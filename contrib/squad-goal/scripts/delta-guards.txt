@@ -132,6 +132,8 @@ contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-ci.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-demote.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-ended.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-killed.sh
+contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-lead-clusters.sh
+contrib/squad-goal/scripts/board_leadtime.py	contrib/squad-goal/scripts/test-hub-lead-clusters.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-loop-switch.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-metrics.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-mobile-move.sh

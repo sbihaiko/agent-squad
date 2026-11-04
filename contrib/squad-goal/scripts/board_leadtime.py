@@ -1,7 +1,7 @@
 """Lead-time control chart arithmetic for the board's closed cards (SPEC 111). Stdlib only: no hub, no client, no file API (ADR-0137)."""
 import math
 import statistics
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 MEASURE = "on board -> closed"
 ABANDONED = "Abandoned"
@@ -160,21 +160,11 @@ FIT_SHARE = 0.5                      # the cards cluster when the range they fil
 FIT_MIN_PAD = timedelta(hours=1)
 TIMEFRAME_SELECTS = "end transition"  # Timeframe keeps a card by the instant it entered the end column
 
-# A cluster ring holds its count at the size the page draws it (#1146). The count inherits the chart box's
-# --fs-body; these measure that text box, so the ring and the page agree on one size. The count itself sits clear
-# above the ring on a leader line (#1304), so no baseline is substituted into the page.
-RING_TEXT_PX = 15        # --fs-body in web-tokens.css: the size the count inherits from the chart box
-AVG_GLYPH_EM = 0.6       # a digit's advance at the page's UI font, in em
-LINE_EM = 1.0            # one line's height at that size, in em
-RING_AIR_PX = 3          # air between the count's box and the ring
-DOT_RADIUS_PX = 4.5      # a single dot's radius, the floor a ring never falls under
-
-
-def count_box_radius(count):
-    """The ring radius that holds `count`'s text box at the page body size, with air; a dot's radius is the floor."""
-    box_w = len(str(count)) * AVG_GLYPH_EM * RING_TEXT_PX
-    box_h = LINE_EM * RING_TEXT_PX
-    return max(DOT_RADIUS_PX, math.hypot(box_w, box_h) / 2 + RING_AIR_PX)
+# SPEC 1327 #1331: a lone card is one hollow dot; a cluster is one outlined filled dot of this one fixed radius. The
+# count-box radius is gone: a cluster carries its count, its cards and its ranges in the payload, and the plot draws no
+# number and no stacked bar.
+CLUSTER_RADIUS_PX = 7   # every cluster's dot: one radius, whatever the count it holds
+DOT_RADIUS_PX = 4.5     # a lone card's dot radius
 
 
 def _stamp(moment):
@@ -222,20 +212,45 @@ def _linear_ticks(max_hours):
     return size * count, [(size * k, _duration(size * k)) for k in range(count + 1)]
 
 
-def _clusters(dots, axis="x"):
-    """The dots merged into rings: two marks closer than DOT_PX in the plot frame share one cluster (#1146). In a fit
-    view the same dots merge at their fit position, so the page draws the rings that view holds (#1334)."""
+def _day_span(first, last):
+    """The closed-date range one cluster carries: each end as the page's day, both when they differ, one when not."""
+    a, b = date.fromisoformat(first), date.fromisoformat(last)
+    one = f"{a:%b} {a.day}"
+    return {"start": first, "end": last, "text": one if a == b else f"{one} to {b:%b} {b.day}"}
+
+
+def _hour_span(lo, hi):
+    """The lead-time range one cluster carries, as the one duration format; one value when both ends agree."""
+    low, high = _value(lo), _value(hi)
+    return {"min": low, "max": high, "text": low["text"] if lo == hi else f"{low['text']} to {high['text']}"}
+
+
+def _clusters(dots, width, height, axis="x", limit=None):
+    """The dots merged into clusters by the screen-space rule in the caller's plot frame: two marks closer than DOT_PX
+    share one cluster (#1146), recomputed for every view from the frame the caller names (#1331). A card past `limit`,
+    the p85 of the plotted hours, never merges: an outlier stays a lone dot. Every cluster serves its fixed radius, its
+    count, its cards, its closed-date range and its lead-time range."""
     clusters = []
     for dot in dots:
-        for cluster in clusters:
-            if math.hypot((cluster["x"] - dot[axis]) * PLOT_WIDTH,
-                          (cluster["y"] - dot["y"]) * PLOT_HEIGHT) < DOT_PX:
-                cluster["dots"].append(dot)
-                break
-        else:
+        home = None
+        if limit is None or dot["hours"] <= limit:
+            for cluster in clusters:
+                if math.hypot((cluster["x"] - dot[axis]) * width,
+                              (cluster["y"] - dot["y"]) * height) < DOT_PX:
+                    home = cluster
+                    break
+        if home is None:
             clusters.append({"x": dot[axis], "y": dot["y"], "dots": [dot]})
-    for cluster in clusters:   # a lone dot keeps the plain radius; a ring is sized for the count it holds (#1146)
-        cluster["r"] = DOT_RADIUS_PX if len(cluster["dots"]) == 1 else count_box_radius(len(cluster["dots"]))
+        else:
+            home["dots"].append(dot)
+    for cluster in clusters:
+        members = cluster["dots"]
+        cluster.update(r=DOT_RADIUS_PX if len(members) == 1 else CLUSTER_RADIUS_PX,
+                       count=len(members), cards=[member["n"] for member in members],
+                       closed=_day_span(min(member["closed"] for member in members),
+                                        max(member["closed"] for member in members)),
+                       lead=_hour_span(min(member["hours"] for member in members),
+                                       max(member["hours"] for member in members)))
     return clusters
 
 
@@ -274,10 +289,14 @@ def _rolling(hours, log):
     return out, size
 
 
-def control_chart(items, timeframe=None, log=False, now=None, start=None, end=None, measure=MEASURE):
-    """The chart over a timeframe in days, or over an explicit zoom range `start`..`end` (#900). A zoom names its dates."""
+def control_chart(items, timeframe=None, log=False, now=None, start=None, end=None, measure=MEASURE, plot=None):
+    """The chart over a timeframe in days, or over an explicit zoom range `start`..`end` (#900). A zoom names its dates.
+    The caller names the plot frame `plot` (its width and height in pixels); the clusters recompute from that frame and
+    the same screen-space rule on every call, so a zoom or a resize redraws the marks its view holds (#1331)."""
     now = now or datetime.now(UTC)
     zoom = start is not None
+    plot_frame = {"width": plot["width"], "height": plot["height"]} if plot else \
+        {"width": PLOT_WIDTH, "height": PLOT_HEIGHT}
     delivered, excluded, excluded_cards = _split(items)
     end = end or now
     if start is None and timeframe:
@@ -331,7 +350,8 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
             dot["xf"] = _clamp((closed - fit_start).total_seconds() / fit_span) if fit_span > 0 else 1.0
         dots.append(dot)
 
-    clusters = _clusters(dots)
+    outlier_limit = _p85(hours) if hours else None
+    clusters = _clusters(dots, plot_frame["width"], plot_frame["height"], limit=outlier_limit)
     band = _band(dots) if dots else None
     if fit and band:
         band["fit"] = _band(dots, "xf")
@@ -361,7 +381,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         scope = f"last {timeframe * 24} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
     text = f"{scope}, {measure}, {summary['plotted_text']}; Timeframe selects by {TIMEFRAME_SELECTS}"
     return {
-        "plot_frame": {"width": PLOT_WIDTH, "height": PLOT_HEIGHT},
+        "plot_frame": plot_frame,
         "measure": measure,
         "scale": axis,
         "axis": axis,
@@ -369,7 +389,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         "window": {"size": size, "unit": "issues", "centered": True},
         "dots": dots,
         "clusters": clusters,
-        **({"clusters_fit": _clusters(dots, "xf")} if fit else {}),
+        **({"clusters_fit": _clusters(dots, plot_frame["width"], plot_frame["height"], "xf", outlier_limit)} if fit else {}),
         "band": band,
         "ticks": [{"hours": hrs, "text": text, "y": y} for hrs, text, y in ticks],
         "xticks": xticks,

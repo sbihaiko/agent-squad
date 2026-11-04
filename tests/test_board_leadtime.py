@@ -283,7 +283,7 @@ def test_cards_clear_at_the_shared_plot_frame_stay_in_separate_clusters(lt):
                       (first["y"] - second["y"]) * result["plot_frame"]["height"]) > lt.DOT_PX
 
 
-def test_dots_closer_than_one_dot_merge_into_a_numbered_cluster(lt):
+def test_dots_closer_than_one_dot_merge_into_one_cluster(lt):
     items = [_closed(1, 5, days_ago=2), _closed(2, 5, days_ago=2), _closed(3, 90, days_ago=2)]
 
     clusters = _chart(lt, items)["clusters"]
@@ -439,27 +439,65 @@ def test_a_fit_range_labels_its_axis_in_hours(lt):
     assert [tick["text"] for tick in zoomed["xticks"]] == ["18:00", "18:40", "19:20", "20:00", "20:40", "21:20", "22:00"]
 
 
-# SPEC 1116 #1146: a cluster ring is sized for the count it holds at the page body size.
+# SPEC 1327 #1331: a cluster is one outlined filled dot of one fixed radius; a lone card is a hollow dot.
 def test_a_single_dot_keeps_the_plain_dot_radius(lt):
     clusters = _chart(lt, [_closed(1, 5, days_ago=2)])["clusters"]
 
-    assert [c["r"] for c in clusters] == [lt.DOT_RADIUS_PX], "a lone dot takes no ring"
+    assert [c["r"] for c in clusters] == [lt.DOT_RADIUS_PX], "a lone card stays a plain dot"
 
 
-def test_a_cluster_serves_the_radius_that_holds_its_count(lt):
-    items = [_closed(n, 5, days_ago=2) for n in range(1, 13)]
+def test_a_cluster_is_one_fixed_radius_dot_with_its_count_cards_and_ranges(lt):
+    items = [_closed(n, hours, days_ago=2) for n, hours in enumerate((5.0, 5.1, 5.2), start=1)]
 
     clusters = _chart(lt, items)["clusters"]
 
-    assert len(clusters) == 1 and len(clusters[0]["dots"]) == 12
-    radius = clusters[0]["r"]
-    box_w, box_h = len("12") * lt.AVG_GLYPH_EM * lt.RING_TEXT_PX, lt.LINE_EM * lt.RING_TEXT_PX
-    assert 2 * radius >= math.hypot(box_w, box_h), f"the ring {radius} does not hold its count's box"
-    assert radius > lt.DOT_RADIUS_PX
+    assert len(clusters) == 1 and len(clusters[0]["dots"]) == 3
+    cluster = clusters[0]
+    assert cluster["r"] == lt.CLUSTER_RADIUS_PX, "every cluster takes the one fixed radius"
+    assert cluster["count"] == 3 and cluster["cards"] == [1, 2, 3]
+    assert cluster["lead"]["min"] == {"hours": 5.0, "text": "5h"}
+    assert cluster["lead"]["max"] == {"hours": 5.2, "text": "5h 12m"}
+    assert cluster["lead"]["text"] == "5h to 5h 12m"
+    assert cluster["closed"]["text"] == "Nov 28", "one shared close names one day"
 
 
-def test_the_ring_radius_grows_with_its_count(lt):
-    assert lt.count_box_radius(9) < lt.count_box_radius(99) < lt.count_box_radius(999)
+def test_a_lone_dot_names_its_own_card_date_range_and_lead_range(lt):
+    cluster = _chart(lt, [_closed(7, 6, days_ago=2)])["clusters"][0]
+
+    assert cluster["count"] == 1 and cluster["cards"] == [7]
+    assert cluster["closed"]["text"] == "Nov 28"
+    assert cluster["lead"] == {"min": {"hours": 6.0, "text": "6h"}, "max": {"hours": 6.0, "text": "6h"},
+                               "text": "6h"}, "one value names both ends of a one-card range"
+
+
+def test_the_cluster_radius_never_grows_with_its_count(lt):
+    few = _chart(lt, [_closed(n, 5, days_ago=2) for n in range(1, 4)])["clusters"][0]["r"]
+    many = _chart(lt, [_closed(n, 5, days_ago=2) for n in range(1, 13)])["clusters"][0]["r"]
+
+    assert few == many == lt.CLUSTER_RADIUS_PX, "the fixed radius holds whatever the count"
+
+
+def test_a_card_past_p85_never_merges_into_a_cluster(lt):
+    items = [_closed(n, 5, days_ago=2) for n in range(1, 13)] + [_closed(99, 400, days_ago=2)]
+
+    clusters = _chart(lt, items)["clusters"]
+
+    lone = next(c for c in clusters if c["count"] == 1)
+    assert lone["cards"] == [99], "the outlier stays a lone dot, however close its close"
+    assert all(99 not in c["cards"] for c in clusters if c["count"] > 1)
+    assert next(c for c in clusters if c["count"] > 1)["count"] == 12
+
+
+def test_clusters_follow_the_caller_plot_size(lt):
+    items = [_closed(1, 5), _closed(2, 5.4)]
+    full = {"width": 672, "height": 212}
+
+    drawn_apart = _chart(lt, items, plot=full)
+    assert sorted(len(c["dots"]) for c in drawn_apart["clusters"]) == [1, 1]
+
+    squashed = _chart(lt, items, plot={"width": 672, "height": 106})
+    assert [c["count"] for c in squashed["clusters"]] == [2], \
+        "one screen-space rule in the caller's plot frame: a shorter frame merges the marks the full frame holds apart"
 
 
 # SPEC 1218 #1256: the chart breaks a card's life into its columns and reports the gate's share.

@@ -3755,6 +3755,12 @@ def _in_bar(row, fw, fs, fk=(), ty=None):
             and (ty is None or row["type"] == ty))
 
 
+def _lead_plot():
+    """The plot frame the lead chart clusters in: the hub names it, the page draws it, and every view recomputes its
+    clusters from this one size and the screen-space rule (#1331)."""
+    return {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT}
+
+
 def lead_zoom(query):
     """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
     or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
@@ -3771,14 +3777,14 @@ def lead_zoom(query):
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
         if days == 0: return {"error": "bad timeframe"}
-        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure)
+        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure, plot=_lead_plot())
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure)
+    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure, plot=_lead_plot())
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -3854,10 +3860,12 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     rows = [r for r in lead_rows(LEAD_START, None, now) if _in_bar(r, fw, fs, fk, ty)]
     measure = f"{LEAD_START} -> closed"
     lead = _leadtime.lead_time(rows, now=now, measure=measure)
-    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now, measure=measure)
+    plot = _lead_plot()
+    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now, measure=measure,
+                                                    plot=plot)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
     coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
-    return {"plot_frame": {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT},
+    return {"plot_frame": plot,
           "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"], "start": LEAD_START,
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_cards": lead["excluded_cards"],
@@ -5678,15 +5686,14 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
     `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
-  const bandCol=k=>COLORS[k]||"var(--chart-series-other)",stack=c.dots.map(d=>(d.stack||[]).map(b=>`<rect x=${ltX(d.x)-3} y=${ltY(b.y)} width=6 height=${ltY(b.y0)-ltY(b.y)} fill="${bandCol(b.column)}"><title>${esc(b.column)} ${esc(b.text)}</title></rect>`).join("")).join("");   // the hub places each band's two edges; the page draws them in the column's palette role (#1256)
-  const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count, and serves the fit view's own rings (#1146, #1334)
-    const cx=ltX(k.x),cy=ltY(k.y);
-    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<line x1=${cx} y1=${cy-k.r} x2=${cx} y2=${cy-k.r-5} stroke="var(--chart-ink)" stroke-width=1 pointer-events=none></line><text x=${cx} y=${cy-k.r-9} fill="var(--chart-ink)" text-anchor=middle pointer-events=none stroke="var(--chart-bg)" stroke-width=3 style="paint-order:stroke">${m}</text>`:"")}).join("");   // a count sits clear above its ring on a leader line, never hidden inside it (#1304)
+  const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.count,title=m>1?`${m} issues`:`#${k.dots[0].n} ${k.dots[0].title}`;   // a lone card is one hollow dot; a cluster is one outlined filled dot of the payload's one fixed radius (#1331)
+    const cx=ltX(k.x),cy=ltY(k.y),strip=k.dots.map(d=>d.stack.map(b=>`${b.column} ${b.text}`).join(", ")).join(" · ");   // the tooltip's stage strip: each dot's column stack, no stacked bar in the plot (#1331)
+    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates and the stage strip; the plot draws no count and no bar (#1331)
   const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling mean</span>${LT.band&&bp?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation</span>`:""}</p>`+   // the series legend names only the marks the plot draws (#1304)
     `<p class="flg ltlg"><span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b></span></p>`+ltKM(c);   // one summary row carries each statistic beside its value; the one exclusion total sits in the header (#1248, #1250, #1334); every line also labels itself at its end (#1304)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
-  return ctl+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${stack}${dots}</svg>`+rows;};
+  return ctl+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
 const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
     (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
@@ -5972,7 +5979,7 @@ HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
-# The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
+# The lead chart's clusters take their fixed radius from the payload; the page draws one dot per cluster and no count (#1331).
 PAGE = PAGE.replace("/*LT_START*/", LEAD_START)
 
 
