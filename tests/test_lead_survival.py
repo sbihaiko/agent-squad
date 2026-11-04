@@ -203,9 +203,24 @@ def test_the_view_opens_on_48_hours_bugs_todo_and_log_scale_on_a_fresh_page(hub)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_a_choice_stays_for_the_visit_and_is_never_stored(hub):  # noqa: F811
-    assert "saveLT" not in hub.PAGE and "ls.lt=" not in hub.PAGE, "a choice outlives the visit"
-    assert re.search(r'id==="ltr"\)\{LT\.tf=e\.target\.value', hub.PAGE), "a Timeframe choice is not kept for the visit"
+def test_a_chart_range_is_stored_under_its_own_key_and_never_in_the_board_record(hub):  # noqa: F811
+    assert "saveLT" not in hub.PAGE and "ls.lt=" not in hub.PAGE, "the chart range is not in the Board record"
+    assert re.search(r'LT\[e\.target\.id==="lta"\?"a":"b"\]=e\.target\.value;chartSave\(\)', hub.PAGE), \
+        "a Start or End choice is not kept"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_chart_key_carries_the_range_only(hub):  # noqa: F811
+    """#1275, #1247: the key owns the Start and End; the timeframe, the Type and the scale stay the visit's choice."""
+    body = re.search(r"chartSave=\(\)=>\{try\{localStorage\.setItem\(CHART_KEY,JSON\.stringify\((\{.*?\})\)\)\}catch",
+                     _page_line(hub, "const CHART_KEY="))
+    assert body and body.group(1) == "{a:LT.a,b:LT.b}", "the chart key carries the Start and End only"
+    onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
+    for ctl in ("ltr", "lty", "lts"):
+        line = next(row for row in onchange.splitlines() if f'"{ctl}"' in row)
+        assert "chartSave" not in line and "ls." not in line, f"the {ctl} control writes no storage (#1247)"
+    assert "chartSave" not in _page_line(hub, "const ltGet=") and "ls." not in _page_line(hub, "const ltGet="), \
+        "reading the chart stores nothing"
 
 
 def test_the_default_window_is_in_the_one_read_the_page_makes(hub, board):  # noqa: F811

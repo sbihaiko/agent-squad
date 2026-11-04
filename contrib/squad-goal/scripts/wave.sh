@@ -338,14 +338,15 @@ stop() {
 # cause, so the janitor's "unknown" counts as the issue's own), an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
 # wrote no ruling (every model failed, or a hold with no verdict), a red base battery no child's own suite names (#663), a
 # run that completed with nothing landed, a prerequisite the loop could not resolve (no profile, a sandbox denial), and a
-# network failure. The caller's kind wins over the text: the janitor reads the run's own review verdict (`own`: CHANGES or
+# network failure, and a finished run that cut no wave (#1349). The caller's kind wins over the text: the janitor reads the run's own review verdict (`own`: CHANGES or
 # BLOCKED on the diff), which a reason like "review_held" hides.
 loop_caused() {
   case "${2:-}" in own) return 1;; loop) return 0;; esac
   case "$1" in *"the gate lock is held"*|*"the gate slots"*"are full"*|*"reached its age cap"*|*adapter_error*|*merge_conflict*|*"the rebase on "*" conflicts"*|*"DISK STOP"*|*"No space left"*|\
     *"every review model failed"*|*"head moved during the review"*|*"with no verdict"*|\
     *"no child's own suite names the cause"*|*"is inconclusive, so the wave does not land"*|*"completed"*"nothing landed"*|*"no profile"*|*"sandbox"*"denied"*|\
-    *"Could not resolve host"*|*"Failed to connect"*|*"Connection timed out"*|*"Operation timed out"*|*"Network is unreachable"*) return 0;; esac
+    *"Could not resolve host"*|*"Failed to connect"*|*"Connection timed out"*|*"Operation timed out"*|*"Network is unreachable"*|\
+    *"run cut no wave"*) return 0;; esac
   return 1
 }
 
@@ -597,10 +598,11 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   }
   rebase_on_tip || return $?
   gates || return 1
-  local try=1
+  local try=1 perr pline
   while :; do
     sha=$($G rev-parse HEAD)
-    if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
+    # The push's stderr is kept: it tells a rejection git names from a failure of the network, auth or server (#1348).
+    if perr=$($G push -q origin "HEAD:refs/heads/$w" 2>&1); then
       board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
       proof_card "$iss" "$obl"   # an unproven entry carries its fact on the card until the settlement answers it (#1176)
       # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Code Complete reads it, never the
@@ -615,11 +617,16 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       wave_fact "$run" "$iss" entered "$cause"
       echo "WAVE $br $sha entered $w (#$iss)$([ -n "$obl" ] && printf ', unproven with obligation %s' "$(basename "$obl")")"; return 0
     fi
+    pline=$(printf '%s\n' "$perr" | /usr/bin/grep -v '^[[:space:]]*$' | tail -1)
+    # A rejection (the wave tip moved: git's non-fast-forward or fetch-first, or the remote's refusal of the ref) is the one refusal,
+    # and it gets one repeat. Any other failure is a hold: the child keeps its commits and enters on a later pass, no requeue (#1348).
+    printf '%s' "$perr" | /usr/bin/grep -q 'rejected\|non-fast-forward\|fetch first' \
+      || { hold "the push to $w failed (git: ${pline:--}); the child enters on a later pass"; return 1; }
     [ "$try" = 1 ] || break
     try=2; rebase_on_tip || return $?
     gates || return 1   # the rebase made a new tree, and only the gates open the entry (#682): what enters is what they passed
   done
-  refuse "the push to $w was refused: HEAD is not a fast-forward of its tip"; return 1
+  refuse "the push to $w was refused: HEAD is not a fast-forward of its tip (git: ${pline:--})"; return 1
 }
 
 # A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in

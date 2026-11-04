@@ -276,30 +276,46 @@ def _page_line(hub, prefix):
     return next(line for line in hub.PAGE.splitlines() if line.startswith(prefix))
 
 
-def _page_harness(hub, answers, drive, onchange=""):
-    """The page's own bar and chart lines, run in node over stub elements. `fetch` answers from `answers`, keyed by URL,
-    with the hub's own route payloads; the script `drive` acts on the page and prints JSON."""
-    # Re-anchored (#1247): the chart's settings are no longer stored, so there is no saveLT line; the LT_TYPES line
-    # carries LT_START, the start the payload measures from, which ltOwn reads.
-    lines = [_page_line(hub, p) for p in ("const LT_TYPES=", "let FLOWFF=", "const barQuery=", "const flowOpen=", "const ltQ=",
-                                          "const ltZoom=", "const ltGet=", "const flowDetach=", "const barMoved=",
-                                          "const pickFilter=")]
+def _onchange(hub):
+    return re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
+
+
+def _page_harness(hub, answers, drive, onchange="", store=None):
+    """The page's own bar, chart and persistence lines, run in node over stub elements. `fetch` answers from `answers`,
+    keyed by URL, with the hub's own route payloads; the script `drive` acts on the page and prints JSON. `store` seeds
+    the page's localStorage, and the page's own save and saveB lines run, so a test reads the key each write reaches
+    (#1275). No hand-written saver stands in for them: a change to the Board record's write line reaches every test."""
+    # The LT_TYPES line carries LT_START, the start the payload measures from, which ltOwn reads; the chart range restores
+    # from its own key, apart from the Board filter's record under "hub" (#1247, #1275).
+    lines = [_page_line(hub, p) for p in ["const LT_TYPES=", "let LT=", "let FLOWFF=", "const barQuery=", "const flowOpen=",
+                                         "const ltQ=", "const ltZoom=", "const ltGet=", "const flowDetach=",
+                                         "const barMoved=", "const pickFilter=", "const LT_TF=", "const CHART_KEY="]]
+    # The two write paths are the page's own lines, never a look-alike: a regression that folded the chart range into
+    # the Board record would show here (#1275).
+    save = _page_line(hub, "const save=")
+    board = _page_line(hub, "const bo=ls.bo||{},saveB=")
     stubs = f"""
-const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],SAVED=[],POLLED=[];
+const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],POLLED=[];
 const el=()=>({{hidden:true,handlers:{{}},addEventListener(t,f){{this.handlers[t]=f}}}});
 const EL={{"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el()}};
 const $=s=>EL[s];
 const fetch=async url=>{{FETCHED.push(url);if(!(url in ANSWERS))throw new Error("no answer for "+url);return {{json:async()=>ANSWERS[url]}}}};
-let bo={{}},FLOWK=null,FLOWD={{}},LT={{tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"Todo",b:""}};
-const ls={{}},save=()=>SAVED.push(JSON.stringify(ls.lt));
+const STORE={json.dumps(store or {})};
+const localStorage=new Proxy({{}},{{get:(t,k)=>k==="getItem"?n=>n in STORE?STORE[n]:null:k==="setItem"?(n,v)=>{{STORE[n]=String(v)}}:STORE[k],set:(t,k,v)=>{{STORE[k]=String(v);return true}}}});
+const ls=JSON.parse(localStorage.hub||"{{}}"),pins=new Set(),q="",per="day",src="";
+let FLOWK=null,FLOWD={{}};
+{save}
+{board}
 EL["#flowb"]=el();
 const drawFlow=()=>DRAWN.push(JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)));
-const saveB=()=>SAVED.push(JSON.stringify(bo)),pollBoard=()=>POLLED.push(1);
+const pollBoard=()=>POLLED.push(1);
 const flowTabs=()=>{{}};   // the tab strip is not what this harness drives (#1080)
-
+const BOARD_ROWS=[{{n:1,l:[]}},{{n:2,l:["bug"]}}];   // the two cards the board would read
 const settle=()=>new Promise(r=>setTimeout(r,0));
 """
-    script = stubs + "\n".join(lines) + "\n" + onchange + "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"
+    # The page's own board filter, so a card list is the filter's answer, never the test's copy of it.
+    script = stubs + (SCRIPTS / "board-lanes.js").read_text() + "\n" + "\n".join(lines) + "\n" + onchange + \
+        "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
@@ -318,11 +334,15 @@ def test_a_kind_pick_redraws_the_open_cumulative_flow_with_the_filtered_route(hu
     answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
     out = _page_harness(hub, answers, """
 pickFilter("fkl","fk");
+EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
 await flowOpen("cfd");await settle();
 EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});await settle();await settle();
-console.log(JSON.stringify({fetched:FETCHED,bo,last:DRAWN[DRAWN.length-1],saved:SAVED.length,polled:POLLED.length}));""")
+console.log(JSON.stringify({fetched:FETCHED,bo,last:DRAWN[DRAWN.length-1],store:STORE,polled:POLLED.length}));""",
+                           onchange=_onchange(hub))
     assert out["fetched"] == [f"/api/chart/cfd?{_bar()}", f"/api/chart/cfd?{_bar(fk='bug')}"]
-    assert out["bo"]["fk"] == ["bug"] and out["saved"] == 1 and out["polled"] == 1, "the pick is stored as the board's own"
+    assert out["bo"]["fk"] == ["bug"] and out["polled"] == 1, "the pick is stored as the board's own"
+    assert set(out["store"]) == {"hub"} and json.loads(out["store"]["hub"])["bo"]["fk"] == ["bug"], \
+        "a kind pick writes the Board key only"
     count = _last_counts(out["last"])[backlog]
     assert count == 0, "the open chart is redrawn from the filtered route: no task is a bug"
 
@@ -337,10 +357,14 @@ def test_a_spec_clear_redraws_the_open_control_chart_and_its_chosen_span(hub, bo
                f"/api/chart/lead?{qall}": hub.flow_lead(*hub.board_filters(qall)),
                f"/api/leadtime?tf=30{span}&{qall}": {"dots": [{"n": 1}, {"n": 2}]}}
     out = _page_harness(hub, answers, """
-bo.fs=["5"];pickFilter("fsl","fs");LT.a="Doing";
+bo.fs=["5"];pickFilter("fsl","fs");
+EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
+EL["#flowb"].onchange({target:{id:"ltr",value:"30"}});
+EL["#flowb"].onchange({target:{id:"lts",value:"jira"}});
+LT.a="Doing";
 await flowOpen("lead");await settle();
 EL["#fsl"].handlers.click({target:{closest:s=>s==="[data-clear]"},preventDefault(){}});await settle();await settle();
-console.log(JSON.stringify({fetched:FETCHED,fs:bo.fs,zc:LT.zc,lead:FLOWD.lead}));""")
+console.log(JSON.stringify({fetched:FETCHED,fs:bo.fs,zc:LT.zc,lead:FLOWD.lead}));""", onchange=_onchange(hub))
     assert out["fs"] == []
     assert f"/api/chart/lead?{qall}" in out["fetched"], "the clear reads the control chart anew"
     assert f"/api/leadtime?tf=30{span}&{qall}" in out["fetched"], "a chosen span is read anew with the bar's values"
@@ -355,10 +379,11 @@ def test_an_answer_for_an_old_bar_value_is_never_drawn(hub, board):
     answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
     out = _page_harness(hub, answers, """
 pickFilter("fkl","fk");
+EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
 const first=flowOpen("cfd");
 EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});
 await first;await settle();await settle();
-console.log(JSON.stringify({last:DRAWN[DRAWN.length-1]}));""")
+console.log(JSON.stringify({last:DRAWN[DRAWN.length-1]}));""", onchange=_onchange(hub))
     count = _last_counts(out["last"])[backlog]
     assert count == 0, "the answer for the picked kind is drawn, not the one read before the pick"
 
@@ -497,36 +522,90 @@ def test_the_type_control_sits_beside_timeframe_and_scale(hub):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_type_and_the_chart_settings_are_restored_on_load(hub):
+def test_a_stored_chart_range_waits_for_the_lead_chart_and_the_type_is_never_stored(hub):
+    """#1275: the stored range stays out of the shared state until the lead chart opens, so the Board tab reads the
+    payload's own start; the timeframe, the Type and the scale stay the visit's choice (#1247)."""
     block = _flow_block(hub).split("const drawFlow")[0]
 
-    def restored(stored):
-        script = "\n".join([f"const ls={json.dumps(stored)};", "const esc=s=>String(s);", block,
-                            "process.stdout.write(JSON.stringify({ty:LT.ty,tf:LT.tf,log:LT.log}));"])
+    def loaded(stored):
+        stub = 'const localStorage={getItem:k=>k==="squad-chart"?' + json.dumps(json.dumps(stored)) + ':null,setItem(){}};'
+        script = "\n".join([stub, "const esc=s=>String(s);", block, _page_line(hub, "const ltQ="),
+                            "process.stdout.write(JSON.stringify({ty:LT.ty,tf:LT.tf,a:LT.a,b:LT.b,log:LT.log,own:ltOwn()}));"])
         result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    # Re-anchored (#1247): a fresh page opens on the four defaults, whatever an older visit stored; a choice lasts the visit.
-    defaults = {"ty": "bug", "tf": "2", "log": True}
-    assert restored({"lt": {"ty": "task", "tf": "3", "log": False}}) == defaults
-    assert restored({"lt": {"tf": "90"}})["tf"] == "2", "a retired preset never reaches the page"
-    assert restored({}) == defaults
-    assert restored({"lt": {"ty": "pr"}})["ty"] == "bug"
+    fresh = {"ty": "bug", "tf": "2", "a": "Todo", "b": "", "log": True, "own": False}
+    for stored in ({"tf": "30", "a": "Doing", "b": "Closed"}, {"ty": "task", "tf": "3", "a": "Doing"}, {}):
+        assert loaded(stored) == fresh, "a stored chart range never reaches the Board tab's shared state"
+
+
+def test_the_board_write_path_never_names_the_chart_key(hub):
+    """#1275: the Board record's three write lines name no chart key and no chart range."""
+    for prefix in ("const $=s=>document.querySelector(s),ls=", "const save=", "const bo=ls.bo||{},saveB="):
+        line = _page_line(hub, prefix)
+        assert "CHART_KEY" not in line and "squad-chart" not in line and "LT." not in line, \
+            f"{prefix!r} writes the Board record, never the chart's"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_reload_restores_the_board_filter_and_the_chart_range_apart(hub, board):
+    """#1275: the Board filter and the chart range each keep their own key; a reload restores each untouched by the other,
+    and the chart's range never reaches the board's route or its cards."""
+    backlog = hub.COLUMN["issue_todo"]
+    _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
+    onchange = _onchange(hub)
+    # The board's own route and its card list, by the page's bar query and its boardOk, read before any chart opens: a
+    # range that leaked into the Board tab's shared state would narrow both here (#1275).
+    observe = """const snap=()=>({a:LT.a,own:ltOwn(),route:barQuery("board"),
+cards:BOARD_ROWS.filter(x=>boardOk(x,bo.fw||[],bo.fs||[],bo.fk||[])).map(x=>x.n)});
+const pre=snap();"""
+    report = "const post=snap();console.log(JSON.stringify({pre,post,bo,tf:LT.tf,a:LT.a,b:LT.b,store:STORE,fetched:FETCHED}));"
+    first = _page_harness(hub, {}, 'pickFilter("fkl","fk");EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});'
+                          + observe + report, onchange=onchange, store={})
+    assert set(first["store"]) == {"hub"}, "a Board filter writes only the Board key"
+    assert first["pre"]["cards"] == [2]
+    assert first["pre"]["own"] is False and first["pre"]["a"] == "Todo", "the board opens on the payload's own start"
+
+    answers = {f"/api/leadtime?tf=30&scale=log&a=Doing&b=&{_bar(ty='bug')}": {"dots": []}}
+    second = _page_harness(hub, answers, 'EL["#flowb"].onchange({target:{id:"ltr",value:"30"}});'
+                           'EL["#flowb"].onchange({target:{id:"lta",value:"Doing"}});await settle();' + observe + report,
+                           onchange=onchange, store=first["store"])
+    assert second["bo"] == first["bo"] == {"fk": ["bug"]}, "a chart range never touches the Board filter"
+    assert second["store"]["hub"] == first["store"]["hub"], "a chart range leaves the Board key as it was"
+    assert set(second["store"]) == {"hub", "squad-chart"}
+    assert json.loads(second["store"]["squad-chart"]) == {"a": "Doing", "b": ""}, \
+        "the chart key carries the range only; the timeframe stays the visit's choice (#1247)"
+
+    span = f"/api/leadtime?tf=2&scale=log&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
+    answers = {f"/api/chart/lead?{_bar(fk='bug', ty='bug')}": {"lead": {}, "t": 1}, span: {"dots": []}}
+    third = _page_harness(hub, answers, observe + 'await flowOpen("lead");await settle();' + report,
+                          onchange=onchange, store=second["store"])
+    assert third["bo"] == {"fk": ["bug"]}, "the Board filter survives the reload untouched"
+    assert (third["pre"]["a"], third["pre"]["own"]) == ("Todo", False), \
+        "the restored range stays off the board: the Board tab reads the payload's own start"
+    assert "a=Doing" not in third["pre"]["route"] and "b=" not in third["pre"]["route"], \
+        "the board's own route carries neither the stored Start nor a stored End"
+    assert third["pre"]["cards"] == first["pre"]["cards"] == [2], "the chart range never narrows the board's cards"
+    assert third["tf"] == "2" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
+    assert span in third["fetched"], "the restored range is what the opened chart reads"
+    assert third["post"]["route"] == third["pre"]["route"] and third["post"]["cards"] == first["pre"]["cards"], \
+        "opening the chart reads the board's route and cards unchanged"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_a_type_pick_saves_the_choice_and_redraws_the_open_lead_chart(hub, board):
     _seed(hub, _typed_items(hub))
     answers = {f"/api/chart/lead?{_bar(ty=ty)}": hub.flow_lead(ty=ty) for ty in ("task", "bug")}
-    onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
+    onchange = _onchange(hub)
     out = _page_harness(hub, answers, """
+EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
 await flowOpen("lead");await settle();
 EL["#flowb"].onchange({target:{id:"lty",value:"bug"}});await settle();await settle();
-console.log(JSON.stringify({fetched:FETCHED,ty:LT.ty,saved:SAVED,drawn:DRAWN[DRAWN.length-1]}));""", onchange=onchange)
+console.log(JSON.stringify({fetched:FETCHED,ty:LT.ty,store:STORE,drawn:DRAWN[DRAWN.length-1]}));""", onchange=onchange)
     assert out["fetched"] == [f"/api/chart/lead?{_bar()}", f"/api/chart/lead?{_bar(ty='bug')}"]
     assert out["ty"] == "bug"
-    assert out["saved"] == [], "the choice stays for the visit and is never stored (#1247)"
+    assert out["store"] == {}, "the choice stays for the visit and is never stored (#1247)"
     assert out["drawn"]["lead"]["type"] == "bug"
 
 
@@ -577,7 +656,7 @@ def test_the_chip_stops_this_chart_following_and_leaves_the_board_filter_alone(h
     backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])]
     _seed(hub, items)
-    q_all, q_bug = _bar(), _bar(fk="bug")
+    q_all, q_bug = _bar(ty="bug"), _bar(fk="bug", ty="bug")
     answers = {f"/api/chart/cfd?{q_all}": hub.flow_cfd(*hub.board_filters(q_all)),
                f"/api/chart/cfd?{q_bug}": hub.flow_cfd(*hub.board_filters(q_bug)),
                f"/api/chart/lead?{q_all}": hub.flow_lead(*hub.board_filters(q_all)),
@@ -602,9 +681,9 @@ def test_stopping_the_chip_on_a_zoomed_control_chart_reads_it_once(hub, board):
     and draw whichever answer lands last."""
     backlog = hub.COLUMN["issue_todo"]
     _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
-    q_bug, q_all = _bar(fk="bug"), _bar()
+    q_bug, q_all = _bar(fk="bug", ty="bug"), _bar(ty="bug")
     f, t = "2026-10-02T00:00:00.000Z", "2026-10-09T00:00:00.000Z"
-    span = "&scale=jira&a=Todo&b="   # re-anchored (#1247): the view starts at Todo
+    span = "&scale=log&a=Todo&b="   # re-anchored (#1247): the view starts at Todo, on the fresh page's Log scale
     from_q, to_q = urllib.parse.quote(f, safe=""), urllib.parse.quote(t, safe="")
     zoom_bug = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_bug}"
     zoom_all = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_all}"
@@ -627,7 +706,7 @@ def test_a_new_board_filter_makes_the_chart_follow_it_again(hub, board):
     """#1147: a new Board filter is a new instruction, so a chart that stopped following reads with it again."""
     backlog = hub.COLUMN["issue_todo"]
     _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
-    q_all, q_bug = _bar(), _bar(fk="bug")
+    q_all, q_bug = _bar(ty="bug"), _bar(fk="bug", ty="bug")
     answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (q_all, q_bug)}
     out = _page_harness(hub, answers, """
 bo.fk=["bug"];pickFilter("fkl","fk");

@@ -63,6 +63,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam mo
 import child_issues   # the issues a child's spawn text names (#555)
 import issue_ledger   # the issue's loop facts: the head a run requeued its child on is a fact there, never a marker (ADR-0149)
 from issue_state import board_state
+from board_columns import claimed_names   # the claimed card names: "Doing" on this board, "In Progress" on the default (#1342)
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -121,6 +122,15 @@ def child_worktree(rd, child, d):   # the tree a child worked in, by the engine'
     return rd / "ws" / f"{logical}-{child}"
 def head_of(wt):   # the sha the child's worktree stands on, "" when it has none
     return subprocess.run(["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+def commits_ahead(wt):   # the commits the child's HEAD carries past origin/<base>; None when git cannot say (the push then decides)
+    try: r = subprocess.run(["git", "-C", str(wt), "rev-list", "--count", f"origin/{os.environ.get('SG_BASE') or 'dev'}..HEAD"], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired: return None
+    got = r.stdout.strip()
+    return int(got) if r.returncode == 0 and got.isdigit() else None
+def salvage_push(wt, branch):   # the child's HEAD pushed to a work branch on its own origin: (True, "") or (False, why); the branch is never forced
+    try: r = subprocess.run(["git", "-C", str(wt), "push", "origin", f"HEAD:refs/heads/{branch}"], capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired: return False, "the push timed out"
+    return r.returncode == 0, (r.stderr or r.stdout).strip()[:200]
 def requeue_head(run, n):   # the head this run requeued the issue's child on, "" when it did not (the old auto/requeued- marker, ADR-0149); "held" when the ledger cannot answer, and then the child is held out
     try: return issue_ledger.requeued(f"{repo}#{n}", run)
     except (OSError, ValueError, KeyError): return "held"
@@ -392,6 +402,20 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
     if (A / f"waved-{name}").exists() and not waved:   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
         logged(f"landed {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run's wave landed without it; no entry, no card move"); mk.touch(); continue
+    if finished and not waved and not (A / f"waved-{name}").exists():   # the run cut no wave: no wave- or waved- marker (#1349)
+        card = card_status(n)   # read once: the salvage and the backfill below share it
+        if child_request(pathlib.Path(r)) and card not in ("Done", "Closed"):   # a child of a run dispatched to cut a wave: its commits reach no remote branch, so they are salvaged, whatever the card
+            wt = child_worktree(pathlib.Path(r), child, d)
+            if not wt.is_dir() or commits_ahead(wt) == 0:   # nothing past origin/dev to salvage: requeued with the reason, which loop_caused reads as the loop's
+                subprocess.run(["bash", wave, "requeue", str(n), "its run cut no wave, so its finished commits have no entry"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
+                print(f"CHILD NO-WAVE REQUEUE #{n} ({name} {child})", flush=True); mk.touch(); continue
+            sha, branch = head_of(wt), f"fix/{n}-salvage-{name}"
+            ok_push, why_push = salvage_push(wt, branch)
+            if not ok_push:   # a failed push is no marker and no requeue: the next pass pushes again
+                print(f"CHILD NO-WAVE SALVAGE FAILED #{n} ({name} {child}): the push of {sha[:9]} to {branch} failed, tried on the next pass: {why_push}", flush=True); continue
+            print(f"CHILD NO-WAVE SALVAGE #{n} ({name} {child}): pushed {sha[:9]} to {branch}", flush=True); mk.touch(); continue
+        if card not in (*claimed_names().split("|"), "Todo", "Blocked"):   # backfill never moves a card past (or out of) its column; a card the backfill may move falls through to the entry, which moves it when there is no wave
+            logged(f"backfill {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run ended and its card is past the backfill; no entry, no card move"); mk.touch(); continue
     if lwhy is not None and requeue_head(name, n):   # its run's own review held it and requeued it already (#601): never twice
         print(f"CHILD HELD #{n} ({name} {child}): its run's review requeued it", flush=True); mk.touch(); continue
     if own:   # the approval is read before a failed land's requeue: a run that reviewed the child owns it, and missing evidence holds delivery (#701, ADR-0151 rules 4 and 5)
@@ -408,8 +432,6 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592); for a run-owned child only a standing approval at its reviewed head reaches here, so the failure is not the review's
         subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
-    if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"):   # backfill never moves a card past (or out of) its column
-        logged(f"backfill {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run ended and its card is past the backfill; no entry, no card move"); mk.touch(); continue
     entered, why, worked = enter(pathlib.Path(r), child, n, d, ok, own)
     if worked is None:   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
         CAUSE[key] = "no review slot this pass: caps.reviews is full"

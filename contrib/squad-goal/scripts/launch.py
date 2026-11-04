@@ -372,6 +372,7 @@ run = new[-1]
 if _issue_child_request(req_text):
     w = subprocess.run(["bash", str(here / "wave.sh"), "start", run], capture_output=True, text=True)
     print("\n".join(l for l in (w.stdout + w.stderr).splitlines() if l.strip()) or f"note: wave.sh start {run} said nothing", file=sys.stderr)
+    if w.returncode != 0: print(f"WAVE-ERROR launch: wave.sh start {run} exit {w.returncode}", file=sys.stderr)   # the cut failed: the run starts without a wave (#1349)
 run_log = runs / run / "launch.log"
 def _copy_launch_log():   # the janitor quotes this file to explain why the run never started; state/<req>.log is the same stream
     try: run_log.write_text(pathlib.Path(log).read_text())

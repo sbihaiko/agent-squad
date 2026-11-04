@@ -138,6 +138,36 @@ case "$r" in *"WAVE REQUEUE #12"*conflict*g11*) ok "D: the conflict is said, and
 [ ! -e "$($G -C "$T/c12" rev-parse --git-path rebase-merge)" ] && ok "D: the failed rebase is aborted, so the worktree carries no half-rebase" || ko "D: the child is left mid-rebase"
 [ ! -e "$T/st/auto/disp-12" ] && /usr/bin/grep -qx 'o 3 Todo 12' "$T/board.log" && ok "D: a conflicting child is back in the queue" || ko "D: #12 was not requeued"
 
+# P (#1348): a push that fails for a reason git does not name as a rejection holds the child: no requeue, no marker move, and
+# the hold names git's last stderr line. A push git rejects as non-fast-forward still refuses, with git's line in the reason.
+# The child's push URL is a path that is no repository: the push fails in transport, and git names no rejection.
+printf 'run-1\n' > "$T/st/auto/disp-1348"; child 1348 g1348; before=$($O rev-parse $W)
+$G -C "$T/c1348" config remote.origin.pushurl "$T/nowhere.git"
+r=$(en 1348); $G -C "$T/c1348" config --unset remote.origin.pushurl
+[ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 1348)" = no ] && ok "P: a push that fails on the network never enters the wave" || ko "P: #1348 entered or moved the wave: '$r'"
+case "$r" in *"WAVE HOLD #1348: the push to $W failed (git: "?*")"*) ok "P: a failed push holds the child and names git's last line";; *) ko "P: no hold for a failed push: '$r'";; esac
+case "$r" in *"WAVE REQUEUE #1348"*) ko "P: a failed push requeued the child: '$r'";; *) ok "P: a failed push requeues nothing";; esac
+[ -e "$T/st/auto/disp-1348" ] && ok "P: a held child keeps its dispatch marker" || ko "P: the marker of a held child was dropped"
+case "$(wfact 1348 run-1)" in "held the push to $W failed"*) ok "P: the hold and its cause are a fact in the issue's ledger";; *) ko "P: ledger fact of #1348: '$(wfact 1348 run-1)'";; esac
+
+# A non-fast-forward rejection: the remote's wave tip moves on every gate run, so each push is behind it. Git rejects both
+# pushes (fetch first), the entry refuses, and the reason quotes git's own last stderr line.
+cat > "$T/advance.sh" <<'EOF'
+#!/bin/bash
+# Moves the wave branch on the remote by one commit with a new file, so the child's push is behind its tip.
+export GIT_INDEX_FILE="$ADV_ROOT/adv.idx"; rm -f "$GIT_INDEX_FILE"
+b=$(echo "$RANDOM$RANDOM$$" | /usr/bin/git -C "$ADV_ROOT/origin.git" hash-object -w --stdin) || exit 1
+/usr/bin/git -C "$ADV_ROOT/origin.git" read-tree "$ADV_REF" || exit 1
+/usr/bin/git -C "$ADV_ROOT/origin.git" update-index --add --cacheinfo "100644,$b,adv-$b.txt" || exit 1
+t=$(/usr/bin/git -C "$ADV_ROOT/origin.git" write-tree) || exit 1
+c=$(/usr/bin/git -C "$ADV_ROOT/origin.git" commit-tree "$t" -p "$(/usr/bin/git -C "$ADV_ROOT/origin.git" rev-parse "$ADV_REF")" -m adv) || exit 1
+/usr/bin/git -C "$ADV_ROOT/origin.git" update-ref "$ADV_REF" "$c"
+EOF
+printf 'run-1\n' > "$T/st/auto/disp-1349"; child 1349 g31; before=$($O rev-parse $W)
+r=$(GATES="ADV_ROOT=$T ADV_REF=refs/heads/$W bash $T/advance.sh" en 1349)
+[ "$($O rev-parse $W)" != "$before" ] && [ "$(entered 1349)" = no ] && ok "P: a non-fast-forward push does not enter the child" || ko "P: #1349 entered: '$r'"
+case "$r" in *"WAVE REQUEUE #1349: the push to $W was refused: HEAD is not a fast-forward of its tip (git: "?*")"*) ok "P: a rejected push refuses, and its reason quotes git's last line";; *) ko "P: no git line in the refusal: '$r'";; esac
+
 # E: a child whose review asked for changes never enters the wave branch (#376). It is held where it stands: nothing is
 # requeued, so the fix round can work on the same branch and the review can be read again.
 before=$($O rev-parse $W); printf 'run-1\n' > "$T/st/auto/disp-20"; child 20 g20; r=$(REV=CHANGES en 20)

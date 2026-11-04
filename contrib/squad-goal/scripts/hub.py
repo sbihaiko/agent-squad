@@ -4719,7 +4719,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
-#flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}.ltlg b{font-weight:600}.ltlg em{font-style:normal;color:var(--mute)}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:var(--radius-sm)}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:var(--radius-sm)}#flowb .ltmore>summary{cursor:pointer;color:var(--mute);margin:2px 0 6px}
+#flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}.ltlg b{font-weight:600}.ltlg em{font-style:normal;color:var(--mute)}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:var(--radius-sm)}.ltlg i.lthollow{width:10px;height:10px;border-radius:var(--radius-full);background:var(--chart-bg);border:1px solid var(--chart-ink)}.ltlg i.ltfilled{width:10px;height:10px;border-radius:var(--radius-full);background:var(--chart-ink)}.ltlg i.ltroll{height:3px;background:var(--chart-bar)}.ltlg i.ltband{background:var(--chart-series-3);opacity:.28}.ltlg i.ltsolid{height:2px;border-radius:0;background:var(--chart-series-8)}.ltlg i.ltdash{height:2px;border-radius:0;background:repeating-linear-gradient(90deg,var(--chart-ok) 0 6px,transparent 6px 9px)}.ltlg i.ltdot{height:2px;border-radius:0;background:repeating-linear-gradient(90deg,var(--chart-series-5) 0 2px,transparent 2px 6px)}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:var(--radius-sm)}#flowb .ltmore>summary{cursor:pointer;color:var(--mute);margin:2px 0 6px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:var(--card);z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:var(--line);border-radius:var(--radius-lg);padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:var(--radius-full);margin-right:7px;background:var(--mute)}
@@ -5649,16 +5649,30 @@ const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.r
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
-let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false,win:"full"};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; a choice stays for the visit and is never stored (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304)
+let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe, the Type and the scale stay the visit's choice (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304); only the average reference shows at first, and the median and p85 are toggles (#1332)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
 const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
+const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe, the Type and the scale stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
+const ltGap=16;   // the least vertical space between two gutter tag baselines, one body line (#1332)
+const ltTextW=s=>9*String(s).length;   // a tag's estimated painted width at the body size: a loose nine units per character, so the gutter holds the longest tag (#1332)
 let LT_FRAME;const ltX=x=>ltP+x*LT_FRAME.width,ltY=y=>ltP+LT_FRAME.height-y*LT_FRAME.height;
-const ltLine=(v,col,dash)=>v&&v.y!=null?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line><text x=${ltP+LT_FRAME.width-3} y=${ltY(v.y)-5} text-anchor=end fill="${col}">${esc(v.label)} ${esc(v.text)}</text>`:"";   // the line labels itself at its right end, in its own colour (#1304)
+const ltTag=(v,col,dash)=>v&&v.y!=null?{ly:ltY(v.y),name:v.label,text:v.text,col,dash}:null;   // one reference tag: its name, its value and its line's paint (#1332)
+const ltGutter=(items,top,h,gap)=>{const out=items.slice().sort((a,b)=>a.ly-b.ly),n=out.length;   // lay the tags out in baseline units, inside the plot's own top and height (#1332)
+  if(!n)return out;
+  if(n>1&&(n-1)*gap>h){const step=h/(n-1);out.forEach((t,i)=>t.ty=top+i*step);return out}   // a frame too short for the block spreads the tags evenly across it (#1332)
+  let at=top;
+  for(const t of out){t.ty=t.ly>at?t.ly:at;at=t.ty+gap}
+  const over=out[n-1].ty-(top+h);   // a block that runs past the floor slides up as a whole
+  if(over>0){for(const t of out)t.ty=t.ty-over;let below=null;
+    for(let i=n-1;i>=0;i--){const hi=below===null?out[i].ty:below-gap;out[i].ty=out[i].ty>hi?hi:out[i].ty;below=out[i].ty}
+    const down=top-out[0].ty;if(down>0)for(const t of out)t.ty=t.ty+down}   // a block that runs past the ceiling slides down again
+  return out};
+const ltLine=(v,col,dash)=>v&&v.y!=null?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=1${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // one 1px reference line, patterned so it reads in grayscale (#1332)
 const ltKM=c=>c.survival?`<p class="fnote ltkm">${esc(c.survival.text)} · ${esc(c.wip.text)}${c.gate?` · ${esc(c.gate.label)} ${esc(c.gate.text)}`:""}</p>`:"";   // the hub's survival reading, work in progress and gate time as one text metric, in its words (#1250, #1304)
 const ltV=v=>v?esc(v.text):"?";   // a summary value's text, or a question mark where it is not estimable
 const LT_MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -5670,12 +5684,14 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const fitMode=LT.win==="fit"&&!!c.fit,printed=fitMode?ltRangeText(c.fit):ltRangeText(c.range);   // the range control switches what this one payload holds (#1334)
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
-      `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label>`+
+      `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
+      `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Linear scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+   // the scale sits beside the filters, where the reading starts (#1332)
+      `<span class=ltgrp><b class=ltgl>Lines</b> <label><input type=checkbox id=ltmd${LT.md?" checked":""}> Median</label> <label><input type=checkbox id=ltp85${LT.p85?" checked":""}> p85</label></span>`+   // the average line is the default; the median and p85 are one toggle each (#1332)
     `</p>`+
     `<details class=ltmore><summary>More</summary>`+
     grp("Measurement",`<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
       `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label>`)+   // the span each dot measures, from the recorded transitions (#905)
-    " "+grp("Display",`<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> <label>Band <input type=checkbox id=ltbd${LT.band?" checked":""}></label>`)+" "+
+    " "+grp("Display",`<label>Band <input type=checkbox id=ltbd${LT.band?" checked":""}></label>`)+" "+
     ((LT.zr||c.fit)?grp("View",(LT.zr?`<span class=fchip id=ltz>Back to ${esc(backTo)} <button id=ltzc type=button title="clear the zoom">Clear</button></span> `:"")+
       (c.fit?`<span class=fchip id=ltrng><button id=ltfit type=button>Fit data</button><button id=ltfull type=button>Full window</button> ${esc(printed)}</span>`:""))+" ":"")+   // one chip while zoomed; the range control switches x from the held payload and prints the range (#1147, #1334)
     `<p class=fnote>Set the controls in order: filters, then measurement, then display, then view.</p>`+
@@ -5684,21 +5700,27 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   if(!n)return ctl+`<p class=fnote>no closed card in this timeframe · ${ltExOf(c)}</p>`+ltKM(c);
   const eX=d=>fitMode&&d.xf!=null?d.xf:d.x;   // the x source of every mark in this view (#1334)
   const bp=!LT.band||!c.band?null:(fitMode&&c.band.fit&&c.dots.every(d=>d.xf!=null)?c.band.fit.polygon:[...c.dots.map(d=>({x:eX(d),y:d.rolling.y_high})),...c.dots.slice().reverse().map(d=>({x:eX(d),y:d.rolling.y_low}))]);   // the band takes the same x as the marks, per dot, never the fit polygon over a mixed payload (#1334)
-  const band=bp?`<polygon points="${bp.map(p=>`${ltX(p.x)},${ltY(p.y)}`).join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band hides by default; when asked for, it is the hub's polygon (#1304, #1334)
-  const roll=`<polyline fill=none stroke="var(--chart-bar)" stroke-width=2 points="${c.dots.map(d=>`${ltX(eX(d))},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling mean</title></polyline>`;   // the trend keeps its chart accent (#1146)
+  const band=bp?`<polygon points="${bp.map(p=>`${ltX(p.x)},${ltY(p.y)}`).join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Rolling spread ±1 SD</title></polygon>`:"";   // the band hides by default; when asked for, it is the hub's polygon, named apart from the median's CI (#1304, #1334, #1332)
+  const roll=`<polyline fill=none stroke="var(--chart-bar)" stroke-width=3 points="${c.dots.map(d=>`${ltX(eX(d))},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling mean</title></polyline>`;   // the trend is the strongest line, about 3px (#1146, #1332)
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
-    `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
-  const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
+    `<text x=${ltP} y=${ltP-26} text-anchor=start fill=${ink}>Lead time (${c.scale==="cube"?"cube root":c.scale})</text>`+   // the y axis is titled above it, outside the plot (#1332)
+    `<text x=${ltP} y=${base+31} text-anchor=start fill=${ink}>Closed date</text>`;   // the x axis is titled below it (#1332)
+  const lines=ltLine(c.average,"var(--chart-series-8)","")+(LT.md?ltLine(c.median,"var(--chart-ok)","6 3"):"")+(LT.p85?ltLine(c.p85,"var(--chart-series-5)","1 3"):"");   // the average shows at first; the median and p85 are toggles, each with its own 1px pattern, a long dash and a dot (#1332)
+  const tags=ltGutter([ltTag(c.average,"var(--chart-series-8)",""),LT.md?ltTag(c.median,"var(--chart-ok)","6 3"):null,LT.p85?ltTag(c.p85,"var(--chart-series-5)","1 3"):null].filter(Boolean),ltP,LT_FRAME.height,ltGap);
+  const gut=22+(tags.map(t=>ltTextW(`${t.name} ${t.text}`)).sort((a,b)=>b-a)[0]||0)+8;   // the reserved right gutter fits the longest tag it carries, so no value runs past the viewBox (#1332)
+  const gutter=tags.map(t=>`<line x1=${ltP+LT_FRAME.width} x2=${ltP+LT_FRAME.width+6} y1=${t.ly} y2=${t.ty} stroke="${t.col}" stroke-width=1></line>`+   // a short leader joins a moved tag to its line (#1332)
+    `<line x1=${ltP+LT_FRAME.width+8} x2=${ltP+LT_FRAME.width+18} y1=${t.ty} y2=${t.ty} stroke="${t.col}" stroke-width=1${t.dash?` stroke-dasharray="${t.dash}"`:""}></line>`+   // the swatch keeps the line's paint and pattern (#1332)
+    `<text class=lttg x=${ltP+LT_FRAME.width+22} y=${t.ty} text-anchor=start fill=var(--chart-axis)>${esc(t.name)} ${esc(t.text)}</text>`).join("");   // the name and the value read together in grayscale, whichever line they belong to; each sits in the reserved right gutter, laid out apart (#1332)
   const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.count,shown=k.cards.slice(0,5).map(n=>"#"+n).join(", ")+(m>5?` +${m-5} more`:""),title=m>1?`${m} issues: ${shown}`:`#${k.dots[0].n} ${k.dots[0].title}`;   // a lone card is one hollow dot; a cluster is one outlined filled dot of the payload's one fixed radius (#1331)
     const cx=ltX(k.x),cy=ltY(k.y),strip=k.dots.map(d=>d.stack.map(b=>`${b.column} ${b.text}`).join(", ")).join(" · ");   // the tooltip's stage strip: each dot's column stack, no stacked bar in the plot (#1331)
     return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates and the stage strip; the plot draws no count and no bar (#1331)
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling mean</span>${LT.band&&bp?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation</span>`:""}</p>`+   // the series legend names only the marks the plot draws (#1304)
-    `<p class="flg ltlg"><span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b></span></p>`+ltKM(c);   // one summary row carries each statistic beside its value; the one exclusion total sits in the header (#1248, #1250, #1334); every line also labels itself at its end (#1304)
+  const legend=`<p class="flg ltlg"><span><i class=lthollow></i>Card</span><span><i class=ltfilled></i>Cluster</span><span><i class=ltroll></i>Rolling mean</span>${LT.band&&bp?`<span><i class=ltband></i>Rolling spread ±1 SD</span>`:""}</p>`+   // the series legend names every mark the plot draws; the head line is the one place that states the window (#1304, #1332)
+    `<p class="flg ltlg"><span><i class=ltsolid></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i class=ltdash></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i class=ltdot></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b></span></p>`+ltKM(c);   // one summary row names each reference line beside its value and pattern; the one exclusion total sits in the header (#1248, #1250, #1334)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
-  return ctl+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
+  return ctl+legend+`<svg data-lt viewBox="0 0 ${ltP+LT_FRAME.width+gut} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}${gutter}</svg>`+rows;};   // the layout reserves the right gutter for the reference tags (#1332)
 const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
     (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
@@ -5707,26 +5729,28 @@ const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.t
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0);flowH=flowHeight(window.innerHeight)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>Loading the chart from the hub.</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
-const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>barQuery(k),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>barQuery(k),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}if(k==="lead"){if(CHART_R){Object.assign(LT,CHART_R);CHART_R=null}if(FLOWK===k&&ltOwn())ltGet()}};   // the control chart reads the span its own key restored, and the stored range reaches LT only here, never on the Board tab (#1275)
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
 const ltResize=async()=>{const s=$("#flowb svg[data-lt]");if(!s)return;const r=s.getBoundingClientRect(),v=s.viewBox.baseVal,pw=LT_FRAME.width*r.width/v.width,ph=LT_FRAME.height*r.height/v.height,tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?${LT.zr?`from=${encodeURIComponent(LT.zr[0])}&to=${encodeURIComponent(LT.zr[1])}`:`tf=${LT.tf}`}${ltQ()}&pw=${pw}&ph=${ph}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // a resize re-clusters the marks in the rendered plot size, by the hub's one rule (#1331)
-const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*(LT_FRAME.width+2*ltP)};
+const ltPx=(e,s)=>{const r=s.getBoundingClientRect(),v=s.viewBox.baseVal;return v.width>0&&r.width>0?(e.clientX-r.left)*v.width/r.width:null};   // pointer to SVG user units, so the reserved gutter never bends the drag; a detached or unlaid-out svg names no x; ltClamp holds the plot (#1332)
 const ltClamp=x=>x<ltP?ltP:x>ltP+LT_FRAME.width?ltP+LT_FRAME.width:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
-$("#flowb").onpointerdown=e=>{const s=e.target.closest("svg[data-lt]");LT.noclick=false;if(!s||e.button!==0||!LT.rng)return;const x=ltClamp(ltPx(e,s));LTD={s,x0:x,x1:x,moved:false}};
-document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx(e,LTD.s));LTD.x1=x1;const dx=x1-LTD.x0;if(!LTD.moved&&dx*dx<36)return;LTD.moved=true;
+$("#flowb").onpointerdown=e=>{const s=e.target.closest("svg[data-lt]");LT.noclick=false;if(!s||e.button!==0||!LT.rng)return;const p=ltPx(e,s);if(p==null)return;const x=ltClamp(p);LTD={s,x0:x,x1:x,moved:false}};
+document.addEventListener("pointermove",e=>{if(!LTD)return;const p=ltPx(e,LTD.s);if(p==null)return;const x1=ltClamp(p);LTD.x1=x1;const dx=x1-LTD.x0;if(!LTD.moved&&dx*dx<36)return;LTD.moved=true;
   let sel=LTD.s.querySelector("rect.ltsel");if(!sel){sel=document.createElementNS("http://www.w3.org/2000/svg","rect");sel.setAttribute("class","ltsel");sel.setAttribute("y",ltP-10);sel.setAttribute("height",LT_FRAME.height+10);sel.setAttribute("fill","var(--chart-series-3)");sel.setAttribute("fill-opacity",".18");sel.setAttribute("pointer-events","none");LTD.s.appendChild(sel)}
   sel.setAttribute("x",ltLo(LTD.x0,x1));sel.setAttribute("width",dx<0?-dx:dx)});
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-ltP)/LT_FRAME.width,b=(ltHi(d.x0,d.x1)-ltP)/LT_FRAME.width;if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
-  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}
+  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}   // the timeframe is this visit's choice, never stored (#1247)
   if(e.target.id==="lty"){LT.ty=e.target.value;barMoved();return}
-  if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
+  if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;chartSave();LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
   if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}
-  if(e.target.id==="ltbd"){LT.band=e.target.checked;drawFlow();return}};   // the band redraws what the plot already holds, never a new read (#1304)
+  if(e.target.id==="ltbd"){LT.band=e.target.checked;drawFlow();return}   // the band redraws what the plot already holds, never a new read (#1304)
+  if(e.target.id==="ltmd"){LT.md=e.target.checked;drawFlow();return}   // a reference toggle redraws the held payload, never a new read (#1332)
+  if(e.target.id==="ltp85"){LT.p85=e.target.checked;drawFlow();return}};
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltzc"){LT.zr=null;ltGet();return}
   if(e.target.id==="ltfit"){LT.win="fit";drawFlow();return}
@@ -5844,14 +5868,20 @@ function paintHL(){
 // A tab only shows one pane; every pane keeps its own poll (#889).
 let TAB="board",lastRead=0,readStale=false;
 const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
+const HASH={board:"#kanban",runs:"#runs",flow:"#flow",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
+function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||null}   // a card link opens Kanban, where the card is (#1274)
+function tabNext(k,i,n){return k==="ArrowRight"?(i+1)%n:k==="ArrowLeft"?(i+n-1)%n:k==="Home"?0:k==="End"?n-1:-1}
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
- document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
+ document.querySelectorAll(".tabs button").forEach(b=>{const on=b.dataset.t===t;b.classList.toggle("on",on);b.setAttribute("aria-selected",on);b.tabIndex=on?0:-1});
+ if(location.hash!==HASH[t]&&!/issue=\d+/.test(location.hash))history.replaceState(null,"",HASH[t]);   // the address bar names the pane shown; a card link keeps its form
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
  if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen(ls.flowk==="lead"?"lead":"cfd");
  drawMain()}
 function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
 document.querySelector(".tabs").addEventListener("click",tabClick);
+function tabKey(e){const bs=[...document.querySelectorAll(".tabs button[data-t]")],n=tabNext(e.key,bs.indexOf(e.target),bs.length);if(n<0)return;e.preventDefault();e.stopPropagation();setTab(bs[n].dataset.t);bs[n].focus()}
+document.querySelector(".tabs").addEventListener("keydown",tabKey);   // the bar is a tab list: focus and the shown pane move together (#1274)
 $("#lrun").addEventListener("click",tabClick);   // the live-runs card's control opens the Runs tab (#1276)
 $("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(!r)return;const id=r.dataset.id;hl={run:id};paintHL();openRun(id)});   // a card row opens the run sheet, exactly as the list's row does (#1276)
 $("#lrun").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-id]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();const id=r.dataset.id;hl={run:id};paintHL();openRun(id)}});   // the card row answers the keyboard too (#1276)
@@ -5966,7 +5996,7 @@ setInterval(squadChartTick,5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
-setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
+setTab(tabFromLocation()||(TABS[ls.tab]?ls.tab:"board"));   // the phone menu links here with #set (#913); a hash picks its tab (#1274)
 // The open page follows the hub build that served it (#1114)
 const SERVED_BUILD=__BUILD__;let hubNote=null;
 function hubStale(msg){if(!msg){if(hubNote)hubNote.remove();hubNote=null;return}if(!hubNote){hubNote=document.createElement("div");hubNote.className="perr";document.body.append(hubNote)}hubNote.textContent=msg}
