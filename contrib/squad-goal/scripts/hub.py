@@ -1993,7 +1993,7 @@ def loop_state(last, now=None):
     except OSError: pass
     return "off"
 
-LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["stop-now"], "starting": []}   # the hub's rule, so no page holds one
+LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["start", "stop-now"], "starting": []}   # the hub's rule, so no page holds one
 
 LOOP_STARTED = STATE / "watchd.started"   # every watchd start stamps it with its epoch second, from the hub or the terminal
 
@@ -2843,7 +2843,7 @@ def board_items_jq(repo):
     rides the same read as `cr` (#921): the key is its own, never `r`, which the hub reads as the row's repository. After
     each page's items it emits one {"_page": n} line, n the page's own item count, so the read says whether its last page
     was short (#894)."""
-    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,fd:.content.id,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,fd:.content.id,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),gt:(((.fields[]?|select(.name=="Gate Tries")|.value)//null)|if type=="number" and .>0 then . else null end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -2939,7 +2939,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     try:
             out = board_seam().rows(
                 board_items_jq(REPO),
-                kind=True, timeout=120)
+                kind=True, tries=True, timeout=120)
             lines = [json.loads(l) for l in out.splitlines() if l.strip()]
             # The jq answer always ends each page with its count (board_items_jq), even for no card: a read with none answered nothing (#894).
             # A full last page is no sign of a missing page: a project of exactly 100 items answers the same way.
@@ -4034,6 +4034,9 @@ def board(moves=None):
         if i["n"] in planned and _columns_module.SPEC_LABEL in row["l"] and _columns_module.view_column(st, False, i.get("l"))[0] == COLUMN["unscheduled"]:
             row["sb"] = True   # the start control: a Backlog spec whose plan holds a ticket (#1128); the count is asked on the press only
         if i.get("b"): row["b"] = i["b"]
+        if isinstance(i.get("gt"), (int, float)) and i["gt"] > 0:
+            row["gt"] = int(i["gt"])   # the card's Gate Tries, off the field the read carried (#1255)
+            row["gchip"] = f"Gating · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
         ho = holder_text(i)                      # the run that holds the card, read from the seam (#241)
@@ -4845,10 +4848,11 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #pj{font:inherit;font-weight:600;background:none;border:1px solid transparent;padding:2px 8px;min-height:36px}#pj:hover{border-color:var(--line)}
 .tabs{display:flex;gap:4px}.tabs button{white-space:nowrap}.tabs button.on{border-color:var(--acc);color:var(--acc)}
 .rkt{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 12px}.rkt button{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:6px 10px;min-height:36px;color:var(--mute);font-weight:600}.rkt button.on{color:var(--fg);border-bottom-color:var(--acc)}.rkt button:hover{color:var(--fg)}
-#tab-flow:has(#flowov:not([hidden])) #main{display:none}#tab-flow #main{min-height:60vh}
+#tab-runs #main{min-height:60vh}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
 #lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child
+#lrmore{display:block;width:100%;margin:2px 0 0;text-align:center}
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#list{max-width:900px}
 /*BOARD_LANES_CSS*/
 /*RUN_SHEET_CSS*/
@@ -4927,7 +4931,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Throughput</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=runs role=tab>Runs</button><button data-t=flow role=tab>Flow</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <script id=sideRule>function sideState(saved,wide){return saved==="shut"&&!!wide}function sideNext(saved,wide){return sideState(saved,wide)?"open":"shut"}</script>
 <div id=win>
@@ -4941,9 +4945,9 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <section id=tab-board class="pane on" aria-label=Board>
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
+<section id=tab-runs class=pane aria-label=Runs><div id=main></div></section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
-<div id=main></div>
+<div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=flowchips></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
@@ -5085,24 +5089,33 @@ const saveGroups=()=>{ls.groups=[...openGroups];save()};
 const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
 const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
 const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":h<=24?"24h":"d"};
+// The Monitor's live-runs card (#1276): a bounded glance, never a second full list. Its summary states the whole truth --
+// the live count and the oldest live run's age -- even when the rows are capped. It draws at most LIVE_ROWS rows, oldest
+// first, and one control that opens the Runs tab. Each row is the history's own row, so it still opens the run sheet.
+const LIVE_ROWS=3;
+function liveCard(live,row){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0);   // a reduce, never a spread: the live list is unbounded
+ const shown=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
+ const head=n?`${n} live · oldest ${age(oldest)}`:"none";   // the count is every live run, never the rows drawn
+ const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
+ return{head,html:(shown.map(row).join("")||"<div class=m>no live runs</div>")+more}}
 function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
   const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
   const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
-  {const live=runs.filter(r=>r.rank===0);$("#lrun").innerHTML=live.map(row).join("")||"<div class=m>no live runs</div>";$("#lrs").textContent=live.length?`${live.length} \u00b7 ${live.filter(r=>r.state==="running").length} running`:"none"}   // the sidebar card: the runs that are live now, the same rows as the history
+  {const live=runs.filter(r=>r.rank===0),c=liveCard(live,row);$("#lrun").innerHTML=c.html;$("#lrs").textContent=c.head}   // the sidebar card: a bounded glance of the runs that are live now (#1276)
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
-  document.querySelectorAll(".r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689)
+  document.querySelectorAll("#list .r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689); the card's rows open through the #lrun handler below (#1276)
     hl={run:id};paintHL();openRun(id)});   // a run opens in the side sheet (#984)
 }
-// The Runs chart tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
-function drawMain(){if(typeof TAB==="string"&&TAB!=="flow")return;
-  const row=r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span><b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</span></div>`;
+// The Runs tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
+function drawMain(){if(TAB!=="runs")return;
+  const row=(r,verdict)=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button>${verdict?`<span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span>`:""}<b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</span></div>`;
   const live=runs.filter(r=>r.rank===0||r.running),ids=new Set(live.map(r=>r.id)),ended=ENDED.filter(r=>!ids.has(r.id));
-  $("#main").innerHTML=(live.length?"<h3>Live</h3>"+live.map(row).join(""):"")+(ended.length?"<h3>Ended today</h3>"+ended.map(row).join(""):"")||"<div class=m>no run is live and none ended today</div>"}
+  $("#main").innerHTML=(live.length?"<h3>Live</h3>"+live.map(r=>row(r,false)).join(""):"")+(ended.length?"<h3>Ended today</h3>"+ended.map(r=>row(r,true)).join(""):"")||"<div class=m>No run is live and none ended today.</div>"}
 function refresh(){plan();drawList();paintHL();drawMain();rkFollow()}
 function applyFilter(){runs=allRuns.filter(r=>r.kind!=="childcc")}   // the childcc pass is drawn in the WORKERS group, never a pane (#598)
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
@@ -5709,7 +5722,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -5782,18 +5795,21 @@ function paintHL(){
 }
 // highlight:end
 
-// The frame of the mock (#889): four tabs over one page. A tab only shows one pane; every pane keeps its own poll.
+// A tab only shows one pane; every pane keeps its own poll (#889).
 let TAB="board",lastRead=0,readStale=false;
-const TABS={board:"#tab-board",flow:"#tab-flow",set:"#tab-set"};
+const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
- if(t==="flow"){if(o&&o.runs)$("#flowov").hidden=true;else if(!o||!o.keep){if($("#flowov").hidden)flowOpen("cfd")}}
+ if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen("cfd");
  drawMain()}
-document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
-$("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
-function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead");const c=h?"":flowFilterChip(bo.fw||[],bo.fs||[],bo.fk||[],!!FLOWFF[k]),x=$("#flowchips");if(x&&x.dataset.h!==c){x.dataset.h=c;x.innerHTML=c}}   // the one Board filter chip, drawn with the chart tabs for both charts (#1147)
+function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
+document.querySelector(".tabs").addEventListener("click",tabClick);
+$("#lrun").addEventListener("click",tabClick);   // the live-runs card's control opens the Runs tab (#1276)
+$("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(!r)return;const id=r.dataset.id;hl={run:id};paintHL();openRun(id)});   // a card row opens the run sheet, exactly as the list's row does (#1276)
+$("#lrun").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-id]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();const id=r.dataset.id;hl={run:id};paintHL();openRun(id)}});   // the card row answers the keyboard too (#1276)
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead");const c=h?"":flowFilterChip(bo.fw||[],bo.fs||[],bo.fk||[],!!FLOWFF[k]),x=$("#flowchips");if(x&&x.dataset.h!==c){x.dataset.h=c;x.innerHTML=c}}   // the one Board filter chip, drawn with the chart tabs for both charts (#1147)
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});

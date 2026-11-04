@@ -52,6 +52,7 @@ test-fastloop-interval.sh 8.33
 test-fastloop-load.sh 0.11
 test-fastloop-orphan.sh 0.73
 test-fastloop-pid.sh 0.05
+test-gate-attempts.sh 9.36
 test-gate-lock.sh 14.58
 test-gate.sh 0.56
 test-gh-pass-bounded.sh 3.40

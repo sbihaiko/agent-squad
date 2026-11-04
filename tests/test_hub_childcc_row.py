@@ -167,7 +167,7 @@ def _page(hub, all_runs, click=None):
 const HTML={list:""},CLICK={};
 const $=s=>({set innerHTML(v){HTML[s.slice(1)]=v},get innerHTML(){return HTML[s.slice(1)]}});
 const document={querySelectorAll:s=>{if(s===".gh")return [];
-  if(s!==".r[data-id]")throw new Error("selector "+s);
+  if(s!=="#list .r[data-id]")throw new Error("selector "+s);
   return [...HTML.list.matchAll(/<div class="r [^"]*"[^>]*data-id="([^"]+)"/g)].map(m=>{const e={dataset:{id:m[1]}};
     Object.defineProperty(e,"onclick",{set:f=>{CLICK[m[1]]=f}});return e})}};
 const esc=s=>String(s),age=s=>s+"s",usd=v=>"$"+v,name=r=>r.id,labelTip=r=>"",loadMark=r=>"",sub=r=>"";
@@ -175,6 +175,7 @@ const GROUPS=[["running","WORKERS"]],groupOf=r=>"running",groupHeader=()=>({text
 let openGroups=new Set(["running"]);const saveGroups=()=>{},save=()=>{};
 let N=1,focus=null,slots=[],pins=new Set(),allRuns=__RUNS__,runs=allRuns.filter(r=>r.kind!=="childcc");
 const refresh=()=>{};
+const LIVE_ROWS=3, liveCard=()=>({head:"",html:""});   // the card is drawn before drawList and has its own suite (#1276)
 let hl=null,opened=null;const paintHL=()=>{},openRun=id=>{opened=id};
 __DRAW__
 drawList();

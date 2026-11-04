@@ -10,7 +10,7 @@ mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledg
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 # The stub gh logs every argv; issue 42 carries the owner freeze label (the issue read is one GraphQL query), every other read answers {}.
-printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\ncase "$*" in *"issue(number: 42)"*) printf "{\\"data\\":{\\"repository\\":{\\"i42\\":{\\"number\\":42,\\"state\\":\\"OPEN\\",\\"labels\\":{\\"nodes\\":[{\\"name\\":\\"frozen:owner\\"}]}}}}}";; *) printf "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\ncase "$*" in *"issue(number: 77)"*) printf "{\\"data\\":{\\"repository\\":{\\"i77\\":{\\"number\\":77,\\"state\\":\\"CLOSED\\",\\"labels\\":{\\"nodes\\":[]}}}}}";; *"issue(number: 78)"*) printf "not json";; *"issue(number: 42)"*) printf "{\\"data\\":{\\"repository\\":{\\"i42\\":{\\"number\\":42,\\"state\\":\\"OPEN\\",\\"labels\\":{\\"nodes\\":[{\\"name\\":\\"frozen:owner\\"}]}}}}}";; *) printf "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 # cnt <n> [loop]: the count of the issue's ledger (#673), read through its one module.
 cnt() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" count "x/y#$1" ${2:-}; }
 nsc() { cat "$T"/st/cq/* 2>/dev/null | /usr/bin/grep -c '^SQUAD-NOT-STARTABLE:'; }
@@ -127,6 +127,19 @@ echo req > "$T/st/auto/disp-42"; o=$(w requeue 42 "the wave reached its age cap"
   && ok "an age-cap requeue leaves an issue frozen for the owner where it is" || ko "frozen #42: '$o', board '$(/usr/bin/grep ' 42$' "$T/board.log")'"
 echo req > "$T/st/auto/disp-44"; o=$(w requeue 44 "the wave reached its age cap" cap)
 [ ! -e "$T/st/auto/disp-44" ] && /usr/bin/grep -q ' Todo 44$' "$T/board.log" && ok "an age-cap requeue still frees an issue nothing stopped" || ko "free #44: '$o'"
+# #1335: a closed issue never goes back to the queue. A capped empty wave landed without a child the owner has closed (no code):
+# the requeue names it on one line, leaves its marker and its card alone, and returns 0. An open issue still goes back.
+echo req > "$T/st/auto/disp-77"; o77=$(w requeue 77 "the wave reached its age cap (7200 s) and landed without this child: it is back in the queue" cap); rc77=$?
+[ "$rc77" = 0 ] && [ -e "$T/st/auto/disp-77" ] && ! /usr/bin/grep -q ' Todo 77$' "$T/board.log" && [ ! -e "$T/st/cq/77-wave$$.md" ] && [ "$(cnt 77)" = 0 ] \
+  && ok "a closed issue is not requeued by the age cap: marker and card stay" || ko "closed #77 (rc $rc77): marker $(/bin/ls "$T/st/auto" | tr '\n' ' '), board '$(/usr/bin/grep ' 77$' "$T/board.log")', '$o77'"
+case "$o77" in "WAVE KEEP #77: the issue is closed, so "*" does not put it back in the queue"*) ok "the keep is named on one line";; *) ko "no keep line for #77: '$o77'";; esac
+echo req > "$T/st/auto/disp-77"; o77=$(w requeue 77 "the local gates failed: x")
+[ -e "$T/st/auto/disp-77" ] && [ "$(cnt 77)" = 0 ] && ! /usr/bin/grep -q ' Todo 77$' "$T/board.log" && case "$o77" in *"WAVE KEEP #77"*) true;; *) false;; esac \
+  && ok "a closed issue is not requeued by a failure either, and counts nothing" || ko "closed #77, failure: '$o77', count $(cnt 77)"
+echo req > "$T/st/auto/disp-78"; o78=$(w requeue 78 "the local gates failed: y")
+[ ! -e "$T/st/auto/disp-78" ] && /usr/bin/grep -q ' Todo 78$' "$T/board.log" && case "$o78" in *"WAVE REQUEUE #78"*) true;; *) false;; esac \
+  && ok "an issue whose state cannot be read is requeued as before" || ko "unread #78: '$o78', board '$(/usr/bin/grep ' 78$' "$T/board.log")'"
+case "$o78" in *"state could not be read"*) ok "the unread state is named";; *) ko "no note that #78's state was not read: '$o78'";; esac
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail

@@ -295,6 +295,9 @@ class Supervisor:
                 raise Refused(f"session {sid} is already recorded")
             (self.state / TRANSCRIPTS).mkdir(mode=0o700, exist_ok=True)
             env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])}
+            # #1320: the SDK spawns and reaps a `claude -v` child before every prompt. The hosted session owns one child, its
+            # CLI, so the probe is off and nothing but the CLI is ever reaped behind the SDK.
+            env.setdefault("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
             argv = hosted_argv()
             sdk_check(argv, env)
             master, slave = pty.openpty()

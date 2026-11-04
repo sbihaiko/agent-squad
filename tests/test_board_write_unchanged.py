@@ -16,8 +16,8 @@ from tests import shell_suites
 SCRIPTS = Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"
 
 
-def _suite(name: str) -> subprocess.CompletedProcess[str]:
-    return shell_suites.run(SCRIPTS / name)
+def _suite(name: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return shell_suites.run(SCRIPTS / name, extra_env=extra_env)
 
 
 @pytest.mark.heavy
@@ -33,10 +33,8 @@ def test_the_janitor_writes_run_fields_only_when_the_holder_changes() -> None:
 
 
 @pytest.mark.heavy
-def test_the_move_suite_runs_without_the_loops_exported_variables(monkeypatch) -> None:
+def test_the_move_suite_runs_without_the_loops_exported_variables() -> None:
     """env.sh exports SG_MOVE_BY=loop (#861), and a gate the live loop runs inherits it: the suite then reads a dispatch
-    context where it asserts that a move with none records none (#864). The suite is handed a clean environment."""
-    monkeypatch.setenv("SG_MOVE_BY", "loop")
-    monkeypatch.setenv("SG_CHECKOUT", "/live/loop/checkout")
-    r = _suite("test-board-move-unchanged.sh")
+    context where it asserts that a move with none records none (#864). The suite is handed those variables on purpose."""
+    r = _suite("test-board-move-unchanged.sh", extra_env={"SG_MOVE_BY": "loop", "SG_CHECKOUT": "/live/loop/checkout"})
     assert r.returncode == 0, r.stdout + r.stderr

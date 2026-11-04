@@ -410,15 +410,28 @@ HOSTED_TOOLS = ["Read", "Glob", "Grep", "Edit", "MultiEdit", "Write", "Bash"]
 
 def host():
     """A hosted session: each stdin line is a prompt run through this adapter's options, or a `!` shell command run in the
-    working directory. The supervisor writes the lines and reads what this prints."""
+    working directory. The supervisor writes the lines and reads what this prints.
+
+    One event loop serves every prompt of the process (#1320). A loop per prompt let an SDK child outlive the loop that
+    watched it: the child watcher is process-wide, so a child of one prompt was still being waited on when that loop
+    closed, and the next prompt's transport could read its own child as reaped behind the SDK (`Unknown child process
+    pid N, will report returncode 255`)."""
     adapter = SdkAdapter()
-    for line in sys.stdin:
+    anyio.run(_serve, adapter)
+
+
+async def _serve(adapter):
+    """The hosted process's one loop: a line of stdin, then a `!` command or a prompt, until stdin closes."""
+    while True:
+        line = await anyio.to_thread.run_sync(sys.stdin.readline)
+        if not line:
+            return
         text = line.rstrip("\n")
         if text.startswith("!"):
             done = subprocess.run(text[1:], shell=True, capture_output=True, text=True)
             print(done.stdout + done.stderr, end="", flush=True)
         elif text:
-            anyio.run(_answer, adapter, text)
+            await _answer(adapter, text)
 
 
 async def _answer(adapter, prompt):

@@ -149,11 +149,20 @@ HOST_ROOTS = ("MESENAI_REPO", "MESENAI_ROOT")
 HOST_ABSENT_REASON = f"no MesenAI checkout on this runner: {' and '.join(HOST_ROOTS)} absent"
 NODE_BOUND_MARKER = "node_bound"
 NODE_ABSENT_REASON = "no node on this runner: the test runs the page's JavaScript under node"
+CI_RUNNER_SWITCH = "SQUAD_CI_RUNNER"
+
+
+def ci_runner_simulated():
+    """True while `SQUAD_CI_RUNNER=1`: the MesenAI checkout and the node binary are hidden, as on a CI runner that holds neither.
+    One switch, so the fixture-bound rule can be checked on this machine (#1323, ADR-0139)."""
+    return os.environ.get(CI_RUNNER_SWITCH) == "1"
 
 
 def host_present():
     """True when this runner holds the MesenAI checkout a host-bound test needs: `MESENAI_REPO` and `MESENAI_ROOT`,
     each set to a directory that exists. A name that is set but absent on disk counts as absent (ADR-0139)."""
+    if ci_runner_simulated():
+        return False
     for name in HOST_ROOTS:
         value = os.environ.get(name)
         if not value or not Path(value).expanduser().is_dir():
@@ -161,23 +170,27 @@ def host_present():
     return True
 
 
+def node_present():
+    return not ci_runner_simulated() and shutil.which("node") is not None
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "host_bound: needs a MesenAI checkout this runner may not hold; deselected, never skipped, when it is absent (ADR-0139)")
+        "host_bound(reason): needs a MesenAI checkout this runner may not hold; deselected, never skipped, when it is absent (ADR-0139)")
     config.addinivalue_line(
         "markers",
         "node_bound: needs the node binary; deselected, never skipped, when it is absent (ADR-0139)")
+    config._absent_deselected = []
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
-    """Name the deselection in the run's own summary, so a host-bound suite reads its removal instead of a bare count."""
-    n = len(getattr(config, "_host_bound_deselected", []))
-    if n:
-        terminalreporter.write_line(f"{n} host-bound test(s) deselected: {HOST_ABSENT_REASON}")
-    m = len(getattr(config, "_node_bound_deselected", []))
-    if m:
-        terminalreporter.write_line(f"{m} node-bound test(s) deselected: {NODE_ABSENT_REASON}")
+    """Print each deselected test by id and reason, so a runner's removal is read by name, never as a bare count (ADR-0139)."""
+    rows = config._absent_deselected
+    for nodeid, reason in rows:
+        terminalreporter.write_line(f"deselected: {nodeid} -- {reason}")
+    if rows:
+        terminalreporter.write_line(f"{len(rows)} test(s) deselected for a fixture this runner lacks (ADR-0139)")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -192,15 +205,17 @@ def pytest_collection_modifyitems(config, items):
     # A test whose fixture is a repository this runner does not own is deselected, never skipped: a skip would read green
     # while proving nothing (ADR-0018 item 6; ADR-0062 items 2 and 3 refuse a skip). The deselection is reported by name.
     if not host_present():
-        deselected = [it for it in items if it.get_closest_marker(HOST_BOUND_MARKER)]
-        if deselected:
-            config.hook.pytest_deselected(items=deselected)
-            items[:] = [it for it in items if not it.get_closest_marker(HOST_BOUND_MARKER)]
-            config._host_bound_deselected = deselected
+        _deselect_absent(config, items, HOST_BOUND_MARKER, HOST_ABSENT_REASON)
     # The same rule for node: a runner without the binary deselects the test that runs the page under it (ADR-0139).
-    if shutil.which("node") is None:
-        deselected = [it for it in items if it.get_closest_marker(NODE_BOUND_MARKER)]
-        if deselected:
-            config.hook.pytest_deselected(items=deselected)
-            items[:] = [it for it in items if not it.get_closest_marker(NODE_BOUND_MARKER)]
-            config._node_bound_deselected = deselected
+    if not node_present():
+        _deselect_absent(config, items, NODE_BOUND_MARKER, NODE_ABSENT_REASON)
+
+
+def _deselect_absent(config, items, marker_name, absent_reason):
+    gone = [it for it in items if it.get_closest_marker(marker_name)]
+    if not gone:
+        return
+    config.hook.pytest_deselected(items=gone)
+    items[:] = [it for it in items if not it.get_closest_marker(marker_name)]
+    config._absent_deselected.extend(
+        (it.nodeid, it.get_closest_marker(marker_name).kwargs.get("reason", absent_reason)) for it in gone)

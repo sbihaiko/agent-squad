@@ -9,8 +9,11 @@
 # to one loop, and a proof that matched one absolute path read the other copy's holder as stale and ran a second loop (#1312).
 is_watchd() { /bin/ps -p "$1" -ww -o command= 2>/dev/null | grep -qE '(^|[ /])watchd\.sh run$'; }
 alive() { pid=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$pid" ] || { [ -s "$P" ] && pid=$(cat "$P"); }; [ -n "$pid" ] && is_watchd "$pid"; }
-# orphans: the lanes of this scripts dir that pid 1 holds, so their supervisor is gone, one "<pid> <lane>" a line (#959)
-orphans() { /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v a="$(dirname "$me")" '$2 == 1 { for (i = 3; i <= NF; i++) if ($i == a "/watch.sh" || $i == a "/fastloop.sh" || $i == a "/cqflush.sh") print $1, substr($i, length(a) + 2) }'; }
+# orphans: the lanes of this profile's state directory that pid 1 holds, so their supervisor is gone, one "<pid> <lane>" a line (#959).
+# A lane is named by its own pid file under $SG_STATE, whichever copy of the skill it runs from (#1313), so a profile never reads another's lanes.
+orphans() { /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | awk '$2 == 1 { for (i = 3; i <= NF; i++) if ($i ~ /(^|\/)(watch|fastloop|cqflush)\.sh$/) { print $1, $i; break } }' | while read -r p l; do
+  case ${l##*/} in watch.sh) f=$SG_STATE/locks/watch/pid;; fastloop.sh) f=$SG_STATE/fastloop.pid;; cqflush.sh) f=$SG_STATE/cqflush.pid;; esac
+  [ "$(cat "$f" 2>/dev/null)" = "$p" ] && printf '%s %s\n' "$p" "${l##*/}"; done; }
 # The drivers run the skill this script sits in: its PUBLISHED sha, else its git HEAD, goes to driver.sha, so live-guard.sh
 # names a later publish to another sha as a restart only the owner makes (#700). No sha known: no stale driver.sha.
 record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED" 2>/dev/null); [ -n "$ds" ] || ds=$(git -C "$k" rev-parse HEAD 2>/dev/null)
@@ -57,8 +60,11 @@ drain_pause() {
   case $p in ''|*[!0-9]*) echo "$p"; return;; esac
   [ "$n" -gt 6 ] && n=6; p=$((p << n)); [ "$p" -gt "$m" ] && p=$m; echo "$p"
 }
+# A start during a drain cancels it (#1316): the waiter ends, and the pause the drain set lifts with its marker.
+drain_cancel() { w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && kill -TERM "$w" 2>/dev/null
+  rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-waiter"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"; }
 case "${1:-status}" in
-  start) alive && { echo "watchd already running pid=$pid"; exit 0; }
+  start) alive && { drain_cancel; echo "watchd already running pid=$pid"; exit 0; }
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"
     rm -f "$SG_STATE/token-guard.since" "$SG_STATE/token-over" "$SG_STATE/token-pause"   # a start is a relight: the token guard measures afresh, never an old burn (#515)
@@ -125,7 +131,9 @@ case "${1:-status}" in
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     echo "watchd draining pid=$pid";;
   drain-wait) rm -f "$SG_STATE/drain-reader.fail"   # a failure streak is one drain's own
-    while alive && drain_busy; do sleep "$(drain_pause)"; done
-    alive && bash "$me" stop >/dev/null; rm -f "$SG_STATE/auto/drain";;
+    echo "$$" > "$SG_STATE/auto/drain-waiter"
+    while alive && [ -e "$SG_STATE/auto/drain" ] && drain_busy; do sleep "$(drain_pause)"; done
+    [ -e "$SG_STATE/auto/drain" ] && alive && bash "$me" stop >/dev/null
+    [ "$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)" = "$$" ] && rm -f "$SG_STATE/auto/drain-waiter"; rm -f "$SG_STATE/auto/drain";;
   status) alive && echo "watchd running pid=$pid" || echo "watchd not running";;
 esac

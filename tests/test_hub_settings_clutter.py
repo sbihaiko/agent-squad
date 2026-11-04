@@ -1,7 +1,7 @@
 """The hub's first screen carries no configuration accordion and no History tab.
 
 Configuration lives on the Settings tab: the subscription plans and the run history are panels there, and the sidebar
-keeps only what a reader watches. The tab bar keeps Kanban, Throughput and Settings.
+keeps only what a reader watches. The tab bar keeps Kanban, Runs, Flow and Settings.
 """
 import importlib.util
 import re

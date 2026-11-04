@@ -62,6 +62,19 @@ for _ in $(seq 1 20); do ! alive_sup && break; sleep 1; done
 if alive_sup; then ko "a zombie gate lock held the drain"; else ok "a zombie gate lock does not hold the drain"; fi
 kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null; rm -f "$SG_STATE/locks/gate/pid"
 bash "$T/watchd.sh" stop >/dev/null
+# (#1316) A start during a drain cancels it: the waiter ends, the drain's pause lifts, and the loop stays up once the work ends.
+rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/active-runs.txt"
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+sleep 300 & gp=$!; echo "$gp" > "$SG_STATE/locks/gate/pid"
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" drain >/dev/null; sleep 2
+w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)
+[ -n "$w" ] && kill -0 "$w" 2>/dev/null && ok "a drain with live work runs its waiter" || ko "the drain waiter did not run"
+bash "$T/watchd.sh" start >/dev/null
+[ -n "$w" ] && ! kill -0 "$w" 2>/dev/null && ok "a start during a drain ends its waiter" || ko "a start during a drain left its waiter running"
+[ ! -e "$SG_STATE/auto/off" ] && [ ! -e "$SG_STATE/auto/drain" ] && ok "a start during a drain lifts its pause and marker" || ko "a start during a drain left auto/off or auto/drain"
+kill "$gp" 2>/dev/null; gp=; sleep 4
+alive_sup && ok "the loop stays up after a cancelled drain's work ends" || ko "a cancelled drain stopped the loop"
+bash "$T/watchd.sh" stop >/dev/null
 # (#1228) Only the last invocation of a record counts (ADR-0167): the events after its last run_start or resume. A verdict
 # there is final, a verdict before it is history, and the run's pid is the last call_start or gate_start of that invocation.
 # drain_busy is read out of the real watchd copy and run alone, on one active run at a time.

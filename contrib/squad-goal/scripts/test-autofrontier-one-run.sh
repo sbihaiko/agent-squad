@@ -59,6 +59,8 @@ import json, os, sys
 if sys.argv[1:2] not in ([], ["--go"]) or os.environ.get("CARDS_DOWN"): print("no board", file=sys.stderr); sys.exit(1)
 for i in json.load(open(os.environ["GH_ISSUES"])):
     if i.get("card", "Todo"): print(f"{i['number']}\t{i.get('card', 'Todo')}")
+for n in os.environ.get("CLOSED_CARDS", "").split():   # #1335: a closed issue whose card still reads Todo (the board names no state)
+    print(f"{n}\tTodo")
 PY
 scene() { # <name> [max_children_of_the_dispatch_node [run_max_children]]: fresh state, its own env.sh and workflow graph
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
@@ -569,6 +571,20 @@ printf '#!/bin/bash\nsleep 1\necho READY\n' > "$T/scripts/stack.sh"
 ( SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" > "$d/pass-a.out" 2>&1 & SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" > "$d/pass-b.out" 2>&1 & wait )
 [ "$(lines "$LAUNCHLOG")" = 1 ] && ok "I8: two overlapping passes launch one issue once" || ko "I8: $(lines "$LAUNCHLOG") launch(es) for #133 from two overlapping passes: $(cat "$d/pass-a.out" "$d/pass-b.out" | /usr/bin/grep FRONTIER)"
 [ "$(marked 133)" = 1 ] && ok "I8: one dispatch marker holds #133" || ko "I8: markers for #133: $(marked 133)"
+
+# C (#1335): a closed issue whose card still reads Todo is no waiting card and is never dispatched. The no-slot line counts the
+#   open cards only, and a free slot dispatches the open one beside it and never the closed one.
+scene closedslot
+slots 1; mkdir -p "$d/co/runs/live"; echo '{"event":"spawn_requested"}' > "$d/co/runs/live/record.jsonl"; echo live > "$d/st/active-runs.txt"   # the one slot is taken
+issues '[{"number":341,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":342,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(CLOSED_CARDS=1299 run)
+case "$r" in *"FRONTIER idle: 2 todo, 0 startable ("*"2 no slot"*) ok "C: the no-slot line counts the open Todo cards only";; *) ko "C: no-slot line counts a closed card: '$r'";; esac
+case "$r" in *"#1299"*) ko "C: the no-slot pass names the closed #1299: '$r'";; *) ok "C: the no-slot pass never names a closed issue";; esac
+scene closedfree
+issues '[{"number":351,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(CLOSED_CARDS=1299 run)
+[ "$(marked 351)" = 1 ] && [ "$(marked 1299)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 1 ] && ok "C: a free slot dispatches the open issue and never the closed one" || ko "C: marks 351=$(marked 351) 1299=$(marked 1299), launches $(lines "$LAUNCHLOG"): '$r'"
+case "$r" in *"#1299"*) ko "C: the pass names the closed #1299: '$r'";; *) ok "C: the dispatching pass never names the closed issue";; esac
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }

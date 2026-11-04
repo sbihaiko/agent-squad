@@ -286,9 +286,9 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # The role chains this repository ships. A registry landing changes no caller, so a chain entry moves only in its
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
-    # The owner's chains of 2026-11-03: DeepSeek, the cheapest model, sits second in coding, heads review and
-    # heads vision; Luna heads the router, with Grok 4.5 behind it (3 of 3 on the router contract).
-    "coding": ["claude-kimi-for-coding", "claude-deepseek-flash[1m]", "claude-haiku-5-5", "gpt-6-luna", "claude-nemotron-super"],   # no model that takes no tools (ADR-0147)
+    # The owner's chains: DeepSeek, the cheapest model, heads coding (the order the live copy runs), review and
+    # vision; Luna heads the router, with Grok 4.5 behind it (3 of 3 on the router contract).
+    "coding": ["claude-deepseek-flash[1m]", "claude-kimi-for-coding", "claude-haiku-5-5", "gpt-6-luna", "claude-nemotron-super"],   # no model that takes no tools (ADR-0147)
     "review": ["claude:claude-deepseek-flash", "claude:claude-opus-5-5", "gemini-3.8-flash-medium", "gpt-6.1-sol"],
     "vision": ["claude-deepseek-flash[1m]", "grok-4.7", "gpt-5.6-luna"],
     "router": ["gpt-6-luna", "claude-grok-4.5", "claude-haiku-5-5"],

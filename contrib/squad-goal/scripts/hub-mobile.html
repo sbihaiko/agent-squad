@@ -617,6 +617,9 @@ function cardButton(x, i) {
   if (x.pa != null && !x.sp) id.append(chip("spec", x.pa));
   const w = laneWaveOf(x);
   if (w !== null) id.append(chip("wave", "W" + w));
+  // The card's Gate Tries (issue 1255): the count the gate-attempt journal projects rides the row as its chip
+  // text, a fact the row carries, so this page names no column of its own.
+  if (x.gchip) id.append(chip("gate", x.gchip));
   const t = document.createElement("span"); t.textContent = x.t;
   b.append(id, t);
   // The reason the hub refused this card's move is page state the card reads, so every render after the refusal draws it

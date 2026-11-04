@@ -67,6 +67,7 @@ base=$(sg_state_base)
 iv=${SG_FLUSH_INTERVAL:-$(sg_profile_setting "${SG_PROFILE:-}" SG_FLUSH_INTERVAL 120)}; [ "${1:-}" = --interval ] && { echo "$iv"; exit 0; }
 stop=; sp=; trap 'stop=1; kill "$sp" 2>/dev/null' TERM   # a reload (#873) ends the flusher after the post in flight, never inside it, and wakes an idle wait
 orphaned() { [ "$(/bin/ps -o ppid= -p $$ | tr -d ' ')" = 1 ]; }   # the supervisor is gone (#959): the flusher posts nothing more
+[ "${1:-}" = --once ] || echo $$ > "$SG_STATE/cqflush.pid"   # the lane's pid under its own state directory, which watchd reads to name an orphan (#1313)
 while :; do left=0; { [ -n "$stop" ] || orphaned; } && exit 0
   for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue; { [ -n "$stop" ] || orphaned; } && exit 0
     [ $(( $(date +%s) - $(mtime "$f") )) -lt 5 ] && { left=1; continue; }

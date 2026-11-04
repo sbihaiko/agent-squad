@@ -7,6 +7,8 @@
        board.py --proof <owner> <project> <issue#> <unproven|green|red>   the card's proof fact: `unproven` while the
          obligation is open, `proof:red` when a settlement measured a defect, neither on a green settlement or a proven landing (#1176)
        board.py --test-case <owner> <project> <issue#> <pass|fail> <merge-commit> [ended]   record a finished test pass as one `test case` item (#300)
+       board.py --gate-tries <owner> <project> <issue#> <n>   raise the card's Gate Tries to the journal's count (#1255):
+         the field only rises (a rearm is a floor, ADR-0149), and it is written only when the value changes (ADR-0144)
 This is the board binding's command door (#236): the state it reads and writes is issue_state's, and this
 file holds the carrier's command line, never a second reach of its own. A field is set by sending its value
 and cleared by sending null -- "To clear the field, set this to null" -- and an empty string is a value the
@@ -51,11 +53,16 @@ test-case write records nothing."""
 import json, os, pathlib, sys, time
 from board_columns import refused_for_automated
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
-args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]; proof = args[:1] == ["--proof"]
-args = args[1:] if add or run_fields or clear_run or test_case or remove or proof else args
+args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]; proof = args[:1] == ["--proof"]; gate_tries = args[:1] == ["--gate-tries"]
+args = args[1:] if add or run_fields or clear_run or test_case or remove or proof or gate_tries else args
 owner, num = args[0], args[1]
 st = pathlib.Path(os.environ["SG_STATE"])
 state = board_state(owner=owner, project=num, kind=None)   # the move is asked for an owner the caller names, so the carrier says whether it is a user or an org (cached a month)
+if gate_tries:   # the journal's count is the source; the field is its projection (#1255)
+    n = int(args[2])
+    try: carried = state.set_gate_tries(n, int(args[3]))   # never lowers, and writes only on a change (#1255, ADR-0144, ADR-0149)
+    except (NotCarried, ReadFailure) as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)
+    (st / "board-dirty").touch(); print(f"#{n} gate tries {carried}"); sys.exit(0)
 if test_case:
     n = int(args[2])
     try: item = state.record_pass(n, args[3], args[4], args[5] if len(args) > 5 else None)   # one item, then the read that proves it (#300)

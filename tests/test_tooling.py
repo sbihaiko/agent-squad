@@ -215,7 +215,7 @@ HOST_NAMES = ("MESENAI_REPO", "MESENAI_ROOT")
 
 def _host_bound_names() -> set[str]:
     """The tests that carry `@pytest.mark.host_bound` in the e2e file: the marker is the rule ADR-0139 states."""
-    return set(re.findall(r"@pytest\.mark\.host_bound\s*\ndef (\w+)\(", E2E.read_text()))
+    return set(re.findall(r"@pytest\.mark\.host_bound(?:\([^\n]*\))?\s*\ndef (\w+)\(", E2E.read_text()))
 
 
 def _no_host_env() -> dict:
@@ -240,7 +240,7 @@ def test_the_host_bound_tests_are_deselected_and_never_run_when_the_host_is_abse
     n = re.search(r"\((\d+) deselected\)", out)
     assert n, out
     assert int(n.group(1)) == len(host), out
-    collected = set(re.findall(r"::(\w+)", out))
+    collected = set(re.findall(r"::(\w+)", "\n".join(ln for ln in out.splitlines() if not ln.startswith("deselected:"))))
     assert host.isdisjoint(collected), sorted(host & collected)
     assert "skipped" not in out, "a host-bound test was skipped, not deselected"
 
