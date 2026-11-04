@@ -4852,6 +4852,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
 #lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child
+#lrmore{display:block;width:100%;margin:2px 0 0;text-align:center}
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#list{max-width:900px}
 /*BOARD_LANES_CSS*/
 /*RUN_SHEET_CSS*/
@@ -5088,13 +5089,22 @@ const saveGroups=()=>{ls.groups=[...openGroups];save()};
 const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
 const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
 const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":h<=24?"24h":"d"};
+// The Monitor's live-runs card (#1276): a bounded glance, never a second full list. Its summary states the whole truth --
+// the live count and the oldest live run's age -- even when the rows are capped. It draws at most LIVE_ROWS rows, oldest
+// first, and one control that opens the Runs tab. Each row is the history's own row, so it still opens the run sheet.
+const LIVE_ROWS=3;
+function liveCard(live,row){const n=live.length,oldest=n?Math.max(...live.map(r=>r.age)):0;
+ const shown=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
+ const head=n?`${n} live · oldest ${age(oldest)}`:"none";   // the count is every live run, never the rows drawn
+ const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";
+ return{head,html:(shown.map(row).join("")||"<div class=m>no live runs</div>")+more}}
 function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
   const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
   const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
-  {const live=runs.filter(r=>r.rank===0);$("#lrun").innerHTML=live.map(row).join("")||"<div class=m>no live runs</div>";$("#lrs").textContent=live.length?`${live.length} \u00b7 ${live.filter(r=>r.state==="running").length} running`:"none"}   // the sidebar card: the runs that are live now, the same rows as the history
+  {const live=runs.filter(r=>r.rank===0),c=liveCard(live,row);$("#lrun").innerHTML=c.html;$("#lrs").textContent=c.head}   // the sidebar card: a bounded glance of the runs that are live now (#1276)
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
@@ -5794,7 +5804,9 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
  if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen("cfd");
  drawMain()}
-document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
+function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
+document.querySelector(".tabs").addEventListener("click",tabClick);
+$("#lrun").addEventListener("click",tabClick);   // the live-runs card's control opens the Runs tab (#1276)
 function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead");const c=h?"":flowFilterChip(bo.fw||[],bo.fs||[],bo.fk||[],!!FLOWFF[k]),x=$("#flowchips");if(x&&x.dataset.h!==c){x.dataset.h=c;x.innerHTML=c}}   // the one Board filter chip, drawn with the chart tabs for both charts (#1147)
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});

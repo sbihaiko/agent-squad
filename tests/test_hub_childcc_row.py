@@ -158,7 +158,7 @@ def _draw_list(hub):
     for k in range(src.index("{", i), len(src)):
         depth += {"{": 1, "}": -1}.get(src[k], 0)
         if depth == 0:
-            return src[i : k + 1]
+            return src[src.index("const LIVE_ROWS="):k + 1]   # the live-runs card the list calls (#1276)
     raise AssertionError("drawList is not closed")
 
 
