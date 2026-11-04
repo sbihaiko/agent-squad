@@ -240,7 +240,7 @@ shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "ru
     k=$((k + 1))
   done
   if [ "$ck" != none ]; then
-    for j in ruff mypy fast-battery; do out="{\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"$ck\"},$out"; done
+    for j in ${CHECK_JOBS:-ruff mypy fast-battery}; do out="{\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"$ck\"},$out"; done
   fi
   echo "{\"check_runs\":[${out%,}]}" > "$T/checks-$s"
 }
@@ -314,6 +314,23 @@ SG_GHREAD="$T/bin/ghread" pass; rc=$?
   || ko "red mypy: rc $rc, stg $(tip stg), runs $(runs) was $n"
 /usr/bin/grep "promote-pass: $tm" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI mypy is red" && ok "the refusal names the red mypy job" \
   || ko "red mypy line: $(/usr/bin/grep "$tm" "$SG_STATE/promote.log")"
+
+# #1322: the check names are read from the job block alone. A step name, a `with:` key, a four-space name: before jobs:, or a
+# job-shaped key after the block is not a check run: the answer is exactly the workflow's job names, at their own indent.
+printf 'env:\n    name: not-a-job\njobs:\n  ruff:\n    name: ruff\n    steps:\n      - name: Ruff\n      - uses: actions/setup-python@v5\n        with:\n          name: step-with\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\nnot-a-job:\n  name: outside-jobs\n' > "$T/ci-step-names.yml"
+out=$(bash "$d/promote-pass.sh" --ci-job-names "$T/ci-step-names.yml" 2>&1)
+[ "$out" = $'ruff\nmypy\nfast-battery' ] && ok "the check names come from the job block, never a step, with: key or a name: outside it (#1322)" \
+  || ko "job names: '$out'"
+
+# #1322: the promotion record names the jobs the pass read, so a renamed job set is recorded as it is, never a stale literal.
+printf 'jobs:\n  lint:\n    name: lint\n  types:\n    name: types\n  battery:\n    name: battery\n' > "$T/ci-renamed.yml"
+adv dev renamed; tx=$(tip dev)
+CHECK_JOBS="lint types battery" shards "$tx" none none none none
+SG_CI_WORKFLOW="$T/ci-renamed.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tx" ] && ok "a renamed fast tier promotes on its own check names (#1322)" \
+  || ko "renamed tier: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+/usr/bin/grep -q -- "description=CI fast tier: lint, types, battery " "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
+  || ko "status description: $(/usr/bin/grep "statuses/$tx" "$T/gh.log")"
 
 # A tip inside the quiet window opens the dev-to-stg pull request, so its four shards start before the proof reads them.
 adv dev shard-open; to=$(tip dev); n=$(runs); : > "$T/gh.log"
