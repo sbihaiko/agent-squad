@@ -428,14 +428,18 @@ pollSubs().then(() => console.log("RESULT" + JSON.stringify(
 def _subs_slice():
     """The page slice holding pollSubs and every helper it reaches, plus the `esc` defined after it and the Now/Settings
     builders the panel draws through (#1278). The shell's own boot runs here, so `save` and the read-only flag are stubbed.
-    The quota rows come from the sidebar card's own `subsGauges` (#1281), so its helpers travel too."""
+    The quota rows come from the sidebar card's own `subsGauges` (#1281), so its helpers travel too. The slice is asserted
+    to carry each helper by name, so a refactor of the sidebar cannot leave it silently empty."""
     i = SRC.index("const usd=v=>")
     j = SRC.index("async function pollStats(")
+    body = SRC[i:j].replace("__CAPS__", "{}")
+    for need in ("function subsGauges(", "const iq=", "fpct="):
+        assert need in body, f"the subscriptions slice lost {need}"
+    for mark in ("// SETT{", "// }SETT"):
+        assert mark in SRC, f"the settings builder lost its marker {mark}"
     esc = SRC[SRC.index("const esc=t=>"):]
     sett = SRC[SRC.index("// SETT{"): SRC.index("// }SETT")]
-    gauges = SRC[SRC.index("function subsGauges(d)"): SRC.index("function instGauges(d)")]
-    return (gauges + "\n" + SRC[i:j].replace("__CAPS__", "{}") + "\n"
-            + esc[: esc.index("\n")] + "\n" + sett + "\nfunction save(){}\n")   # iq and fpct travel in the page slice
+    return (body + "\n" + esc[: esc.index("\n")] + "\n" + sett + "\nfunction save(){}\n")   # iq and fpct travel in the page slice
 
 
 def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
@@ -482,6 +486,9 @@ const out={html:subsGauges(d)};
 
 
 def test_a_gauge_fill_token_is_not_its_track_token_on_any_returned_state():
+    """The sidebar card and the Subscriptions theme share `.isub`, so the card's element must carry the class as well as
+    its id; the rules then apply to both (#1281 review)."""
+    assert re.search(r'class="[^"]*\bisub\b[^"]*"\s+id=isub', SRC), "the sidebar usage card lost its .isub class"
     track = re.search(r"\.isub \.sb2\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1)
     fills = {
         "ok": re.search(r"\.isub \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),

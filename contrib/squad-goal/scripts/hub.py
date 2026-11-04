@@ -5129,7 +5129,6 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
  // are gone with the #inst/#isub scope bug that painted them black (#Astra, 2026-11-01): a bar reads at a glance where a
  // dial needed a caption, and four of them stack at 380 px. The bar and its text are shared by the sidebar card and the
  // Subscriptions theme, which draws the same row from the same answer (#1281).
- // dial needed a caption, and four of them stack at 380 px.
  const reset=s=>{if(!s.resets)return esc(s.why||"no reading");const d=(s.resets-Date.now()/1000)/86400;
    return d<=0?"resets now":d>=1?`resets in ${d.toFixed(1)} d`:`resets in ${Math.max(1,Math.round(d*24))} h`};
  return xs.map(s=>{const p=typeof s.pct==="number"?s.pct:null,cls=p===null?" na":p>=90?" red":p>=75?" warn":"";
@@ -5548,7 +5547,7 @@ function subRender(d){d=d||subData;if(!d||!$("#subs"))return;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}" aria-label="${k} custom amount"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" aria-label="${k} currency" title="R$, U$, € or any 3-letter code"></span>`:"";
   const note=v.noRate?`<span class=warn>no exchange rate for ${esc(pl.currency)} right now</span>`:(pl&&pl.currency!=="USD"&&v.usd!=null?`<span class=dt>≈ <b>US$${v.usd}</b> / month · ${(+v.rate).toFixed(2)} ${esc(pl.currency)} per US$</span>`:"");
   const gauge=(d.gauges||[]).find(g=>g.key===k),bar=gauge?`<div class=isub>${subsGauges({subs:[gauge]})}</div>`:"";   // the sidebar usage card's own bar and text, from the same answer (#1281)
-  const win=pl&&pl.qwin||"",man=!pl||(v.quota&&v.quota.windows&&v.quota.windows.length)?""   // the hand-entered quota stays a settings row
+  const win=pl&&pl.qwin||"",man=!pl||(v.quota&&v.quota.windows&&v.quota.windows.length)?""   // the hand-entered quota is a fallback: with no plan there is nothing to hold, and with a live CLI window the CLI value wins, so the row would edit a value the card never reads (#1281)
    :`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${pl.quota??""}" placeholder="%" aria-label="${k} quota used" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" aria-label="${k} quota window"maxlength=40 style="flex:1;min-width:0"></div>`;
   return `<div class=sub><div class=hd><span class=nm>${esc(v.name)}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")]);
  setBar()}   // a staged change arms the one Save at once, never on the next poll (#1281)
@@ -6232,8 +6231,12 @@ def plans_diff(old, new):
             for k in SUBS if old.get(k) != new.get(k)]
 def plans_set(new):
     """One subscription = a preset plan, or a custom monthly amount in any 3-letter currency; null clears it. Atomic write.
-    With `confirm` not true it answers the diff of every changed plan and writes nothing, which is what Save shows first."""
+    With `confirm` not true it answers the diff of every changed plan and writes nothing, which is what Save shows first.
+    This is the same wire contract as /api/limits and /api/slack (#1281): an absent or false `confirm` previews, and only
+    `confirm: true` writes, so no caller can write with a field edit alone. A non-boolean `confirm` is refused, never read
+    as a preview that looks like a save."""
     if not isinstance(new, dict) or set(new) - set(SUBS) - {"confirm"}: return {"err": "unknown subscription"}
+    if "confirm" in new and not isinstance(new["confirm"], bool): return {"err": "confirm: true or false"}
     confirm = new.get("confirm") is True
     d = plans_get(); out = dict(d)
     for k, v in new.items():
@@ -6519,8 +6522,9 @@ def quota_row(k, now=None):
 
 BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google", "kimi": "Kimi"}
 def sub_name(k, plan, detected):
-    """The card name comes from the account: the plan the probe detected, else the plan chosen in the card, else the provider."""
-    name = detected or (PRESETS[k].get(plan["plan"], (None,))[0] if plan else None)
+    """The card name comes from the account: the plan the probe detected, else the plan chosen in the card, else the provider.
+    A plan of None (no plan, or a plan cleared) and a dict without a `plan` key both read as the provider's name."""
+    name = detected or (PRESETS[k].get(plan.get("plan"), (None,))[0] if isinstance(plan, dict) else None)
     if not name: return BRANDS[k]
     name = str(name); name = name[:1].upper() + name[1:]
     return name if BRANDS[k].lower() in name.lower() else f"{BRANDS[k]} {name}"

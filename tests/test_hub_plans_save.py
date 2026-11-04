@@ -89,9 +89,38 @@ def test_an_invalid_plan_is_refused_with_no_write(hub):
     assert out["err"] and plans.read_text() == before
 
 
+def test_the_preview_names_a_changed_plan_and_never_raises_on_an_odd_row(hub):
+    """plans_diff calls sub_name; a plan cleared, a row with no `plan` key and no row at all all read as the provider,
+    so a preview never throws inside the write path (#1281 review)."""
+    mod, _ = hub
+    assert mod.plans_diff({"claude": {"plan": "max20"}}, {"claude": {"plan": "max5"}}) == \
+        ["Subscriptions · Claude Max 5x: Max 20x · US$200 -> Max 5x · US$100"]
+    assert mod.plans_diff({"claude": {"plan": "max5"}}, {"claude": None}) == \
+        ["Subscriptions · Claude: Max 5x · US$100 -> no plan"]
+    assert mod.plans_diff({"claude": {"quota": 40}}, {"claude": {"plan": "max5"}})   # a malformed row never raises
+    assert mod.sub_name("claude", {"quota": 40}, None) == "Claude"
+    assert mod.sub_name("claude", None, None) == "Claude"
+
+
+def test_the_plans_route_previews_without_confirm_and_writes_only_on_true(hub):
+    """The /api/plans wire contract is /api/limits and /api/slack's (#1281): a body with no confirm, or confirm false,
+    answers the diff and writes nothing; only a boolean true writes. A string "true" is refused, never read as a save."""
+    mod, plans = hub
+    before = plans.read_text()
+    out = mod.plans_set({"claude": {"plan": "max20"}})
+    assert out["diff"] and "plans" not in out and plans.read_text() == before
+    out = mod.plans_set({"claude": {"plan": "max20"}, "confirm": False})
+    assert out["diff"] and "plans" not in out and plans.read_text() == before
+    for bad in ("true", 1, "yes"):
+        out = mod.plans_set({"claude": {"plan": "max20"}, "confirm": bad})
+        assert out["err"] and plans.read_text() == before, (bad, out)
+    mod.plans_set({"claude": {"plan": "max20"}, "confirm": True})
+    assert json.loads(plans.read_text())["claude"]["plan"] == "max20"
+
+
 # ---------------------------------------------------------------- the page: stage, diff, confirm
 
-def _page_slices(page):
+def _page_slices(page, stub=None):
     """The subscriptions panel's own source: its state, its renderer and its save path."""
     esc = re.search(r"^const esc=.*$", page, re.M).group(0)
     usd = re.search(r"^const usd=.*$", page, re.M).group(0)
@@ -99,19 +128,35 @@ def _page_slices(page):
     sett = page[page.index("// SETT{"):page.index("// }SETT")]
     gauges = page[page.index("function subsGauges(d)"):page.index("function instGauges(d)")]
     state = page[page.index("const STH="):page.index("async function pollStats(")]   # carries fpct, which the card's row reads
-    stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
-            'value:"",onclick:null,addEventListener(){},showModal(){},close(){},classList:{toggle(){}}});'
-            'function setBar(){};function save(){};const ls={};const RO=false,RO_WHY="";'
-            'let limS=null,slDraft=null,slS=null;const limVals=()=>({}),mdlChanged=()=>false,slDirty=()=>false,'
-            'mdlLoad=()=>{};'
-            'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};')
+    stub = stub or ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
+                    'value:"",onclick:null,addEventListener(){},showModal(){},close(){},classList:{toggle(){}}});'
+                    'function setBar(){};function save(){};const ls={};const RO=false,RO_WHY="";'
+                    'let limS=null,slDraft=null,slS=null;const limVals=()=>({}),mdlChanged=()=>false,slDirty=()=>false,'
+                    'mdlLoad=()=>{};'
+                    'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};')
     return "\n".join([stub, esc, usd, iq, sett, gauges, state])
 
 
-def _node(mod, body):
+# A shell that records the listeners the panel registers and every outgoing write, so the change handler is run, not read.
+_LIVE = ('const STORE={},HANDLERS={},SENT=[];'
+         'const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,value:"",onclick:null,'
+         'addEventListener(t,f){(HANDLERS[s+":"+t]=HANDLERS[s+":"+t]||[]).push(f)},'
+         'querySelector(){return null},querySelectorAll(){return[]},closest(){return null},showModal(){},close(){},'
+         'classList:{toggle(){}}});'
+         'function setBar(){};function save(){};const ls={};const RO=false,RO_WHY="";'
+         'let limS=null,slDraft=null,slS=null;const limVals=()=>({}),mdlChanged=()=>false,slDirty=()=>false,'
+         'mdlLoad=()=>{};'
+         'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};'
+         'globalThis.fetch=(u)=>{SENT.push(u);return Promise.resolve({json:async()=>({})})};'
+         'globalThis.XMLHttpRequest=function(){this.open=(m,u)=>SENT.push(u);this.send=()=>SENT.push("sent");'
+         'this.setRequestHeader=()=>{}};'
+         'globalThis.navigator={sendBeacon:u=>{SENT.push(u);return true}};')
+
+
+def _node(mod, body, stub=None):
     if NODE is None:
         pytest.skip("node is required")
-    p = subprocess.run(["node", "-"], input=_page_slices(mod.PAGE) + "\n" + body, capture_output=True, text=True, timeout=60)
+    p = subprocess.run(["node", "-"], input=_page_slices(mod.PAGE, stub) + "\n" + body, capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
 
@@ -132,13 +177,27 @@ def _payload(pct=None, saved=True, api=28.0):
 
 
 def test_a_plan_change_stages_a_draft_and_the_page_posts_nothing_on_change(hub):
-    page = hub[0].PAGE
+    """The change handler is run, not read: with a fetch/XHR/sendBeacon recorder it stages the draft, arms the Save,
+    and sends nothing. A post under any other call name would still be caught (#1281 review)."""
+    mod = hub[0]
+    page = mod.PAGE
     assert page.count('fetch("/api/plans"') == 1, "a second path posts the plans route"
     i = page.index('fetch("/api/plans"')
     assert page.index("async function subPost(") < i < page.index("async function pollSubs("), "the only post is not the confirm"
-    change = page[page.index('$("#subs").addEventListener("change"'):page.index("async function pollStats(")]
-    assert "fetch(" not in change, "a change handler posts the plans route"
-    assert "subDraft[k]=" in change, "a change does not stage into the draft"
+    got = _node(mod, """
+subS={claude:null,grok:null};subSrv=JSON.stringify(subS);subDraft=JSON.parse(subSrv);
+subData={frac:0.3,plans:0,api:0,total:0,file:"/p/plans.json",gauges:[],
+ presets:{claude:{},grok:{}},
+ subs:{claude:{name:"Claude",plan:null,quota:null},grok:{name:"Grok",plan:null,quota:null}}};
+const before=JSON.stringify(subDraft);
+const h=HANDLERS["#subs:change"][0];
+const row={querySelector:s=>s==="[data-f=plan]"?{value:"max20"}:{value:""}};
+h({target:{dataset:{plan:"claude",f:"plan"},closest:()=>row}});
+console.log(JSON.stringify({sent:SENT,staged:subDraft.claude,dirty:setDirty(),changed:JSON.stringify(subDraft)!==before}));
+""", stub=_LIVE)
+    assert got["sent"] == [], got["sent"]
+    assert got["staged"] == {"plan": "max20"} and got["changed"], got
+    assert "sub" in got["dirty"], got["dirty"]
 
 
 def test_the_dirty_flag_lists_the_subscriptions_theme_while_a_change_is_staged(hub):
@@ -165,6 +224,22 @@ def test_the_theme_names_the_plans_file_and_draws_each_quota_with_the_sidebar_ca
     assert got["chip"] == "all under limit", got["chip"]
 
 
+def test_the_hand_quota_row_shows_only_where_the_cli_reading_does_not(hub):
+    """The hand-entered quota is a fallback: a saved plan with no live CLI window keeps the row, and a plan the probe
+    already reports hides it, because the board draws the CLI value and would ignore an edit to the stored one."""
+    mod = hub[0]
+
+    def rendered(windowed):
+        p = _payload(77)
+        p["subs"]["claude"]["quota"] = {"windows": [{"label": "weekly", "pct": 77, "resets": 2}]} if windowed else None
+        return _node(mod, f"subData={json.dumps(p)};subS={{}};subSrv='{{}}';"
+                          'subDraft={claude:{plan:"max20",amount:200,currency:"USD"}};subRender();'
+                          'console.log(JSON.stringify($("#subs").innerHTML));')
+
+    assert "data-f=quota" not in rendered(True), "a live CLI reading still offers a hand quota the card never reads"
+    assert "data-f=quota" in rendered(False), "a saved plan with no CLI reading lost its hand quota row"
+
+
 def test_the_summary_reads_at_limit_all_under_limit_or_no_plan_chosen(hub):
     mod = hub[0]
     for payload, want in ((_payload(100), "1 at limit"), (_payload(77), "all under limit"),
@@ -175,9 +250,10 @@ def test_the_summary_reads_at_limit_all_under_limit_or_no_plan_chosen(hub):
 
 
 def test_the_page_holds_no_dead_write_in_the_subscriptions_panel(hub):
+    """Every element the panel writes must exist on the page, whatever its name: a dead write to a renamed id is
+    caught by the resolution check, not by a literal (#1281 review)."""
     page = hub[0].PAGE
     seg = page[page.index("const STH="):page.index("async function pollStats(")]
-    assert "cashEl" not in page and '"#cash"' not in page, "the dead write to the cash element is back"
     targets = set(re.findall(r'\$\("#([A-Za-z0-9_]+)"\)', seg))
     ids = set(re.findall(r"id=([A-Za-z0-9_-]+)", page))
     assert targets <= ids, f"the panel writes elements it does not have: {sorted(targets - ids)}"
