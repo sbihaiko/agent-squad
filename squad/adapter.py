@@ -4,7 +4,9 @@ A later step swaps the scripted adapter for the real Claude Agent SDK. The real 
 process and must stop it when its task is cancelled (see squad.procs).
 """
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import anyio
 
 
 class AdapterError(Exception):
@@ -33,6 +35,33 @@ class MessageOverCeiling(AdapterError):
         self.ceiling, self.size = ceiling, size
 
 
+class Pulse:
+    """What the no-progress watch reads of one call in flight (#1289, squad/session.py). The adapter beats it on every message
+    the session streams, and marks a tool open from its use until its result. A tool that is still running is not silence:
+    its time is bounded by the node deadline, never by the upstream's no-progress window. `beats` counts the messages read."""
+
+    def __init__(self, now=None):
+        self.now = now or anyio.current_time
+        self.touched, self.beats, self.open = self.now(), 0, set()
+
+    def beat(self):
+        """One message read from the stream."""
+        self.beats += 1
+        self.touched = self.now()
+
+    def tool_started(self, tool_id):
+        self.open.add(tool_id)
+        self.touched = self.now()
+
+    def tool_done(self, tool_id):
+        self.open.discard(tool_id)
+        self.touched = self.now()
+
+    def silent_for(self):
+        """Seconds since the last message, or None while a tool the call started has not returned."""
+        return None if self.open else self.now() - self.touched
+
+
 @dataclass
 class CallRequest:
     node: str
@@ -51,6 +80,7 @@ class CallRequest:
     instructions: str | None = None   # the node's role text: a system prompt addition, not part of the user message
     max_output_tokens: int | None = None   # set by the project settings file; None leaves the adapter's own value
     context_tokens: int | None = None      # same: the context window before compaction
+    pulse: Pulse | None = field(default=None, compare=False)   # set by the session's metered call; the adapter beats it per message (#1289)
 
 
 @dataclass

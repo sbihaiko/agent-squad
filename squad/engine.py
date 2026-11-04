@@ -14,7 +14,7 @@ from pathlib import Path
 
 import anyio
 
-from squad import adapt, git, modelreg, node_commit, skills
+from squad import adapt, git, modelreg, node_commit, session, skills
 from squad import options as opt
 from squad import project_settings as P
 from squad import verdict as V
@@ -187,6 +187,11 @@ class Engine:
         refresh(self.facts, c)
 
     # ------------------------------------------------------------ deadlines
+    def no_progress_window(self):
+        """The silence one call may keep before its entry ends and the chain moves on (#1289). A project may set it; the
+        scale applies as it does to the deadlines, so a test that compresses time compresses this window too."""
+        return self.limits.get("no_progress_seconds", session.NO_PROGRESS_SECONDS) * self.scale
+
     def _call_deadline(self, node, sc):
         own = node.get("deadline", self.run_cfg["deadline"])     # null run deadline: no run limit, the node's own deadline is the cap
         own = math.inf if own is None else own * self.scale

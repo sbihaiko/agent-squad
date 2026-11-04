@@ -62,18 +62,14 @@ class AgentRunner:
     async def run(self, ctx, node, entry, sc):
         await shadow(ctx, node, entry, sc)    # before the deadline and the reservation, so it never eats a node's time
         eff, deadline, slot = ctx.eff.agent(node), ctx.call_deadline(node, sc), {}
+        ends = ctx.clock() + deadline      # the node's deadline bounds the whole chain, not each entry of it (#1289)
         fin = lambda *a, **kw: ctx.finish(node, entry, sc, *a, **kw)    # noqa: E731
         eff, chain = self.chain(ctx, node, entry, eff)
-        def on_retry(model, out):    # the one retry after a transport failure is a measured fact on the record (#1293)
-            ctx.record.append("model_retried", node=node["name"], entry=entry, model=model,
-                              error=str(out.error)[:session.CHAIN_LINE])
-
+        log = session.ChainLog(ctx.record, node["name"], entry, limits.write)    # the chain's record: a retry, a silent end, the refusals
         out, tried, who = await session.run_chain(
-            chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin, chain=chain),
-            on_retry=on_retry)
-        for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
-            ctx.record.append("model_refused", node=node["name"], entry=entry, model=m, error=err[:session.CHAIN_LINE])
-            limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
+            chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, ends, m, slot, fin, chain=chain),
+            on_retry=log.retried, on_silent=log.silent_entry)
+        log.close(tried)
         if session.exhausted(chain, tried):    # every entry refused to serve: one fail, naming each entry and its error
             return fin("fail", ["adapter_error"], cap=out.res.amount, elapsed=out.elapsed,
                        diagnostic={"error": session.chain_message(tried)}, **session.error_fields(out.error), **who)
@@ -105,9 +101,10 @@ class AgentRunner:
             ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
         return eff, chain
 
-    async def attempt(self, ctx, node, entry, sc, eff, deadline, model, slot, fin, chain=()):
+    async def attempt(self, ctx, node, entry, sc, eff, ends, model, slot, fin, chain=()):
         """One model's call for this node entry. The next entry of the chain answers after one that refused to serve."""
         who = {"model": model, "effort": eff["effort"]}      # the attempt's own model: it names the outcome and any stop
+        deadline = max(0.0, ends - ctx.clock())              # what is left of the node's deadline; zero ends the chain as expired
 
         def hit_deadline(res, el):
             slot.update(res=fin("deadline", ["deadline"], spend=None, cap=res.amount, elapsed=el, **who))
@@ -124,7 +121,8 @@ class AgentRunner:
         out = await session.run_call(
             lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"], node["budget"]["spend"].get("max_tokens")), deadline, make, adapter=ctx.adapter,
             chain=chain, registry=ctx.model_registry,
-            record=ctx.record, budget=ctx.budget, clock=ctx.clock, wall=ctx.wall, on_deadline=hit_deadline, on_cancel=cancelled)
+            record=ctx.record, budget=ctx.budget, clock=ctx.clock, wall=ctx.wall, on_deadline=hit_deadline, on_cancel=cancelled,
+            no_progress=ctx.no_progress_window())
         return out, who
 
     def settle(self, ctx, node, entry, sc, out, eff, who):

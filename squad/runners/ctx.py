@@ -118,6 +118,9 @@ class RunCtx:
     def call_deadline(self, node, sc):
         return self._e._call_deadline(node, sc)
 
+    def no_progress_window(self):
+        return self._e.no_progress_window()
+
     def finish(self, node, entry, sc, outcome, reasons, artifact=None, **kw):
         return self._e._finish(node, entry, sc, outcome, reasons, artifact, **kw)
 

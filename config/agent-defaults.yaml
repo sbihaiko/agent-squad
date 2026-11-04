@@ -39,6 +39,7 @@ limits:                             # every session gets all three caps (G5)
   context_tokens: 200000            # context size; an agent cannot call /compact (a CLI built-in), so the CLI compacts at this size; passed as env CLAUDE_CODE_AUTO_COMPACT_WINDOW. Probed: it sets the window; auto-compact fires 33000 below it; values under 100000 clamp up (the checker refuses them)
   task_budget: null                 # soft, API-side token budget; the only token cap in the SDK options
   deadline_seconds: 600             # engine wall clock per call; the SDK has no such option
+  no_progress_seconds: 300          # silence of one call's upstream before its chain entry ends and the chain moves on (#1289); a call with a tool open is not silent. The node deadline still bounds the whole chain
 
 run:                                # mirrors the graph run block (schema run_block)
   deadline: null                    # owner ruling: no run cap; runs may last days. The per-call deadline bounds each agent. The schema accepts null.
