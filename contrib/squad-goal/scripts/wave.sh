@@ -875,7 +875,10 @@ wave_conflict() {
   if [ -n "${dset// /}" ]; then list=$dset; for n2 in $refs; do case " $dset " in *" $n2 "*) ;; *) outs="${outs:+$outs }$n2";; esac; done
   else list=$refs; fi
   files=${6:-}; files=${files% }
-  sig="$($G -C "$S" rev-parse "origin/$base" 2>/dev/null) $files"
+  # The sig keys on the conflicting paths (#1343): the base sha moves with every landing, so a base in the key made every conflict a
+  # first. A conflict that names no path keeps the base sha, so an unnamed conflict never matches another one.
+  if [ -n "$files" ]; then sig=$(printf '%s\n' $files | sort -u | tr '\n' ' '); sig=${sig% }
+  else sig="base $($G -C "$S" rev-parse "origin/$base" 2>/dev/null)"; fi
   for n in $list; do
     wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"
     hit=$(ledger conflict "$n" "$run" "$sig" 2>&1) || { echo "WAVE-LEDGER #$n refused: $hit"; continue; }
