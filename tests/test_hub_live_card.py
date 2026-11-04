@@ -98,12 +98,28 @@ def test_a_row_reads_the_dot_the_label_the_stage_and_the_bare_title(page):
     out = _card(page, runs)
     body = out["html"]
     assert '<i class="dot"></i>' in body, "a row opens with a state dot, never the state word"
-    assert "implement #1282" in body
+    assert ">#1282</b>" in body, "the label is the issue the run delivers; `implement` is every card run's word, not a run's"
     assert "· implement" in body, "the run's current node reads as its stage"
     assert "Build the thing" in body
     assert "SPEC 1311" not in body, "the spec prefix is stripped from the ticket's title"
     assert ">12s ago<" in body, "a writing run says how long since its last write"
     assert "running" not in _visible(body), "the state word left the row"
+
+
+def test_the_stage_reads_in_a_person_s_words_and_yields_to_the_load_mark(page):
+    runs = [{"id": "run-a", "label": "implement #1282", "age": 9, "rank": 0, "state": "running",
+             "stage": "route.router.2", "issues": ["1282"], "titles": {"1282": "Build the thing"}},
+            {"id": "run-b", "label": "implement #1283", "age": 9, "rank": 0, "state": "running",
+             "stage": "review_gate", "issues": ["1283"], "titles": {"1283": "Another thing"}},
+            {"id": "run-c", "label": "implement #1284", "age": 9, "rank": 0, "state": "running",
+             "stage": "review_gate", "cpu": 23, "issues": ["1284"], "titles": {"1284": "A third thing"}}]
+    body = _card(page, runs)["html"]
+    rows = body.split('data-id="')[1:]
+    a, b, c = (r.split("</div></div>")[0] for r in rows)
+    assert "· router 2" in _visible(a), "the graph's own node name is not what a person reads"
+    assert "· review" in _visible(b), "a gate node drops its `_gate` suffix"
+    # One diagnostic shares the line: a run that owns machine CPU shows `cpu N%` instead of its stage, never both cramped.
+    assert "cpu 23%" in _visible(c) and "review" not in _visible(c)
 
 
 def test_a_quiet_run_reads_quiet_with_an_amber_dot_and_rule(page):

@@ -4690,12 +4690,12 @@ button.on{border-color:var(--acc);color:var(--acc)}
    share reads as good, a partial one as in progress; a run no gate counted carries no chip at all, never a 0%. */
 .r .sh{color:var(--warn);font-variant-numeric:tabular-nums}.r .sh.done{color:var(--ok)}
 .r .dot{width:7px;height:7px;border-radius:var(--radius-full);background:var(--run);flex:none;display:inline-block}
-.r .slot{margin-left:auto;flex:none;font-size:var(--fs-caption);color:var(--mute);white-space:nowrap;font-variant-numeric:tabular-nums}
+.r .slot{margin-left:0;flex:none;font-size:var(--fs-caption);color:var(--mute);white-space:nowrap;font-variant-numeric:tabular-nums}
 .r .slot.quiet,.r .slot.wait{color:var(--warn)}
 .r .slot.need{color:var(--err)}
 .r .dot.quiet,.r .dot.wait{background:var(--warn)}
 .r .dot.need{background:var(--err)}
-.r .stg{color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;flex:none}
+.r .stg{color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .r.show{background:var(--raise);box-shadow:inset 3px 0 0 var(--acc)}.r.pinned .pn{color:var(--acc)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
 /*RUN_STATE_BASE_CSS*/
@@ -4921,7 +4921,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
 #lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden;display:block;position:relative;padding:7px 22px 8px 10px}#lrun .r>div{min-width:0}#lrun .r.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .r.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}   /* the panel's own run keeps its accent bar beside the amber one */
-#lrun .r1{display:flex;align-items:center;gap:6px;min-width:0}#lrun .r1 b{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#lrun .r1{display:flex;align-items:center;gap:6px;min-width:0}#lrun .r1 .load{flex:none;margin:0;padding:0;border:0;background:none;color:var(--warn);font-size:var(--fs-caption)}#lrun .r1 b{flex:0 0 auto;white-space:nowrap}
 #lrun .r2{margin-top:1px;color:var(--ink-body);font-size:var(--fs-caption);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 #lrun .r .pn{position:absolute;top:6px;right:7px;opacity:0;pointer-events:none}#lrun .r:hover .pn,#lrun .r:focus-visible .pn{opacity:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child{margin-bottom:0}
 #lrmore{display:block;width:100%;margin:2px 0 0;text-align:center}
@@ -5200,10 +5200,13 @@ function liveSlot(r){
  return{k:"",text:age(r.age)+" ago"}}
 // The issue title is one line; a spec's `[SPEC <n>] ` prefix is the spec's name, not the ticket's, so it is stripped here.
 const liveTitle=r=>{const t=sub(r)||"";return t.replace(/^\[SPEC \d+\] /,"")};
+// The record names its node in the graph's own words (`route.router.1`, `review_gate`); the row says it in a person's, short
+// enough to share one line with the label: `router 1`, `review`. A node the map does not know keeps its own name.
+const liveStage=r=>{const n=r.stage||"";if(!n)return"";const m=/^route\.router\.(\d+)$/.exec(n);return m?"router "+m[1]:n.replace(/_gate$/,"")};
 function liveRow(r,shown){
  const s=liveSlot(r),on=shown&&(shown.has?shown.has(r.id):shown.includes(r.id))?` show`:"",t=liveTitle(r);
- const dot=`<i class="dot${s.k?" "+s.k:""}"></i>`,stg=r.stage?`<span class=stg title="the node the run is at">· ${esc(r.stage)}</span>`:"";
- const lab=`<b title="${iq(labelTip(r))}">${esc(name(r))}</b>`,slot=`<span class="slot${s.k?" "+s.k:""}">${esc(s.text)}</span>`;
+ const st=r.cpu?"":liveStage(r),dot=`<i class="dot${s.k?" "+s.k:""}"></i>`,stg=st?`<span class=stg title="the node the run is at">· ${esc(st)}</span>`:"";
+ const lab=`<b title="${iq(labelTip(r))}">${esc(name(r).replace(/^implement /,""))}</b>`,slot=`<span class="slot${s.k?" "+s.k:""}">${esc(s.text)}</span>`;
  return `<div class="r${on}${s.k?" "+s.k:""}" data-id="${esc(r.id)}" tabindex=0 role=button><div class=r1>${dot}${lab}${stg}${loadMark(r)}${slot}</div>${t?`<div class=r2 title="${iq(t)}">${esc(t)}</div>`:""}<span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`
 }
 function drawList(){
