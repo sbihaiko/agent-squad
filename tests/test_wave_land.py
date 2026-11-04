@@ -15,6 +15,7 @@ The order is right in two senses, and the lifecycle suite proves both: the run's
 that landing, and a run whose entry pass is running elsewhere is left unread, so the next cycle lands a wave its children
 are in rather than one they were added to afterwards.
 """
+import json
 import os
 import re
 import shutil
@@ -106,9 +107,12 @@ class Wave:
         self.state = root / "st"
         self.bin = root / "bin"
         self.scripts = root / "s"
-        for d in (self.state / "auto", self.bin, self.scripts):
+        for d in (self.state / "auto", self.state / "cq", self.bin, self.scripts):
             d.mkdir(parents=True)
-        for name in ("wave.sh", "address.sh", "ghcall.sh", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh"):
+        # The landing reads the run's own record through child_issues.py, writes its facts through issue_ledger.py, reads the
+        # base's check through basecheck.sh and the issue's state through ghread.py, so the fixture carries each of them.
+        for name in ("wave.sh", "address.sh", "ghcall.sh", "ghread.py", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh",
+                     "basecheck.sh", "child_issues.py", "issue_ledger.py"):
             shutil.copy(SCRIPTS / name, self.scripts / name)
         self.origin = root / "origin.git"
         self.co = root / "co"
@@ -125,7 +129,20 @@ class Wave:
             f" SG_LAND_REMOTE={self.origin} BOARD={board} SG_WAVE_TIP_GATES=true\n. {self.scripts}/address.sh\n"
         )   # the wave tip's own check (#377) is `true` here: this fixture runs wave.sh's verbs, never the fast gate
         gh = self.bin / "gh"
-        gh.write_text(f'#!/bin/bash\necho "$*" >> "{root}/gh.log"\necho \'{{"number":1,"state":"closed"}}\'\n')
+        # A single issue read answers `open` (#1335: a requeue acts only on an issue the owner left open), in the GraphQL
+        # shape ghread.py asks it in and in the REST shape; the base's head reads no check, so no case is held by it;
+        # every other read keeps the closed answer this fixture gave before. Every call is logged.
+        gh.write_text(f"""#!/bin/bash
+echo "$*" >> "{root}/gh.log"
+case "$*" in
+  *graphql*)
+    n=$(printf '%s' "$*" | /usr/bin/grep -oE 'i[0-9]+: issue' | head -1 | tr -dc '0-9')
+    printf '{{"data":{{"repository":{{"i%s":{{"number":%s,"title":"t","body":"","state":"OPEN","createdAt":"2026-01-01T00:00:00Z","labels":{{"nodes":[]}}}}}}}}}}\\n' "$n" "$n";;
+  *"/check-runs"*) echo '{{"check_runs":[]}}';;
+  *"/issues/"[0-9]*) echo '{{"number":1,"state":"open"}}';;
+  *) echo '{{"number":1,"state":"closed"}}';;
+esac
+""")
         gh.chmod(0o755)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
         self.env["PATH"] = f"{self.bin}:{os.environ['PATH']}"
@@ -161,6 +178,13 @@ class Wave:
         entered = self.wave("enter", run, str(issue), cwd=wt)
         assert entered.returncode == 0, entered.stdout + entered.stderr
         return wt
+
+    def record(self, run, issue):
+        """The run's own record, naming the one child issue it dispatched: the landing reads its dispatch set from it."""
+        rd = self.co / "runs" / run
+        rd.mkdir(parents=True)
+        line = {"event": "spawn_accepted", "run": run, "definition": f"GOAL (GitHub issue #{issue}): work it"}
+        (rd / "record.jsonl").write_text(json.dumps(line) + "\n")
 
     def base_moves(self, filename, text="other\n", message="other work"):
         other = self.root / "other"
@@ -204,11 +228,11 @@ def test_a_landed_wave_is_in_dev_by_one_push_and_logged(wave):
     assert wave.closed() == ["7"]
 
 
-@pytest.mark.heavy
 def test_a_landing_that_conflicts_exits_1_and_lands_nothing(wave):
     """A conflicting rebase is terminal for the wave (#844, `wave_conflict`): the landing lands nothing and exits 1, the
     run's issues go back to the queue, and the wave marker is removed so the loop retires the wave and never retries it.
     The wave branch stays on the remote with its commits (#844)."""
+    wave.record("run-1", 7)
     wave.child("run-1", 7, "work 7 (Refs #7)")
     # the base moves under the wave on the very file the child wrote
     wave.base_moves("g7-0", "someone else\n")
