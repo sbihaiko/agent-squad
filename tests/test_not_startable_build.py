@@ -81,3 +81,11 @@ def test_the_shell_reader_keeps_a_marker_of_this_build():
     cur = subprocess.run(["/usr/bin/git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD"],
                          capture_output=True, text=True, timeout=10).stdout.strip()
     assert shell_says(f"SQUAD-NOT-STARTABLE: build={cur} 3 runs failed") is True
+
+
+def test_adr_rule_four_names_the_label_the_owner_removes():
+    """ADR-0159 rule 4 names the frozen:not-startable label: the label holds an issue whose marker names no build, so the
+    owner removes the comment and the label, or runs the re-arm command. Removing the comment alone does not re-arm it."""
+    adr = (ROOT / "docs/adr/0159-a-not-startable-marker-names-its-build.md").read_text(encoding="utf-8")
+    rule4 = adr.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+    assert "frozen:not-startable" in rule4

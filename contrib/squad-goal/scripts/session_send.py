@@ -2,7 +2,7 @@
 (docs/design/session-wire-protocol.md) and records each send in a durable reservation before it writes a byte.
 The session registry and the key read go through sessions.py; nothing here prints or logs the key.
 """
-import hashlib, json, os, pathlib, re, socket, struct, sys, time
+import hashlib, json, os, pathlib, re, socket, struct, sys, time, uuid
 import sessions
 
 MAX_CHARS = 4000
@@ -12,6 +12,8 @@ CLIENT_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
 FROM_NAME = "squad-hub"
 STATES = ("sent", "uncertain", "refused")   # owner, #834: the protocol returns nothing for a hold, so no held, delivered or expired
 SOL_LOCAL, LOCAL_PEERPID = 0, 2   # macOS <sys/un.h>
+NO_MODE = ("the session's permission mode is unknown, so a message would be held for an approval the web owner cannot give: "
+           "send once from its terminal, or start the session with CLAUDE_CODE_DISABLE_TERMINAL_TITLE set")   # #1298
 
 
 class Refused(Exception):
@@ -35,7 +37,7 @@ def _name(sid, cid):
 
 
 def _write(path, body):
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")   # a unique name: two writers of one record never share a temporary file
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(json.dumps(body)); f.flush(); os.fsync(f.fileno())
@@ -61,6 +63,90 @@ def _stored(path):
     except (OSError, ValueError):
         return {"state": "reserved"}
     return body if isinstance(body, dict) else {"state": "reserved"}
+
+
+def _modes(root, profile):
+    return _dir(root, profile) / "modes"
+
+
+def _mode_file(root, profile, sid):
+    return _modes(root, profile) / f"{sid}.json"
+
+
+def _instance(rec):
+    """The session instance a live registry record names: its process and the start the registry wrote (#1298)."""
+    return {"pid": rec.get("pid"), "startedAt": rec.get("startedAt")}
+
+
+def remembered_mode(profile, rec, root=None):
+    """The permission mode the hub recorded for this session instance, or "" (#1298). A record binds to the pid and start
+    that the live registry record names: one that names another instance of the id is dropped, never answered, so a
+    reused session id cannot lend its mode. `root` is the hub's state folder; with none there is no record to read."""
+    sid = rec.get("sessionId") if isinstance(rec, dict) else None
+    if root is None or not isinstance(sid, str) or sessions.SID.fullmatch(sid) is None:
+        return ""
+    path = _mode_file(root, profile, sid)
+    try:
+        body = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    if {"pid": body.get("pid"), "startedAt": body.get("startedAt")} != _instance(rec):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return ""
+    mode = body.get("permissionMode")
+    return mode if isinstance(mode, str) else ""
+
+
+def _store_mode(profile, rec, mode, root):
+    """Write the mode of this session instance to its record, replacing an earlier one (#1298)."""
+    _modes(root, profile).mkdir(parents=True, exist_ok=True)
+    _write(_mode_file(root, profile, rec["sessionId"]), {"permissionMode": mode, "cwd": rec.get("cwd", ""), **_instance(rec)})
+
+
+def live_mode(profile, rec, root=None):
+    """The mode a send asserts (#1298): the live read first, and the recorded mode only when the live read answers nothing.
+    A live answer also refreshes the record, so a session cycled to another mode is never answered by its old one. Nothing
+    is guessed: "" when neither answers, and the send refuses."""
+    mode = sessions.permission_mode(rec.get("cwd", ""), rec["sessionId"], rec.get("pid"))
+    if not mode:
+        return remembered_mode(profile, rec, root)
+    if root is not None and remembered_mode(profile, rec, root) != mode:
+        try:
+            _store_mode(profile, rec, mode, root)
+        except OSError:
+            pass   # the record is a fallback only: the send still asserts the mode the live read named
+    return mode
+
+
+def remember_mode(profile, rec, root=None):
+    """Record the mode of a session the hub sees (#1298). A record of this instance answers it and is marked seen, so the
+    purge keeps what the hub still sees; with none, the live read answers once and the answer is stored. An unreadable mode
+    stays unrecorded: it is never a guess, and the send refuses instead."""
+    if root is None or not isinstance(rec, dict):
+        return ""
+    sid = rec.get("sessionId")
+    if not isinstance(sid, str) or sessions.SID.fullmatch(sid) is None:
+        return ""
+    mode = remembered_mode(profile, rec, root)
+    if mode:
+        try:
+            os.utime(_mode_file(root, profile, sid))
+        except OSError:
+            pass
+        return mode
+    mode = sessions.permission_mode(rec.get("cwd", ""), sid, rec.get("pid"))
+    if not mode:
+        return ""
+    try:
+        _store_mode(profile, rec, mode, root)
+    except OSError:
+        pass   # an unwritable record costs the fallback, never the send
+    return mode
 
 
 def _purge(d):
@@ -120,16 +206,18 @@ def live_session(profile, sid, profiles_of=sessions.profiles_of):
     return None
 
 
-def _deliver(profile, sid, text, cid, profiles_of):
+def _deliver(profile, sid, text, cid, profiles_of, root=None):
     rec = live_session(profile, sid, profiles_of)
     if rec is None:
         raise Refused("no live session of this profile has that id")
     pid, sock = int(rec["pid"]), rec["socket"]
+    mode = live_mode(profile, rec, root)
+    if not mode:
+        raise Refused(NO_MODE)
     token = _key_token(pid, sock)
     frames = (json.dumps({"type": "auth", "token": token}) + "\n"
               + json.dumps({"type": "user", "message": {"role": "user", "content": text},
-                            "from_name": FROM_NAME, "msg_id": cid, "priority": "next",
-                            **({"from_mode": m} if (m := sessions.permission_mode(rec["cwd"], sid, pid)) else {})}) + "\n").encode()
+                            "from_name": FROM_NAME, "msg_id": cid, "priority": "next", "from_mode": mode}) + "\n").encode()
     s = _open()
     s.settimeout(DEADLINE_S)
     try:
@@ -160,6 +248,7 @@ def send(profile, sid, text, cid, profiles_of=sessions.profiles_of, root=None):
     d = _dir(root, profile)
     try:
         _purge(d)
+        _purge(_modes(root, profile))
         _reserve(d, sid, cid)
     except FileExistsError:
         return _recorded(d, sid, cid)
@@ -167,7 +256,7 @@ def send(profile, sid, text, cid, profiles_of=sessions.profiles_of, root=None):
         return {"status": "refused", "reason": "the send could not be recorded"}
     state, reason, cwd = "sent", "", ""
     try:
-        cwd = _deliver(profile, sid, text, cid, profiles_of)
+        cwd = _deliver(profile, sid, text, cid, profiles_of, root)
     except Refused as exc:
         state, reason = "refused", str(exc)
     except Uncertain as exc:

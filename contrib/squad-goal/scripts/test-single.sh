@@ -42,4 +42,18 @@ mkdir -p "$SG_STATE/locks/single-zombie"; echo "$(cat "$T/zombie")" > "$SG_STATE
 bash "$d/single.sh" zombie sh -c "echo z >> $T/zlog" 2>"$T/zerr"
 [ "$(cat "$T/zlog" 2>/dev/null)" = z ] && ok "a single lock held by a zombie is taken over" || ko "a zombie holder blocked single: $(cat "$T/zerr")"
 kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null
+# 8. (#1290) a lock held by a live holder answers with one distinct code, so a caller tells a wait from the command's own
+# failure by the code alone; the command runs only once the holder is gone.
+/bin/sleep 60 & lh=$!
+mkdir -p "$SG_STATE/locks/single-live"; echo "$lh" > "$SG_STATE/locks/single-live/pid"
+bash "$d/single.sh" live sh -c "echo live >> $T/log"; rc=$?
+[ "$rc" = 76 ] && ok "a live holder returns the held code 76" || ko "a live holder returned $rc, not 76"
+/usr/bin/grep -qx live "$T/log" && ko "the call ran beside the live holder" || ok "the call runs nothing beside the live holder"
+SG_SINGLE_WAIT=1 bash "$d/single.sh" live sh -c "echo waited >> $T/log"; rc=$?
+[ "$rc" = 76 ] && ok "a bounded wait that ran out returns the held code too" || ko "a wait that ran out returned $rc, not 76"
+bash "$d/single.sh" ownfail sh -c 'exit 7'; rc=$?
+[ "$rc" = 7 ] && ok "the command's own failure passes through, distinct from the held code" || ko "the command's exit was $rc, not 7"
+kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null
+bash "$d/single.sh" live sh -c "echo after >> $T/log"; rc=$?
+[ "$rc" = 0 ] && /usr/bin/grep -qx after "$T/log" && ok "the dead holder is reaped and the call runs" || ko "the dead holder blocked the call: rc=$rc"
 sleep 5; rm -rf "$T"; exit $fail

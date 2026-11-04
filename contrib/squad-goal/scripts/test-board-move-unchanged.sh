@@ -17,6 +17,11 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
+  *graphql*)   # the card's own node read: the compare and the proof of one move read the card, never the whole board (#1300)
+    [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
+    echo node >> "TMPDIR/nodes"; id=${a##*id=}; id=${id%% *}; case "$id" in ITEM*) n=${id#ITEM};; *) n=2003;; esac
+    st=$(/usr/bin/grep "^$n	" "TMPDIR/cards.tsv" | cut -f2)
+    printf '{"data":{"node":{"isArchived":false,"content":{"number":%s},"fieldValueByName":{"name":"%s"}}}}\n' "$n" "$st";;
   *"-X PATCH"*items/*)
     echo PATCH >> "TMPDIR/patches"
     [ -e "TMPDIR/drop" ] && { echo '{"id":"ITEM"}'; exit 0; }   # a write answered ok and never landed
@@ -105,4 +110,12 @@ before=$(rec)
 s=$(cat "$T/replace.src" 2>/dev/null)
 [ -n "$s" ] && [ "$(dirname "$s")" = "$T/st" ] && case "$(basename "$s")" in board-moves.json.*.tmp) ok "the record is formed in a temp file in the state directory";; *) ko "temp name: $(basename "$s")";; esac || ko "no temp beside the record: $s"
 case "$(python3 "$T/bin/rec.py" "$s" 2>/dev/null)" in "ITEM2001 Doing "*) ok "the temp file holds the finished record before the rename";; *) ko "temp content: $(python3 "$T/bin/rec.py" "$s" 2>/dev/null)";; esac
+# One hinted move (#1300): the hub names the card's item, so the move reads no whole-project list for the id, and its compare and
+# its proof are the card's own node reads. No whole-board read is sent.
+printf '2001\tTodo\n2002\tDoing\n2003\tTodo\n' > "$T/cards.tsv"; rm -f "$T/reads" "$T/nodes" "$T/gh.calls" "$T/patches"
+export SG_BOARD_ITEM_HINTS='{"2002":"ITEM2002"}'; o=$(run o 4 Todo 2002 2>&1); rc=$?; unset SG_BOARD_ITEM_HINTS
+[ "$rc" -eq 0 ] && grep -q '^2002	Todo' "$T/cards.tsv" && ok "a hinted move writes the card and the card carries the Status" || ko "hinted move: exit $rc $o"
+[ "$(reads)" = 0 ] && ok "a hinted move sends no whole-board read" || ko "whole-board reads for a hinted move: $(reads)"
+n=$(/usr/bin/grep -c 'items?per_page' "$T/gh.calls" 2>/dev/null); [ "${n:-0}" = 0 ] && ok "a hinted move reads no whole-project item list for its id" || ko "item list reads: ${n:-0}"
+[ "$(wc -l < "$T/nodes" | tr -d ' ')" -ge 2 ] && ok "the compare and the proof are node reads of the card" || ko "node reads: $(wc -l < "$T/nodes" 2>/dev/null)"
 rm -rf "$T"; exit $fail

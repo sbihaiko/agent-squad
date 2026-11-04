@@ -64,7 +64,13 @@ class AgentRunner:
         eff, deadline, slot = ctx.eff.agent(node), ctx.call_deadline(node, sc), {}
         fin = lambda *a, **kw: ctx.finish(node, entry, sc, *a, **kw)    # noqa: E731
         eff, chain = self.chain(ctx, node, entry, eff)
-        out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin, chain=chain))
+        def on_retry(model, out):    # the one retry after a transport failure is a measured fact on the record (#1293)
+            ctx.record.append("model_retried", node=node["name"], entry=entry, model=model,
+                              error=str(out.error)[:session.CHAIN_LINE])
+
+        out, tried, who = await session.run_chain(
+            chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin, chain=chain),
+            on_retry=on_retry)
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             ctx.record.append("model_refused", node=node["name"], entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)

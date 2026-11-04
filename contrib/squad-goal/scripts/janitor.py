@@ -8,7 +8,7 @@
     grows with nothing bounding it (41 were alive after the freeze of 2026-10-13). S counts every dashboard this loop started, whatever the
     dashboard serves, and kills the oldest one the pass cannot tie to a live run, down to the ceiling. A live run's own dashboard is never a
     victim, a dashboard another project started is not this pass's to count, and JANITOR_DRY=1 reports without killing.
- C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
+ C  zombie run (no verdict, record.jsonl idle 20 min, no run process inside its folder -- the engine, a gate or a session, never a dashboard server -- last started call dead): write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
     Its active-runs.txt line stays, as squad/reap.py keeps it (#1230): the readers of a finished run need it, and wtclean.sh rule A alone drops it.
  T  taken-over run (no verdict, its record has not moved for SG_TAKEOVER_SECONDS, default 1800, and no gate process is alive in its folder): end it and keep its issues claimed (ADR-0166). A run waiting its turn in the machine-wide gate queue is not stuck: that wait is no run time, so it never reaches the bound (#1191). The pass writes the killed
     verdict, kills every process inside the run folder and its dashboard, drops it from active-runs and writes auto/taken-<run>, which names the run and its issues.
@@ -179,6 +179,10 @@ def kill(pidv, why):
             except OSError: pass
 OWN_PASS = ("childcc.py",)   # the loop's own passes that work inside a finished run's folder by design (#497)
 SESSION = re.compile(r"_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad\b")   # a run's own session, never a helper (#745)
+ENGINE = re.compile(r"[s]quad (start|resume)( |$)")   # the engine of a run: the .venv/bin/squad entry point, `squad start` or `squad resume` (#1270)
+# The liveness of a run, the same predicate as squad/reap.py LIVE_PROC (a copy: this script runs as a bare file). A run's process
+# is its engine, a gate or a session; a dashboard server (`-m squad.dashboard_server`) is none of them, so it never keeps a run alive (#1270).
+LIVE = re.compile(r"gate\.sh\b|_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad(?!\.dashboard_server)\b|[s]quad (start|resume)( |$)")
 def own_pass(q):
     """True when the process or one of its ancestors is a pass of this loop: the child review (childcc.py -> childreview.sh ->
     review.sh -> the model) and `wave.sh land` run after the run's verdict, in the child's worktree inside the run folder,
@@ -385,9 +389,10 @@ for r in names:
                 c = procs.get(q, (0, ""))[1]
                 # Another run's own session is never a leftover of this one: childfix.sh starts a fix run with its target
                 # inside the folder of the run it fixes, and rule A killed that engine while it still waited at the run cap
-                # -- a state that names no pid, so no reap could prove it dead and its slot stayed counted (#1270). This
-                # run's own session is still a leftover, so the pid its record names stays killable, as rule 433 has it.
-                if SESSION.search(c) and q != i["pid"]: continue
+                # -- a state that names no pid, so no reap could prove it dead and its slot stayed counted (#1270). The engine of
+                # that run is `squad start` (the .venv entry point), not a session, so ENGINE spares it too. This run's own
+                # session is still a leftover, so the pid its record names stays killable, as rule 433 has it.
+                if (SESSION.search(c) or ENGINE.search(c)) and q != i["pid"]: continue
                 if "dashboard_server" not in c and not own_pass(q): kill(q, f"leftover of finished run {n}")
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
@@ -402,11 +407,12 @@ for r in names:
                 for p in mks: p.unlink(missing_ok=True)
         if i["landed"]: landed_n |= req_issues(f)
         keep.append(r); continue
-    # A live run is one whose own session is inside its folder: the run's process, or a call it started. A helper the session
-    # left behind -- uv, caffeinate, a stray shell -- has a cwd there too, and reading any process as the run kept a dead run
-    # "alive" for ever, its card in Doing and its active-runs line held (#745).
+    # A live run is one whose own process is inside its folder: its engine (`squad start`), a gate, or a session it started. A
+    # helper the session left behind -- uv, caffeinate, a stray shell -- has a cwd there too, and reading any process as the run
+    # kept a dead run "alive" for ever, its card in Doing and its active-runs line held (#745). The dashboard server the loop
+    # starts beside a run is no run process: counting it kept an idle pid-less run alive, so rule C never fired (#1270).
     hips = inside(f)
-    alive = any(SESSION.search(procs.get(q, (0, ""))[1]) for q in hips)
+    alive = any(LIVE.search(procs.get(q, (0, ""))[1]) for q in hips)
     # A gate process alive inside the run folder is the child's own entry gate waiting on the machine-wide gate lock, or
     # holding it: either way the run is working or waiting its turn, so the bound does not apply (#1191, ADR-0166).
     gate_wait = any(GATE.search(procs.get(q, (0, ""))[1]) for q in hips)

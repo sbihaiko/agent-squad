@@ -123,6 +123,7 @@ test-janitor-terminal-comment.sh 2.71
 test-janitor-unlanded-branch.sh 0.97
 test-janitor-watchd-orphan.sh 3.78
 test-janitor-wave-exclusion.sh 0.65
+test-janitor-zombie-dashboard.sh 3.43
 test-land-target.sh 0.12
 test-launch-run-target.sh 1.98
 test-launch-target.sh 3.55

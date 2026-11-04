@@ -150,6 +150,14 @@ class State:
         """
         return self.binding.read_all()
 
+    def read_one(self, issue):
+        """The state of one card, read by its item's node id in one call (#1300): the compare and the proof of a single move
+        cost no whole-board read. The whole-board read answers only when the node read does not (no id is known for the card,
+        or the read is refused). "" when the card carries no Status."""
+        node = getattr(self.binding, "node_state", None)   # a binding with no node read answers through its whole read
+        got = node(issue) if node else None
+        return self.read(issue) if got is None else got
+
     def rows(self, jq, **kw):
         """Every card in the same one read as `read_all`, projected by the caller's jq: the hub's pane draws titles
         and labels beside the state, and asks for them here rather than at the carrier."""
@@ -209,8 +217,10 @@ class State:
         as written. Returns the state the issue carries."""
         refused = ""
         try: self.binding.write(issue, wanted)
-        except RuntimeError as e: refused = str(e)   # the refusal is kept, not raised: the read then confirms it or disproves it
-        carried = self.read(issue)
+        except RuntimeError as e:
+            refused = str(e)   # the refusal is kept, not raised: the read then confirms it or disproves it
+            self.binding.item_hints.pop(str(issue), None)   # an id the hub named and the write refused is not trusted again (#1300)
+        carried = self.read_one(issue)
         if carried != wanted:
             raise NotCarried(issue, wanted, carried, refused)
         return carried
@@ -368,6 +378,7 @@ class BoardBinding:
         self.settle_seconds = max(0.0, self._num("SG_BOARD_SETTLE_SECONDS", "60"))   # the sleep budget for a new card to reach the read (#403)
         self.server_error = re.compile(r"\bHTTP 5\d\d\b")
         self.items_map = None
+        self.item_hints = _item_hints(env.get("SG_BOARD_ITEM_HINTS"))   # the item ids the caller holds (#1300)
 
     def _num(self, name, default):   # a bad value in the environment must not kill a card move
         try: return float(self.env.get(name, default))
@@ -481,17 +492,10 @@ class BoardBinding:
         (self.st / self._known_file).write_text(json.dumps(known))
 
     def node_status(self, issue):
-        """The Status of the card a known node id names, read by node(id:) -- a route the items list does not share (#800).
-        None when no id is known for the issue, or the node read is refused or names another issue."""
-        iid = self.known_ids().get(str(issue))
-        if not iid: return None
-        query = ('query($id: ID!) { node(id: $id) { ... on ProjectV2Item { isArchived content { ... on Issue { number } } '
-                 'fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } } } } }')
-        try: d = json.loads(self.api("graphql", "-f", f"query={query}", "-F", f"id={iid}"))
-        except (RuntimeError, ValueError): return None
-        node = ((d or {}).get("data") or {}).get("node") or {}
-        if str((node.get("content") or {}).get("number", "")) != str(issue) or node.get("isArchived"): return None
-        return ((node.get("fieldValueByName") or {}).get("name")) or None
+        """The Status of the card a known node id names, read by the one-item REST route (#1300, #1303). None when no id is
+        known for the issue, or the read is refused, unparsable, archived, or names another issue, or the card carries no
+        Status; the caller then falls back to the whole-board read."""
+        return self.node_state(issue) or None
 
     def item_id(self, n, add_missing=False):
         """The one reader every caller uses (move, --add, --run-fields, --clear-run). A miss re-reads the
@@ -499,6 +503,7 @@ class BoardBinding:
         a card written a moment ago is not always in the next read (#96). None means a card no read ever
         carried and nothing was written for it here."""
         key = str(n)
+        if self.item_hints.get(key): return self.item_hints[key]   # the caller's id: no read of the items for it (#1300)
         if key not in self._items(): self.items_map = self.items(); self._save_items()
         if key in self.items_map: return self.items_map[key]
         wrote = False   # an add that landed, or a refusal that proves the card is on the board: the write is done, the read is behind
@@ -524,6 +529,21 @@ class BoardBinding:
             if iid: return iid
             raise ReadFailure(reads[0], len(self.items_map))
         return None   # a read that never carried it, and nothing was written for it here: genuinely absent
+
+    def node_state(self, issue):
+        """The Status one card carries, read by the one-item REST route in one call (#1300, #1303). None when no id is known
+        for the card, or the read is refused, unparsable or names another issue; "" when the card carries no Status. The
+        loop reads GitHub over REST only: the GraphQL quota is shared with every `gh` subcommand."""
+        iid = self.item_hints.get(str(issue)) or self.known_ids().get(str(issue))
+        if not iid: return None
+        try: d = json.loads(self.api(f"{self.base}/items/{iid}"))
+        except (RuntimeError, ValueError): return None
+        if not isinstance(d, dict) or str((d.get("content") or {}).get("number", "")) != str(issue) or d.get("isArchived"): return None
+        for f in d.get("fields") or []:
+            if not isinstance(f, dict) or f.get("name") != "Status": continue
+            v = f.get("value")
+            return (v.get("name") if isinstance(v, dict) else v) or ""
+        return ""
 
     def read_all(self):
         """Every card the carrier answers, in ONE read: {issue: state}, a card with no Status absent.
@@ -708,6 +728,12 @@ def board_state(owner=None, project=None, repo=None, **kw):
     return State(BoardBinding(owner, project, repo, env=env, **kw))
 
 
+def _item_hints(raw):
+    """The issue -> item id map the hub already holds (SG_BOARD_ITEM_HINTS, a JSON object), so a move names its card's item
+    without reading the whole project for the id (#1300). A value that is not a JSON object is no hint."""
+    try: d = json.loads(raw or "{}")
+    except ValueError: return {}
+    return {str(k): str(v) for k, v in d.items() if v} if isinstance(d, dict) else {}
 def _name_unread(state_dir, missing, unanswered):
     """One alerts.log line for each go issue the pass names unread for a reason it was not named for on the last pass. An
     issue whose own read did not answer is named as that failed read, never as a card the board does not carry."""

@@ -138,14 +138,15 @@ ab_free_refused() {   # <run> <request> <issue>...: a refused launch frees its c
   echo "AUTOBUG $run refused by launch.py: $why; freed its claim, card back to Todo, next pass retries" >&2
 }
 ab_resume_startable() {   # <issue> <board read>: 0 when the issue still passes the gates a candidate passes (#868, #550, #1858, ADR-0149)
-  local n=$1 board=$2 labels col k s=0
+  local n=$1 board=$2 labels col k s=0 flab
   ab_check_open "$n"; [ "${#live[@]}" -eq 1 ] || return 1
   labels=$(jq -r --argjson n "$n" '[.[]|select(.number==$n)][0].labels[]? | (if type=="object" then .name else . end)' "$F/issues.json" 2>/dev/null | paste -sd, -)
   for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ "$s" = 0 ] || return 1
   case ",$labels," in *",$go,"*) ;; *) return 1;; esac
   col=$(printf '%s\n' "$board" | awk -F '\t' -v n="$n" '$1 == n { print $2; exit }')
   case "$col" in "${SG_TODO:-Todo}"|"$doing") ;; *) return 1;; esac
-  sg_not_startable "$n" && return 1
+  flab=; case ",$labels," in *",frozen:not-startable,"*) flab=1;; esac
+  sg_not_startable "$n" "$flab" && return 1
   sg_ledger_held "$n" >/dev/null && return 1
   return 0
 }
@@ -181,11 +182,17 @@ ab_resume() {   # the pending events of earlier passes: a Doing event launches i
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
-[ -n "${SG_SINGLE_AUTOBUG:-}" ] || exec env SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"
+# The held code of single.sh (76, #1290) is the landing's signal, read by wave callers only: a dispatcher's skipped pass is no
+# failure, so this seam maps it back to 0 and no dispatcher exits 76 (autobug.sh itself never does).
+if [ -z "${SG_SINGLE_AUTOBUG:-}" ]; then
+  SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"; rc=$?
+  [ "$rc" = 76 ] && rc=0
+  exit $rc
+fi
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
 # The frozen labels autofrontier.sh skips too (#530) are a floor, never a default (#537): a profile sets its own
 # SG_BUG_SKIP_LABELS and env.sh exports it, so a default here never applied and a frozen:dependency issue was dispatched.
-skip="$skip,frozen:owner,frozen:dependency,frozen:not-startable,needs-info"   # needs-info: a ticket waits on an answer (#729)
+skip="$skip,frozen:owner,frozen:dependency,needs-info"   # needs-info: a ticket waits on an answer (#729); frozen:not-startable is read with its marker (ADR-0159), never a floor
 read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, sys
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
@@ -293,7 +300,8 @@ for sel in "$lab" debt; do
     # ... and an issue the loop itself marked not startable is not a candidate either: a repeated identical failure is a
     # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
     # is one request per candidate that got this far, and it is a refusal-safe read like every other one here.
-    sg_not_startable "$n" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
+    flab=; case ",$labels," in *",frozen:not-startable,"*) flab=1;; esac
+    sg_not_startable "$n" "$flab" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE (its marker, or its frozen:not-startable label with no marker to re-arm it)"; continue; }
     h=$(sg_ledger_held "$n") && { echo "AUTOBUG skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
     ready_now "$n" || continue
     sg_ac_refused "$n" "$F/issue-$n.json" AUTOBUG && continue   # an acceptance command on a missing script (#729)

@@ -664,6 +664,9 @@ wave_check() {
     # (watch.sh), so this wait holds no watch cycle, and dispatch rides fastloop, which never runs a landing (#955).
     # The check writes its word to $of: GATE_OUTCOME_READ_FILE is the copy gate.sh makes inside the lock, and GATE_OUTCOME_FILE
     # is the file a raw tip check writes, as the entry's gate does.
+    # Each gate round marks the held landing lock (#1290): health.sh reads the last mark as the landing's progress, so a landing
+    # that runs several rounds (a red tip, the child that broke it leaves, the tip again) is busy, not held past its bounds.
+    touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
     (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" && eval "$tipgate") >"$clog" 2>&1; rc=$?
     oc=
     [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null
@@ -679,6 +682,7 @@ wave_check() {
     esac
     found=""; while read -r sha; do
       [ -n "$sha" ] || continue
+      touch "$SG_STATE/locks/single-wland/round" 2>/dev/null   # each child's own suite is a gate round too (#1290)
       child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")" || { found=$sha; break; }
     done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)   # newest first: the last entrant is tried first
     [ -n "$found" ] || { rm -f "$of"; echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause (the check's own output is $clog)"; return 1; }

@@ -355,8 +355,10 @@ def _transcript_tail(cwd, sid):
         if isinstance(obj, dict): lines.append(obj)
     return lines
 
-def live_sessions(profile, profiles_of=profiles_of):
-    """Each record that passes every check and belongs to this profile, with its token: the one membership rule for the routes."""
+def live_sessions(profile, profiles_of=profiles_of, seen=None):
+    """Each record that passes every check and belongs to this profile, with its token: the one membership rule for the routes.
+    `seen` is told every live record as the hub sees it, so the mode of a session can be recorded once while a read still
+    answers it (#1298)."""
     alive = []
     for rec in _records():
         sid, pid, cwd = rec["sessionId"], rec["pid"], rec["cwd"]
@@ -371,12 +373,14 @@ def live_sessions(profile, profiles_of=profiles_of):
         parked = rec.get("parkedJobId")
         if isinstance(parked, str) and parked in alive_sids:
             continue   # a front that parked its work in a live job is an empty shell (#1269)
+        if seen is not None:
+            seen(rec)
         yield rec, _secret(rec["sessionId"])
 
-def list_sessions(profile, profiles_of=profiles_of):
+def list_sessions(profile, profiles_of=profiles_of, seen=None):
     """This profile's live sessions: each record that passes every check, grouped by project, waiting sessions first."""
     rows = []
-    for rec, secret in live_sessions(profile, profiles_of):
+    for rec, secret in live_sessions(profile, profiles_of, seen=seen):
         sid, cwd = rec["sessionId"], rec["cwd"]
         rows.append({"project": os.path.basename(cwd.rstrip("/")) or cwd, "sid": sid, "name": rec["name"], "status": rec["status"],
                      "waiting": rec["status"] == "waiting", "last": read_last_message(cwd, sid, [secret]) or ""})

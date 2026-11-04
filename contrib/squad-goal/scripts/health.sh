@@ -11,8 +11,10 @@
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | grep -q "$2"; }
-causes=(); detail=(); briefs=()
-add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); }
+# akeys[i] is the alert key of causes[i]: the marker name, which says when an alert has already gone out. It is the cause
+# name, except a repeating failure, whose key also names its reason (#1294), so each group alerts once on its own.
+causes=(); detail=(); briefs=(); akeys=()
+add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); akeys+=("${4:-$1}"); }
 alive "$SG_STATE/watchd.pid" 'watchd.sh run' || add watchd-down "watchd is not running: no merges, dispatch or cleanup until it is restarted (watchd.sh start)"
 alive "$SG_STATE/fastloop.pid" 'fastloop.sh' || add fastloop-down "fastloop (autopilot every SG_FAST_INTERVAL s) is not running"
 c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(mtime "$c"))) -gt 360 ] && alive "$SG_STATE/watchd.pid" 'watchd.sh run' && add watch-stalled "cycle.log silent for $(( (now - $(mtime "$c")) / 60 )) min while watchd is up"
@@ -22,6 +24,11 @@ c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(mtime "$c"))) -gt 360 ] && 
 rroot=$(cd "$(dirname "$0")/../../.." && pwd); [ -f "$rroot/squad/reap.py" ] || rroot=${SG_SQUAD:-}
 while IFS= read -r l; do [ -n "$l" ] || continue; echo "$l"; [ -n "${HEALTH_DRY:-}" ] || echo "$(date '+%F %T') $l" >> "$SG_STATE/alerts.log"
 done < <(PYTHONPATH="$rroot${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.reap "$SG_STATE/active-runs.txt" "$SG_CHECKOUT" ${HEALTH_DRY:+--dry} 2>/dev/null)
+# #1270: a pass that reads no free run slot names the holder that has had no live lease and no live process for five minutes. A
+# count alone leaves the owner guessing which run blocks dispatch, and the reap above leaves a run whose proof of death it
+# cannot read. The ceiling is this checkout's (`caps.run_holders`), one line per holder.
+slots=$(PYTHONPATH="$rroot${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.reap --slots "$SG_STATE/active-runs.txt" "$SG_CHECKOUT" 2>/dev/null | paste -sd';' - | sed 's/;/; /g')
+[ -n "${slots// /}" ] && add no-free-slot "$slots"
 nv=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "$r" ] && f="$SG_CHECKOUT/runs/$r"
   [ -e "$f/record.jsonl" ] || { [ -e "$f/request.txt" ] && [ $((now - $(mtime "$f/request.txt"))) -gt 300 ] && nv=$((nv+1)); }; done
 [ $nv -gt 0 ] && add never-started-runs "$nv run(s) with no record.jsonl after 5 min (the squad refused to start)"
@@ -124,6 +131,7 @@ rr=$(python3 -I - "$SG_CHECKOUT" "$now" "$(( ${SG_HEALTH_REPEAT_MINUTES:-120} * 
 import glob, json, os, sys
 co, now, win, need = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 groups = {}
+def flat(s): return str(s).replace("\t", " ").replace("\n", " ").replace("\r", " ")   # the TSV reads four fields: a tab or newline in free text or in a reason never splits one (#1294)
 # a run folder is <checkout>/runs/<run>, or in a run or child worktree (#580, #585)
 recs = [r for rel in (("runs",), ("worktrees", "run", "*", "runs"), ("worktrees", "child", "*", "runs"))
         for r in glob.glob(os.path.join(glob.escape(co), *rel, "*", "record.jsonl"))]
@@ -146,7 +154,8 @@ for p in recs:
                 import re
                 iss += re.findall(r"GitHub issue #(\d+)|issue #(\d+)", l) and [m for t in re.findall(r"GitHub issue #(\d+)|issue #(\d+)", l) for m in t if m]
     except OSError: pass
-    k = (rs[0] if rs else "?")[:60]
+    # the key is the machine reason, flattened like the text; an empty reason is "?", so its TSV field is never empty (an empty field collapses under read)
+    k = (flat(rs[0]) if rs else "")[:60] or "?"
     g = groups.setdefault(k, {"n": 0, "iss": [], "why": (rs[1] if len(rs) > 1 else "")})
     g["n"] += 1
     for i in iss:
@@ -154,29 +163,45 @@ for p in recs:
     g["why"] = g["why"] or (rs[1] if len(rs) > 1 else "")
 for k, g in sorted(groups.items(), key=lambda kv: -kv[1]["n"]):
     if g["n"] >= need:
-        print("%d\t%s\t%s\t%s" % (g["n"], k, ",".join(g["iss"]) or "-", g["why"][:220].replace("\t", " ")))
+        # one line per group: every field is flattened to its own line, so a free text newline never reads as another group
+        print("%d\t%s\t%s\t%s" % (g["n"], k, ",".join(g["iss"]) or "-", flat(g["why"])[:220]))
 PY
 )
 if [ -n "$rr" ]; then
-  nrr=${rr%%$'\t'*}; rest=${rr#*$'\t'}; rkey=${rest%%$'\t'*}; rest=${rest#*$'\t'}; riss=${rest%%$'\t'*}; rwhy=${rest#*$'\t'}
-  add runs-repeating-failure "$nrr run(s) ended failed with the same reason '$rkey' in the last ${SG_HEALTH_REPEAT_MINUTES:-120} min: $rwhy"
-  # write it where the next dispatch will read it (once per reason and issue: the marker is the memory)
-  [ -n "${HEALTH_DRY:-}" ] || for n in ${riss//,/ }; do
+  # The helper answers one line per group, and every group at or over the count is its own cause and marks its own issues
+  # (#1294). Reading only the first line folded the rest into its free text and left their issues unmarked.
+  while IFS=$'\t' read -r nrr rkey riss rwhy; do
+    [ -n "$nrr" ] || continue
     # The marker's name is the reason, and the reason is the run's own machine word: `killed/no-process` carries a path
     # separator, so as a file name it names a directory that does not exist, touch fails, the guard below never holds and
     # every pass posts the marker again (#1292). The key is the reason made path-safe; two reasons that encode alike are
     # one marker by design, and the marker line still names the raw reason.
-    kf=$(printf '%s' "$rkey" | tr -c 'A-Za-z0-9._-' '-'); cm="$A/notstartable-$n-$kf"; [ -e "$cm" ] && continue
-    printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it; remove this comment (or fix the cause) to re-arm it sooner.\n' \
-      "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
-    # The marker is claimed before the post, so a pass interrupted between the two posts nothing twice; a post GitHub
-    # refuses drops the claim, so the next pass tries again. An existing path-safe marker keeps its name, so a marker
-    # written before this rule still dedupes.
-    : > "$cm"
-    if gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1; then
-      gh api --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" >/dev/null 2>&1
-    else rm -f "$cm"; fi
-    rm -f "$A/.cm$$"; done
+    kf=$(printf '%s' "$rkey" | tr -c 'A-Za-z0-9._-' '-')
+    # The alert is per group (#1294): its key is the cause plus the reason, and the checksum keeps two reasons that encode alike
+    # apart, so a second group that reaches the count later alerts while the first still persists.
+    ak="runs-repeating-failure-$kf-$(printf '%s' "$rkey" | cksum | cut -d' ' -f1)"
+    add runs-repeating-failure "$nrr run(s) ended failed with the same reason '$rkey' in the last ${SG_HEALTH_REPEAT_MINUTES:-120} min: $rwhy" "" "$ak"
+    # write it where the next dispatch will read it (once per reason and issue: the marker is the memory)
+    [ -n "${HEALTH_DRY:-}" ] || for n in ${riss//,/ }; do
+      # The marker's name is the reason, and the reason is the run's own machine word: `killed/no-process` carries a path
+      # separator, so as a file name it names a directory that does not exist, touch fails, the guard below never holds and
+      # every pass posts the marker again (#1292). The key is the reason made path-safe; two reasons that encode alike are
+      # one marker by design, and the marker line still names the raw reason.
+      kf=$(printf '%s' "$rkey" | tr -c 'A-Za-z0-9._-' '-')
+      # a group whose runs named no issue ("-") has no issue to comment on or mark (#1294)
+      case "$n" in ''|*[!0-9]*) continue;; esac
+      cm="$A/notstartable-$n-$kf"; [ -e "$cm" ] && continue
+      printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it on its own. To re-arm it sooner, remove this comment and the frozen:not-startable label, or fix the cause.\n' \
+        "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
+      # The marker is claimed before the post, so a pass interrupted between the two posts nothing twice; a post GitHub
+      # refuses drops the claim, so the next pass tries again. An existing path-safe marker keeps its name, so a marker
+      # written before this rule still dedupes.
+      : > "$cm"
+      if gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1; then
+        gh api --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" >/dev/null 2>&1
+      else rm -f "$cm"; fi
+      rm -f "$A/.cm$$"; done
+  done <<< "$rr"
 fi
 # Two loops are not twice the loop (#1858): a second watch.sh doubles every GitHub read the loop makes -- which is what the API's
 # abuse limit costs -- and a second loop is invisible from inside the first. watchd runs exactly one; anything else is an orphan.
@@ -195,11 +220,31 @@ nw=$(printf '%s\n' $wl | grep -c .)
 wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid"); held=
 [ -n "$wd" ] && for p in $wl; do [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && held="$held $p"; done; held=${held# }
 [ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive (pids $wl; watchd pid ${wd:-none} holds ${held:-none}): watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
+# health.json shape (#1294, asserted in test-health.sh): `causes` holds one entry per alert, so a repeating failure with two groups
+# over the count is listed twice and the length of the list counts the groups. `briefs` is keyed by cause name, so it carries the
+# ghspend causes only; a group's reason and count live in its alert line and its marker, not here.
+# A landing lock whose current gate round has run past the round's bounds is stuck, not queued (#1290): a round waits up to
+# SERIAL_WAIT_SECONDS (900 s) for the gate lock, then the gate is bounded at SG_GATE_BOUND_SECONDS (900 s), so a live holder whose
+# last round began past their sum has outlived both, and a person is told, once. A landing runs several rounds (a red tip, the child
+# that broke it leaves, the tip again), so wave.sh marks each round's start in the lock's round file: that mark is the progress, not
+# the landing's start. The lock's pid mtime is the instant the holder took it, which is what the alert names; a new holder restarts it.
+lkd="$SG_STATE/locks/single-wland"; lhp=$(cat "$lkd/pid" 2>/dev/null)
+if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$lhp" 2>/dev/null | cut -c1)" != Z ]; then
+  lw=${SERIAL_WAIT_SECONDS:-900}; case $lw in ''|*[!0-9]*) lw=900;; esac
+  lb=${SG_GATE_BOUND_SECONDS:-${SG_PROMOTE_BOUND_SECONDS:-900}}; case $lb in ''|*[!0-9]*|0) lb=900;; esac
+  ls=$(mtime "$lkd/pid"); rs=$(mtime "$lkd/round"); [ "$rs" -gt "$ls" ] && lp=$rs || lp=$ls   # the round mark, when a round has begun since the lock was taken
+  la=$(( now - lp ))
+  [ "$ls" -gt 0 ] && [ "$la" -gt $(( lw + lb )) ] && add landing-held "the landing lock has been held by pid $lhp since $(date -r "$ls" '+%F %T' 2>/dev/null || date -d "@$ls" '+%F %T' 2>/dev/null || printf '%s' "$ls") (no gate round began for ${la}s, past the ${lw}s gate wait plus the ${lb}s gate bound): the landing is stuck, not queued"
+fi
 { printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf '],"briefs":{'; bn=0; for i in "${!causes[@]}"; do [ -n "${briefs[$i]}" ] || continue; [ $bn = 0 ] || printf ','; bn=1; printf '"%s":"%s"' "${causes[$i]}" "${briefs[$i]}"; done; printf '}}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
-for i in "${!causes[@]}"; do m="$A/health-${causes[$i]}"
-  if [ ! -e "$m" ]; then msg="HEALTH ${causes[$i]}: ${detail[$i]}"; echo "$msg"
-    [ -n "${HEALTH_DRY:-}" ] || { touch "$m"; echo "$(date '+%F %T') $msg" >> "$SG_STATE/alerts.log"; "$notify" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1; }; fi
+# The marker is written after the pass, not inside it: one cause may arrive as several lines (a repeating failure names one per
+# group, #1294), and every one of them must reach the alert readers on the pass it appears. The marker still holds the alert
+# key across passes, so an unchanged alert fires once.
+for i in "${!causes[@]}"; do m="$A/health-${akeys[$i]}"; [ -e "$m" ] && continue
+  msg="HEALTH ${causes[$i]}: ${detail[$i]}"; echo "$msg"
+  [ -n "${HEALTH_DRY:-}" ] || { echo "$(date '+%F %T') $msg" >> "$SG_STATE/alerts.log"; "$notify" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1; }
 done
-for m in "$A"/health-*; do [ -e "$m" ] || continue; k=${m##*/health-}; case " ${causes[*]} " in *" $k "*) ;; *) [ -n "${HEALTH_DRY:-}" ] || { rm -f "$m"; echo "HEALTH $k cleared"; };; esac; done
+[ -n "${HEALTH_DRY:-}" ] || for i in "${!causes[@]}"; do touch "$A/health-${akeys[$i]}"; done
+for m in "$A"/health-*; do [ -e "$m" ] || continue; k=${m##*/health-}; case " ${akeys[*]} " in *" $k "*) ;; *) [ -n "${HEALTH_DRY:-}" ] || { rm -f "$m"; echo "HEALTH $k cleared"; };; esac; done
 exit 0

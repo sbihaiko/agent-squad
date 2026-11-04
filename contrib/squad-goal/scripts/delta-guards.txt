@@ -169,6 +169,8 @@ contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-li
 contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-neverstarted.sh
 contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-own-pass.sh
 contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-pid-reuse.sh
+contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-fix-run.sh
+contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-zombie-dashboard.sh
 contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-probe-retry.sh
 contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-rearm-floor.sh
 contrib/squad-goal/scripts/janitor.py	contrib/squad-goal/scripts/test-janitor-rule-o.sh

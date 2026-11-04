@@ -26,6 +26,14 @@ UNAUTHORIZED = "ResultError: Claude Code returned an error result: API Error: 40
 NO_ACCESS = ("ResultError: Claude Code returned an error result: There's an issue with the selected model "
              "(gemini-3.8-flash-high). It may not exist or you may not have access (exit code: 1)")
 TIMEOUT = "TimeoutError: the request timed out after 600 s"
+CONNECTION_REFUSED = ("ResultError: Claude Code returned an error result: API Error: Connection refused\n"
+                      "— a firewall or proxy may be blocking it (ECONNREFUSED) (exit code: 1)")
+CONNECTION_RESET = ("ResultError: Claude Code returned an error result: Connection reset by peer "
+                    "(ECONNRESET) (exit code: 1)")
+# A quota or a refusal that a dropped connection happens to sit beside: the provider's answer wins, the transport does not (#1293)
+RATE_LIMIT_AND_RESET = "API Error: 429 rate limit exceeded; connection reset by peer (exit code: 1)"
+CREDIT_AND_REFUSED = "ResultError: API Error: insufficient credit balance; Connection refused (ECONNREFUSED) (exit code: 1)"
+TOOL_SERVER_DOWN = "ResultError: the tool server stopped: Connection refused (ECONNREFUSED) (exit code: 1)"
 TOOL_DENIED = "ResultError: Claude Code returned an error result: the tool call was denied by the permission hook"
 PROTOCOL = "ResultError: the response was malformed: invalid JSON frame (exit code: 1)"
 UNPLACED = "ProcessError: Command failed with exit code 1 (exit code: 1)\nError output: Check stderr output for details"
@@ -89,6 +97,11 @@ def record(tmp_path, name, events):
     (UNAUTHORIZED, "auth"),
     (NO_ACCESS, "auth"),
     (TIMEOUT, "timeout"),
+    (CONNECTION_REFUSED, "protocol"),
+    (CONNECTION_RESET, "protocol"),
+    (TOOL_SERVER_DOWN, "protocol"),
+    (RATE_LIMIT_AND_RESET, "quota"),
+    (CREDIT_AND_REFUSED, "quota"),
     (TOOL_DENIED, "tool_refusal"),
     (PROTOCOL, "protocol"),
     (UNPLACED, "unknown"),
@@ -96,6 +109,16 @@ def record(tmp_path, name, events):
 ])
 def test_each_cause_is_read_from_the_text(text, cause):
     assert AC.cause(text) == cause
+
+
+@pytest.mark.parametrize("text", [CONNECTION_REFUSED, CONNECTION_RESET, TOOL_SERVER_DOWN])
+def test_a_dropped_connection_is_a_transport_failure(text):
+    assert AC.is_transport(text)
+
+
+@pytest.mark.parametrize("text", [RATE_LIMIT_AND_RESET, CREDIT_AND_REFUSED, TOOL_DENIED, SESSION_LIMIT, PROTOCOL])
+def test_a_provider_answer_is_never_a_transport_failure(text):
+    assert not AC.is_transport(text)
 
 
 def test_the_cause_names_are_the_closed_set():

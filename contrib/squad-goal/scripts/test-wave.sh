@@ -1077,4 +1077,14 @@ r=$(land2 run-21 2>&1); rc=$?
 [ "$(/usr/bin/grep -c 'issues/895 -f state=closed' "$T/gh.log")" = 1 ] && ok "Z7: a squashed RED+fix commit closes its Refs #895 once" || ko "Z7: closes for #895: '$(cat "$T/gh.log")' (exit $rc: '$r')"
 /usr/bin/grep -q 'issues/896 -f state=closed' "$T/gh.log" && ko "Z7: a commit whose subject is TDD RED closed #896" || ok "Z7: a commit whose subject is TDD RED does not close #896"
 
+# W1290 (#1290): a landing that runs more than one gate round (a red tip, the child that broke it leaves, the tip again) marks each
+# round on its held lock (locks/single-wland/round), so the held alert reads the last round's start as progress. The tip gate
+# records whether the mark is there when it runs, then clears it: a mark the second round did not set reads as absent.
+W93=wave/run-93; start2 run-93 >/dev/null; child 930 g930 "origin/$W93"; en2 run-93 930 >/dev/null; child 931 g931 "origin/$W93"; en2 run-93 931 >/dev/null
+mkdir -p "$T/st/locks/single-wland"; rm -f "$T/st/rounds.log"; printf 'run-93\n' > "$T/st/auto/disp-931"
+r=$(SG_WAVE_TIP_GATES='[ -e "$SG_STATE/locks/single-wland/round" ] && echo marked >> "$SG_STATE/rounds.log"; rm -f "$SG_STATE/locks/single-wland/round"; ! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q "work 931"' SG_WAVE_CHILD_GATES='[ "$SG_WAVE_CHILD" = 931 ] && exit 1; exit 0' land2 run-93); rc=$?
+[ "$(/usr/bin/grep -c '^marked$' "$T/st/rounds.log" 2>/dev/null)" = 2 ] && ok "W1290: each gate round of the landing marks its held lock" || ko "W1290: marks at the tip gate: '$(cat "$T/st/rounds.log" 2>/dev/null)' (exit $rc: '$r')"
+[ $rc = 0 ] && ok "W1290: the two-round landing lands the wave without the child that broke it" || ko "W1290: exit $rc: '$r'"
+rm -rf "$T/st/locks/single-wland"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

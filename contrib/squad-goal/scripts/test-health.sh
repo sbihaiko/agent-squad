@@ -108,7 +108,7 @@ printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH runs-board-drift: 2 live run(s)' &&
 cmp -s "$T/st/auto/drift-prev" "$T/prev.bak" && ok "HEALTH_DRY leaves drift-prev alone" || ok "HEALTH_DRY leaves no stale drift-prev"
 # ---- #1858: a failure that repeats unchanged is a defect in the loop, and two loops are not twice the loop ----
 rep() { mkdir -p "$T/co/runs/$1"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #%s"}\n{"ts":2,"event": "verdict", "verdict": "failed", "reasons": ["%s", "why %s"]}\n' "${2:-}" "$3" "$3" > "$T/co/runs/$1/record.jsonl"; }
-rc() { { echo '#!/bin/bash'; printf 'case "$*" in *comments*) echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
+rc() { { echo '#!/bin/bash'; printf 'for a; do case "$a" in body=@*) cp "${a#body=@}" %s/comment.body 2>/dev/null;; esac; done\ncase "$*" in *comments*) echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 rg() { { echo '#!/bin/bash'; printf '#!/bin/bash\nsleep 60\n' > "$T/s/watch.sh"; } > /dev/null; }
 reset; : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-runs-repeating-failure"; mkdir -p "$T/co/runs"; rc
 o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'runs-repeating-failure' && ko "one failed run alerted: $o" || ok "one failed run is not a repetition"
@@ -118,6 +118,9 @@ rep r3 10 no_such_issue; o=$(bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'no_such_issue'" && ok "the third identical failure alerts, naming the reason and the count" || ko "repeat: $o"
 /usr/bin/grep -q 'issues/10/comments' "$T/comments.calls" 2>/dev/null && ok "the report is written on the issue the runs were on" || ko "no comment on #10: $(cat "$T/comments.calls" 2>/dev/null)"
 /usr/bin/grep -qF 'labels[]=frozen:not-startable' "$T/labels.calls" 2>/dev/null && /usr/bin/grep -q 'issues/10/labels' "$T/labels.calls" && ok "the marker carries the frozen:not-startable label on the same issue" || ko "no frozen:not-startable label on #10: $(cat "$T/labels.calls" 2>/dev/null)"
+# (#1297) the marker tells the owner what re-arms it: the comment and the label go together, because the label alone holds an issue
+# whose marker names no build, and removing the comment alone leaves the label holding it.
+/usr/bin/grep -qF 'remove this comment and the frozen:not-startable label' "$T/comment.body" 2>/dev/null && ok "the marker names the comment and the frozen:not-startable label as the re-arm" || ko "the marker's re-arm line: $(tail -n 2 "$T/comment.body" 2>/dev/null)"
 bash "$T/s/health.sh" >/dev/null; n2=$(/usr/bin/grep -c 'issues/10/comments' "$T/comments.calls" 2>/dev/null); [ "${n2:-0}" = 1 ] && ok "the same repetition comments once" || ko "commented $n2 time(s)"
 # #1292: the reason is the marker's file name, and a reason with a path separator named a directory that does not exist,
 # so the guard never held and every pass posted the marker again
@@ -135,6 +138,71 @@ reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failu
 rep l1 13 no_such_issue; rep l2 13 no_such_issue; rep l3 13 no_such_issue
 bash "$T/s/health.sh" >/dev/null; nl=$(/usr/bin/grep -c 'issues/13/comments' "$T/comments.calls" 2>/dev/null || true)
 [ "${nl:-0}" = 0 ] && ok "#1292 a legacy path-safe marker still dedupes" || ko "#1292 the legacy marker was reposted ${nl:-0} time(s)"
+# #1294: every reason group at or over the count reports and marks its own issues; a later group never folds into an earlier
+# group's free text. The helper prints one line per group, so the shell must read the whole answer, not its first line.
+reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure"; : > "$T/comments.calls"; rm -rf "$T/bodies"; mkdir -p "$T/bodies"
+cat > "$T/bin/gh" <<GH1294
+#!/bin/bash
+case "\$*" in
+  *comments*)
+    echo "\$*" >> "$T/comments.calls"
+    for a in "\$@"; do case "\$a" in body=@*) cp "\${a#body=@}" "$T/bodies/\$(printf '%s' "\$*" | sed -n 's#.*issues/\([0-9]*\)/comments.*#\1#p')";; esac; done;;
+  */labels*) echo "\$*" >> "$T/labels.calls";;
+esac
+exit 0
+GH1294
+chmod +x "$T/bin/gh"
+rep a1 20 alpha_bad; rep a2 20 alpha_bad; rep a3 20 alpha_bad; rep a4 20 alpha_bad
+rep b1 21 beta_bad; rep b2 21 beta_bad; rep b3 21 beta_bad
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "runs-repeating-failure: 4 run(s) ended failed with the same reason 'alpha_bad'" && ok "#1294 the first group reports its own reason and count" || ko "#1294 alpha: $o"
+printf '%s' "$o" | /usr/bin/grep -qF "runs-repeating-failure: 3 run(s) ended failed with the same reason 'beta_bad'" && ok "#1294 the second group reports its own reason and count" || ko "#1294 beta: $o"
+[ "$(jq '[.causes[]|select(.=="runs-repeating-failure")]|length' "$T/st/health.json")" = 2 ] && ok "#1294 health.json carries one cause entry per group" || ko "#1294 health.json: $(cat "$T/st/health.json")"
+[ -e "$T/st/auto/notstartable-20-alpha_bad" ] && ok "#1294 the first group marks its issue" || ko "#1294 no marker on #20: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+[ -e "$T/st/auto/notstartable-21-beta_bad" ] && ok "#1294 the second group marks its own issue" || ko "#1294 no marker on #21: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+/usr/bin/grep -q 'issues/20/comments' "$T/comments.calls" && /usr/bin/grep -q 'issues/21/comments' "$T/comments.calls" && ok "#1294 each group comments on its own issue" || ko "#1294 comments: $(cat "$T/comments.calls" 2>/dev/null)"
+/usr/bin/grep -q 'alpha_bad' "$T/bodies/20" 2>/dev/null && /usr/bin/grep -q 'beta_bad' "$T/bodies/21" 2>/dev/null && ok "#1294 each marker names its own reason" || ko "#1294 marker bodies: $(cat "$T/bodies/20" "$T/bodies/21" 2>/dev/null)"
+/usr/bin/grep -q 'beta_bad' "$T/bodies/20" 2>/dev/null && ko "#1294 the second group's table leaked into the first group's marker" || ok "#1294 no other group's table in the first marker"
+/usr/bin/grep -q 'alpha_bad' "$T/bodies/21" 2>/dev/null && ko "#1294 the first group's table leaked into the second group's marker" || ok "#1294 no other group's table in the second marker"
+# #1294 review: the alert is keyed per group (cause plus reason), so a second group that reaches the count on a LATER pass,
+# while the first still persists, alerts, writes its alerts.log line and notifies; a persisting group does not alert again
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc; : > "$T/st/alerts.log"
+rep p1 40 alpha_late; rep p2 40 alpha_late; rep p3 40 alpha_late
+bash "$T/s/health.sh" >/dev/null
+nb=$(notif)
+rep q1 41 beta_late; rep q2 41 beta_late; rep q3 41 beta_late
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'beta_late'" && ok "a second group reaching the count on a later pass is reported" || ko "later group silent: $o"
+[ "$(/usr/bin/grep -c 'beta_late' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "the later group writes its alerts.log line" || ko "later group alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+[ "$(notif)" -gt "$nb" ] && ok "the later group notifies" || ko "no notification for the later group"
+o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'runs-repeating-failure' && ko "persisting groups alerted again: $o" || ok "persisting groups do not alert again"
+# #1294 review: a machine reason with a tab or a newline is flattened in the group key, so the TSV keeps its four fields
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep f1 50 'x\ty\nz'; rep f2 50 'x\ty\nz'; rep f3 50 'x\ty\nz'
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'x y z'" && ok "a reason with a tab and a newline is one flattened group" || ko "flattening: $o"
+[ -e "$T/st/auto/notstartable-50-x-y-z" ] && ok "the flattened reason marks its issue" || ko "no marker for the flattened reason: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+/usr/bin/grep -q 'issues/50/comments' "$T/comments.calls" 2>/dev/null && ok "the flattened group comments on its issue" || ko "no comment on #50: $(cat "$T/comments.calls" 2>/dev/null)"
+# #1294 review: an empty machine reason keys as "?", so the TSV does not collapse its empty field
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep e1 51 ''; rep e2 51 ''; rep e3 51 ''
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason '?'" && ok "an empty machine reason is keyed as ?" || ko "empty reason: $o"
+[ -e "$T/st/auto/notstartable-51-" ] && ko "an empty reason made an empty marker key" || ok "an empty reason makes no empty marker key"
+# #1294 review: a group whose runs named no issue has no issue to comment on or mark: no "-" issue, no "notstartable---" marker
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep n1 "" no_issue_reason; rep n2 "" no_issue_reason; rep n3 "" no_issue_reason
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "same reason 'no_issue_reason'" && ok "a group with no issue still reports" || ko "no-issue group not reported: $o"
+/usr/bin/grep -q 'issues/-/' "$T/comments.calls" 2>/dev/null && ko "a comment went to issues/-" || ok "a group with no issue posts no comment"
+[ -n "$(/usr/bin/find "$T/st/auto" -name 'notstartable---*' 2>/dev/null)" ] && ko "a marker was claimed for -" || ok "a group with no issue claims no marker"
+# #1294 review: health.json lists one causes entry per group (its count of groups), and briefs stay keyed by cause name, so a
+# repeating failure never carries a brief of its own
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep h1 60 shape_a; rep h2 60 shape_a; rep h3 60 shape_a; rep h4 61 shape_b; rep h5 61 shape_b; rep h6 61 shape_b
+bash "$T/s/health.sh" >/dev/null
+[ "$(jq '[.causes[]|select(.=="runs-repeating-failure")]|length' "$T/st/health.json")" = 2 ] && ok "health.json has one causes entry per group" || ko "health.json groups: $(cat "$T/st/health.json")"
+jq -e '.briefs | has("runs-repeating-failure") | not' "$T/st/health.json" >/dev/null && ok "health.json carries no brief for a repeating failure" || ko "health.json brief: $(cat "$T/st/health.json")"
 # #1292: a post GitHub refuses drops the claim, so the next pass tries again
 reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure" "$T/post.ok"; : > "$T/comments.calls"
 { echo '#!/bin/bash'; printf 'case "$*" in *comments*) [ -e %s/post.ok ] || exit 1; echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"
@@ -215,4 +283,44 @@ kill -0 $up 2>/dev/null && ok "the unrelated process keeps running (the pass kil
 cmp -s "$T/st/active-runs.txt" "$T/act.bak" && ok "the active-runs lines are kept" || ko "active-runs changed: $(cat "$T/st/active-runs.txt")"
 n2=$(bash "$T/s/health.sh" | /usr/bin/grep -c REAPED); [ "$n2" = 0 ] && ok "a run with its final verdict is not marked twice" || ko "marked again: $n2"
 kill $lp $up 2>/dev/null; wait $lp $up 2>/dev/null
+# ---- #1270: a pass that reads no free run slot names the holder that has had no live lease and no live process for five minutes ----
+# The ceiling is one run (the project file lowers it) and it is taken, so the pass reads no free slot and must say which run holds
+# it. Its engine is gone and its request is fresh: the reap leaves a run in its launch window alone, so only the report names it.
+reset; : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-no-free-slot"; mkdir -p "$T/co/runs" "$T/co/docs/squad"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+sleep 0 & dp=$!; wait $dp; rrun run-noshow start "call:$dp:$(( $(date +%s) ))"; touch "$T/co/runs/run-noshow/request.txt"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH no-free-slot: NO-SLOT run-noshow: caps.runs has no free slot and this run has had no live lease and no live process for' && ok "a full ceiling names the run that has had no lease and no process for five minutes" || ko "the stale holder was not named: $o"
+[ -e "$T/st/auto/health-no-free-slot" ] && ok "the named holder alerts once" || ko "no alert marker for the named holder"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH no-free-slot' && ko "the same holder alerted twice: $o" || ok "the same holder does not alert twice"
+# a named engine that lives is never named, whatever its record says (#1270): the report and the reap read the same pid
+reset; rm -rf "$T/co/runs" "$T/st/auto/health-no-free-slot"; mkdir -p "$T/co/runs"
+sleep 300 & sp=$!; rrun run-live start "call:$sp:$(( $(date +%s) ))"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'NO-SLOT run-live' && ko "a run whose named engine lives was named: $o" || ok "a run whose named engine lives is never named"
+kill $sp 2>/dev/null; wait $sp 2>/dev/null; rm -f "$T/co/docs/squad/defaults.yaml"
+# a free slot names nobody
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; rm -f "$T/st/auto/health-no-free-slot"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'no-free-slot' && ko "a free ceiling named a holder: $o" || ok "a free ceiling names no holder"
+rm -f "$T/co/docs/squad/defaults.yaml"
+# ---- #1290: a landing held past its own gate wait plus the gate bound is a named failure; a wait inside them stays quiet ----
+mkdir -p "$T/st/locks/single-wland"; /bin/sleep 60 & lh=$!; echo "$lh" > "$T/st/locks/single-wland/pid"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'landing-held' && ko "a fresh landing wait alerted: $o" || ok "a landing wait inside its bounds stays quiet"
+touch -t 202001010000 "$T/st/locks/single-wland/pid"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing-held: the landing lock has been held by pid $lh since 2020-01-01 00:00:00" \
+  && ok "a holder past the gate wait plus the gate bound alerts, naming the pid and the instant" || ko "no landing-held cause: $o"
+/usr/bin/grep -q 'HEALTH landing-held:' "$T/st/alerts.log" && ok "alerts.log carries it" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held:' && ko "the same held landing alerted twice" || ok "the same held landing alerts once"
+kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "a released landing clears the cause" || ko "not cleared: $o"
+# ---- #1290: a landing that runs more than one gate round (a red tip, a child that leaves, the tip again) is progressing: its last
+# round's start is the clock, not the landing's start. The held instant still names when the lock was taken.
+mkdir -p "$T/st/locks/single-wland"; /bin/sleep 60 & lh=$!; echo "$lh" > "$T/st/locks/single-wland/pid"; touch -t 202001010000 "$T/st/locks/single-wland/pid"
+touch "$T/st/locks/single-wland/round"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'landing-held' && ko "a landing in a fresh gate round alerted: $o" || ok "a landing past its bounds whose gate round just started stays quiet"
+touch -t 202001010000 "$T/st/locks/single-wland/round"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing-held: the landing lock has been held by pid $lh since 2020-01-01 00:00:00" \
+  && ok "a landing whose last gate round is past the bounds alerts, naming the held instant" || ko "a stale gate round did not alert: $o"
+kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "the round-progress landing clears its cause" || ko "round-progress cause not cleared: $o"
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail

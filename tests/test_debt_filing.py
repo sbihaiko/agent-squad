@@ -47,6 +47,12 @@ class StubGh:
         if method == "GET" and re.fullmatch(r"repos/o/r/issues/\d+", path):
             n = int(path.rsplit("/", 1)[1])
             return json.dumps({"number": n, "id": 9000 + n})
+        if method == "GET" and re.fullmatch(r".*projectsV2/4/items/PVTI_\d+", path):   # one card, the REST single-item route (#1303)
+            n = int(path.rsplit("PVTI_", 1)[1]) - 9000
+            status = dict((int(i.removeprefix("PVTI_")) - 9000, v) for i, v in self.moved)
+            name = {"O1": "Todo"}.get(status.get(n), status.get(n))   # the write sends the option id, the read answers the name
+            fields = [{"name": "Status", "value": {"name": name}}] if name else []
+            return json.dumps({"id": f"PVTI_{9000 + n}", "isArchived": False, "content": {"number": n}, "fields": fields})
         if method == "GET" and "projectsV2/4/items" in path and "@tsv" in args[-1]:   # the seam's state read
             status = dict((int(i.removeprefix("PVTI_")) - 9000, v) for i, v in self.moved)
             return "".join(f"{n}\t{status.get(n, '')}\thttps://api.github.com/repos/o/r\n" for n in sorted(self.on_board))
