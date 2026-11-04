@@ -175,54 +175,82 @@ def test_the_communication_settings_keep_their_rows_and_their_tables_apart(hub):
 # ---------------------------------------------------------------- Communication states each role once (#1284)
 
 def _sl_theme(hub, people, connection="connected"):
-    """The Communication theme as the page draws it, with the people a reader would see."""
+    """The Communication theme as the page draws it, with the people a reader would see. The nav line is read before
+    the render too, so a value left in the harness can never pass for the renderer's own write."""
     view = dict(hub.SLACK_DEFAULT, connection=connection, people=people)
-    body = (_comm_slices(hub.PAGE) + f"\nslS={json.dumps(view)};slDraft=slClone(slS);slRender();"
-            "console.log(JSON.stringify({body:STORE['#sbody'].innerHTML,"
+    body = (_comm_slices(hub.PAGE) + f"\nconst nav0=$('#slknav').textContent;"
+            f"slS={json.dumps(view)};slDraft=slClone(slS);slRender();"
+            "console.log(JSON.stringify({body:STORE['#sbody'].innerHTML,nav0:nav0,"
             "chip:STORE['#slksr'].textContent,nav:STORE['#slknav'].textContent}))")
     return json.loads(_node(body))
 
 
 def test_the_communication_legend_states_each_role_once_and_no_person_row_repeats_it(hub):
-    """A role's behavior is a legend above the People table, once for the theme. Two people of one role do not double it,
-    and no person row carries the behavior text: the row holds the name, the role select and Remove (#1284)."""
+    """A role's behavior is a labelled legend above the People table, once for the theme, each role a term and its
+    behavior a definition. Two people of one role do not double it, and no person row carries the behavior text: the
+    row holds the name, the role select and Remove (#1284)."""
     roles = json.loads(_node(_comm_slices(hub.PAGE) + "\nconsole.log(JSON.stringify(SL_ROLE))"))
     assert sorted(roles) == ["Colleague", "Manager"], "the theme names an unexpected role"
     out = _sl_theme(hub, [{"name": "Ana", "role": "Manager"}, {"name": "Bo", "role": "Manager"}])
     body = out["body"]
     for role, text in roles.items():
         assert body.count(text) == 1, f"{role}'s behavior appears {body.count(text)} times, not once"
-    start = body.index("</p>", body.index("<h4>People</h4>"))   # after the legend paragraph
-    people = body[start:body.index("<h4>Templates</h4>")]
+    legend = re.search(r'<div class="sllegend"[^>]*>(.*?)</div>', body)
+    assert legend, "the theme states no role legend"
+    assert legend.start() < body.index("<h4>People</h4>"), "the legend sits below the People table"
+    assert re.findall(r"<dt>(.*?)</dt>", legend.group(1)) == list(roles), "the legend does not list each role once"
+    assert re.findall(r"<dd>(.*?)</dd>", legend.group(1)) == [roles[k] for k in roles], legend.group(1)
+    people = body[body.index("<h4>People</h4>"):body.index("<h4>Templates</h4>")]
     for text in roles.values():
         assert text not in people, "a person row repeats a role's behavior"
     assert people.count('data-sl="pp:') == 2, "the person rows lost their role select"
 
 
+def _tiles(now):
+    """Every Now tile as its tone, key and value, in the order the block draws them."""
+    return re.findall(r'<div class="tile (\w+)">(?:(?!</div>).)*?<span class=tk>(.*?)</span>'
+                      r'(?:(?!</div>).)*?<span class=tv>(.*?)</span>', now)
+
+
 def test_the_connection_fact_is_a_now_tile_with_a_tone_and_not_an_editable_row(hub):
+    """The connection is a Now tile carrying the hub's tone, and no settings row states it: the row labels the theme
+    builds are read, not the whole block's text, so an unrelated mention cannot hide or fake the row (#1284)."""
     out = _sl_theme(hub, [])
     now, settings = _blocks(out["body"])
-    assert re.search(r'<div class="tile ok"><span class=tk>Connection</span><span class=tv>connected</span>', now), now
-    assert "connection" not in settings.lower(), "the connection fact is still a settings row"
+    assert ("ok", "Connection", "connected") in _tiles(now), now
+    labels = re.findall(r"<span class=sl>(.*?)</span>", settings)
+    assert labels, "the settings block carries no row"
+    assert not any("connect" in lab.lower() for lab in labels), labels
     warn = _sl_theme(hub, [], connection="not connected")
-    assert re.search(r'<div class="tile warn"><span class=tk>Connection</span>', _blocks(warn["body"])[0])
+    assert ("warn", "Connection", "not connected") in _tiles(_blocks(warn["body"])[0]), warn["body"]
 
 
 def test_the_owner_inbox_switches_carry_the_owner_inbox_name(hub):
+    """The switches that give the owner an inbox sit under the Owner inbox heading, and each switch's visible label
+    and aria-label names that inbox, so a rename of the labels cannot pass on the heading alone (#1284)."""
     settings = _blocks(_sl_theme(hub, [])["body"])[1]
-    assert "<h4>Owner inbox</h4>" in settings
-    assert "Optional" not in settings, "the old Optional heading stayed"
+    heads = re.findall(r"<h4>(.*?)</h4>", settings)
+    assert "Owner inbox" in heads and "Optional" not in heads, heads
+    block = settings[settings.index("<h4>Owner inbox</h4>"):]
+    switches = re.findall(r'<label class=swt><input type=checkbox data-sl=(\w+)[^>]*aria-label="([^"]*)"[^>]*>'
+                          r'\s*([^<]*)</label>', block)
+    assert [s[0] for s in switches] == ["dm", "audio"], switches
+    for _, aria, text in switches:
+        assert aria.startswith("Owner inbox"), aria
+        assert text.strip().startswith("Owner inbox"), text
 
 
 def test_the_communication_chip_states_the_connection_and_the_people_count_in_the_nav_line(hub):
     """The theme's chip is a status: it reads the connection and how many people the agent answers, and the nav's small
-    line carries the same text (#1284)."""
+    line carries the same text from the one render (#1284). The nav line is empty before the render, so its value can
+    only be what the render wrote."""
     cases = [([{"name": "Ana", "role": "Manager"}, {"name": "Bo", "role": "Colleague"}], "connected",
               "connected · 2 people"),
              ([{"name": "Ana", "role": "Manager"}], "connected", "connected · 1 person"),
              ([], "not connected", "not connected · 0 people")]
     for people, connection, want in cases:
         out = _sl_theme(hub, people, connection=connection)
+        assert out["nav0"] == "", "the harness pre-filled the nav line"
         assert out["chip"] == want, out["chip"]
         assert out["nav"] == out["chip"], "the nav line disagrees with the summary chip"
 

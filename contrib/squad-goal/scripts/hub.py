@@ -4946,6 +4946,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
    and the reason sits above them. */
 #tab-set .blkh{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:0 0 4px}
 #tab-set .setblk{margin:0 0 14px}
+#tab-set .sllegend{margin:0 0 12px}#tab-set .sllegend dl{margin:0;padding:0}#tab-set .sllegend dt{font-weight:600;font-size:var(--fs-caption);color:var(--fg);margin:2px 0 0}#tab-set .sllegend dd{margin:0;color:var(--mute);font-size:var(--fs-caption)}
 #tab-set .now{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0 0 10px}
 #tab-set .tile{background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);padding:6px 8px;min-width:0;font-size:var(--fs-caption)}
 #tab-set .tile .tk{display:block;color:var(--mute);font-weight:600}
@@ -5391,9 +5392,10 @@ const slChan=(c,i)=>{const on=c.watch?"":" disabled",n=slA(c.name);
 const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc(p.name)}</b></span>`
  +`<span role=cell data-l="role"><select data-sl="pp:${i}:role" aria-label="${slA(p.name)}: role">${slOpts(Object.keys(SL_ROLE),p.role)}</select></span>`
  +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
-const slLegend=()=>Object.keys(SL_ROLE).map(k=>`<b>${esc(k)}</b>: ${esc(SL_ROLE[k])}`).join("; ")+".";   // each role stated once, never per row
+const slLegend=()=>`<dl>${Object.keys(SL_ROLE).map(k=>`<dt>${esc(k)}</dt><dd>${esc(SL_ROLE[k])}</dd>`).join("")}</dl>`;   // each role stated once, never per row
+const slStatusText=s=>`${s.connection} · ${s.people.length} ${s.people.length===1?"person":"people"}`;   // one text for the chip and the nav line (#1284)
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const d=slDraft,np=slS.people.length;setChip("slk",`${slS.connection} · ${np} ${np===1?"person":"people"}`);   // a status: the connection and how many people the agent answers (#1284)
+ const d=slDraft,st=slStatusText(slS);setChip("slk",st);   // a status: one text for the chip and the nav line (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn")],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
  +setSettings("slk",[
  setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
@@ -5405,12 +5407,12 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
  `<h4>Channels</h4><div class=slt role=table><div class="slc slh" role=row><span>Channel</span><span>Language</span><span>Watch</span><span>Thread only</span><span>Mention only</span><span>Announce</span><span></span></div>`
  +(d.channels.map(slChan).join("")||`<p class=m>No channel: the agent reads and posts nowhere.</p>`)+`</div>`,
  `<div class=slad><input id=slch placeholder="#channel or id" aria-label="channel to add"><button id=slcha>Add channel</button></div>`,
- `<h4>People</h4><p class="note legend">${slLegend()}</p><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span></span></div>`
+ `<div class="sllegend" role=group aria-label="Roles"><span class=blkh>Roles</span>${slLegend()}</div><h4>People</h4><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span></span></div>`
  +(d.people.map(slPerson).join("")||`<p class=m>No person: the agent answers nobody by name.</p>`)+`</div>`,
  `<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`,
  `<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join(""),
- `<h4>Owner inbox</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="owner self-DM as an inbox"> Owner self-DM as an inbox</label></div>`,
- `<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="audio in and out"> Audio in and out</label></div>`]);
+ `<h4>Owner inbox</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="Owner inbox: self-DM"> Owner inbox: self-DM</label></div>`,
+ `<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="Owner inbox: audio in and out"> Owner inbox: audio in and out</label></div>`]);
  if(slMsg)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
