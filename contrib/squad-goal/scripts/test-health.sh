@@ -9,7 +9,7 @@ pg checkout -q -b gui/7 local/next; echo 7 > "$P/g"; pg add g; pg commit -q -m w
 export SG_FORK_DIR="$P" SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORK_ORPHAN_MINUTES=0
 unset "${!SG_@}"; export HOME="$T/home"   # hermetic: whatever the caller exports (the live loop's SG_*) stops here
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"   # ...and so do the live loops of this machine: health.sh counts watch.sh processes by command line, so without this a second real loop adds a loops-duplicated alert to every count below
-mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"
+mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"; cp "$(dirname "$src")/startability.sh" "$T/s/startability.sh"
 # hermetic: health.sh counts watch.sh with a real pgrep, so the default pattern would count the host's own live loop (a duplicate there is a third cause)
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"
 export SQUAD_CAPS_DIR="$T/caps"   # hermetic: the reap step (#1226) reclaims leases here, never in the machine's caps folder
@@ -28,10 +28,18 @@ page() { local n=$1; shift; printf '%s\n' "$@" | jq -s . > "$T/pages/$n.json"; }
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
 case "$*" in
-  *"issues?state=open"*) [ -n "$GH_READY" ] && printf '%s\n' "$GH_READY";;
+  *"issues?state=open"*) "$(dirname "$0")/issues" "$@";;
 esac
 GH
-chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+# the open-issue list (#1338): GH_READY (numbers) when set, else page 1 of $T/pages, through the call's own -q filter as gh applies it
+cat > "$T/bin/issues" <<'IS'
+#!/bin/bash
+if [ -n "$GH_READY" ]; then printf '%s\n' "$GH_READY"; exit 0; fi
+q=""; while [ $# -gt 0 ]; do [ "$1" = -q ] && q=$2; shift; done
+f="$(dirname "$0")/../pages/1.json"; [ -f "$f" ] || exit 0
+if [ -n "$q" ]; then jq -r "$q" "$f"; else cat "$f"; fi
+IS
+chmod +x "$T/bin/gh" "$T/bin/issues"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"; export HEALTH_NOTIFY="$T/notify"
 touch "$T/st/cycle.log" "$T/st/active-runs.txt"; git -C "$T/co" init -q 2>/dev/null
@@ -45,7 +53,6 @@ touch -t 202001010000 "$T/st/cycle.log"; o=$(bash "$T/s/health.sh"); echo "$o" |
 mkdir -p "$T/co/runs/run-n"; echo r > "$T/co/runs/run-n/request.txt"; touch -t 202001010000 "$T/co/runs/run-n/request.txt"; echo run-n > "$T/st/active-runs.txt"
 o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'HEALTH never-started-runs' && ok "record-less run -> never-started-runs" || ko "no never-started: $o"
 # A wave-only issue can be READY after its blocker closes. The health pass must expose it without a triage label.
-o=$(GH_READY=41 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH frontier-idle: startable 41 with no work branch' && ok "a startable wave-only issue is reported" || ko "wave-only issue was not reported: $o"
 # An open issue without bug, enhancement, or spec is visible before the loop can dispatch it untyped.
 page 1 "$(iss 427 'Add a thing' '')"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH untyped-issues: open issue(s) without a type label: #427' && ok "an untyped open issue is reported" || ko "untyped issue was not reported: $o"
@@ -59,7 +66,7 @@ printf '%s' "$o" | /usr/bin/grep -qE 'defect-without-bug.*#(502|503)' && ko "a b
 printf '%s' "$o" | /usr/bin/grep -q 'HEALTH untyped-issues:' && ko "typed issues reported untyped: $o" || ok "typed issues are not untyped"
 rm -f "$T/pages/"*.json
 # ---- #1795: runs-board-drift, the loop against its own board ----
-bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
+bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; *"issues?state=open"*) "$(dirname "$0")/issues" "$@";; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 alerts() { local n; n=$(/usr/bin/grep -c 'HEALTH runs-board-drift' "$T/st/alerts.log" 2>/dev/null); echo "${n:-0}"; }
 notif() { local n; n=$(/usr/bin/grep -c . "$T/notify.calls" 2>/dev/null); echo "${n:-0}"; }
 liverun() { mkdir -p "$T/co/runs/$1"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #%s"}\n' "$2" > "$T/co/runs/$1/record.jsonl"
@@ -106,6 +113,18 @@ printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH runs-board-drift: 2 live run(s)' &&
 [ "$(alerts)" = "$al" ] && ok "HEALTH_DRY writes no alerts.log line" || ko "HEALTH_DRY alerted"
 [ "$(notif)" = "$nb" ] && ok "HEALTH_DRY does not notify" || ko "HEALTH_DRY notified"
 cmp -s "$T/st/auto/drift-prev" "$T/prev.bak" && ok "HEALTH_DRY leaves drift-prev alone" || ok "HEALTH_DRY leaves no stale drift-prev"
+# ---- #1338: frontier-idle names only work autofrontier would start: a Todo card, no spec, no live run ----
+fr() { : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-frontier-idle"; mkdir -p "$T/co/runs"; rm -f "$T/pages/"*.json; bd; }
+fr; printf '41\tTodo\n' > "$T/board.tsv"; page 1 "$(iss 41 'A wave-only thing' '')"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH frontier-idle: startable 41 with no work branch' && ok "a startable wave-only issue is reported" || ko "wave-only issue was not reported: $o"
+fr; printf '41\tTodo\n' > "$T/board.tsv"; page 1 "$(iss 41 'Spec of a thing' 'spec')"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a spec was named startable: $o" || ok "a spec issue is never named startable (ADR-0142)"
+fr; printf '41\tTodo\n' > "$T/board.tsv"; page 1 "$(iss 41 'Has a live run' '')"; liverun run-old 41
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a live run older than 30 min did not suppress frontier-idle: $o" || ok "a live run older than 30 min suppresses frontier-idle"
+fr; printf '41\tCode Complete\n' > "$T/board.tsv"; page 1 "$(iss 41 'Already in code' '')"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a card not in Todo was named startable: $o" || ok "a card not in Todo is not named"
+fr; rm -f "$T/board.tsv"; page 1 "$(iss 41 'Board unreadable' '')"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH frontier-idle: startable 41' && ok "an unreadable board keeps today's alert" || ko "unreadable board dropped the alert: $o"
 # ---- #1858: a failure that repeats unchanged is a defect in the loop, and two loops are not twice the loop ----
 rep() { mkdir -p "$T/co/runs/$1"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #%s"}\n{"ts":2,"event": "verdict", "verdict": "failed", "reasons": ["%s", "why %s"]}\n' "${2:-}" "$3" "$3" > "$T/co/runs/$1/record.jsonl"; }
 rc() { { echo '#!/bin/bash'; printf 'for a; do case "$a" in body=@*) cp "${a#body=@}" %s/comment.body 2>/dev/null;; esac; done\ncase "$*" in *comments*) echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
