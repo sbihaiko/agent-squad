@@ -49,11 +49,11 @@ caller names `bug`, and only the binding knows which field and option carry it (
 import json, os, pathlib, re, subprocess, sys, time, urllib.parse
 
 _VALUE_FLAGS = {"-X", "--method", "-f", "-F", "--raw-field", "--field", "--input", "--jq", "-q", "-H", "--header"}
-def _log_call(args, outcome):
+def _log_call(state, args, outcome):
     """One api.log line for a `gh api` call this seam makes (#847). The board pass is the largest REST reader the loop has,
     and it was the one that spent the quota unlogged; the line is the door's own, so the spend reads the same everywhere.
-    Only a loop run logs (SG_STATE set): a call outside the loop writes nothing."""
-    if not os.environ.get("SG_STATE"): return
+    The line goes to the seam's own state dir (#1328), never to an inherited SG_STATE; a seam with no state dir writes nothing."""
+    if not state: return
     it = iter(args); route = ""
     for x in it:
         if x in _VALUE_FLAGS: next(it, None); continue
@@ -63,7 +63,7 @@ def _log_call(args, outcome):
     if here not in sys.path: sys.path.insert(0, here)
     try: import ghread
     except ImportError: return
-    ghread.log_call(None, route, ghread.MISS, outcome, transport="GraphQL" if route == "graphql" else "REST")
+    ghread.log_call(state, route, ghread.MISS, outcome, transport="GraphQL" if route == "graphql" else "REST")
 
 # The binding a repository binds the vocabulary to. A carrier is named here, and a run records the name.
 BOARD = "board"
@@ -419,8 +419,8 @@ class BoardBinding:
         for k in range(self.attempts):
             if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
             r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=self.timeout or timeout)
-            if not r.returncode: _log_call(a, "answer"); return r.stdout
-            _log_call(a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
+            if not r.returncode: _log_call(self.st, a, "answer"); return r.stdout
+            _log_call(self.st, a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
             err = r.stderr.strip()[:200]
             if not self.server_error.search(err): break
         raise RuntimeError(err)
