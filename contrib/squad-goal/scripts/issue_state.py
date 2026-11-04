@@ -506,6 +506,8 @@ class BoardBinding:
         if self.item_hints.get(key): return self.item_hints[key]   # the caller's id: no read of the items for it (#1300)
         if key not in self._items(): self.items_map = self.items(); self._save_items()
         if key in self.items_map: return self.items_map[key]
+        if add_missing and not self.repo:   # an add with no repository wrote nothing, and "not on the board" then named a write that never ran (#1315)
+            raise RuntimeError(f"#{n}: the add needs the repository, and SG_REPO is not set")
         wrote = False   # an add that landed, or a refusal that proves the card is on the board: the write is done, the read is behind
         if add_missing and self.repo:
             iid = json.loads(self.api(f"repos/{self.repo}/issues/{n}"))["id"]

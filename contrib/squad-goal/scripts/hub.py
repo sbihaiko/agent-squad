@@ -4157,7 +4157,7 @@ def promote_write(issues, add=False):
     came from the open-issue read (#815). The call carries the state directory this hub resolved: hubctl starts the hub
     with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
     nums = issues if isinstance(issues, list) else [issues]
-    env = {**os.environ, "SG_STATE": str(STATE), "SG_MOVE_BY": "owner"}   # the owner's arrow names its dispatch context (#861)
+    env = {**os.environ, "SG_STATE": str(STATE), "SG_REPO": REPO, "SG_MOVE_BY": "owner"}   # the owner's arrow names its dispatch context (#861); the repository is the one the hub resolved, since hubctl starts it with none and an add runs only with one (#1315)
     # The item ids the hub already holds go to the writer, so a move reads no whole-project list for an id (#1300).
     env["SG_BOARD_ITEM_HINTS"] = json.dumps({str(i["n"]): i["i"] for i in board_cache.get("items") or []
                                              if i.get("n") in nums and i.get("i") and (i.get("r") or REPO).lower() == REPO.lower()})   # this repository's cards only (the seam's own filter)
