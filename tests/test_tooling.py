@@ -331,13 +331,14 @@ def test_the_deselection_adr_records_the_rule_and_is_indexed():
     assert "[0139](0139-a-test-without-its-fixture-repo-is-deselected.md)" in (ROOT / "docs" / "adr" / "README.md").read_text()
 
 
-def test_ci_fast_tier_names_no_gui_e2e_step_and_no_mesenai_path():
-    """Guard for ADR-0139 and #1322: the fast tier carries no separate GUI e2e step and names no MESENAI_REPO path the
-    runner never checks out. The file is not dropped: it sits under the tree's `tests` testpath, so the fast battery
-    collects it, and the host-bound tests are deselected by name when the host is absent (ADR-0139). The battery's one
-    pytest command carries no `--ignore` or `--deselect`, so the run reaches the file's host-free tests."""
+def test_ci_fast_tier_runs_the_gui_e2e_suite_from_one_step_and_names_no_mesenai_path():
+    """Guard for ADR-0139 and #1322: the fast tier runs the GUI e2e suite from exactly one step, and names no
+    MESENAI_REPO path the runner never checks out. The step is the rule, not a convenience: the battery above carries
+    `-m "not heavy"`, and the file's `heavy` tests ran on every promotion before the fast tier, so a tier that leaves the
+    file to the tree walk drops them. Neither pytest command carries `--ignore` or `--deselect`, so the host-bound tests
+    are deselected by name when the host is absent (ADR-0139) and the host-free ones run."""
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-    assert "test_gui_test_e2e.py" not in text, "no CI step names the GUI e2e file: the fast battery collects it"
+    assert text.count("test_gui_test_e2e.py") == 1, "the fast tier runs the GUI e2e suite from exactly one step"
     assert "MESENAI_REPO" not in text
     for gate in (r for r in _ci_run_lines() if r.startswith("python3 -m pytest")):
         assert "--ignore" not in gate and "--deselect" not in gate, \
@@ -347,9 +348,10 @@ def test_ci_fast_tier_names_no_gui_e2e_step_and_no_mesenai_path():
 
 
 def test_ci_gate_steps_run_the_fast_battery_once_on_python_313():
-    """Guard for the suite rule: the fast-battery job runs the fast battery once, which leaves the `heavy` tests out."""
+    """Guard for the suite rule: the fast-battery job runs the fast battery once, which leaves the `heavy` tests out, and
+    one explicit GUI e2e run beside it, which is where that file's `heavy` tests come back."""
     gates = [r for r in _ci_run_lines() if r.startswith("python3 -m pytest")]
-    assert gates == ['python3 -m pytest -n auto -m "not heavy"'], gates
+    assert gates == ['python3 -m pytest -n auto -m "not heavy"', "python3 -m pytest tests/test_gui_test_e2e.py -q"], gates
     assert _job_python(_ci_workflow()["jobs"]["fast-battery"]) == "3.13"
 
 

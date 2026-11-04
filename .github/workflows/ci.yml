@@ -8,7 +8,9 @@ on:
 # a work branch is proven by the local fast gate, and a landing by the promotion proof. A pull request from any other branch
 # starts none, because each job's own condition refuses it.
 # The fast tier is three jobs (ruff, mypy, fast-battery), each on Python 3.13, with no `needs:` between them, so they run in
-# parallel and the pull request reports in the time of the slowest one. The GUI e2e suite is outside this tier (ADR-0139).
+# parallel and the pull request reports in the time of the slowest one. The fast-battery job carries one explicit GUI e2e
+# run beside the battery: the battery's `-m "not heavy"` leaves that file's `heavy` tests out, and they ran on every
+# promotion before this tier existed. The host-bound tests are deselected by name there (ADR-0139).
 # Why no matrix: a matrix over one job split a commit into legs that waited behind each other for runners (#149), and a check
 # no runner picks up answers nothing. The three jobs are separate, each with its own check-run name, which the promotion pass
 # reads from this file. Whether three runners start at once is measured by the first real dev-to-stg run, not assumed here.
@@ -35,9 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
@@ -50,9 +52,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
@@ -65,11 +67,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
       - run: python3 -m pip install -e '.[dev]'
       - run: python3 -m pytest -n auto -m "not heavy"
+      - name: GUI test squad e2e suite
+        # The battery above leaves out the file's `heavy` tests, and these ran on every promotion before the fast tier.
+        # No MesenAI checkout is on the runner: the host-bound tests are deselected by name (ADR-0139), and the step
+        # names the file so a missing checkout is reported rather than silently collected by the tree walk.
+        run: python3 -m pytest tests/test_gui_test_e2e.py -q
