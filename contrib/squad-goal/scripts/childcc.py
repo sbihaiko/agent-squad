@@ -63,6 +63,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam mo
 import child_issues   # the issues a child's spawn text names (#555)
 import issue_ledger   # the issue's loop facts: the head a run requeued its child on is a fact there, never a marker (ADR-0149)
 from issue_state import board_state
+from board_columns import claimed_names   # the claimed card names: "Doing" on this board, "In Progress" on the default (#1342)
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -408,8 +409,13 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592); for a run-owned child only a standing approval at its reviewed head reaches here, so the failure is not the review's
         subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
-    if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"):   # backfill never moves a card past (or out of) its column
-        logged(f"backfill {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run ended and its card is past the backfill; no entry, no card move"); mk.touch(); continue
+    if finished and not waved and card_status(n) not in (*claimed_names().split("|"), "Todo", "Blocked"):   # backfill never moves a card past (or out of) its column
+        if card_status(n) in ("Done", "Closed"):   # a terminal card has nothing left to enter: the skip stands
+            logged(f"backfill {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run ended and its card is past the backfill; no entry, no card move"); mk.touch(); continue
+        # the run cut no wave (no wave- or waved- marker): the child has no wave to enter and its commits reach no remote branch, so
+        # it is requeued with the reason, never marked done (#1349)
+        subprocess.run(["bash", wave, "requeue", str(n), "its run cut no wave, so its finished commits have no entry"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
+        print(f"CHILD NO-WAVE REQUEUE #{n} ({name} {child})", flush=True); mk.touch(); continue
     entered, why, worked = enter(pathlib.Path(r), child, n, d, ok, own)
     if worked is None:   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
         CAUSE[key] = "no review slot this pass: caps.reviews is full"
