@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -201,11 +202,18 @@ def js_view(**over):
     return json.dumps({**VIEW, **over})
 
 
-def test_the_loop_answer_carries_the_four_health_keys(hub):
-    """The loop answer carries the health object, so the phone and the desktop draw one health view from one read (#1280)."""
-    _, port, _, _, _ = hub
+def test_the_loop_answer_carries_the_four_health_keys(hub, monkeypatch):
+    """The loop answer carries the health object, and its values are measured from the state: the cycle age and the live
+    counts the same answer reports, never four empty keys (#1280)."""
+    mod, port, _, _, state = hub
+    (state / "cycle.log").write_text(time.strftime("%H:%M:%S") + " CYCLE 30s\n")
+    monkeypatch.setattr(mod, "loop_live", lambda: {"runs": ["run-1"], "gates": ["gate pid 1"]})
     _, v = ask(port, "GET")
-    assert {"cycle_age", "starting_left", "live_runs", "live_gates"} <= set(v["health"]), v["health"]
+    health = v["health"]
+    assert {"cycle_age", "starting_left", "live_runs", "live_gates"} <= set(health), health
+    assert isinstance(health["cycle_age"], int) and health["cycle_age"] >= 0, health
+    assert health["live_runs"] == len(v["live"]["runs"]) == 1, health
+    assert health["live_gates"] == len(v["live"]["gates"]) == 1, health
 
 
 def test_the_theme_opens_on_its_state_line():
@@ -228,6 +236,8 @@ def test_the_last_change_tile_names_the_action_who_from_and_when():
     assert "start · owner · loopback · 2026-10-31 16:02" in out, out
     empty = run_js(f"loopLogHtml({js_view(log=[], who='', when='')})")
     assert "none recorded" in empty, empty
+    lost = run_js(f"loopLogHtml({js_view(log=[], who='owner', when='2026-10-31T16:02:00-03:00')})")
+    assert "none recorded" in lost and "16:02" not in lost, "a truncated log still names no action or source, so it says none recorded"
 
 
 def test_the_health_tile_reads_the_hubs_values_and_formats_only_the_span():
@@ -245,6 +255,8 @@ def test_the_starting_switch_states_the_seconds_left():
     """A disabled switch is never a mystery: the seconds left in the starting window sit by it (#1280)."""
     out = run_js(f"loopSetHtml({js_view(state='starting', health={'live_runs': 2, 'live_gates': 1, 'cycle_age': None, 'starting_left': 62})})")
     assert "Loop starting · 62s left" in out and " disabled" in out, out
+    assert re.search(r'role=switch[^>]*title="the loop is starting"', out), "the disabled starting switch carries its tooltip"
+    assert run_js(f"loopTip({js_view(state='starting')})") == "the loop is starting"
 
 
 def test_a_failed_start_offers_try_again_and_it_posts_a_start():
@@ -296,6 +308,8 @@ def test_the_loop_switch_shows_the_state_and_the_log_keeps_who_and_when():
 def test_the_loop_theme_shows_the_read_only_reason():
     out = run_js(f"loopSetHtml({js_view(write=False, reason='read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on')})")
     assert "SQUAD_TAILNET_LOOP_WRITE" in out and "disabled" in out
+    assert re.search(r'role=switch[^>]*title="read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on"', out), \
+        "the disabled read-only switch carries its reason as a tooltip"
 
 
 def test_a_failed_start_is_shown_in_the_loop_theme_and_the_log():

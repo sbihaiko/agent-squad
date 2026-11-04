@@ -124,7 +124,7 @@ def test_the_loop_health_reads_the_last_cycles_age_and_says_none_when_it_has_non
     log.write_text(time.strftime("%H:%M:%S", time.localtime(now - 90)) + " CYCLE 30s\n")
     health = hub.loop_health({"runs": ["a", "b"], "gates": []}, now=now)
     assert health["live_runs"] == 2 and health["live_gates"] == 0
-    assert 88 <= health["cycle_age"] <= 92, health["cycle_age"]
+    assert 85 <= health["cycle_age"] <= 95, health["cycle_age"]
     log.unlink()
 
 

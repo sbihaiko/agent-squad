@@ -2029,7 +2029,8 @@ def loop_started_after(at):
 def loop_health(live, now=None):
     """The Loop theme's Now tiles (#1280): how many runs and gates are live, how old the last watch cycle is, and how
     long a pending start has left. Each value is a fact one reader already measures; a missing cycle is None, never zero,
-    so the tile says "no cycle yet" instead of "0s"."""
+    so the tile says "no cycle yet" instead of "0s". A cycle end in the future, from a skewed clock, clamps to 0 rather
+    than reading negative. `cycle_age` replaces the old `cycle_left` tile."""
     now = time.time() if now is None else now
     cyc = _cycle_state(now)
     age = max(0, int(round(now - cyc["end"]))) if cyc else None
@@ -6021,9 +6022,8 @@ function roAll(root){if(!root||!root.querySelectorAll)return;for(const el of roo
  el.disabled=true;if(el.tagName==="A"){el.setAttribute("aria-disabled","true");el.style.pointerEvents="none";el.tabIndex=-1}}}
 function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&root)new MutationObserver(()=>roAll(root)).observe(root,{subtree:true,childList:true})}
 // }SETT
-const loopBy=v=>v.who?`${v.who} · ${moment(v.when)}`:"";
-const loopLast=v=>{const e=(v.log||[])[0];return e?[e.action,e.who,e.from,moment(e.at)].filter(Boolean).join(" · "):loopBy(v)||"none recorded"};
-const loopTip=v=>!v.write?v.reason:v.state==="on"||v.state==="draining"?"turn off":v.state==="off"?"turn on":"";
+const loopLast=v=>{const e=(v.log||[])[0];return e?[e.action,e.who,e.from,moment(e.at)].filter(Boolean).join(" · "):"none recorded"};   // no log entry names no action or source, so the tile never shows a partial who and when
+const loopTip=v=>!v.write?v.reason:v.state==="on"||v.state==="draining"?"turn off":v.state==="off"?"turn on":v.state==="starting"?"the loop is starting":"";
 const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
