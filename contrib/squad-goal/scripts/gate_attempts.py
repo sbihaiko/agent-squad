@@ -159,9 +159,9 @@ def last_attempt(path, card, tip=None):
 
 
 def start_marker(state_dir, card, tip):
-    """The path of the start marker gate.sh writes before a gate runs and drops once the attempt is
-    journaled: while it stands, a gate is live for the card at that tip (#1257). The name is the one
-    gate.sh builds, so the live read and the write never drift apart."""
+    """The path of the start marker the gate runner writes before a gate runs and drops once the
+    attempt is journaled: while it stands, a gate is live for the card at that tip (#1257). The name
+    is the one the runner builds, so the live read and the write never drift apart."""
     return pathlib.Path(state_dir) / f"gate-attempt-{int(card)}-{str(tip)[:12]}.start"
 
 
