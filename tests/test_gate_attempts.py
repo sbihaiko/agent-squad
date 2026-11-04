@@ -8,6 +8,7 @@ rising, written only when the value changes. The projection itself lives in issu
 """
 import importlib.util
 import json
+import os
 import pathlib
 import time
 
@@ -168,54 +169,100 @@ class TestProjection:
 
 class TestGating:
     """The gating fact (#1257): a card reads Gating while a gate is live for its wave, or while the
-    wave's last attempt ended red or unproven with none since. The fact is read from the attempt
+    wave's last attempt for the card ended red or unproven with none since. The wave is named by its
+    run: a wave-level gate (card 0) holds every card of the wave. The fact is read from the attempt
     journal, so a hub restart re-reads the same answer."""
 
     def test_a_live_gate_holds_the_card_in_gating(self, ga, journal):
-        assert ga.gating(journal, 1257, "abc", live=True) is True
+        assert ga.gating(journal, 1257, "W1", live=True) is True
 
     def test_a_card_with_no_attempt_is_not_gating(self, ga, journal):
-        assert ga.gating(journal, 1257, "abc") is False
+        assert ga.gating(journal, 1257, "W1") is False
 
     def test_the_last_attempt_red_or_unproven_holds_the_card_in_gating(self, ga, journal):
-        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
-        assert ga.gating(journal, 1257, "abc") is True
-        ga.record_attempt(journal, 1257, "abc", "unproven", "a2", now=200)
-        assert ga.gating(journal, 1257, "abc") is True
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100, wave="W1")
+        assert ga.gating(journal, 1257, "W1") is True
+        ga.record_attempt(journal, 1257, "def", "unproven", "a2", now=200, wave="W1")
+        assert ga.gating(journal, 1257, "W1") is True
 
     def test_a_passed_last_attempt_leaves_gating(self, ga, journal):
-        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
-        ga.record_attempt(journal, 1257, "abc", "pass", "a2", now=200)
-        assert ga.gating(journal, 1257, "abc") is False
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100, wave="W1")
+        ga.record_attempt(journal, 1257, "def", "pass", "a2", now=200, wave="W1")
+        assert ga.gating(journal, 1257, "W1") is False
 
     def test_only_the_attempts_of_the_cards_wave_count(self, ga, journal):
-        """The wave is named by its tip: a red attempt at another tip -- a work-branch gate, a
-        different wave -- does not hold this wave's card in Gating."""
-        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
-        assert ga.gating(journal, 1257, "def") is False
+        """A red attempt in another wave -- a different run's gate -- does not hold this wave's card."""
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100, wave="W1")
+        assert ga.gating(journal, 1257, "W2") is False
 
     def test_a_reuse_marker_is_no_attempt_since_the_red(self, ga, journal):
-        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100, wave="W1")
         ga.record_reuse(journal, 1257, "abc", "m1", now=200)
-        assert ga.gating(journal, 1257, "abc") is True
+        assert ga.gating(journal, 1257, "W1") is True
 
-    def test_the_answer_survives_a_restart(self, ga, journal, tmp_path):
+    def test_a_landing_red_holds_every_card_of_the_wave_until_a_landing_pass(self, ga, journal):
+        """The landing gate is card 0 of the wave: it holds all the wave's cards, and a sibling's later
+        entry pass never answers for another card, so it does not clear the landing red."""
+        ga.record_attempt(journal, 0, "land1", "fail", "", now=100, wave="W1")
+        ga.record_attempt(journal, 2, "child2", "pass", "e2", now=200, wave="W1")
+        assert ga.gating(journal, 1, "W1") is True
+        assert ga.gating(journal, 2, "W1") is True
+        ga.record_attempt(journal, 0, "land2", "pass", "", now=300, wave="W1")
+        assert ga.gating(journal, 1, "W1") is False
+        assert ga.gating(journal, 2, "W1") is False
+
+    def test_the_answer_survives_a_restart(self, ga, journal):
         """The journal on disk is the only state: a fresh read under a new process answers the same
         card the same column, so a hub restart changes nothing (#1257)."""
-        ga.record_attempt(journal, 1257, "abc", "unproven", "a1", now=100)
+        ga.record_attempt(journal, 1257, "abc", "unproven", "a1", now=100, wave="W1")
         reloaded = _load("gate_attempts_reloaded", SCRIPTS / "gate_attempts.py")
-        assert reloaded.gating(journal, 1257, "abc") is True
+        assert reloaded.gating(journal, 1257, "W1") is True
 
-    def test_the_live_gate_marker_names_the_card_and_the_wave_tip(self, ga, tmp_path):
-        """gate.sh writes the attempt's start marker beside the state dir and drops it once the
-        attempt is journaled: while it stands, a gate is live for that card at that tip."""
-        marker = ga.start_marker(tmp_path, 1257, "abcdef1234567890")
-        assert marker.name == "gate-attempt-1257-abcdef123456.start"
-        assert ga.gate_live(tmp_path, 1257, "abcdef1234567890") is False
-        marker.write_text("gate-1-2-3")
-        assert ga.gate_live(tmp_path, 1257, "abcdef1234567890") is True
-        assert ga.gating(tmp_path / "hub-flow.x_y.jsonl", 1257, "abcdef1234567890") is False
-        assert ga.gating(tmp_path / "hub-flow.x_y.jsonl", 1257, "abcdef1234567890", live=ga.gate_live(tmp_path, 1257, "abcdef1234567890")) is True
+    def test_a_live_marker_of_a_running_gate_reads_live(self, ga, tmp_path):
+        marker = tmp_path / ga.live_marker_name("W1", os.getpid())
+        marker.write_text(f"{os.getpid()} {int(time.time())} 900\n")
+        assert ga.gate_live(tmp_path, "W1") is True
+        assert ga.gate_live(tmp_path, "W2") is False
+
+    def test_a_marker_whose_pid_is_gone_is_not_live_and_is_removed(self, ga, tmp_path):
+        marker = tmp_path / ga.live_marker_name("W1", 2 ** 22 + 7)
+        marker.write_text(f"{2 ** 22 + 7} {int(time.time())} 900\n")
+        assert ga.gate_live(tmp_path, "W1") is False
+        assert not marker.exists()
+
+    def test_a_live_marker_past_its_limit_is_not_live(self, ga, tmp_path):
+        marker = tmp_path / ga.live_marker_name("W1", os.getpid())
+        marker.write_text(f"{os.getpid()} {int(time.time()) - 1000} 900\n")
+        assert ga.gate_live(tmp_path, "W1") is False
+
+
+class TestGateRunner:
+    """The gate runner itself writes the live marker and the wave's journal record (#1257): the
+    marker is up while the gate waits or runs, and the landing red it journals holds the wave."""
+
+    @pytest.mark.heavy
+    def test_a_wave_gate_is_live_while_it_runs_and_holds_its_wave_when_red(self, ga, tmp_path):
+        import subprocess
+        state = tmp_path / "state"
+        state.mkdir()
+        cache = tmp_path / "board-cache.json"
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "GATE_", "SERIAL_"))}
+        env.update({"SG_STATE": str(state), "SG_GATE_WAVE": "W1", "SG_GATE_KIND": "fast",
+                    "SG_BOARD_CACHE": str(cache), "SG_REPO": "o/r"})
+        proc = subprocess.Popen(["bash", str(SCRIPTS / "gate.sh"), "bash", "-c", "sleep 2; false"],
+                                cwd=tmp_path, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        seen = False
+        deadline = time.time() + 20
+        while proc.poll() is None and time.time() < deadline:
+            seen = seen or ga.gate_live(state, "W1")
+            time.sleep(0.05)
+        assert proc.wait(timeout=20) == 1
+        assert seen, "the wave's gate was never live while it ran"
+        assert ga.gate_live(state, "W1") is False
+        journal = ga.journal_path(str(cache), "o/r")
+        assert ga.gating(journal, 1257, "W1") is True
+        landing = [r for r in ga.attempts(journal) if r.get("n") == 0]
+        assert [r["v"] for r in landing] == ["fail"] and landing[0]["w"] == "W1"
 
 
 class TestCompaction:

@@ -126,8 +126,8 @@ def test_the_gating_fact_reads_the_attempt_journal(tmp_path):
     ga = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ga)
     journal = tmp_path / "hub-flow.x_y.jsonl"
-    ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
-    held = ga.gating(journal, 1257, "abc")
+    ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100, wave="W1")
+    held = ga.gating(journal, 1257, "W1")
     derived = facts.issue_facts(entered=True, standing="ahead", approved=False, dev_running=False,
                                 review_waits=False, gating=held)
     assert columns.column_for(derived)[0] == "Gating"
