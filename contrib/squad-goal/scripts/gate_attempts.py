@@ -151,7 +151,7 @@ def counts(path):
 
 
 def live_marker_name(wave, pid):
-    """The name of the live marker one gate process writes for its wave (gate.sh writes it): the
+    """The name of the live marker one gate process writes for its wave (the gate runner writes it): the
     wave run and the gate's pid. A gate waiting for the lock and a gate running share the name."""
     return f"gate-wave-{wave}.{int(pid)}.live"
 
@@ -167,7 +167,7 @@ def _alive(pid):
 
 
 def gate_live(state_dir, wave, now=None):
-    """True when a gate is queued for or running the wave's attempt right now. gate.sh writes one
+    """True when a gate is queued for or running the wave's attempt right now. The gate runner writes one
     marker per gate process, `pid start limit`, before it waits for the lock; the marker is live only
     while its pid is alive and the gate is within its limit (the attempt bound plus the lock wait).
     A marker whose pid is gone is removed here, so a crash never leaves a gate reading as live."""
