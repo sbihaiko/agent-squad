@@ -434,7 +434,9 @@ def test_scrollback_is_dropped_when_the_session_ends(state):
     deadline = time.time() + 10
     while time.time() < deadline and '"event": "end"' not in (state / "sessions.jsonl").read_text():
         time.sleep(0.05)
-    assert sv.call(state, "read", session=session, offset=0)["data"] == ""
+    # The in-memory window is dropped at the end; a read then serves the redacted transcript and names the end (#1318).
+    out = sv.call(state, "read", session=session, offset=0)
+    assert out["ended"] is True and out["data"] == (state / "transcripts" / f"{session}.txt").read_text()[-4000:]
 
 
 def test_hub_module_holds_no_pty_or_fork_on_the_job_path():
@@ -547,3 +549,28 @@ def test_a_start_whose_interpreter_cannot_import_the_sdk_is_refused_naming_both(
         sv.Supervisor(state).start("p#31", str(tmp_path))
     assert sv.hosted_argv()[0] in str(err.value) and "claude_agent_sdk" in str(err.value), str(err.value)
     assert not (state / sv.LEDGER).exists() or '"start"' not in (state / sv.LEDGER).read_text()
+def test_a_read_of_an_ended_session_names_the_end_its_return_code_and_its_last_output(state, tmp_path, monkeypatch):
+    """#1318: a session that exited answered reads as a live, silent one, so the panel showed `Working` for a dead
+    process. A read after the end says it ended, with the return code and the transcript tail, and a write refuses."""
+    monkeypatch.setattr(sv, "hosted_argv", lambda root=sv.ROOT: [sys.executable, "-c", "print('boom at import'); raise SystemExit(3)"])
+    sup = sv.Supervisor(state)
+    sid = sup.start("p#41", str(tmp_path))
+    deadline = time.time() + 10
+    out = sup.read(sid, 0)
+    while not out.get("ended") and time.time() < deadline:
+        time.sleep(0.05)
+        out = sup.read(sid, 0)
+    assert out["ended"] is True and out["returncode"] == 3, out
+    assert "boom at import" in out["data"], out
+    with pytest.raises(sv.Refused, match="session ended"):
+        sup.write(sid, "hello\n", sv.Caller())
+
+
+def test_a_read_of_a_live_session_says_it_has_not_ended(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "hosted_argv", lambda root=sv.ROOT: [sys.executable, "-c", "import time; time.sleep(30)"])
+    sup = sv.Supervisor(state)
+    sid = sup.start("p#42", str(tmp_path))
+    try:
+        assert sup.read(sid, 0)["ended"] is False
+    finally:
+        sup.stop(sid, sv.Caller())

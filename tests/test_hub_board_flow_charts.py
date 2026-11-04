@@ -431,16 +431,42 @@ def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, boa
 
 def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
     # Re-anchored by #1145: the rolling window is stated once, in the head line, so the line names no window size.
-    for name in ("Rolling average, centered", "Standard deviation", "Past month", "Log scale", "Timeframe"):
+    for name in ("Rolling mean", "Standard deviation", "Past month", "Log scale", "Timeframe"):
         assert name in hub.PAGE, f"the page names no {name!r}"
 
 
-def test_the_legend_says_what_each_line_answers(hub):
-    """Owner, 2026-11-01: a reader asks what p85 means; the legend answers it in place, never by a second line of numbers."""
-    for reading in ("85% of closed cards finished within this time", "one slow card lifts it",
-                    "half the cards that arrived finish within this time", "the usual spread"):   # re-anchored (#1250): Kaplan-Meier
-        assert reading in hub.PAGE, f"the legend does not say {reading!r}"
-    assert "ltV(c.p85)" in hub.PAGE and "ltV(c.median)" in hub.PAGE, "the legend carries no value beside its line"
+def test_the_legend_carries_short_names_and_values_never_prose(hub):
+    """Re-anchored by #1304: the legend keeps short names and values; explanations move out of the reading path."""
+    for prose in ("85% of closed cards finished within this time", "one slow card lifts it",
+                  "half the cards that arrived finish within this time", "the usual spread",
+                  "the proof's time inside this window"):
+        assert prose not in hub.PAGE, f"the legend still carries the prose sentence {prose!r}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(hub, board, tmp_path):
+    """#1304: the chart answers "how long do bugs take" without a prose legend; each reference line labels itself at its
+    end; the standard-deviation band hides by default; a cluster's count sits clear of its ring with a leader line."""
+    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-readable.js", chart)
+    for legend in re.findall(r'<p class="flg ltlg">(.*?)</p>', out):
+        assert "<em>" not in legend, "the legend still carries a prose sentence"
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    for label in ("Average", "Median", "p85"):
+        assert re.search(rf'<text [^>]*text-anchor=end[^>]*>{label} [^<]+</text>', plot), \
+            f"the {label} reference line carries no end label"
+    assert "<polygon" not in plot, "the standard-deviation band draws by default"
+    circle = re.search(r"<circle [^>]*>", plot).group(0)
+    count = re.search(r"<text ([^>]*)>12</text>", plot)
+    assert count, "the cluster ring draws no count"
+    assert float(_svg_attr(count.group(1), "y")) < float(_svg_attr(circle, "cy")) - float(_svg_attr(circle, "r")), \
+        "the count sits inside the ring instead of clear above it"
+    leader = next((ln for ln in re.findall(r"<line [^>]*>", plot)
+                   if _svg_attr(ln, "x1") == _svg_attr(circle, "cx") and
+                   float(_svg_attr(ln, "y1")) == pytest.approx(float(_svg_attr(circle, "cy"))
+                                                               - float(_svg_attr(circle, "r")))), None)
+    assert leader, "the count has no leader line back to its ring"
 
 
 def _lt_chart(hub, tmp_path, name, chart, zr=None, coverage=None):
@@ -497,7 +523,7 @@ def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board,
     head = re.search(r"<p class=fhead>(.*?)</p>", out).group(1)
     assert "excluded" not in head, "the head line still states the exclusion"
     assert out.count("excluded") == 1, "the page states the exclusion more than once"
-    p85 = next(e for e in re.findall(r"<span>(.*?)</span>", re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)) if "p85" in e)
+    p85 = next(e for e in re.findall(r"<span>(.*?)</span>", "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out))) if "p85" in e)
     assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1<', p85), "the total and its named cards sit beside p85"
     assert "window 20 issues" in head
     assert out.count("20 issues") == 1, "the rolling window is stated twice"
@@ -588,15 +614,25 @@ def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_legend_marks_each_entry_once_and_keeps_the_band_entry_whole(hub, board, tmp_path):
+def test_the_legend_splits_series_from_summary_and_the_band_stays_hidden_until_asked(hub, board, tmp_path):
+    """#1304: the series legend names only the drawn marks; statistics sit in one summary row; the standard-deviation
+    band hides by default and appears with its legend entry only when the display asks for it."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
-    out = _lt_chart(hub, tmp_path, "lt-legend.js", _flow(hub)["lead"]["control"]["jira"]["all"])
-    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
-    entries = re.findall(r"<span>(.*?)</span>", legend)
-    assert len(entries) == 6, entries   # re-anchored (#1256): gate time is a sixth entry, once
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-legend.js", chart)
+    series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
+    entries = re.findall(r"<span>(.*?)</span>", series)
+    assert [re.sub(r"<[^>]+>", "", e) for e in entries] == ["Rolling mean"], entries
+    assert "Standard deviation" not in series, "the band names itself while it hides"
     assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
-    band = next(entry for entry in entries if "Standard deviation" in entry)
-    assert "<i" in band, "the band's label is split from its marker"
+    for label in ("Average", "Median", "p85"):
+        assert label in re.sub(r"<[^>]+>", "", summary), f"the summary row names no {label}"
+    assert "Gate time" not in series + summary, "gate time stays a text metric, not a legend entry"
+    on = _render(hub, tmp_path, "lt-legend-band.js", f"(LT.band=true,ltChart({json.dumps(chart)},null))")
+    assert "<polygon" in on, "the band does not draw when the display asks for it"
+    series_on = re.findall(r'<p class="flg ltlg">(.*?)</p>', on)[0]
+    band = next((e for e in re.findall(r"<span>(.*?)</span>", series_on) if "Standard deviation" in e), None)
+    assert band and band.count("<i") == 1, "the band's label is split from its marker"
 
 
 def test_a_legend_entry_stays_on_one_line(hub):
@@ -630,29 +666,27 @@ def _paint(tag, name):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_no_statistic_is_drawn_inside_the_plot_and_the_legend_carries_each_one(hub, board, tmp_path):
+def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carries_each_value(hub, board, tmp_path):
+    """Re-anchored by #1304: a reference line carries its name and value at its own right end, and the summary row
+    repeats each value once; the value never sits over the dots."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 4)})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-no-stat-in-plot.js", chart)
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
-    labels = [body for _, body in _svg_texts(plot)]
-    assert not [b for b in labels if b.startswith(("Average", "Median", "p85"))], \
-        f"a statistic is drawn inside the plot: {labels}"
-    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
-    entries = re.findall(r"<span>(.*?)</span>", legend)
-    for label, key, reading in (("Average", "average", "one slow card lifts it"),
-                                ("Median", "median", "half the cards that arrived finish within this time"),   # re-anchored (#1250)
-                                ("p85", "p85", "85% of closed cards finished within this time")):
-        entry = next(e for e in entries if label in re.sub(r"<[^>]+>", "", e))
-        assert f"<b>{chart[key]['text']}</b>" in entry, f"the legend does not carry {label}'s value"
-        assert reading in entry, f"the legend does not explain {label}"
+    for label, key in (("Average", "average"), ("Median", "median"), ("p85", "p85")):
+        text = next((body for _, body in _svg_texts(plot) if body.startswith(label + " ")), None)
+        assert text == f"{label} {chart[key]['text']}", f"the {label} reference line carries no end label of its own"
+    summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)[1]
+    for key in ("average", "median", "p85"):
+        assert f"<b>{chart[key]['text']}</b>" in summary, f"the summary row does not carry {key}'s value"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_path):
+    """Re-anchored by #1304: the band hides by default, so the role check draws it by asking for it."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in (1, 2)})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
-    out = _lt_chart(hub, tmp_path, "lt-roles.js", chart)
+    out = _render(hub, tmp_path, "lt-roles.js", f"(LT.band=true,ltChart({json.dumps(chart)},null))")
     tokens = _tokens()
     trail = re.search(r"<polyline [^>]*>", out).group(0)
     band = re.search(r"<polygon [^>]*>", out).group(0)
@@ -668,15 +702,20 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
     assert average_col == _resolved("var(--chart-series-8)", tokens), "the average line does not take the chart grey"
     assert float(_paint(band, "fill-opacity")) > 0.16, "the band is no stronger than before"
     assert len({ink, trail_col, band_col, average_col}) == 4, "two marks share one role"
-    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
-    swatches = re.findall(r'<i style="background:([^;"]+)', legend)
-    assert [_resolved(v, tokens) for v in swatches[:4]] == [
-        _resolved("var(--chart-bar)", tokens), _resolved("var(--chart-series-3)", tokens),
-        _resolved("var(--chart-series-8)", tokens), _resolved("var(--chart-ok)", tokens)], "the legend paint differs from its mark"
+    series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
+    swatches = re.findall(r'<i style="background:([^;"]+)', series)
+    assert [_resolved(v, tokens) for v in swatches] == [
+        _resolved("var(--chart-bar)", tokens), _resolved("var(--chart-series-3)", tokens)], \
+        "the series legend paint differs from its mark"
+    swatches = re.findall(r'<i style="background:([^;"]+)', summary)
+    assert [_resolved(v, tokens) for v in swatches] == [
+        _resolved("var(--chart-series-8)", tokens), _resolved("var(--chart-ok)", tokens),
+        _resolved("var(--chart-series-5)", tokens)], "the summary row paint differs from its line"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_cluster_ring_holds_its_count_at_the_page_size(hub, board, tmp_path):
+def test_the_cluster_ring_holds_its_count_and_draws_it_clear_above_with_a_leader_line(hub, board, tmp_path):
+    """#1304: the count never hides inside an overlapping ring: it sits above the ring with a leader line."""
     lt = _load("board_leadtime_ring", SCRIPTS / "board_leadtime.py")
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
@@ -692,7 +731,12 @@ def test_the_cluster_ring_holds_its_count_at_the_page_size(hub, board, tmp_path)
     assert count, "the cluster ring draws no count"
     attrs = count.group(1)
     assert "font-size" not in attrs, "the count sets a size of its own instead of inheriting the box"
-    assert float(_svg_attr(attrs, "y")) - float(_svg_attr(circle, "cy")) == pytest.approx(lt.RING_BASELINE_EM * fs)
+    top = float(_svg_attr(circle, "cy")) - radius
+    assert float(_svg_attr(attrs, "y")) < top, "the count does not sit clear above the ring"
+    leader = next((ln for ln in re.findall(r"<line [^>]*>", out)
+                   if _svg_attr(ln, "x1") == _svg_attr(circle, "cx") and float(_svg_attr(ln, "y1")) == pytest.approx(top)
+                   and _svg_attr(ln, "x2") == _svg_attr(circle, "cx")), None)
+    assert leader, "the count has no leader line back to its ring"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -845,7 +889,8 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     base = float(re.search(r"<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--chart-grid\)>", svg).group(1))
     assert {float(_svg_attr(attrs, "y")) for attrs, _ in x_labels} == {base + 17}
     summary = [(attrs, body) for attrs, body in _svg_texts(svg) if body.startswith(("Average", "Median", "p85"))]
-    assert summary == [], "a summary label is still drawn inside the plot"
+    assert len(summary) == 3, "each reference line labels itself at its end (#1304)"
+    assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in summary), "an end label does not sit at the line's end"
 
 
 # SPEC 889 #901: the cumulative flow has a range selector and a hover that names each band's count for the day.
@@ -948,10 +993,15 @@ def test_the_chart_axis_text_takes_the_page_size_and_the_muted_ink(hub, board, t
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     cfd = _render(hub, tmp_path, "flow-cfd-ink.js", f"flowCFD({json.dumps(_flow(hub)['cfd']['ranges']['all'])})")
     lead = _lt_chart(hub, tmp_path, "lt-ink.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    def axis_texts(markup):
+        """#1304: reference end labels and cluster counts are annotations in their mark's colour, not axis text."""
+        return [(a, b) for a, b in re.findall(r"<text ([^>]*)>([^<]*)</text>", markup)
+                if not re.fullmatch(r"\d+", b) and not b.startswith(("Average ", "Median ", "p85 "))]
+
     def fills(markup):
-        texts = re.findall(r"<text [^>]*>", markup)
-        assert texts and all("font-size" not in t for t in texts), "an SVG text sets its own size"
-        return {re.search(r'fill="?([^" >]+)', t).group(1) for t in texts}
+        texts = axis_texts(markup)
+        assert texts and all("font-size" not in a for a, _ in texts), "an SVG text sets its own size"
+        return {re.search(r'fill="?([^" >]+)', a).group(1) for a, _ in texts}
     assert fills(cfd) == fills(lead) == {"var(--chart-axis)"}, (fills(cfd), fills(lead))
     assert _resolved("var(--chart-axis)", _tokens()) == _resolved("var(--mute)", _tokens()), "axis text is not mute"
 
@@ -974,7 +1024,9 @@ def test_the_chart_family_draws_one_grid_axis_and_title_treatment(hub, board, tm
         texts = re.findall(r"<text ([^>]*)>([^<]*)</text>", svg)
         assert texts, name
         assert all("font-size" not in attrs for attrs, _ in texts), f"{name} text sets its own size"
-        assert {re.search(r'fill="?([^" >]+)', " " + attrs).group(1) for attrs, _ in texts} == {"var(--chart-axis)"}, \
+        axis = [(a, b) for a, b in texts if not re.fullmatch(r"\d+", b)
+                and not b.startswith(("Average ", "Median ", "p85 "))]   # #1304: end labels and counts are annotations
+        assert {re.search(r'fill="?([^" >]+)', " " + attrs).group(1) for attrs, _ in axis} == {"var(--chart-axis)"}, \
             f"{name} axis text does not take mute"
         grid = [ln for ln in re.findall(r"<line [^>]*>", svg) if "stroke=var(--chart-grid)" in ln]
         vert = next(ln for ln in grid if re.search(r"x1=(\S+) y1=\S+ x2=\1 ", ln))
@@ -1220,9 +1272,7 @@ def test_the_chart_draws_the_stack_and_gate_time_in_the_boards_palette_roles(hub
     assert _paint(todo, "fill") == roles["Todo"], "the Todo band does not take the column's palette role"
     assert all(re.fullmatch(r"var\(--chart-[\w-]+\)", _paint(band, "fill") or "") for band in bands), \
         "a band paints a colour outside the chart roles"
-    tokens = _tokens()
-    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
-    entry = next(e for e in re.findall(r"<span>(.*?)</span>", legend) if "Gate time" in e)
-    swatch = re.search(r'<i style="background:([^;"]+)', entry).group(1)
-    assert _resolved(swatch, tokens) == _resolved(roles["Gating"], tokens), "gate time does not take the Gating role"
-    assert f"<b>{chart['gate']['text']}</b>" in entry, "the legend does not carry gate time"
+    assert "Gate time" not in "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out)), \
+        "gate time is not a legend entry: zero has no counterpart on a log axis (#1304)"
+    note = re.search(r'<p class="fnote ltkm">(.*?)</p>', out).group(1)
+    assert f"Gate time {chart['gate']['text']}" in note, "gate time is not a text metric beside the survival reading"

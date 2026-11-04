@@ -82,6 +82,8 @@ SQ.supervisorView = info => { const text = SQ.supervisorLine(info); return { hid
 SQ.isHosted = (hosted, sid) => !!sid && Array.isArray(hosted) && hosted.indexOf(sid) >= 0;
 SQ.startOffered = (info, hosted, sid) => !!(info && info.state === "up") && !SQ.isHosted(hosted, sid);
 SQ.composerRoute = hosted => hosted ? "write" : "send";
+// A read of a hosted session that ended (#1318): the end and its return code, never a live line for a dead process.
+SQ.endedLine = d => d && d.ended ? `Ended (rc ${d.returncode}). Start a new session.` : "";
 SQ.sentLine = route => route === "write" ? "Sent to the terminal." : SQ.SENT_INBOX;
 SQ.draft = ctx => {
   const list = v => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
@@ -651,6 +653,8 @@ async function pollTerminal() {
     }
     if (typeof d.data === "string" && d.data) appendTerm(d.data);
     if (typeof d.offset === "number") termOffset = d.offset;
+    const ended = SQ.endedLine(d);
+    if (ended && !s.ended) { s.ended = true; s.status = "ended"; say(ended); paintHead(); }
   } catch (e) { console.warn("terminal:", e); }
 }
 async function attachTerminal(s) {

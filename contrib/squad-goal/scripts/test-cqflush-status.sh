@@ -89,4 +89,30 @@ q=$B/alpha/cq/x__alpha#7-unstart~rearm3.md
 out=$(flush)
 [ ! -e "$T/c/10" ] && [ -f "$q.done" ] && [ "$(cat "$LAB/7")" = bug ] \
   && ok "the retry removes the comment and the label" || ko "retry: $(cat "$T/ghlog") / $out / comments $(ls "$T/c") / label '$(cat "$LAB/7")'"
+
+# 9. (#1301) a re-arm also clears the issue's notstartable claim files, so a later failure with the same reason is marked again:
+#    the claim is health.sh's memory that the marker was posted, and the marker is gone, so the claim names a comment that is not
+#    there. Only that issue's claims go; another issue's claim and a non-claim file in auto are left alone.
+mkdir -p "$B/alpha/auto"
+printf 'SQUAD-NOT-STARTABLE: 3 failed dispatches\n' > "$T/c/12"; : > "$T/ghlog"; printf 'bug\nfrozen:not-startable\n' > "$LAB/7"
+: > "$B/alpha/auto/notstartable-7-some_reason"; : > "$B/alpha/auto/notstartable-7-killed-no-process"
+: > "$B/alpha/auto/notstartable-8-other_reason"; : > "$B/alpha/auto/health-runs-repeating-failure"
+put 'x__alpha#7-unstart~rearm4.md' 'SQUAD-NOT-STARTABLE:'
+out=$(flush)
+{ [ ! -e "$B/alpha/auto/notstartable-7-some_reason" ] && [ ! -e "$B/alpha/auto/notstartable-7-killed-no-process" ] \
+  && [ -e "$B/alpha/auto/notstartable-8-other_reason" ] && [ -e "$B/alpha/auto/health-runs-repeating-failure" ]; } \
+  && ok "#1301 a re-arm clears the issue's notstartable claims and no other issue's" \
+  || ko "re-arm claims: $(ls "$B/alpha/auto" | tr '\n' ' ') / $out"
+# a label the API refuses leaves the claims: the marker is still in place, so its memory stays too
+printf 'SQUAD-NOT-STARTABLE: 3 failed dispatches\n' > "$T/c/13"; : > "$T/ghlog"; printf 'bug\nfrozen:not-startable\n' > "$LAB/7"
+: > "$B/alpha/auto/notstartable-7-refused_reason"
+put 'x__alpha#7-unstart~rearm5.md' 'SQUAD-NOT-STARTABLE:'
+export REFUSE_LABEL=1; out=$(flush); unset REFUSE_LABEL
+{ [ -e "$T/c/13" ] && [ -e "$B/alpha/auto/notstartable-7-refused_reason" ]; } \
+  && ok "#1301 a refused re-arm keeps the claims while the marker stays" \
+  || ko "refused re-arm claims: $(ls "$B/alpha/auto" | tr '\n' ' ') / $out / $(ls "$T/c")"
+out=$(flush)
+{ [ ! -e "$T/c/13" ] && [ ! -e "$B/alpha/auto/notstartable-7-refused_reason" ]; } \
+  && ok "#1301 the retry clears the claims with the marker" \
+  || ko "retry claims: $(ls "$B/alpha/auto" | tr '\n' ' ') / $out / $(ls "$T/c")"
 rm -rf "$T"; exit $fail

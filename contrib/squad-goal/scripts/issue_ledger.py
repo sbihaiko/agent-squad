@@ -492,6 +492,13 @@ def migrate(key):
 def rearm(key):   # the SQUAD-NOT-STARTABLE comment goes through the comment queue (cqflush.sh unstart~)
     o, r, n = parse(key)
     transition(key, {"op": "rearm"})
+    # #1301 the notstartable claims health.sh wrote with the marker are its memory that the marker was posted: the marker
+    # goes, so the claims of this issue go with it, and a later failure with the same reason is marked again. health.sh
+    # serves the profile's primary repository and names a claim by a bare issue number, so only that repository's rearm
+    # may clear; another repository's issue of the same number keeps its claims.
+    if os.environ.get("SG_REPO", f"{o}/{r}") == f"{o}/{r}":
+        for p in (state_dir() / "auto").glob(f"notstartable-{n}-*"):
+            with contextlib.suppress(OSError): p.unlink()
     q = state_dir() / "cq"; q.mkdir(parents=True, exist_ok=True)
     name = f"{o}__{r}#{n}-unstart~rearm{os.getpid()}.md"
     (q / (name + ".tmp")).write_text("SQUAD-NOT-STARTABLE:\n"); os.replace(q / (name + ".tmp"), q / name)

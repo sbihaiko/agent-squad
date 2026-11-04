@@ -35,6 +35,17 @@ cq_unstart() { local repo=$1 n=$2 file=$3 pg page ids=() id k=0 lab=frozen:not-s
     [ "$(printf '%s' "$page" | jq 'length' 2>/dev/null)" = 100 ] || break
   done
   for id in ${ids[@]+"${ids[@]}"}; do gh_send --method DELETE "repos/$repo/issues/comments/$id" >/dev/null 2>&1 || return 1; k=$((k + 1)); done
+  # The claim files health.sh wrote with the marker are its memory that the marker was posted (#1301): the marker is gone now,
+  # so the claims of this issue go too, and a later failure with the same reason is marked again. The claims live in the
+  # auto/ of the state directory that owns the queue file, so one flusher serves every profile: the file the loop hands in
+  # always sits at <state>/cq/<name>.posting, and a file at any other depth is a layout defect, refused by name, never rm'd
+  # at a path the dirname stack guessed. Only a removal that reached this line clears them: a refused label or comment
+  # returned above, the marker is still in place, and its memory stays. Another issue's claims and the health alert's own
+  # files are no match for this issue's prefix.
+  local qdir auto
+  qdir=$(dirname "$file"); [ "$(basename "$qdir")" = cq ] || return 1
+  auto=$(dirname "$qdir")/auto
+  [ -d "$auto" ] && rm -f "$auto/notstartable-$n-"*
   echo "removed $k comment(s), label $lab $lw" > "$file.did"; }
 cq_send() { local repo=$1 n=$2 b=$3 file=$4 t mk cid
   t=${b#*#}; t=${t#*-}; case "$t" in status~*) mk=status;; delivery~*) mk=delivery;; unstart~*) cq_unstart "$repo" "$n" "$file"; return;; esac
