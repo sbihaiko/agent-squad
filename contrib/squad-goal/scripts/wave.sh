@@ -899,6 +899,9 @@ wave_conflict() {
   done
   for n in $repeats; do
     file_conflict_bug "$n" "$run" "$w" "$at" "$files"
+    # The repeat stops the issue through the stop path (frozen:owner, ledger stop, one NOT-STARTABLE marker), so no dispatch pass
+    # picks it again while the loop rebuilds it (#1343). The count is the two conflicts on the same paths.
+    c=2; stop "$n" "the rebase on $base conflicts again at $at in ${files:-no path named by git}, the same paths as its last conflict: $w cannot land on the current base"
   done
   rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
   return 1
