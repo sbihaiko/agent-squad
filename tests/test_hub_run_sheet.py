@@ -296,9 +296,10 @@ def test_the_runs_tab_lists_runs_that_open_the_sheet(hub):
     """The Runs tab lists the runs as rows that open the sheet, never a frame."""
     page = hub.PAGE
     assert 'data-t=runs role=tab>Runs' in page and "id=bruns" not in page and "<div id=main>" in page
-    draw = page[page.index("function drawMain("):]
-    draw = draw[:draw.index("\n}\n")]
+    pane = page[page.index("id=tab-runs"):page.index("</section>", page.index("id=tab-runs"))]
+    draw = page[page.index("function drawMain("):page.index("function refresh(")]
     assert "data-rid=" in draw and "iframe" not in draw
+    assert "iframe" not in pane, "the Runs pane embeds a frame"
     assert re.search(r'\$\("#main"\)\.addEventListener\("click"[^\n]*openRun\(', page)
 
 

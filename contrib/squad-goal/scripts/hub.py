@@ -4716,6 +4716,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #board{position:relative;width:auto}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);display:flex;flex-direction:column}#flowov[hidden]{display:none}
+#flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
 #flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}.ltlg b{font-weight:600}.ltlg em{font-style:normal;color:var(--mute)}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:var(--radius-sm)}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:var(--radius-sm)}#flowb .ltmore>summary{cursor:pointer;color:var(--mute);margin:2px 0 6px}
@@ -4985,7 +4986,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 </section>
 <section id=tab-runs class=pane aria-label=Runs><div id=main></div><div id=list></div></section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
+<div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=flowchips></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
@@ -5731,7 +5732,8 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltfit"){LT.win="fit";drawFlow();return}
   if(e.target.id==="ltfull"){LT.win="full";drawFlow();return}   // the range control redraws the held payload, never a second read (#1334)
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden){drawFlow();if(FLOWK==="lead")ltResize()}});
+const flowPick=k=>{ls.flowk=k;save();flowOpen(k)};
+$("#bflow").onclick=()=>flowPick("cfd");$("#blead").onclick=()=>flowPick("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden){drawFlow();if(FLOWK==="lead")ltResize()}});
 function squadChart(k){if(FLOWK===k&&!$("#flowov").hidden)flowOpen(k)}   // a pushed version redraws only the chart it names
 function squadStreamLost(){$("#sse").hidden=false;$("#sse").textContent="live stream lost: retrying; the page keeps what it drew"}
 function squadStreamBack(){$("#sse").hidden=true;poll();pollBoard();if(FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // one read each of the runs, the board and the open chart
@@ -5846,7 +5848,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
- if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen("cfd");
+ if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen(ls.flowk==="lead"?"lead":"cfd");
  drawMain()}
 function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
 document.querySelector(".tabs").addEventListener("click",tabClick);

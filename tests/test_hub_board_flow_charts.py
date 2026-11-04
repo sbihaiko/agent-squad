@@ -118,7 +118,7 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     # Re-anchored to the owner-approved mock (#889): Flow and Lead time sit on the Flow charts tab, not in the board's toolbar.
     tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=flowchips>")]
     # Re-anchored by the owner (2026-11-02): the burn-down tab is gone, so the charts are the two the owner keeps; Runs is a top tab (#1272).
-    assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Cumulative Flow Diagram", "Lead Time"]
+    assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Cumulative Flow", "Lead Time"]
     assert "id=flowv" not in hub.PAGE, "the View selector is gone: a chart is a tab"
     assert 'flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();' in hub.PAGE, "the lit tab follows the chart drawn"
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
@@ -126,6 +126,68 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     assert "id=bflow" not in head and "id=blead" not in head
     assert '<details id=fw' in head and '<details id=fs' in head, "the header lost the filter bar"
     assert 'id=bsp' not in head and 'id=bz' not in head and 'id=bx' not in head, "a removed control is still in the header"
+
+
+def _visit(hub, tmp_path, name, stored, steps):
+    """The page's tab and chart-pick code run under node over `stored` localStorage: each step is one JS call, then
+    the charts opened, the chart open now, and the stored text after the steps."""
+    page = hub.PAGE
+    pick = re.search(r"^const flowPick=[^\n]*", page, re.M)
+
+    def line(pattern):
+        m = re.search(pattern, page, re.M | re.S)
+        assert m, f"the page has no {pattern!r}"
+        return m.group(0)
+
+    drawing = "\n".join([
+        f"const localStorage={{hub:{json.dumps(stored)}}};",
+        'let TAB="board",pins=new Set(),q="",per=10,src="",FLOWK=null;',
+        'const sTheme=null,setTheme=()=>{},drawMain=()=>{},document={querySelectorAll:()=>[]};',
+        'const el={"#flowov":{hidden:true}};const $=s=>el[s]||(el[s]={classList:{toggle(){}}});',
+        'const ls=JSON.parse(localStorage.hub||"{}");const opened=[];',
+        'const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;opened.push(k)};',
+        line(r"^const save=[^\n]*"), line(r"^const TABS=[^\n]*"), line(r"^function setTab\(.*?drawMain\(\)\}"),
+        pick.group(0) if pick else "",
+        *steps,
+        'console.log(JSON.stringify({opened,FLOWK,stored:localStorage.hub}));',
+    ])
+    path = tmp_path / name
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_first_visit_to_flow_opens_cumulative_flow(hub, tmp_path):
+    out = _visit(hub, tmp_path, "flow-first-visit.js", "{}", ['setTab("flow")'])
+    assert out["opened"] == ["cfd"] and out["FLOWK"] == "cfd"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_flow_reopens_the_chart_last_picked_after_a_reload(hub, tmp_path):
+    picked = _visit(hub, tmp_path, "flow-pick-lead.js", "{}", ['flowPick("lead")'])
+    again = _visit(hub, tmp_path, "flow-reload.js", picked["stored"], ['setTab("flow")'])
+    assert again["opened"] == ["lead"] and again["FLOWK"] == "lead"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_entering_flow_twice_in_a_row_reopens_the_chart_picked_in_between(hub, tmp_path):
+    out = _visit(hub, tmp_path, "flow-reenter.js", "{}",
+                 ['setTab("flow")', 'flowPick("lead")', 'setTab("board")', 'setTab("flow")'])
+    assert out["opened"] == ["cfd", "lead"] and out["FLOWK"] == "lead"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_stored_pick_that_names_no_chart_opens_cumulative_flow(hub, tmp_path):
+    out = _visit(hub, tmp_path, "flow-unknown-pick.js", '{"flowk":"burn"}', ['setTab("flow")'])
+    assert out["opened"] == ["cfd"]
+
+
+def test_the_top_bar_gains_no_tab_when_a_chart_opens(hub):
+    top = hub.PAGE[hub.PAGE.index("<div class=tabs role=tablist>"):]
+    top = top[:top.index("</div>")]
+    assert re.findall(r"data-t=(\w+)", top) == ["board", "runs", "flow", "set"], "a chart is a tab of the top bar"
 
 
 def test_cfd_bands_follow_the_hub_order(hub, board):
