@@ -56,6 +56,16 @@ def _runs(log):
     return len(log.read_text().splitlines()) if log.exists() else 0
 
 
+def test_a_fix_run_keeps_no_suite_key_because_its_commands_prove_in_the_childrens_trees(tmp_path):
+    """#1374: the one tree key is the target, and a fix run proves in its children's trees, which that key cannot read."""
+    art = {"ac_runs": [["pytest -q", str(tmp_path / "child")]], "ac_commands": ["pytest -q"]}
+    params = {"commands_from": "dispatch"}
+    inp = gates.GateInput({"dispatch": art}, {}, cwd=str(tmp_path), fix_run=True)
+    assert gates.suite_key("ac-verify", params, inp) is None
+    inp.fix_run = False
+    assert gates.suite_key("ac-verify", params, inp) is not None
+
+
 def _events(run_dir, kind):
     return [e for e in read(run_dir / "record.jsonl") if e["event"] == kind]
 

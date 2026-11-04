@@ -12,6 +12,7 @@ class RunCtx:
     facts = property(lambda s: s._e.facts)
     artifacts = property(lambda s: s._e.artifacts)
     target = property(lambda s: s._e.target)
+    fix_run = property(lambda s: s._e.fix_run)          # the run option `run_start` recorded (#1374)
     run_id = property(lambda s: s._e.run_id)
     clock = property(lambda s: s._e.clock)
     wall = property(lambda s: s._e.wall)

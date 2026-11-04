@@ -41,10 +41,14 @@ class GateResult:
 
 @dataclass
 class GateInput:
-    """What a check may read: the artifacts in scope and the registered facts."""
+    """What a check may read: the artifacts in scope, the registered facts, and the run option a check names.
+
+    `fix_run` is the run's own recorded option (ADR-0106): the run repairs a work branch, so every acceptance command proves in
+    the tree its child wrote (#1374)."""
     artifacts: dict
     facts: dict
     cwd: str = "."
+    fix_run: bool = False
 
 
 def _diff(inp):
@@ -104,10 +108,13 @@ def security(params, inp):
     return GateResult(not bad, [f"sensitive_path:{p}" for p in bad])
 
 
-def held_out_tree_missing(c, tree):
-    """True when a git-history command has no child tree to read: none recorded, or the recorded one is gone (#862).
-    The one rule both the final gate and the landing check apply: it fails the command, never runs it in the target."""
-    return workcmd.reads_history(c) and (tree is None or not Path(tree).is_dir())
+def held_out_tree_missing(c, tree, fix_run=False):
+    """True when a held-out command has no child tree to read: none recorded, or the recorded one is gone (#862).
+
+    A git-history command is held out, and so is every command of a fix run (#1374): the fix is on the branch its child checked
+    out, never in the target cut from the base. The one rule both the final gate and the landing check apply: it fails the
+    command, never runs it in the target."""
+    return (fix_run or workcmd.reads_history(c)) and (tree is None or not Path(tree).is_dir())
 
 
 def suite_runs(params, inp):
@@ -146,9 +153,12 @@ def suite_key(check_id, params, inp, values=None):
     """The identity of the suite a gate stage would run, or None when the stage runs no shell command.
 
     Two stages with one key run the same commands over the same trees, so one green verdict answers for both. Any doubt --
-    no command, or no git tree -- is no key, and the stage runs its check.
+    no command, or no git tree -- is no key, and the stage runs its check. A fix run's `ac-verify` stage keeps no key: its
+    commands prove in its children's trees, and the one tree key is the target, which cannot answer for them (#1374).
     """
     cmds = stage_commands(check_id, params, inp, values)
+    if check_id == "ac-verify" and inp.fix_run:
+        return None
     return json.dumps([[list(argv), tree] for argv, tree in cmds], separators=(",", ":")) if cmds else None
 
 
@@ -242,7 +252,9 @@ def ac_verify(params, inp):
     outcome (#80): the share of the suite that passed is progress a reader can see while the gate is still red. The
     counts never enter the verdict -- the exit code alone decides that (ADR-0019).
 
-    Routing (#862): a git-history command runs only in the tree its child wrote; every other command runs only in the target.
+    Routing (#862, #1374): a git-history command runs only in the tree its child wrote, and so does every command of a fix
+    run's dispatch: its work is on the branch the child checked out, and its target is cut from the base. Every other command,
+    and every command of a run that is not a fix run, runs only in the target.
     No fallback: a red result is never replaced by another tree's green (ADR-0018).
     """
     runs, dispatch = suite_runs(params, inp)
@@ -250,11 +262,11 @@ def ac_verify(params, inp):
         return GateResult(False, ["no_ac_commands"])
     findings, evidence, counts = [], {}, {}
     for c, tree in dict.fromkeys(runs):     # each (command, tree) runs once, however many children named it
-        history = dispatch and workcmd.reads_history(c)
-        label = f"{c} @{Path(tree).name}" if history and tree else c     # a history command's result names the tree it ran in
-        if not history:
+        held_out = dispatch and (inp.fix_run or workcmd.reads_history(c))
+        label = f"{c} @{Path(tree).name}" if held_out and tree else c     # a held-out command's result names the tree it ran in
+        if not held_out:
             r = workcmd.run(c, inp.cwd)     # the target: the merged head is what every other command must hold on
-        elif held_out_tree_missing(c, tree):
+        elif held_out_tree_missing(c, tree, inp.fix_run):
             findings.append(f"child_tree_missing:{label}")     # never a silent run in the target: that is the false red of #862
             evidence[f"child_tree_missing:{label}"] = f"child worktree not found: {tree}" if tree else "no child worktree recorded"
             continue

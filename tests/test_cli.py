@@ -104,6 +104,14 @@ def test_resume_from_a_node_and_an_answer_are_recorded(tmp_path, capsys):
     assert r["engine_options"] == {"answer": "pass"} and r["invoker"] == "cli"
 
 
+def test_fix_run_is_an_engine_option_of_start(monkeypatch):
+    """#1374: the harness launcher marks a fix run with `--fix-run`, and `run_start` records it for the final gate."""
+    seen = []
+    monkeypatch.setattr(cli, "_start", lambda a: seen.append(cli._opts(a)) or 0)
+    assert cli.main(["start", "--target", ".", "--fix-run", "do it"]) == 0
+    assert seen == [{"fix_run": True}]
+
+
 def test_an_unknown_node_name_is_refused(tmp_path, capsys):
     g, s = write(tmp_path, two_agents())
     assert cli.main(["run", g, "--script", s, "--run-dir", str(tmp_path / "r"), "--stop-after", "nope"]) == 2

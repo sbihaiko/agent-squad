@@ -346,7 +346,11 @@ def _keeps_children():
     try: return "keep_children" in (pathlib.Path(squad) / "squad" / "options.py").read_text()
     except OSError: return False
 keep = ["--keep-children"] if _issue_child_request(req_text) and _keeps_children() else []
-proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + [
+# A fix run repairs a work branch (#1374): its child's commits are on that branch, never in the target, so the final gate
+# proves every acceptance command in the child's tree. The mark is `SG_RUN_TARGET` (a run on the kept worktree, childfix.sh)
+# or `SG_FIX_RUN` (a round on a pushed branch, branchfixpass.sh). It is recorded at run start, so a resume reads it again.
+fix = ["--fix-run"] if (named or os.environ.get("SG_FIX_RUN")) else []
+proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + fix + [
                         "--models", str(here / "models.json"), "--target", str(target)] + (["--runs-dir", str(runs)] if named else []) + (["--spent-models", ",".join(spent)] if spent else [])+ (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                         cwd=str(target),

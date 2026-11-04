@@ -14,9 +14,11 @@ printf 'print("hub")\n' > "$T/s/hub.py"
 printf '#!/bin/bash\necho "note: wave stub $*"\n' > "$T/s/wave.sh"
 cat > "$T/bin/caffeinate" <<'C'
 #!/bin/bash
+argv="$*"
 while [ "${1#-}" != "$1" ]; do shift; done
 t=; rd=$PWD/runs; while [ $# -gt 0 ]; do [ "$1" = --target ] && t=$2; [ "$1" = --runs-dir ] && rd=$2; shift; done
 printf '%s\n' "$t" >> "$CAFF_TARGETS"
+case "$argv" in *--fix-run*) echo fix >> "$CAFF_ARGS";; *) echo plain >> "$CAFF_ARGS";; esac
 r="$rd/run-20261018-000000-$$"; mkdir -p "$r/ws"
 c="$r/ws/target-c1"; /usr/bin/git -C "$t" worktree add -q -b "child-$$" "$c" HEAD
 (cd "$c" && echo "$$" > "child-$$.txt" && /usr/bin/git add . && /usr/bin/git -c user.email=t@t -c user.name=t commit -qm "child $$")
@@ -25,7 +27,7 @@ c="$r/ws/target-c1"; /usr/bin/git -C "$t" worktree add -q -b "child-$$" "$c" HEA
 C
 chmod +x "$T/bin/caffeinate"
 printf '#!/bin/bash\nexit 0\n' > "$T/bin/uv"; chmod +x "$T/bin/uv"
-export PATH="$T/bin:$PATH" CAFF_TARGETS="$T/targets"
+export PATH="$T/bin:$PATH" CAFF_TARGETS="$T/targets" CAFF_ARGS="$T/args"
 $G init -q --bare "$T/origin.git"
 $G clone -q "$T/origin.git" "$T/seed" 2>/dev/null
 (cd "$T/seed" && $G checkout -q -b dev && echo base > base.txt && $G add . && $G -c user.email=t@t -c user.name=t commit -qm base && $G push -q origin dev)
@@ -56,6 +58,8 @@ check() {   # <label> <request>: launch it and read what the run's target and ch
   [ "$(snap)" = "$before" ] && ok "$1: the owner's HEAD, index and files are unchanged" || ko "$1: the owner's checkout changed"
 }
 check "no-issue run" "$T/repl.txt"; t1=$t; c1=$ch
+# #1374: only a fix run is marked as one; every other run still proves its commands in the target.
+[ "$(tail -1 "$T/args")" = plain ] && ok "a run that is not a fix run carries no fix-run mark" || ko "a run that is not a fix run is marked: $(tail -1 "$T/args")"
 $G -C "$co" merge-base --is-ancestor "$c1" "$($G -C "$t1" rev-parse HEAD)" && ok "the stub merged its child into the run's target" || ko "the stub did not merge into $t1"
 check "two-issue run" "$T/req2.txt"; t2=$t
 [ "$t1" != "$t2" ] && ok "two runs get two targets" || ko "two runs share the target $t1"
@@ -73,6 +77,7 @@ $G -C "$co" worktree add -q -b kept-br "$kept" "$tip"
 : > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$kept" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1)
 t=$(tail -1 "$T/targets"); rd=$(tail -1 "$T/st/active-runs.txt" 2>/dev/null)
 [ "$t" = "$kept" ] && ok "a fix run's target is the kept worktree it names" || ko "fix run target is ${t:-none}, not $kept: $o"
+[ "$(tail -1 "$T/args")" = fix ] && ok "a fix run reaches the engine marked as a fix run (#1374)" || ko "the fix run is not marked: $(tail -1 "$T/args")"
 # The run folder lives with every other run (#668): the kept worktree is the target its gates read, and the worktree is what a
 # landing or a cleanup deletes, so a folder inside it disappears with the record three readers ask for liveness.
 case "$rd" in "$co"/runs/*) ok "the fix run's folder is beside the other runs";; *) ko "fix run folder ${rd:-none} is not under $co/runs";; esac
