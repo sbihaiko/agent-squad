@@ -276,7 +276,7 @@ python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_SHARED/codex-limited"
 tries=$(jq -r '.model_retry_budget // 2' "$cfg"); prev=""
 tbound=$(jq -r '.review_timeout_bound // 3' "$cfg"); tomit=$(jq -r '.review_timeout_omit_seconds // 21600' "$cfg")
 streak() { python3 "$(dirname "$0")/review-timeouts.py" "$SG_STATE/review-timeouts.json" "$@" --bound "$tbound" --window "$tomit"; }   # omitted|timeout|clear <model>: the timeout streak of one review model (#749)
-omit_say() { local line; line=$(printf 'MODEL_OMIT review %s on branch %s: %s.' "$m" "$bm" "$1")
+omit_say() { local line; line=$(printf 'MODEL_OMIT %s %s on branch %s: %s.' "${chainname:-review}" "$m" "$bm" "$1")
   printf '%s\n' "$line" >&2; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; printf '%s\n' "$line" > "$(sg_cq_status "$iss" "momit$$-$ms")"; }
 # A branch pass may pin the review to one model and one try (SG_REVIEW_CHAIN_DEPTH): an old branch may not
 # spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.

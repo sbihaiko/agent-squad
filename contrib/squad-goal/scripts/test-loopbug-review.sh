@@ -106,6 +106,10 @@ else ko "3c loopbug.sh is missing: the plan verdict has no helper"; fi
 /usr/bin/grep -q 'loopbug.sh' "$d/autobug.sh" && /usr/bin/grep -q 'lb_plan_verdict' "$d/autobug.sh" \
   && ok "4a autobug.sh sources loopbug.sh and asks it for the plan verdict" || ko "4a autobug.sh does not gate loop-bug on the plan verdict"
 /usr/bin/grep -q 'lb_is_loop_bug' "$d/autobug.sh" && ok "4b autobug.sh selects loop-bug by label" || ko "4b autobug.sh does not select loop-bug by label"
+# The frontier pass dispatches a loop-bug too (a loop defect without the bug label): it asks the same plan verdict, so the gate
+# is never bypassed by one missing label.
+/usr/bin/grep -q 'lb_plan_verdict' "$d/autofrontier.sh" && ok "4c autofrontier.sh asks for the plan verdict of a loop-bug" || ko "4c autofrontier.sh dispatches a loop-bug with no plan review"
+/usr/bin/grep -q 'lb_is_loop_bug' "$d/autofrontier.sh" && ok "4d autofrontier.sh selects loop-bug by label" || ko "4d autofrontier.sh does not select loop-bug by label"
 
 # --- 5) the record -------------------------------------------------------------------------------------------------------
 adr=$(ls "$repo_root"/docs/adr/0171-*.md 2>/dev/null | head -1)
