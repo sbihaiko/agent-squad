@@ -35,6 +35,7 @@ def test_a_seam_read_under_an_inherited_loop_state_logs_to_the_loop_state(tmp_pa
     own_state = tmp_path / "test-seam"
     loop_state.mkdir()
     monkeypatch.setenv("SG_STATE", str(loop_state))
+    monkeypatch.delenv("SG_GH_PASS", raising=False)
 
     state = issue_state.board_state("o", "4", "x/y", kind="users", state_dir=own_state, run=stub,
                                     env={"SG_BOARD_READ_BACKOFF": "0"})
@@ -48,6 +49,7 @@ def test_a_seam_write_is_one_done_line_and_no_snapshot_miss(tmp_path, monkeypatc
     loop_state = tmp_path / "live-loop"
     loop_state.mkdir()
     monkeypatch.setenv("SG_STATE", str(loop_state))
+    monkeypatch.delenv("SG_GH_PASS", raising=False)
 
     state = issue_state.board_state("o", "4", "x/y", kind="users", state_dir=tmp_path / "test-seam", run=stub,
                                     env={"SG_BOARD_READ_BACKOFF": "0"})

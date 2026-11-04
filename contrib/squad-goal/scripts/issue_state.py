@@ -72,7 +72,8 @@ def _log_call(args, outcome):
     if here not in sys.path: sys.path.insert(0, here)
     try: import ghread
     except ImportError: return
-    ghread.log_call(state, route, ghread.MISS, outcome, transport="GraphQL" if route == "graphql" else "REST")
+    cache = ghread.WRITE if _is_write(args) else ghread.MISS   # a write is never a snapshot miss, whatever its outcome (#1328)
+    ghread.log_call(state, route, cache, outcome, transport="GraphQL" if route == "graphql" else "REST")
 
 # The binding a repository binds the vocabulary to. A carrier is named here, and a run records the name.
 BOARD = "board"
