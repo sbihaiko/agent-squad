@@ -462,7 +462,15 @@ probe_retry() {
 }
 
 requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.
-  local n=$1 why=$2 f h
+  local n=$1 why=$2 f h st
+  # A closed issue never goes back to the queue (#1335): the owner closed it, its card stays where it is, and no marker or count moves.
+  # The state is read live (gh_api: a read that decides a write is never a snapshot). A read that does not answer keeps the requeue, named.
+  st=$(gh_api "repos/$SG_REPO/issues/$n" -q '.state' 2>/dev/null) || st=""
+  case "$st" in
+    closed) echo "WAVE KEEP #$n: the issue is closed, so $why does not put it back in the queue"; return 0;;
+    open) ;;
+    *) echo "WAVE NOTE #$n: its state could not be read, so the requeue goes on";;
+  esac
   [ "${3:-}" != cap ] && probe_refuted "$n" "${SG_REQUEUE_RUN:-}" && return 0   # a refuting probe is held, never requeued (#888)
   # The run is SG_REQUEUE_RUN (enter and land set it; childcc and runreview pass it). A requeue the wave's age cap made
   # (`cap`, #594) is the loop's delay, not a failure of the child: it neither counts nor stops the issue. The run behind it

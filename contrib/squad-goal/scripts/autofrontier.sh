@@ -55,8 +55,21 @@ idle() {   # <reasons file> [reason for a card the file does not name]: the summ
   printf '%s\n' "$h" > "$A/frontier-why.$$" && mv "$A/frontier-why.$$" "$A/frontier-why"
   return 0
 }
+# open_cards <numbers>: the ones the open-issue list holds (#1335): a closed issue whose card still reads Todo waits for nothing. One
+# list read, which the walk reads anyway; a list that does not answer keeps every card, and the line says so.
+open_cards() {
+  if gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json"; then
+    local open out="" n
+    open=" $(jq -r '[.[]|select(.pull_request|not)|(.number|tostring)]|join(" ")' "$F/issues.json" 2>/dev/null) "
+    for n in $1; do case "$open" in *" $n "*) out="$out $n";; esac; done
+    printf '%s\n' "$out"
+  else
+    echo "FRONTIER: the open issues did not answer; a closed card may count as waiting" >&2; printf '%s\n' "$1"
+  fi
+}
 idle_noslot() {   # the pass has no run slot or no child room: every Todo card waits for one, and the line says so
   todo=$(sg_todo_cards) || { echo "FRONTIER: the board did not answer; nothing dispatched this pass" >&2; return 0; }
+  todo=$(open_cards "$todo")
   todo=" $(echo $todo) "; : > "$F/why"; idle "$F/why" "no slot"
 }
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
