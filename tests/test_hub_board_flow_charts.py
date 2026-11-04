@@ -466,7 +466,8 @@ def test_the_lead_page_draws_the_plot_frame_supplied_by_the_hub(hub, board, tmp_
 
     out = _lt_chart(hub, tmp_path, "lt-supplied-frame.js", chart)
 
-    assert 'viewBox="0 0 828 368"' in out
+    # Re-anchored (#1332): the layout reserves a right gutter for the reference tags, outside the plot.
+    assert 'viewBox="0 0 896 368"' in out
     assert '<line x1=64 y1=304 x2=764 y2=304' in out
 
 
@@ -495,7 +496,7 @@ def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, boa
 
 def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
     # Re-anchored by #1145: the rolling window is stated once, in the head line, so the line names no window size.
-    for name in ("Rolling mean", "Standard deviation", "Past month", "Log scale", "Timeframe"):
+    for name in ("Rolling mean", "Rolling spread ±1 SD", "Past month", "Log scale", "Timeframe"):
         assert name in hub.PAGE, f"the page names no {name!r}"
 
 
@@ -509,17 +510,25 @@ def test_the_legend_carries_short_names_and_values_never_prose(hub):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(hub, board, tmp_path):
-    """#1304: the chart answers "how long do bugs take" without a prose legend; each reference line labels itself at its
-    end; the standard-deviation band hides by default; a cluster is one dot, with no count text in the plot (#1331)."""
+    """#1304: the chart answers "how long do bugs take" without a prose legend; the standard-deviation band hides by
+    default; a cluster is one dot, with no count text in the plot (#1331).
+
+    Re-anchored by #1332: a reference no longer labels itself inside the plot; its value sits in the reserved right
+    gutter, outside the plot's right edge."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-readable.js", chart)
     for legend in re.findall(r'<p class="flg ltlg">(.*?)</p>', out):
         assert "<em>" not in legend, "the legend still carries a prose sentence"
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
-    for label in ("Average", "Median", "p85"):
-        assert re.search(rf'<text [^>]*text-anchor=end[^>]*>{label} [^<]+</text>', plot), \
-            f"the {label} reference line carries no end label"
+    right = 64 + chart["plot_frame"]["width"]
+    gutter = [attrs for attrs, _ in _svg_texts(plot) if _has_class(attrs, "lttg")]
+    assert len(gutter) == 1, "only the average reference tag is drawn by default"
+    assert all(float(_svg_attr(attrs, "x")) > right for attrs in gutter), \
+        "a reference tag sits inside the plot instead of the reserved right gutter"
+    assert not [body for attrs, body in _svg_texts(plot)
+                if body.startswith(("Average ", "Median ", "p85 ")) and not _has_class(attrs, "lttg")], \
+        "a reference still labels itself inside the plot"
     assert "<polygon" not in plot, "the standard-deviation band draws by default"
     assert not re.search(r"<text[^>]*>\s*\d+\s*</text>", plot), "the plot still draws a count"
     circle = re.search(r"<circle [^>]*>", plot).group(0)
@@ -546,12 +555,15 @@ def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub,
     first, sep, rest = out.partition("<details class=ltmore>")
     assert sep, "the first screen carries no More disclosure"
     more = rest[:rest.index("</details>")]
-    assert "id=ltr" in first and "id=lty" in first, "Timeframe and Type are not on the first screen"
-    for later in ("id=lta", "id=ltb", "id=lts"):
+    # Re-anchored (#1332): the scale control and the two reference toggles sit beside the filters, where the reading
+    # starts; the measurement and the band stay behind More.
+    for shown in ("id=ltr", "id=lty", "id=lts", "id=ltmd", "id=ltp85"):
+        assert shown in first, f"{shown} is not on the first screen"
+    for later in ("id=lta", "id=ltb", "id=ltbd"):
         assert later not in first, f"the first screen still carries {later}"
         assert later in more, f"More does not hold {later}"
     assert "id=ltz" not in out, "the zoom chip is drawn only while a zoom is active"
-    order = ["Measurement", "id=lta", "id=ltb", "Display", "id=lts"]
+    order = ["Measurement", "id=lta", "id=ltb", "Display", "id=ltbd"]
     marks = [more.index(mark) for mark in order]
     assert marks == sorted(marks), f"the disclosure does not keep the shipped order: {order}"
     zoomed = _lt_chart(hub, tmp_path, "lt-two-controls-zoom.js", lead["control"]["jira"]["all"],
@@ -559,7 +571,7 @@ def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub,
     zfirst, _, zrest = zoomed.partition("<details class=ltmore>")
     assert "id=ltz" not in zfirst, "the zoom chip is never on the first screen"
     zmore = zrest[:zrest.index("</details>")]
-    order = ["Display", "id=lts", "View", "id=ltz"]
+    order = ["Display", "id=ltbd", "View", "id=ltz"]
     marks = [zmore.index(mark) for mark in order]
     assert marks == sorted(marks), f"the zoomed disclosure does not keep the shipped order: {order}"
     assert "Set the controls in order: filters, then measurement, then display, then view." in more
@@ -679,14 +691,19 @@ def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_legend_splits_series_from_summary_and_the_band_stays_hidden_until_asked(hub, board, tmp_path):
     """#1304: the series legend names only the drawn marks; statistics sit in one summary row; the standard-deviation
-    band hides by default and appears with its legend entry only when the display asks for it."""
+    band hides by default and appears with its legend entry only when the display asks for it.
+
+    Re-anchored by #1332: the series legend names every mark the plot draws — the card, the cluster and the rolling
+    mean with its window size — and the band carries its own name, "Rolling spread ±1 SD".
+    """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
     chart = _flow(hub)["lead"]["control"]["jira"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-legend.js", chart)
     series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
     entries = re.findall(r"<span>(.*?)</span>", series)
-    assert [re.sub(r"<[^>]+>", "", e) for e in entries] == ["Rolling mean"], entries
-    assert "Standard deviation" not in series, "the band names itself while it hides"
+    assert [re.sub(r"<[^>]+>", "", e) for e in entries] == [
+        "Card", "Cluster", f"Rolling mean ({chart['window']['size']} {chart['window']['unit']})"], entries
+    assert "Rolling spread ±1 SD" not in series, "the band names itself while it hides"
     assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
     for label in ("Average", "Median", "p85"):
         assert label in re.sub(r"<[^>]+>", "", summary), f"the summary row names no {label}"
@@ -694,7 +711,7 @@ def test_the_legend_splits_series_from_summary_and_the_band_stays_hidden_until_a
     on = _render(hub, tmp_path, "lt-legend-band.js", f"(LT.band=true,ltChart({json.dumps(chart)},null))")
     assert "<polygon" in on, "the band does not draw when the display asks for it"
     series_on = re.findall(r'<p class="flg ltlg">(.*?)</p>', on)[0]
-    band = next((e for e in re.findall(r"<span>(.*?)</span>", series_on) if "Standard deviation" in e), None)
+    band = next((e for e in re.findall(r"<span>(.*?)</span>", series_on) if "Rolling spread ±1 SD" in e), None)
     assert band and band.count("<i") == 1, "the band's label is split from its marker"
 
 
@@ -730,15 +747,27 @@ def _paint(tag, name):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carries_each_value(hub, board, tmp_path):
-    """Re-anchored by #1304: a reference line carries its name and value at its own right end, and the summary row
-    repeats each value once; the value never sits over the dots."""
+    """Re-anchored by #1304: a reference carries its value, and the summary row repeats each value once; the value never
+    sits over the dots. Re-anchored by #1332: the value sits in the reserved right gutter, outside the plot."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 4)})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
-    out = _lt_chart(hub, tmp_path, "lt-no-stat-in-plot.js", chart)
+    out = _render(hub, tmp_path, "lt-no-stat-in-plot.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
-    for label, key in (("Average", "average"), ("Median", "median"), ("p85", "p85")):
-        text = next((body for _, body in _svg_texts(plot) if body.startswith(label + " ")), None)
-        assert text == f"{label} {chart[key]['text']}", f"the {label} reference line carries no end label of its own"
+    right = 64 + chart["plot_frame"]["width"]
+    tags = [(attrs, body) for attrs, body in _svg_texts(plot) if _has_class(attrs, "lttg")]
+    assert len(tags) == 3, "the gutter does not carry one tag per drawn reference"
+    assert sorted(body for _, body in tags) == sorted(f'{chart[k]["label"]} {chart[k]["text"]}'
+                                                      for k in ("average", "median", "p85")), \
+        "a gutter tag neither names its reference nor carries its value, so grayscale cannot tell them apart"
+    assert all(float(_svg_attr(attrs, "x")) > right for attrs, _ in tags), \
+        "a reference tag sits inside the plot instead of the reserved right gutter"
+    refs = {re.search(r"<title>(\S+) ", tag).group(1): tag
+            for tag in re.findall(r"<line [^>]*><title>(?:Average|Median|p85) [^<]*</title></line>", plot)}
+    assert len(refs) == 3, "a reference line's title does not name it, so the swatch check would assert nothing"
+    gutter = [ln for ln in re.findall(r"<line [^>]*>", plot) if float(_paint(ln, "x1")) > right]
+    for name, tag in refs.items():
+        assert _paint(tag, "stroke-dasharray") in [_paint(ln, "stroke-dasharray") for ln in gutter], \
+            f"the gutter draws no swatch in {name}'s own pattern"
     summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)[1]
     for key in ("average", "median", "p85"):
         assert f"<b>{chart[key]['text']}</b>" in summary, f"the summary row does not carry {key}'s value"
@@ -766,14 +795,157 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
     assert float(_paint(band, "fill-opacity")) > 0.16, "the band is no stronger than before"
     assert len({ink, trail_col, band_col, average_col}) == 4, "two marks share one role"
     series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
-    swatches = re.findall(r'<i style="background:([^;"]+)', series)
-    assert [_resolved(v, tokens) for v in swatches] == [
-        _resolved("var(--chart-bar)", tokens), _resolved("var(--chart-series-3)", tokens)], \
-        "the series legend paint differs from its mark"
-    swatches = re.findall(r'<i style="background:([^;"]+)', summary)
-    assert [_resolved(v, tokens) for v in swatches] == [
-        _resolved("var(--chart-series-8)", tokens), _resolved("var(--chart-ok)", tokens),
-        _resolved("var(--chart-series-5)", tokens)], "the summary row paint differs from its line"
+    # Re-anchored (#1332): the legend's swatches are styled by class, so each class's paint is read from its rule.
+    assert re.findall(r"<i class=(\w+)>", series) == ["lthollow", "ltfilled", "ltroll", "ltband"], \
+        "the series legend does not name every drawn mark with its own swatch"
+    css = hub.PAGE
+    def painted(cls):
+        rule = re.search(rf"\.ltlg i\.{cls}\{{([^}}]*)\}}", css)
+        assert rule, f"the {cls} swatch has no rule"
+        return {_resolved(v, tokens) for v in re.findall(r"var\(--[\w-]+\)", rule.group(1))}
+    assert painted("ltroll") == {_resolved("var(--chart-bar)", tokens)}, "the trend swatch differs from its line"
+    assert painted("ltband") == {_resolved("var(--chart-series-3)", tokens)}, "the band swatch differs from its fill"
+    assert re.findall(r"<i class=(\w+)>", summary) == ["ltsolid", "ltdash", "ltdot"], \
+        "the summary row carries no swatch for each reference pattern"
+    assert painted("ltsolid") == {_resolved("var(--chart-series-8)", tokens)}
+    assert painted("ltdash") == {_resolved("var(--chart-ok)", tokens)}
+    assert painted("ltdot") == {_resolved("var(--chart-series-5)", tokens)}, "the summary row paint differs from its line"
+    assert painted("lthollow") != painted("ltfilled"), \
+        "the hollow and filled swatches resolve to one paint, so grayscale cannot tell a card from a cluster"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_every_chart_token_the_lead_chart_paints_is_declared(hub, board, tmp_path):
+    """#1332: no colour literal is in the chart code, and every role the lead chart names is a hub web token."""
+    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 4)})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    out = _render(hub, tmp_path, "lt-tokens.js",
+                  f"(LT.band=true,LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
+    css = "".join(re.findall(r"#flowb[^{}]*\{[^}]*\}|\.ltlg i\.[\w]+\{[^}]*\}", hub.PAGE))
+    tokens = _tokens()
+    for value in set(re.findall(r"var\(--chart-[\w-]+\)", out + css)):
+        name = re.fullmatch(r"var\(--([\w-]+)\)", value).group(1)
+        assert name in tokens, f"the lead chart paints var(--{name}), which no hub token declares"
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(", out + css), "the lead chart carries a colour literal"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_only_the_average_line_shows_by_default_and_the_three_patterns_differ(hub, board, tmp_path):
+    """#1332: only the average reference draws at first; the median and p85 are one toggle each. All three are 1px and
+    carry distinct patterns (solid, dashed, dotted), and the rolling mean is the stronger 3px line."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z"),
+                3: _done(3, "2026-10-05T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+
+    def refs(markup):
+        return {re.search(r"<title>(\w+) ", tag).group(1): tag
+                for tag in re.findall(r"<line [^>]*><title>(?:Average|Median|p85) [^<]*</title></line>", markup)}
+
+    out = _lt_chart(hub, tmp_path, "lt-reference-default.js", chart)
+    default = refs(out)
+    assert list(default) == ["Average"], "a reference other than the average draws by default"
+    first = out.partition("<details class=ltmore>")[0]
+    assert "id=ltmd" in first and "id=ltp85" in first, "the median and p85 toggles are not on the first screen"
+    for toggle in ("ltmd", "ltp85"):
+        assert not re.search(rf"<input[^>]*id={toggle}[^>]*checked", first), f"the {toggle} toggle opens checked"
+
+    on = _render(hub, tmp_path, "lt-reference-on.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
+    shown = refs(on)
+    assert set(shown) == {"Average", "Median", "p85"}, "a toggle does not draw its reference line"
+    width = lambda tag: re.search(r"stroke-width=([^\s>]+)", tag).group(1)   # noqa: E731
+    assert all(width(tag) == "1" for tag in shown.values()), "a reference line is not 1px"
+    patterns = {name: (re.search(r'stroke-dasharray="([^"]*)"', tag) or [None, "solid"])[1]
+                for name, tag in shown.items()}
+    assert len(set(patterns.values())) == 3, f"the reference patterns are not distinct: {patterns}"
+    assert patterns["Average"] == "solid"
+    median_on = float(patterns["Median"].split()[0])          # the dash; the gap is the second number
+    p85_on = float(patterns["p85"].split()[0])                # the dot
+    assert median_on >= 6 and p85_on <= 1.5, \
+        f"the dashed and dotted lines read alike at 1px: {patterns}"
+    roll = re.search(r"<polyline [^>]*>", on).group(0)
+    assert width(roll) == "3", "the rolling mean is not the stronger 3px line"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_chart_titles_both_axes_outside_the_plot(hub, board, tmp_path):
+    """#1332: "Lead time" sits above the y axis with its scale named, and "Closed date" sits below the x axis."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-axis-titles.js", chart)
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    texts = _svg_texts(plot)
+    y_title = next(attrs for attrs, body in texts if body == "Lead time (linear)")
+    x_title = next(attrs for attrs, body in texts if body == "Closed date")
+    frame_top = float(re.search(r"<line x1=\S+ y1=(\S+)", plot).group(1))
+    base = float(re.search(r'<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--chart-grid\)>', plot).group(1))
+    assert float(_svg_attr(y_title, "y")) < frame_top, "the y axis title sits inside the plot"
+    assert float(_svg_attr(x_title, "y")) > base, "the x axis title does not sit below the axis"
+    assert _svg_attr(y_title, "x") == _svg_attr(x_title, "x") == re.search(r"<line x1=(\S+)", plot).group(1), \
+        "an axis title does not start at the plot's left edge"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_drag_maps_the_pointer_through_the_plot_and_never_attributes_the_gutter(hub, board, tmp_path):
+    """#1332: the reserved right gutter sits outside the plot, so the drag reads the pointer in SVG user units and clamps
+    it to the plot's own edges; a drag to the plot's right edge lands on that edge, and the zoom stays wired."""
+    page = hub.PAGE
+    # The viewBox is the page's own: plot left margin plus frame width plus the reserved gutter, so a wider gutter
+    # changes the rendered scale this test reads instead of leaving it pinned to a stale constant.
+    lt_g = int(re.search(r"const ltG=(\d+);", page).group(1))
+    vb_width, left, right = 64 + 700 + lt_g, 64, 64 + 700
+    block = f"const ltP=64,LT_FRAME={{width:700}},ltG={lt_g};let LT={{}};" + \
+        page[page.index("const ltPx"):page.index('$("#flowb").onpointerdown')]
+    svg = (f"{{getBoundingClientRect:()=>({{left:0,width:{2 * vb_width}}}),"
+           f"viewBox:{{baseVal:{{width:{vb_width}}}}}}}")
+    out = _render(hub, tmp_path, "lt-pointer.js",
+                  f"JSON.stringify([0,{vb_width // 2},{vb_width - 128},"
+                  f"{2 * right},{2 * vb_width}].map(px=>ltClamp(ltPx({{clientX:px}},{svg}))))",
+                  block=block)
+    assert json.loads(out) == [left, vb_width // 4, (vb_width - 128) // 2, right, right], \
+        "a drag does not land on the user-space x it points at, or the reserved gutter bends it"
+    drag = page[page.index('$("#flowb").onpointerdown'):page.index('$("#flowb").onchange')]
+    assert "ltPx(e,s)" in drag and "ltZoom(" in drag, "the drag-to-zoom is no longer wired"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_right_gutter_tags_never_overlap_when_the_values_are_close(hub, board, tmp_path):
+    """#1332: the reference tags sit in the reserved right gutter, outside the plot, and are moved apart by one body
+    line so no tag covers another — on one value, on values a few pixels apart, and on a block that runs past the floor."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    assert len({chart[k]["text"] for k in ("average", "median", "p85")}) == 1, "the fixture does not put the values on one"
+    frame, gap = chart["plot_frame"], 16
+    right, bottom = 64 + frame["width"], 64 + frame["height"]
+
+    def tags_for(chart_in, name):
+        out = _render(hub, tmp_path, name, f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart_in)},null))")
+        plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+        tags = re.findall(r"<text class=lttg [^>]*x=(\S+) y=(\S+) ", plot)
+        assert len(tags) == 3, "the gutter does not carry one tag per drawn reference"
+        assert all(float(x) > right for x, _ in tags), "a tag sits inside the plot"
+        return sorted(float(y) for _, y in tags)   # the tag's baseline, four units under its centre
+
+    def apart(chart_in, shift, name):
+        c = json.loads(json.dumps(chart_in))
+        for key, step in (("median", shift), ("p85", 2 * shift)):
+            c[key]["y"] = c["average"]["y"] + step / frame["height"]
+        heights = tags_for(c, name)
+        assert all(b - a >= gap for a, b in zip(heights, heights[1:], strict=False)), \
+            f"two close tags overlap at {shift}px: {heights}"
+        return heights
+
+    apart(chart, 0, "lt-gutter-coincident.js")
+    apart(chart, 4, "lt-gutter-4px.js")     # closer than one body line
+    apart(chart, 7, "lt-gutter-7px.js")     # still closer than one body line
+    low = json.loads(json.dumps(chart))
+    for key, step in (("average", 0), ("median", 2), ("p85", 4)):
+        low[key]["y"] = step / frame["height"]
+    heights = tags_for(low, "lt-gutter-floor.js")
+    assert all(b - a >= gap for a, b in zip(heights, heights[1:], strict=False)), \
+        f"the block that runs past the floor overlaps: {heights}"
+    assert heights[0] >= 64 + gap / 2 and heights[-1] <= bottom - gap / 2 + 4, \
+        f"the block that slides up still leaves the plot's height: {heights}"
+    assert heights[-1] >= bottom - gap / 2, f"the block sits above the plot's floor instead of at it: {heights}"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -952,6 +1124,12 @@ def _svg_texts(svg):
     return [(attrs, body) for attrs, body in re.findall(r"<text ([^>]*)>([^<]*)</text>", svg)]
 
 
+def _has_class(attrs, name):
+    """True when an element's class attribute carries `name` as one exact token, never as a substring of another."""
+    m = re.search(r"(?:^|\s)class=([^\s>]+)", attrs)
+    return bool(m and name in m.group(1).split())
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_lead_time_axis_title_is_drawn_from_the_plot_left_edge(hub, board, tmp_path, monkeypatch):
     class Frozen(datetime):
@@ -962,13 +1140,15 @@ def test_the_lead_time_axis_title_is_drawn_from_the_plot_left_edge(hub, board, t
     left = next(re.search(r"x1=(\S+)", line).group(1)
                 for line in re.findall(r"<line [^>]*>", svg)
                 if re.search(r"x1=(\S+) y1=\S+ x2=\1 ", line))
-    titles = [(attrs, body) for attrs, body in _svg_texts(svg) if "elapsed time" in body]
+    titles = [(attrs, body) for attrs, body in _svg_texts(svg) if body.startswith("Lead time")]
     assert len(titles) == 1
     attrs, body = titles[0]
-    assert body == "elapsed time (linear)", "the full axis title is drawn"
+    # Re-anchored (#1332): the y axis is titled above it, outside the plot, with its scale named.
+    assert body == "Lead time (linear)", "the full axis title is drawn"
     assert _svg_attr(attrs, "x") == left, "the title starts at the plot's left edge"
     assert _svg_attr(attrs, "text-anchor") == "start"
-    assert 0 < float(_svg_attr(attrs, "y")) < float(re.search(r'viewBox="0 0 \S+ (\S+)"', svg).group(1))
+    frame_top = float(re.search(r"<line x1=\S+ y1=(\S+)", svg).group(1))
+    assert 0 < float(_svg_attr(attrs, "y")) < frame_top, "the y axis title does not sit above the plot"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -978,7 +1158,7 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
         def now(cls, tz=None): return cls(2026, 10, 10, tzinfo=tz)
     monkeypatch.setattr(hub, "dt", types.SimpleNamespace(**{**vars(hub.dt), "datetime": Frozen}))
     svg = _drawn_lead_svg(hub, board, tmp_path)
-    others = [(attrs, body) for attrs, body in _svg_texts(svg) if "elapsed time" not in body]
+    others = [(attrs, body) for attrs, body in _svg_texts(svg) if not body.startswith(("Lead time", "Closed date"))]
     tick_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "x") == "57"]
     # Re-anchored (#1334): the round linear ladder serves five ticks for this spread, not a fixed six.
     assert len(tick_labels) == 5, "the round y ticks keep their place beside the axis"
@@ -988,9 +1168,12 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     assert len(x_labels) == 7, "the seven x ticks keep their place under the axis"
     base = float(re.search(r"<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--chart-grid\)>", svg).group(1))
     assert {float(_svg_attr(attrs, "y")) for attrs, _ in x_labels} == {base + 17}
-    summary = [(attrs, body) for attrs, body in _svg_texts(svg) if body.startswith(("Average", "Median", "p85"))]
-    assert len(summary) == 3, "each reference line labels itself at its end (#1304)"
-    assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in summary), "an end label does not sit at the line's end"
+    # Re-anchored (#1332): only the average is drawn by default, and its value sits in the right gutter, never in the plot.
+    tags = [(attrs, body) for attrs, body in others if _has_class(attrs, "lttg")]
+    assert len(tags) == 1, "the average's gutter tag is not the one reference tag drawn by default"
+    assert all(_svg_attr(attrs, "text-anchor") == "start" for attrs, _ in tags), "a gutter tag is not left-aligned"
+    right = max(float(x) for x in re.findall(r'<line x1=\S+ y1=\S+ x2=(\S+) y2=\S+ stroke=var\(--chart-grid\)>', svg))
+    assert all(float(_svg_attr(attrs, "x")) > right for attrs, _ in tags), "a reference tag sits inside the plot"
 
 
 # SPEC 889 #901: the cumulative flow has a range selector and a hover that names each band's count for the day.
@@ -1120,12 +1303,11 @@ def test_the_chart_family_draws_one_grid_axis_and_title_treatment(hub, board, tm
     cfd = _render(hub, tmp_path, "flow-family.js", f"flowCFD({json.dumps(_flow(hub)['cfd']['ranges']['all'])})")
     assert _resolved("var(--chart-grid)", tokens) == _resolved("var(--line)", tokens), "the grid is not line"
     assert "#flowb" in hub.PAGE and "font-size:var(--fs-body)" in re.search(r"#flowb\{[^}]*\}", hub.PAGE).group(0)
-    for name, svg, title in (("flow", cfd, "cards"), ("lead", lead, "elapsed time")):
+    for name, svg, title in (("flow", cfd, "cards"), ("lead", lead, "Lead time")):
         texts = re.findall(r"<text ([^>]*)>([^<]*)</text>", svg)
         assert texts, name
         assert all("font-size" not in attrs for attrs, _ in texts), f"{name} text sets its own size"
-        axis = [(a, b) for a, b in texts if not re.fullmatch(r"\d+", b)
-                and not b.startswith(("Average ", "Median ", "p85 "))]   # #1304: end labels and counts are annotations
+        axis = [(a, b) for a, b in texts if not re.fullmatch(r"\d+", b)]   # #1332: reference tags are axis ink too
         assert {re.search(r'fill="?([^" >]+)', " " + attrs).group(1) for attrs, _ in axis} == {"var(--chart-axis)"}, \
             f"{name} axis text does not take mute"
         grid = [ln for ln in re.findall(r"<line [^>]*>", svg) if "stroke=var(--chart-grid)" in ln]
@@ -1138,8 +1320,12 @@ def test_the_chart_family_draws_one_grid_axis_and_title_treatment(hub, board, tm
         attrs, _ = found[0]
         assert _svg_attr(attrs, "x") == left, f"{name} title does not start at the plot's left edge"
         assert _svg_attr(attrs, "text-anchor") == "start"
-        assert float(frame_top) < float(_svg_attr(attrs, "y")) < float(frame_base), \
-            f"{name} title does not sit inside the plot"
+        # Re-anchored (#1332): the lead chart titles its y axis above the plot, the flow chart inside it.
+        if name == "lead":
+            assert float(_svg_attr(attrs, "y")) < float(frame_top), f"{name} title does not sit above its axis"
+        else:
+            assert float(frame_top) < float(_svg_attr(attrs, "y")) < float(frame_base), \
+                f"{name} title does not sit inside the plot"
 
 
 def test_each_band_serves_its_count_per_day(hub, board):
