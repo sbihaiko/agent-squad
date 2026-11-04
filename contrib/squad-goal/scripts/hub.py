@@ -6503,8 +6503,10 @@ def kimi_pass_once():
 QUOTA_MAX_AGE = 3 * 3600   # a probe repolls every 20 min; a reading older than this stopped tracking the account
 def quota_row(k, now=None):
     """What the cost panel and the footer show for provider k: the CLI's own reading, or the reason there is no reading.
-    A reading past QUOTA_MAX_AGE is no reading, and says when the last one was taken. A reading with `until` (the kept
-    grok reading: the CLI writes a credit line only when a TUI session starts) holds to its period end, then is stale."""
+    A reading past QUOTA_MAX_AGE is no reading, and says when the last one was taken, and why it did not move when the
+    probe left a reason: a broken probe and a provider nobody called read the same without it. A reading with `until`
+    (the kept grok reading: the CLI writes a credit line only when a TUI session starts) holds to its period end, then
+    is stale."""
     r = quota.get(k); now = time.time() if now is None else now
     if not r: return None
     if r.get("windows") and r.get("until"):
@@ -6515,8 +6517,10 @@ def quota_row(k, now=None):
     if r.get("windows"):
         age = now - r["asof"] if r.get("asof") else 0
         if age <= QUOTA_MAX_AGE: return r
+        taken = time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(r['asof']))
+        why = f"; {r['err']}" if r.get("err") else ""
         return {"unavailable": True, "asof": r["asof"], "plan": r.get("plan"),
-                "err": f"no reading: the last one is {round(age / 3600)} h old (the limit is {QUOTA_MAX_AGE // 3600} h), taken {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(r['asof']))}"}
+                "err": f"no reading: the last one is {round(age / 3600)} h old (the limit is {QUOTA_MAX_AGE // 3600} h), taken {taken}{why}"}
     if r.get("err"): return {"unavailable": True, "err": r["err"], "asof": r.get("asof"), "plan": r.get("plan")}
     return None
 

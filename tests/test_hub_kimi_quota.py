@@ -144,3 +144,20 @@ def test_a_kept_reading_still_ages_out(hub, monkeypatch):
     monkeypatch.setattr(hub, "QUOTA", Path(tempfile.mkdtemp()) / "hub-quota.json")
     hub.kimi_pass_once()
     assert _kimi_row(hub)["pct"] is None
+
+
+def test_an_aged_row_keeps_the_reason_the_probe_left(hub, monkeypatch):
+    """A reading past the limit is no reading, and the row says when it was taken. The probe's reason rides along when
+    it left one: an owner must be able to tell a broken probe from a provider that has not been used."""
+    aged = dict(_good_reading(hub.QUOTA_MAX_AGE + 60),
+                err="no live Kimi token: the bridge refreshes it on the next kimi call")
+    monkeypatch.setattr(hub, "quota", {"kimi": aged})
+    row = hub.quota_row("kimi")
+    assert row["unavailable"] is True
+    assert "no reading" in row["err"] and "token" in row["err"]
+
+
+def test_an_aged_row_without_a_reason_says_only_the_age(hub, monkeypatch):
+    monkeypatch.setattr(hub, "quota", {"kimi": _good_reading(hub.QUOTA_MAX_AGE + 60)})
+    row = hub.quota_row("kimi")
+    assert "no reading" in row["err"] and "token" not in row["err"]
