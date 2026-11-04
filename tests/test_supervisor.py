@@ -524,3 +524,26 @@ def test_a_start_whose_process_cannot_spawn_answers_a_refusal_not_a_dead_socket(
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_hosted_session_runs_on_the_repository_venv_when_it_has_one(tmp_path):
+    """#1317: the supervisor ran under a python with no claude_agent_sdk, and the hosted session died at import, so the web
+    terminal never answered. The repository's own venv is the interpreter that carries the SDK."""
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("")
+    assert sv.hosted_argv(tmp_path) == [str(venv_python), "-m", "squad.sdk_adapter", "host"]
+    assert sv.hosted_argv(tmp_path / "none")[0] == sys.executable
+
+
+def test_a_start_whose_interpreter_cannot_import_the_sdk_is_refused_naming_both(state, tmp_path, monkeypatch):
+    """#1317: a session that cannot import the SDK is refused at start, naming the interpreter and the module, instead of
+    a live-looking session that never answers."""
+    folder = tmp_path / "nosdk"
+    folder.mkdir()
+    (folder / "claude_agent_sdk.py").write_text("raise ImportError('no sdk here')\n")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(folder), str(ROOT)]))
+    with pytest.raises(sv.Refused) as err:
+        sv.Supervisor(state).start("p#31", str(tmp_path))
+    assert sv.hosted_argv()[0] in str(err.value) and "claude_agent_sdk" in str(err.value), str(err.value)
+    assert not (state / sv.LEDGER).exists() or '"start"' not in (state / sv.LEDGER).read_text()
