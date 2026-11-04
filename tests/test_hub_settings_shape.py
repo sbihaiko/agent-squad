@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from html.parser import HTMLParser
 
 import pytest
 
@@ -59,6 +60,71 @@ def _slices(page):
 
 def _run(page, expr):
     return json.loads(_node(_slices(page) + f"\nconsole.log(JSON.stringify({expr}))"))
+
+
+# A DOM read of a rendered block: a test asks for the element by its class or its role, never by the order of the
+# classes or the order of the attributes, so a cosmetic markup change does not fail a test and a changed element does.
+
+class _Node:
+    def __init__(self, tag, attrs, parent):
+        self.tag, self.attrs, self.parent = tag, dict(attrs), parent
+        self.children, self.parts = [], []
+
+    @property
+    def classes(self):
+        return set((self.attrs.get("class") or "").split())
+
+    @property
+    def text(self):
+        return "".join(self.parts) + "".join(c.text for c in self.children)
+
+
+class _Dom(HTMLParser):
+    VOID = {"input", "br", "img", "meta", "link", "hr", "col", "area", "base", "embed", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = _Node("#root", [], None)
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+        node = _Node(tag, attrs, self.stack[-1])
+        self.stack[-1].children.append(node)
+        if tag not in self.VOID:
+            self.stack.append(node)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stack) - 1, 0, -1):
+            if self.stack[i].tag == tag:
+                del self.stack[i:]
+                return
+
+    def handle_data(self, data):
+        self.stack[-1].parts.append(data)
+
+
+def _parse(html):
+    dom = _Dom()
+    dom.feed(html)
+    dom.close()
+    return dom.root
+
+
+def _walk(node):
+    yield node
+    for child in node.children:
+        yield from _walk(child)
+
+
+def _find_all(node, pred):
+    return [n for n in _walk(node) if pred(n)]
+
+
+def _by_class(root, cls):
+    return _find_all(root, lambda n: cls in n.classes)
 
 
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "tailnet": False,
@@ -174,11 +240,14 @@ def test_the_communication_settings_keep_their_rows_and_their_tables_apart(hub):
 
 # ---------------------------------------------------------------- Communication states each role once (#1284)
 
-def _sl_theme(hub, people, connection="connected"):
+def _sl_theme(hub, people, connection="connected", chip_only=False, **extra):
     """The Communication theme as the page draws it, with the people a reader would see. The nav line is read before
-    the render too, so a value left in the harness can never pass for the renderer's own write."""
-    view = dict(hub.SLACK_DEFAULT, connection=connection, people=people)
-    body = (_comm_slices(hub.PAGE) + f"\nconst nav0=$('#slknav').textContent;"
+    the render too, so a value left in the harness can never pass for the renderer's own write. With `chip_only`, the
+    chip helper is narrowed to the summary alone, so the nav line can only be the render's own write."""
+    view = dict(hub.SLACK_DEFAULT, connection=connection, people=people, **extra)
+    override = ('\nfunction setChip(theme,text){const sr=$("#"+theme+"sr");if(sr)sr.textContent=text}'
+                if chip_only else "")
+    body = (_comm_slices(hub.PAGE) + override + f"\nconst nav0=$('#slknav').textContent;"
             f"slS={json.dumps(view)};slDraft=slClone(slS);slRender();"
             "console.log(JSON.stringify({body:STORE['#sbody'].innerHTML,nav0:nav0,"
             "chip:STORE['#slksr'].textContent,nav:STORE['#slknav'].textContent}))")
@@ -195,49 +264,89 @@ def test_the_communication_legend_states_each_role_once_and_no_person_row_repeat
     body = out["body"]
     for role, text in roles.items():
         assert body.count(text) == 1, f"{role}'s behavior appears {body.count(text)} times, not once"
-    legend = re.search(r'<div class="sllegend"[^>]*>(.*?)</div>', body)
-    assert legend, "the theme states no role legend"
-    assert legend.start() < body.index("<h4>People</h4>"), "the legend sits below the People table"
-    assert re.findall(r"<dt>(.*?)</dt>", legend.group(1)) == list(roles), "the legend does not list each role once"
-    assert re.findall(r"<dd>(.*?)</dd>", legend.group(1)) == [roles[k] for k in roles], legend.group(1)
-    people = body[body.index("<h4>People</h4>"):body.index("<h4>Templates</h4>")]
+    settings = _blocks(body)[1]
+    root = _parse(settings)
+    nodes = list(_walk(root))
+    legend = next((n for n in nodes if n.attrs.get("role") == "group" and n.attrs.get("aria-label") == "Roles"), None)
+    assert legend is not None, "the settings block states no role legend"
+    people = next((n for n in nodes if n.tag == "h4" and n.text.strip() == "People"), None)
+    assert people is not None, "the settings block draws no People table heading"
+    assert legend.parent is people.parent, "the legend is not in the settings block beside the People table"
+    assert nodes.index(legend) < nodes.index(people), "the legend sits below the People table"
+    assert [n.text.strip() for n in _find_all(legend, lambda n: n.tag == "dt")] == list(roles), \
+        "the legend does not list each role once"
+    assert [n.text.strip() for n in _find_all(legend, lambda n: n.tag == "dd")] == [roles[k] for k in roles]
+    people_html = body[body.index("<h4>People</h4>"):body.index("<h4>Templates</h4>")]
     for text in roles.values():
-        assert text not in people, "a person row repeats a role's behavior"
-    assert people.count('data-sl="pp:') == 2, "the person rows lost their role select"
+        assert text not in people_html, "a person row repeats a role's behavior"
+    assert people_html.count('data-sl="pp:') == 2, "the person rows lost their role select"
 
 
 def _tiles(now):
-    """Every Now tile as its tone, key and value, in the order the block draws them."""
-    return re.findall(r'<div class="tile (\w+)">(?:(?!</div>).)*?<span class=tk>(.*?)</span>'
-                      r'(?:(?!</div>).)*?<span class=tv>(.*?)</span>', now)
+    """Every Now tile as its tone, key and value, in the order the block draws them. A tile is found by its own class
+    and its inner spans by theirs, so class order or span order cannot move a tile out of the reading."""
+    tiles = []
+    for tile in _by_class(_parse(now), "tile"):
+        tone = next(iter(tile.classes - {"tile"}), "neutral")
+        key = next((n.text.strip() for n in _by_class(tile, "tk")), None)
+        val = next((n.text.strip() for n in _by_class(tile, "tv")), None)
+        tiles.append((tone, key, val))
+    return tiles
+
+
+def _row_labels(settings_html):
+    """The label each settings row states, read from the row element itself."""
+    return [lab.text.strip() for row in _by_class(_parse(settings_html), "setrow")
+            for lab in row.children if lab.tag == "span" and "sl" in lab.classes]
 
 
 def test_the_connection_fact_is_a_now_tile_with_a_tone_and_not_an_editable_row(hub):
     """The connection is a Now tile carrying the hub's tone, and no settings row states it: the row labels the theme
-    builds are read, not the whole block's text, so an unrelated mention cannot hide or fake the row (#1284)."""
+    builds are read from each row element, so an unrelated mention cannot hide or fake the row (#1284)."""
     out = _sl_theme(hub, [])
     now, settings = _blocks(out["body"])
     assert ("ok", "Connection", "connected") in _tiles(now), now
-    labels = re.findall(r"<span class=sl>(.*?)</span>", settings)
+    labels = _row_labels(settings)
     assert labels, "the settings block carries no row"
     assert not any("connect" in lab.lower() for lab in labels), labels
     warn = _sl_theme(hub, [], connection="not connected")
     assert ("warn", "Connection", "not connected") in _tiles(_blocks(warn["body"])[0]), warn["body"]
 
 
+def _inbox_switches(settings_html):
+    """Each switch under the Owner inbox heading as its data-sl key, aria-label, visible label and disabled state, read
+    from its own input element so an attribute reorder cannot hide it."""
+    root = _parse(settings_html)
+    nodes = list(_walk(root))
+    at = next(i for i, n in enumerate(nodes) if n.tag == "h4" and n.text.strip() == "Owner inbox")
+    switches = []
+    for label in nodes[at:]:
+        if label.tag != "label" or "swt" not in label.classes:
+            continue
+        inp = next((n for n in _walk(label) if n.tag == "input"), None)
+        if inp is None or inp.attrs.get("data-sl") not in ("dm", "audio"):
+            continue
+        switches.append((inp.attrs["data-sl"], inp.attrs.get("aria-label", ""), label.text.strip(),
+                         "disabled" in inp.attrs))
+    return switches
+
+
 def test_the_owner_inbox_switches_carry_the_owner_inbox_name(hub):
     """The switches that give the owner an inbox sit under the Owner inbox heading, and each switch's visible label
-    and aria-label names that inbox, so a rename of the labels cannot pass on the heading alone (#1284)."""
+    and aria-label names that inbox, so a rename of the labels cannot pass on the heading alone. The audio switch
+    keeps its dependency on the self-DM switch (#1284)."""
     settings = _blocks(_sl_theme(hub, [])["body"])[1]
-    heads = re.findall(r"<h4>(.*?)</h4>", settings)
+    heads = [n.text.strip() for n in _find_all(_parse(settings), lambda n: n.tag == "h4")]
     assert "Owner inbox" in heads and "Optional" not in heads, heads
-    block = settings[settings.index("<h4>Owner inbox</h4>"):]
-    switches = re.findall(r'<label class=swt><input type=checkbox data-sl=(\w+)[^>]*aria-label="([^"]*)"[^>]*>'
-                          r'\s*([^<]*)</label>', block)
+    switches = _inbox_switches(settings)
     assert [s[0] for s in switches] == ["dm", "audio"], switches
-    for _, aria, text in switches:
-        assert aria.startswith("Owner inbox"), aria
-        assert text.strip().startswith("Owner inbox"), text
+    for key, aria, text, _ in switches:
+        assert aria.startswith("Owner inbox"), f"{key}: aria-label {aria!r} does not name the inbox"
+        assert text.startswith("Owner inbox"), f"{key}: visible label {text!r} does not name the inbox"
+    assert switches[1][3] is True, "the audio switch is live while its self-DM switch is off"
+    on = _blocks(_sl_theme(hub, [], dm=True)["body"])[1]
+    audio = _inbox_switches(on)[1]
+    assert audio[3] is False, "the audio switch stays off while its self-DM switch is on"
 
 
 def test_the_communication_chip_states_the_connection_and_the_people_count_in_the_nav_line(hub):
@@ -253,6 +362,18 @@ def test_the_communication_chip_states_the_connection_and_the_people_count_in_th
         assert out["nav0"] == "", "the harness pre-filled the nav line"
         assert out["chip"] == want, out["chip"]
         assert out["nav"] == out["chip"], "the nav line disagrees with the summary chip"
+
+
+def test_the_render_writes_the_nav_line_from_the_one_status_text(hub):
+    """The nav line is the render's own write, not a side effect of the chip helper: with the helper narrowed to the
+    summary, a changed connection or people count still reaches the nav line from the one text (#1284)."""
+    for people, connection, want in (
+            ([{"name": "Ana", "role": "Manager"}], "connected", "connected · 1 person"),
+            ([], "not connected", "not connected · 0 people")):
+        out = _sl_theme(hub, people, connection=connection, chip_only=True)
+        assert out["nav0"] == "", "the harness pre-filled the nav line"
+        assert out["chip"] == want, out["chip"]
+        assert out["nav"] == want, "the render did not write the nav line from the status text"
 
 
 # ---------------------------------------------------------------- the Save bar and the dialog

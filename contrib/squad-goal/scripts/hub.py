@@ -5395,7 +5395,7 @@ const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc
 const slLegend=()=>`<dl>${Object.keys(SL_ROLE).map(k=>`<dt>${esc(k)}</dt><dd>${esc(SL_ROLE[k])}</dd>`).join("")}</dl>`;   // each role stated once, never per row
 const slStatusText=s=>`${s.connection} · ${s.people.length} ${s.people.length===1?"person":"people"}`;   // one text for the chip and the nav line (#1284)
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const d=slDraft,st=slStatusText(slS);setChip("slk",st);   // a status: one text for the chip and the nav line (#1284)
+ const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn")],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
  +setSettings("slk",[
  setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
