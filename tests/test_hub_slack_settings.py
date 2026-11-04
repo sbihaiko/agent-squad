@@ -10,6 +10,7 @@ import http.client
 import importlib.util
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import threading
@@ -226,6 +227,29 @@ def test_a_channel_with_watch_on_has_every_control_enabled(ctx):
     html_text = _channel_row(ctx, on)
     assert "do not watch" not in html_text
     assert not any(_controls(html_text).values())
+
+
+def test_the_communication_theme_reads_its_connection_and_edits_everything_else(ctx):
+    """#1278: one shape for every theme. The Now block holds the connection as a tile and no control; every switch,
+    field and row the owner can change sits in the Settings block."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    page = ctx["hub"].served_page()
+    esc = 'const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));'
+    sett = page[page.index("// SETT{"):page.index("// }SETT")]
+    rules = page[page.index("const SL_LANG="):page.index("async function slLoad(")]
+    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});let slMsg="";'
+    view = {k: v for k, v in ctx["hub"].slack_view(ctx["hub"].slack_file()).items() if k != "new_channel"}
+    script = "\n".join([stub, esc, sett, rules, f"slS={json.dumps(view)};slDraft=JSON.parse(JSON.stringify(slS));"
+                        "slRender();console.log(STORE['#sbody'].innerHTML);"])
+    r = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    now = r.stdout[r.stdout.index("data-blk=now"):r.stdout.index("data-blk=settings")]
+    settings = r.stdout[r.stdout.index("data-blk=settings"):]
+    assert re.findall(r"<span class=tk>(.*?)</span>", now) == ["Connection"], now
+    for ctl in ("<input", "<select", "<textarea", "<button"):
+        assert ctl not in now, f"the Communication Now block carries {ctl}"
+    assert "data-sl=prefix" in settings and "<h4>Channels</h4>" in settings
 
 
 def test_the_page_states_what_the_agent_does_for_each_role(ctx):

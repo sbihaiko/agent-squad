@@ -424,11 +424,14 @@ pollSubs().then(() => console.log("RESULT" + JSON.stringify(
 
 
 def _subs_slice():
-    """The page slice holding pollSubs and every helper it reaches, plus the `esc` defined after it."""
+    """The page slice holding pollSubs and every helper it reaches, plus the `esc` defined after it and the Now/Settings
+    builders the panel draws through (#1278). The shell's own boot runs here, so `save` and the read-only flag are stubbed."""
     i = SRC.index("const usd=v=>")
     j = SRC.index("async function pollStats(")
     esc = SRC[SRC.index("const esc=t=>"):]
-    return SRC[i:j].replace("__CAPS__", "{}") + "\n" + esc[: esc.index("\n")] + "\n"
+    sett = SRC[SRC.index("// SETT{"): SRC.index("// }SETT")]
+    return (SRC[i:j].replace("__CAPS__", "{}") + "\n" + esc[: esc.index("\n")] + "\n" + sett
+            + "\nfunction save(){}\n")
 
 
 def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
@@ -440,6 +443,18 @@ def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
     assert "SuperGrok" in out["subs"] and "unavailable" in out["subs"], out["subs"][:300]
     assert "Claude Max 20x" in out["subs"] and "Claude Team" not in out["subs"], out["subs"][:300]   # the name comes from the row (#511)
     assert "77%" in out["subs"], out["subs"][:300]
+
+
+def test_the_now_block_is_read_only_and_the_settings_block_keeps_the_plans():
+    """#1278: the Subscriptions theme reads its facts in tiles and changes its plans in the Settings block."""
+    post = _POST.replace("{ subs:", '{ now: (__els["#subnow"] || {}).innerHTML || "", subs:')
+    out = json.loads(_node(_PRE + _subs_slice() + post).split("RESULT")[-1])
+    assert not out["err"], out["err"]
+    now, settings = out["now"], out["subs"]
+    assert re.findall(r"<span class=tk>(.*?)</span>", now) == ["At limit", "Cash this month", "Month passed"], now
+    for ctl in ("<input", "<select", "<textarea", "<button"):
+        assert ctl not in now, f"the Subscriptions Now block carries {ctl}"
+    assert settings.count("<select data-plan=") == 2 and "data-f=plan" in settings, settings[:300]
 
 
 def test_the_pie_merges_the_spellings_of_one_model_name():
