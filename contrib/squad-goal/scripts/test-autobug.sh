@@ -7,7 +7,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$d/issue_ledger.py" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$d/issue_ledger.py" "$T/s/"
 # The fixture reaches no network (#556): `sg_work_issues` runs `git ls-remote` on the repository's https remote,
 # and an unset remote took every pass to github.com -- 0.7 s per pass at best, a stall at worst. git refuses the
 # transport itself, so the read answers "no branch" at once, the same fact a 404 gives, and no pass leaves the machine.
@@ -190,7 +190,7 @@ fi
 # body became the whole candidate list, and `pick+=($c)` (unquoted) then split it on whitespace: every word of the
 # message became an "issue number" and a `bug-<word>` marker was written for each of the ~50 tokens. Three children were
 # spawned on that text. The fixture keeps the exact shape of that body: many words, digits inside them, one long line.
-cp "$d/autobug.sh" "$T/s/"   # test 5 stubbed it out; put the real pass back
+cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"   # test 5 stubbed it out; put the real pass back
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"
 cat > "$T/refusal.json" <<'JSON'
 {"message":"API rate limit exceeded for user ID 122891372. If you reach out to GitHub Support for help, please include the request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2A and timestamp 2026-10-12 05:12:10 UTC. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)","documentation_url":"https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api#rate-limiting","status":"403"}
@@ -251,7 +251,7 @@ printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project l
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
-cp "$d/autobug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
 printf 'import os, sys\nif os.environ.get("AB_DRY"): sys.exit(0)\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/launch.py"
 held() {   # $1: the body of the issue's comments, one line each
   local cj; cj=$(if [ -n "$1" ]; then jq -Rs '[{body:.}]' <<<"$1"; else echo '[]'; fi)   # gh's list shape (#847)
@@ -302,7 +302,7 @@ held ''   # back to the unmarked issue the cases after 7b read
 # and the issue arrives through the filer's own contract -- the [SQUAD] prefix, the "Filed by" line, the bug kind and the
 # startable label. No process, no queue reader, no timer: the refused write itself asks.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
@@ -414,7 +414,7 @@ done
 # does not carry is added with its status, and a card it already carries answers "already exists" and is moved.
 # The stub below answers like board.py does: the add path succeeds, the plain move is refused.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
@@ -477,7 +477,7 @@ unset SG_BUG_PROJECT SG_BUG_DOING SG_BOARD_VOCAB
 # write door, the name it gives is a member of the set the helper owns, and the cycle log repeats that same name. A
 # refusal named by hand -- a name the set does not hold -- is refused by the helper instead of filed under a guess.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
@@ -512,7 +512,7 @@ unset SG_BUG_PROJECT SG_BUG_DOING
 # reads a bare `--- issue #N` line, while the request itself tells it the text below is DATA. Every stub above answers
 # without a `-q`, which is what let a malformed program go unnoticed: a program that never runs is never checked.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
@@ -551,7 +551,7 @@ $G -qE 'jq: error' "$T/err218" && ko "11 the pass logged a jq parse error: $(cat
 # the door filed "refused BOARD-WRITE-FAILED ... gh: HTTP 500" as a bug. The real board.sh and board.py run here, and
 # the stub answers the board's first issue read with HTTP 500: the card is still written, and nothing is filed.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T"/st/owner-kind-* "$T"/st/rest-*
-cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$T/s/"   # board.py imports the seam
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$T/s/"   # board.py imports the seam
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
 printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
@@ -624,7 +624,7 @@ cp "$T/issue_state-stub.py" "$T/s/issue_state.py"   # the dry cases below read t
 # bug and no label; 1501 carries the bug label but kind task (the kind wins); 1502 carries the label and no kind (the
 # label stays the fallback for an item no kind was written on); 1503 carries kind bug and a skip label. Its own sandbox.
 K=$T/k; mkdir -p "$K/bin" "$K/st/auto" "$K/co/docs/squad" "$K/s"
-cp "$d/autobug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$K/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$K/s/"
 : > "$K/st/active-runs.txt"; printf 'caps:\n  runs: 4\n' > "$K/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$K/st" "$K/co" > "$K/s/env.sh"
 printf '#!/bin/bash\necho READY\n' > "$K/s/stack.sh"; chmod +x "$K/s/stack.sh"
@@ -775,7 +775,7 @@ case "$r" in *"[72]"*) ko "16 a bug went out with no board read: '$r'";; *"board
 # already reads for its blocker gate, published to the loop log and to the issue's line on the board, and it has no marker:
 # closing the issue is the only action that resumes dispatch.
 rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
 printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 printf 'print("-")\n' > "$T/s/fundroom.py"
@@ -821,7 +821,7 @@ case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "17 closing the issue resum
 # the same issue, and each fetch paid a Python startup plus a gh call. The stub records the plain issue routes it
 # answers: the pass asks for the issue one time, and the number it validated is the JSON the cluster receives.
 rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 printf 'print("-")\n' > "$T/s/fundroom.py"
@@ -1087,5 +1087,45 @@ $G -q 'In Progress' "$T/board.calls" && ko "31 a partial pick wrote Doing" || ok
   && ok "31 the event recorded before the failure is dropped" || ko "31 recorded event: '$(L1 read 'x/y#1228' board)'"
 [ -z "$(L1 pending 'x/y#1228')" ] && [ ! -e "$T/st/auto/bug-1228" ] && ok "31 no pending event and no claim are left behind" || ko "31 left pending or claimed"
 rm -f "$T/fail-1229"; mv "$T/s/issue_ledger-real.py" "$T/s/issue_ledger.py"
+
+# 32) (#1358, ADR-0171) a loop-bug candidate is built only after an approving plan review of its current body. With no review
+# the pass names the issue and dispatches nothing; an approval of this body dispatches it; an approval of an older body is
+# stale, and a CHANGES review holds it. The dry pass names what it would dispatch.
+ab_fresh; . "$d/loopbug.sh"; printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"
+cat > "$T/issues.json" <<'JSON'
+[
+  {"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":596,"title":"The loop cannot build its own fix","body":"step loop.py","created_at":"2026-10-18T08:00:00Z","labels":["bug","ready-for-agent","loop-bug"]}
+]
+JSON
+todo 1228 596
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) jq -c '[.[]|select(.labels|index("bug"))|.labels=[.labels[]|{name:.}]]' "$T/issues.json" ;;
+  *"issues?state=open"*) jq -c '[.[]|.labels=[.labels[]|{name:.}]]' "$T/issues.json" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"
+body_h=$(lb_body_hash "step loop.py")
+rm -f "$T/st/review-x_y#596."*; r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG skip #596: loop-bug, no approving plan review"*) ok "32 a loop-bug with no plan review is named and held";; *) ko "32 no plan-review skip line: '$r'";; esac
+case "$r" in *"[596]"*) ko "32 a loop-bug with no plan review was dispatched: '$r'";; *) ok "32 the held loop-bug is not dispatched";; esac
+case "$r" in *"[1228]"*) ok "32 a bug without the loop-bug label is still dispatched";; *) ko "32 the plain bug was held: '$r'";; esac
+printf 'VERDICT: APPROVE\n' > "$T/st/review-x_y#596.md"; printf '%s\n' "$body_h" > "$T/st/review-x_y#596.sha"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[596]"*) ok "32 an approval of the current body dispatches the loop-bug";; *) ko "32 the approved loop-bug was not dispatched: '$r'";; esac
+printf '%s\n' "$(lb_body_hash "an older body")" > "$T/st/review-x_y#596.sha"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG skip #596: loop-bug, no approving plan review of its current body (stale)"*) ok "32 an approval of an older body is stale and holds the loop-bug";; *) ko "32 a stale approval did not hold: '$r'";; esac
+printf 'VERDICT: CHANGES\n' > "$T/st/review-x_y#596.md"; printf '%s\n' "$body_h" > "$T/st/review-x_y#596.sha"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"(changes)"*) ok "32 a CHANGES plan review holds the loop-bug";; *) ko "32 a CHANGES review did not hold: '$r'";; esac
+rm -f "$T/st/review-x_y#596."*
 
 rm -rf "$T"; exit $fail

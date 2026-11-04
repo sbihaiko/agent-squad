@@ -249,8 +249,11 @@ def run_hold(rd, child, n, d, ok, rnd):
     if now != head: return f"its run approved {head[:9]}, and the child stands at {now[:9] or 'no head'}: a new commit needs a new review"
     return ""
 def machine_hold(cause):   # a machine-wide hold clears by itself, so it never counts toward a deferral deadline and never requeues (#931, #567)
+    # A child kept on a rebase round waits for its own commits to be rebased, not for the machine: no deadline requeues it,
+    # and no failed dispatch is counted against it (#1344).
     return any(s in cause for s in ("the gate lock is held", "the gate slots (caps.gates) are full",
-                                    "the local gates were inconclusive", "no review slot this pass"))
+                                    "the local gates were inconclusive", "no review slot this pass",
+                                    "for one rebase round, not requeued"))
 def moved_tip(rd, child, d, rnd):   # the tip a review read, when the child stands past it (#808); False when no head was read or the tip is not there
     head = str((rnd or {}).get("head") or "")
     return bool(head) and head_of(child_worktree(rd, child, d)) not in ("", head)
@@ -292,6 +295,10 @@ def enter(rd, child, n, d, approved=False, own=False):
     if not own and e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
         return fix_round(rd, child, n, wt, fx, out)   # a fix run in its worktree, never a requeue at once (#636)
     elif e.returncode != 0 and "WAVE HOLD" in out:   # held, not requeued: the wave waits for it (#620)
+        if re.search(r"kept on fix/\S+ for one rebase round, not requeued", out):
+            # Its commits stand on a work branch of their own, which the landing passes deliver, so it leaves this wave
+            # rather than holding it for its whole age cap (#1344).
+            return False, out, True
         HOLDS.add(f"{rd.name} {child}")
         if re.search(r"WAVE HOLD #\d+: (no review|the review of)", out):   # a review hold, never a gate one: bounded per head, so a dead review chain never holds the wave for its whole age cap
             hk, h = A / f"holds-{rd.name}-{child}", head_of(wt)

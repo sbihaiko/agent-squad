@@ -12,7 +12,7 @@
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
 # to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
 # landing anything, whatever its verdict (janitor rule O; rule R sets the card: Todo after a failed run, Blocked after needs-human). Empty SG_FRONTIER_LABEL turns it off.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/loopbug.sh"; . "$(dirname "$0")/startability.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 [ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
@@ -230,6 +230,11 @@ while [ $i -lt ${#cands[@]} ]; do
   skip=; bad=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
   [ -n "$skip" ] && { [ -z "$card" ] || why_card "$n" "skip label" "$bad"; continue; }
   case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) [ -z "$card" ] || why_card "$n" "no go label"; continue;; esac   # no go label, no dispatch (#485)
+  # ADR-0171 (#1358): a loop defect is built only after a plan review approved its current body, whichever pass dispatches it.
+  if lb_is_loop_bug "$labels"; then
+    lbb=$(gh_api "repos/$SG_REPO/issues/$n" -q '.body // ""') || { [ -z "$card" ] || why_card "$n" "loop-bug" "its body is not readable, so its plan review cannot be checked"; continue; }
+    lbv=$(lb_plan_verdict "$SG_STATE" "$SG_REPO" "$n" "$(lb_body_hash "$lbb")") || { echo "FRONTIER skip #$n: loop-bug, no approving plan review of its current body ($lbv); review.sh --plan $SG_REPO $n" >&2; [ -z "$card" ] || why_card "$n" "loop-bug" "its plan review is $lbv"; continue; }
+  fi
   case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: the owner has not started it (#550)
   case "$refs" in *" $n "*) why_card "$n" busy "an open work branch names it"; continue;; esac
   case ",$busy," in *",$n,"*) why_card "$n" busy "a live run holds it"; continue;; esac

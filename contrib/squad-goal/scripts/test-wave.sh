@@ -132,12 +132,68 @@ case "$r" in *"WAVE-ERROR"*gates*) ok "C: the missing gates are said";; *) ko "C
 tip0=$($O rev-parse $W)                       # the tip before #11 entered
 child 11 g11; en 11 >/dev/null                # #11 adds g11 and enters
 child 12 g11 "$tip0"                          # #12 adds the same file from the older tip: the rebase conflicts
-printf 'run-1\n' > "$T/st/auto/disp-12"; before=$($O rev-parse $W); r=$(en 12)
+printf 'run-1\n' > "$T/st/auto/disp-12"; before=$($O rev-parse $W); mine=$($G -C "$T/c12" rev-parse HEAD); r=$(en 12)
 [ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 12)" = no ] && ok "D: a child that conflicts with the wave tip never enters" || ko "D: #12 entered: '$r'"
-case "$r" in *"WAVE REQUEUE #12"*conflict*g11*) ok "D: the conflict is said, and names the file";; *) ko "D: no reason for the conflict: '$r'";; esac
+case "$r" in *"WAVE HOLD #12"*conflict*g11*) ok "D: the conflict is said, and names the file";; *) ko "D: no reason for the conflict: '$r'";; esac
+# A conflict keeps the child's own commits (#1344): pushed to fix/12-rebase-run-1, the child's HEAD never reset, one fix round
+# queued on that branch by a CHANGES verdict, and no requeue (no fresh build, the card stays Doing).
+[ "$($O rev-parse -q --verify refs/heads/fix/12-rebase-run-1)" = "$mine" ] && ok "D: the conflicted commits are kept on fix/12-rebase-run-1 on the remote" || ko "D: the commits are not kept on fix/12-rebase-run-1"
+[ "$($G -C "$T/c12" rev-parse HEAD)" = "$mine" ] && ok "D: the child's HEAD is not reset to the base" || ko "D: the child's HEAD was reset"
+head -1 "$T/st/review-fix_12-rebase-run-1.md" 2>/dev/null | /usr/bin/grep -q CHANGES && ok "D: a CHANGES verdict asks one rebase round on fix/12-rebase-run-1" || ko "D: no CHANGES verdict for fix/12-rebase-run-1"
 [ ! -e "$($G -C "$T/c12" rev-parse --git-path rebase-merge)" ] && ok "D: the failed rebase is aborted, so the worktree carries no half-rebase" || ko "D: the child is left mid-rebase"
-[ ! -e "$T/st/auto/disp-12" ] && /usr/bin/grep -qx 'o 3 Todo 12' "$T/board.log" && ok "D: a conflicting child is back in the queue" || ko "D: #12 was not requeued"
+[ -e "$T/st/auto/disp-12" ] && ! /usr/bin/grep -q 'Todo 12' "$T/board.log" && ok "D: a conflicting child is not requeued to Todo (no fresh build)" || ko "D: #12 was requeued"
 
+# The round rebases on the wave tip the child conflicted with, never on dev (#1344): the review names that ref, and the kept
+# branch carries a marker that names it too, so the work-branch passes read the kept state from the marker, not the branch name.
+/usr/bin/grep -q "Rebase this branch on origin/$W," "$T/st/review-fix_12-rebase-run-1.md" 2>/dev/null && ok "D: the rebase round is ordered on origin/$W, the tip it conflicted with" || ko "D: the round is not ordered on origin/$W"
+[ "$(cat "$T/st/auto/kept-fix_12-rebase-run-1" 2>/dev/null)" = "origin/$W" ] && ok "D: the kept branch is marked with the ref its round rebases on" || ko "D: no kept marker for fix/12-rebase-run-1"
+
+# D2 (#1344, the retry path): the wave tip moves between the first push and its repeat, and the repeat's rebase conflicts. The
+# first rebase rewrites the child's head, so the head the repeat keeps is not the one the child had at the entry. The review
+# must name the pushed head, the remote tip the fix pass compares with.
+w20saved=$($O rev-parse $W); child 20 g20 "$($O rev-parse $W)"
+rm -rf "$T/sib20"; $G clone -q "$T/origin.git" "$T/sib20" 2>/dev/null
+(cd "$T/sib20" && $G checkout -q -b s20 "origin/$W" && echo s > h20 && $G add h20 && $G -c user.email=a@b -c user.name=t commit -q -m "a sibling (Refs #21)" && $G push -q origin HEAD:refs/heads/$W)
+(cd "$T/sib20" && echo other > g20 && $G add g20 && $G -c user.email=a@b -c user.name=t commit -q -m "a conflicting sibling (Refs #22)" && $G push -q origin HEAD:refs/heads/sib20)
+SIB20=$($G -C "$T/sib20" rev-parse HEAD)
+# The D2 hook replaces the suite's own pre-receive: it is saved here and put back at the end of the block, so a later
+# scene never pushes through a hook that was written for this one.
+cp "$T/origin.git/hooks/pre-receive" "$T/pre-receive.d2saved" 2>/dev/null || : > "$T/pre-receive.d2saved"
+cat > "$T/origin.git/hooks/pre-receive" <<H
+#!/bin/bash
+reject=
+while read -r old new ref; do printf '%s\t%s\t%s\n' "\$old" "\$new" "\$ref" >> "$T/pushes.log"; [ "\$ref" = refs/heads/$W ] && [ -e "$T/hook20" ] && reject=1; done
+[ -n "\$reject" ] || exit 0
+rm -f "$T/hook20"; mkdir -p "$T/origin.git/refs/heads/wave"; printf '%s\n' "$SIB20" > "$T/origin.git/refs/heads/$W"; exit 1
+H
+chmod +x "$T/origin.git/hooks/pre-receive"
+: > "$T/hook20"; mine0=$($G -C "$T/c20" rev-parse HEAD); printf 'run-1\n' > "$T/st/auto/disp-20"
+r=$(en 20); rm -f "$T/hook20"
+kb=$($O rev-parse -q --verify refs/heads/fix/20-rebase-run-1); head20=$($G -C "$T/c20" rev-parse HEAD)
+[ -n "$kb" ] && [ "$kb" = "$head20" ] && [ "$kb" != "$mine0" ] && ok "D2: the repeat keeps the head it pushed, the one the first rebase wrote" || ko "D2: remote $kb, child $head20, first $mine0: '$r'"
+[ "$(cat "$T/st/review-fix_20-rebase-run-1.sha" 2>/dev/null)" = "$kb" ] && ok "D2: the review names the pushed remote tip, so the fix pass reads it" || ko "D2: review sha '$(cat "$T/st/review-fix_20-rebase-run-1.sha" 2>/dev/null)', remote tip $kb"
+case "$r" in *"WAVE HOLD #20"*"kept on fix/20-rebase-run-1"*) ok "D2: the repeat holds the child on the kept branch";; *) ko "D2: no kept hold line: '$r'";; esac
+[ "$(cat "$T/st/auto/kept-fix_20-rebase-run-1" 2>/dev/null)" = "origin/$W" ] && ok "D2: the retry path keeps the marker" || ko "D2: no marker on the retry path"
+# DEBT (#1344): a repeat on a kept branch that already holds a later commit of its round is the kept state, not a failed push:
+# no push is made, the branch keeps the round's commit, and the hold does not say the push failed.
+rm -rf "$T/rnd20"; $G clone -q "$T/origin.git" "$T/rnd20" 2>/dev/null
+(cd "$T/rnd20" && $G checkout -q fix/20-rebase-run-1 && echo round > r20 && $G add r20 && $G -c user.email=a@b -c user.name=t commit -q -m "the round (Refs #20)" && $G push -q origin HEAD:refs/heads/fix/20-rebase-run-1)
+R20=$($O rev-parse refs/heads/fix/20-rebase-run-1)
+r=$(en 20)
+[ "$($O rev-parse refs/heads/fix/20-rebase-run-1)" = "$R20" ] && ok "a repeat on a branch that holds its round's commit leaves the branch as it is" || ko "the round's commit was overwritten: '$r'"
+case "$r" in *"the push failed"*) ko "a kept branch reads as a failed push: '$r'";; *"kept on fix/20-rebase-run-1"*) ok "a repeat on a kept branch reads as kept";; *) ko "no kept line on the repeat: '$r'";; esac
+# A repeat while the round's branch has moved past the first keep reads the kept state and rewrites nothing: the round owns the
+# branch and its review (#1344).
+(cd "$T/rnd20" && echo round2 > r20b && $G add r20b && $G -c user.email=a@b -c user.name=t commit -q -m "the round, a commit later (Refs #20)" && $G push -q origin HEAD:refs/heads/fix/20-rebase-run-1)
+rev 20; rs20=$(cat "$T/st/review-fix_20-rebase-run-1.sha" 2>/dev/null)
+r=$(cd "$T/c20" && SG_WAVE_GATES=${GATES-true} bash "$T/s/wave.sh" enter run-1 20)
+[ -n "$rs20" ] && [ "$(cat "$T/st/review-fix_20-rebase-run-1.sha" 2>/dev/null)" = "$rs20" ] && ok "a repeat while the round is open never rewrites the round's review" || ko "the repeat rewrote the review: '$r'"
+case "$r" in *"not requeued"*) ok "a repeat while the round is open holds on the kept wording";; *) ko "the repeat's hold: '$r'";; esac
+cp "$T/pre-receive.d2saved" "$T/origin.git/hooks/pre-receive"; chmod +x "$T/origin.git/hooks/pre-receive"
+# The scene moved the wave branch and wrote its own state: both are put back so no later scene reads a wave tip it did not build.
+$O update-ref "refs/heads/$W" "$w20saved"
+rm -f "$T/st/auto/kept-"* "$T/st/auto/disp-20" "$T/st/review-fix_20-rebase-run-1."* "$T/st/review-fix_20-rebase-run-1".md \
+      "$T/st/auto/disp-12" "$T/st/review-fix_12-rebase-run-1."* "$T/st/review-fix_12-rebase-run-1".md
 # P (#1348): a push that fails for a reason git does not name as a rejection holds the child: no requeue, no marker move, and
 # the hold names git's last stderr line. A push git rejects as non-fast-forward still refuses, with git's line in the reason.
 # The child's push URL is a path that is no repository: the push fails in transport, and git names no rejection.
@@ -795,7 +851,7 @@ cat > "$T/origin.git/hooks/pre-receive" <<H
 reject=
 while read -r old new ref; do [ "\$ref" = refs/heads/$W40 ] && [ -e "$T/hook40" ] && reject=1; done
 [ -n "\$reject" ] || exit 0
-rm -f "$T/hook40"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
+rm -f "$T/hook40"; mkdir -p "$T/origin.git/refs/heads/wave"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
 H
 chmod +x "$T/origin.git/hooks/pre-receive"
 child 400 g400 "origin/$W40"; REV_BASE=$W40 rev 400; : > "$T/hook40"; : > "$T/gl40"
@@ -813,7 +869,7 @@ cat > "$T/origin.git/hooks/pre-receive" <<H
 reject=
 while read -r old new ref; do [ "\$ref" = refs/heads/$W40 ] && [ -e "$T/hook40" ] && reject=1; done
 [ -n "\$reject" ] || exit 0
-rm -f "$T/hook40"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
+rm -f "$T/hook40"; mkdir -p "$T/origin.git/refs/heads/wave"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
 H
 : > "$T/hook40"; before=$SIB
 r=$(cd "$T/c401" && SG_WAVE_GATES="[ -e '$T/g401' ] && { echo red after the rebase; exit 1; }; touch '$T/g401'" bash "$T/s/wave.sh" enter run-40 401 2>&1); rc=$?

@@ -7,6 +7,11 @@
 . "$(dirname "$0")/env.sh"; repo=$SG_REPO; [ "$#" = 3 ] && { repo=$1; shift; }
 br=$1 iss=$2; key=$(printf '%s' "$br" | tr / _); f="$SG_STATE/review-$key.md"
 head -1 "$f" 2>/dev/null | grep -q CHANGES || exit 0
-echo "One child, a FIX RUN on the work branch $br for GitHub issue #$iss (repo $repo). In your worktree, check out origin/$br and commit on top; push nothing and open no pull request: once the run ends, the loop pushes the run's head to $br (fast-forward only). Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
+# The kept marker names the ref the round rebases on (#1344): the branch name alone proves nothing, so a hand-made
+# fix/*-rebase-* branch takes the ordinary round.
+km="$SG_STATE/auto/kept-$key"
+if [ -s "$km" ]; then work="REBASE ROUND: the branch's commits were kept when they conflicted with the wave tip (#1344). In your worktree, check out origin/$br, rebase it on $(head -1 "$km"), resolve each conflict in the files the review names so the work is kept, and commit; push nothing and open no pull request: once the run ends, the loop publishes the run's head to $br under a lease on the tip it reviewed."
+else work="check out origin/$br and commit on top; push nothing and open no pull request: once the run ends, the loop pushes the run's head to $br (fast-forward only)."; fi
+echo "One child, a FIX RUN on the work branch $br for GitHub issue #$iss (repo $repo). In your worktree, $work Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
 echo; echo "[review] The latest automated review of the branch says VERDICT: CHANGES. Address every finding (fix it, or say why it is wrong, with file:line evidence):"
 tail -n +2 "$f"

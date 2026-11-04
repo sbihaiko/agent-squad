@@ -103,6 +103,7 @@ FIXTURE = {
     "suggest": {k: [{"id": x, "text": x.upper()} for x in "abcd"] for k in
                 ("coding_models", "review_models", "vision_models", "router_models")},
     "boxes": {}, "outside": {}, "chain": {}, "version": 1,
+    "file": "/p/models.json", "counts": {"on": 2, "at_limit": 1},   # the shape models_get() hands the panel (#1278)
 }
 
 
@@ -114,9 +115,10 @@ def _node(hub, body):
     esc = re.search(r"^const esc=.*$", page, re.M).group(0)
     setv = re.search(r"^// SETV\{.*?^// \}SETV$", page, re.M | re.S)
     assert setv, "the page carries no SETV block"
+    sett = _between(page, "// SETT{", "// }SETT")   # the Now/Settings builders the panel draws through (#1278)
     panel = _between(page, "let mdl=null", "async function mdlLoad()")
     stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
-    out = subprocess.run(["node", "-"], input="\n".join([stub, esc, setv.group(0), panel, body]),
+    out = subprocess.run(["node", "-"], input="\n".join([stub, esc, setv.group(0), sett, panel, body]),
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
@@ -169,6 +171,27 @@ def test_the_chain_rows_carry_no_switch_and_no_position_words(hub):
     assert "primary" not in b and "fallback" not in b
 
 
+def test_the_models_theme_draws_read_only_tiles_and_editable_rows(hub):
+    """#1278: the Now block is tiles only (a key, a value, one tone), and every control sits in the Settings block."""
+    b = _render(hub)["b"]
+    now = b[b.index("data-blk=now"):b.index("data-blk=settings")]
+    settings = b[b.index("data-blk=settings"):]
+    assert re.findall(r"<span class=tk>(.*?)</span>", now) == ["Models on", "At limit", "Last coding", "Repository chains"]
+    for ctl in ("<input", "<select", "<textarea", "<button"):
+        assert ctl not in now, f"the Models Now block carries {ctl}"
+    assert 'class="tile ok"' in now and 'class="tile err"' in now, "the tiles lost their tones"
+    for ctl in ('data-ef="coding_models|a"', 'data-hr="coding_models|b"', 'data-add="coding_models"'):
+        assert ctl in settings, ctl
+
+
+def test_the_models_chip_counts_what_the_table_counts(hub):
+    b = _render(hub)["b"]
+    assert "data-blk=now" in b
+    got = _node(hub, f"mdl={json.dumps(FIXTURE)};mdlSrv=JSON.stringify(mdl);mdlRender();"
+                     'console.log(JSON.stringify([$("#mdlsr").textContent,$("#mdlnav").textContent]))')
+    assert got == ["2 on · 1 at limit", "2 on · 1 at limit"], got
+
+
 def test_one_intro_line_and_a_how_it_works_disclosure(hub):
     b = _render(hub)["b"]
     assert b.count('class="note lead"') == 1
@@ -191,10 +214,10 @@ def test_an_unchanged_panel_has_no_diff(hub):
     assert _node(hub, f"const o={json.dumps(FIXTURE)};console.log(JSON.stringify(mdlDiffLines(o,o,MLAB)))") == []
 
 
-def test_a_reset_reads_as_time_left_or_unknown(hub):
-    got = _node(hub, "console.log(JSON.stringify([rstText(1000+4.5*86400,1000),rstText(1000+6*3600,1000),"
-                     "rstText(1000+20*60,1000),rstText(null,1000),rstText(900,1000)]))")
-    assert got == ["resets in 4.5 d", "resets in 6 h", "resets in 20 min", "reset unknown", "resets now"]
+def test_a_span_reads_as_days_hours_or_minutes(hub):
+    """Re-anchored (#1278): the one span function replaced rstText, and it answers every duration the page draws."""
+    got = _node(hub, "console.log(JSON.stringify([span(4.5*86400),span(6*3600),span(20*60),span(59),span(0)]))")
+    assert got == ["4d 12h", "6h 0m", "20m", "59s", "0s"]
 
 
 def test_a_diff_line_names_its_theme_once(hub):
@@ -209,7 +232,8 @@ def test_access_names_the_phone_check_command(hub):
         pytest.skip("node is required")
     acc = re.search(r"^const accHtml=.*?\};$", mod.PAGE, re.M | re.S).group(0)
     esc = re.search(r"^const esc=.*$", mod.PAGE, re.M).group(0)
-    out = subprocess.run(["node", "-"], input=f"{esc}\n{acc}\nconsole.log(accHtml({{access:{{}}}}))",
+    sett = _between(mod.PAGE, "// SETT{", "// }SETT")
+    out = subprocess.run(["node", "-"], input=f"{esc}\n{sett}\n{acc}\nconsole.log(accHtml({{access:{{}}}}))",
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert "/agent-squad:start-mobile" in out.stdout

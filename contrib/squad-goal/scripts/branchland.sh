@@ -70,6 +70,12 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base gaid
     /usr/bin/git -C "$wt/tip" rebase --abort >/dev/null 2>&1; /usr/bin/git -C "$wt/tip" reset -q --hard >/dev/null 2>&1
     /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
     printf 'Status update — BRANCHLAND CONFLICT %s: %s conflicts with %s %s (rebase of %s). The branch does not land until it is rebased.\n' "$br" "$files" "$land" "${base:-?}" "${sha:0:9}" > "$(sg_cq_status "$i" "branchland$$")"
+    # A rebase branch kept by a wave conflict (#1344) gets one rebase round: a CHANGES verdict on its tip, which branchfixpass.sh
+    # dispatches as a fix run on the same branch. Its review is read at this tip only, so the review pass does not replace it.
+    rbk=$(printf '%s' "$br" | tr / _)
+    if [ -s "$SG_STATE/auto/kept-$rbk" ]; then rbref=$(head -1 "$SG_STATE/auto/kept-$rbk")
+      printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on %s, resolve the conflict in each file, keep the work, and push.\n' \
+        "$land" "$files" "$rbref" > "$SG_STATE/review-$rbk.md"; printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"; rm -f "$SG_STATE/review-$rbk.base"; fi
     say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; }
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.
@@ -169,6 +175,7 @@ EOT
   col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed   # the shipped vocabulary has no Done (#468)
   $BOARD "$SG_OWNER" "$SG_PROJECT" "$col" "$i" >/dev/null
   printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$i" >> "$SG_STATE/landed.tsv"   # the ledger the hub's last-landing fact reads: the landed branch is deleted by the push, so the remote no longer names it. The board draws no lane for it (#384): a landed branch is read from its issue card
+  rm -f "$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"   # a landed rebase round's branch is gone, so its kept marker is too (#1344)
   sg_base_red "$land" >/dev/null   # the base right after the landing (#786): a red head it lands on is reported now, not at the next landing
   echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"
 done <<EOT

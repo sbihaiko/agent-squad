@@ -153,7 +153,7 @@ def _pieces():
     state = SRC[SRC.index("// The open groups belong") : SRC.index("function drawList(")]
     assert "openGroup" in state, "the open state does not live beside drawList any more"
     acc = SRC[SRC.index("const ACC=") :]
-    acc = acc[: acc.index("mdlLoad();") + len("mdlLoad();")]
+    acc = acc[: acc.index("if(RO){")]   # the accordion state and its boot; the read-only pass is not part of it (#1278)
     return [
         _decl(SRC, "usd"),
         _decl(SRC, "age"),

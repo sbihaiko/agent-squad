@@ -150,4 +150,50 @@ r=$(OPEN="22 23" LABELED="22=loop-bug:other" fp)
 r=$(OPEN="24" LABELED="24=bug" fp)
 [ "$(n gui/24-pb)" = 1 ] && ok "a plain bug gets one fix run" || ko "a plain bug dispatched $(n gui/24-pb) times: '$r'"
 case "$r" in *"BRANCHFIX SKIP"*) ko "a plain bug was skipped: '$r'";; *) ok "a plain bug prints no skip line";; esac
+# 19) (#1344, BLOCKING 1) a kept rebase branch (its kept marker names the ref the round rebases on) gets a round whose head is no
+#     fast-forward of the reviewed tip: the pass pushes it with a lease on the reviewed sha, and the round's wording names that ref.
+: > "$T/launch.log"; rb=fix/30-rebase-r1
+push "$rb"; rev "$rb" CHANGES "g.sh:1 the rebase conflicts"; echo origin/dev > "$T/st/auto/kept-fix_30-rebase-r1"; K=$($O rev-parse "$rb")
+r=$(OPEN="30" fp)
+q=$(/usr/bin/grep "work branch $rb " "$T/launch.log")
+[ "$(n "$rb")" = 1 ] && ok "a kept rebase branch gets one fix run" || ko "a kept rebase branch dispatched $(n "$rb") times: '$r'"
+case "$q" in *"REBASE ROUND"*"rebase it on origin/dev"*) ok "the round's wording names the ref the round rebases on";; *) ko "the round's wording: '$q'";; esac
+rid=$(cat "$T/st/auto/branchfix-fix_30-rebase-r1-"* 2>/dev/null)
+tg2=$T/tg2; rm -rf "$tg2"; $G clone -q "$T/origin.git" "$tg2" 2>/dev/null
+(cd "$tg2" && $G checkout -q -b "squad/run/$rid" origin/dev && echo rb > rb30 && $G add rb30 && $G -c user.email=a@b -c user.name=t commit -q -m "the round (Refs #30)")
+RH=$($G -C "$tg2" rev-parse HEAD); mkdir -p "$T/co/runs/$rid"
+printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "pass", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg2" "$rid" "$RH" > "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="30" fp)
+[ "$($O rev-parse "refs/heads/$rb")" = "$RH" ] && ok "the rebased round is pushed to the kept branch (lease on the reviewed sha)" || ko "the rebased round was not pushed: remote $($O rev-parse "refs/heads/$rb") want $RH: '$r'"
+case "$r" in *"BRANCHFIX PUSH $rb"*) ok "the round's push is named";; *) ko "no push line for the round: '$r'";; esac
+# 20) (#1344, DEBT) the wording follows the kept marker, not the branch name: a hand-made fix/*-rebase-* branch with no marker gets the
+#     ordinary round.
+: > "$T/launch.log"; push fix/31-rebase-hand; rev fix/31-rebase-hand CHANGES "m.sh:1 fix"; r=$(OPEN="31" fp)
+q=$(/usr/bin/grep "work branch fix/31-rebase-hand " "$T/launch.log")
+case "$q" in *"REBASE ROUND"*) ko "a hand-made rebase-named branch got the rebase round: '$q'";; *"check out origin/fix/31-rebase-hand and commit on top"*) ok "a hand-made rebase-named branch gets the ordinary round";; *) ko "no ordinary round for the hand-made branch: '$q'";; esac
+# 21) (#1344, BLOCKING 2) the lease is on the sha the round was dispatched for: a writer that pushed to the branch after the
+#     review is never clobbered, and the round is refused by name.
+: > "$T/launch.log"; rb=fix/32-rebase-r1
+push "$rb"; rev "$rb" CHANGES "g.sh:1 the rebase conflicts"; echo origin/dev > "$T/st/auto/kept-fix_32-rebase-r1"; K=$($O rev-parse "$rb")
+r=$(OPEN="32" fp); rid=$(cat "$T/st/auto/branchfix-fix_32-rebase-r1-"* 2>/dev/null)
+tg4=$T/tg4; rm -rf "$tg4"; $G clone -q "$T/origin.git" "$tg4" 2>/dev/null
+(cd "$tg4" && $G checkout -q -b "squad/run/$rid" origin/dev && echo rb > rb32 && $G add rb32 && $G -c user.email=a@b -c user.name=t commit -q -m "the round (Refs #32)")
+RH=$($G -C "$tg4" rev-parse HEAD); mkdir -p "$T/co/runs/$rid"
+printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "pass", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg4" "$rid" "$RH" > "$T/co/runs/$rid/record.jsonl"
+(cd "$T/w" && $G checkout -q "$rb" && echo w > w32 && $G add w32 && $G -c user.email=a@b -c user.name=t commit -q -m "a writer (Refs #32)" && $G push -q origin "$rb")
+W=$($O rev-parse "$rb")
+r=$(OPEN="32" fp)
+[ "$($O rev-parse "refs/heads/$rb")" = "$W" ] && ok "a writer's push after the review is not clobbered by the round" || ko "the round clobbered a later push: remote $($O rev-parse "refs/heads/$rb") want $W: '$r'"
+case "$r" in *"moved past the reviewed sha"*) ok "the refused round names the branch that moved";; *) ko "no moved-branch line: '$r'";; esac
+# 22) (#1344, BLOCKING 1) a fix run that recorded no pass outcome names no head of its own: the target branch is never taken
+#     as the round's head, so the kept branch is never replaced by the base.
+: > "$T/launch.log"; rb=fix/33-rebase-r1
+push "$rb"; rev "$rb" CHANGES "h.sh:1 the rebase conflicts"; echo origin/dev > "$T/st/auto/kept-fix_33-rebase-r1"; K=$($O rev-parse "$rb")
+r=$(OPEN="33" fp); rid=$(cat "$T/st/auto/branchfix-fix_33-rebase-r1-"* 2>/dev/null)
+tg5=$T/tg5; rm -rf "$tg5"; $G clone -q "$T/origin.git" "$tg5" 2>/dev/null; (cd "$tg5" && $G checkout -q dev && $G branch -q -f "squad/run/$rid" dev)   # the run's target branch, never advanced past the base
+mkdir -p "$T/co/runs/$rid"
+printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "verdict", "verdict": "failed"}\n' "$tg5" "$rid" > "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="33" fp)
+[ "$($O rev-parse "refs/heads/$rb")" = "$K" ] && ok "a run that added no head leaves the kept branch as it is" || ko "the kept branch moved to $($O rev-parse "refs/heads/$rb"), want $K"
+case "$r" in *"(rebase round"*) ko "a run with no head was pushed as a round: '$r'";; *) ok "a run with no head pushes no round";; esac
 exit $fail

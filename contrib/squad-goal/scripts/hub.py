@@ -1062,7 +1062,7 @@ def limited_until(txt, now=None):
     return t if t > (time.time() if now is None else now) else None
 
 def _rel_span(x):
-    """A span in the page's own `rel()` shape: `3d 2h`, `2h 14m`, `5m` — the same three rungs, never a fourth. A countdown
+    """A span in the page's own `span()` shape: `3d 2h`, `2h 14m`, `5m` — the same three rungs, never a fourth. A countdown
     keeps them: the reader plans by the reset time, and the page's subscription panel draws the same span. An AGE does not
     (`_age`): three rungs on `16h 13m ago` is a precision nobody reads across the room."""
     d, h, m = int(x // 86400), int(x % 86400 // 3600), int(x % 3600 // 60)
@@ -1241,7 +1241,7 @@ def _subs_pct(p):
     return f"{p:.1f}%" if 0 < p < 10 else f"{int(p + 0.5)}%"
 
 def _subs_reset(resets, now):
-    """The time to a reset in the page's own `rel()` shape (`3h 20m`), without its `resets in` lead — the token already
+    """The time to a reset in the page's own `span()` shape (`3h 20m`), without its `resets in` lead — the token already
     says what the number is. A time the hub cannot read is `?`; one already past reads `now`, as the page reads it."""
     if isinstance(resets, bool) or not isinstance(resets, (int, float)): return "?"
     x = resets - now
@@ -1430,7 +1430,8 @@ def limits_read():
     s = limits_settings(path)
     hour = burn_read(hours=1)
     window = burn_read(hours=s["window"])
-    return {"profile": str(path) if path else None, "guard": s["guard"], "cap": s["cap"], "factor": s["factor"],
+    return {"profile": str(path) if path else None, "file": str(path) if path else None,
+            "guard": s["guard"], "cap": s["cap"], "factor": s["factor"],
             "window_h": s["window"], "pause_line": limit_line(s["cap"], s["factor"], s["window"]),
             "hour_burn": (hour or {}).get("total"), "window_burn": (window or {}).get("total"),
             "paused": (STATE / "token-pause").exists(), "last_change": limits_last()}
@@ -1560,8 +1561,9 @@ def slack_read(path):
     return cfg
 
 def slack_view(path):
-    """What the page draws: the saved settings, and the defaults a new channel starts from."""
-    return {**slack_read(path), "new_channel": SLACK_NEW_CHANNEL}
+    """What the page draws: the saved settings, the defaults a new channel starts from, and the file a Save writes
+    (#1278: the Save dialog names each path it would touch)."""
+    return {**slack_read(path), "new_channel": SLACK_NEW_CHANNEL, "file": str(path)}
 
 def _slack_int(v, lo, hi):
     if isinstance(v, bool): return None
@@ -2022,12 +2024,31 @@ def loop_started_after(at):
     try: return int(_read(LOOP_STARTED).split()[0]) > int(when)
     except (ValueError, IndexError): return False
 
+def loop_health(live, now=None):
+    """The Loop theme's Now tiles (#1278): how many runs and gates are live, how long until the watch cycle's next beat,
+    and how long a pending start has left. Each value is a fact one reader already measures; a missing cycle is None,
+    never zero, so the tile says "no cycle yet" instead of "0s"."""
+    now = time.time() if now is None else now
+    cyc = _cycle_state(now)
+    left = None
+    if cyc and cyc["secs"]:
+        left = int(round(cyc["end"] + cyc["secs"][-1] - now))
+    starting = None
+    try:
+        age = now - LOOP_STARTING.stat().st_mtime
+        if age < LOOP_START_WINDOW: starting = int(LOOP_START_WINDOW - age)
+    except OSError: pass
+    return {"live_runs": len(live.get("runs") or []), "live_gates": len(live.get("gates") or []),
+            "cycle_left": left, "starting_left": starting, "unknown": live.get("unknown", "")}
+
 def loop_view(a):
     last = (loop_audit_last(1) or [{}])[-1]
     tn = tailnet_block()
     write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
     state = loop_state(last)
-    return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
+    live = loop_live()
+    return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": live,
+            "health": loop_health(live),   # the Loop theme's Now tiles (#1278)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
@@ -4908,6 +4929,25 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #sbar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin-top:12px;max-width:1120px;background:var(--panel);border-top:1px solid var(--line);z-index:2}#sbar[hidden]{display:none}
 #sbar.dirty{background:var(--tint-warn);border-top-color:var(--tint-warn-line)}#sbar button{height:var(--ctl-h);padding:0 12px}#sbar.dirty #ssave{background:var(--warn);color:var(--on-tone)}#schg{color:var(--mute);font-size:var(--fs-caption)}#schg.err{color:var(--err);font-weight:600}#schg.ok{color:var(--ok)}
 #sdlg{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-lg);max-width:min(720px,94vw)}#sdpre{white-space:pre-wrap;font-size:var(--fs-caption);max-height:50vh;overflow:auto}#sdlg .sact{display:flex;gap:8px}
+/* Settings (#1278): every theme draws the same two blocks. Now holds read-only facts as tiles; Settings holds editable rows
+   only, label left and control right. Tones are the three the hub names plus the neutral one it names for a value it cannot
+   verify, so a tile never invents a ladder of its own. The tailnet view is read only: every control under the panels is off
+   and the reason sits above them. */
+#tab-set .blkh{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:0 0 4px}
+#tab-set .setblk{margin:0 0 14px}
+#tab-set .now{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:0 0 10px}
+#tab-set .tile{background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);padding:6px 8px;min-width:0;font-size:var(--fs-caption)}
+#tab-set .tile .tk{display:block;color:var(--mute);font-weight:600}
+#tab-set .tile .tv{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+#tab-set .tile.ok .tv{color:var(--ok)}#tab-set .tile.warn .tv{color:var(--warn)}#tab-set .tile.err .tv{color:var(--err)}#tab-set .tile.neutral .tv{color:var(--fg)}
+#tab-set .setrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);min-width:0}
+#tab-set .setrow .sl{min-width:0;font-size:var(--fs-body);color:var(--fg)}
+#tab-set .setrow .sc{justify-self:end;min-width:0;max-width:100%}
+#tab-set .setrow .sc small{color:var(--mute);font-size:var(--fs-caption)}
+#tab-set input,#tab-set select{font-size:var(--fs-body);height:var(--ctl-h)}
+#tab-set textarea{font-size:var(--fs-body);min-height:var(--ctl-h)}
+#tab-set .ro{color:var(--warn);background:var(--tint-warn);border:1px solid var(--tint-warn-line);border-radius:var(--radius-md);padding:6px 10px;margin:0 0 10px;max-width:1120px}#tab-set .ro[hidden]{display:none}
+@media (max-width:600px){#tab-set .now{grid-template-columns:1fr}}
 .mtab{width:100%;border-collapse:collapse;font-size:var(--fs-caption);margin-bottom:8px}.mtab th{text-align:left;color:var(--mute);font-weight:600;padding:4px 6px;border-bottom:1px solid var(--line)}.mtab td{padding:4px 6px;border-bottom:1px solid var(--line)}.mtab tr.off .mn{text-decoration:line-through;color:var(--mute)}
 .stc{display:inline-block;font-size:var(--fs-caption);border:1px solid var(--line);border-radius:var(--radius-sm);padding:0 5px;color:var(--mute)}.stc.off{color:var(--warn);border-color:var(--tint-warn-line)}.stc.lim{color:var(--err);border-color:var(--err)}.mr.off .mn{text-decoration:line-through}.mr.rmk .mn,.mr.rmk .pv{text-decoration:line-through;opacity:.55}
 .madd select{flex:1;min-width:0;height:var(--ctl-h);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}#mbody .lead{margin:4px 0 8px}#mbody details.hlp{margin-top:10px}#mbody details.hlp summary{cursor:pointer;color:var(--acc)}
@@ -4992,14 +5032,15 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 </section>
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small>token guard and cap</small></button><button data-sp=sub>Subscriptions<small>plan prices and quota</small></button><button data-sp=mdl>Models &amp; chains<small>who does the work, when</small></button><button data-sp=slk>Communication<small>Slack, for this profile</small></button><button data-sp=lop>Loop<small>start, stop</small></button><button data-sp=acc>Access<small>tailnet and phone</small></button></nav>
-<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=lop>Loop</option><option value=acc>Access</option></select></label>
-<details id=lim class=sp data-sp=lim open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
-<details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr></span></summary><div class=sb><div id=subs></div></div></details>
-<details id=mdl class=sp data-sp=mdl open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
-<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>start, stop</span></summary><div class=sb id=lopb></div></details>
-<details id=acc class=sp data-sp=acc open><summary>Access<span class=sr>tailnet and phone</span></summary><div class=sb><div id=accb></div><div class=kr><span class=l>This device</span><a id=mobile-link href="#">mobile view</a></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
+<p class=ro id=ro hidden></p>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>loopback</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
+<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>off</span></summary><div class=sb id=lopb></div></details>
+<details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr>on</span></summary><div class=sb id=lbody></div></details>
+<details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
+<details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
+<details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
+<details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>loopback</span></summary><div class=sb><div id=accb></div><div class=kr><span class=l>This device</span><a id=mobile-link href="#">mobile view</a></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
 <dialog id=sdlg aria-label="Confirm the settings change"><b>Save these settings?</b><pre id=sdpre></pre><p class=m>Written to the project files. Runs already started keep the chains they recorded.</p><div class=sact><button id=sdok>Confirm and save</button><button id=sdno>Back</button></div></dialog>
@@ -5025,7 +5066,6 @@ sideWide.addEventListener("change",()=>sideShow(ls.side));
 sideShow(ls.side);
 // }SIDEBAR
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
-const usdc=v=>v==null?"—":"$"+(+v).toFixed(2);   // plan prices carry cents, so a month's cash total keeps them: usd would round $282.23 to $282
 const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
 // a run's name says what it is for: "fix PR #1202 · #1178", "implement #1179, #1182", "dispatch #31, #25"; the hub computes
 // that string (hub.run_label) and the run id moves to the detail line -- the page renders the value, it holds no rule of its own
@@ -5058,6 +5098,7 @@ function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu
 // ceiling is red, and that is `LOAD_ERR`, substituted when the page is served. A source the hub cannot see stays `?`:
 // a missing reading is not a high one. Red sits above the older, machine-wide amber of `#inst.warn`, and never replaces it.
 const LOAD_ERR=Number("__LOADERR__");
+const RO=("__READONLY__"==="true"),RO_WHY="__ROWHY__";   // #1278: a tailnet reader sees every control disabled and why
 function ldNum(v){if(v===null||v===undefined||v===""||typeof v==="boolean")return null;const f=Number(v);return(f!==f||f<0)?null:Math.min(f,100)}
 function ldRound(f){const fl=Math.floor(f),fr=f-fl;return fr>.5?fl+1:fr<.5?fl:fl+(fl%2)}   // half to even, exactly as `:.0f` rounds
 function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!==null&&f>=LOAD_ERR}}
@@ -5193,7 +5234,6 @@ function openRows(o){return `<h4>Open branches <small>oldest first</small></h4>`
   +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
    :`<div class=kr><span class=l>none open</span></div>`)}
 // SETV{ the settings view's pure rules (#913): the reset text, the add list, the diff before save. Run in node by tests.
-function rstText(t,now){if(!t)return"reset unknown";const x=t-now;if(x<=0)return"resets now";if(x>=86400)return`resets in ${(x/86400).toFixed(1)} d`;if(x>=3600)return`resets in ${Math.round(x/3600)} h`;return`resets in ${Math.max(1,Math.round(x/60))} min`}
 function addOpts(sug,chain,isOff){return (sug||[]).filter(s=>!(chain||[]).includes(s.id)&&!isOff(s.id))}
 function chainDesc(d,k){return (d[k]||[]).map(m=>{const e=((d.efforts||{})[k]||{})[m]||"",h=((d.hours||{})[k]||{})[m]||"";return [m,e&&e!=="medium"?e:"",h||"always"].filter(Boolean).join(" · ")}).join(" → ")}
 function mdlDiffLines(old,cur,lab){const T="Models & chains · ",out=[],ids=[...new Set([...(old.models||[]),...(cur.models||[])].map(r=>r.id))];
@@ -5235,17 +5275,23 @@ function mdlChip(st){return st==="on"?"":`<span class="stc${String(st).startsWit
 function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${r.label?esc(r.label):mdlName(x,r.id)}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
 const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. A row may also name days and UTC, clauses joined by <code>;</code>: <code>mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC</code> is DeepSeek off-peak. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>Loading the data.</span>";return}
- {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
+ const c=mdl.counts||{on:0,at_limit:0},lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",lx=lc?mdlBox("coding_models",lc):MBOX0;
+ setChip("mdl",`${c.on} on · ${c.at_limit} at limit`);   // a settings fact, never the last run's model (#1278)
 
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
  const rd=mdl.repo_diff||[],rdBan=rd.length?`<div class="mx err" role=status><b>The repository chains differ from the live ones.</b> Run models-apply.sh to apply them.${rd.map(d=>`<div class=mx>${esc(MLAB[d.chain+"_models"]||d.chain)}: repository ${esc(d.repo.join(", "))} · live ${esc(d.live.join(", "))}</div>`).join("")}</div>`:"";
- b.innerHTML=chBan+rdBan+`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
+ b.innerHTML=chBan+rdBan+setNow("mdl",[
+  setTile("Models on",c.on,c.on?"ok":"neutral"),
+  setTile("At limit",c.at_limit,c.at_limit?"err":"ok"),
+  setTile("Last coding",lx.llm?`${lx.llm} · ${lc}`:lc,"neutral"),
+  setTile("Repository chains",rd.length?`${rd.length} differ`:"in sync",rd.length?"err":"ok")])
+ +setSettings("mdl",[`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
  +`<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+`<h3>Chains</h3>`
  +Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]}</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),mof=mdlOffM(m),o=(mdl.outside&&mdl.outside[k]||{})[m],st=((mdl.models||[]).find(z=>z.id===m)||{}).state;
   const rmk=mdlRmd(k,m),live=mdl[k].filter(z=>!mdlRmd(k,z)).length;
   return`<div class="mr${cof||mof?" off":""}${rmk?" rmk":""}" data-row="${k}|${esc(m)}"><span class=rk>${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${esc(x.text)}">${mdlRoute(x,"")}${mdlSub(x)}</span>${mof?`<span class="stc off">off (model)</span>`:cof?`<span class="stc off">off (chain)</span>`:""}${st==="at limit"?`<span class="stc lim">at limit</span>`:""}${k==="review_models"?chTag(m):""}${o?`<span class=bk title="this row runs only inside its hours">outside hours ${esc(o)}</span>`:""}<label class=el>effort <select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" aria-label="${esc(m)}: effort" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select></label><label class=el>hours <input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" aria-label="${esc(m)}: hours" title="hours this model may run (HH-HH local, wraps midnight; or days, ranges and UTC; empty = always)"></label><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} aria-label="move up" title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} aria-label="move down" title="move down">↓</button><button class=x data-rm="${k}|${i}" ${rmk||live>1?"":"disabled"} aria-label="${rmk?"undo remove":"remove"} ${esc(m)}" title="${rmk?"keep this model in the chain":"remove from chain on Save"}">${rmk?"↺":"✕"}</button></span></span></div>`}).join("")
   +`<div class=madd><select data-add="${k}" aria-label="${MLAB[k]}: add a model"><option value="">+ add a model…</option>${addOpts((mdl.suggest||{})[k],mdl[k],mdlOffM).map(s=>`<option value="${esc(s.id)}">${esc(s.text)}</option>`).join("")}</select></div></div>`).join("")
-  +MHELP+(mdlMsg?`<div class="mx${mdlMsg.startsWith("!")?" err":""}" role=status>${esc(mdlMsg.replace(/^!/,""))}</div>`:"");
+  +MHELP])+(mdlMsg?`<div class="mx${mdlMsg.startsWith("!")?" err":""}" role=status>${esc(mdlMsg.replace(/^!/,""))}</div>`:"");
  if(typeof setBar==="function")setBar()}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRmk={};mdlRender()}catch(e){}}
 /* One write route for both places (SPEC 889 #920): a chip flips at once; the table stages its switch until Save. */
@@ -5267,15 +5313,19 @@ let limS=null,limMsg="",limDiff=null,limPend=null;   // limPend holds the typed 
 const limN=v=>v==null?"—":tk(v);
 const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const s=limS,v=limPend||s;const sr=$("#limsr");if(sr)sr.textContent=s.guard==="off"?"off":s.paused?"paused":"on";
- let h=`<div class=kr><span class=l>token guard</span><select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select></div>`
- +`<div class=kr><span class=l>daily token cap</span><input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap"></div>`
- +`<div class=kr><span class=l title="the hourly burn that pauses dispatch, as a multiple of the cap's hourly share">pause factor</span><input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="pause factor"></div>`
- +`<div class=kr><span class=l>dispatch pauses over</span><b>${limN(s.pause_line)}<small>tokens/h</small></b></div>`
- +`<div class=kr><span class=l>last hour</span><b${s.hour_burn==null?" class=m":""}>${limN(s.hour_burn)}<small>tokens</small></b></div>`
- +`<div class=kr><span class=l>window <small>${s.window_h} h</small></span><b${s.window_burn==null?" class=m":""}>${limN(s.window_burn)}<small>tokens</small></b></div>`
- +`<div class=kr><span class=l>dispatch now</span><b class="${s.paused?"w":"ok"}">${s.paused?"paused":"running"}</b></div>`
- +`<div class=kr><span class=l>last change</span><span class=lv title="${esc(s.profile||"")}">${s.last_change?esc(s.last_change.at+" · "+s.last_change.text):"none recorded"}</span></div>`;
+ const s=limS,v=limPend||s;setChip("lim",s.guard==="off"?"off":s.paused?"paused":"on");
+ let h=setNow("lim",[
+  setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
+  setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
+  setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
+  setTile("Pauses over",limN(s.pause_line)+" tokens/h","neutral"),
+  setTile("Last change",s.last_change?moment(s.last_change.at)+" · "+s.last_change.text:"none recorded","neutral"),
+ ],`Profile: ${esc(s.profile||"none in force")}`)
+ +setSettings("lim",[
+  setRow("token guard",`<select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select>`),
+  setRow("daily token cap",`<input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap">`),
+  setRow("pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="pause factor">`,"the hourly burn that pauses dispatch, as a multiple of the cap's hourly share"),
+ ]);
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg="";limRender()}catch(e){limMsg="!load failed";limRender()}}
@@ -5305,27 +5355,27 @@ const slChan=(c,i)=>{const on=c.watch?"":" disabled",n=slA(c.name);
  +`<span class=swc role=cell><button data-slrm="ch:${i}" aria-label="remove ${n}">Remove</button></span></div>`};
 const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc(p.name)}</b></span>`
  +`<span role=cell data-l="role"><select data-sl="pp:${i}:role" aria-label="${slA(p.name)}: role">${slOpts(Object.keys(SL_ROLE),p.role)}</select></span>`
- +`<span class=c1 role=cell data-l="the agent">${esc(SL_ROLE[p.role])}</span>`
  +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
+const slLegend=()=>Object.keys(SL_ROLE).map(k=>`<b>${esc(k)}</b>: ${esc(SL_ROLE[k])}`).join("; ")+".";   // each role stated once, never per row
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const d=slDraft,sr=$("#slksr");if(sr)sr.textContent=slS.connection;
- let h=`<div class=kr><span class=l>connection</span><b class="${slS.connection==="connected"?"ok":"w"}">${esc(slS.connection)}</b></div>`
- +`<p class=m>Posts through your own account by the Claude Slack connector. No token is stored here.</p>`
- +`<div class=kr><span class=l>prefix</span><input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix"></div>`
- +`<div class=kr><span class=l>default language</span><select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select></div>`
- +`<div class=kr><span class=l>read every</span><span><input data-sl=tick type=number min=1 max=30 value="${slA(d.tick)}" aria-label="read every, minutes"> min</span></div>`
- +`<div class=kr><span class=l>up to, when quiet</span><span><input data-sl=max type=number min=2 max=120 value="${slA(d.max)}" aria-label="up to, minutes"> min</span></div>`
- +`<div class=kr><span class=l>quiet hours</span><input data-sl=quiet value="${slA(d.quiet)}" placeholder="always on" aria-label="quiet hours, HH-HH"></div>`
- +`<div class=kr><span class=l>anyone not listed</span><select data-sl=other aria-label="anyone not listed"><option value=ignore${d.other==="ignore"?" selected":""}>is ignored</option><option value=reply${d.other==="reply"?" selected":""}>gets a fixed reply</option></select></div>`
- +`<h4>Channels</h4><div class=slt role=table><div class="slc slh" role=row><span>Channel</span><span>Language</span><span>Watch</span><span>Thread only</span><span>Mention only</span><span>Announce</span><span></span></div>`
- +(d.channels.map(slChan).join("")||`<p class=m>No channel: the agent reads and posts nowhere.</p>`)+`</div>`
- +`<div class=slad><input id=slch placeholder="#channel or id" aria-label="channel to add"><button id=slcha>Add channel</button></div>`
- +`<h4>People</h4><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span>What the agent does</span><span></span></div>`
- +(d.people.map(slPerson).join("")||`<p class=m>No person: the agent answers nobody by name.</p>`)+`</div>`
- +`<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`
- +`<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join("")
- +`<h4>Optional</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="owner self-DM as an inbox"> Owner self-DM as an inbox</label></div>`
- +`<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="audio in and out"> Audio in and out</label></div>`;
+ const d=slDraft;setChip("slk",slS.connection);
+ let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn")],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
+ +setSettings("slk",[
+ setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
+ setRow("default language",`<select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select>`),
+ setRow("read every",`<span><input data-sl=tick type=number min=1 max=30 value="${slA(d.tick)}" aria-label="read every, minutes"> min</span>`),
+ setRow("up to, when quiet",`<span><input data-sl=max type=number min=2 max=120 value="${slA(d.max)}" aria-label="up to, minutes"> min</span>`),
+ setRow("quiet hours",`<input data-sl=quiet value="${slA(d.quiet)}" placeholder="always on" aria-label="quiet hours, HH-HH">`),
+ setRow("anyone not listed",`<select data-sl=other aria-label="anyone not listed"><option value=ignore${d.other==="ignore"?" selected":""}>is ignored</option><option value=reply${d.other==="reply"?" selected":""}>gets a fixed reply</option></select>`),
+ `<h4>Channels</h4><div class=slt role=table><div class="slc slh" role=row><span>Channel</span><span>Language</span><span>Watch</span><span>Thread only</span><span>Mention only</span><span>Announce</span><span></span></div>`
+ +(d.channels.map(slChan).join("")||`<p class=m>No channel: the agent reads and posts nowhere.</p>`)+`</div>`,
+ `<div class=slad><input id=slch placeholder="#channel or id" aria-label="channel to add"><button id=slcha>Add channel</button></div>`,
+ `<h4>People</h4><p class="note legend">${slLegend()}</p><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span></span></div>`
+ +(d.people.map(slPerson).join("")||`<p class=m>No person: the agent answers nobody by name.</p>`)+`</div>`,
+ `<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`,
+ `<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join(""),
+ `<h4>Owner inbox</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="owner self-DM as an inbox"> Owner self-DM as an inbox</label></div>`,
+ `<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="audio in and out"> Audio in and out</label></div>`]);
  if(slMsg)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
@@ -5350,25 +5400,36 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Loop and
    Access have no Save: the bar hides there. */
-const STH={lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",lop:"Loop",acc:"Access"};
-let sTheme=STH[ls.sth]?ls.sth:"mdl",sPend=null;
+const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
+const SET_SAVE=["lim","mdl","slk"];   // the themes the one Save writes; Loop and Access stage no file here
+const SET_LIVE=["sub"];   // Subscriptions writes each change at once, so the bar names no staged diff there
+let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
 const limDirty=()=>{if(!limS||!$("#limc"))return false;const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)};
 const mdlDirty=()=>mdlChanged();
 const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()]].filter(x=>x[1]).map(x=>x[0]);
-function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty();bar.hidden=sTheme==="lop"||sTheme==="acc"||sTheme==="sub";bar.classList.toggle("dirty",d.length>0);
- $("#ssave").disabled=!d.length;$("#sdisc").disabled=!d.length;$("#schg").textContent=d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
-function setTheme(sp){if(!STH[sp])sp="mdl";sTheme=sp;ls.sth=sp;save();
- document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);if(on&&!e.open)e.open=true});
- document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar()}
+/* The Save bar is always visible (#1278): a read-only theme reads "nothing to save here" with both buttons disabled,
+   never a bar that disappears and leaves the reader guessing whether anything was lost. */
+function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme);bar.hidden=false;
+ bar.classList.toggle("dirty",d.length>0&&!ro);
+ $("#ssave").disabled=ro||!d.length;$("#sdisc").disabled=ro||!d.length;
+ $("#schg").textContent=RO?RO_WHY:SET_LIVE.includes(sTheme)?"Subscriptions: each change saves at once":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
+function setTheme(sp){if(!STH[sp])sp="lop";sTheme=sp;ls.sth=sp;save();
+ document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
+  if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
+ document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar()}   // opening the panel loads its data, in its own toggle handler
 $(".snav").addEventListener("click",e=>{const b=e.target.closest("button[data-sp]");if(b)setTheme(b.dataset.sp)});
 $("#ssel").addEventListener("change",e=>setTheme(e.target.value));
-const setAskOne=async(url,body,theme)=>{try{const r=await (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,confirm:false})})).json();
- return r.err?["! "+themeLine(theme,r.err)]:(r.diff||[]).map(l=>"  "+themeLine(theme,l))}catch(x){return["! "+theme+" · the diff could not be read"]}};
-$("#ssave").onclick=async()=>{const d=setDirty(),lines=[];sPend=d;
- if(d.includes("mdl"))lines.push(...mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB));
- if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};lines.push(...await setAskOne("/api/limits",limPend,"Spend & limits"))}
- if(d.includes("slk"))lines.push(...await setAskOne("/api/slack",slDraft,"Communication"));
- $("#sdpre").textContent=lines.join("\n")||"No change to save.";$("#sdok").disabled=!lines.length||lines.some(l=>l.startsWith("!"));$("#sdlg").showModal()};
+document.addEventListener("click",e=>{const a=e.target.closest&&e.target.closest("a[data-sp]");if(!a)return;
+ e.preventDefault();setTab("set");setTheme(a.dataset.sp)});   // #1278: a theme named inside another theme opens that theme
+const setAskOne=async(url,body,theme,file)=>{try{const r=await (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,confirm:false})})).json();
+ return r.err?{file,lines:["! "+themeLine(theme,r.err)]}:{file,lines:(r.diff||[]).map(l=>themeLine(theme,l))}}catch(x){return{file,lines:["! "+theme+" · the diff could not be read"]}}};
+/* The Save dialog groups its lines by the file they would touch (#1278), each group headed by the path the server named. */
+$("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
+ if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
+ if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"))}
+ if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
+ const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
+ $("#sdpre").textContent=diffByFile(groups)||"No change to save.";$("#sdok").disabled=!any||bad;$("#sdlg").showModal()};
 $("#sdno").onclick=()=>{sPend=null;limPend=null;$("#sdlg").close()};
 $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  if(d.includes("mdl")){try{const r=await mdlPost(mdlOut());if(r.err)mdlMsg="!"+r.err;else{mdl=r;mdlSrv=JSON.stringify(r);mdlRmk={};mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}mdlRender()}
@@ -5385,9 +5446,14 @@ $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlR
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
-if(openAcc.has("lim"))limLoad();
-if(openAcc.has("slk"))slLoad();
+ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();
+ if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}});
+ if(openAcc.has(i))e.open=true});   // a panel stored open loads through its own toggle, once (#1278)
+/* A refused write gets every control disabled and the reason stated (#1278); the observer keeps a render from re-enabling
+   what it drew after the first pass. The loop switch is the hub's to gate: it follows the `write` field, never this flag. */
+if(RO){const ro=$("#ro");if(ro){ro.hidden=false;ro.textContent=RO_WHY}roWatch($("#tab-set"))}
+setTheme(sTheme);
+if(!$("#mdl").open)mdlLoad();   // the models panel answers on boot while it is closed; an open panel already loaded (#1278)
 const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)","var(--chart-series-other)"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const TOP=3;
 function pie(ms){
@@ -5418,19 +5484,21 @@ $("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]")
 $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
 $("#pie").addEventListener("focusin",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("focusout",()=>hlPie(""));
-const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m<90?m+" min ago":Math.round(m/60)+" h ago"},rs=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"?";
-const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return"resets in "+(d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`)};
 const qcol=p=>`hsl(${Math.round(120*(1-Math.min(Math.max(+p||0,0),100)/100))} 65% 42%)`;   // a quota bar fills green when empty and red when full; only the fill takes colour (owner)
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
-const qbar=(label,pct,resets,sm,tip)=>`<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span><span class=rst>${esc(rstText(resets,Date.now()/1000))}${resets?" · "+esc(rs(resets)):""}</span></div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"></div></div></div>`;
-const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${ago(a.asof)}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${ago(a.asof)}</span></div>`};
+const qbar=(label,pct,resets,sm,tip)=>{const left=resets?resets-Date.now()/1000:null,when=left==null?"":(left<=0?"resets now":"resets in "+span(left));
+ return `<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span><span class=rst>${esc(when)}${resets?" · "+esc(moment(resets)):""}</span></div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"></div></div></div>`};
+const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.",aged=a.asof?span(Date.now()/1000-a.asof)+" ago":"";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${aged}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${aged}</span></div>`};
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
-const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
- const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
- $("#subsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
- const cashEl=$("#cash"); if(cashEl)cashEl.textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
- $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
+ const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);
+ const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
+ setChip("sub",lims.length?`${lims.length} at limit`:(any||d.api?"all under limit":"no plan chosen"))   // the chip says what needs a look; the prices stay in the settings block
+ $("#subnow").innerHTML=setNow("sub",[
+  setTile("At limit",`${lims.length}`,lims.length?"err":"ok"),
+  setTile("Cash this month",any||d.api?usd(d.total):"no plan chosen","neutral"),
+  setTile("Month passed",Math.round((d.frac||0)*100)+"%","neutral")]);
+ $("#subs").innerHTML=setSettings("sub",[`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan aria-label="${k} plan"><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}" aria-label="${k} custom amount"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" aria-label="${k} currency" title="R$, U$, € or any 3-letter code"></span>`:"";
   const note=v.noRate?`<span class=warn>no exchange rate for ${esc(pl.currency)} right now</span>`:(pl&&pl.currency!=="USD"&&v.usd!=null?`<span class=dt>≈ <b>US$${v.usd}</b> / month · ${(+v.rate).toFixed(2)} ${esc(pl.currency)} per US$</span>`:"");
@@ -5438,7 +5506,7 @@ async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae
   const MT="Fill: API-equivalent used by squad runs ÷ monthly plan price (partial: other uses of the plan are not seen). 100% = plan paid off. Tick: how much of the month has passed.";
   const bar=aw||(aq&&aq.unavailable)?autoq(aq):q!=null?qbar(win||"quota used",q,null,false,"Quota % entered by hand. 100% = quota exhausted."):pct!=null?`<div class=qw><div class=ql><span>used <b>${fpct(pct)}%</b> of plan value</span><span class=rst>month ${Math.round(today)}%${pct>=100?" · paid off ✓":""}</span></div><div class=tr title="${MT}"><div class="fl ${ok?(v.saved>=0?"lv-ok":"lv-err"):"lv-est"}" style="width:${Math.min(pct,100)}%"></div><div class=tk style="left:${Math.min(today,100)}%"></div></div></div>`:"";
   const man=aw||!pl?"":`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${q??""}" placeholder="%" aria-label="${k} quota used" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" aria-label="${k} quota window"maxlength=40 style="flex:1;min-width:0"></div>`;
-  return `<div class=sub><div class=hd><span class=nm>${esc(v.name)}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")}catch(e){console.error(e)}}
+  return `<div class=sub><div class=hd><span class=nm>${esc(v.name)}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")])}catch(e){console.error(e)}}
 $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(!k)return;const row=e.target.closest(".sub");let body;
  const f=e.target.dataset.f,pick=row.querySelector("[data-f=plan]").value;
  if(f==="quota"||f==="qwin"){const x=row.querySelector("[data-f=quota]").value,w=row.querySelector("[data-f=qwin]").value.trim();body={quota:x===""?null:+x,qwin:w||null}}
@@ -5899,31 +5967,64 @@ setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",rea
 // a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
 // The renderers are pure: tests/test_hub_loop_switch_page.py runs them in node.
 let loopV=null,loopErr="";
-const loopWhen=s=>{const m=String(s||"").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);return m?m[1]+" "+m[2]:String(s||"")};
-const loopBy=v=>v.who?`${v.who} · ${loopWhen(v.when)}`:"";
+// SETT{ the Settings tab's one shape (#1278). Every theme draws a Now block of tiles and a Settings block of rows through
+// these writers, and the whole tab writes a moment and a span one way. Both read the value the hub gives: an epoch second or
+// the hub's own date text for a moment, a count of seconds for a span. Run in node by tests.
+const SETT_TONES=["ok","warn","err","neutral"];   // the tones the hub names: FOOT_TONES plus the neutral one
+function moment(t){const s=String(t??"").replace(" ","T"),m=s.match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);if(m)return m[1]+" "+m[2];
+ if(typeof t==="number"||/^\d+(\.\d+)?$/.test(s)){const n=typeof t==="number"?t:+s,d=new Date(n*1000),p=x=>String(x).padStart(2,"0");if(isNaN(d))return "?";return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`}
+ return s?String(t):"?"}   // a value the hub hands in another shape is shown as it came, never replaced by "?"
+function span(s){const n=Number(s);if(s===null||s===undefined||s===""||!Number.isFinite(n)||n<0)return "?";   // a bad reading is never zero
+ const x=Math.round(n);if(x<90)return x+"s";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`}
+function setTile(k,v,tone,tip){const t=SETT_TONES.includes(tone)?tone:"neutral";return `<div class="tile ${t}"${tip?` title="${esc(tip)}"`:""}><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`}
+function setNow(theme,tiles,note){return `<div class=setblk data-blk=now data-theme="${esc(theme)}"><h3 class=blkh>Now</h3><div class=now>${tiles.filter(Boolean).join("")}</div>${note?`<p class=note>${note}</p>`:""}</div>`}
+function setRow(label,control,tip){return `<div class=setrow${tip?` title="${esc(tip)}"`:""}><span class=sl>${esc(label)}</span><span class=sc>${control}</span></div>`}
+function setSettings(theme,rows,note){return `<div class=setblk data-blk=settings data-theme="${esc(theme)}"><h3 class=blkh>Settings</h3>${rows.filter(Boolean).join("")}${note?`<p class=note>${note}</p>`:""}</div>`}
+function setChip(theme,text){const sr=$("#"+theme+"sr");if(sr)sr.textContent=text;const nv=$("#"+theme+"nav");if(nv)nv.textContent=text}
+/* The Save dialog groups its lines by the file the hub names, so one confirm covers several files without doubt. */
+function diffByFile(groups){const out=[];for(const g of groups||[]){if(!g||!(g.lines||[]).length)continue;out.push(g.file||"(the project files)");for(const l of g.lines)out.push("  "+l)}return out.join("\n")}
+/* A read-only view disables every control under its roots, an anchor included, and adds any control a render writes later.
+   The theme navigation is reading, not writing: the nav buttons and the phone select stay live so every panel opens. */
+function roAll(root){if(!root||!root.querySelectorAll)return;for(const el of root.querySelectorAll("input,select,textarea,button,a[href]")){
+ if(el.closest&&(el.closest(".snav")||el.closest("#ssel")))continue;
+ el.disabled=true;if(el.tagName==="A"){el.setAttribute("aria-disabled","true");el.style.pointerEvents="none";el.tabIndex=-1}}}
+function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&root)new MutationObserver(()=>roAll(root)).observe(root,{subtree:true,childList:true})}
+// }SETT
+const loopBy=v=>v.who?`${v.who} · ${moment(v.when)}`:"";
 const loopTip=v=>!v.write?v.reason:v.state==="on"?"turn off: stop after the live runs and gates finish, or now":v.state==="draining"?"turn on: keep the loop running; turn off again to stop now":v.state==="starting"?"the loop is starting":"turn on: start the loop (watchd)";
 const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw title="${esc(loopTip(v))}"><i aria-hidden="true"></i></button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
 const loopSetHtml=v=>`<div class=lnow>${loopSw(v)}<span class="ls ${esc(v.state)}">Loop ${esc(v.state)}</span></div>`
  +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"");
-const loopLogHtml=v=>`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
+const loopLogHtml=v=>{const live=v.live||{},h=v.health||{};
+ const runs=h.live_runs!=null?h.live_runs:(live.runs||[]).length,gates=h.live_gates!=null?h.live_gates:(live.gates||[]).length;
+ const cyc=h.cycle_left==null?"no cycle yet":(h.cycle_left>=0?`in ${span(h.cycle_left)}`:`${span(-h.cycle_left)} late`);
+ const now=setNow("lop",[
+  setTile("Live",`${runs} run${runs===1?"":"s"} · ${gates} gate${gates===1?"":"s"}`,"neutral"),
+  setTile("Health",h.starting_left!=null?`starting · ${span(h.starting_left)} left`:cyc,h.starting_left!=null||(h.cycle_left!=null&&h.cycle_left<0)?"warn":"neutral"),
+  setTile("Last change",loopBy(v)||"none recorded","neutral")]);
+ return now+setSettings("lop",[],`The switch is in the Monitor. The rule for a write over the tailnet is in <a href="#set" data-sp=acc>Access</a>.`)
+ +`<details class=aud><summary>Changes <span class=m>${(v.log||[]).length}</span></summary><h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(moment(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul></details>`};
 const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
  return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`
  +(drain?`<label class=lrad><input type=radio name=lm value=drain checked><span><b>Stop after the live runs and gates finish</b><small>No new dispatch. The live work runs to its end, then the loop stops. The safe default.</small></span></label>`:"")
  +`<label class=lrad><input type=radio name=lm value=stop-now${drain?"":" checked"}><span><b>Stop now</b><small>Kills these at once; their work in progress is lost:</small><ul>${r.map(x=>`<li>run ${esc(loopRun(x))}</li>`).join("")}${g.map(x=>`<li>${esc(x)}</li>`).join("")}${r.length||g.length?"":"<li>no live run or gate</li>"}</ul></span></label>`
  +`<div class=lact><button value=ok id=lok>Confirm</button><button value=no id=lno>Back</button></div>`};
-const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"<span class=no>refused</span>";
- return `<div class=kr><span class=l>This page is reached</span><b>${v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)"}</b></div>`
- +`<div class=kr><span class=l>Loop start and stop from the tailnet</span><b>${yn(a.loop_write)} <small>SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)</small></b></div>`
- +`<div class=kr><span class=l>Terminal send from the tailnet</span><b>${yn(a.terminals_send)} <small>SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)</small></b></div>`
- +`<div class=kr><span class=l>Run dashboards over the tailnet</span><b>read only, through the hub</b></div>`
- +`<div class=kr><span class=l>Phone check</span><b><code>/agent-squad:start-mobile</code></b></div>`
- +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
+const accHtml=v=>{const a=v.access||{},yn=x=>x?"allowed":"refused",ty=x=>x?"ok":"err";
+ return setNow("acc",[
+  setTile("Reached",v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)",v.tailnet?"warn":"ok"),
+  setTile("Loop write from the tailnet",yn(a.loop_write),ty(a.loop_write),"SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"),
+  setTile("Terminal send from the tailnet",yn(a.terminals_send),ty(a.terminals_send),"SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)"),
+  setTile("Run dashboards","read only, through the hub","neutral"),
+  setTile("Phone check","/agent-squad:start-mobile","neutral")])
+ +setSettings("acc",[],`Read here; the owner sets each value in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.`)};
 // loop-switch:end
 // One switch, in the Monitor where the owner looks (owner, from #1071's cleanup): the Loop panel keeps the change log,
 // and no second button carries the same id (ADR-0162). The run history left for the bottom of the Runs tab (#1277).
-function loopDraw(){if(!loopV)return;const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
+function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=null?hp.live_runs:((loopV.live||{}).runs||[]).length;
+ setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));setChip("acc",loopV.tailnet?"tailnet":"loopback");
+ const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}
  const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
@@ -6392,7 +6493,7 @@ def v1_view(d):
     view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
     view["efforts"] = {k: {e.raw: e.effort for e in rows[k] if e.effort} for k in CHAINS}
     return view
-READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "repo_diff", "last_coding", "chain", "models", "outside")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "repo_diff", "last_coding", "chain", "models", "outside", "file", "counts")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -6698,7 +6799,10 @@ def models_get():
             "labels": model_labels(set(known) | set(rknown) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
             "boxes": {**{k: {bare_id(m): {**model_box(bare_id(m), k), **model_status(bare_id(m), states)} for m in d.get(k, [])} for k in CHAINS},
                       "known": {m: model_box(m) for m in set(known) | set(rknown) | ({last_coding_model()} - {None, ""})}},
-            "chain": chainhealth.chain_state(d, "review_models", SHARED)}
+            "chain": chainhealth.chain_state(d, "review_models", SHARED),
+            # #1278: the Save dialog names the file it writes, and the theme's chip reads the table's own count.
+            "file": str(MODELS), "counts": {"on": sum(1 for r in rows if r["state"] == "on"),
+                                            "at_limit": sum(1 for r in rows if r["state"] == "at limit")}}
 def models_version():
     """What a Save must have read (#688): a hash of models.json, parsed, so a rewrite that keeps the same data keeps
     the version. An unreadable models.json hashes as its raw bytes. The four chains all live in that one file (SPEC
@@ -7250,11 +7354,19 @@ def mobile_html():
     stream = f'window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}' if hubstream.enabled() else ""
     return MOBILE_PAGE.replace("/*STREAM*/", stream).encode()
 
-def served_page(login=""):
+RO_TAILNET = ("Read-only over the tailnet: this view may not write, and a write needs the owner's grant "
+              "(ADR-0152, ADR-0162). Open the hub on the machine to change a value.")
+
+def served_page(login="", allowed=True):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
-    json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
+    json.dumps brings its own quotes, and a second pair is a syntax error that empties the page. The read-only flag follows
+    the hub's own write rule: a request the server refuses to write gets the flag and its reason. An allowed login, loopback
+    or tailnet, writes the settings routes, so its page stays live (#1278)."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
+    return (PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))
+            .replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT))
+            .replace("__READONLY__", "false" if allowed else "true").replace("__ROWHY__", "" if allowed else RO_TAILNET)
+            .replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else "")))
 
 
 def own_host(h):
@@ -7605,7 +7717,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): body, ct = mobile_html(), "text/html; charset=utf-8"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
-        else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
+        else: body, ct = served_page(a.login, a.allowed).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
         if self.path.startswith("/api/board") and getattr(self, "board_etag", None): self.send_header("ETag", self.board_etag)
         if self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): self.send_header("Content-Security-Policy", MOBILE_CSP)
