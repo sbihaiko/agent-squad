@@ -49,10 +49,19 @@ caller names `bug`, and only the binding knows which field and option carry it (
 import json, os, pathlib, re, subprocess, sys, time, urllib.parse
 
 _VALUE_FLAGS = {"-X", "--method", "-f", "-F", "--raw-field", "--field", "--input", "--jq", "-q", "-H", "--header"}
-def _log_call(state, args, outcome):
+def _is_write(args):
+    """A call that changes GitHub: `-X`/`--method` with a verb other than GET. Its one line is the `done` outcome (ADR-0277)."""
+    it = iter(args)
+    for x in it:
+        if x in ("-X", "--method"): return next(it, "GET").upper() != "GET"
+    return False
+
+def _log_call(args, outcome):
     """One api.log line for a `gh api` call this seam makes (#847). The board pass is the largest REST reader the loop has,
     and it was the one that spent the quota unlogged; the line is the door's own, so the spend reads the same everywhere.
-    The line goes to the seam's own state dir (#1328), never to an inherited SG_STATE; a seam with no state dir writes nothing."""
+    The line goes to $SG_STATE, the loop's one call log, even from a seam built with its own state dir (the hub's, #1328):
+    that seam still spends the loop's quota. Outside a loop (SG_STATE unset) a call writes nothing."""
+    state = os.environ.get("SG_STATE")
     if not state: return
     it = iter(args); route = ""
     for x in it:
@@ -419,8 +428,8 @@ class BoardBinding:
         for k in range(self.attempts):
             if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
             r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=self.timeout or timeout)
-            if not r.returncode: _log_call(self.st, a, "answer"); return r.stdout
-            _log_call(self.st, a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
+            if not r.returncode: _log_call(a, "done" if _is_write(a) else "answer"); return r.stdout
+            _log_call(a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
             err = r.stderr.strip()[:200]
             if not self.server_error.search(err): break
         raise RuntimeError(err)

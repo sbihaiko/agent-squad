@@ -11,7 +11,7 @@ they carry, so the next exhaustion is a diagnosis already written rather than an
 * `gh-miss-rate`: the snapshot is not answering the repeats. Of the reads in the window that the snapshot MAY answer
   (`ghthrottle.fact_class` is not `LIVE`), at least `SG_HEALTH_GH_MISS_RATE` missed it. The reads that gate a write are live by
   design (the liveness rule) and a read the cooldown held back sent no request, so neither says anything about the snapshot and
-  neither is counted. Fewer than `SG_HEALTH_GH_MISS_MIN_CALLS` such reads is a burst, not a sustained rate.
+  neither is counted, and neither is a write GitHub took (`done`): a write says nothing about the snapshot. Fewer than `SG_HEALTH_GH_MISS_MIN_CALLS` such reads is a burst, not a sustained rate.
 
 Documented defaults (each overridable in the environment `health.sh` runs in; a bad value falls back to the default):
 
@@ -120,6 +120,7 @@ def _miss_rate(state: Path, now: float) -> Cause | None:
         if c.at >= now - minutes * 60
         and c.outcome != ghread.COOLING
         and c.cache in (ghread.HIT, ghread.MISS)
+        and c.outcome != ghread.DONE   # a write GitHub took is not a read, whatever its route (#1328)
         and ghthrottle.fact_class(c.route) != ghthrottle.LIVE
     ]
     misses = [c for c in eligible if c.cache == ghread.MISS]

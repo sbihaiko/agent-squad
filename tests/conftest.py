@@ -116,10 +116,21 @@ def _real_git_first_on_path():
         shutil.rmtree(link_dir, ignore_errors=True)
 
 
+ORIGINAL_SG_STATE = os.environ.get("SG_STATE")   # the inherited value, read before any test runs (#1328)
+
+
+@pytest.fixture(autouse=True)
+def _own_state_dir(monkeypatch, tmp_path_factory):
+    """No test writes to the SG_STATE the suite inherited: a gate under the live loop inherits the loop's api.log and
+    cooldown (#1328). Each test gets its own dir; a test that sets or deletes SG_STATE itself runs after this and wins."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path_factory.mktemp("state")))
+
+
 def gui_tests_off():
     """True while the GUI test switch is off (scripts/gui-tests.sh off). The two markers are the switch's own: the one under
-    $SG_STATE is the visible idiom, the home one survives a suite that inherits the machine's SG_STATE and cleans it."""
-    return (Path(os.environ.get("SG_STATE", Path.home() / ".cache" / "squad-goal")) / "auto" / "gui-tests-off").exists() \
+    the inherited $SG_STATE is the visible idiom, the home one survives a suite that inherits the machine's SG_STATE and cleans it."""
+    state = Path(ORIGINAL_SG_STATE) if ORIGINAL_SG_STATE is not None else Path.home() / ".cache" / "squad-goal"
+    return (state / "auto" / "gui-tests-off").exists() \
         or (Path.home() / ".squad-gui-tests-off").exists()
 
 

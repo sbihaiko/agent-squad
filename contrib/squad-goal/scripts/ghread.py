@@ -60,7 +60,7 @@ module every door carries (see `log_call`):
 
 * transport: `REST`, or `GraphQL` for an aggregate route.
 * cache: `hit` when the snapshot answered it, `miss` for every read that went to GitHub, snapshottable or not (`ghspend.py`
-  leaves the routes that gate a write out of the miss rate).
+  leaves the routes that gate a write out of the miss rate, and the writes GitHub took, `done`).
 * outcome: `answer`, `refused` (GitHub refused it), `failed` (no verdict), `done` (a write GitHub took) or `cooling` (the shared
   cooldown held the call back and no request was sent).
 * pass: the pass that spent the call -- `frontier`, `landing`, `autobug` or `board` -- from `SG_GH_PASS`, which each pass script
