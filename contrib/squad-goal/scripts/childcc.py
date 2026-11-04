@@ -295,6 +295,10 @@ def enter(rd, child, n, d, approved=False, own=False):
     if not own and e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
         return fix_round(rd, child, n, wt, fx, out)   # a fix run in its worktree, never a requeue at once (#636)
     elif e.returncode != 0 and "WAVE HOLD" in out:   # held, not requeued: the wave waits for it (#620)
+        if re.search(r"kept on fix/\S+ for one rebase round, not requeued", out):
+            # Its commits stand on a work branch of their own, which the landing passes deliver, so it leaves this wave
+            # rather than holding it for its whole age cap (#1344).
+            return False, out, True
         HOLDS.add(f"{rd.name} {child}")
         if re.search(r"WAVE HOLD #\d+: (no review|the review of)", out):   # a review hold, never a gate one: bounded per head, so a dead review chain never holds the wave for its whole age cap
             hk, h = A / f"holds-{rd.name}-{child}", head_of(wt)

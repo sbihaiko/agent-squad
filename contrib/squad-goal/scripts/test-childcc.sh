@@ -217,8 +217,10 @@ pass cap >/dev/null; pass cap >/dev/null; rc=$?
 # (#1344) A child kept on a rebase round is no deadline: its commits wait for the round, so it is never requeued or counted, however
 # many passes it waits. Its sibling still enters.
 run2 kpt 5400 5401; : > "$WAVE_CALLS"
-for p in 1 2 3 4 5 6 7 8; do pass kpt >/dev/null; done
+for p in 1 2 3 4 5 6 7 8; do pass kpt >/dev/null; done; rc=$?
 ! /usr/bin/grep -q '^requeue 5400' "$WAVE_CALLS" && [ ! -e "$T/st/auto/dwait-kpt-a" ] && [ "$(ent kpt 5401)" = 1 ] && ok "a child kept on a rebase round is never requeued or counted" || ko "a kept child was requeued or counted: $(cat "$WAVE_CALLS") $(cat "$T/st/auto/dwait-kpt-a" 2>/dev/null)"
+# Its commits stand on a work branch of its own, which the landing passes deliver: it leaves the wave rather than holding it (#1344).
+[ "$rc" = 0 ] && ok "a child kept on a rebase round does not hold the wave's landing" || ko "a kept child held the wave: exit $rc"
 # a child whose requeue holds it on an unchanged head costs no work: its sibling is worked in the same pass
 run2 sup 5400 5401; : > "$WAVE_CALLS"; lqset 5400 sup "$(/usr/bin/git -C "$T/co/runs/sup/ws/target-a" rev-parse HEAD)"
 pass sup >/dev/null; rc=$?

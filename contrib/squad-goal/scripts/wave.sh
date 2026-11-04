@@ -558,6 +558,10 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # round (branchfixpass.sh). The child is held, never requeued: its worktree is not reset and no fresh build is dispatched.
   keep_conflict() { local kb=fix/$iss-rebase-$run kkey=fix_$iss-rebase-$run khead rhead
     khead=$($G rev-parse HEAD)
+    # A later pass enters the same child again while its round is still open: the kept state is written, the round owns the branch,
+    # and the review is the round's. So the child holds on the same wording, and nothing is pushed and no review is rewritten (#1344).
+    if [ -s "$SG_STATE/auto/kept-$kkey" ]; then
+      hold "the rebase on $w conflicts: $1; its commits are kept on $kb for one rebase round, not requeued"; return 1; fi
     # A later pass enters the same child again on the same head, or on a round that already pushed on top of it: a branch that
     # already holds this commit is the kept state, never a failure, so the push's refusal is read against the remote, not its exit code.
     $G push -q origin "HEAD:refs/heads/$kb" >/dev/null 2>&1

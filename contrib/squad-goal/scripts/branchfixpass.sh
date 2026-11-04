@@ -28,7 +28,7 @@ A="$SG_STATE/auto"; mkdir -p "$A"
 # reviews the new tip.
 for m in "$A"/branchfix-push-*; do
   [ -f "$m" ] || continue
-  run=${m##*/branchfix-push-}; read -r br _ < "$m"
+  run=${m##*/branchfix-push-}; read -r br dsha < "$m"   # dsha: the sha the round was dispatched for, the one its lease is on
   rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); rd=${rd:-$SG_CHECKOUT/runs/$run}
   t=$(python3 -c 'import json,sys
 s=v=None; h=[]
@@ -47,19 +47,31 @@ if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s[
   head=$(/usr/bin/git -C "$tg" rev-parse -q --verify "refs/heads/$tb^{commit}" 2>/dev/null) \
     && /usr/bin/git -C "$tg" fetch -q "$remote" "refs/heads/$br" 2>/dev/null || { echo "BRANCHFIX PUSH $br: the head of run $run is not readable; the next pass retries"; continue; }
   old=$(/usr/bin/git -C "$tg" rev-parse FETCH_HEAD)
+  # ff reads a pass outcome's own head only: a run that left no commit names no head of its own, and the target branch it
+  # would otherwise name is the base, never a rebase round's work (#1344).
   ff=
-  for c in $ch "$head"; do
+  for c in $ch; do
     c=$(/usr/bin/git -C "$tg" rev-parse -q --verify "$c^{commit}" 2>/dev/null) || continue
     [ "$c" = "$old" ] && continue
     [ -n "$ff" ] || ff=$c
+  done
+  for c in $ch "$head"; do
+    c=$(/usr/bin/git -C "$tg" rev-parse -q --verify "$c^{commit}" 2>/dev/null) || continue
+    [ "$c" = "$old" ] && continue
     /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$c" && { head=$c; break; }
   done
   # A kept rebase round (#1344) rewrites its own branch, so its head is never a fast-forward of the reviewed tip and the
-  # ordinary rule would drop it. The kept marker names the ref the round rebased on; its head is the branch's new first head.
-  kept="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; [ -s "$kept" ] && [ -n "$ff" ] && head=$ff
+  # ordinary rule would drop it. Its head is the branch's new first pass head, and only when it carries a commit past the ref
+  # the round rebased on: a head that adds nothing is no round.
+  kept="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; kre=$(head -1 "$kept" 2>/dev/null)
+  [ -s "$kept" ] && [ -n "$ff" ] && [ -n "$kre" ] && [ "$(/usr/bin/git -C "$tg" rev-list --count "$kre..$ff" 2>/dev/null)" != 0 ] && head=$ff
   if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit"
+  elif [ -s "$kept" ] && [ -z "$ff" ]; then echo "BRANCHFIX PUSH $br: run $run added no head of its own, so no round is pushed"
   elif [ -s "$kept" ] && ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then
-    if /usr/bin/git -C "$tg" push -q --force-with-lease="refs/heads/$br:$old" "$remote" "$head:refs/heads/$br" 2>/dev/null
+    # The lease is on the sha the round was dispatched for, never on what the branch holds now: a writer that pushed after the
+    # review is not clobbered, and the round is refused instead (#1344).
+    if [ "$old" != "$dsha" ]; then echo "BRANCHFIX PUSH $br: the branch moved past the reviewed sha ${dsha:0:9}; the round of run $run is not pushed"; continue
+    elif /usr/bin/git -C "$tg" push -q --force-with-lease="refs/heads/$br:$dsha" "$remote" "$head:refs/heads/$br" 2>/dev/null
     then echo "BRANCHFIX PUSH $br: ${old:0:9} -> ${head:0:9} (rebase round, run $run)"
     else echo "BRANCHFIX PUSH $br: the push of run $run was refused; the next pass retries"; continue; fi
   elif ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then echo "BRANCHFIX PUSH $br: the head of run $run is no fast-forward of the branch, so it is not pushed"

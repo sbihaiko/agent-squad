@@ -182,10 +182,18 @@ R20=$($O rev-parse refs/heads/fix/20-rebase-run-1)
 r=$(en 20)
 [ "$($O rev-parse refs/heads/fix/20-rebase-run-1)" = "$R20" ] && ok "a repeat on a branch that holds its round's commit leaves the branch as it is" || ko "the round's commit was overwritten: '$r'"
 case "$r" in *"the push failed"*) ko "a kept branch reads as a failed push: '$r'";; *"kept on fix/20-rebase-run-1"*) ok "a repeat on a kept branch reads as kept";; *) ko "no kept line on the repeat: '$r'";; esac
+# A repeat while the round's branch has moved past the first keep reads the kept state and rewrites nothing: the round owns the
+# branch and its review (#1344).
+(cd "$T/rnd20" && echo round2 > r20b && $G add r20b && $G -c user.email=a@b -c user.name=t commit -q -m "the round, a commit later (Refs #20)" && $G push -q origin HEAD:refs/heads/fix/20-rebase-run-1)
+rev 20; rs20=$(cat "$T/st/review-fix_20-rebase-run-1.sha" 2>/dev/null)
+r=$(cd "$T/c20" && SG_WAVE_GATES=${GATES-true} bash "$T/s/wave.sh" enter run-1 20)
+[ -n "$rs20" ] && [ "$(cat "$T/st/review-fix_20-rebase-run-1.sha" 2>/dev/null)" = "$rs20" ] && ok "a repeat while the round is open never rewrites the round's review" || ko "the repeat rewrote the review: '$r'"
+case "$r" in *"not requeued"*) ok "a repeat while the round is open holds on the kept wording";; *) ko "the repeat's hold: '$r'";; esac
 cp "$T/pre-receive.d2saved" "$T/origin.git/hooks/pre-receive"; chmod +x "$T/origin.git/hooks/pre-receive"
 # The scene moved the wave branch and wrote its own state: both are put back so no later scene reads a wave tip it did not build.
 $O update-ref "refs/heads/$W" "$w20saved"
-rm -f "$T/st/auto/kept-"* "$T/st/auto/disp-20" "$T/st/review-fix_20-rebase-run-1."* "$T/st/review-fix_20-rebase-run-1".md
+rm -f "$T/st/auto/kept-"* "$T/st/auto/disp-20" "$T/st/review-fix_20-rebase-run-1."* "$T/st/review-fix_20-rebase-run-1".md \
+      "$T/st/auto/disp-12" "$T/st/review-fix_12-rebase-run-1."* "$T/st/review-fix_12-rebase-run-1".md
 # P (#1348): a push that fails for a reason git does not name as a rejection holds the child: no requeue, no marker move, and
 # the hold names git's last stderr line. A push git rejects as non-fast-forward still refuses, with git's line in the reason.
 # The child's push URL is a path that is no repository: the push fails in transport, and git names no rejection.
