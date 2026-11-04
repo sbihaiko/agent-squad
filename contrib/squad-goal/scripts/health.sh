@@ -7,7 +7,7 @@
 # which pass owns it, and a sustained snapshot miss rate is named from the call log; both also land in health.json as a short `brief`
 # the hub's footer shows. ghspend.py makes no request, so this pass spends nothing from the bucket it reports on.
 # Each cause alerts ONCE (alerts.log + macOS notification) when it appears and re-arms when it clears. HEALTH_DRY=1 prints only; HEALTH_NOTIFY overrides the notifier.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/workbranches.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/startability.sh"; export SG_GH_PASS=health; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | grep -q "$2"; }
@@ -63,7 +63,7 @@ undef=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_req
 [ -n "${undef// /}" ] && add defect-without-bug "open defect(s) that carry no bug label:$(for n in $undef; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
 # A ready issue with no run or work branch for one pass must remain visible even when it has only a wave label.
-ra=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("debt")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
+ra=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("debt")) // false | not))|select((([.labels[].name]|index("spec")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
 ready=""
 for n in $ra; do
   "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^READY' && ready="$ready $n"
@@ -71,9 +71,15 @@ done
 if [ -n "${ready// /}" ]; then
   brs=" $(sg_work_issues) "
   free=""; for n in $ready; do case "$brs" in *" $n "*) ;; *) free="$free $n";; esac; done
+  # A live run is one with a record and no verdict, however old it is (#1338); only a run with no record yet is live for its 30 min.
   nv2=$(sort -u "$SG_STATE/active-runs.txt" 2>/dev/null | while read -r r; do d=$r; [ "${r#/}" = "$r" ] && d="$SG_CHECKOUT/runs/$r"; [ -d "$d" ] || continue   # an absolute entry stands: a run worktree's folder too (#580, #585)
-    grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null || { [ -n "$(find "$d/request.txt" -mmin -30 2>/dev/null)" ] && echo x; }; done | wc -l | tr -d ' ')
-  [ -n "${free// /}" ] && [ "$nv2" = 0 ] && add frontier-idle "startable$free with no work branch and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
+    if [ -e "$d/record.jsonl" ]; then grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null || echo x
+    else [ -n "$(find "$d/request.txt" -mmin -30 2>/dev/null)" ] && echo x; fi; done | wc -l | tr -d ' ')
+  if [ -n "${free// /}" ] && [ "$nv2" = 0 ]; then
+    # Frontier work is a Todo card, the owner's go signal (#550): a name whose card is not in Todo is dropped. An unreadable board keeps the list.
+    if td=$(sg_todo_cards 2>/dev/null); then tds=" $(printf '%s\n' "$td" | tr '\n' ' ')"; keep=""; for n in $free; do case "$tds" in *" $n "*) keep="$keep $n";; esac; done; free=$keep; fi
+    [ -n "${free// /}" ] && add frontier-idle "startable$free with no work branch and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
+  fi
 fi
 # The loop against its own board (#1795): a run that dies without its verdict leaves an `In Progress` card with nobody on it while
 # the loop still looks busy. Both numbers come from sources the loop already reads -- $SG_STATE/active-runs.txt and the REST board
