@@ -217,7 +217,7 @@ def test_the_chart_key_carries_the_range_only(hub):  # noqa: F811
     assert body and body.group(1) == "{a:LT.a,b:LT.b}", "the chart key carries the Start and End only"
     onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
     for ctl in ("ltr", "lty", "lts"):
-        line = next(l for l in onchange.splitlines() if f'"{ctl}"' in l)
+        line = next(row for row in onchange.splitlines() if f'"{ctl}"' in row)
         assert "chartSave" not in line and "ls." not in line, f"the {ctl} control writes no storage (#1247)"
     assert "chartSave" not in _page_line(hub, "const ltGet=") and "ls." not in _page_line(hub, "const ltGet="), \
         "reading the chart stores nothing"
