@@ -28,19 +28,32 @@ def history_path(board, repo):
 
 
 def item_facts(issue, project):
-    """The clocks one issue carries on one project: the Status field's updatedAt (the Status clock) and the issue's own."""
+    """The clocks one issue carries on one project: the Status field's updatedAt (the Status clock), the issue's own, and the
+    Status value the card carries now."""
     items = [i for i in (issue.get("projectItems") or {}).get("nodes", []) if (i.get("project") or {}).get("number") == project]
     status = max((((i.get("fieldValueByName") or {}).get("updatedAt")) or "" for i in items), default="")
-    return {"n": issue["number"], "issue_updated": issue["updatedAt"], "status_updated": status}
+    value = max((((i.get("fieldValueByName") or {}).get("name")) or "" for i in items), default="")
+    return {"n": issue["number"], "issue_updated": issue["updatedAt"], "status_updated": status, "status": value}
+
+
+def last_status(rec):
+    """The last Status a record knows the card held, "" when it knows none."""
+    for e in reversed(rec.get("events") or []):
+        if e.get("type") == "status": return e.get("status") or ""
+    return ""
 
 
 def due_reads(items, stored):
-    """The numbers to read: a card with no complete record, or whose Status moved past its record. Neither the item's nor the
-    issue's own updatedAt is a reason: the first moves on writes that touch no Status, the second on any edit."""
+    """The numbers to read: a card with no complete record, one whose Status moved past its record, or one whose record
+    stops before the Status the card carries now. Neither the item's nor the issue's own updatedAt is a reason: the first
+    moves on writes that touch no Status, the second on any edit. The third rule is what a lagging Status clock leaves
+    behind (#1394): a timeline read while GitHub had not yet published a move is complete by its own page cursor, and the
+    clock that stamps the move can agree with the record's, so only the value itself says the record is behind."""
     return [i["n"] for i in items
             if (rec := stored.get(i["n"])) is None
             or not rec.get("complete")
-            or i["status_updated"] > rec["status_updated"]]
+            or i["status_updated"] > rec["status_updated"]
+            or bool(i.get("status")) and last_status(rec) != i["status"]]
 
 
 def backfill_batch(numbers, store):
