@@ -194,9 +194,22 @@ def test_the_loop_health_reads_the_last_cycles_age_and_says_none_when_it_has_non
     log.unlink()
 
 
+def test_the_access_chip_is_written_by_the_client_alone(hub):
+    """The served page seeds neither the chip nor the nav line: both start as a dash and the one client writer sets them
+    from the access answer, so a cached loopback page and a tailnet answer never flicker between two sources (#1285)."""
+    page = hub.served_page("me", True)
+    assert re.search(r'<button data-sp=acc>Access<small id=accnav>&#8212;</small>', page)
+    assert re.search(r'<summary>Access<span class=sr id=accsr>&#8212;</span>', page)
+    assert "__REACH__" not in page
+    draw = page[page.index("const accDraw="):page.index("async function accPoll(")]
+    assert "#accsr" in draw and "#accnav" in draw and "accV.tailnet" in draw
+
+
 def test_the_access_theme_states_its_facts_and_names_who_sets_each_value(hub):
-    now, settings = _blocks(_run(hub.PAGE, "accHtml({tailnet:true,access:{loop_write:false,terminals_send:false}})"))
-    assert "tailnet" in now and "refused" in now and "<input" not in now and "<select" not in now, now
+    now, settings = _blocks(_run(hub.PAGE, "accHtml({tailnet:true,reach:true,access:{loop_write:false,terminals_send:false},file:'/p/.env'})"))
+    assert "allowed" in now and "refused" in now and "<input" not in now and "<select" not in now, now
+    assert 'title="SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"' in now, "the setting's name sits in the hover, not the value"
+    assert "Read from <code>/p/.env</code>." in now, now
     assert "Settings" in settings and "project file" in settings, settings
 
 
