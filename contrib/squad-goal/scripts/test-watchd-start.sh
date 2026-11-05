@@ -64,5 +64,12 @@ case "$out" in *"could not be read"*) ok "a failed read says the loop-bug check 
 rm -f "$SG_STATE/gh-fail"
 bash "$T/watchd.sh" stop >/dev/null 2>&1; sup=
 
+# 6. A SG_SQUAD whose squad.caps lacks free_runs refuses the start with the reinstall command (#1422).
+issues '[]'
+bad="$T/badsq"; mkdir -p "$bad/squad"; : > "$bad/squad/__init__.py"; printf 'X = 1\n' > "$bad/squad/caps.py"
+out=$(SG_SQUAD="$bad" bash "$T/watchd.sh" start 2>&1); rc=$?
+[ "$rc" -ne 0 ] && [ ! -e "$SG_STATE/watchd.pid" ] && ok "a SG_SQUAD without free_runs refuses the start" || ko "a SG_SQUAD without free_runs did not refuse (rc=$rc)"
+case "$out" in *"claude plugin uninstall agent-squad@agent-squad && claude plugin install agent-squad@agent-squad"*) ok "the refusal carries the reinstall command";; *) ko "the refusal lacks the reinstall command: $out";; esac
+
 [ "$fail" = 0 ] && echo "all cases passed" || echo "FAILURES"
 exit "$fail"

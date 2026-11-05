@@ -319,4 +319,36 @@ case "$out" in *"file(s) published"*) ok "a normal publish prints the success co
 out=$(env -u SG_SQUAD -u SG_REPO bash "$src" --check "$vr" "$vl" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ] && ok "the destination verifies clean after a normal publish" || ko "--check after a normal publish (rc $rc): $out"
 
+# --- a non-git SG_SQUAD (the plugin cache) is checked against the commit the plugin was installed at (#1422) -----------
+# env.sh defaults SG_SQUAD to the cache, which is no git repo, so the #605 check skipped it. The installed commit is read
+# from installed_plugins.json; a squad/ or pyproject.toml change since that commit refuses the publish.
+pr="$T/pcrepo"; mkdir -p "$pr/squad" "$pr/contrib/squad-goal/scripts"
+printf 'caps v1\n' > "$pr/squad/caps.py"; printf 'p1\n' > "$pr/pyproject.toml"; printf 'skill P1\n' > "$pr/contrib/squad-goal/SKILL.md"
+git -C "$pr" init -q -b main && git -C "$pr" add -A && git -C "$pr" commit -qm P1
+p1=$(git -C "$pr" rev-parse HEAD)
+cache="$T/cache/0.2.34"; mkdir -p "$cache/squad"; printf 'caps v1\n' > "$cache/squad/caps.py"
+phome="$T/phome"; mkdir -p "$phome/.claude/plugins"
+reg() { printf '{"version":2,"plugins":{"agent-squad@agent-squad":[{"scope":"user","installPath":"%s","version":"0.2.34","gitCommitSha":"%s"}]}}\n' "$cache" "$1" > "$phome/.claude/plugins/installed_plugins.json"; }
+pl="$T/plive"; mkdir -p "$pl/scripts"; printf 'skill v0\n' > "$pl/SKILL.md"
+prun() { env -u SG_REPO HOME="$phome" SG_SQUAD="$cache" bash "$src" "$pr/contrib/squad-goal" "$pl" 2>&1; }
+printf 'caps v2\n' > "$pr/squad/caps.py"; git -C "$pr" commit -qam "squad change"
+printf 'skill P2\n' > "$pr/contrib/squad-goal/SKILL.md"; git -C "$pr" commit -qam "skill change"
+p2=$(git -C "$pr" rev-parse HEAD)
+reg "$p1"; before=$(snap "$pl")
+out=$(prun); rc=$?
+[ "$rc" = 3 ] && ok "a cache installed before a squad/ change refuses (exit 3)" || ko "a stale cache did not refuse with 3 (rc $rc): $out"
+[ "$before" = "$(snap "$pl")" ] && ok "the stale-cache refusal writes nothing" || ko "the stale-cache refusal wrote to the live skill"
+printf '%s' "$out" | /usr/bin/grep -q "${p1:0:8}" && printf '%s' "$out" | /usr/bin/grep -q "${p2:0:8}" \
+  && printf '%s' "$out" | /usr/bin/grep -q 'claude plugin uninstall agent-squad@agent-squad && claude plugin install agent-squad@agent-squad' \
+  && ok "the refusal names both commits and the reinstall command" || ko "the stale-cache refusal line: $out"
+printf '{"plugins":{}}\n' > "$phome/.claude/plugins/installed_plugins.json"
+out=$(prun); rc=$?
+[ "$rc" = 3 ] && [ "$before" = "$(snap "$pl")" ] && ok "an unreadable installed sha refuses" || ko "an unreadable sha (rc $rc): $out"
+reg "$p2"
+out=$(prun); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$pl/SKILL.md")" = "skill P2" ] && ok "a cache installed at HEAD publishes" || ko "a cache at HEAD (rc $rc): $out"
+printf 'skill P3\n' > "$pr/contrib/squad-goal/SKILL.md"; git -C "$pr" commit -qam "outside squad"
+out=$(prun); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$pl/SKILL.md")" = "skill P3" ] && ok "a change outside squad/ publishes" || ko "a change outside squad/ (rc $rc): $out"
+
 rm -rf "$T"; [ $fail = 0 ] && echo "test-publish-live: all checks green" || { echo "test-publish-live: failed"; exit 1; }
