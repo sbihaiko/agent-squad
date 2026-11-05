@@ -335,8 +335,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-ltf="7" type="button">1 week</button>
 <button data-ltf="30" type="button">1 month</button>
 <button data-ltf="all" type="button">All</button>
-<button data-lscale="jira" type="button">Linear</button>
-<button data-lscale="log" type="button">Log</button>
 </div>
 <div id="ltplot"></div>
 <div id="ltlegend"></div>
@@ -1160,18 +1158,17 @@ const MORE = {
   }
 };
 // The lead-time screen (#1333): the phone draws the payload /api/chart/lead serves, the desktop page's own route, and
-// computes none of its numbers (ADR-0137). The timeframe and the scale switch inside that one payload; zoom and reset
+// computes none of its numbers (ADR-0137). The timeframe switches inside that one payload; the axis is always log (#1355); zoom and reset
 // read the desktop's /api/leadtime through one explicit button each, never a drag. A tap pins one mark's tooltip.
-let MLT = { tf: "2", log: true, base: null, start: "", zc: null, zr: null, seq: 0 };   // `seq` numbers every view action: an answer numbered older than the last one never draws (#1333)
+let MLT = { tf: "2", base: null, start: "", zc: null, zr: null, seq: 0 };   // `seq` numbers every view action: an answer numbered older than the last one never draws (#1333)
 const leadEl = () => document.querySelector('[data-screen="lead"]');
-const leadView = () => MLT.zc || (MLT.base ? MLT.base[MLT.log ? "log" : "jira"][MLT.tf] : null);
+const leadView = () => MLT.zc || (MLT.base ? MLT.base[MLT.tf] : null);
 function leadDraw() {
   const el = leadEl(), c = leadView(); if (!el || !c) return;
   const part = mltChart(c);
   el.querySelector("#ltplot").innerHTML = part.svg;
   el.querySelector("#ltlegend").innerHTML = part.legend;   // the legend and the reference values follow the plot, with no gutter
   for (const b of el.querySelectorAll("#ltbars [data-ltf]")) b.setAttribute("aria-pressed", String(b.dataset.ltf === MLT.tf));
-  for (const b of el.querySelectorAll("#ltbars [data-lscale]")) b.setAttribute("aria-pressed", String((b.dataset.lscale === "log") === MLT.log));
 }
 function leadPin(k) {
   const el = leadEl(); if (!el) return;
@@ -1183,10 +1180,10 @@ async function leadZoom(dir) {
   if (dir === "reset") { MLT.zr = MLT.zc = null; leadPin(null); leadDraw(); msg.textContent = ""; return; }
   const c = leadView(), z = mltZoom(c && c.range, dir); if (!z) return;
   const q = "/api/leadtime?from=" + encodeURIComponent(z.from) + "&to=" + encodeURIComponent(z.to) +
-    "&scale=" + (MLT.log ? "log" : "jira") + "&a=" + encodeURIComponent(MLT.start || "");   // `a` is the span the payload serves (#1333)
+    "&a=" + encodeURIComponent(MLT.start || "");   // `a` is the span the payload serves (#1333)
   try {
     const d = await call(q, true);
-    if (seq !== MLT.seq) return;   // a later zoom, timeframe or scale holds the screen: a stale answer never draws (#1333)
+    if (seq !== MLT.seq) return;   // a later zoom or timeframe holds the screen: a stale answer never draws (#1333)
     if (d.error) { msg.textContent = "The hub refused the zoom."; return; }
     MLT.zr = z; MLT.zc = d; leadPin(null); leadDraw(); msg.textContent = "";
   } catch (e) { if (seq === MLT.seq) msg.textContent = e.message; }
@@ -1195,7 +1192,6 @@ leadEl().addEventListener("click", e => {
   const b = e.target ? e.target.closest("button") : null;
   if (!b) return;
   if (b.dataset.ltf) { ++MLT.seq; MLT.tf = b.dataset.ltf; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }
-  else if (b.dataset.lscale) { ++MLT.seq; MLT.log = b.dataset.lscale === "log"; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }   // a zoom chart belongs to the scale it was read on
   else if (b.dataset.ltzoom) leadZoom(b.dataset.ltzoom);
   else if (b.dataset.ltpin === "dismiss") leadPin(null);
 });
