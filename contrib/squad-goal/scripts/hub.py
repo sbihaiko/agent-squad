@@ -2063,7 +2063,21 @@ def loop_view(a):
             "health": loop_health(live),   # the Loop theme's Now tiles (#1280)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
-            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
+            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # kept for every client that already reads the loop answer
+
+
+def access_view(a):
+    """Settings > Access reads the reach and the two tailnet rules on their own route (#1285), an additive answer beside the
+    loop route so the theme never waits on the loop answer. `reach` is this request's own access result; each rule says
+    allowed or refused, and `file` names the file the rule is read from: the project file when it holds the block, else the
+    project's personal `.env`, and none when no file holds one. A request the seam refuses gets its reach and no rule, login
+    or file, marked `withheld` so the page says the values stay with the owner rather than reading as an empty rule."""
+    if not a.allowed:
+        return {"tailnet": a.tailnet, "login": "", "reach": False, "reason": a.reason, "withheld": True, "access": {}, "file": ""}
+    tn, path = tailnet_source()
+    return {"tailnet": a.tailnet, "login": a.login, "reach": a.allowed, "reason": "",
+            "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True},
+            "file": path}
 
 def loop_refusal(a, origin_ok, tn):
     """The reason a loop write is refused, or '' when it may run: the access rule, then the tailnet grant, then the origin and body."""
@@ -5039,6 +5053,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--inset);margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
 #lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
 #accb .kr b{font-weight:600;font-size:var(--fs-caption);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
+.sdev{padding:8px 0 0;border-top:1px solid var(--line)}.sdev h4{margin:0 0 4px;font-size:var(--fs-caption);color:var(--mute)}.sdev a{margin-right:10px}.sdev p{margin:6px 0 0}
 #ldg{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-lg);padding:16px;width:min(520px,92vw)}#ldg::backdrop{background:var(--scrim)}#ldg .lrad{display:flex;gap:8px;align-items:flex-start;padding:8px 0;cursor:pointer}#ldg .lrad small{display:block;color:var(--mute)}#ldg ul{margin:4px 0 0;padding-left:18px}#ldg .lact{display:flex;gap:6px;margin-top:10px}
 header.top{position:relative;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
 header.top h1{font-size:var(--fs-display);margin:0}header.top .spx{flex:1}
@@ -5178,14 +5193,14 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>loopback</small></button></nav>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
 <div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
 <details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>off</span></summary><div class=sb id=lopb></div></details>
 <details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr>on</span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
-<details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>loopback</span></summary><div class=sb><div id=accb></div><div class=kr><span class=l>This device</span><a id=mobile-link href="#">mobile view</a></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
+<details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>&#8212;</span></summary><div class=sb><div id=accb></div><div class=sdev><h4>This device</h4><a id=mobile-link href="#">mobile view</a><p class=note>The phone check runs <code>/agent-squad:start-mobile</code> on this machine.</p></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
 <dialog id=sdlg aria-label="Confirm the settings change"><b>Save these settings?</b><pre id=sdpre></pre><p class=m>Written to the project files. Runs already started keep the chains they recorded.</p><div class=sact><button id=sdok>Confirm and save</button><button id=sdno>Back</button></div></dialog>
@@ -6222,21 +6237,29 @@ const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on
  +`<label class=lrad><input type=radio name=lm value=stop-now${drain?"":" checked"}><span><b>Stop now</b><small>Kills these at once; their work in progress is lost:</small><ul>${r.map(x=>`<li>run ${esc(loopRun(x))}</li>`).join("")}${g.map(x=>`<li>${esc(x)}</li>`).join("")}${r.length||g.length?"":"<li>no live run or gate</li>"}</ul></span></label>`
  +`<div class=lact><button value=ok id=lok>Confirm</button><button value=no id=lno>Back</button></div>`};
 const accHtml=v=>{const a=v.access||{},yn=x=>x?"allowed":"refused",ty=x=>x?"ok":"err";
+ const rv=x=>v.withheld?"withheld":yn(x),rt=x=>v.withheld?"neutral":ty(x);   // a refused viewer never read a rule: no "refused" for it (#1285)
+ const route=v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)";
+ const reachTip=v.reach?`the request ${route}`:`the request ${route} was refused${v.reason?`: ${v.reason}`:""}`;   // the tone is the access answer; the route is the transport, in the hover
+ const note=v.file?`Read from <code>${esc(v.file)}</code>.`:v.withheld?"This read is refused; the two rules are withheld and stay with the owner.":"";
  return setNow("acc",[
-  setTile("Reached",v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)",v.tailnet?"warn":"ok"),
-  setTile("Loop write from the tailnet",yn(a.loop_write),ty(a.loop_write),"SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"),
-  setTile("Terminal send from the tailnet",yn(a.terminals_send),ty(a.terminals_send),"SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)"),
-  setTile("Run dashboards","read only, through the hub","neutral"),
-  setTile("Phone check","/agent-squad:start-mobile","neutral")])
+  setTile("Reached",yn(v.reach),ty(v.reach),reachTip),
+  setTile("Loop write from the tailnet",rv(a.loop_write),rt(a.loop_write),"SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"),
+  setTile("Terminal send from the tailnet",rv(a.terminals_send),rt(a.terminals_send),"SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)")],note)
  +setSettings("acc",[],`Read here; the owner sets each value in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.`)};
+// The Access theme reads its own route (#1285): the reach and the two rules never ride on the loop answer, so a stopped
+// loop still states them.
+let accV=null,accBusy=false;
+const accDraw=()=>{if(!accV)return;const reach=accV.tailnet?"tailnet":"loopback";   // the theme's chip and the nav's small line, one live fact
+ const sr=$("#accsr");if(sr)sr.textContent=reach;const nv=$("#accnav");if(nv)nv.textContent=reach;
+ const c=$("#accb"),ah=accHtml(accV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}};
+async function accPoll(){if(accBusy)return;accBusy=true;try{accV=await (await fetch("/api/access")).json();accDraw()}catch(e){}finally{accBusy=false}}
 // loop-switch:end
 // One switch, in the Monitor where the owner looks (owner, from #1071's cleanup): the Loop panel keeps the change log,
 // and no second button carries the same id (ADR-0162). The run history left for the bottom of the Runs tab (#1277).
 function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=null?hp.live_runs:((loopV.live||{}).runs||[]).length;
- setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));setChip("acc",loopV.tailnet?"tailnet":"loopback");
+ setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
- const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}
- const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}}
+ const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
@@ -6246,6 +6269,7 @@ document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop
 $("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok")return;const m=(d.querySelector('input[name="lm"]:checked')||{}).value;
  if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
 setInterval(loopPoll,5000);loopPoll();
+setInterval(accPoll,5000);accPoll();
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
@@ -7650,17 +7674,56 @@ def tailnet_seam():
     return _SEAM["seam"]
 
 _PROJECT = {}
-def tailnet_block():
-    """The `tailnet` block of the project file under the profile's checkout (squad/project_settings.py). Empty when the file or
-    the squad package does not load, so the seam refuses every tailnet request."""
+def _project_holds_tailnet(ps, path):
+    """True when the tracked project file itself holds a `tailnet` block, so it wins the named home over the personal `.env`."""
+    strip = getattr(ps, "without_tailnet", None)
+    try:
+        text = pathlib.Path(path).read_text()
+    except OSError:
+        return False
+    return strip is not None and strip(text) != text
+
+def _file_sig(path):
+    """The stat signature of `path`, or None when it is absent: a moved mtime or size means the file changed, so a cached
+    read is stale. The request path stats two small files and reads neither while the signature holds."""
+    try:
+        st = pathlib.Path(path).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+def tailnet_source():
+    """The `tailnet` block and the file it is read from, from one cached load of `squad/project_settings.py`. The project
+    route and the loop seam share the cache, so both read the same block within a request. Empty, with no named file, when
+    the file or the squad package does not load or no file holds the block: the seam then refuses every tailnet request.
+    The tracked project file wins the name; a block that lives only in `.env` names `.env`. A changed project file or
+    `.env` signature re-reads; an unchanged one answers from the cache, keyed on both files and the checkout."""
+    checkout = CHECKOUT or "."
+    proj = pathlib.Path(checkout) / "docs" / "squad" / "defaults.yaml"
+    env = pathlib.Path(checkout) / ".env"
+    sig = (str(pathlib.Path(checkout).resolve()), _file_sig(proj), _file_sig(env))
+    hit = _PROJECT.get("source")
+    if hit and hit[0] == sig: return dict(hit[1]), hit[2]
     try:
         if "ps" not in _PROJECT:
             (_PROJECT["ps"],) = load_squad(tailnet_roots(), ("project_settings",))
-        data, _ = _PROJECT["ps"].load(CHECKOUT)
+        data, info = _PROJECT["ps"].load(checkout)
     except Exception as e:
         log_once(f"hub: tailnet settings unavailable, every tailnet request is refused: {type(e).__name__}: {' '.join(str(e).split())}")
-        return {}
-    return (data or {}).get("tailnet") or {}
+        _PROJECT["source"] = (sig, {}, "")
+        return {}, ""
+    block = (data or {}).get("tailnet") or {}
+    path = (info or {}).get("path")
+    if path and _project_holds_tailnet(_PROJECT["ps"], path): home = path          # the tracked file holds the block
+    elif block and env.is_file(): home = str(env)                                 # only `.env` holds it
+    else: home = ""                                                               # no file holds a block: name none
+    _PROJECT["source"] = (sig, block, home)
+    return dict(block), home
+
+def tailnet_block():
+    """The `tailnet` block of the project file under the profile's checkout. Empty when the file or the squad package does
+    not load, so the seam refuses every tailnet request."""
+    return tailnet_source()[0]
 
 class Access(NamedTuple):
     allowed: bool
@@ -7944,6 +8007,7 @@ class H(BaseHTTPRequestHandler):
             out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
+        elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/conversation"):
             page = conversation_payload(self.path.partition("?")[2])
