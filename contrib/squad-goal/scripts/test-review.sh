@@ -696,6 +696,19 @@ l1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)
 [ $rc = 0 ] && [ "$l1" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-fix_1-x.md" \
   && ok "24b a grok debt-only CHANGES keeps its verdict, so the fix round runs" \
   || ko "24b grok debt-only was saved as '$l1' (rc=$rc)"
+# 24c) the published verdict names its model and its counts in the state, one ledger row per verdict.
+vm=$(cat "$T/st/review-fix_1-x.verdict-model" 2>/dev/null); lg=$(tail -1 "$T/st/review-ledger.jsonl" 2>/dev/null)
+[ "$vm" = "grok-4.7" ] && jq -e '.model=="grok-4.7" and .verdict=="VERDICT: CHANGES" and .blocking==0 and .debt==1 and (.effort // "")!=""' <<<"$lg" >/dev/null 2>&1 \
+  && ok "24c the published verdict names its model in verdict-model and the ledger" || ko "24c verdict-model '$vm', ledger '$lg'"
+at=$(tail -1 "$T/st/review-attempts.tsv" 2>/dev/null); [ "$(printf '%s' "$at" | awk -F'\t' '{print NF}')" = 6 ] \
+  && [ "$(printf '%s' "$at" | awk -F'\t' '{print $3" "$4" "$6}')" = "grok-4.7 medium 0" ] \
+  && ok "24c every try is logged with its effort, so a low-effort review can be counted" \
+  || ko "24c attempts: '$at'"
+# 24d) a reused verdict names the model that ruled, not the model a killed try left behind.
+printf 'claude:first' > "$T/st/review-fix_1-x.model"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+case "$out" in "model=grok-4.7 (reused"*CHANGES) ok "24d a reused verdict names the model that ruled, not the killed try" ;; *) ko "24d reuse named '$out' (rc=$rc)";; esac
+rm -f "$T/st/review-fix_1-x.model"
 # 13c) a v2 chain entry that names its effort is what the call gets, not effort_of's default.
 printf '{"schema_version":2,"chains":{"review":[{"id":"grok-4.7","route":"cli","effort":"low"}]},"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; printf %s\n' "'VERDICT: APPROVE\n'" > "$T/bin/grok"; chmod +x "$T/bin/grok"
