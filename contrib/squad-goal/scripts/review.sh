@@ -89,12 +89,30 @@ while True:
         if time.time() > d: sys.exit(1)
         time.sleep(1)' "${SG_REVIEW_LOCK_WAIT:-3600}" || { echo "REVIEW $lbl: another review of this branch held it past ${SG_REVIEW_LOCK_WAIT:-3600}s" >&2; exit 1; }
 # The review this one waited for may have ruled on this very head: its verdict is reused, and no model is called again.
+# The named model is the verdict's own (review-<key>.verdict-model), not the model a killed try left behind.
 if [ -s "$last" ] && [ "$(cat "$last")" = "$head" ] && head -1 "$out" 2>/dev/null | grep -qE '^VERDICT: (APPROVE|CHANGES)'; then
-  echo "model=$(cat "$SG_STATE/review-$pr.model" 2>/dev/null || echo unknown) (reused: this head was reviewed) $(head -1 "$out")"; exit 0; fi
+  echo "model=$(cat "$SG_STATE/review-$pr.verdict-model" 2>/dev/null || cat "$SG_STATE/review-$pr.model" 2>/dev/null || echo unknown) (reused: this head was reviewed) $(head -1 "$out")"; exit 0; fi
 # Each try writes private files ($o and its siblings); only a verdict, or the BLOCKED line, is published to $out, by a rename.
 o="$out.$$"; e="$o.err"
 trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".* "$SG_STATE/review-route.$$.err"' EXIT
 publish() { printf '%s\n' "$1" > "$o.pub" && mv -f "$o.pub" "$out"; }
+# One row per published verdict in review-ledger.jsonl; an unreadable summary writes null counts, never zero.
+ledger() {  # <model> <effort>
+  local counts; counts=$(python3 "$(dirname "$0")/revformat.py" --summary "$out" 2>/dev/null)
+  LEDGER_COUNTS=$counts LEDGER_KEY=$pr LEDGER_HEAD=$head LEDGER_MODEL=$1 LEDGER_EFFORT=$2 LEDGER_FIX=${delta:+1} \
+  LEDGER_VERDICT=$(head -1 "$out") LEDGER_FILE="$SG_STATE/review-ledger.jsonl" python3 - <<'PY'
+import datetime, json, os, re
+counts = os.environ.get("LEDGER_COUNTS", "")
+m = re.search(r"blocking=(\d+) debt=(\d+)", counts)
+row = {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+       "key": os.environ["LEDGER_KEY"], "head": os.environ["LEDGER_HEAD"], "model": os.environ["LEDGER_MODEL"],
+       "effort": os.environ["LEDGER_EFFORT"], "verdict": os.environ["LEDGER_VERDICT"],
+       "fix_round": bool(os.environ.get("LEDGER_FIX")),
+       "blocking": int(m.group(1)) if m else None, "debt": int(m.group(2)) if m else None}
+with open(os.environ["LEDGER_FILE"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(row) + "\n")
+PY
+}
 prevmd="$SG_STATE/review-$pr.prev.md"; delta=""
 if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/review-$pr.md" | grep -q '^VERDICT: CHANGES' && [ "$(cat "$last")" != "$head" ] \
    && ahead "$(cat "$last")" "$head"; then
@@ -365,6 +383,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
   echo "$m" > "$SG_STATE/review-$pr.model"   # the model this review tries now: the hub reads it for the pass that holds the child (#598)
+  eff=$([ -n "$lane" ] && echo low || effort_of "$m")
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s on branch %s (previous model failed %s times).\n" "$prev" "$m" "$bm" "$tries" > "$(sg_cq_status "$iss" "mswitch$$-$ms")"
   tmo=$(row_of "$m" 6); [ -n "$tmo" ] || tmo=$(jq -r --arg m "$m" "$bare"' (.review_timeout_seconds_by_model // {}) as $t | $t[$m] // ([$t | to_entries[] | select((.key|bare) == ($m|bare)) | .value] | first) // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
@@ -439,6 +458,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     [ -n "$bad" ] && { printf "MODEL_FAIL review %s on branch %s: the run ended %s (exit %s), so its answer is no review: %s\n" "$m" "$bm" "$bad" "$rc" "$(head -c 200 "$o" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"; fmt=1; rc=1; continue; }
     [ -e "$p.superseded" ] && { publish "VERDICT: BLOCKED ($lbl head moved during the review)"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$eff" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-attempts.tsv"
     if grep -q "hit your usage limit" "$e" 2>/dev/null; then
       python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_SHARED/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
     if grep -qE "RESOURCE_EXHAUSTED|Individual quota reached" "$e" 2>/dev/null; then   # agy quota: account-wide, the error names its own reset
@@ -478,12 +498,13 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # after the verdict would make the loop's own approval malformed and hold its branch.
     # A grok reviewer is exempt: measured on a planted diff it files a real defect as Debt in most runs (#1848), so its
     # debt-only CHANGES keeps its verdict and the fix round runs -- the downgrade would turn that habit into an approval.
+    # Stays on the vendor name until review-grok-measure.py's live numbers say otherwise (ADR-0012, ADR-0018).
     if [ $rc = 0 ] && [ "$(head -1 "$o" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$runner" != grok ] \
        && python3 "$(dirname "$0")/revformat.py" --summary "$o" 2>/dev/null | /usr/bin/grep -qE '^blocking=0 debt=[1-9]'; then
       { echo "VERDICT: APPROVE"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
     fi
     # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope
-    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"; exit 0; }
+    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; printf '%s\n' "$m" > "$o.vm" && mv -f "$o.vm" "$SG_STATE/review-$pr.verdict-model"; ledger "$m" "$eff"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"; exit 0; }
   done
   [ "$timed_out" = 1 ] || streak clear "$m"
   # #925: a timed-out try is no model failure. The MODEL_TIMEOUT above already names what happened; a MODEL_FAIL beside it
