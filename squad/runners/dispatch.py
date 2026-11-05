@@ -203,15 +203,20 @@ class Dispatch:
             if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
                 self.ac_before, _ = await self.ac_survey()
             head_before = git.head(self.e.target)
-            review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc)
-            fixes, last = [], None
+            fixes, last, why = self.regression_replay(name)      # a resume reads the fix entries the record holds, never runs them again (ADR-0107)
+            failed = next((f for f in fixes if f["outcome"] != "pass"), None)
+            if failed:
+                review, rounds, r = None, 0, actions.ActionResult(False, [*why, "review_fix_failed", *failed["reasons"]], head_before)
+            else:
+                start = self.last(name)["entry"] if fixes and self.last(name)["entry"] > self.last_round(name) else 1    # a fix entry nobody reviewed is read first
+                review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc, start)
             while not r.ok and r.extra.get("owner") == name:
                 regressed = r.extra["regressed"]
                 if regressed == last:      # the same regression after a fix entry: failed attempts that do not change stop the loop (ADR-0134)
                     r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", "regression_unchanged"], head_before, r.extra)
                     break
                 last = regressed
-                fix = await self.fix_regression(node, name, d, sc, r.extra["findings"])
+                fix = await self.fix_regression(node, name, d, sc, r)
                 fixes.append({**fix, "regressions": r.extra["regressions"]})
                 if fix["outcome"] != "pass":
                     r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", *fix["reasons"]], head_before, r.extra)
@@ -248,18 +253,42 @@ class Dispatch:
             r = await self.landing_check(name, head_before)
         return review, rounds, r
 
-    async def fix_regression(self, node, name, d, sc, findings):
+    async def fix_regression(self, node, name, d, sc, r):
         """The owner's fix entry answers a route-stage regression as CHANGES does (ADR-0151): the finding names the regressed
         commands, the child that declared each, and its landed head. The entry is the child's next one, read from its outcomes
         and never from its review rounds. The run must fund it first (ADR-0108): an unfunded entry fails
-        `review_fix_unfunded`. Return {entry, outcome, reasons}."""
+        `review_fix_unfunded`. A diagnostic names the entry before it starts, so a resume replays it (`regression_replay`).
+        Return {entry, outcome, reasons}."""
         entry = self.last(name)["entry"] + 1
         fund = self.e.budget.hold(d["spend"], d.get("spend_tokens"))
         if fund is None:
             return {"entry": entry, "outcome": "fail", "reasons": ["review_fix_unfunded"]}
         self.held[name] = fund
-        out = await self.e.runs.fix(node, name, entry, {"verdict": "fix", "findings": findings, "stderr": ""}, sc.deadline_at, self.coder(node, name, d))
+        x = r.extra
+        self.e.record.append("diagnostic", source="regression_fix", node=name, entry=entry,
+                             payload={"regressions": x["regressions"], "regressed": x["regressed"], "reasons": list(r.reasons)})
+        out = await self.e.runs.fix(node, name, entry, {"verdict": "fix", "findings": x["findings"], "stderr": ""}, sc.deadline_at, self.coder(node, name, d))
         return {"entry": entry, "outcome": out["outcome"], "reasons": list(out.get("reasons", []))}
+
+    def regression_replay(self, name):
+        """The regression fix entries the record holds for a child, as `land` rows, and the last regression they answered.
+        An entry with an outcome is reused; one with a `call_start` and no outcome crashed mid-session and is not run again
+        under its grant (as in `rounds`); one never launched is left out and runs again. Return (rows, regressed, the landing reasons of the last entry)."""
+        e, rows, last, why = self.e, {}, None, []
+        for x in e.record.events:
+            if x["event"] != "diagnostic" or x["source"] != "regression_fix" or x["node"] != name:
+                continue
+            n, p = x["entry"], x["payload"]
+            out = e.outcomes.event(name, n)
+            if out is None and any(c["event"] == "call_start" and c["node"] == name and c["entry"] == n for c in e.record.events):
+                cap = self.children[name]["reservation"]
+                out = e.runs.outcome(name, "fail", ["crashed", "launched_no_outcome"], None, {"cap": cap}, n)
+                e.budget.unmeasured += cap
+            if out is None:
+                continue
+            rows[n] = {"entry": n, "outcome": out["outcome"], "reasons": list(out.get("reasons", [])), "regressions": p["regressions"]}
+            last, why = [(c, k) for c, k in p["regressed"]], list(p["reasons"])
+        return list(rows.values()), last, why
 
     def review_base(self, path):
         """The target's side of a review's `{base}`: the point the child's branch was cut from. A target head read when the
