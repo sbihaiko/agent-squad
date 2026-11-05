@@ -294,7 +294,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="more-menu">
 <button data-more="cost" type="button">Cost and usage</button>
 
-<a class="more-link" href="./#set">Settings</a>
+<a class="more-link" id="more-settings" href="./#set">Settings</a>
 </div>
 <p class="msg">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
 <article data-screen="cost" data-src="/api/stats" hidden>
@@ -433,6 +433,13 @@ function qcardNodes(v, act, submit) {
 const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
 $("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
+
+// settings-handoff:begin
+// #1286: Settings opens the desktop tab on the theme last used there, kept under "hub"; Loop when none was used
+const SET_THEMES = ["lop","lim","sub","mdl","slk","acc"];
+const lastSetTheme = (() => { try { const t = JSON.parse(localStorage.getItem("hub") || "{}").sth; return SET_THEMES.includes(t) ? t : "lop"; } catch (e) { return "lop"; } })();
+$("more-settings").href = "./#set-" + lastSetTheme;
+// settings-handoff:end
 
 const tabs = [...document.querySelectorAll("nav [data-tab]")];
 // Each tab keeps its own page scroll (#1008): the scroll of the tab left is saved, the scroll of the tab shown is restored.
