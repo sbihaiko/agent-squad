@@ -1249,4 +1249,13 @@ rm -f "$T/st/py.log"
 r=$(SG_WAVE_TIP_GATES=true SG_WAVE_CHILD_PYTEST='echo ran >> "$SG_STATE/py.log"; exit 1' land2 run-95 2>&1); rc=$?
 [ $rc = 0 ] && [ ! -e "$T/st/py.log" ] && ok "W1409: a green tip runs no child pytest" || ko "W1409: exit $rc, py.log: '$(cat "$T/st/py.log" 2>/dev/null)': '$r'"
 
+# A default-style tip red (a measured fail naming pytest at this HEAD, recorded by gate.sh as fast-gate.sh does) never blames a child whose own pytest passes, and the child
+# gate writes no wave-level journal: the child runs with SG_GATE_STATUS=self and no SG_GATE_WAVE.
+W97=wave/run-97; start2 run-97 >/dev/null; child 1944 g1944 "origin/$W97"; en2 run-97 1944 >/dev/null; child 1945 g1945 "origin/$W97"; en2 run-97 1945 >/dev/null
+printf 'run-97\n' > "$T/st/auto/disp-1945"; : > "$T/gh.log"; : > "$T/board.log"
+printf '%s\n' 'printf "fail\tred\tpytest\n" > "$GATE_OUTCOME_FILE"; exit 1' > "$T/tipred.sh"
+r=$(SG_WAVE_TIP_GATES="SERIAL_TRY=1 SG_GATE_KIND=fast bash $T/s/gate.sh bash $T/tipred.sh" SG_WAVE_CHILD_PYTEST='exit 0' land2 run-97 2>&1); rc=$?
+case "$r" in *"broke the wave tip"*) ko "W1409: a passing child was named after a tip red: '$r'";; *) ok "W1409: a passing child is not named after a measured tip red";; esac
+[ "$(/usr/bin/grep -c '^o 3 Todo 194[45]$' "$T/board.log")" = 0 ] && ok "W1409: no passing child is requeued after a tip red" || ko "W1409: requeue: '$(cat "$T/board.log")'"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

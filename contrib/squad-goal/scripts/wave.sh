@@ -677,7 +677,8 @@ held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([
 waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* waited [0-9.]+s for caps\.gates'; }
 
 # child_pytest <clone> <from> <to> <issue> (#1409): the Python test delta of one child's change, run against the wave tip in the
-# clone, through gate.sh: under the gate lock and holding gate slots, never beside them. `SG_WAVE_CHILD_PYTEST` replaces the
+# clone, through gate.sh: under the gate lock and holding gate slots, never beside them. `SG_GATE_STATUS=self` keeps it out of the tip's red,
+# status, history and wave journal: it only passes the command's exit code through. `SG_WAVE_CHILD_PYTEST` replaces the
 # command (SG_WAVE_CHILD, _FROM and _TO are set); the default selects the files the child's commit reaches (squad.testselect, as
 # the fast gate does), read in a detached tree at the child's commit, and runs them in the clone. An empty selection passes: the
 # child changed nothing pytest covers. Exit 0: passed; 1: failed; 9: the gate lock or slots were not free, so nothing ran.
@@ -689,7 +690,7 @@ child_pytest() {
 case $sel in none:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;; esac
 "$SG_WAVE_PY" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-2}" -m "not heavy" "$@"'
   fi
-  out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_WAVE="${run:-}" SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
+  out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_STATUS=self SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
   [ $grc = 73 ] && held_by "$out" >/dev/null && return 9
   [ $grc = 75 ] && waited_out "$out" && return 9
   [ $grc = 0 ] && return 0
