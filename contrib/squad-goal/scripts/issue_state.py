@@ -836,7 +836,12 @@ def _name_unread(state_dir, missing, unanswered):
 
 
 def _fresh_hub_items(require_fresh=True, repo=None):
-    """Return verified rows for this repository, optionally requiring a recent refresh stamp."""
+    """Return verified rows for this repository, optionally requiring a recent refresh stamp.
+
+    The hub stamps every row with its repository (`r`). One project may hold cards of several repositories and an
+    issue number repeats between them, so a row that names another repository is that repository's card, never this
+    board's (#1429). A cache row with no stamp proves no repository and is a cache written before the stamp: such a
+    cache is not trusted at all, and the caller reads the board itself."""
     path = pathlib.Path(os.environ.get("SG_BOARD_CACHE", "/nonexistent"))
     try:
         data = json.loads(path.read_text())
@@ -846,9 +851,15 @@ def _fresh_hub_items(require_fresh=True, repo=None):
         if not expected_repo or data.get("repo") != expected_repo:
             return None
         if 0 <= age < 300 and (not require_fresh or not data.get("err")) and isinstance(items, list):
-            # A row that names another repository is that repository's card, never this board's: one project may hold
-            # cards of several repositories, and an issue number repeats between them (#1429).
-            return [i for i in items if not (i.get("r") and str(i["r"]) != expected_repo)]
+            rows = []
+            for i in items:
+                if not isinstance(i, dict): continue
+                if not i.get("r"):
+                    if i.get("st") is not None: return None   # an unstamped card: the cache is not this build's
+                    continue                                   # an issue with no card carries no state to name
+                if str(i["r"]) != expected_repo: continue      # another repository's card, dropped
+                rows.append(i)
+            return rows
     except (OSError, ValueError, TypeError, KeyError):
         pass
     return None
@@ -861,11 +872,12 @@ def main(argv):
     if args[:1] == ["--repo"]: repo = args[1]; args = args[2:]
     if "--label" in args:
         k = args.index("--label"); label = args[k + 1] if k + 1 < len(args) else ""; del args[k:k + 2]
-    # The binding is this profile's repository: with no --repo the seam falls back to SG_REPO, as every other door
-    # already asks it. An empty name is no repository named, never a board read without a filter (#1429).
-    repo = repo or None
+    # The binding is this profile's repository: with no --repo the door names SG_REPO, as every other path asks the
+    # seam. A name neither the option nor the profile gives is no repository named, never a board read without a
+    # filter (#1429).
+    repo = repo or os.environ.get("SG_REPO", "") or None
     if args[:1] == ["--hub-todos"]:
-        cached = _fresh_hub_items(require_fresh=False, repo=repo or None)
+        cached = _fresh_hub_items(require_fresh=False, repo=repo)
         if cached is not None:
             todo = os.environ.get("SG_TODO", "Todo")
             for item in sorted(cached, key=lambda i: int(i.get("n") or 0)):
@@ -873,9 +885,9 @@ def main(argv):
                     print(item["n"])
         return 0
     if args[:1] == ["--go"]:   # the rows a dispatch pass reads, with the go-labelled issues the board does not carry named (#800)
-        state = board_state(repo=repo or None)
+        state = board_state(repo=repo)
         requested = [n for n in (args[1].split(",") if len(args) > 1 and args[1] else []) if n]
-        cached = _fresh_hub_items(repo=repo or None)
+        cached = _fresh_hub_items(repo=repo)
         if cached is not None:   # the rows the hub holds, and the same naming rule: an issue they lack is asked for itself (#1031)
             held = {str(i["n"]): i.get("st") or "" for i in cached if i.get("n") is not None}
             carried, rescued, missing = state.unread_rows(held, requested, label)
@@ -888,7 +900,7 @@ def main(argv):
             if os.environ.get("SG_STATE"): _name_unread(os.environ["SG_STATE"], missing, state.unanswered)
         return 0
     if args[:1] == ["--kinds"]:
-        cached = _fresh_hub_items(repo=repo or None)
+        cached = _fresh_hub_items(repo=repo)
         rows = ({str(i["n"]): i["k"] for i in cached if i.get("n") is not None and i.get("k")}
                 if cached is not None else board_state(repo=repo).kinds())
         for n, k in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{k}")
@@ -897,7 +909,7 @@ def main(argv):
         for k in board_state(repo=repo).kind_gaps(): print(k)
         return 0
     if not args or args[0] not in ("--state",):
-        cached = _fresh_hub_items(repo=repo or None)
+        cached = _fresh_hub_items(repo=repo)
         if cached is not None:
             rows = {str(i["n"]): i["st"] for i in cached if i.get("n") is not None and i.get("st") is not None}
         else:

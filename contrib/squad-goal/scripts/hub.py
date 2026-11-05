@@ -3032,11 +3032,12 @@ def task_count(i):
     return f"{c}/{t}" if t > 0 else None
 def board_items_jq(repo):
     """The board read's jq. A project may hold cards of several repositories and an issue number repeats between them, so an
-    Issue item counts only when its repository is `repo`; a draft item has no repository. The issue's own close reason
-    rides the same read as `cr` (#921): the key is its own, never `r`, which the hub reads as the row's repository. After
+    Issue item counts only when its repository is `repo`; a draft item has no repository. Every row carries that
+    repository as `r`, so a reader of the cache can place a row without trusting the file's own claim (#1429). The
+    issue's own close reason rides the same read as `cr` (#921): the key is its own, never `r`. After
     each page's items it emits one {"_page": n} line, n the page's own item count, so the read says whether its last page
     was short (#894)."""
-    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,fd:.content.id,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),gt:(((.fields[]?|select(.name=="Gate Tries")|.value)//null)|if type=="number" and .>0 then . else null end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,r:$repo,fd:.content.id,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),gt:(((.fields[]?|select(.name=="Gate Tries")|.value)//null)|if type=="number" and .>0 then . else null end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -3145,7 +3146,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             for i in gh_list(f"repos/{REPO}/issues", "state=open", until):
                 if i.get("pull_request") is None and i["number"] not in have:
                     s = i.get("sub_issues_summary") or {}
-                    items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
+                    items.append({"n": i["number"], "r": REPO, "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             nodes, complete = open_relations(until)   # every page of open issues; never one REST call per card
             if not complete: gaps.append("relations read incomplete: a page with no cursor, or past the page cap")

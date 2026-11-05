@@ -63,7 +63,7 @@ echo "$out" | /usr/bin/grep -qx 803 && ko "a closed issue is not listed as Todo"
 # #1031: closing an issue drops it from the go set on the next cycle. The rows are the hub cache, read before the close,
 # and still carry #803's Todo card; the issue itself answers closed, so it leaves the rows the pass reads, while #801,
 # which answers open and go-labelled, stays.
-printf '{"t": %s, "repo": "o/r", "items": [{"n":801,"st":"Todo"},{"n":803,"st":"Todo"}]}' "$(date +%s)" > "$T/hub.json"
+printf '{"t": %s, "repo": "o/r", "items": [{"n":801,"st":"Todo","r":"o/r"},{"n":803,"st":"Todo","r":"o/r"}]}' "$(date +%s)" > "$T/hub.json"
 cached=$(SG_BOARD_CACHE="$T/hub.json" sg_todo_cards "801,803" 2>"$T/err3")
 echo "$cached" | /usr/bin/grep -qx 801 && ok "an open go-labelled issue the cache rows carry stays in the go set" || ko "an open go-labelled issue the cache rows carry stays in the go set (rows: $(echo $cached))"
 echo "$cached" | /usr/bin/grep -qx 803 && ko "a closed issue the cache rows still carry drops out of the go set" || ok "a closed issue the cache rows still carry drops out of the go set"
