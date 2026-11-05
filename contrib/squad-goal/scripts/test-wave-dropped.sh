@@ -82,5 +82,15 @@ mkrun run-e 96 ""; entered run-e 96; : > "$T/gh.log"
 r=$(SG_WAVE_TIP_GATES=true land run-e); rc=$?
 [ $rc = 0 ] && [ "$(closes)" = "96 " ] && ok "e: an entered child of an empty wave still closes" || ko "e: exit $rc, closes '$(closes)': '$r'"
 
+# f: the tip check drops the only child, a long bisection lets the base move, the push is refused, and the retry finds nothing
+# ahead: the empty path must not count the dropped child as delivered.
+mkrun run-f 97 "bad work 97 (Refs #97)"; entered run-f 97; : > "$T/gh.log"; rm -f "$T/st/landed.tsv" "$T/moved"
+rm -rf "$T/mv"; $G clone -q "$T/origin.git" "$T/mv" 2>/dev/null
+CHILDMOVE='if [ ! -e "$T_MOVED" ]; then : > "$T_MOVED"; (cd "$T_MV" && echo m > mv-f && /usr/bin/git add mv-f && /usr/bin/git -c user.email=a@b -c user.name=t commit -q -m "base moves" && /usr/bin/git push -q origin HEAD:refs/heads/dev) >/dev/null 2>&1; fi; case " $DROP " in *" $SG_WAVE_CHILD "*) exit 1;; esac; exit 0'
+r=$(T_MOVED=$T/moved T_MV=$T/mv DROP=97 SG_WAVE_TIP_GATES=$TIPRED SG_WAVE_CHILD_GATES=$CHILDMOVE land run-f); rc=$?
+[ -e "$T/moved" ] && ok "f: the base moved during the bisection" || ko "f: the base never moved: '$r'"
+[ -z "$(closes)" ] && ok "f: the dropped child's issue #97 stays open on the empty retry" || ko "f: closes '$(closes)': '$r'"
+[ -s "$T/st/landed.tsv" ] && ko "f: landed.tsv has a row: $(cat "$T/st/landed.tsv")" || ok "f: no landed.tsv row on the empty retry"
+
 [ $fail = 0 ] && echo "PASS test-wave-dropped" || echo "FAIL test-wave-dropped"
 exit $fail
