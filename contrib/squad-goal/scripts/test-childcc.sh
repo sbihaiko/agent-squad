@@ -674,6 +674,31 @@ for i in 1 2 3; do SG_CHILDCC_BUDGET=1 SG_CHILDCC_DEFER_MAX=2 dpass dsb >/dev/nu
 [ "$(/usr/bin/grep -c '^enter dsb ' "$WAVE_CALLS")" = 3 ] && ok "one pass per child enters all three healthy siblings" || ko "entries: $(cat "$WAVE_CALLS")"
 ! /usr/bin/grep -q '^requeue ' "$WAVE_CALLS" && ok "a child the pass budget never reached is never requeued: over-reach is fixed" || ko "requeued a budget-skipped child: $(cat "$WAVE_CALLS")"
 
+# A gate-lock hold with no review run in the pass is no work (#1407, spec #1402): it spends none of the pass budget, keeps the
+# cursor off the held child, and ends the pass's entries at once, because the next child meets the same holder. The pass exits
+# 3 and the held child is tried first on the next pass. A hold after a review this pass ran is work and spends the budget.
+mkdir -p "$T/co/runs/hld"
+{ for c in a:6420 b:6421 c:6422; do echo '{"event": "spawn_accepted", "child": "'${c%%:*}'", "envelope": "route", "definition": "GitHub issue #'${c#*:}'"}'; done
+  for c in a b c; do echo '{"event": "outcome", "node": "'$c'", "outcome": "pass", "reasons": ["ok"]}'; done; } > "$T/co/runs/hld/record.jsonl"
+rm -f "$T"/st/review-*
+for c in a b c; do wtree hld "$c"; /usr/bin/git -C "$T/co/runs/hld/ws/target-$c" checkout -q -b "hld-$c"; hh=$(/usr/bin/git -C "$T/co/runs/hld/ws/target-$c" rev-parse HEAD)
+  echo '{"event": "review_round", "node": "'$c'", "round": 1, "head": "'$hh'", "verdict": "approve", "offered": false, "review": {"verdict": "approve", "findings": "x"}}' >> "$T/co/runs/hld/record.jsonl"
+  echo '{"event": "land", "node": "'$c'", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "review", "review": {"verdict": "approve", "findings": "x"}}}' >> "$T/co/runs/hld/record.jsonl"
+  printf '**VERDICT: APPROVE**\n' > "$T/st/review-hld-$c.md"; echo wave/hld > "$T/st/review-hld-$c.base"; echo "$hh" > "$T/st/review-hld-$c.sha"; done
+echo '{"event": "verdict"}' >> "$T/co/runs/hld/record.jsonl"; echo wave/hld > "$T/st/auto/wave-hld"; echo wave/hld > "$T/st/auto/waved-hld"
+export GH_NUMS="6420:Doing 6421:Doing 6422:Doing 6430:Doing 6431:Doing"; : > "$WAVE_CALLS"; rm -f "$T/st/auto/dwait-hld"* "$T/st/auto/cc-hld"* "$T/st/auto/childcc-cursor" "$T/st/auto/childcc-round"
+touch "$WAVE_GATE_HOLD"; hout=$(SG_CHILDCC_BUDGET=2 dpass hld); hrc=$?
+[ "$(/usr/bin/grep -c '^enter hld ' "$WAVE_CALLS")" = 1 ] && ok "a gate-lock hold ends the pass's entries: one entry, though the budget allows two" || ko "entries after a lock hold: $(cat "$WAVE_CALLS")"
+[ "$hrc" = 3 ] && ok "a gate-lock hold exits with the children-left code" || ko "lock hold exit $hrc: $hout"
+[ ! -s "$T/st/auto/childcc-cursor" ] && ok "a gate-lock hold with no review spends no budget and keeps the cursor before the held child" || ko "cursor after a lock hold: '$(cat "$T/st/auto/childcc-cursor" 2>/dev/null)'"
+[ ! -e "$T/st/auto/dwait-hld-a" ] && ! /usr/bin/grep -q '^requeue ' "$WAVE_CALLS" && ok "a gate-lock hold counts toward no deferral deadline and requeues nothing" || ko "dwait or requeue after a lock hold: $(cat "$WAVE_CALLS")"
+rm -f "$WAVE_GATE_HOLD"; : > "$WAVE_CALLS"; SG_CHILDCC_BUDGET=1 dpass hld >/dev/null
+[ "$(/usr/bin/grep '^enter hld ' "$WAVE_CALLS" | head -1)" = "enter hld 6420" ] && ok "the held child is tried first on the next pass" || ko "first entry on the next pass: $(cat "$WAVE_CALLS")"
+# A hold after a review this pass ran is work: it spends the budget, and the cursor moves to the child.
+rm -f "$T/st/auto/childcc-cursor" "$T/st/auto/childcc-round"; rm -f "$T"/st/review-*; : > "$T/cr.calls"
+run2 hlr 6430 6431; : > "$WAVE_CALLS"; touch "$WAVE_GATE_HOLD"; SG_CHILDCC_BUDGET=2 dpass hlr >/dev/null; rm -f "$WAVE_GATE_HOLD"
+[ -s "$T/cr.calls" ] && [ "$(cat "$T/st/auto/childcc-cursor" 2>/dev/null)" = "hlr a" ] && ok "a hold after a review the pass ran still spends the budget" || ko "review calls '$(cat "$T/cr.calls")', cursor '$(cat "$T/st/auto/childcc-cursor" 2>/dev/null)'"
+[ "$(/usr/bin/grep -c '^enter hlr ' "$WAVE_CALLS")" = 1 ] && ok "a lock hold after a review ends the entries too" || ko "entries: $(cat "$WAVE_CALLS")"
 # A child with no change past its base (#1406): childreview.sh exits 6. The issue is requeued once at once, with the reason,
 # never held three passes, and the head is recorded so the next pass does not review it again.
 cat > "$T/childreview.sh" <<'CR'
