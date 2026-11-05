@@ -435,6 +435,10 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; : > "$e"; fmt=1; lim=$i; false > "$o";;   # no stale stderr, no second MODEL_FAIL, no more tries for a model that never ran
     esac
     rc=$?; exec 8>&-   # the grok try is over: fd 8 (the probe lock) closes, so later subprocesses never hold it (#1417)
+    # #1385: the lease is a deadline, not a race with the watchdog. A saturated box wakes the watchdog late, so an answer
+    # that takes longer than its timeout can land first; it is the timeout the watchdog owed, and the chain moves on. The
+    # note below still names the configured lease, so no wall clock reaches it.
+    [ $rc = 0 ] && [ $(( $(date +%s) - t1 )) -gt "$tmo" ] && rc=142
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
     # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens. A
     # call whose answer carries no usage is not a zero, it is a FLOOR: a claude call -- a model that reports tokens -- whose
