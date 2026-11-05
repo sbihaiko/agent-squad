@@ -247,17 +247,32 @@ repw run/k1 w1; repw run/k2 w2; repw child/gui-11 w3; o=$(bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'wt_reason'" && ok "#585: failed runs in run and child worktrees are a repetition" || ko "#585 worktree repeat: $o"
 rm -rf "$T/co/worktrees"
 reset; : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-loops-duplicated"; mkdir -p "$T/co/runs"
-printf '#!/bin/bash\nsleep 60\n' > "$T/s/watch.sh"; bash "$T/s/watch.sh" & w1=$!; SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh" >/dev/null
+# #1427: a loop names itself in its own state dir, through the lock pidfile it holds. The stub holds one only when STUB_LOCK=1,
+# so a case names exactly the process it means; a case that leaves it unset starts a loop no state dir names.
+printf '#!/bin/bash\n[ -n "${STUB_LOCK:-}" ] && { mkdir -p "$SG_STATE/locks/watch"; echo $$ > "$SG_STATE/locks/watch/pid"; }\nsleep 60\n' > "$T/s/watch.sh"
+SG_STATE="$T/st" STUB_LOCK=1 bash "$T/s/watch.sh" & w1=$!; sleep 1
 o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "one loop alerted: $o" || ok "one watch.sh is not a duplication"
-bash "$T/s/watch.sh" & w2=$!; sleep 1; o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh")
+# #1427: a second profile runs the same watch.sh under its own state dir, so this profile's pass never names it
+mkdir -p "$T/st2/locks/watch" "$T/st3/locks/watch"
+SG_STATE="$T/st2" STUB_LOCK=1 bash "$T/s/watch.sh" & p2=$!
+SG_STATE="$T/st3" STUB_LOCK=1 bash "$T/s/watch.sh" & p3=$!; sleep 1
+o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "#1427 another profile's loop alerted as a duplicate ($p2, $p3): $o" || ok "#1427 another profile's watch.sh is not this profile's duplicate"
+kill $p2 $p3 2>/dev/null; wait $p2 $p3 2>/dev/null
+# two loops of this profile: one holds its lock pidfile, the other is the watch.sh lane its supervisor holds in watchd.pid
+rm -f "$T/st/auto/health-loops-duplicated"
+mkdir -p "$T/sup"; printf '#!/bin/bash\nbash "'"$T"'/s/watch.sh" &\necho $! > "'"$T"'/lane.pid"\nwait\n' > "$T/sup/lane.sh"
+SG_STATE="$T/st" bash "$T/sup/lane.sh" & qd=$!; sleep 1; q2=$(cat "$T/lane.pid"); echo "$qd" > "$T/st/watchd.pid"
+o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh")
 # #17: the cause names the pids it counted, so an operator can compare them with the loop watchd started
-wps=$(printf '%s\n' $w1 $w2 | sort -n | tr '\n' ' '); wps=${wps% }
-printf '%s' "$o" | /usr/bin/grep -qF "HEALTH loops-duplicated: 2 watch.sh process(es) alive (pids $wps;" && ok "the duplicate names both pids" || ko "pids not named ($w1 $w2): $o"
-kill $w1 $w2 2>/dev/null; wait $w1 $w2 2>/dev/null
+qps=$(printf '%s\n' $w1 $q2 | sort -n | tr '\n' ' '); qps=${qps% }
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH loops-duplicated: 2 watch.sh process(es) alive (pids $qps;" && ok "#1427 two loops under one profile alert, naming both pids" || ko "#1427 two loops under this profile ($w1, $q2): $o"
+kill $qd $q2 $w1 2>/dev/null; wait $qd $q2 $w1 2>/dev/null; rm -f "$T/st/watchd.pid"
 # #17: the cause also names the pid the supervisor holds for its watch.sh, so the stray one is the pid that is not named there
 rm -f "$T/st/auto/health-loops-duplicated"
-mkdir -p "$T/sup"; printf '#!/bin/bash\nbash "'"$T"'/s/watch.sh" &\necho $! > "'"$T"'/held.pid"\nwait\n' > "$T/sup/watchd.sh"; printf '#!/bin/bash\nsleep 60\n' > "$T/s/watch.sh"
-bash "$T/sup/watchd.sh" run & sp=$!; bash "$T/s/watch.sh" & w3=$!; sleep 1; hp=$(cat "$T/held.pid"); echo "$sp" > "$T/st/watchd.pid"
+mkdir -p "$T/sup"; printf '#!/bin/bash\nbash "'"$T"'/s/watch.sh" &\necho $! > "'"$T"'/held.pid"\nwait\n' > "$T/sup/watchd.sh"
+SG_STATE="$T/st" bash "$T/sup/watchd.sh" run & sp=$!
+SG_STATE="$T/st" STUB_LOCK=1 bash "$T/s/watch.sh" & w3=$!; sleep 1; hp=$(cat "$T/held.pid"); echo "$sp" > "$T/st/watchd.pid"
 o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF "watchd pid $sp holds $hp" && ok "the duplicate names the pid the supervisor holds" || ko "supervisor pid not named (watchd $sp holds $hp, stray $w3): $o"
 kill $sp $hp $w3 2>/dev/null; wait $sp $hp $w3 2>/dev/null; rm -f "$T/st/watchd.pid"
@@ -265,7 +280,7 @@ kill $sp $hp $w3 2>/dev/null; wait $sp $hp $w3 2>/dev/null; rm -f "$T/st/watchd.
 # One healthy loop that forks must not read as two; the fake loop keeps a pipeline and a nested $(...) alive for the whole check.
 rm -f "$T/st/auto/health-loops-duplicated"
 # a detached step, `( cmd & )`, is a fork whose parent exited: parent pid 1, the loop's argv, the loop's process group (watch.sh runs forkclose so)
-printf '#!/bin/bash\n{ x=$(sleep 20; true); } &\n( { sleep 20; true; } & )\ntrue | { sleep 20; true; } | cat > /dev/null\nwait\n' > "$T/s/watch.sh"; bash "$T/s/watch.sh" & wf=$!; sleep 1
+printf '#!/bin/bash\nmkdir -p "$SG_STATE/locks/watch"; echo $$ > "$SG_STATE/locks/watch/pid"\n{ x=$(sleep 20; true); } &\n( { sleep 20; true; } & )\ntrue | { sleep 20; true; } | cat > /dev/null\nwait\n' > "$T/s/watch.sh"; SG_STATE="$T/st" bash "$T/s/watch.sh" & wf=$!; sleep 1
 /bin/ps -axwwo ppid=,command= | /usr/bin/grep -v grep | /usr/bin/grep -q "^ *1 bash $T/s/watch\.sh\$" && ok "the fake loop leaves a detached fork (parent pid 1)" || ko "no orphaned fork in the fake loop"
 nf=$(/usr/bin/pgrep -f "$T/s/watch\.sh$" | wc -l | tr -d ' ')
 [ "$nf" -gt 1 ] && ok "the fake loop is forking ($nf pgrep matches for one loop)" || ko "the fake loop does not fork: $nf match(es), the next check proves nothing"

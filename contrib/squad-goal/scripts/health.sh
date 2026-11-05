@@ -225,9 +225,24 @@ wl=$(/bin/ps -axwwo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/aw
   END { for (p in m) { if (pp[p] in m) continue
     if (pp[p] == 1) { f = 0; for (q in m) if (q != p && pg[q] == pg[p]) f = 1; if (f) continue }
     print p } }' | sort -n | tr '\n' ' '); wl=${wl% }
+# #1427: the count is this profile's loops, not the machine's. A second profile runs the same watch.sh under its own state
+# directory, and counting it made a healthy machine alert -- the false alert that taught the reader to ignore the real one.
+# A candidate counts only when this state dir names it: the lock pidfile the loop holds (`locks/watch/pid`), the lane pid
+# watchd holds (`watchd.pid`), or the process's own SG_STATE where the OS exposes it (`/proc`, on Linux; macOS hides another
+# process's environment, and the two pidfiles stand for it there).
+wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid")
+wlockpid=$(cat "$SG_STATE/locks/watch/pid" 2>/dev/null); mestate=${SG_STATE%/}
+pstate() { [ -r "/proc/$1/environ" ] && tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | sed -n 's/^SG_STATE=//p' | head -n 1; }
+wkeep=
+for p in $wl; do
+  [ "$p" = "$wlockpid" ] && { wkeep="$wkeep $p"; continue; }
+  [ -n "$wd" ] && [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && { wkeep="$wkeep $p"; continue; }
+  s=$(pstate "$p"); [ -n "$s" ] && [ "${s%/}" = "$mestate" ] && wkeep="$wkeep $p"
+done
+wl=${wkeep# }
 nw=$(printf '%s\n' $wl | grep -c .)
 # The pid watchd holds for its watch.sh is the watch.sh child of the pid in watchd.pid; any other counted pid is the stray. Read-only: nothing here kills.
-wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid"); held=
+held=
 [ -n "$wd" ] && for p in $wl; do [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && held="$held $p"; done; held=${held# }
 [ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive (pids $wl; watchd pid ${wd:-none} holds ${held:-none}): watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
 # health.json shape (#1294, asserted in test-health.sh): `causes` holds one entry per alert, so a repeating failure with two groups
