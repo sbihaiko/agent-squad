@@ -40,7 +40,7 @@ hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/d
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
 IFS=$'\t' read -r fin kind res at start _ < <(tail -n 1 "$H"); sel=$(tail -n 1 "$H" | cut -f6); scope=$(tail -n 1 "$H" | cut -f7)
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 12 ] && ok "the history line has thirteen fields: the selection and scope, the verdict, the slots, then how a red cleared" || ko "history fields: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 13 ] && ok "the history line has fourteen fields: the selection and scope, the verdict, the slots, how a red cleared, then the caller" || ko "history fields: '$(tail -n 1 "$H")'"
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$S" 2>/dev/null
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the status line carries the selection and the scope" || ko "status selection: '$(cat "$S" 2>&1)'"
@@ -48,7 +48,7 @@ case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$sta
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 
 (cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" sh -c 'exit 7'); rc=$?
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 12 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 13 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
 
 # --- the verdict (spec 1163): the outcome, its one reason, the checks that ran and the ones that did not, and the slots ---
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'printf "unproven\tmypy is not installed\truff\tmypy pytest\n" > "$GATE_OUTCOME_FILE"; exit 4'); rc=$?
@@ -149,6 +149,11 @@ rfile() {  # <sha>: the standing red record for that tree, empty when none
   local f; for f in "$RS"/gate-reds/*; do [ -f "$f" ] || continue; IFS=$'\t' read -r _ _ s _ < "$f"; [ "$s" = "$1" ] && { printf '%s\n' "$f"; return; }; done
 }
 rsha=$(git -C "$T/w" rev-parse HEAD)
+# (#1410) A gate row names its caller in field 14: the word SG_GATE_CALLER carries, `other` when it names none.
+(cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_CALLER=entry bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
+[ "$(rh | cut -f14)" = entry ] && ok "a gate row names the caller the environment gave" || ko "caller field: '$(rh)'"
+(cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
+[ "$(rh | cut -f14)" = other ] && ok "a gate row with no caller named reads other" || ko "default caller: '$(rh)'"
 out=$(rrun red-delta); rc=$?
 [ $rc = 1 ] && [ "$(rh | cut -f8)" = fail ] && [ -n "$(rfile "$rsha")" ] && [ "$(rh | cut -f13)" = red ] \
   && ok "a measured red is recorded, and the history names it red" || ko "red record: rc $rc, '$(rh)'"

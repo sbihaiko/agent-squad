@@ -33,6 +33,7 @@ auto/ccdefer-<run>-<child>, which the janitor drops once the run has its verdict
 gate slots, an inconclusive gate, a full review budget -- clears by itself, so it never counts and never requeues; a child a
 finished run never approved is missing review evidence, so it is never requeued either (ADR-0151 rule 5): the wave age cap
 owns it. A child the pass never reached (its budget, its cursor) has no deadline, because the pass did not try it (#590).
+A gate-lock or gate-slot hold with no review run in this pass is no work: it spends no budget, the cursor stops before the held child, and the pass ends its entries (exit 3), because the next child meets the same holder (#1407).
 A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
 the queue once with the landing's reason, and no card moves (#592).
 With the shipped vocabulary a child whose review starts, or that is deferred while it waits for review, moves its card from
@@ -78,6 +79,8 @@ HOLD_TRIES = int(os.environ.get("SG_HOLD_TRIES") or 3)   # the review holds on o
 DEFER_MAX = int(os.environ.get("SG_CHILDCC_DEFER_MAX") or 6)   # the passes one attempted child waits on one unchanged (tip, cause) before its issue goes back to the queue (#931, ADR-0134)
 HOLDS = set()   # the children this pass held out of their wave, neither entered nor requeued: the landing waits for them (#620)
 CAUSE = {}   # why this pass left each child out of its turn: the one diagnosis a deferral carries (#931)
+REVIEWED_NOW = set()   # the children whose review this pass ran: a review is work, so a gate hold after it still spends the budget (#1407)
+LOCK_HOLD = []   # set when an entry stopped at the gate lock or the gate slots: the next child meets the same holder, so the pass ends its entries (#1407)
 ATTEMPTED = set()   # the children this pass tried to enter and could not: only these have a deferral deadline, never one the budget left (#931)
 FIX_WAIT = set()   # the children a live fix run still works: its verdict is their bound, so they never count toward the deadline (#931)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
@@ -179,6 +182,7 @@ def reviewed(rd, child, n, wt, rv):
     try: e = subprocess.run(["bash", childreview, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     finally: caps_cmd("release", "reviews", holder); HELD.update(step="enter", rk=None); publish()
     out = (e.stdout + e.stderr).strip()
+    REVIEWED_NOW.add(f"{rd.name} {child}")
     if out: print(f"CHILD REVIEW {rd.name} {child}: {out}", flush=True)
     if e.returncode == 6:   # #1406: no change past its base, so nothing to review: the issue is requeued at once with the child's reason, never three hold passes
         k = review_paths(wt)[0].name[len("review-"):-len(".md")]
@@ -304,6 +308,9 @@ def enter(rd, child, n, d, approved=False, own=False):
             # rather than holding it for its whole age cap (#1344).
             return False, out, True
         HOLDS.add(f"{rd.name} {child}")
+        if machine_hold(out) and re.search(r"the gate lock is held|the gate slots \(caps.gates\) are full|waited for the gate lock", out):   # a machine hold: no work unless this pass ran the child's review (#1407)
+            LOCK_HOLD.append(1)
+            return False, out, f"{rd.name} {child}" in REVIEWED_NOW
         if re.search(r"WAVE HOLD #\d+: (no review|the review of)", out):   # a review hold, never a gate one: bounded per head, so a dead review chain never holds the wave for its whole age cap
             hk, h = A / f"holds-{rd.name}-{child}", head_of(wt)
             try: was, k = hk.read_text().split()
@@ -448,12 +455,17 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
         CAUSE[key] = "no review slot this pass: caps.reviews is full"
         visited.discard(key); continue
     if worked: spent += 1; CURSOR.write_text(key + "\n")
+    elif LOCK_HOLD:   # no work: the cursor stops just before the held child, so the next pass tries it first (#1407)
+        i = [p[0] for p in pending].index(key)
+        if i: CURSOR.write_text(pending[i - 1][0] + "\n")
+        else: CURSOR.unlink(missing_ok=True)
     if why: print(why, flush=True)
     if key in HOLDS:   # a held child is no ruling: it stays left, so the pass exits 3 and the wave waits, until its age cap (#620)
         CAUSE[key] = why or "its entry held it on this head"
         if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode:
             visited.discard(key)
             if key not in FIX_WAIT: ATTEMPTED.add(key)   # only a child this pass tried and could not enter has a deadline; a budget or cursor child does not, and a live fix run is its own bound (#931)
+    if LOCK_HOLD: break   # a lock hold ends the pass's entries: the next child meets the same holder, and the held child is tried first next pass (#1407)
     if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue
     mk.touch()
     if entered is None:   # no wave: the pass moves the cards itself, one per issue the child works (#954)

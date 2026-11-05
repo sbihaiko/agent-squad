@@ -24,13 +24,18 @@ d=$(cd "$(dirname "$0")" && pwd)
 # outside a job never becomes a check run whose absence would hold every tip forever (ADR-0164, #1322). Only a job that
 # names itself is read: the shard names are read apart, from the matrix the same file carries. A file that names no job
 # answers nothing, and its caller reads that as pending, never as a vacuous pass.
+# A job gated on base_ref runs only on a pull request into that branch (the complete tier on stg-to-main, #1324), so the
+# dev-to-stg pass never waits on it: the gate may stand on any line of the job.
 ci_job_names() {
   awk '
+    function flush() { if (cur != "" && !gated) print cur; cur = ""; gated = 0 }
     /^jobs:[[:space:]]*$/ { injobs = 1; next }
-    /^[^[:space:]#]/ { injobs = 0 }
+    /^[^[:space:]#]/ { if (injobs) flush(); injobs = 0 }
     !injobs { next }
-    /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { job = 1 }
-    /^    name:[[:space:]]+/ { if (!job) next; v = $0; sub(/^    name:[[:space:]]+/, "", v); print v }
+    /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { flush(); job = 1; next }
+    /^    name:[[:space:]]+/ { if (!job) next; cur = $0; sub(/^    name:[[:space:]]+/, "", cur); next }
+    /^    if:[[:space:]]/ && /base_ref/ { gated = 1 }
+    END { flush() }
   ' "$1" 2>/dev/null
 }
 if [ "${1:-}" = --ci-job-names ]; then   # the check names a workflow's job block produces, printed one per line
