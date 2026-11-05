@@ -110,6 +110,7 @@ contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-requeue-
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-probe.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-janitor-probe-retry.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-norefs.sh
+contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-dropped.sh
 contrib/squad-goal/scripts/wtclean.sh	contrib/squad-goal/scripts/test-wtclean.sh
 contrib/squad-goal/scripts/wtclean.sh	contrib/squad-goal/scripts/test-wtclean-run-tree.sh
 contrib/squad-goal/scripts/acpaths.py	contrib/squad-goal/scripts/test-acpaths.sh

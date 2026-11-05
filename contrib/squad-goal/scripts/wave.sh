@@ -758,6 +758,7 @@ wave_check() {
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
     wave_fact "$run" "$cx" refused "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
     requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
+    dropped="${dropped:+$dropped }$cx"   # land keeps the set: the tree it pushes lacks this child's commits (#1416)
     echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
   done
 }
@@ -1005,7 +1006,9 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
-  local out sha try=1 issues n anyref=0 files rc ob tipobl=""
+  # `dropped`: the issues whose child the tip check removed from the tree this landing pushes (#1416). Only this pass sets it,
+  # so a refusal an earlier pass wrote never excludes an issue. wave_check adds to it; a repeat after a refused push keeps it.
+  local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped=""
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
@@ -1042,6 +1045,9 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
         [ "$k" = A ] && echo "WAVE-NOTE $w: commit ${sha:0:9} names several issues ($ns) and closes none of them"; done
       for n in $(run_issues "$rd"); do
         dispatched="${dispatched:+$dispatched, }#$n"
+        # (#1416) A child the tip check dropped has no work in $base, even when a refused push moved the base and this retry
+        # found nothing ahead: the entered fact below is no proof for it.
+        case " $dropped " in *" $n "*) continue;; esac
         # A child that entered this wave (the entered fact of its ledger, ADR-0149) and still leaves it empty reached the base
         # by another route, whatever its message says: the entry is the proof, so it is delivered, never requeued (#620).
         case " $ent " in *" $n "*) delivered="${delivered:+$delivered }$n"; continue;; esac
@@ -1149,6 +1155,12 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv";; esac; done
     issues=$kept
   fi
+  # (#1416) An issue whose child the tip check dropped is decided here, before deliver() writes anything: its work is not in
+  # the tree this landing pushed, so no close, landed.tsv row or delivery comment follows, and its requeue stands.
+  if [ -n "$dropped" ]; then
+    kept=""; for n2 in $issues; do case " $dropped " in *" $n2 "*) echo "WAVE-NOTE $w: the tip check dropped the child of #$n2; the landing closes none of them";; *) kept="${kept:+$kept }$n2";; esac; done
+    issues=$kept
+  fi
   # (#1003) A wave whose commits name no issue at all (no `Refs #N` in any commit, a RED one included) closes the issues its run
   # was dispatched for, read from the run's own request (run_issues, one source), and clears their dispatch markers: the run
   # ended and its work is in $base, so nothing else would free them. Only an issue whose child entered the wave closes (`ent`,
@@ -1157,7 +1169,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # rule above. A run whose issues cannot be read, or a multi-issue run with no entered child, closes nothing, and one line names the run.
   local fb="" cand="" n3
   if [ -z "$issues" ] && [ "${anyref:-0}" = 0 ]; then
-    for n3 in $dset; do case " $rq " in *" $n3 "*) ;; *) cand="${cand:+$cand }$n3";; esac; done
+    for n3 in $dset; do case " $rq " in *" $n3 "*) continue;; esac
+      case " $dropped " in *" $n3 "*) echo "WAVE-NOTE $w: the tip check dropped the child of #$n3; the landing closes none of them";; *) cand="${cand:+$cand }$n3";; esac; done
     if [ -z "${dset// /}" ]; then
       echo "WAVE-NOTE $w: no commit names an issue (no Refs), and the issues of run $run cannot be read ($rd/request.txt, $rd/record.jsonl), so the landing closes nothing"
     elif [ -n "${ent// /}" ]; then
