@@ -15,6 +15,9 @@ $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.
 mkorigin() { rm -rf "$T/origin.git" "$T/w"; $G clone -q --bare "$T/co" "$T/origin.git"; $G clone -q "$T/origin.git" "$T/w" 2>/dev/null
   (cd "$T/w" && $G checkout -q -b gui/7-x origin/dev && echo y > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "work" && $G push -q origin gui/7-x 2>/dev/null); }
 mkorigin
+# mkbranch8: a second open work branch (issue 8), beside gui/7-x, so a case can prove that one branch's review holds only itself.
+mkbranch8() { rm -rf "$T/w8"; $G clone -q "$T/origin.git" "$T/w8" 2>/dev/null
+  (cd "$T/w8" && $G checkout -q -b gui/8-y origin/dev && echo y8 > h8 && $G add h8 && $G -c user.email=a@b -c user.name=t commit -q -m "work 8" && $G push -q origin gui/8-y 2>/dev/null); rm -rf "$T/w8"; }
 # The stub: no open PR unless PRS names one. CHECKS names the check-runs answer.
 cat > "$T/bin/gh" <<J
 #!/bin/bash
@@ -150,6 +153,69 @@ reset; echo 0000000000000000000000000000000000000000 > "$T/st/review-gui_7-x.sha
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a review of an older tip does not approve the new one" || ko "landed on a stale review"
 # a red check never closes the issue or moves the card
 ! /usr/bin/grep -q "issues/7" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "a waiting branch closes nothing and moves no card" || ko "a waiting branch wrote"
+
+# (#1376) The landing pass asks ONE parser for a four-way classification -- stale, malformed, changes or approves --
+# instead of reading a first-line substring and a --summary count. A prose review has no recognised finding, so the old
+# predicate read blocking=0 and RELEASED the branch; the classification calls it malformed and holds it. These cases drive
+# the real parser (revformat.py) and the real pass (branchland.sh). --summary keeps its exact line and exit code, which
+# the other callers read, so it is guarded here too.
+printf 'I looked at the diff and it seems mostly fine, though the naming is odd.\nNo blocking issues as far as I can tell.\n' > "$T/prose.md"
+out=$(python3 "$T/s/revformat.py" --summary "$T/prose.md"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "blocking=0 debt=0" ] && ok "the --summary line and exit 0 on a prose review are unchanged (other callers read them)" || ko "--summary on prose changed: rc=$rc '$out'"
+printf 'VERDICT: CHANGES\n## Blocking\n- a.sh:1 — wrong — breaks — fix\n## Debt\n- b.sh:2 — naming — unclear — rename\n' > "$T/valid.md"
+out=$(python3 "$T/s/revformat.py" --summary "$T/valid.md"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "blocking=1 debt=1" ] && ok "the --summary counts of a valid review are unchanged" || ko "--summary on a valid review changed: rc=$rc '$out'"
+reset; cp "$T/prose.md" "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"
+tip=$($O rev-parse gui/7-x)
+[ "$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_7-x.md" "$T/st/review-gui_7-x.sha" "$tip")" = malformed ] && ok "the parser classifies a prose review as malformed" || ko "the prose review was not classified malformed"
+r=$(CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a prose review lands nothing" || ko "a prose review released the branch: '$r'"
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*malformed*"## Blocking"*"## Debt"*) ok "a malformed review holds its branch and names the shape";; *) ko "no malformed hold naming the shape: '$r'";; esac
+# a corrected file at the SAME commit: the next pass classifies it again and lands it, so the hold is not keyed on the tip
+printf 'VERDICT: APPROVE\n' > "$T/st/review-gui_7-x.md"
+r=$(CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$tip" ] && ok "a corrected file at the same commit lands on the next pass" || ko "the corrected file did not land: '$r'"
+# a valid CHANGES with one Blocking finding: 'changes', and it holds
+reset; rev CHANGES
+[ "$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_7-x.md" "$T/st/review-gui_7-x.sha" "$($O rev-parse gui/7-x)")" = changes ] && ok "a valid CHANGES with a Blocking finding reads changes" || ko "the Blocking review was not classified changes"
+r=$(CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a valid CHANGES with a Blocking finding still holds" || ko "a Blocking review landed"
+# a CHANGES whose sections are both empty: the shape check passes it, and the counts say blocking=0, so the old predicate
+# released the branch. The reviewer asked for a change and said nowhere what -- malformed, and it holds.
+reset; printf 'VERDICT: CHANGES\n## Blocking\n' > "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"
+cls=$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_7-x.md" "$T/st/review-gui_7-x.sha" "$($O rev-parse gui/7-x)")
+r=$(CHECKS="$GREEN" bl)
+[ "$cls" = malformed ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a CHANGES with no Blocking and no Debt is malformed, and holds" || ko "an empty CHANGES released or misclassified ('$cls'): '$r'"
+# review.sh's legacy line 'VERDICT: APPROVE (reason)' is the bare verdict, not prose: the branch lands, never held forever
+reset; printf 'VERDICT: APPROVE (small change; no blocking findings)\n## Blocking\n(none)\n' > "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"
+r=$(CHECKS="$GREEN" bl)
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a kept review with review.sh's legacy VERDICT line lands";; *) ko "the legacy APPROVE line did not land: '$r'";; esac
+# a valid debt-only CHANGES keeps its approval behaviour: 'approves', and it lands
+reset; rev DEBTONLY
+[ "$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_7-x.md" "$T/st/review-gui_7-x.sha" "$($O rev-parse gui/7-x)")" = approves ] && ok "a valid debt-only CHANGES reads approves" || ko "the debt-only review was not an approval"
+r=$(CHECKS="$GREEN" bl)
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a valid debt-only CHANGES still lands";; *) ko "the debt-only CHANGES did not land: '$r'";; esac
+# a saved review is the full-review shape or a fix round's, and the file names no mode: '## Resolved' is malformed in the
+# full shape and valid in the fix-round shape, so the pass asks the second and lands it
+reset; printf 'VERDICT: APPROVE\n## Resolved\n- a.sh:1 — x — fixed: y — check\n' > "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"
+[ "$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_7-x.md" "$T/st/review-gui_7-x.sha" "$($O rev-parse gui/7-x)")" = malformed ] && ok "a full review with '## Resolved' is malformed" || ko "'## Resolved' is accepted outside a fix round"
+r=$(CHECKS="$GREEN" bl)
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a fix-round review with '## Resolved' lands (the file names no mode)";; *) ko "the fix-round review did not land: '$r'";; esac
+# a review whose recorded sha is not the tip is stale, and holds
+reset; rev APPROVE; printf '0%.0s' $(seq 1 40) > "$T/st/review-gui_7-x.sha"
+cls=$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_7-x.md" "$T/st/review-gui_7-x.sha" "$($O rev-parse gui/7-x)")
+r=$(CHECKS="$GREEN" bl)
+[ "$cls" = stale ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a review of another tip is stale, and holds" || ko "a stale review released or misclassified ('$cls'): '$r'"
+# a malformed review of one branch stops no other branch: gui/7-x is held while gui/8-y lands
+reset; mkbranch8
+cp "$T/prose.md" "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-gui_8-y.md"; $O rev-parse gui/8-y > "$T/st/review-gui_8-y.sha"
+r=$(OPEN="7 8" CHECKS="$GREEN" bl)
+$O rev-parse -q --verify refs/heads/gui/8-y >/dev/null && ko "the other branch did not land: '$r'" || ok "a malformed review of one branch lands the other branch"
+tip7=$($O rev-parse -q --verify refs/heads/gui/7-x 2>/dev/null)
+[ -n "$tip7" ] && ! $O merge-base --is-ancestor "$tip7" dev 2>/dev/null && ok "the malformed branch stays held while the other lands" || ko "the malformed branch was released"
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*malformed*) true;; *) ko "no malformed line for the held branch: '$r'";; esac
+case "$r" in *"BRANCHLAND LANDED gui/8-y"*) ok "the pass lands the other branch and names it";; *) ko "no landed line for the other branch: '$r'";; esac
 
 # dev moved after the branch was cut: the branch is rebased on top, then lands
 reset; (cd "$T/w" && $G checkout -q dev && echo z > h && $G add h && $G -c user.email=a@b -c user.name=t commit -q -m "other" && $G push -q origin dev 2>/dev/null)

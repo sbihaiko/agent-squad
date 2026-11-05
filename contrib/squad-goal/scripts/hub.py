@@ -722,6 +722,11 @@ def group_header(kind, rows, caps):
 RUN_GROUPS = (("running", "WORKERS"), ("1h", "≤ 1 h"), ("2h", "1–2 h"), ("4h", "2–4 h"),
               ("8h", "4–8 h"), ("24h", "8–24 h"), ("d", "24 h+ (days)"))
 
+def band_of(r):
+    """The history group a row lands in: group_of's ladder, and the childcc pass is a worker, never a run, so it joins
+    WORKERS and never an age band."""
+    return "running" if r.get("kind") == "childcc" else group_of(r)
+
 def run_groups(rows, caps=None):
     """The run history's groups, in ladder order: each key, its label, the header text and title built by group_header, and
     `empty` marking a band that holds no run. The page draws what it is given, so the worktree ladder and its wording live here
@@ -729,13 +734,19 @@ def run_groups(rows, caps=None):
     row and the held row alike). The childcc pass is a worker, never a run: it lands in WORKERS and never in an age band, and
     group_header never counts it."""
     by = {k: [] for k, _ in RUN_GROUPS}
-    for r in rows: by["running" if r.get("kind") == "childcc" else group_of(r)].append(r)
+    for r in rows: by[band_of(r)].append(r)
     out = []
     for k, label in RUN_GROUPS:
         held = by[k]
         h = group_header(k, held, caps)
         out.append({"key": k, "label": label, "text": h["text"], "title": h["title"], "empty": not held})
     return out
+
+def run_muted(groups):
+    """The one muted line naming the age bands that hold no run, built here: the page lays it out and never invents the
+    wording or its separator (#1277, #1337). Empty when every band holds a run."""
+    empty = [g["label"] for g in groups if g["key"] != "running" and g.get("empty")]
+    return "no runs in " + " · ".join(empty) if empty else ""
 def run_rank(st, live=True):
     return 0 if live and st in LIVE_STATES else 1
 
@@ -2561,9 +2572,11 @@ def runs_answer():
     """The opted-in runs answer (`/api/runs?groups=1`): the rows the page draws and one entry per history group, its header
     built here (#1277). The bare route keeps its array, so a script, a phone forward or any other client that reads it is
     untouched. The caps are read on every answer, so a changed ceiling shows after one poll and the page substitutes none at
-    serve time."""
-    rows = run_list()
-    return {"runs": rows, "groups": run_groups(rows, loop_caps())}
+    serve time. Each row carries its own group's key as `band` (#1337), on a copy, so the bare array's rows are never given a
+    page's field. `muted` is the one line naming the empty bands, built here so a page lays it out (#1337)."""
+    rows = [dict(r, band=band_of(r)) for r in run_list()]
+    groups = run_groups(rows, loop_caps())
+    return {"runs": rows, "groups": groups, "muted": run_muted(groups)}
 
 def watch_runs(stop=None):
     """Watch the known runs directories without a platform-specific dependency; the API poll remains the fallback.

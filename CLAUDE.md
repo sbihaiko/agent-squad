@@ -59,6 +59,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 
 - **Run truth lives in one module; the exit code is a function of one verdict** ([ADR-0019](docs/adr/0019-run-truth-in-one-module.md)). Guard: none yet.
 - **`loop-bug:dispatch`, `loop-bug:landing` and `loop-bug:infra` halt dispatch; a bare `loop-bug` halts nothing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `test-autobug.sh`, `test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-watch-land.sh`.
+- **One parser classifies a review for the landing pass: stale, malformed, changes or approves; a malformed review holds its own branch and names the shape.** Guard: `contrib/squad-goal/scripts/test-branchland.sh`, `contrib/squad-goal/scripts/test-revformat.sh`.
 - **A start is refused while any loop-bug issue is open, bare or prefixed** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `contrib/squad-goal/scripts/test-watchd-start.sh`.
 - **A loop defect is reviewed by Fable or Astra first; a loop-bug is built only after an approving plan review of its current body** ([ADR-0171](docs/adr/0171-a-loop-defect-is-reviewed-by-fable-or-astra.md)). Guard: `contrib/squad-goal/scripts/test-loopbug-review.sh`, `test-autobug.sh`.
 - **Needs-human is not success and has its own exit code; its card keeps its column, marked frozen:owner** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.

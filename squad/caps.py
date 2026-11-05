@@ -102,30 +102,45 @@ def folder():
     return Path(os.environ.get("SQUAD_CAPS_DIR") or Path.home() / ".cache" / "agent-squad" / "caps")
 
 
-def started_at(pids):
-    """{pid: the wall time it started} for every pid the system answers for, in ONE call for all of them.
+def _procs(pids):
+    """{pid: (the wall time it started, its command line)} for every pid the system answers for, in ONE call for all of them.
 
     The slots are counted on every poll of every wait, and a wait polls until a slot frees, so one `ps` per lease is a fork
     storm: a worker spins in a subprocess loop and holds what the rest of the suite needs, and on a two-core runner the
     wait never converges and the run never reaches a verdict (#130; the runner in #158). One call per count, whatever the
-    number of leases; the answer is the same one.
+    number of leases; the answer is the same one. The command comes in that same call, so the dashboard rule below costs
+    no second process (#1389).
     """
     want = sorted({int(p) for p in pids if isinstance(p, int) and not isinstance(p, bool) and p > 0})
     if not want:
         return {}
     try:
-        out = subprocess.run(["/bin/ps", "-o", "pid=,lstart=", "-p", ",".join(str(p) for p in want)],
+        out = subprocess.run(["/bin/ps", "-o", "pid=,lstart=,command=", "-p", ",".join(str(p) for p in want)],
                              capture_output=True, text=True, check=False).stdout
     except OSError:
         return {}
     found = {}
     for line in out.splitlines():
-        pid, _, lstart = line.strip().partition(" ")
+        parts = line.strip().split(None, 6)      # pid, the five fields of lstart, then the command and its arguments
+        if len(parts) < 6:
+            continue
         try:
-            found[int(pid)] = datetime.datetime.strptime(lstart.strip(), "%a %b %d %H:%M:%S %Y").timestamp()
+            found[int(parts[0])] = (datetime.datetime.strptime(" ".join(parts[1:6]), "%a %b %d %H:%M:%S %Y").timestamp(),
+                                    parts[6] if len(parts) > 6 else "")
         except ValueError:
             continue
     return found
+
+
+def started_at(pids):
+    """{pid: the wall time it started} for every pid the system answers for, in ONE call for all of them (`_procs`)."""
+    return {pid: started for pid, (started, _) in _procs(pids).items()}
+
+
+# The page server the loop starts beside a run. It idles and never works the run, so a lease that names one is no live
+# run: an orphaned dashboard kept a dead run's slot for hours, the janitor could not prove the run dead, and the drain
+# never ended (#1389). A running engine is `-m squad.cli`, never this.
+DASHBOARD = re.compile(r"(?:^|\s|/)squad\.dashboard_server\b")
 
 
 def alive(pid, since=None, started=None):
@@ -176,10 +191,15 @@ class Ceiling:
                 leases.append((p, json.loads(p.read_text())))
             except (OSError, ValueError):
                 continue
-        started = started_at([lease.get("pid", -1) for _, lease in leases])
+        found = _procs([lease.get("pid", -1) for _, lease in leases])
+        started = {pid: at for pid, (at, _) in found.items()}
         out = []
         for p, lease in leases:
-            if alive(lease.get("pid", -1), lease.get("since"), started):
+            pid = lease.get("pid", -1)
+            if pid in found and DASHBOARD.search(found[pid][1] or ""):
+                p.unlink(missing_ok=True)       # a page server idles: a lease that names one holds no slot (#1389)
+                continue
+            if alive(pid, lease.get("since"), started):
                 out.append(lease)
             else:
                 p.unlink(missing_ok=True)

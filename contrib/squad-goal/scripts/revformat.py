@@ -44,6 +44,9 @@ and `-same-<key>`, so each pass keeps its own), and --record-stall keeps the rou
 usage: revformat.py [--max-lines N] [--fix-round] <review>
                                            exit 0 = the shape holds; 1 = one reason on stdout
        revformat.py --summary <review>     prints "blocking=N debt=N" (0 when the shape is broken)
+       revformat.py --classify <review> <sha-file> <tip> [--fix-round]
+                                           prints stale|malformed|changes|approves (#1376): the one reading the
+                                           landing pass makes, so it never reads a first line or a count
        revformat.py --shape [--fix-round]  prints the answer shape of that mode, and checks nothing (#1835)
        revformat.py --fingerprint <review> prints the fingerprint of the review's findings
        revformat.py --schema               prints the JSON schema of an answer (#632)
@@ -202,6 +205,58 @@ def record_stall(markers, prefix, key, fingerprint, rounds):
     for name, value in ((f"{prefix}-fp-{key}", fingerprint), (f"{prefix}-same-{key}", rounds)):
         with open(os.path.join(markers, name), "w", encoding="utf-8") as f:
             f.write(f"{value}\n")
+
+
+def classify(review_path, sha_path, tip, fix_round=False):
+    """The four-way reading of a stopped review file, the one the landing pass asks (#1376).
+
+    `stale` is no review file, or a recorded sha that is not the branch tip `tip`; `malformed` is a file outside the
+    accepted shape; `changes` is a valid review with at least one Blocking finding; `approves` is a valid review without
+    one. The shape is `survey`'s, the one --check enforces, and `fix_round` reads the mode whose grammar has
+    `## Resolved`. The answer is one word and never a reason: the pass holds the branch and names the shape itself.
+
+    A file that is missing and a sha that is missing are both `stale`, never `malformed`, so no absent file can be read
+    as a review at all. The classification is computed afresh on every pass, so a corrected file at the same tip lands
+    on the next pass; nothing is written here.
+    """
+    try:
+        with open(review_path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return "stale"
+    if _marker(sha_path) != tip.strip():
+        return "stale"
+    text = _legacy_verdict(text)
+    if survey(text, 0, fix_round) is not None:
+        return "malformed"
+    c = count(text)
+    # A verdict of CHANGES that lists no bullet at all releases nothing: the reviewer asked for a change and said what
+    # for nowhere, which is outside the shape exactly as an APPROVE carrying a Blocking finding is (survey's own rule).
+    # The #653 downgrade turns a debt-only CHANGES into an approval, so Debt is what keeps that path open (#1376).
+    # The bullets are counted, not the findings: in a fix round every bullet may be answered `fixed` and read as no
+    # finding, and that round did answer what the reviewer asked -- only a CHANGES that lists nothing at all is empty.
+    if text.split("\n", 1)[0].strip() == "VERDICT: CHANGES" \
+            and not any(section in ("Blocking", "Debt") for section, _ in bullets(text)):
+        return "malformed"
+    return "changes" if c["Blocking"] else "approves"
+
+
+LEGACY_VERDICT = re.compile(r"^VERDICT: (APPROVE|CHANGES) \(.*\)$")
+
+
+def _legacy_verdict(text):
+    """Line 1 with a note after the verdict, as review.sh wrote it before #1376, read as the bare verdict.
+
+    `review.sh` once wrote `VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)` (#653). The strict line
+    is the rule from this change on, and that file is kept under the branch key and never rewritten: reading it as
+    malformed would hold a branch that was approved, for ever, with a message telling the owner to correct a file no pass
+    will ever correct (#1376).
+    """
+    first, sep, rest = text.partition("\n")
+    m = LEGACY_VERDICT.match(first.strip())
+    if not m:
+        return text
+    return f"VERDICT: {m.group(1)}{sep}{rest}"
 
 
 def survey(review, max_lines=0, fix_round=False):
@@ -451,6 +506,9 @@ def main(argv=None):
                    " answer its previous findings in a '## Resolved' section, which a full review may not write")
     p.add_argument("--summary", action="store_true", help="print 'blocking=N debt=N' instead of checking"
                    " (a bullet answered 'fixed' is not a finding, #1832)")
+    p.add_argument("--classify", nargs=3, metavar=("REVIEW", "SHA-FILE", "TIP"),
+                   help="print one word for a review file: stale (missing, or another tip's), malformed (outside the"
+                        " shape), changes (valid with a Blocking finding) or approves (valid without one) (#1376)")
     p.add_argument("--normalize", action="store_true",
                    help="print the review with its verdict canonical on line 1, and check nothing")
     p.add_argument("--shape", action="store_true",
@@ -472,6 +530,9 @@ def main(argv=None):
         return 0
     if a.record_stall:
         record_stall(*a.record_stall)
+        return 0
+    if a.classify:
+        print(classify(*a.classify, fix_round=a.fix_round))
         return 0
     if a.shape:
         print(shape(a.fix_round))

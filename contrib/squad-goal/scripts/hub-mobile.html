@@ -141,6 +141,13 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 /* The run row draws the shared state chip: the served word in the state's tone, behind its shared mark (#1142). */
 .runrow .run-line{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
 .runrow .run-state{flex:none}
+/* The run history's bands (#1337): one header per group the answer draws, its occupancy on the same line, and one muted
+   line naming the bands that hold no run. */
+.hist{display:grid;gap:8px}
+[hidden].hist{display:none}   /* an author display rule would otherwise outrank the hidden attribute */
+.hist .gh{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:8px 2px 0;color:var(--mute);font:600 var(--fs-caption) system-ui,sans-serif;letter-spacing:.04em}
+.hist .gh .sr{font-weight:400;font-variant-numeric:tabular-nums;letter-spacing:0}
+.hist .mut{color:var(--mute);font-size:var(--fs-caption);margin:0 2px}
 /*RUN_STATE_BASE_CSS*/
 /*RUN_STATE_CSS*/
 #bread{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px} #bread.stale{color:var(--warn)} #cards.stale{opacity:.45;filter:grayscale(1)}
@@ -270,6 +277,8 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="runs-live" class="runlist"></div>
 <h3 class="sub">Ended today</h3>
 <div id="runs-ended" class="runlist"></div>
+<h3 class="sub" id="runs-history-h" hidden>Run history</h3>
+<div id="runs-history" class="hist" hidden></div>
 <p id="runs-msg" class="msg"></p>
 </section>
 <section data-panel="terminals" hidden>
@@ -1158,14 +1167,74 @@ function runRow(r, url) {
   b.append(line, meta);
   return b;
 }
+// The run history at the bottom of the tab (#1337), as the desktop tab draws it (#1277): the hub sends one entry per group,
+// its label, its header text and title, and marks a band that holds no run; it also sends the muted line's own words, so the
+// page only lays them out. A row carries its group's key as `band` (#1337); a hub from #1277 sends the groups without that
+// field, so the page derives it with the same ladder the groups name. WORKERS always draws, an age band only while it holds a
+// run, and the empty bands fold into one muted line. No groups — an older hub's bare array — draws nothing.
+function runHistory(groups, mutedText) {
+  const all = Array.isArray(groups) ? groups : [];
+  const drawn = all.filter(g => g.key === "running" || !g.empty);
+  const empty = all.filter(g => g.key !== "running" && g.empty);
+  // The hub owns the wording: only a hub that sends no `muted` gets the same words built from its own labels.
+  return { drawn, muted: mutedText || (empty.length ? "no runs in " + empty.map(g => g.label).join(" · ") : "") };
+}
+const LIVE_BANDS = ["running", "starting", "stalled"];
+function ageBand(age) {
+  const h = (age || 0) / 3600;
+  return h <= 1 ? "1h" : h <= 2 ? "2h" : h <= 4 ? "4h" : h <= 8 ? "8h" : h <= 24 ? "24h" : "d";
+}
+function rowBand(r) {
+  if (r.band) return r.band;
+  if (r.kind === "childcc" || (r.live !== false && LIVE_BANDS.includes(r.state))) return "running";
+  return ageBand(r.age);
+}
+function histRow(r) {
+  // The childcc pass is a worker, not a run: its row is drawn, and it opens no dashboard of its own (#598).
+  if (r.kind !== "childcc") return runRow(r, r.url || runURLs(r.id).page);
+  const d = document.createElement("div"), name = document.createElement("b"), meta = document.createElement("div");
+  d.className = "runrow";
+  name.textContent = r.label || r.id;
+  meta.className = "mut";
+  meta.textContent = [r.badge, r.sub].filter(Boolean).join(" · ");
+  d.append(name, meta);
+  return d;
+}
+function drawHistory(rows, groups, mutedText) {
+  const box = $("runs-history"), head = $("runs-history-h"), { drawn, muted } = runHistory(groups, mutedText);
+  const keys = new Set(drawn.map(g => g.key));
+  const first = (drawn.find(g => !g.empty) || drawn[0] || {}).key;   // a row no drawn header names joins the first filled band
+  const band = r => { const b = rowBand(r); return keys.has(b) ? b : first; };
+  box.replaceChildren();
+  for (const g of drawn) {
+    const h = document.createElement("div"), text = document.createElement("span");
+    h.className = "gh"; h.dataset.g = g.key; h.textContent = g.label;
+    if (g.title) h.setAttribute("title", g.title);
+    text.className = "sr"; text.textContent = g.text;
+    h.append(text);
+    box.append(h, ...rows.filter(r => band(r) === g.key).map(histRow));
+  }
+  if (muted) {
+    const p = document.createElement("p");
+    p.className = "mut"; p.textContent = muted;
+    box.append(p);
+  }
+  box.hidden = head.hidden = !drawn.length;
+}
 async function loadRuns() {
   try {
-    // The phone reads the bare runs array: the history groups are the desktop Runs tab's, and the array is the shape this
-    // route kept for every client (#1277).
-    const [live, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
-    $("runs-live").replaceChildren(...live.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
+    // The list first, on the bare route the page always read (#1337): a hub or an intermediary that rejects the groups query
+    // still shows the live and ended runs, as main did.
+    const [d, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
+    const rows = Array.isArray(d) ? d : d.runs || [];
+    $("runs-live").replaceChildren(...rows.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
     $("runs-ended").replaceChildren(...ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
     $("runs-msg").textContent = "";
+    // Then the history's groups in their own read, so a rejected or failed query costs the history alone. A hub older than
+    // the page ignores the query and answers the bare array: the history stays honestly empty (#1277).
+    let a = Array.isArray(d) ? null : d;
+    if (!a) { try { const g = await call("/api/runs?groups=1"); a = Array.isArray(g) ? null : g; } catch (e) { a = null; } }
+    drawHistory(a && a.runs ? a.runs : rows, a ? a.groups || [] : [], a ? a.muted || "" : "");
   } catch (e) { $("runs-msg").textContent = e.message; }
 }
 // Pause and resume: the one write the run screen makes. It posts through the hub's forward route to the run's own control
@@ -1204,7 +1273,7 @@ function openRun(id, url, name) {
   loadRunControl();
 }
 function closeRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; runId = null; }
-for (const id of ["runs-live", "runs-ended"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b) openRun(b.dataset.id, b.dataset.url, b.dataset.name); };
+for (const id of ["runs-live", "runs-ended", "runs-history"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b && b.dataset.id) openRun(b.dataset.id, b.dataset.url, b.dataset.name); };
 $("runview-back").onclick = closeRun;
 $("runctl-btn").onclick = sendRunControl;
 let rtouch = null;
