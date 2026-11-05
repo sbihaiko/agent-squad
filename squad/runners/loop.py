@@ -18,6 +18,7 @@ fails (ADR-0134). Two opt-ins change that, each kept generic to this one executo
 
 `max_by: "task"` never reads the streak.
 """
+from squad import acrepeat
 from squad.engine_errors import Defect
 from squad.runners.walk import walk_children
 from squad.stall import signature
@@ -38,18 +39,22 @@ class LoopRunner:
                 return self._stop(ctx, node, entry, sc, t0, word[5:], res.reasons, st)
             elif word != "continue":
                 raise Defect(f"{child}: unknown next word {word}")
-            reason = st.task_max(ctx, node, entry, ctx.record.events[pos0:]) or st.stall(ctx.record.events[pos0:]) or (st.same_failure(res.reasons) if again else None)
+            events = ctx.record.events[pos0:]
+            repeated_ac = st.ac_repeated(ctx, child, res, events)
+            if again and repeated_ac:
+                return self._stop(ctx, node, entry, sc, t0, "needs-human", ["ac_repeated", *st.ac_findings], st, repeated=st.ac_evidence)
+            reason = st.task_max(ctx, node, entry, events) or st.stall(events) or (st.same_failure(res.reasons) if again else None)
             if reason:
                 return self._stop(ctx, node, entry, sc, t0, "fail", [reason, *why], st)
             if not again:
                 return self._stop(ctx, node, entry, sc, t0, "pass", [], st)
 
-    def _stop(self, ctx, node, entry, sc, t0, outcome, reasons, st=None):
+    def _stop(self, ctx, node, entry, sc, t0, outcome, reasons, st=None, **extra):
         if st is not None and st.dropped and outcome == "pass":
             outcome, reasons = "fail", []
         if st is not None and st.dropped:
             reasons = [*reasons, *(f"task_exhausted:{t}" for t in st.dropped)]
-        return ctx.finish(node, entry, sc, outcome, reasons, elapsed=ctx.clock() - t0)
+        return ctx.finish(node, entry, sc, outcome, reasons, elapsed=ctx.clock() - t0, **extra)
 
 
 class _State:
@@ -60,6 +65,20 @@ class _State:
         self.by_task = node.get("max_by") == "task"
         self.attempts, self.unnamed, self.streak, self.dropped = {}, 0, 0, []
         self.last_failure, self.same = None, 0
+        self.ac, self.ac_findings, self.ac_evidence = acrepeat.Streak(), [], {}
+
+    def ac_repeated(self, ctx, child, res, events):
+        """#1378: True when an ac-verify gate fails the same way twice in a row. A gate that passes, or a commit that moves
+        the head, in the walk starts the count again."""
+        if any(e["event"] == "outcome" and e["outcome"] == "pass" and ctx.nodes.get(e["node"], {}).get("kind") == "gate" for e in events):
+            self.ac.reset()
+        if child is None or ctx.nodes[child].get("check") != "ac-verify" or res.outcome != "fail":
+            return False
+        out = next(e for e in reversed(events) if e["event"] == "outcome" and e["node"] == child)
+        heads = [e["workspace"]["head"] for e in events if e["event"] == "outcome" and e.get("workspace")]
+        evidence = dict(out.get("evidence") or {})
+        self.ac_findings, self.ac_evidence = list(res.reasons), evidence
+        return self.ac.failed(acrepeat.fingerprint(res.reasons, evidence), heads[-1] if heads else self.ac.head)
 
     def same_failure(self, reasons):
         """A repeated entry extends the streak when its failure reads like the last one, else restarts it at one. At `max` it ends the loop."""
