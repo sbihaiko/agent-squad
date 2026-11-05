@@ -350,4 +350,25 @@ python3 "$src" --max-lines 60 "$T/fx.md" >/dev/null 2>&1 && ko "27 a full-review
 [ "$(python3 "$src" --summary "$T/fx.md")" = "blocking=1 debt=0" ] && ok "27 the rendered fix round reads blocking=1 debt=0" || ko "27 summary: $(python3 "$src" --summary "$T/fx.md")"
 [ "$(python3 "$src" --fingerprint "$T/fx.md")" = "$(python3 "$src" --fingerprint "$T/fxeq.md")" ] \
   && ok "27 the fix-round fingerprint equals the equivalent markdown's (ADR-0134)" || ko "27 fix fingerprint: $(diff "$T/fx.md" "$T/fxeq.md")"
+# 28) one parser classifies a kept review (#1376): branchland.sh reads this answer, never line 1 and never --summary, so a
+# review outside the accepted shape holds its branch. cl() compares the answer for a file written by the caller.
+printf '%s' "abc1234" > "$T/c.sha"
+cl() { local want=$1 f=$2 tip=${3:-abc1234} extra=$4 got
+  got=$(python3 "$src" --classify "$f" "$T/c.sha" "$tip" $extra 2>&1)
+  [ "$got" = "$want" ] && ok "28 classify $want: $5" || ko "28 classify want=$want got=$got: $5"; }
+printf 'VERDICT: APPROVE\n## Blocking\n(none)\n' > "$T/c1.md"; cl approves "$T/c1.md" "" "" "a bare APPROVE with no findings"
+printf 'VERDICT: APPROVE (small change; no blocking findings)\n## Blocking\n(none)\n' > "$T/c2.md"
+cl approves "$T/c2.md" "" "" "review.sh's legacy VERDICT line still approves, never holds forever"
+printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — an empty list raises TypeError — return [] when empty\n' > "$T/c3.md"
+cl changes "$T/c3.md" "" "" "a CHANGES with a Blocking finding asks for changes"
+printf 'VERDICT: CHANGES\n## Blocking\n(none)\n## Debt\n(none)\n' > "$T/c4.md"
+cl malformed "$T/c4.md" "" "" "a CHANGES with no Blocking and no Debt is malformed, never an approval"
+printf 'Looks good to me overall, ship it.\n' > "$T/c5.md"
+cl malformed "$T/c5.md" "" "" "prose outside the shape is malformed"
+cl stale "$T/c3.md" deadbee "" "a kept review of another tip is stale"
+printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — fixed: the guard is added — test_guard passes\n## Resolved\n- src/b.py:42 — no backoff — fixed: backoff added — test_backoff passes\n' > "$T/c6.md"
+cl malformed "$T/c6.md" "" "" "a full review that answers findings is malformed"
+cl approves "$T/c6.md" "" --fix-round "the same file answers its findings as a fix round"
+# The hold a malformed review puts on its branch is never permanent: a corrected file at the same tip approves.
+printf 'VERDICT: APPROVE\n## Blocking\n(none)\n' > "$T/c7.md"; cl approves "$T/c7.md" "" "" "a corrected file at the same tip clears the hold"
 rm -rf "$T"; exit $fail

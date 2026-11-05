@@ -466,7 +466,7 @@ rm -f "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null);
 sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q '"resolved"' && ok "22 the fix prompt carries the schema" || ko "22 the fix prompt has no schema"
 /usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21" && ok "22 the fix prompt forbids skill files (#764)" || ko "22 the fix prompt has no skill line (#764)"
 sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — y — z$' && ok "22 the fix prompt reads the previous findings as markdown" || ko "22 previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"
-[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)" ] && /usr/bin/grep -q '^## Resolved$' "$T/st/review-fix_1-x.md" \
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] && /usr/bin/grep -q '^## Resolved$' "$T/st/review-fix_1-x.md" \
   && /usr/bin/grep -q '^- a.cs:1 — x — fixed: the ADR is followed now — UI.Tests/a.cs$' "$T/st/review-fix_1-x.md" \
   && ok "22 the fix-round JSON answer renders the '## Resolved' section" || ko "22 fix render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
 [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md")" = "blocking=0 debt=1" ] && sed '1s/.*/VERDICT: CHANGES/' "$T/st/review-fix_1-x.md" | python3 "$T/s/revformat.py" --fix-round - >/dev/null \
@@ -515,14 +515,14 @@ chmod +x "$T/bin/claude"
 printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 l1=$(head -1 "$T/st/review-fix_1-x.md")
-[ $rc = 0 ] && [ "$l1" = "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)" ] && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-fix_1-x.md" \
+[ $rc = 0 ] && [ "$l1" = "VERDICT: APPROVE" ] && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-fix_1-x.md" \
   && ok "24 a debt-only CHANGES is saved as APPROVE, its Debt kept" || ko "24 debt-only: rc=$rc '$l1'"
 printf '%s\n' "$l1" | /usr/bin/grep -q 'VERDICT: APPROVE' && ok "24 wave.sh reads it as an approval" || ko "24 wave.sh reads '$l1'"
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
 cat > "${CLAUDE_PROMPT:-/dev/null}"; printf 'VERDICT: APPROVE\n'
 J
-echo ccc333 > "$T/st/review-fix_1-x.sha"; printf 'VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)\n## Debt\n- b.cs:2 — x — y — z\n' > "$T/st/review-fix_1-x.md"
+echo ccc333 > "$T/st/review-fix_1-x.sha"; printf 'VERDICT: APPROVE\n## Debt\n- b.cs:2 — x — y — z\n' > "$T/st/review-fix_1-x.md"
 : > "$T/prompt"; CLAUDE_PROMPT="$T/prompt" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
 /usr/bin/grep -q 'FIX ROUND' "$T/prompt" && ko "24 the saved approval started a fix round" || ok "24 the saved approval starts no fix round"
 cat > "$T/bin/claude" <<'J'

@@ -144,10 +144,20 @@ while read -r sha br i; do
     [ -z "$bad" ] || { say wait "$br" "$sha" red "the check on ${sha:0:9} is not green: $bad"; continue; }
   fi
   # The review must have approved this tip as well (#357): branchreview.sh keeps its verdict and the sha it read under the branch key.
+  # One parser classifies it (#1376): branchland reads no first-line substring and no --summary count, so a review outside
+  # the accepted shape can never release a branch. A saved file is the full-review shape or a fix round's ('## Resolved'),
+  # and it carries no mode, so the fix-round shape is asked when the full one is malformed.
   rk="$SG_STATE/review-$(printf '%s' "$br" | tr '/' '_')"
-  if [ "$(cat "$rk.sha" 2>/dev/null)" != "$sha" ] || [ ! -s "$rk.md" ]; then say wait "$br" "$sha" noreview "no review of ${sha:0:9} yet"; continue; fi
-  # a CHANGES with no Blocking finding (debt only) is an approval, as the loop's own passes read it (revformat.py count; #392)
-  head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || python3 "$here/revformat.py" --summary "$rk.md" 2>/dev/null | grep -q '^blocking=0 ' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
+  cls=$(python3 "$here/revformat.py" --classify "$rk.md" "$rk.sha" "$sha" 2>/dev/null)
+  [ "$cls" = malformed ] && cls=$(python3 "$here/revformat.py" --classify "$rk.md" "$rk.sha" "$sha" --fix-round 2>/dev/null)
+  case "$cls" in
+    approves) ;;
+    changes) say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes: $(head -1 "$rk.md")"; continue;;
+    stale) say wait "$br" "$sha" noreview "no review of ${sha:0:9} yet"; continue;;
+    *) # malformed holds its own branch and names the shape. The marker carries the file's content, and the pass classifies
+       # afresh every time, so a corrected file at the same tip lands on the next pass -- the hold is never permanent.
+       say wait "$br" "$sha" "malformed$(cksum "$rk.md" 2>/dev/null | awk '{print $1}')" "the review of ${sha:0:9} is malformed: it is not the accepted shape (line 1 'VERDICT: APPROVE' or 'VERDICT: CHANGES', then '## Blocking' and/or '## Debt', one bullet per finding); a corrected file lands on the next pass"; continue;;
+  esac
   # The base's own check (#786): a red completed check on $land holds every landing until its head is green, whatever this branch
   # says. It is read before the local gate, so a red base costs no gate run.
   red=$(sg_base_red "$land"); past=

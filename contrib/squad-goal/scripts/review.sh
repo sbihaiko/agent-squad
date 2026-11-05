@@ -472,11 +472,13 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     fi
     # #653: a CHANGES with no Blocking finding and at least one Debt finding is an approval (revformat.py --summary, the one
     # predicate), so it is saved as APPROVE: wave.sh, childcc and the fix round read line 1, and they must read it so too.
+    # The line stays the exact verdict the shape accepts (#1376): the landing pass now asks the parser, and a parenthetical
+    # after the verdict would make the loop's own approval malformed and hold its branch.
     # A grok reviewer is exempt: measured on a planted diff it files a real defect as Debt in most runs (#1848), so its
     # debt-only CHANGES keeps its verdict and the fix round runs -- the downgrade would turn that habit into an approval.
     if [ $rc = 0 ] && [ "$(head -1 "$o" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$runner" != grok ] \
        && python3 "$(dirname "$0")/revformat.py" --summary "$o" 2>/dev/null | /usr/bin/grep -qE '^blocking=0 debt=[1-9]'; then
-      { echo "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
+      { echo "VERDICT: APPROVE"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
     fi
     # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope
     grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"; exit 0; }
