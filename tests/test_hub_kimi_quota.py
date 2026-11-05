@@ -10,7 +10,10 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -99,66 +102,194 @@ def _expired_stores(hub, monkeypatch):
                   cli={"access_token": "expired-cli", "expires_at": int(now - 60), "refresh_token": "cli-refresh"})
 
 
-def test_an_expired_token_refreshes_once_through_the_bridge_and_reads_usage(hub, monkeypatch):
-    """The bridge renews the token only on a Kimi call, so the probe makes that one call and reads the store the bridge
-    writes. It never writes a credential itself, and it never refreshes twice."""
-    bridge_file, cli_file = _expired_stores(hub, monkeypatch)
-    calls = []
+class _Answer:
+    """One bridge answer at the HTTP boundary: what the refresh call reads and lets go of."""
 
-    def bridge_refresh():
-        calls.append(1)
+    def __init__(self, body=b'{"type":"message","content":[{"type":"text","text":"."}]}'):
+        self.body = body
+
+    def read(self): return self.body
+
+    def __enter__(self): return self
+
+    def __exit__(self, *a): return False
+
+
+@pytest.fixture(autouse=True)
+def _no_refresh_backoff(hub):
+    """The refresh backoff is hub state, and one test's failed renewal must not silence the next test's."""
+    getattr(hub, "KIMI_REFRESH_STATE", {}).update(until=0.0, reason=None)
+
+
+def _bridge_answer(hub, monkeypatch, answer=None, on_call=None):
+    """Stub the HTTP seam every refresh POST crosses, so the real `kimi_refresh` builds and sends its request.
+    `on_call` runs as the bridge answers -- the bridge's own store write happens there, never in the probe."""
+    sent = []
+
+    def open_refresh(req, timeout=30):
+        sent.append({"url": req.full_url, "method": req.get_method(),
+                     "body": json.loads(req.data), "headers": dict(req.headers)})
+        if on_call: on_call()
+        return answer if answer is not None else _Answer()
+
+    monkeypatch.setattr(hub, "kimi_refresh_open", open_refresh)
+    return sent
+
+
+def test_an_expired_token_refreshes_once_through_the_bridge_and_reads_usage(hub, monkeypatch):
+    """The bridge renews the token only on a Kimi call, so the probe sends that one call on the bridge's own inference
+    route and reads the store the bridge writes. It writes no credential itself, and it never refreshes twice."""
+    bridge_file, cli_file = _expired_stores(hub, monkeypatch)
+
+    def bridge_writes_its_own_store():   # this write is the BRIDGE's, made while it answers the call
         bridge_file.write_text(json.dumps({"access": "fresh-bridge", "refresh": "bridge-refresh-2",
                                            "expires": int((time.time() + 800) * 1000)}))
 
-    monkeypatch.setattr(hub, "kimi_refresh", bridge_refresh)
+    sent = _bridge_answer(hub, monkeypatch, on_call=bridge_writes_its_own_store)
     read = []
     monkeypatch.setattr(hub, "kimi_usages", lambda tok: read.append(tok) or _usages_doc())
     cli_before = cli_file.read_bytes()
     got = hub.q_kimi()
     assert [(w["label"], w["pct"]) for w in got["windows"]] == [("5 h", 23.9), ("month", 2.9)]
-    assert calls == [1]                              # exactly one refresh
+    assert sent == [{"url": "http://127.0.0.1:18765/v1/messages", "method": "POST",
+                     "body": {"model": "kimi-for-coding", "max_tokens": 1,
+                              "messages": [{"role": "user", "content": "."}]},
+                     "headers": {"Content-type": "application/json", "Anthropic-version": "2023-06-01"}}]
     assert read == ["fresh-bridge"]                  # read with the token the bridge wrote
     assert cli_file.read_bytes() == cli_before       # the probe wrote no credential
     assert json.loads(bridge_file.read_text())["access"] == "fresh-bridge"
 
 
-def test_a_refresh_that_leaves_no_live_token_reads_unavailable_once(hub, monkeypatch):
-    """A refresh that answers but leaves no live token is no reading with its reason, and the probe does not try again."""
-    _expired_stores(hub, monkeypatch)
-    calls = []
-    monkeypatch.setattr(hub, "kimi_refresh", lambda: calls.append(1))
+def test_the_probe_writes_no_credential_and_says_the_store_is_still_empty(hub, monkeypatch):
+    """The bridge answers but renews nothing: the probe writes neither store and reads as no reading whose reason names
+    the store, never a guess."""
+    bridge_file, cli_file = _expired_stores(hub, monkeypatch)
+    bridge_before, cli_before = bridge_file.read_bytes(), cli_file.read_bytes()
+    sent = _bridge_answer(hub, monkeypatch)
     read = []
     monkeypatch.setattr(hub, "kimi_usages", lambda tok: read.append(tok) or _usages_doc())
     got = hub.q_kimi()
-    assert calls == [1] and read == []
+    assert len(sent) == 1 and read == []
+    assert bridge_file.read_bytes() == bridge_before and cli_file.read_bytes() == cli_before
     assert got["windows"] == [] and got["unavailable"] is True
-    assert "token" in got["err"]
+    assert "still holds no live token" in got["err"]
 
 
 def test_a_failed_refresh_reads_as_no_reading_with_its_reason(hub, monkeypatch):
-    """A refresh that fails reads unavailable with the reason, never a guess."""
+    """A refresh the bridge refuses reads unavailable with the exception's own kind and message, never a guess."""
     _expired_stores(hub, monkeypatch)
 
-    def down():
-        raise OSError("bridge down")
+    def down(req, timeout=30):
+        raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, None)
 
-    monkeypatch.setattr(hub, "kimi_refresh", down)
+    monkeypatch.setattr(hub, "kimi_refresh_open", down)
     read = []
     monkeypatch.setattr(hub, "kimi_usages", lambda tok: read.append(tok) or _usages_doc())
     got = hub.q_kimi()
     assert got["windows"] == [] and got["unavailable"] is True
-    assert "refresh" in got["err"] and "bridge down" in got["err"]
+    assert "refresh failed" in got["err"] and "HTTPError" in got["err"] and "503" in got["err"]
     assert read == []
 
 
+def test_a_refresh_that_answers_no_message_reads_as_a_failure(hub, monkeypatch):
+    """A 200 that is not a bridge message did not renew the token, so the row names a failed refresh, never a store
+    that genuinely holds nothing."""
+    _expired_stores(hub, monkeypatch)
+    _bridge_answer(hub, monkeypatch, answer=_Answer(b'{"type":"error","error":{"message":"Rate limited"}}'))
+    read = []
+    monkeypatch.setattr(hub, "kimi_usages", lambda tok: read.append(tok) or _usages_doc())
+    got = hub.q_kimi()
+    assert got["windows"] == [] and got["unavailable"] is True
+    assert "refresh failed" in got["err"] and "no message" in got["err"] and read == []
+
+
+def test_a_failed_refresh_backs_off_so_polls_make_no_model_call(hub, monkeypatch):
+    """The panel polls every couple of minutes; a failing renewal is remembered for a few minutes instead of making one
+    Kimi call per poll."""
+    _expired_stores(hub, monkeypatch)
+    calls = []
+    monkeypatch.setattr(hub, "kimi_refresh_open",
+                        lambda req, timeout=30: calls.append(1) or (_ for _ in ()).throw(OSError("bridge down")))
+    hub.q_kimi()
+    second = hub.q_kimi()
+    assert calls == [1] and "bridge down" in second["err"]
+
+
+def test_a_cli_only_refresh_token_names_its_path_and_makes_no_call(hub, monkeypatch):
+    """The bridge renews only from its own store; when only the CLI's store holds a refresh token the reason says so
+    instead of claiming no store has one."""
+    now = time.time()
+    _store(hub, monkeypatch,
+           bridge={"access": "expired-bridge", "expires": int((now - 600) * 1000)},
+           cli={"access_token": "expired-cli", "expires_at": int(now - 60), "refresh_token": "cli-refresh"})
+    calls = []
+    monkeypatch.setattr(hub, "kimi_refresh_open", lambda req, timeout=30: calls.append(1))
+    got = hub.q_kimi()
+    assert calls == [] and got["unavailable"] is True
+    assert "CLI" in got["err"] and "refresh token" in got["err"]
+
+
 def test_no_refresh_token_is_no_refresh_call(hub, monkeypatch):
-    """With no refresh token in the bridge's store there is nothing to renew, so the probe calls no refresh path."""
+    """With no refresh token in either store there is nothing to renew, so the probe calls no refresh path and names
+    both stores."""
     _store(hub, monkeypatch, bridge={"access": "gone", "expires": 1})
     calls = []
-    monkeypatch.setattr(hub, "kimi_refresh", lambda: calls.append(1))
+    monkeypatch.setattr(hub, "kimi_refresh_open", lambda req, timeout=30: calls.append(1))
     got = hub.q_kimi()
     assert calls == []
-    assert got["windows"] == [] and got["unavailable"] is True and "token" in got["err"]
+    assert got["windows"] == [] and got["unavailable"] is True
+    assert "bridge" in got["err"] and "CLI" in got["err"]
+
+
+def _bridge_server(hub, monkeypatch, status, body):
+    """A real loopback server in the bridge's place, so the refresh request crosses a socket, not a stub."""
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("content-length") or 0)
+            seen.append({"path": self.path, "method": "POST", "body": json.loads(self.rfile.read(n)),
+                         "content-type": self.headers.get("content-type"),
+                         "anthropic-version": self.headers.get("anthropic-version")})
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            if status // 100 == 3: self.send_header("location", "http://127.0.0.1:1/elsewhere")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a): pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("SG_CCP_PROXY", f"http://127.0.0.1:{srv.server_address[1]}")
+    return srv, seen
+
+
+def test_the_refresh_call_posts_a_one_token_kimi_message(hub, monkeypatch):
+    """The refresh is the smallest Kimi call the bridge accepts, on its own inference route, and the proxy address is
+    read per call so a configured port is the port used."""
+    body = b'{"type":"message","content":[{"type":"text","text":"."}]}'
+    srv, seen = _bridge_server(hub, monkeypatch, 200, body)
+    try:
+        hub.kimi_refresh()
+    finally:
+        srv.shutdown(); srv.server_close()
+    assert seen == [{"path": "/v1/messages", "method": "POST",
+                     "body": {"model": "kimi-for-coding", "max_tokens": 1,
+                              "messages": [{"role": "user", "content": "."}]},
+                     "content-type": "application/json", "anthropic-version": "2023-06-01"}]
+
+
+def test_the_refresh_call_refuses_a_redirect(hub, monkeypatch):
+    """The answer must be the bridge's own: a redirect is refused, never followed to another host."""
+    srv, seen = _bridge_server(hub, monkeypatch, 302, b"")
+    try:
+        with pytest.raises(urllib.error.HTTPError) as e: hub.kimi_refresh()
+    finally:
+        srv.shutdown(); srv.server_close()
+    assert e.value.code == 302
+    assert len(seen) == 1
 
 
 def test_the_https_read_takes_a_tls_context(hub):
