@@ -445,15 +445,12 @@ def test_eligible_honours_off_and_hours(tmp_path):
 
 
 def test_eligible_honours_a_marker_with_and_without_a_reset(tmp_path):
+    """#1417: the grok marker holds its write epoch and is fresh for the TTL; the other pools hold a reset epoch."""
     entry = _chain_entry(tmp_path, {"coding_models": ["grok-4.7"]}, "coding", "grok-4.7")
-    (tmp_path / "grok-limited").write_text("9999999999")
+    (tmp_path / "grok-limited").write_text("1000")
     ev = mr.eligible(entry, shared=tmp_path, now=1000)
-    assert ev.ok is False and ev.reason == "usage limit" and ev.until == 9999999999
-    (tmp_path / "grok-limited").write_text("no-reset")
-    ev = mr.eligible(entry, shared=tmp_path, now=1000)
-    assert ev.ok is False and ev.reason == "balance exhausted" and ev.until is None
-    (tmp_path / "grok-limited").write_text("10")
-    assert mr.eligible(entry, shared=tmp_path, now=1000).ok is True
+    assert ev.ok is False and ev.reason == "balance exhausted" and ev.until == 1000 + 21600
+    assert mr.eligible(entry, shared=tmp_path, now=1000 + 21600).ok is True
 
 
 def test_a_v1_chain_keeps_the_codex_marker_for_a_legacy_spelling(tmp_path):
@@ -486,9 +483,9 @@ def test_eligible_honours_the_claude_reserve(tmp_path):
 
 
 def test_quota_reads_the_marker_and_the_probe(tmp_path):
-    (tmp_path / "grok-limited").write_text("no-reset")
+    (tmp_path / "grok-limited").write_text("1000")   # #1417: the marker is its write epoch, fresh for the TTL
     q = mr.quota("grok", shared=tmp_path, now=1000)
-    assert q["limited"] is True and q["until"] is None and q["reason"] == "balance exhausted"
+    assert q["limited"] is True and q["until"] == 1000 + 21600 and q["reason"] == "balance exhausted"
     (tmp_path / "hub-quota.json").write_text(json.dumps(
         {"gpt": {"windows": [{"label": "weekly", "pct": 40, "resets": 9}]}}))
     q = mr.quota("gpt", shared=tmp_path, now=1000)

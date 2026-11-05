@@ -53,7 +53,8 @@ def _marker(shared, name, now):
     return t if t > now else None
 
 def _is_grok(raw):
-    return _bare(raw).startswith(("grok-", "claude-grok-"))
+    e = _resolver().model(raw)   # the registry names the subscription; no prefix is parsed here (ADR-0147)
+    return bool(e and e.subscription == "grok")
 
 
 def _grok_why(raw, shared, now):

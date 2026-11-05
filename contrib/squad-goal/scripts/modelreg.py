@@ -617,9 +617,9 @@ def _marker_state(sub, shared, now, reg):
         return None
     if sub == "grok":   # one TTL rule, shared with review.sh (#1417); an expired marker is eligible
         sys.path.insert(0, str(Path(__file__).resolve().parent)) if str(Path(__file__).resolve().parent) not in sys.path else None
-        import grokmark
+        import grokmark  # type: ignore[import-not-found]  # a sibling file, not a package member
         st = grokmark.state(_shared_dir(shared), now)
-        return ("limited: balance spent", st[1]) if st[0] == "fresh" else None
+        return ("balance exhausted", st[1]) if st[0] == "fresh" else None
     try:
         until = float(text)
     except ValueError:

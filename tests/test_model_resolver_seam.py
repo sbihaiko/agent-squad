@@ -107,6 +107,11 @@ def test_the_registry_and_the_resolver_are_byte_identical_copies():
         assert source.read_bytes() == shipped.read_bytes(), f"{shipped} drifted from {source}"
 
 
+def test_the_grok_marker_rule_is_a_byte_identical_copy():
+    """#1417: the resolver imports grokmark from beside itself, so squad/ carries the same file the scripts ship."""
+    assert (ROOT / "squad/grokmark.py").read_bytes() == (ROOT / "contrib/squad-goal/scripts/grokmark.py").read_bytes()
+
+
 @pytest.mark.parametrize("line,why", [
     ('    return m.startswith("claude-")', "startswith a model prefix"),
     ("    return m.removeprefix('claude:')", "removeprefix a model prefix"),
