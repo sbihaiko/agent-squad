@@ -29,6 +29,7 @@ printf 'childreview %s\n' "\$*" >> "$T/rev.log"
 br=\$(git symbolic-ref --quiet --short HEAD); key=\$(printf '%s' "\$br" | tr / _)
 case "\${STUB_VERDICT:-APPROVE}" in
   NONE) exit 1;;
+  NOCHANGE) printf 'provisional: the fix for #7 already exists at this head\n' > "$T/st/reason-\$key"; echo "CHILDREVIEW \$br: no change past abc123def, nothing to review (#7)" >&2; exit 6;;
   APPROVE) printf 'VERDICT: APPROVE\n' > "$T/st/review-\$key.md";;
   *) printf '**VERDICT: %s**\n## Blocking\n- a.py:1 first finding\n- b.py:2 second finding%s\n## Nits\n- c.py:3 a nit\n' "\$STUB_VERDICT" "\${STUB_EXTRA:+
 - \$STUB_EXTRA}" > "$T/st/review-\$key.md";;
@@ -163,5 +164,16 @@ reset; rm -f "$T/gh.log"
 (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=2 STUB_VERDICT=APPROVE bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
 [ "$(st read 'x/y#7' state)" = todo ] && [ "$(st coder 'x/y#7')" = 0 ] \
   && ok "L: an approval resets the review streak" || ko "L: after approve '$(st read 'x/y#7' review)'"
+
+# M) #1406: a child whose head equals its base has nothing to review. childreview.sh exits 6, which is no "try again": the
+# issue is requeued once with the no-change reason, the ledger holds the head, the run exits 1 and never retries the review.
+reset; out=$(STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 1 ] && ok "M: a no-change child exits 1, never try again (5)" || ko "M: exit $rc: $out"
+[ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && /usr/bin/grep -q 'the child made no change past .* in run run-1: provisional: the fix for #7 already exists' "$T/wave.log" \
+  && ok "M: one requeue, with the no-change reason" || ko "M: wave.log '$(cat "$T/wave.log")'"
+mh=$($G -C "$T/wt" rev-parse HEAD)
+[ "$(lq)" = "$mh" ] && ok "M: the requeue fact holds this head" || ko "M: fact '$(lq)'"
+: > "$T/wave.log"; STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 >/dev/null 2>&1; rc=$?
+[ "$rc" = 1 ] && [ ! -s "$T/wave.log" ] && ok "M: a second call on the same head requeues nothing" || ko "M: exit $rc, wave.log '$(cat "$T/wave.log")'"
 
 rm -rf "$T"; exit $fail

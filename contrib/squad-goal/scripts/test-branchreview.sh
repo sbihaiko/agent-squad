@@ -141,4 +141,16 @@ out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1)
 [ "$(head -1 "$T/st/author-squad_run-1_ws-late" 2>/dev/null)" = claude-sonnet-5-5 ] && ok "author: the coder's model from the run record names the branch author" \
   || ko "author: author file '$(cat "$T/st/author-squad_run-1_ws-late" 2>/dev/null)' $out"
 rm -f "$T/record.jsonl"
+# 12) #1406: a child with no change of its own has nothing to review. childreview.sh exits 6 before review.sh and any model
+#     call: a child at the wave tip, and a child rebased onto a newer dev with no commit of its own. No review record is kept.
+for kind in tip rebased; do
+  b=squad/run-1/ws-nochange-$kind; k=$(printf '%s' "$b" | tr / _); rm -f "$T/st/review-$k".* "$T/prompt"; : > "$T/gh.log"
+  if [ $kind = tip ]; then (cd "$T/child" && $G fetch -q origin && $G checkout -q -b "$b" origin/wave/run-1)
+  else (cd "$T/child" && $G fetch -q origin && $G checkout -q -b "$b" origin/dev); fi
+  out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1); rc=$?
+  [ $rc = 6 ] && ok "nochange $kind: childreview exits 6" || ko "nochange $kind: exit $rc: $out"
+  case "$out" in *"nothing to review (#7)"*) ok "nochange $kind: the line says nothing to review";; *) ko "nochange $kind: '$out'";; esac
+  [ ! -e "$T/prompt" ] && ok "nochange $kind: no model call" || ko "nochange $kind: a model was called"
+  ! ls "$T/st/review-$k".* >/dev/null 2>&1 && ok "nochange $kind: no review record" || ko "nochange $kind: $(ls "$T/st" | /usr/bin/grep "review-$k")"
+done
 rm -rf "$T"; exit $fail
