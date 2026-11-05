@@ -136,6 +136,23 @@ def test_a_lease_of_a_reused_pid_is_reclaimed_and_the_ceiling_recovers(tmp_path)
     assert c.try_take("runs", "next-run") is not None
 
 
+def test_a_lease_naming_a_run_dashboard_holds_no_slot(tmp_path):
+    """A run's dashboard page server idles and never works the run (#1389). When the engine died without a verdict and the
+    dashboard outlived it, the lease still answered 'alive': the janitor could not prove the run dead, the drain never
+    ended, and the slot stayed taken for hours. A lease that names a dashboard is reclaimed as one whose holder is dead,
+    and the run's own record is what the janitor's rule C then reaps."""
+    c = caps.Ceiling({"runs": 1, "children": 20}, tmp_path / "leases")
+    d = subprocess.Popen(["bash", "-c", 'exec -a "squad.dashboard_server /tmp/run-x" sleep 30'])
+    try:
+        time.sleep(0.1)
+        assert c.try_take("runs", "run-with-a-dead-engine", pid=d.pid)
+        assert c.occupancy()["runs"] == 0                # a page server is no run, so its lease holds no slot
+        assert c.try_take("runs", "next-run") is not None
+    finally:
+        d.kill()
+        d.wait()
+
+
 def listed(tmp_path, *runs):
     """An active-runs.txt naming one run folder per (name, events) pair; the entries are absolute, as launch.py writes them.
     `events` is None for a run with no record yet (a launch, with a fresh `request.txt` as launch.py writes), else the
