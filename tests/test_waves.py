@@ -460,3 +460,64 @@ async def test_a_regression_with_no_passing_landing_in_the_ledger_has_no_owner(t
     assert d.regression_owner("route.router.2", ["route.router.1"]) == (None, [])
     d.landed = {"route.router.1": {"outcome": "pass", "effect": {"head": None}}}
     assert d.regression_owner("route.router.2", ["route.router.1"]) == (None, [])
+
+
+def cut_record(tmp_path, keep):
+    """Resume a regression-fix run from a record cut after the first event `keep` says is the last one kept; the target goes
+    back to the head of router.2's landing, the state a crash there leaves."""
+    events = read(tmp_path / "record.jsonl")
+    cut = next(e["pos"] for e in events if keep(e))
+    (tmp_path / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events if e["pos"] <= cut))
+    return [e for e in events if e["event"] == "land"][1]["effect"]["head"]
+
+
+async def regression_fix_run(tmp_path):
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = sibling_repo(tmp_path / "t")
+    script = wiped_three(tmp_path, [wiper("d.txt", "base.txt", cmds=["test -f d.txt"]), writer("base.txt", cmds=["test -f d.txt"])])
+    eng = make(tmp_path, script, tweak=gated(stub(tmp_path, [0, 0])), target=repo)
+    eng.dispatch.prune = lambda: None
+    assert (await eng.run()).verdict == "completed"
+    return repo
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_resume_after_a_regression_fix_entry_reviews_its_head_and_keeps_the_fixes_row(tmp_path):
+    """The run stops after the fix entry's outcome and before its review round. The resume reviews entry 2's head as round 2
+    before it merges, runs no entry again, and the land record keeps the `fixes` row."""
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = await regression_fix_run(tmp_path)
+    head2 = next(r["head"] for r in ev(tmp_path, "review_round") if r["node"] == "route.router.3" and r["round"] == 2)
+    base = cut_record(tmp_path, lambda e: e["event"] == "outcome" and e["node"] == "route.router.3" and e["entry"] == 2)
+    git.run(["reset", "--hard", base], repo)
+    (tmp_path / "review.log").unlink()
+    eng2 = make(tmp_path, {}, tweak=gated(stub(tmp_path, [0, 0])), target=repo)
+    assert (await eng2.resume()).verdict == "completed" and eng2.adapter.calls == []
+    [line] = (tmp_path / "review.log").read_text().splitlines()
+    assert line.split()[1] == "2" and line.split()[3] == head2
+    third = lands(tmp_path)[-1]
+    assert third["node"] == "route.router.3" and third["outcome"] == "pass"
+    [fix] = third["effect"]["fixes"]
+    assert fix["entry"] == 2 and fix["outcome"] == "pass" and fix["regressions"][0]["declared_by"] == "route.router.1"
+    assert [(r["round"], r["verdict"]) for r in ev(tmp_path, "review_round") if r["node"] == "route.router.3"] == [(1, "approve"), (2, "approve")]
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_regression_fix_entry_that_crashed_is_not_run_again_on_resume(tmp_path):
+    """The run stops after the fix entry's `call_start` and before its outcome: the resume records it crashed, runs no entry
+    again, and the landing fails `review_fix_failed` with the fix row kept."""
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = await regression_fix_run(tmp_path)
+    base = cut_record(tmp_path, lambda e: e["event"] == "call_start" and e["node"] == "route.router.3" and e["entry"] == 2)
+    git.run(["reset", "--hard", base], repo)
+    (tmp_path / "review.log").unlink()
+    eng2 = make(tmp_path, {}, tweak=gated(stub(tmp_path, [0, 0])), target=repo)
+    assert (await eng2.resume()).verdict != "completed" and eng2.adapter.calls == []
+    third = lands(tmp_path)[-1]
+    assert third["outcome"] == "fail" and "review_fix_failed" in third["reasons"] and "launched_no_outcome" in third["reasons"]
+    assert [f["entry"] for f in third["effect"]["fixes"]] == [2] and not (tmp_path / "review.log").exists()
