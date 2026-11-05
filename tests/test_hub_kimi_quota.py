@@ -2,8 +2,8 @@
 
 The hub's Usage panel asks each provider's CLI for its quota. Kimi publishes no CLI command for it, but the coding API
 answers `/coding/v1/usages` with the 5 h window and the month's share, so the probe reads that document with the token
-the bridge already keeps. A probe reads a credential and never writes one: an absent or expired token reads as no
-reading with its reason, never as a guess.
+the bridge already keeps. An expired token is renewed once through the bridge's own path, which writes its own store;
+the probe writes no credential. A renewal that fails reads as no reading with its reason, never as a guess.
 """
 import importlib.util
 import json
@@ -89,6 +89,76 @@ def test_a_missing_token_reads_as_no_reading_with_its_reason(hub, monkeypatch):
     got = hub.q_kimi()
     assert got["windows"] == [] and got["unavailable"] is True
     assert "token" in got["err"] and called == []
+
+
+def _expired_stores(hub, monkeypatch):
+    """Both stores hold an expired access token, and both hold a refresh token."""
+    now = time.time()
+    return _store(hub, monkeypatch,
+                  bridge={"access": "expired-bridge", "expires": int((now - 600) * 1000), "refresh": "bridge-refresh"},
+                  cli={"access_token": "expired-cli", "expires_at": int(now - 60), "refresh_token": "cli-refresh"})
+
+
+def test_an_expired_token_refreshes_once_through_the_bridge_and_reads_usage(hub, monkeypatch):
+    """The bridge renews the token only on a Kimi call, so the probe makes that one call and reads the store the bridge
+    writes. It never writes a credential itself, and it never refreshes twice."""
+    bridge_file, cli_file = _expired_stores(hub, monkeypatch)
+    calls = []
+
+    def bridge_refresh():
+        calls.append(1)
+        bridge_file.write_text(json.dumps({"access": "fresh-bridge", "refresh": "bridge-refresh-2",
+                                           "expires": int((time.time() + 800) * 1000)}))
+
+    monkeypatch.setattr(hub, "kimi_refresh", bridge_refresh)
+    read = []
+    monkeypatch.setattr(hub, "kimi_usages", lambda tok: read.append(tok) or _usages_doc())
+    cli_before = cli_file.read_bytes()
+    got = hub.q_kimi()
+    assert [(w["label"], w["pct"]) for w in got["windows"]] == [("5 h", 23.9), ("month", 2.9)]
+    assert calls == [1]                              # exactly one refresh
+    assert read == ["fresh-bridge"]                  # read with the token the bridge wrote
+    assert cli_file.read_bytes() == cli_before       # the probe wrote no credential
+    assert json.loads(bridge_file.read_text())["access"] == "fresh-bridge"
+
+
+def test_a_refresh_that_leaves_no_live_token_reads_unavailable_once(hub, monkeypatch):
+    """A refresh that answers but leaves no live token is no reading with its reason, and the probe does not try again."""
+    _expired_stores(hub, monkeypatch)
+    calls = []
+    monkeypatch.setattr(hub, "kimi_refresh", lambda: calls.append(1))
+    read = []
+    monkeypatch.setattr(hub, "kimi_usages", lambda tok: read.append(tok) or _usages_doc())
+    got = hub.q_kimi()
+    assert calls == [1] and read == []
+    assert got["windows"] == [] and got["unavailable"] is True
+    assert "token" in got["err"]
+
+
+def test_a_failed_refresh_reads_as_no_reading_with_its_reason(hub, monkeypatch):
+    """A refresh that fails reads unavailable with the reason, never a guess."""
+    _expired_stores(hub, monkeypatch)
+
+    def down():
+        raise OSError("bridge down")
+
+    monkeypatch.setattr(hub, "kimi_refresh", down)
+    read = []
+    monkeypatch.setattr(hub, "kimi_usages", lambda tok: read.append(tok) or _usages_doc())
+    got = hub.q_kimi()
+    assert got["windows"] == [] and got["unavailable"] is True
+    assert "refresh" in got["err"] and "bridge down" in got["err"]
+    assert read == []
+
+
+def test_no_refresh_token_is_no_refresh_call(hub, monkeypatch):
+    """With no refresh token in the bridge's store there is nothing to renew, so the probe calls no refresh path."""
+    _store(hub, monkeypatch, bridge={"access": "gone", "expires": 1})
+    calls = []
+    monkeypatch.setattr(hub, "kimi_refresh", lambda: calls.append(1))
+    got = hub.q_kimi()
+    assert calls == []
+    assert got["windows"] == [] and got["unavailable"] is True and "token" in got["err"]
 
 
 def test_the_https_read_takes_a_tls_context(hub):
