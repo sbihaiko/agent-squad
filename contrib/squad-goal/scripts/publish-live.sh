@@ -11,6 +11,8 @@
 # A publish refuses (exit 3, nothing written, one line naming both commits) when the source HEAD is not in the history of
 # $SG_SQUAD's HEAD, the repository the live scripts import squad from (#605). SG_SQUAD unset or the source repo: no check.
 # A publish refuses (exit 3, nothing written, one line naming the tree) when the source is a linked worktree (#658).
+# A publish refuses (exit 3, nothing written, one line naming both paths and the recovery command) when the canonical
+# source path equals the destination's -- the live copy itself or a symlink alias of it; --check refuses too (#1377).
 # A publish prints one `publish-live: chain <name> differs` line per chain whose head or order differs between the
 # repository and the live scripts/models.json, naming both chains, and never writes the live file (#1261, ADR-0140).
 # --no-compare is the explicit mode live-guard's per-cycle pass uses: it compares nothing. models-apply.sh is the one writer.
@@ -60,6 +62,16 @@ src=${args[0]:-$(cd "$here/.." && pwd)}
 dest=${args[1]:-${SG_LIVE_DIR:-$HOME/.claude/skills/squad-goal}}
 [ -d "$src" ] || { echo "publish-live: no source tree at $src" >&2; exit 2; }
 [ -d "$dest" ] || { echo "publish-live: no live skill at $dest" >&2; exit 2; }
+
+# The live skill copy is never the source. A publish run from the live copy copies the tree onto itself
+# and reports a successful publish (#1377). When the canonical source path equals the destination's --
+# a symlink alias resolves to the same tree -- the publish is refused before any copy, retirement or
+# tracker call: exit 3, nothing written, one line naming both paths and the recovery command. --check
+# refuses too.
+srcc=$(cd "$src" && pwd -P); destc=$(cd "$dest" && pwd -P)
+if [ "$srcc" = "$destc" ]; then
+  echo "publish-live: refused: source $srcc is the live skill destination; publish from the repository tree: publish-live.sh <repo>/contrib/squad-goal $destc" >&2; exit 3
+fi
 
 # Only the main checkout publishes. A coding child published its unlanded branch from its own worktree (#658), so a
 # publish from a linked worktree (git-dir differs from the common dir) is refused: exit 3, nothing written, one line

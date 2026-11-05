@@ -241,4 +241,29 @@ chains head-new > "$cl/scripts/models.json"
 out=$(env -u SG_SQUAD bash "$src" "$cr" "$cl" 2>&1)
 case "$out" in *head-*) ko "identical chains printed: $out";; *) ok "identical chains print nothing";; esac
 
+# --- the live skill copy is never the source (#1377) ----------------------------------------------
+# A publish run from the live skill copy copies the tree onto itself and reports a successful publish.
+# It is refused: nonzero, nothing written, one line naming both paths and the recovery command, before
+# any copy, retirement or tracker call. --check refuses too, and a symlink alias of the live copy is
+# the same tree. A publish from the repository tree still publishes.
+live4="$T/live4"; mkdir -p "$live4/scripts" "$live4/scripts/profiles"
+printf 'skill v1\n' > "$live4/SKILL.md"; printf 'watch v1\n' > "$live4/scripts/watch.sh"
+printf '{"models": "mine"}\n' > "$live4/scripts/models.json"
+printf '#!/bin/bash\n' > "$live4/scripts/autofix.sh"          # a retired name: a refusal never drops it
+before=$(snap "$live4")
+alias_="$T/alias-live"; ln -s "$live4" "$alias_"
+for s in "$live4" "$alias_"; do
+  for mode in "" "--check"; do
+    out=$(env -u SG_SQUAD bash "$src" $mode "$s" "$live4" 2>&1); rc=$?
+    [ "$rc" != 0 ] && ok "a publish whose source is the destination is refused ($s $mode)" || ko "the live copy published ($s $mode, rc $rc): $out"
+    [ "$before" = "$(snap "$live4")" ] && ok "a refused self-publish writes nothing ($s $mode)" || ko "a refused self-publish wrote ($s $mode)"
+    [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && ok "the self-publish refusal is one line ($s $mode)" || ko "not one line ($s $mode): $out"
+    printf '%s' "$out" | /usr/bin/grep -q "$live4" && printf '%s' "$out" | /usr/bin/grep -qi 'repository tree' \
+      && ok "the refusal names both paths and the recovery command ($s $mode)" || ko "the refusal line ($s $mode): $out"
+  done
+done
+[ -e "$live4/scripts/autofix.sh" ] && ok "a refusal retires nothing" || ko "a refusal dropped a retired name"
+out=$(env -u SG_SQUAD bash "$src" "$sq/contrib/squad-goal" "$live4" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$live4/SKILL.md")" = "skill B" ] && ok "a publish from the repository tree still publishes" || ko "repository-tree publish (rc $rc): $out"
+
 rm -rf "$T"; [ $fail = 0 ] && echo "test-publish-live: all checks green" || { echo "test-publish-live: failed"; exit 1; }

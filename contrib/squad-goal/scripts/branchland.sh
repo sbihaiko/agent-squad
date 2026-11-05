@@ -121,16 +121,28 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
   # machine's or the loop tooling's, never the branch's: it opens no round, and the next base head re-gates — which is the
   # recovery when the base itself was at fault.
   if [ "$rc" = 1 ]; then
+    # (#1398) The fix round can act only on what the gate printed. A bullet that names the id alone sends it to a green branch
+    # head it cannot reproduce (the gate read the tip REBASED onto the base), so the round answers needs-human and the tip is
+    # stranded until the marker expires and the same round is paid again. Each bullet now carries what python said about that id.
     local rbk ids t; rbk=$(printf '%s' "$br" | tr / _)
     ids=$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u)
+    # ev <id>: the message the gate printed for one id: pytest's short summary (the text after " - "), else its first E line.
+    ev() { printf '%s\n' "$out" | awk -v id="$1" '
+      index($0, "FAILED " id " - ") == 1 { sub("^FAILED [^ ]+ - ", ""); gsub(/[[:space:]]+$/, ""); print; found = 1; exit }
+      first == "" && /^E   / { first = $0; sub(/^E   /, "", first) }
+      END { if (!found && first != "") print first }'; }
+    # one red with no id names a shell suite or the gate itself: several of its error lines, never only the last one.
+    tail3() { printf '%s\n' "$out" | awk 'NF' | tail -5 | tr '\n' '|' | sed 's/|/ | /g; s/ *| *$//' | cut -c1-220; }
     { printf 'VERDICT: CHANGES\n\n## Blocking\n'
       if [ -n "$ids" ]; then
         printf '%s\n' "$ids" | while IFS= read -r t; do
-          [ -n "$t" ] && printf -- '- %s — the landing gate fails on %s rebased onto %s — the tip cannot land — make it pass the gate.\n' "$t" "$t" "$land"
+          [ -n "$t" ] || continue
+          local e; e=$(ev "$t"); [ -n "$e" ] || e="the gate named this id and printed no message for it"
+          printf -- '- %s — the landing gate, this tip rebased onto %s, fails: %s — make it pass the gate.\n' "$t" "$land" "$e"
         done
       else
-        printf -- '- whole change — the landing gate on %s rebased onto %s failed: %s — the tip cannot land — make it pass the gate.\n' \
-          "${sha:0:9}" "$land" "$(printf '%s' "$out" | tail -1)"
+        printf -- '- whole change — the landing gate on %s rebased onto %s failed: %s — make it pass the gate.\n' \
+          "${sha:0:9}" "$land" "$(tail3)"
       fi
     } > "$SG_STATE/review-$rbk.md"
     printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"
