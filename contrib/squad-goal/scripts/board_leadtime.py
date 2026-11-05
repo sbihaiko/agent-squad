@@ -187,8 +187,11 @@ TIMEFRAME_SELECTS = "end transition"  # Timeframe keeps a card by the instant it
 # SPEC 1327 #1331: a lone card is one hollow dot; a cluster is one outlined filled dot of this one fixed radius. The
 # count-box radius is gone: a cluster carries its count, its cards and its ranges in the payload, and the plot draws no
 # number and no stacked bar.
-CLUSTER_RADIUS_PX = 7   # every cluster's dot: one radius, whatever the count it holds
-DOT_RADIUS_PX = 4.5     # a lone card's dot radius
+# SPEC 1327 #1432: the marks stay small. One place names the three sizes, and the payload serves them, so the page and
+# the payload cannot disagree.
+CLUSTER_RADIUS_PX = 5   # every cluster's dot: one radius, whatever the count it holds
+DOT_RADIUS_PX = 3       # a lone card's dot radius
+MARK_OUTLINE_PX = 1.5   # the contrast ring on both kinds of mark
 FALLBACK_LABEL = "measured from its first time on the board"   # a card that never entered the default start column (#1354)
 
 
@@ -390,6 +393,8 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
     text = f"{scope}, {measure}, {summary['plotted_text']}{note}; Timeframe selects by {TIMEFRAME_SELECTS}"
     return {
         "plot_frame": plot_frame,
+        # #1432: the page draws these sizes and names none of its own, so a mark can never grow here and stay small there.
+        "mark": {"dot_radius": DOT_RADIUS_PX, "cluster_radius": CLUSTER_RADIUS_PX, "outline": MARK_OUTLINE_PX},
         "measure": measure,
         "axis": "log",
         "timeframe": timeframe,

@@ -1176,6 +1176,23 @@ def test_a_lone_card_draws_a_hollow_dot_and_a_cluster_draws_one_filled_dot(hub, 
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_drawn_marks_are_small_and_agree_with_the_payload(hub, board, tmp_path):
+    """#1432: the page draws a lone card at 3 px, a cluster at 5 px and the outline at 1.5 px, the sizes the payload
+    serves. The figures are literals, so a later change that grows a mark fails here."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-09T09:00:00Z"),
+                3: _done(3, "2026-10-09T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["all"]
+    assert chart["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}
+    out = _lt_chart(hub, tmp_path, "lt-small-marks.js", chart)
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    lone, cluster = sorted(re.findall(r"<circle [^>]*>", plot), key=lambda tag: float(_svg_attr(tag, "r")))
+    assert float(_svg_attr(lone, "r")) == 3, "a lone card does not draw 3 px"
+    assert float(_svg_attr(cluster, "r")) == 5, "a cluster does not draw 5 px"
+    assert float(_svg_attr(lone, "stroke-width")) == 1.5, "a lone card's outline is not 1.5 px"
+    assert float(_svg_attr(cluster, "stroke-width")) == 1.5, "a cluster's outline is not 1.5 px"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(hub, board, tmp_path):
     """#1331: the tooltip names the card or the cluster and shows the lead time, the closed dates and each dot's column
     stack; the cluster carries its count, cards, date range and lead-time range in the payload."""
