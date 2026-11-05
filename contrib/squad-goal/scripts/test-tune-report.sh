@@ -112,6 +112,8 @@ grow() {  # <finish> <start> <result> <sha> [<caller>]: one 13-field row, plus t
   grow $((S + 300)) $((S + 200)) pass e1 entry
   grow $((S + 400)) $((S + 360)) fail e2 entry
   grow $((S + 500)) $((S + 440)) pass e3 entry
+  grow $((S + 650)) $((S + 640)) pass e4 entry
+  grow $((S + 600)) $((S + 590)) fail e4 entry
   grow $((S + 900)) $((S + 700)) pass t1 tip
   grow $((S + 950)) $((S + 940)) pass o1 other
   grow $((S + 1000)) $((S + 500)) pass old1
@@ -121,11 +123,11 @@ grow() {  # <finish> <start> <result> <sha> [<caller>]: one 13-field row, plus t
 cal=$(SG_STATE="$T/st2" SG_CHECKOUT="$T/co" bash "$TR" 2026-10-10 2026-10-11 2>&1)
 chas() { printf '%s\n' "$cal" | grep -qxF -- "$1"; }
 chas "gate lock seconds, child: 90" && ok "lock time by caller: the child's two rows, 60 + 30 s" || ko "child lock time: $cal"
-chas "gate lock seconds, entry: 200" && ok "lock time by caller: the entry's three rows, 100 + 40 + 60 s" || ko "entry lock time: $cal"
+chas "gate lock seconds, entry: 220" && ok "lock time by caller: the entry's three rows, 100 + 40 + 60 s" || ko "entry lock time: $cal"
 chas "gate lock seconds, tip: 200" && ok "lock time by caller: the tip row in the window; the row before it is left out" || ko "tip lock time: $cal"
 chas "gate lock seconds, other: 10" && ok "lock time by caller: the other-gate row" || ko "other lock time: $cal"
 chas "gate lock seconds, unknown: 510" && ok "a row with no caller field, and a row with a caller no one knows, read as unknown (500 + 10 s)" || ko "unknown lock time: $cal"
-chas "entry gate refused share: 0.33 (1 of 3 children)" && ok "the entry gate's refusal share: one of three distinct shas failed" || ko "refusal share: $cal"
+chas "entry gate refused share: 0.25 (1 of 4 children)" && ok "the entry gate's refusal share: a sha that failed then passed on its rerun is not refused; e2, never rerun, is" || ko "refusal share: $cal"
 printf '%s\n' "$cal" | grep -qxF -- "window: 2026-10-10 00:00:00 to 2026-10-11 00:00:00 UTC" && ok "the window these numbers cover is named in the report" || ko "no window line: $cal"
 cal2=$(SG_STATE="$T/st2" SG_CHECKOUT="$T/co" bash "$TR" 2026-10-10 2026-10-10T00:05:00 2>&1)
 printf '%s\n' "$cal2" | grep -qxF -- "gate lock seconds, entry: 0" && printf '%s\n' "$cal2" | grep -qxF -- "gate lock seconds, child: 90" && ok "a narrower window counts only its own rows" || ko "narrow window: $cal2"
