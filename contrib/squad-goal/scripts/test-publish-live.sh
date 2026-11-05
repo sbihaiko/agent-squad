@@ -266,4 +266,57 @@ done
 out=$(env -u SG_SQUAD bash "$src" "$sq/contrib/squad-goal" "$live4" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$live4/SKILL.md")" = "skill B" ] && ok "a publish from the repository tree still publishes" || ko "repository-tree publish (rc $rc): $out"
 
+# --- a publish verifies the destination before it reports success (#1379) ------------------------
+# The copy loop reports what it tried, never what arrived. After the shipped selection and the retirement list are
+# applied, the publish reads the destination back: every shipped file is present with the same bytes and, when the
+# source is executable, executable; no retired name is left. A mismatch is a failed publish: nonzero, one line naming
+# it, no success count and no PUBLISHED.
+vt="$T/verify"; vr="$vt/repo/contrib/squad-goal"; vl="$vt/live"; vshim="$vt/shim"; mkdir -p "$vshim"
+mkdir -p "$vr/scripts/profiles" && git -C "$vt/repo" init -q -b main
+printf 'skill v2\n' > "$vr/SKILL.md"; printf 'watch v2\n' > "$vr/scripts/watch.sh"
+printf '#!/bin/bash\necho tool\n' > "$vr/scripts/tool.sh"; chmod +x "$vr/scripts/tool.sh"
+git -C "$vt/repo" add -A && git -C "$vt/repo" commit -qm verify
+vfix() {
+  rm -rf "$vl"; mkdir -p "$vl/scripts/profiles"
+  printf 'skill v1\n' > "$vl/SKILL.md"; printf 'watch v1\n' > "$vl/scripts/watch.sh"
+  printf '{"models": "mine"}\n' > "$vl/scripts/models.json"; printf 'mine\n' > "$vl/scripts/profiles/mine.sh"
+  printf '#!/bin/bash\n' > "$vl/scripts/publish-landing.sh"      # a retired name: a normal publish drops it
+}
+# The shims stand in for a copy that goes wrong the ways a filesystem can: it fails midway, it leaves a partial temp
+# and fails, it reports success with other bytes, or it drops the executable bit. The rm shim reports success and
+# removes nothing, so a retired name lingers.
+printf '%s\n' '#!/bin/bash' 'last=; for a; do last=$a; done' \
+  'case "$VMODE" in' \
+  '  fail) case "$*" in *watch.sh.new.*) exit 1;; esac;;' \
+  '  partial) case "$*" in *watch.sh.new.*) printf part > "$last"; exit 1;; esac;;' \
+  '  wrongbytes) /bin/cp "$@" || exit $?; printf corrupt > "$last"; exit 0;;' \
+  '  noexec) /bin/cp "$@" || exit $?; chmod a-x "$last"; exit 0;;' \
+  'esac' 'exec /bin/cp "$@"' > "$vshim/cp"
+printf '%s\n' '#!/bin/bash' '[ "$VMODE" = keeprm ] && exit 0' 'exec /bin/rm "$@"' > "$vshim/rm"
+chmod +x "$vshim/cp" "$vshim/rm"
+vrun() { env -u SG_SQUAD -u SG_REPO PATH="$vshim:$PATH" VMODE="$1" bash "$src" "$vr" "$vl" 2>&1; }
+vbad() { # vbad MODE NAMED LABEL: the publish must fail, name NAMED, print no count and write no PUBLISHED
+  local out rc; vfix; out=$(vrun "$1"); rc=$?
+  [ "$rc" != 0 ] && ok "$3 exits non-zero" || ko "$3 published (rc $rc): $out"
+  printf '%s\n' "$out" | /usr/bin/grep -q "mismatch $2" && ok "$3 names $2" || ko "$3 names no mismatch for $2: $out"
+  case "$out" in *"file(s) published"*) ko "$3 printed the success count: $out";; *) ok "$3 prints no success count";; esac
+  [ ! -e "$vl/PUBLISHED" ] && ok "$3 writes no PUBLISHED" || ko "$3 wrote PUBLISHED"
+}
+vbad fail scripts/watch.sh "a copy that fails midway"
+vbad partial scripts/watch.sh "a copy that leaves a partial temp and fails"
+vfix; vrun partial >/dev/null 2>&1
+[ -z "$(/bin/ls "$vl"/scripts/*.new.* 2>/dev/null)" ] && ok "a failed copy leaves no temp file at the destination" || ko "a failed copy left a temp file: $(/bin/ls "$vl"/scripts/*.new.* 2>/dev/null)"
+vbad wrongbytes scripts/watch.sh "a copy that reports success with wrong bytes"
+vbad noexec scripts/tool.sh "a copy that loses its executable bit"
+vbad keeprm scripts/publish-landing.sh "a retired file that stays at the destination"
+vfix; out=$(vrun normal); rc=$?
+[ "$rc" = 0 ] && ok "a normal publish exits 0" || ko "a normal publish (rc $rc): $out"
+case "$out" in *"file(s) published"*) ok "a normal publish prints the success count";; *) ko "a normal publish prints no count: $out";; esac
+[ "$(cat "$vl/scripts/watch.sh")" = "watch v2" ] && [ -x "$vl/scripts/tool.sh" ] && ok "a normal publish lands the bytes and the executable bit" || ko "a normal publish landed wrong bytes or mode"
+[ ! -e "$vl/scripts/publish-landing.sh" ] && ok "a normal publish drops the retired file" || ko "the retired file survived a normal publish"
+[ "$(cat "$vl/scripts/models.json")" = '{"models": "mine"}' ] && [ -f "$vl/scripts/profiles/mine.sh" ] && ok "a normal publish keeps machine configuration" || ko "a normal publish touched machine configuration"
+[ -s "$vl/PUBLISHED" ] && ok "a normal publish writes PUBLISHED" || ko "a normal publish wrote no PUBLISHED"
+out=$(env -u SG_SQUAD -u SG_REPO bash "$src" --check "$vr" "$vl" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && ok "the destination verifies clean after a normal publish" || ko "--check after a normal publish (rc $rc): $out"
+
 rm -rf "$T"; [ $fail = 0 ] && echo "test-publish-live: all checks green" || { echo "test-publish-live: failed"; exit 1; }
