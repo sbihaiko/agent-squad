@@ -252,6 +252,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id=warn-detail hidden></div>
 <p id=msg></p>
 </section>
+<!-- The phone has no Flow view: its tabs are Monitor, Board, Runs, Terminals and More, and the Cumulative Flow and
+     Lead Time charts are desktop-only. So the desktop chart's Type and visible-state filters (#1356) have no control
+     here; the phone reader opens the desktop page for them. -->
 <section data-panel="board" hidden>
 <div id="bhead" data-role="header">
 <button id="col-prev" aria-label="Previous column">&lsaquo;</button>
@@ -293,6 +296,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 
 <a class="more-link" href="./#set">Settings</a>
 </div>
+<p class="msg">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
 <article data-screen="cost" data-src="/api/stats" hidden>
 <div id="cost-content"><h2>Cost and usage</h2>
 <div id="periods">

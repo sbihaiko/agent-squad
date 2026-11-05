@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 HUB_PY = SCRIPTS / "hub.py"
 OPENED = "2026-10-01T09:00:00Z"
-BAR = "fw=&fs=&fk=&ty=task"
+BAR = "fw=&fs=&fk=&ty=task"   # the cumulative flow's route, at the tasks default it always sent (#1356)
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
@@ -95,7 +95,7 @@ const EL={"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el(),"#sse":el(),"#flowb
 const $=s=>EL[s];
 globalThis.setInterval=(f,ms)=>{INTERVALS.push(f)};
 globalThis.fetch=async url=>{FETCHED.push(url);return {json:async()=>({t:1,cfd:{ranges:[]}})}};
-let bo={},FLOWK=null,FLOWD={},LT={tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"Todo",b:""};
+let bo={},FLOWK=null,FLOWD={},CF={r:"30",ty:"task",hidden:[]},LT={tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"Todo",b:""};   // the cumulative flow's own Type and hidden states (#1356)
 const ls={},save=()=>{},saveB=()=>{},pollBoard=()=>POLLED.push(1);
 const drawFlow=()=>{},flowTabs=()=>{},poll=()=>RUNS.push(1);
 const settle=()=>new Promise(r=>setTimeout(r,0));

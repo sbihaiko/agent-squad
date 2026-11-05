@@ -294,6 +294,9 @@ def mark_killed(f):
     _run(["python3", "-m", "squad.killed", str(f)], env=env)
 TAKEOVER_SECONDS = float(os.environ.get("SG_TAKEOVER_SECONDS", "1800") or 1800)
 GATE = re.compile(r"gate\.sh\b")   # a gate process (`gate.sh`, `fast-gate.sh`): a run inside one is doing work or waiting its turn, never stuck (#1191)
+# A gate process older than this is itself overdue: every bound the loop gives a gate is shorter (ADR-0163, ADR-0157), so
+# it is no evidence that the run is working, and the takeover bound applies again (#1390).
+GATE_STUCK_SECONDS = float(os.environ.get("SG_GATE_STUCK_SECONDS", "") or TAKEOVER_SECONDS)
 def age_of(t):   # T: seconds since a record stamp, or None when the pass cannot read it (an epoch, or an ISO UTC stamp)
     try: return now - float(t)
     except (TypeError, ValueError): pass
@@ -415,7 +418,9 @@ for r in names:
     alive = any(LIVE.search(procs.get(q, (0, ""))[1]) for q in hips)
     # A gate process alive inside the run folder is the child's own entry gate waiting on the machine-wide gate lock, or
     # holding it: either way the run is working or waiting its turn, so the bound does not apply (#1191, ADR-0166).
-    gate_wait = any(GATE.search(procs.get(q, (0, ""))[1]) for q in hips)
+    # A gate that has outlived every bound the loop gives a gate is itself overdue, and it exempts nothing: three dead runs
+    # sat behind such a process for hours and no rule named them (#1390).
+    gate_wait = any(GATE.search(procs.get(q, (0, ""))[1]) and now - starts.get(q, now) < GATE_STUCK_SECONDS for q in hips)
     age = progress_age(i)
     if age is None: age = run_age(i)
     if age is not None and age > TAKEOVER_SECONDS and not gate_wait:   # T: past the bound with no progress the run is stuck; it is ended and handed over, never requeued (ADR-0166)
