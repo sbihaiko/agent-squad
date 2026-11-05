@@ -89,6 +89,7 @@ test-hubmux-check-board.sh 0.81
 test-hubmux-live.sh 0.12
 test-hubstream.sh 8.84
 test-issue-ledger.sh 2.21
+test-issue-state-door.sh 2.12
 test-janitor-board-facts.sh 1.24
 test-janitor-board-reconcile.sh 4.71
 test-janitor-board-vocab.sh 1.58
@@ -194,8 +195,8 @@ test-watchd-supervisor.sh 2.68
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
 test-wave-compete.sh 8.03
-test-wave-lifecycle.sh 18.50
 test-wave-dropped.sh 10.00
+test-wave-lifecycle.sh 18.50
 test-wave-norefs.sh 18.04
 test-wave-probe.sh 2.64
 test-wave-requeue-cap.sh 3.35

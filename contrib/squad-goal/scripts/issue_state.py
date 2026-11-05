@@ -846,7 +846,9 @@ def _fresh_hub_items(require_fresh=True, repo=None):
         if not expected_repo or data.get("repo") != expected_repo:
             return None
         if 0 <= age < 300 and (not require_fresh or not data.get("err")) and isinstance(items, list):
-            return items
+            # A row that names another repository is that repository's card, never this board's: one project may hold
+            # cards of several repositories, and an issue number repeats between them (#1429).
+            return [i for i in items if not (i.get("r") and str(i["r"]) != expected_repo)]
     except (OSError, ValueError, TypeError, KeyError):
         pass
     return None
@@ -859,6 +861,9 @@ def main(argv):
     if args[:1] == ["--repo"]: repo = args[1]; args = args[2:]
     if "--label" in args:
         k = args.index("--label"); label = args[k + 1] if k + 1 < len(args) else ""; del args[k:k + 2]
+    # The binding is this profile's repository: with no --repo the seam falls back to SG_REPO, as every other door
+    # already asks it. An empty name is no repository named, never a board read without a filter (#1429).
+    repo = repo or None
     if args[:1] == ["--hub-todos"]:
         cached = _fresh_hub_items(require_fresh=False, repo=repo or None)
         if cached is not None:
