@@ -32,8 +32,10 @@ column its work never reached.
    the column the owner gave it otherwise; it never follows a ticket into Doing, Code Review or Code
    Complete, because the spec is not work. A spec is kept out of the count of work a live run holds
    by its `spec` label, never by its column: a spec card in a work column is still not work.
-2. **Two columns are terminal: Closed and Abandoned.** A card that reaches one stays. A closed card
-   that still carries an old option lands in Closed, whatever its option said.
+2. **Two columns are terminal: Closed and Abandoned.** A card that reaches one stays while its
+   issue is closed. An issue open again returns its card to Todo and to no other column; the move names
+   `SG_MOVE_REASON=reopened`, and `rework` stays on the issue as the badge. A closed card that still
+   carries an old option lands in Closed, whatever its option said.
 3. **A migration plan names every move before any write.** It is a dry run: each card on an old
    option, the old option, the new column and the labels to add, then each option's removal. The
    planner has no write mode; the applier of the definition writes the board.

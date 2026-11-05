@@ -1038,6 +1038,13 @@ def reconcile_board():
         if str(n) in have_all and board_write(["--remove", owner, str(proj), str(n)], n, "the issue is a run parent"):
             del have_all[str(n)]
             say(f"BOARD-RECONCILE #{n}: card removed (run-parent: a roll-up, never work)")
+    if shipped:   # an open issue whose card reads Closed goes back to Todo, once: the reopen is the door (ADR-0143 rule 2, #1420)
+        for n in sorted(k for k in olabels if str(k) in have_all and have_all[str(k)] == "Closed" and k not in specs and not (RUN_PARENT in olabels[k])):
+            if n in held_owner or owner_frozen(n): continue
+            say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued; card -> Todo (reopened)")
+            if board_write([owner, str(proj), "Todo", str(n)], n, "the issue is open again", "reopened"):
+                have_all[str(n)] = "Todo"; expected.pop(n, None)
+                say(f"BOARD-RECONCILE #{n}: card -> Todo (the issue is open again)")
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
         have = have_all.get(str(n))
         note = None

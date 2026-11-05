@@ -113,6 +113,7 @@ def past(have, want):
 
 
 UNCLAIM = (DOING, "Todo")   # the one backward move: the loop's dispatch undoes its own claim (ADR-0143)
+REOPENED = "reopened"         # the reason an issue open again gives: its Closed card returns to Todo and no other column (#1420)
 NO_LANDING = "no-landing"     # the reason a run that landed nothing gives: the column the loop set goes back to Todo (#1059)
 
 
@@ -122,6 +123,7 @@ def refused_for_automated(have, want, reason=None):
     if not have: return False
     if (have, want) == UNCLAIM: return False
     if reason == NO_LANDING and want == "Todo": return False
+    if reason == REOPENED and have == "Closed" and want == "Todo": return False   # the reopen is the door: the issue state is the owner's intent (ADR-0143 rule 2, #1420)
     return past(have, want)
 
 
