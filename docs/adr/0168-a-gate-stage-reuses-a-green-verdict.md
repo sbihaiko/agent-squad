@@ -29,7 +29,8 @@ different tree. A silent skip would hide what happened, so the reuse must be on 
 4. **The memo spans callers and processes.** A pass is kept under a machine-wide key: the tree object, the digest of
    the uncommitted state, the base ref, the merge-base and the battery text. The base commit is no part of the key, so a
    base that moved with the same merge-base still answers; a changed tree, dirt, merge-base or battery is a new key. The
-   base must resolve, and a command that depends directly on the base tip keeps that dependency in its key. A run's
+   base must resolve. The shipped battery reads the base only through the merge-base; a battery that reads the base
+   tip directly must put the base commit back in its key before it uses the memo. A run's
    record-bound stage still reads the `gate_result` events of its own run. An approval binds to the tree it proved.
 5. **The reuse is a record event.** A reused stage writes `gate_reuse` with the tree and the stage it reused, its
    artifact carries an empty finding list, and its outcome names `reused_from`. A reader sees the reuse; it is never a
