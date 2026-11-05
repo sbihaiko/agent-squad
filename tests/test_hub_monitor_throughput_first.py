@@ -60,9 +60,11 @@ def _section(page, sid):
 
 
 SPEED = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
-         "stale": False, "age_secs": 60, "tasks": {"n": 4, "of": 10, "share": 0.4},
-         "arrivals": {"opened": 10, "bugs": {"n": 7, "of": 10, "share": 0.7},
-                      "loop_bugs": {"n": 4, "of": 10, "share": 0.4}}}
+         "stale": False, "age_secs": 60, "labels": {"age_secs": 60, "stale": False},
+         "tasks": {"n": 4, "of": 10, "share": 0.4},
+         "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3}, "loop_bugs": {"in": 4, "out": 2, "open": 2}},
+         "specs": {"open": 3, "so": "3 open", "done": 5, "total": 9, "pct": 55, "frac": 5 / 9,
+                   "value": "5/9 tickets · 55%", "state": "info", "bar": True, "tip": "", "none": {"closed": 0, "total": 0}}}
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "write": True, "reason": "", "tailnet": False,
              "access": {"loop_write": False, "terminals_send": False},
              "live": {"runs": ["/x/runs/run-20261102-1"], "gates": []}, "log": []}
@@ -123,17 +125,17 @@ def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
     page = hub.PAGE
     monitor = _section(page, "inst")
     assert monitor.index("id=igs") < monitor.index("id=ispeed")
-    assert monitor.index("id=ispeed") < monitor.index("id=ispec")
     card = _run(page, f"speedRow({json.dumps(SPEED)})", _monitor_blocks(page))
-    sentences = ["Tasks: 4 of 10 closed", "Bugs: 7 of 10 opened", "Loop-bugs: 4 of 10 opened"]
+    sentences = ["Tasks: 4 of 10 closed", "Bugs: 7 in · 4 out · 3 open", "Loop-bugs: 4 in · 2 out · 2 open",
+                 "Specs: 5/9 tickets · 55%, 3 open"]
     positions = [card.index(f'aria-label="{s}"') for s in sentences]
     assert positions == sorted(positions), "the three rows are out of order"
 
 
 def test_the_loop_switch_closes_the_monitor_card(hub):
-    """The owner put the switch at the bottom of the Monitor: every instrument and the Specs tile sit above it."""
+    """The owner put the switch at the bottom of the Monitor: the gauges and the Throughput card sit above it."""
     monitor = _section(hub.PAGE, "inst")
-    assert monitor.index("id=iloop") > monitor.index("id=ispec"), "the loop switch is not the last row of the Monitor"
+    assert monitor.index("id=iloop") > monitor.index("id=ispeed"), "the loop switch is not the last row of the Monitor"
 
 
 def test_the_throughput_row_sits_above_every_cost_and_subscription_section(hub):
@@ -193,7 +195,7 @@ def test_the_card_fits_the_sidebar_at_the_phone_width_on_rendered_dimensions(hub
                     cardRight: card.right, rowCount: rows.length, rowOverflow: Math.max(0, ...rows)};
         }""")
     got = _rendered(hub, SPEED, measure)
-    assert got["rowCount"] == 3 and got["docW"] <= PHONE_WIDTH, got
+    assert got["rowCount"] == 4 and got["docW"] <= PHONE_WIDTH, got
     assert got["cardLeft"] >= 0 and got["cardRight"] <= got["sideRight"] + 0.5 <= PHONE_WIDTH + 0.5, got
     assert got["rowOverflow"] <= 0, got
 

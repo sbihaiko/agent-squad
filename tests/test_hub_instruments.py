@@ -186,7 +186,7 @@ def test_every_card_selector_names_the_card_once(hub):
     """A stray `#inst` prefix nests the card in itself, so the rule matches nothing on either page."""
     for sels, _ in _rules(hub.INST_CSS):
         for s in sels:
-            assert re.match(r"#(inst|ispec)\b", s), s
+            assert re.match(r"#inst\b", s), s
             assert len(re.findall(r"#inst\b", s)) <= 1, s
 
 
