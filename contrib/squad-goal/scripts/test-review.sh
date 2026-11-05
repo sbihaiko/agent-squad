@@ -717,6 +717,24 @@ out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 /usr/bin/grep -q -- '--reasoning-effort low' "$GROK_ARGS" \
   && ok "13c the grok review takes the chain entry's own effort" \
   || ko "13c the grok review ignored the entry's effort: $(cat "$GROK_ARGS")"
+# 29) #1371: a grok review asks for --output-format json: the usage it reports is logged (not unreported), and the verdict
+# parses from the envelope's text field. The stub answers plain text to any other argv, as the old plain leg did.
+cat > "$T/bin/grok" <<'J'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"
+case "$*" in
+  *"--output-format json"*) printf '%s\n' '{"type":"result","text":"VERDICT: APPROVE\n","usage":{"input_tokens":1200,"output_tokens":90,"cache_read_input_tokens":400}}';;
+  *) printf 'VERDICT: APPROVE\n';;
+esac
+J
+chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+export GROK_ARGS="$T/grok-args"; : > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+l1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)
+awk -F'\t' '$3=="grok-4.7" && $4==1200 && $5==90 && $6==400 && NF==6 {f=1} END{exit !f}' "$T/st/token-usage.tsv" 2>/dev/null && [ "$l1" = "VERDICT: APPROVE" ] && [ $rc = 0 ] \
+  && ok "29 a grok review asks for json, logs its reported tokens, and the verdict parses from the text field" \
+  || ko "29 grok json: rc=$rc line1='$l1' ledger='$(tail -1 "$T/st/token-usage.tsv" 2>/dev/null)' args='$(cat "$GROK_ARGS")'"
 unset GROK_ARGS
 suite_s=$(( $(date +%s) - suite_t0 ))
 [ "$suite_s" -lt 240 ] && ok "#1413 the suite finishes inside the acceptance cap (${suite_s}s of 240s)" || ko "#1413 the suite took ${suite_s}s, over 240s: an acceptance command of 300 s fails a run whose code is green"

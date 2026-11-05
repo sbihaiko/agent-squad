@@ -414,7 +414,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       # grok's reasoning effort defaults to high and cannot be disabled; unset, a review ran minutes long and timed out (479-623 s
       # medians, #1848). The call takes the chain entry's effort, and the fast lane takes low as the claude leg does; an entry
       # that names none falls to effort_of's default, so a shipped entry always names one (tests/test_modelreg.py pins it).
-      cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --reasoning-effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
+      cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --reasoning-effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --prompt-file "$p" --output-format json --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
       cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
       cli:codex) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
@@ -427,7 +427,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # answer carried none (a refusal, an error, a zeroed .usage, an old CLI's plain text) gets a 7th field `no-usage`, so a reader
     # can tell a call that never answered from a model that never reports (both make the total a floor). codex prints 'tokens used' and the total on its
     # output (same line or the next), with a locale separator (54.227, 54,227): the digits are logged as the input count, out and
-    # cache_read 0; with no such line it logs 0. grok and agy print no token count on the plain path this script reads, so they log 0 with NO mark: the call is still counted and named, and tokens.py reads it as `unreported`, so the total is a floor.
+    # cache_read 0; with no such line it logs 0. agy prints no token count on the path this script reads, so it logs 0 with NO mark: the call is still counted and named, and tokens.py reads it as `unreported`, so the total is a floor. grok's json envelope carries its usage (#1371).
     # The mark is APPENDED, never substituted into a count field: the six fields keep their order and their meaning, so a reader
     # that stops at six (tokens.py reads len(p) >= 6) is untouched, and a count field holding a word would make that reader drop
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
@@ -443,6 +443,9 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       # with --json-schema the answer is the envelope's structured_output (#632); without it, .result
       jq -r 'if (.structured_output|type)=="object" then (.structured_output|tojson) else .result end' "$o" > "$o.r" 2>/dev/null && mv "$o.r" "$o"; rm -f "$o.r"
       case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
+      cli:grok) tu=$(jq -r 'select(type=="object" and (.text|type)=="string") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
+        [ -n "$tu" ] || tu="0	0	0"
+        jq -r 'select(type=="object" and (.text|type)=="string") | .text' "$o" > "$o.r" 2>/dev/null && [ -s "$o.r" ] && mv "$o.r" "$o"; rm -f "$o.r";;
       cli:codex) tu=$(awk 'f{gsub(/[^0-9]/,""); if($0!=""){print; exit}} /tokens used/{f=1; sub(/.*tokens used/,""); gsub(/[^0-9]/,""); if($0!=""){print; exit}}' "$e" 2>/dev/null)
         tu="${tu:-0}	0	0";;
       *) tu="0	0	0";;
