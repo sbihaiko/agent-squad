@@ -2303,6 +2303,28 @@ def arrivals_fact(items, now_ts, window_secs):
     bugs = sum(1 for i in opened if "bug" in (i.get("l") or []) or loop_defect(i))
     return {"opened": total, "bugs": row(bugs), "loop_bugs": row(sum(1 for i in opened if loop_defect(i)))}
 
+def tasks_fact(items, now_ts, window_secs, closed_n):
+    """The Tasks row under the hero figure: planned delivery closed inside the window (#1362). A task is a closed card with
+    no `spec` label, no `bug` label and no label beginning with `loop-bug` — a spec is a document and never work, and a
+    closed defect is a fix — and with a close reason that is not the carrier's not-delivered one (#921, one copy of the
+    vocabulary in board_columns). The share runs over `closed_n`, every card the hero figure counts closed in the window
+    whatever its kind, so a spec and an abandoned card sit in the denominator and never in the numerator.
+
+    The row reads the close stamps from the same two sources as the hero: the board cache's `c` stamps, and the store's
+    `closed` events when the cache holds nothing, whose rows carry no label and no reason and so are closures without a
+    task. A share over a zero denominator is None, as on the arrival rows."""
+    since, n = now_ts - window_secs, 0
+    for i in items or []:
+        if i.get("s") != "closed": continue
+        ts = _close_instant(i.get("c"))
+        if ts is None or not since <= ts <= now_ts: continue
+        labels = [str(x) for x in (i.get("l") or [])]
+        if "spec" in labels or "bug" in labels or any(x.startswith("loop-bug") for x in labels): continue
+        if _columns_module.not_planned(i.get("cr")): continue
+        n += 1
+    of = int(closed_n or 0)
+    return {"n": n, "of": of, "share": round(n / of, 3) if of else None}
+
 def throughput_fact(now=None):
     """How fast the board is closing cards over the last window: its close count, the six rolling slots it is compared
     with (the newest is the window), which finished slots are available, one median and the bar maximum over those, the
@@ -2342,6 +2364,7 @@ def throughput_fact(now=None):
     oldest = min((r for r in reads if r), default=0) or None
     return {"window_secs": w, "window": window_n, "today": window_n,   # `today` is the key the page draws until #1363 moves the card
             "arrivals": arrivals_fact(items, now_ts, w),   # the Bugs and Loop-bugs rows, off the cache's `o` stamps alone
+            "tasks": tasks_fact(items, now_ts, w, window_n),   # planned delivery over the same window as the hero figure
             "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
             "max": max(avail + [window_n]), "trend": trend,
             "as_of": oldest, "age_secs": now_ts - oldest if oldest else None}

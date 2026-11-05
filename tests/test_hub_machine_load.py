@@ -1151,3 +1151,144 @@ def test_the_arrival_rows_read_the_stamp_the_snapshot_already_carries(hub, tmp_p
     now_ts = THROUGHPUT_NOW.timestamp()
     assert hub.arrivals_fact(rows, now_ts, 4 * 3600)["bugs"]["n"] == 1, "the snapshot's own row is not an arrival row input"
 
+
+
+# ---------------------------------------------------------------- the Tasks row (owner, 2026-11-05, #1362)
+
+def _task_card(n, closed, labels=(), reason=None, state="closed"):
+    """One cache row as the items read writes it: the close stamp `c`, the labels `l`, the close reason `cr`, and a
+    creation stamp well before the window so no arrival row takes it."""
+    return {"n": n, "s": state, "c": _stamp(closed) if closed is not None else None, "st": "Done",
+            "l": list(labels), "cr": reason, "o": _stamp(THROUGHPUT_NOW.timestamp() - 6 * 3600)}
+
+
+def test_the_tasks_row_counts_planned_delivery_closed_in_the_window(hub, tmp_path, monkeypatch):
+    """A task is a closed card with no spec, bug or loop-bug label, closed as completed. The row's share runs over every
+    card closed in the window, whatever its kind, so a spec and an abandoned card sit in the denominator alone (#1362)."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(1, now_ts - 1 * 3600),                                    # a task
+             _task_card(2, now_ts - 2 * 3600, ["enhancement"]),                  # a task
+             _task_card(3, now_ts - 3 * 3600, ["spec"]),                         # a spec: never work
+             _task_card(4, now_ts - 90 * 60, ["bug"]),                           # a defect: a fix, never a task
+             _task_card(5, now_ts - 60 * 60, ["loop-bug:dispatch"]),             # a loop defect: never a task
+             _task_card(6, now_ts - 30 * 60, reason="not_planned"),              # abandoned: a closure, not delivery
+             _task_card(7, now_ts - 6 * 3600),                                   # closed before the window
+             _task_card(8, None, state="open")]                                  # still open
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    tasks = hub.throughput_fact(now=THROUGHPUT_NOW)["tasks"]
+    assert tasks == {"n": 2, "of": 6, "share": round(2 / 6, 3)}, tasks
+
+
+def test_a_closed_spec_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_path, monkeypatch):
+    """A spec is a document and never work: it keeps its place in the hero figure, so the denominator holds it, and the
+    numerator never does (#1362)."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(1, now_ts - 1 * 3600, ["spec"]),
+             _task_card(2, now_ts - 2 * 3600, ["spec", "wave:02"])]   # a spec carries other labels too
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["window"] == 2, "the hero figure counts a closed spec"
+    assert got["tasks"] == {"n": 0, "of": 2, "share": 0.0}, got["tasks"]
+
+
+def test_a_card_closed_not_planned_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_path, monkeypatch):
+    """An abandoned card is a closure and not delivery: it counts in the hero figure and in the denominator, never in the
+    numerator (#1362)."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(1, now_ts - 1 * 3600, reason="not_planned"),
+             _task_card(2, now_ts - 2 * 3600, reason="completed")]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["window"] == 2, "the hero figure counts a card closed as not planned"
+    assert got["tasks"] == {"n": 1, "of": 2, "share": 0.5}, got["tasks"]
+
+
+def test_a_closed_defect_is_never_a_task_whatever_its_bug_spelling(hub, tmp_path, monkeypatch):
+    """A closed defect is a fix rather than planned delivery: `bug`, and every `loop-bug` prefix the loop dispatches by,
+    keep the card out of the Tasks row while it stays in the hero figure (ADR-0146, #1362)."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(i, now_ts - i * 60, labels) for i, labels in
+             enumerate([["bug"], ["loop-bug"], ["loop-bug:landing"], ["loop-bug:dispatch"], ["bug", "loop-bug:infra"]], 1)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["window"] == 5, "the hero figure counts closed defects"
+    assert got["tasks"] == {"n": 0, "of": 5, "share": 0.0}, got["tasks"]
+
+
+def test_the_tasks_share_denominator_is_every_card_closed_in_the_window(hub, tmp_path, monkeypatch):
+    """The share is taken against every closure of the window, whatever the kind: a mixed window of one task, one spec,
+    one defect and one abandoned card reads 1 of 4, never 1 of 1."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(1, now_ts - 1 * 60),
+             _task_card(2, now_ts - 2 * 60, ["spec"]),
+             _task_card(3, now_ts - 3 * 60, ["bug"]),
+             _task_card(4, now_ts - 4 * 60, reason="not_planned")]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["tasks"]["of"] == got["window"] == 4, "the denominator is not the hero figure"
+    assert got["tasks"] == {"n": 1, "of": 4, "share": 0.25}, got["tasks"]
+
+
+def test_the_tasks_row_reads_the_close_stamps_the_hero_reads_from_the_store_too(hub, tmp_path, monkeypatch):
+    """The row follows the hero's two close-stamp sources: with no board cache the hero falls back to the store's `closed`
+    events, and the row's denominator is that same hero figure. A store event carries no label and no reason, so it is a
+    closure without a task (#1362)."""
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 3])
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["window"] == 3, "the hero figure's store fallback moved"
+    assert got["tasks"] == {"n": 0, "of": 3, "share": 0.0}, got["tasks"]
+
+
+def test_the_tasks_row_follows_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
+    """SG_SPEED_WINDOW_SECS moves the Tasks row with the hero figure and its denominator: one window, not two (#1362)."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(1, now_ts - 90 * 60),
+             _task_card(2, now_ts - 30 * 60)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["window"] == 1, "the hero figure did not follow the override"
+    assert got["tasks"] == {"n": 1, "of": 1, "share": 1.0}, got["tasks"]
+
+
+def test_no_card_closed_in_the_window_reads_a_task_share_over_zero(hub, tmp_path, monkeypatch):
+    """Nothing closed in the window: the row reads 0 of 0 and leaves the share unworded rather than inventing a ratio
+    over nothing, as the arrival rows do (#1362)."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(1, now_ts - 8 * 3600)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["window"] == 0 and got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]
+
+
+def test_a_card_closed_as_a_duplicate_is_not_planned_delivery(hub, tmp_path, monkeypatch):
+    """The carrier's not-delivered vocabulary is board_columns' one copy (#921): a duplicate closure is an abandoned card
+    by the same rule that names Abandoned, so it is no task and still a closure of the window."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_task_card(1, now_ts - 1 * 60, reason="duplicate"),
+             _task_card(2, now_ts - 2 * 60)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["tasks"] == {"n": 1, "of": 2, "share": 0.5}, got["tasks"]
+
+
+def test_the_tasks_row_reads_the_reason_and_labels_the_snapshot_already_carries(hub, tmp_path):
+    """The row runs on the rows the items read writes, with no added snapshot field: a REST card taken through the hub's
+    own jq emits the close reason and the labels the fact counts (#1362)."""
+    jq = shutil.which("jq")
+    assert jq, "jq runs the items program the hub reads with"
+    now_ts = THROUGHPUT_NOW.timestamp()
+    def rest(n, reason, labels):
+        return {"content_type": "Issue", "id": f"PVTI_{n}", "fields": [{"name": "Status", "value": {"name": {"raw": "Done"}}}],
+                "content": {"id": 900 + n, "number": n, "repository_url": "https://api.github.com/repos/x/y",
+                            "title": f"card {n}", "state": "CLOSED", "state_reason": reason, "closed_at": _stamp(now_ts - 60 * n),
+                            "labels": [{"name": x} for x in labels], "sub_issues_summary": {},
+                            "created_at": _stamp(now_ts - 6 * 3600)}}
+    src = tmp_path / "items.json"
+    src.write_text(json.dumps([rest(1, "completed", []), rest(2, "completed", ["bug"]),
+                               rest(3, "not_planned", ["spec"])]))
+    out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
+    rows = [json.loads(line) for line in out.splitlines() if "_page" not in line]
+    assert rows[0]["cr"] == "completed" and rows[2]["cr"] == "not_planned", "the snapshot drops the close reason"
+    assert hub.tasks_fact([dict(r, s="closed") for r in rows], now_ts, 4 * 3600, 3) == {"n": 1, "of": 3, "share": 0.333}, \
+        "the snapshot's own row is not a Tasks row input"
