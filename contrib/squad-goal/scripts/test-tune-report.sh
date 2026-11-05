@@ -97,6 +97,40 @@ for line in "landings: 0" "live-run hours: 0.00" "landings per live-run hour: 0.
 done
 case "$empty" in *FLAG*) ko "an empty window is flagged: $empty";; *) ok "an empty window is not flagged";; esac
 
+# --- gate lock time by caller and the entry gate's refusal share (#1410) ------------------------------------------------
+# A gate row of 13 fields is a row from before the caller field: it reads as an unknown caller, never as another one. A row
+# whose caller field names no known caller reads as unknown too. The entry gate's children are its distinct shas.
+mkdir -p "$T/st2"; tab=$(printf '\t')
+grow() {  # <finish> <start> <result> <sha> [<caller>]: one 13-field row, plus the caller field when named
+  local row; row=$(printf '%s\tfast\t%s\t%s\t%s\t\t\t%s\t-\t-\t-\t0\t-' "$1" "$3" "$4" "$2" "$3")
+  [ $# -lt 5 ] || row="$row${tab}$5"
+  printf '%s\n' "$row"
+}
+{
+  grow $((S + 100)) $((S + 40)) pass e1 child
+  grow $((S + 200)) $((S + 170)) pass e1 child
+  grow $((S + 300)) $((S + 200)) pass e1 entry
+  grow $((S + 400)) $((S + 360)) fail e2 entry
+  grow $((S + 500)) $((S + 440)) pass e3 entry
+  grow $((S + 900)) $((S + 700)) pass t1 tip
+  grow $((S + 950)) $((S + 940)) pass o1 other
+  grow $((S + 1000)) $((S + 500)) pass old1
+  grow $((S + 1100)) $((S + 1090)) pass odd1 weird
+  grow $((S - 100)) $((S - 900)) pass early1 tip
+} > "$T/st2/gate-history"
+cal=$(SG_STATE="$T/st2" SG_CHECKOUT="$T/co" bash "$TR" 2026-10-10 2026-10-11 2>&1)
+chas() { printf '%s\n' "$cal" | grep -qxF -- "$1"; }
+chas "gate lock seconds, child: 90" && ok "lock time by caller: the child's two rows, 60 + 30 s" || ko "child lock time: $cal"
+chas "gate lock seconds, entry: 200" && ok "lock time by caller: the entry's three rows, 100 + 40 + 60 s" || ko "entry lock time: $cal"
+chas "gate lock seconds, tip: 200" && ok "lock time by caller: the tip row in the window; the row before it is left out" || ko "tip lock time: $cal"
+chas "gate lock seconds, other: 10" && ok "lock time by caller: the other-gate row" || ko "other lock time: $cal"
+chas "gate lock seconds, unknown: 510" && ok "a row with no caller field, and a row with a caller no one knows, read as unknown (500 + 10 s)" || ko "unknown lock time: $cal"
+chas "entry gate refused share: 0.33 (1 of 3 children)" && ok "the entry gate's refusal share: one of three distinct shas failed" || ko "refusal share: $cal"
+printf '%s\n' "$cal" | grep -qxF -- "window: 2026-10-10 00:00:00 to 2026-10-11 00:00:00 UTC" && ok "the window these numbers cover is named in the report" || ko "no window line: $cal"
+cal2=$(SG_STATE="$T/st2" SG_CHECKOUT="$T/co" bash "$TR" 2026-10-10 2026-10-10T00:05:00 2>&1)
+printf '%s\n' "$cal2" | grep -qxF -- "gate lock seconds, entry: 0" && printf '%s\n' "$cal2" | grep -qxF -- "gate lock seconds, child: 90" && ok "a narrower window counts only its own rows" || ko "narrow window: $cal2"
+printf '%s\n' "$cal2" | grep -qxF -- "entry gate refused share: 0.00 (0 of 0 children)" && ok "no entry gate row in the window: a zero share, no division" || ko "empty share: $cal2"
+
 bare=$(mktemp -d); mkdir -p "$bare/st" "$bare/co"
 none=$(SG_STATE="$bare/st" SG_CHECKOUT="$bare/co" bash "$TR" 2026-10-10 2026-10-11 2>&1); nrc=$?
 [ "$nrc" = 0 ] && printf '%s\n' "$none" | grep -qxF -- "landings: 0" && ok "a state directory with no files reads as zeros" || ko "no files: rc=$nrc $none"

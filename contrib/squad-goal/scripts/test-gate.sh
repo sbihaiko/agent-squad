@@ -149,6 +149,11 @@ rfile() {  # <sha>: the standing red record for that tree, empty when none
   local f; for f in "$RS"/gate-reds/*; do [ -f "$f" ] || continue; IFS=$'\t' read -r _ _ s _ < "$f"; [ "$s" = "$1" ] && { printf '%s\n' "$f"; return; }; done
 }
 rsha=$(git -C "$T/w" rev-parse HEAD)
+# (#1410) A gate row names its caller in field 14: the word SG_GATE_CALLER carries, `other` when it names none.
+(cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_CALLER=entry bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
+[ "$(rh | cut -f14)" = entry ] && ok "a gate row names the caller the environment gave" || ko "caller field: '$(rh)'"
+(cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
+[ "$(rh | cut -f14)" = other ] && ok "a gate row with no caller named reads other" || ko "default caller: '$(rh)'"
 out=$(rrun red-delta); rc=$?
 [ $rc = 1 ] && [ "$(rh | cut -f8)" = fail ] && [ -n "$(rfile "$rsha")" ] && [ "$(rh | cut -f13)" = red ] \
   && ok "a measured red is recorded, and the history names it red" || ko "red record: rc $rc, '$(rh)'"
