@@ -66,6 +66,36 @@ grep -q '^due \[1393\]$' "$T/out2.txt" \
 grep -q '^settled \[\]$' "$T/out2.txt" \
   && ok "the re-read record is settled, so the pass does not loop" || ko "the settled record is still due: $(cat "$T/out2.txt")"
 
+# (#1419) A close that moves no card is never read: the issue closes through the API and its card keeps its Status, so no
+# clock moves. A complete record that ends in Backlog is due while the card is closed, and once read it ends closed and
+# plots its lead row. An edit that changes no state is still no reason to read.
+"$py" - "$T/s" <<'PY' >"$T/out3.txt" 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import board_history as bh
+ev = [{"t": "2026-11-01T00:00:00Z", "type": "added"},
+      {"t": "2026-11-01T00:00:00Z", "type": "status", "status": "Backlog"}]
+stored = {1420: {"issue_updated": "2026-11-01T00:00:00Z", "status_updated": "2026-11-01T00:00:00Z",
+                 "events": ev, "complete": True, "cursor": None}}
+closed = {"n": 1420, "issue_updated": "2026-11-04T00:00:00Z", "status_updated": "2026-11-01T00:00:00Z",
+          "status": "Backlog", "closed": True}
+open_ = dict(closed, closed=False)
+print("due", bh.due_reads([closed], stored))
+print("edited", bh.due_reads([open_], stored))
+stored[1420]["events"] = ev + [{"t": "2026-11-02T00:00:00Z", "type": "closed"}]
+print("settled", bh.due_reads([closed], stored))
+row = bh.board_time(bh.intervals(stored[1420]["events"]))
+print("row", row is not None, round(row["flowing"], 3), sorted(row["columns"].items()), row["censored"])
+PY
+grep -q '^due \[1420\]$' "$T/out3.txt" \
+  && ok "a card closed while its complete record ends in Backlog is re-read" || ko "a close that moves no card is never read: $(cat "$T/out3.txt")"
+grep -q '^edited \[\]$' "$T/out3.txt" \
+  && ok "an edit that changes no closed state is no reason to read" || ko "an unrelated edit is a reason to read: $(cat "$T/out3.txt")"
+grep -q '^settled \[\]$' "$T/out3.txt" \
+  && ok "the re-read record ends closed and is settled" || ko "the closed record is still due: $(cat "$T/out3.txt")"
+grep -qxF "row True 24.0 [('Backlog', 24.0)] False" "$T/out3.txt" \
+  && ok "the re-read record plots its lead row from the board entry" || ko "lead row: $(cat "$T/out3.txt")"
+
 "$py" - "$T/s" <<'PY' >"$T/boardtime.txt" 2>&1
 import sys
 sys.path.insert(0, sys.argv[1])

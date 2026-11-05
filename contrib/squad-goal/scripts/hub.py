@@ -4091,8 +4091,11 @@ def _history_search():
 
 
 def _history_due(store, items):
-    """The cards a pass reads: no timeline yet, a partial one, or one whose Status moved past its record (#1024)."""
-    return _hist.due_reads([{"n": i["n"], "status_updated": i.get("su") or ""} for i in items], store)
+    """The cards a pass reads: no timeline yet, a partial one, one whose Status moved past its record, or one whose
+    closed state disagrees with its record (#1024, #1419). An item that names no state states no closed state."""
+    return _hist.due_reads([{"n": i["n"], "status_updated": i.get("su") or "",
+                             "closed": None if i.get("s") is None else str(i["s"]).lower() == "closed"}
+                            for i in items], store)
 
 
 def _read_timeline(n, prior, keys, read_issue, path, recs, now):
