@@ -182,6 +182,7 @@ def _rendered(hub, sp, measure):
     return out
 
 
+@pytest.mark.heavy
 def test_the_card_fits_the_sidebar_at_the_phone_width_on_rendered_dimensions(hub):
     def measure(page):
         return page.evaluate("""() => {
@@ -197,6 +198,7 @@ def test_the_card_fits_the_sidebar_at_the_phone_width_on_rendered_dimensions(hub
     assert got["rowOverflow"] <= 0, got
 
 
+@pytest.mark.heavy
 def test_each_row_carries_its_full_sentence_in_its_accessible_name_on_the_rendered_page(hub):
     def measure(page):
         return [page.get_by_role("img", name=s, exact=True).count()
