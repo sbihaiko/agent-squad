@@ -2207,7 +2207,7 @@ def nospec_count(items, moves=None, window=None, now=None):
     if window is None: window = pending_window()
     since = (time.time() if now is None else now) - NOSPEC_HOURS * 3600
     ends, closed_col = (COLUMN["issue_closed"], COLUMN["abandoned"]), COLUMN["issue_closed"]
-    cols = [(i, drawn_column(i, moves, window)["st"]) for i in items or []]
+    cols = [(i, cache_row_column(i, moves, window)) for i in items or []]
     gone = {i.get("n") for i, st in cols if _columns_module.SPEC_LABEL in (i.get("l") or []) and st in ends}
     done = total = 0
     for i, st in cols:
@@ -2222,7 +2222,7 @@ def nospec_count(items, moves=None, window=None, now=None):
     return {"closed": done, "total": total}
 
 def spec_progress(items, moves=None, window=None, now=None):
-    """The Monitor card's spec tile: closed over total sub-issues, summed over every open spec on the board cache. An open
+    """The Throughput card's last row (#1424): closed over total sub-issues, summed over every open spec on the board cache. An open
     spec is a card with the spec label that the board draws in neither Closed nor Abandoned: its column comes from
     `drawn_column`, with the door's overlay, as the board draws it (#829). The count is the one `task_count` reads, so
     no new GitHub read. The percent rounds down, so 100% means every sub-issue is closed; `frac` is the exact fraction
@@ -2234,7 +2234,7 @@ def spec_progress(items, moves=None, window=None, now=None):
     rows = []   # (fraction, number, tip line) per open spec
     for i in items or []:
         if _columns_module.SPEC_LABEL not in (i.get("l") or []): continue
-        if drawn_column(i, moves, window)["st"] in gone: continue
+        if cache_row_column(i, moves, window) in gone: continue
         sc = task_count(i)
         if sc:
             c, t = (int(x) for x in sc.split("/"))
@@ -2254,10 +2254,12 @@ def spec_progress(items, moves=None, window=None, now=None):
     if not n and not none["total"]: return dict(out, pct=0, frac=0, value="no open spec", state="none", bar=False)
     if not total: return dict(out, pct=0, frac=0, value=f"{n} open · no sub-issue yet", state="info", bar=True)
     pct = done * 100 // total
-    return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} · {pct}%", state="ok" if done == total else "info", bar=True)
+    return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} tickets · {pct}%",   # `tickets`, never a window count
+                state="ok" if done == total else "info", bar=True)
 
 SPEED_SLOTS = 6                 # the rolling slots the window is compared with, the window itself being the newest
 SPEED_WINDOW_SECS = 4 * 3600    # the window's first value; SG_SPEED_WINDOW_SECS moves it without a code change
+LABELS_STALE_SECS = 120         # the board cache's label read may trail the card this long before the card names it (#1424)
 
 def speed_window_secs():
     """The window in seconds: the constant, or SG_SPEED_WINDOW_SECS when it names a positive whole number. Read at call
@@ -2296,26 +2298,44 @@ def closed_since(items, now_ts, window_secs):
         if ts is not None and since <= ts <= now_ts: out += 1
     return out
 
-def arrivals_fact(items, now_ts, window_secs):
-    """The two arrival rows the card draws under the hero figure, both over the same window: Bugs counts every card
-    carrying `bug` or any label beginning with `loop-bug` (the prefix rule the loop itself dispatches by, ADR-0146, so
-    a loop defect is never missed), and Loop-bugs counts the prefix alone, always a subset of Bugs and never subtracted
-    from it. Each row carries its count and its share over every card opened in the window, so the card reads `7 of 10
-    opened`.
+def cache_row_column(i, moves, window):
+    """The board's own column for one cache row. A row a test or an older read hands in with a key missing is never a
+    KeyError: the missing key is one fact the board cannot draw, and the column reads from what the row carries."""
+    return drawn_column({"s": i.get("s"), "st": i.get("st"), "l": i.get("l"), "cr": i.get("cr"),
+                         "i": i.get("i"), "ot": i.get("ot")}, moves, window)["st"]
 
-    A row counts what came in, not what is still open: a card opened and closed inside the window is an arrival. Both
-    rows read `o`, the creation stamp the board cache already carries on every card (#1361); the snapshot gains no
-    field for them, and a card with no readable stamp is never invented as an arrival. A share over a zero denominator
-    is None: `0 of 0` is worded from the count and the denominator, never from a ratio over nothing."""
-    since, opened = now_ts - window_secs, []
-    for i in items or []:
-        ts = _close_instant(i.get("o"))
-        if ts is not None and since <= ts <= now_ts: opened.append(i)
-    total = len(opened)
-    def row(n): return {"n": n, "of": total, "share": round(n / total, 3) if total else None}
+
+def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
+    """The two window rows the card draws under the hero figure (#1424). Both cover the same rows, over the same window
+    and the same kinds: Bugs counts every card carrying `bug` or any label beginning with `loop-bug` (the prefix rule the
+    loop itself dispatches by, ADR-0146, so a loop defect is never missed), and Loop-bugs counts the prefix alone, always
+    a subset of Bugs and never subtracted from it. Each row carries three counts so the card reads `7 in · 4 out · 3 open`:
+
+    `in` is every card created in the window (`o`), a card closed inside it included; `out` is every card closed in the
+    window (`c`, the close stamp the board cache already carries, #1361); `open` is every card the board draws open now,
+    the same `drawn_column` rule the kanban serves, so a closed card and a card in the Abandoned column are no open card.
+    A card with no readable stamp is never invented as an arrival or a close."""
+    if moves is None: moves = read_moves() if overlay_on() else {}
+    if window is None: window = pending_window()
+    since, ends = now_ts - window_secs, (COLUMN["issue_closed"], COLUMN["abandoned"])
+    rows = {"bugs": {"in": 0, "out": 0, "open": 0}, "loop_bugs": {"in": 0, "out": 0, "open": 0}}
     def loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
-    bugs = sum(1 for i in opened if "bug" in (i.get("l") or []) or loop_defect(i))
-    return {"opened": total, "bugs": row(bugs), "loop_bugs": row(sum(1 for i in opened if loop_defect(i)))}
+    def open_now(i):
+        if str(i.get("s") or "").lower() == "closed": return False
+        return cache_row_column(i, moves, window) not in ends   # the kanban's own column, never a second rule
+    for i in items or []:
+        labels = i.get("l") or []
+        kinds = [k for k, hit in (("bugs", "bug" in labels or loop_defect(i)), ("loop_bugs", loop_defect(i))) if hit]
+        if not kinds: continue
+        o, c = _close_instant(i.get("o")), _close_instant(i.get("c"))
+        came = o is not None and since <= o <= now_ts
+        went = str(i.get("s") or "").lower() == "closed" and c is not None and since <= c <= now_ts
+        still = open_now(i)
+        for k in kinds:
+            rows[k]["in"] += 1 if came else 0
+            rows[k]["out"] += 1 if went else 0
+            rows[k]["open"] += 1 if still else 0
+    return rows
 
 def tasks_fact(items, now_ts, window_secs, closed_n):
     """The Tasks row under the hero figure: planned delivery closed inside the window (#1362). A task is a closed card with
@@ -2377,9 +2397,15 @@ def throughput_fact(now=None):
             ([board_cache.get("t") or 0] if items else [])
     oldest = min((r for r in reads if r), default=0) or None
     age = now_ts - oldest if oldest else None
+    cache_t = board_cache.get("t") or 0   # the item read that carries each card's labels (#1424)
+    labels_age = now_ts - cache_t if cache_t else None
+    moves = read_moves() if overlay_on() else {}
+    window = pending_window()
     return {"window_secs": w, "window": window_n, "day": sum(s["n"] for s in slots),   # closes in the whole day: none means no history
-            "arrivals": arrivals_fact(items, now_ts, w),   # the Bugs and Loop-bugs rows, off the cache's `o` stamps alone
+            "arrivals": arrivals_fact(items, now_ts, w, moves, window),   # the Bugs and Loop-bugs rows, off the cache's stamps
             "tasks": tasks_fact(items, now_ts, w, window_n),   # planned delivery over the same window as the hero figure
+            "specs": spec_progress(items, moves, window, now_ts),   # the cumulative Specs row that closes the card (#1424)
+            "labels": {"age_secs": labels_age, "stale": labels_age is not None and labels_age > LABELS_STALE_SECS},
             "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
             "max": max(avail + [window_n]), "trend": trend,
             "as_of": oldest, "age_secs": age, "stale": age is not None and age > board_stale_bound()}
@@ -2417,9 +2443,8 @@ def load_payload():
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
             "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), time.time())],
-            "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "subs": subs_gauges(),   # the Monitor's subscription instruments: each weekly window and its reset, off the quota cache
-            "speed": throughput_fact(),   # the Monitor's throughput row: today against the finished days
+            "speed": throughput_fact(),   # the Monitor's throughput card, the Specs row included (#1424)
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -5077,7 +5102,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:var(--radius-md)}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-caption);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:6px;border-radius:var(--radius-lg);background:var(--raise);margin-top:6px}#ispeed .spr i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--fg)}#ispeed .spr .spt{left:0;top:0;bottom:0;width:0;border-radius:var(--radius-lg);background:var(--mute)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#ispeed .spw{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;margin-top:6px;font-size:var(--fs-caption);min-width:0}#ispeed .spwl{font-weight:600;color:var(--mute)}#ispeed .spwv{color:var(--fg);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}#ispeed .spw.ok .spwl{color:var(--ok)}#ispeed .spw.warn .spwl{color:var(--warn)}#ispeed .spw.err .spwl{color:var(--err)}#ispeed .spwt{grid-column:1/-1;display:block;height:4px;border-radius:var(--radius-lg);background:var(--raise);overflow:hidden}#ispeed .spwt i{display:block;height:100%;background:var(--ok)}#ispeed .spw.warn .spwt i{background:var(--warn)}#ispeed .spw.err .spwt i{background:var(--err)}#ispeed .spw.mute .spwt i{background:var(--mute)}#ispeed .spage{font-size:var(--fs-caption);color:var(--warn);margin-top:6px}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:6px;border-radius:var(--radius-lg);background:var(--raise);margin-top:6px}#ispeed .spr i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--fg)}#ispeed .spr .spt{left:0;top:0;bottom:0;width:0;border-radius:var(--radius-lg);background:var(--mute)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#ispeed .spw{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;margin-top:6px;font-size:var(--fs-caption);min-width:0}#ispeed .spwl{font-weight:600;color:var(--mute)}#ispeed .spwv{color:var(--fg);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}#ispeed .spw.ok .spwl{color:var(--ok)}#ispeed .spw.warn .spwl{color:var(--warn)}#ispeed .spw.err .spwl{color:var(--err)}#ispeed .spwt{grid-column:1/-1;display:block;height:4px;border-radius:var(--radius-lg);background:var(--raise);overflow:hidden}#ispeed .spwt i{display:block;height:100%;background:var(--ok)}#ispeed .spw.warn .spwt i{background:var(--warn)}#ispeed .spw.err .spwt i{background:var(--err)}#ispeed .spw.mute .spwt i{background:var(--mute)}#ispeed .spw.spec .spwl{color:var(--acc)}#ispeed .spw.spec .spwt i{background:var(--acc)}#ispeed .spws{grid-column:1/-1;font-size:calc(var(--fs-caption) - 2px);color:var(--mute)}#ispeed .spage{font-size:var(--fs-caption);color:var(--warn);margin-top:6px}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
@@ -5129,7 +5154,6 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
 #inst .at .av{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#inst .at.err .av{color:var(--err)}#inst .at a{color:var(--acc);text-decoration:none}#inst .at a:hover{text-decoration:underline}
 #inst .at details>summary{cursor:pointer;color:var(--mute)}#inst .at details>ul{margin:4px 0 0;padding:0 0 0 14px;color:var(--mute);overflow-wrap:anywhere}
-#ispec{margin-bottom:8px}#inst .at .so{margin-left:auto;font-weight:400;color:var(--mute);font-variant-numeric:tabular-nums}#inst .pb{display:block;height:6px;margin:5px 0 2px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}#inst .pf{display:block;height:100%;border-radius:var(--radius-sm);background:var(--acc);transition:width var(--motion-duration-long) var(--motion-entry-easing)}#inst .at.ok .pf{background:var(--ok)}
 #inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-caption);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 /* The Monitor's loop switch (#923, #1234): the phone serves this block alone, so the switch is styled here and not only
@@ -5178,7 +5202,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <div id=win>
 <script id=sbboot>try{if(sideState(JSON.parse(localStorage.hub||"{}").side,matchMedia("(min-width: 601px)").matches))document.documentElement.classList.add("sbshut")}catch(e){}</script>
 <aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbbody>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=iloop></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </div></aside>
@@ -5302,15 +5326,20 @@ function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><spa
   +(sp.median==null?"":`<i class=spmed style="left:${at(sp.median)}%" title="median ${sp.median}"></i>`)+`<i class="spt ${tag[2]}" style="width:${at(sp.window)}%"></i></div>`
   +`<div class=spl><span>median ${med}</span><span>max ${sp.max}</span></div>`;
  const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
- const row=(cls,name,word,r)=>{const n=(r||{}).n||0,of=(r||{}).of||0,t=cls==="ok"||of?cls:"mute";
-  return `<div class="spw ${t}" role=img aria-label="${name}: ${n} of ${of} ${word}"><span class=spwl>${name}</span><span class=spwv>${n} of ${of} ${word}</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`};
+ const win=`title="last ${hrs} h: in counts every card created in the window, closed ones too"`;   // #1424: the window and what `in` means
+ const row=(cls,name,r)=>{const n=(r||{}).in||0,o=(r||{}).out||0,k=(r||{}).open||0,t=n?cls:"mute";
+  const v=n?`${n} in \u00b7 ${o} out \u00b7 ${k} open`:"0 in", pb=n?`<span class=spwt><i style="width:${100*o/n}%"></i></span>`:"";
+  return `<div class="spw ${t}" role=img aria-label="${name}: ${v}" ${win}><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
+ const tasks=(()=>{const n=(sp.tasks||{}).n||0,of=(sp.tasks||{}).of||0,t=of?"ok":"mute";
+  return `<div class="spw ${t}" role=img aria-label="Tasks: ${n} of ${of} closed"><span class=spwl>Tasks</span><span class=spwv>${n} of ${of} closed</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`})();
+ const spec=(()=>{const p=sp.specs||{},v=esc(p.value||"no open spec"),sub=p.so?esc(p.so):"";
+  const pb=p.bar?`<span class=spwt><i style="width:${100*Math.max(0,Math.min(1,Number(p.frac)||0))}%"></i></span>`:"";
+  return `<div class="spw spec" role=img aria-label="Specs: ${v}${sub?", "+sub:""}"><span class=spwl>Specs</span><span class=spwv>${v}</span>`+(sub?`<span class=spws>${sub}</span>`:"")+pb+`</div>`})();
  const arr=sp.arrivals||{}, stale=sp.stale?`<div class=spage>\u00b7 read ${Math.floor(sp.age_secs/60)} m ago</div>`:"";
+ const lab=sp.labels||{}, lnote=lab.stale?`<div class=spage>\u00b7 labels ${Math.floor(lab.age_secs/60)} min old</div>`:"";
  return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`+hero+bar
-  +row("ok","Tasks","closed",sp.tasks)+row("warn","Bugs","opened",arr.bugs)+row("err","Loop-bugs","opened",arr.loop_bugs)+stale+`</div>`}
+  +tasks+row("warn","Bugs",arr.bugs)+row("err","Loop-bugs",arr.loop_bugs)+spec+stale+lnote+`</div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
-function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.state:"";   // the hub decides the count, the text and the state; the page only draws them
- const w=100*Math.max(0,Math.min(1,Number(p.frac)||0)),bar=p.bar?`<span class=pb role=progressbar aria-label="Open spec progress" aria-valuemin=0 aria-valuemax=${Number(p.total)||0} aria-valuenow=${Number(p.done)||0}><span class=pf style="width:${w}%"></span></span>`:"";
- return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
 let instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
 function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
@@ -5318,7 +5347,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.known?`url(#g-${x.k})`:"none")}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispeed",speedRow((d||{}).speed));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
 }
