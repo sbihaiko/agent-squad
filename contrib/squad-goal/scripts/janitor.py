@@ -976,7 +976,8 @@ def reconcile_board():
                 col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), todo, spec=is_spec, todo=todo)   # a spec reads Todo while a ticket is in flight, and never a work column (#1131)
                 if is_spec and col == todo and not have_cards.get(n, ""): col = None   # a spec with no card is created by the floor, in Backlog (ADR-0142)
                 if is_spec and reverted and shipped:   # an open spec never keeps a terminal column: its own work is never a branch, so the reopen rule below (ADR-0143 rule 2) returns it to Todo with the reason (#1431)
-                    reverted = False
+                    set_expected(n, col, f"spec folds over its sub-issues: a child reopened, the card keeps {col}", rank=15)   # the fold's own read still lands, so a pass whose reopen declines leaves the card where the fold found it
+                    reverted = False   # the reopen loop lifts the card; it carries no reverted tag and no negative reason
                 elif col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Todo the fold writes nothing, and the spec keeps the owner's column (#550)
             if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
