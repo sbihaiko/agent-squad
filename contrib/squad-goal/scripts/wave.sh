@@ -590,8 +590,8 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   }
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
-  # They run under the machine-wide gate lock (#392), in try mode (#575): the entry runs inline in the fast lane, and a wait
-  # there stops every dispatch, so a lock held by another gate holds the child out until a later pass, with no requeue.
+  # They run under the machine-wide gate lock (#392), in try mode (#575): the fast lane runs the childcc pass, which makes the entry, in the
+  # background, and a wait there would still hold the childcc lock, so a lock held by another gate holds the child out until a later pass, with no requeue.
   # The landing waits a bounded time instead (#955): a bounded wait in a detached pass never stops dispatch, because dispatch rides fastloop.
   gates() {
     # The gate's word decides (spec 1163, #1174, ADR-0164): pass admits the child, fail refuses it and requeues it, and unproven
