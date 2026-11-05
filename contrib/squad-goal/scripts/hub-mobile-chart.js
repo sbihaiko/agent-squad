@@ -26,7 +26,7 @@ const mltChart = c => {
   const xs = (c.xticks || []).map(t => `<text x=${mltX(t.x, w)} y=${base + 18} text-anchor=middle fill="${ink}">${mltEsc(t.text)}</text>`).join("");
   const axes = `<line x1=${MLT_P} y1=${MLT_P - 10} x2=${MLT_P} y2=${base} stroke="var(--chart-grid)"></line>` +
     `<line x1=${MLT_P} y1=${base} x2=${MLT_P + w} y2=${base} stroke="var(--chart-grid)"></line>` +
-    `<text x=${MLT_P} y=${MLT_P - 24} text-anchor=start fill="${ink}">Lead time (${mltEsc(c.scale || "linear")})</text>` +
+    `<text x=${MLT_P} y=${MLT_P - 24} text-anchor=start fill="${ink}">Lead time (log)</text>` +
     `<text x=${MLT_P} y=${base + 36} text-anchor=start fill="${ink}">Date closed</text>`;   // the phone names no board column: the hub's column names stay out of its page (ADR-0137)
   const refs = MLT_REF.map(([key, col, dash]) => mltLine(c[key], col, dash, w, h)).join("");
   const dots = c.dots || [];
