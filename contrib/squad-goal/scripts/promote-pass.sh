@@ -252,7 +252,11 @@ g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is alread
 # window passes and the shards run while it does. Best effort: a failure there leaves the proof below to answer.
 SG_PROMOTE_OPEN_ONLY=1 bash "$d/promote-stg.sh" >/dev/null 2>&1
 last=$(awk -F'\t' '$1 > m {m = $1} END {print m + 0}' "$state/landed.tsv" 2>/dev/null); last=${last:-0}
-[ $(( $(date +%s) - last )) -ge "${SG_PROMOTE_QUIET_SECONDS:-900}" ] || exit 0   # a landing is still recent: wait for the burst to end
+# ADR-0164: the guards below protect a local suite from a loaded box. When SG_PROMOTE_PROOF=ci names the dev-to-stg check as
+# the proof, no local suite runs, so a recent landing, a loaded box, a low-memory box and a nightly that owns the machine
+# refuse nothing: a landing costs a local suite its measurement and costs a job on GitHub's runner nothing.
+[ "${SG_PROMOTE_PROOF:-}" = ci ] \
+  || [ $(( $(date +%s) - last )) -ge "${SG_PROMOTE_QUIET_SECONDS:-900}" ] || exit 0   # a landing is still recent: wait for the burst to end
 # The proof is a measurement (#738): the suite's assertions are the wall time of real scripts, so it never measures under the
 # loop's own load. A live run, or a load average at the bound, marks the tip "not proven: machine loaded" and writes no marker,
 # so a later pass takes the same tip once the machine is free. SG_PROMOTE_LOAD_LIMIT names the load average bound (default:
@@ -282,7 +286,11 @@ done < "$live" 2>/dev/null
 memfree=$(vm_stat 2>/dev/null | awk '/Pages free/ { gsub(/\./, "", $3); f = $3 } /Pages inactive/ { gsub(/\./, "", $3); i = $3 } END { print int((f + i) * 16384 / 1048576) }')
 memfree=${memfree:-99999}; memmin=${SG_PROMOTE_MEM_MIN_MB:-512}
 nightly=$state/locks/nightly
-if awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }' || [ "$memfree" -lt "$memmin" ] || [ -d "$nightly" ]; then
+loaded=0
+awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }' && loaded=1
+[ "$memfree" -lt "$memmin" ] && loaded=1
+[ -d "$nightly" ] && loaded=1
+if [ "$loaded" = 1 ] && [ "${SG_PROMOTE_PROOF:-}" != ci ]; then
   l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $memfree MB free, nightly $([ -d "$nightly" ] && echo held || echo free), $nlive runs alive)"
   echo "$(date -u +%FT%TZ) $l" >> "$log"; echo "$l"; exit 0
 fi

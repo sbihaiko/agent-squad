@@ -296,6 +296,31 @@ shards "$ta" none none none none; SG_CI_WORKFLOW="$T/ci-no-shards.yml" SG_GHREAD
   || ko "check-alone record: $(/usr/bin/grep "$ta" "$SG_STATE/promote.log")"
 export SG_CI_WORKFLOW="$T/ci-shards.yml"
 
+# ADR-0164: when the proof is the dev-to-stg check (SG_PROMOTE_PROOF=ci), no local suite runs, so the guards that protect a
+# local suite from a loaded box refuse nothing: the load average, the free memory and a nightly that owns the machine. A green
+# CI tip promotes even while the box is loaded and a nightly runs, which is the state the loop is in every evening.
+adv dev ci-proof-loaded; tcl=$(tip dev); before=$(tip stg); n=$(runs)
+mkdir -p "$SG_STATE/locks/nightly"
+shards "$tcl" success success success success
+SG_PROMOTE_PROOF=ci SG_PROMOTE_LOAD_LIMIT=0 SG_PROMOTE_MEM_MIN_MB=99999999 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+rmdir "$SG_STATE/locks/nightly"
+[ $rc = 0 ] && [ "$(tip stg)" = "$tcl" ] && [ "$(runs)" = "$n" ] \
+  && ok "a CI proof promotes on a loaded box while a nightly runs, and runs no local suite" \
+  || ko "CI proof under load: rc $rc, stg $(tip stg), was $before, runs $(runs) was $n, out '$(cat "$T/out")'"
+
+# A landing inside the quiet window holds a local proof, and never a CI proof: a landing costs a local suite its measurement,
+# and costs a job on GitHub's runner nothing.
+printf '%s\tlanded\n' "$(date +%s)" > "$SG_STATE/landed.tsv"
+adv dev ci-proof-quiet; tcq=$(tip dev); before=$(tip stg)
+shards "$tcq" success success success success
+SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$before" ] && ok "a recent landing still holds a local proof" \
+  || ko "quiet window: rc $rc, stg $(tip stg), was $before"
+SG_PROMOTE_PROOF=ci SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tcq" ] && ok "a recent landing holds no CI proof" \
+  || ko "quiet window on a CI proof: rc $rc, stg $(tip stg), was $before, out '$(cat "$T/out")'"
+rm -f "$SG_STATE/landed.tsv"
+
 # The check job of the same commit (ruff, mypy, the fast battery) is part of the CI proof: a red one holds the tip, and no
 # suite runs for it (ADR-0164: a red the proof measured holds delivery).
 adv dev check-red; tc=$(tip dev); before=$(tip stg); n=$(runs)
