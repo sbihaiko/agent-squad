@@ -1262,16 +1262,28 @@ case "$r" in *"broke the wave tip"*) ko "W1409: a passing child was named after 
 # whose bodies name nothing in common but whose diffs touch one file are a conflict before the wave: the second never
 # enters and its issue goes back to the queue, so the landing never attempts the merge of the pair. A sibling whose diff
 # is disjoint from the wave's enters as it always did.
+# The file both siblings change exists in the base first, and #61 is cut from that same base, not from the wave tip: the pair
+# is genuinely independent, so neither diff carries a sibling's change and only the derived check can stop the second.
+rm -rf "$T/basef"; $G clone -q "$T/origin.git" "$T/basef" 2>/dev/null
+(cd "$T/basef" && $G checkout -q dev && printf 'a\nb\nc\nd\ne\nf\n' > shared60 && $G add shared60 \
+  && $G -c user.email=a@b -c user.name=t commit -q -m "the shared file" && $G push -q origin HEAD:dev)
 WS=wave/run-s; start2 run-s >/dev/null
 inwave() { $O merge-base --is-ancestor "$($G -C "$T/c$2" rev-parse HEAD)" "$1" 2>/dev/null && echo yes || echo no; }
+# The body filter passes the pair: neither body names a repository-relative file and neither names a spec shared with the
+# other, so siblings.py lets them join. The entry's diff check is what must stop the second.
+cat > "$T/issues-sd.json" <<'J'
+[{"number": 60, "body": "Adjust the first line of the greeting."},
+ {"number": 61, "body": "Adjust the last line of the greeting."}]
+J
+python3 "$d/siblings.py" "$T/issues-sd.json" 61 60 >/dev/null 2>&1 && ok "SD: the body filter lets the pair join, so only the diff check can stop it" || ko "SD: the body filter already refuses the pair, so this case would prove nothing"
 rm -rf "$T/c60"; $G clone -q "$T/origin.git" "$T/c60" 2>/dev/null
-(cd "$T/c60" && $G checkout -q -b gui/60 "origin/$WS" && printf 'a\nb\nc\nd\ne\nf\n' > shared60 && $G add shared60 \
+(cd "$T/c60" && $G checkout -q -b gui/60 "origin/$WS" && printf 'A\nb\nc\nd\ne\nf\n' > shared60 && $G add shared60 \
   && $G -c user.email=a@b -c user.name=t commit -q -m "work 60 (Refs #60)")
 en2 run-s 60 >/dev/null
-# #61 is cut from the wave with #60's commit in it and changes another line of the same file: a rebase on the tip applies
-# cleanly, so nothing but the derived check stops it. Neither body names the file, and no body filter runs here.
+# #61 is cut from the wave's base and changes another line of the same file: a rebase on the tip applies cleanly, so nothing
+# but the derived check stops it. Neither body names the file.
 rm -rf "$T/c61"; $G clone -q "$T/origin.git" "$T/c61" 2>/dev/null
-(cd "$T/c61" && $G checkout -q -b gui/61 "origin/$WS" && printf 'A\nb\nc\nd\ne\nf\n' > shared60 && $G add shared60 \
+(cd "$T/c61" && $G checkout -q -b gui/61 origin/dev && printf 'a\nb\nc\nd\ne\nF\n' > shared60 && $G add shared60 \
   && $G -c user.email=a@b -c user.name=t commit -q -m "work 61 (Refs #61)")
 tip=$($O rev-parse "$WS"); printf 'run-s\n' > "$T/st/auto/disp-61"; : > "$T/board.log"
 REV_BASE=$WS rev 61
@@ -1280,20 +1292,31 @@ r=$((cd "$T/c61" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-s 61) 2>&1)
 case "$r" in *"WAVE REQUEUE #61"*shared60*) ok "SD: the shared file is named before the wave";; *) ko "SD: the shared file is not named: '$r'";; esac
 /usr/bin/grep -qx 'o 3 Todo 61' "$T/board.log" && ok "SD: its issue is back in the queue, as a body conflict leaves it" || ko "SD: no Todo card for #61: '$(cat "$T/board.log")'"
 [ ! -e "$T/st/auto/disp-61" ] && ok "SD: its dispatch marker is dropped, so a later run builds it alone" || ko "SD: the marker is kept"
-# The merge of the pair is never attempted: the landing carries #60 alone, and the base keeps #60's version of the file.
+# The merge of the pair is never attempted: the run recorded #60 alone, so the landing carries #60 alone and never names #61
+# or a conflict. The base keeps the entrant's version of the file. #61's card and close never move.
 mkdir -p "$T/co/runs/run-s"
-printf '%s\n%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #60 work"}}' \
-  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #61 work"}}' > "$T/co/runs/run-s/record.jsonl"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #60 work"}}' > "$T/co/runs/run-s/record.jsonl"
 : > "$T/gh.log"
 r=$(land2 run-s 2>&1); rc=$?
-[ $rc = 0 ] && ok "SD: the wave of the one entrant lands" || ko "SD: exit $rc: '$r'"
-[ "$($O show dev:shared60 2>/dev/null | head -1)" = a ] && ok "SD: the base holds the entrant's version, never #61's" || ko "SD: dev:shared60 is '$($O show dev:shared60 2>/dev/null | tr '\n' ' ')'"
+[ $rc = 0 ] && case "$r" in "WAVE $WS "*) ok "SD: the wave of the one entrant lands";; *) ko "SD: the landing is not named: '$r'";; esac || ko "SD: exit $rc: '$r'"
+case "$r" in *#61*) ko "SD: the landing attempted #61, a child the wave never carried: '$r'";; *conflict*) ko "SD: the landing hit the conflict the entry prevents: '$r'";; *) ok "SD: the landing never attempts #61's merge and names no conflict";; esac
+[ "$($O show dev:shared60 2>/dev/null | head -1)" = A ] && [ "$($O show dev:shared60 2>/dev/null | tail -1)" = f ] && ok "SD: the base holds the entrant's version of the file, never #61's" || ko "SD: dev:shared60 is '$($O show dev:shared60 2>/dev/null | tr '\n' ' ')'"
+/usr/bin/grep -q 'issues/60 -f state=closed' "$T/gh.log" && ok "SD: the landing delivers the one entrant" || ko "SD: #60 is not closed: '$(cat "$T/gh.log")'"
 /usr/bin/grep -q 'issues/61 -f state=closed' "$T/gh.log" && ko "SD: #61 was delivered by a landing that never carried it" || ok "SD: #61 is not closed: its merge was never attempted"
-# The disjoint sibling passes the derived check unchanged: two children of one wave, each on its own file, both enter.
+# The disjoint sibling passes the derived check unchanged: two children of one wave, each cut from its base on its own file,
+# both enter.
 WS2=wave/run-s2; start2 run-s2 >/dev/null
-child 964 g964 "origin/$WS2"; en2 run-s2 964 >/dev/null
-child 965 g965 "origin/$WS2"; en2 run-s2 965 >/dev/null
+child 964 g964 origin/dev; en2 run-s2 964 >/dev/null
+child 965 g965 origin/dev; en2 run-s2 965 >/dev/null
 [ "$(inwave "$WS2" 964)" = yes ] && [ "$(inwave "$WS2" 965)" = yes ] && ok "SD: siblings with disjoint diffs enter, unchanged" || ko "SD: a disjoint sibling was held out"
 [ "$($O cat-file -e "$WS2:g964" 2>/dev/null && echo yes)" = yes ] && [ "$($O cat-file -e "$WS2:g965" 2>/dev/null && echo yes)" = yes ] && ok "SD: the wave carries both disjoint siblings" || ko "SD: the wave does not carry both: '$(inwave "$WS2" 964) $(inwave "$WS2" 965)'"
+# A diff the entry cannot read is a WAVE-ERROR, never a clean pass: the child's clone has no origin/dev, so the wave's side
+# of the comparison cannot be computed and the child enters no wave.
+child 966 g966 origin/dev
+$G -C "$T/c966" update-ref -d refs/remotes/origin/dev
+REV_BASE=$WS2 rev 966
+r=$((cd "$T/c966" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-s2 966) 2>&1); rc=$?
+[ $rc = 2 ] && ok "SD: a sibling diff the entry cannot read exits 2" || ko "SD: exit $rc, not 2: '$r'"
+case "$r" in *"WAVE-ERROR"*"cannot be read"*) ok "SD: the unreadable diff is a WAVE-ERROR, never a clean pass";; *) ko "SD: the unreadable diff is silent: '$r'";; esac
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
