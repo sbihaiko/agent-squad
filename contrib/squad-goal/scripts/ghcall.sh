@@ -144,8 +144,9 @@ gh_land_stop() {
 # children that outlive the wave age cap unreviewed. Returns 0 and prints the one line on a hold, 1 when the pass may go on.
 # No cap, a cap that is not a number, a missing or unreadable count, or a count older than 30 min (a stale childcc) never
 # holds: the loop is never blocked on a file it cannot trust.
-# The nightly full suite decides the same way (#704): a red record at $SG_STATE/nightly-result (nightly.sh) holds delivery
-# until one green run replaces it, because a base whose full suite is red starts work on a defect the loop already found.
+# The nightly full suite decides the same way (#704): a red record at $SG_STATE/nightly-result (nightly.sh) is a report,
+# never a hold (owner, 2026-11-05; ADR-0153): each landing carries its own local gate and the promotion still needs its
+# full proof, so the pass goes on and one note names the test, once per record.
 # A bounded record is an attempt the suite never finished: the tip is unproven, never red, so it holds nothing and the pass
 # names the stopped leg on one line, once per record (#1183, ADR-0164). A missing or unreadable record never holds, by the
 # same rule.
@@ -163,7 +164,7 @@ sg_nightly_mode() {
   return 0
 }
 # sg_nightly_red   A mode a failing test made red: `fail`, or `fail:signal-<n>` when a signal also stopped that leg. A red
-# holds delivery whatever else stopped it; the tag only carries the stop reason.
+# names a defect whatever else stopped it; the tag only carries the stop reason.
 sg_nightly_red() { case "$1" in fail|fail:signal-[0-9]*) return 0;; esac; return 1; }
 
 # sg_nightly_state   What a nightly result record says about delivery. The record is one line, `<epoch> TAB
@@ -290,23 +291,27 @@ gh_dispatch_hold() {
     return 1
   fi
   if [ "$nrc" = 0 ]; then
-    # (#747) The record is red for the sha it ran at, not for whatever the tip became. A tip the nightly has not seen is
-    # unproven, not red: one line names both shas and the pass delivers, and the next nightly proves the new tip. Each
-    # landing carries its own local gate, and the promotion still needs its full proof. A tip the pass cannot read holds.
+    # (#747, ADR-0153) The record is red for the sha it ran at, not for whatever the tip became, and it is a report either
+    # way: the pass goes on. A tip the nightly has not seen is unproven, one line names both shas, and the next nightly
+    # proves the new tip. A red at the tip itself names the test it measured; each landing still carries its own local
+    # gate, and the promotion still needs its full proof. The line is said once per record, keyed by the sha and the
+    # record's own time, so a red that stands until the next nightly does not bury cycle.log.
     rsha=$(cut -f3 "$SG_STATE/nightly-result" 2>/dev/null); tip=
     if [ -n "${SG_CHECKOUT:-}" ]; then
       tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q origin/dev 2>/dev/null) \
         || tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q HEAD 2>/dev/null) || tip=
     fi
+    rmt=$(date -r "$SG_STATE/nightly-result" +%s 2>/dev/null) || rmt=
+    key="$rsha ${rmt:-no-time}"; seen="$SG_STATE/nightly-red-noted"
+    [ "$(cat -- "$seen" 2>/dev/null)" = "$key" ] && return 1
     if [ -n "$tip" ] && [ "${rsha:0:12}" != "${tip:0:12}" ]; then
-      line="DISPATCH NOTE: the nightly red names $rsha, not the dev tip $tip; the tip is unproven and the next nightly proves it"
-      printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
-      return 1
+      line="$(date -u '+%F %T') DISPATCH NOTE: the nightly red names $rsha, not the dev tip $tip; the tip is unproven, the pass goes on, and the next nightly proves it"
+    else
+      line="$(date -u '+%F %T') DISPATCH NOTE: the nightly full suite is red at ${rsha:0:7} (${nids:-no test named}); the pass goes on, and the promotion still needs its proof"
     fi
-    line="$(date -u '+%F %T') DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
-    printf '%s\n' "$line"
-    printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
-    return 0
+    if printf '%s\n' "$key" > "$seen.$$" 2>/dev/null; then mv -f "$seen.$$" "$seen" 2>/dev/null || rm -f "$seen.$$"; fi
+    printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+    return 1
   fi
   [ -n "$m" ] || return 1
   case "$m" in *[!0-9]*) echo "$(date -u '+%F %T') DISPATCH HOLD: SG_DISPATCH_MAX_WAITING='$m' is not a non-negative integer; no limit"; return 1;; esac

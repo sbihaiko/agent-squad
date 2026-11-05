@@ -85,12 +85,15 @@ json_ids "$r_ids" && ok "the ids field is one JSON array, so no reader splits an
 /usr/bin/grep -q "${sha:0:7}" "$ST/alerts.log" 2>/dev/null && ok "the alert names the sha it ran at" || ko "the alert names no sha: '$(cat "$ST/alerts.log" 2>&1)'"
 [ "$(/usr/bin/grep -c . "$T/notify.log" 2>/dev/null)" = 1 ] && ok "the notifier is called once" || ko "notify calls: '$(cat "$T/notify.log" 2>&1)'"
 
-# 4) a red record holds dispatch until one green run, and a green one releases it
-hold >/dev/null; [ $? = 0 ] && ok "the dispatch hold stops a pass after a red nightly" || ko "a red nightly held no dispatch"
-[ -z "$(hold 2>&1 | /usr/bin/grep -i nightly)" ] && ko "the hold does not say why it stopped" || ok "the hold names the nightly as its cause"
-hold 2>&1 | /usr/bin/grep -qF 'tests/test_x.py::test_x[case with space]' && ok "the hold names a failing test whole, its space included" || ko "the hold split a parametrized id: $(hold)"
+# 4) (owner, 2026-11-05; ADR-0153) a red record is a report, never a hold: the pass goes on, one note names the test it
+#    measured, and it is said once per record rather than on every pass.
+o=$(hold); rc=$?
+[ $rc = 1 ] && ok "a red nightly holds no dispatch: it is a report" || ko "a red nightly held dispatch: rc $rc, '$o'"
+case "$o" in *nightly*) ok "the note names the nightly as its cause";; *) ko "the note names no nightly: '$o'";; esac
+case "$o" in *'tests/test_x.py::test_x[case with space]'*) ok "the note names a failing test whole, its space included";; *) ko "the note split a parametrized id: '$o'";; esac
+o2=$(hold); [ -z "$o2" ] && ok "the red note is said once per record, not on every pass" || ko "the red note repeated: '$o2'"
 mark; out=$(ng)                                     # one green run
-hold >/dev/null; [ $? = 1 ] && ok "one green nightly releases delivery" || ko "the hold outlived a green nightly: $(hold)"
+hold >/dev/null; [ $? = 1 ] && ok "one green nightly releases delivery" || ko "a green nightly did not release: $(hold)"
 # 4b (#747) a red record holds delivery while it names the dev tip. A tip the nightly has not seen is unproven, not red: the
 #    pass says so in one line naming both shas and delivers, and the next nightly proves the new tip. A sha the checkout does
 #    not carry holds nothing.
@@ -152,8 +155,9 @@ rec
 /usr/bin/grep -q "NIGHTLY" "$ST/alerts.log" 2>/dev/null && ok "a red leg that was also stopped still alerts" \
   || ko "red killed leg raised no alert: '$(cat "$ST/alerts.log" 2>&1)'"
 o=$(hold); rc=$?
-[ $rc = 0 ] && ok "a red leg still holds delivery, even when a signal also stopped it" \
-  || ko "a red killed leg held no dispatch: rc $rc, '$o'"
+[ $rc = 1 ] && case "$o" in *nightly*red*) true;; *) false;; esac \
+  && ok "a red leg is a report, even when a signal also stopped it" \
+  || ko "a red killed leg held dispatch or said nothing: rc $rc, '$o'"
 rm -f "$T/ran.log"
 
 # 5) the landing lock is never taken: a held gate lock is no obstacle, and it is left as it was
@@ -528,12 +532,12 @@ rec
 [ ! -e "$ST/locks/nightly" ] && ok "a killed start releases its lock" || ko "the lock outlived the killed start"
 rm -f "$ST/alerts.log" "$ST/nightly-result"
 
-# 25) (#1201) the two readings are told apart at the readers: a red record holds dispatch and names its ids, and a bounded
-#     one names no test and holds nothing. A bounded result over a red mode is still no reading.
+# 25) (#1201) the two readings are told apart at the readers: a red record names its ids and is a report, and a bounded one
+#     names no test and is a report too. A bounded result over a red mode is still no reading.
 rm -f "$T/ran.log"; mark
 out=$(ng FAIL_parallel=1); rc=$?; rec
-[ "$r_res $r_par" = "fail fail" ] && [ -n "$r_ids" ] && hold >/dev/null \
-  && ok "a red record names its ids and holds dispatch" || ko "red record: '$r_res $r_par $r_ids'"
+[ "$r_res $r_par" = "fail fail" ] && [ -n "$r_ids" ] && ! hold >/dev/null \
+  && ok "a red record names its ids and is a report, not a hold" || ko "red record: '$r_res $r_par $r_ids'"
 printf '%s\tbounded\t%s\tbounded:signal-15\tpass\t[]\n' "$(date +%s)" "$start_tip" > "$ST/nightly-result"
 o=$(hold); rc=$?
 [ $rc = 1 ] && ok "a bounded record holds no dispatch" || ko "a bounded record held dispatch: '$o'"
