@@ -6660,13 +6660,36 @@ def kimi_usages(tok):
     """The one HTTP read the probe makes: the subscription's own usage document."""
     req = urllib.request.Request(KIMI_USAGES, headers={"authorization": f"Bearer {tok}"})
     with urllib.request.urlopen(req, timeout=15, context=ca_context()) as r: return json.loads(r.read().decode("utf8", "replace"))
+KIMI_PROXY = os.environ.get("SG_CCP_PROXY", "http://127.0.0.1:18765")   # the bridge's local server
+KIMI_MODEL = "kimi-for-coding"   # a one-token call is the smallest Kimi call the bridge accepts
+def kimi_refreshable():
+    """True when the bridge's store holds a refresh token, so the bridge's own path can renew the access token."""
+    try: return bool(json.loads(KIMI_AUTH.read_text()).get("refresh"))
+    except Exception: return False
+def kimi_refresh():
+    """The bridge renews its Kimi token only on a Kimi call, so the probe makes the smallest one through the running
+    bridge; the bridge writes its own store, and the probe writes no credential."""
+    body = json.dumps({"model": KIMI_MODEL, "max_tokens": 1,
+                       "messages": [{"role": "user", "content": "."}]}).encode()
+    req = urllib.request.Request(f"{KIMI_PROXY}/v1/messages", data=body, method="POST",
+                                 headers={"content-type": "application/json", "anthropic-version": "2023-06-01"})
+    with urllib.request.urlopen(req, timeout=30) as r: r.read()
 def q_kimi():
-    """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An absent or expired token
-    reads as no reading with its reason, never as a guess."""
-    tok = kimi_token()
-    # `keep`: the token lives fifteen minutes and only a kimi call refreshes it, so this is no new reading, never one
-    # that stopped tracking the account; quota_store keeps the last good windows, and quota_row still ages them out.
-    if not tok: return {"windows": [], "unavailable": True, "keep": True, "err": "no live Kimi token: the bridge refreshes it on the next kimi call"}
+    """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An expired token is renewed
+    once through the bridge's own path; a renewal that fails or leaves no live token reads as no reading with its
+    reason, never as a guess."""
+    tok = kimi_token(); why = None
+    if not tok and kimi_refreshable():
+        try: kimi_refresh()
+        except Exception as e: why = f"no live Kimi token and the bridge refresh failed: {e}"
+        else:
+            tok = kimi_token()
+            if not tok: why = "no live Kimi token: the bridge refresh answered no live token"
+    # `keep`: the token lives fifteen minutes, so this is no new reading, never one that stopped tracking the account;
+    # quota_store keeps the last good windows, and quota_row still ages them out.
+    if not tok:
+        return {"windows": [], "unavailable": True, "keep": True,
+                "err": (why or "no live Kimi token: the bridge holds no refresh token to renew it")[:160]}
     d = kimi_usages(tok)
     u = d.get("usages") or {}
     ws = []
