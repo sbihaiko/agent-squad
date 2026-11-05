@@ -413,6 +413,7 @@ def entries_of(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_regression_goes_to_the_child_whose_landing_moved_it_and_the_ledger_names_the_attribution(tmp_path):
     """#1392: router.1 declared the command and landed it green; router.3's landing turned it red. The fix entry goes to
     router.3 alone, with the command and its declaring child as the finding, and the land record carries the ledger rows."""
@@ -433,6 +434,7 @@ async def test_a_regression_goes_to_the_child_whose_landing_moved_it_and_the_led
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_the_fix_entry_and_the_review_round_of_a_regression_fix_keep_their_own_counters(tmp_path):
     """The regression fix is entry 2 of the owner. Its head is review round 2 and a review fix after it is entry 3: the
     entry is read from the child's outcomes, the round from its review rounds, and neither rereads the other's count."""
