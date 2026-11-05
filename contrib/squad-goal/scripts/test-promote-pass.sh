@@ -322,6 +322,12 @@ out=$(bash "$d/promote-pass.sh" --ci-job-names "$T/ci-step-names.yml" 2>&1)
 [ "$out" = $'ruff\nmypy\nfast-battery' ] && ok "the check names come from the job block, never a step, with: key or a name: outside it (#1322)" \
   || ko "job names: '$out'"
 
+# #1324: a job gated to a stg-to-main pull request is not a check a dev-to-stg tip waits on, whichever line of the job carries its gate.
+printf 'jobs:\n  ruff:\n    name: ruff\n  full-xdist:\n    if: github.base_ref == '"'"'main'"'"'\n    name: full-xdist\n  full-serial:\n    name: full-serial\n    if: github.base_ref == '"'"'main'"'"'\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n' > "$T/ci-tiers.yml"
+out=$(bash "$d/promote-pass.sh" --ci-job-names "$T/ci-tiers.yml" 2>&1)
+[ "$out" = $'ruff\nmypy\nfast-battery' ] && ok "a job gated to stg-to-main is not a check the dev-to-stg tip waits on (#1324)" \
+  || ko "tier job names: '$out'"
+
 # #1322: the promotion record names the jobs the pass read, so a renamed job set is recorded as it is, never a stale literal.
 printf 'jobs:\n  lint:\n    name: lint\n  types:\n    name: types\n  battery:\n    name: battery\n' > "$T/ci-renamed.yml"
 adv dev renamed; tx=$(tip dev)
