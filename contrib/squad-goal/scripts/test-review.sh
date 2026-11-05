@@ -35,6 +35,7 @@ cat > "$T/bin/claude" <<'J'
 cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_FAIL" ] && { echo "API Error: 529 overloaded_error"; exit 1; }; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_ERRJSON" ] && case "$*" in *"--model bad"*) printf '{"is_error":true,"subtype":"error_max_turns","result":"I'"'"'ll review the branch against the issue, reading the code.","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0}}\n'; exit 0;; esac; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
+export SG_CAP_POLL=0.2   # review.sh cap() polls every 2 s by default; a stub reviewer needs no such wait
 out=$(bash "$T/s/review.sh" --branch fix/1-x 8); rc=$?
 [ $rc = 0 ] && ok "accepts a verdict (exit 0)" || ko "accepts a verdict: review.sh exited $rc"
 case "$out" in model=claude:claude-opus-5-5*) ok "reports the model";; *) ko "reports the model: '$out'";; esac
@@ -263,7 +264,7 @@ W="$T/child"; /usr/bin/git init -q -b main "$W"; /usr/bin/git -C "$W" -c user.em
 /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q -m child
 /usr/bin/git init -q -b main "$T/co"; /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m checkout
 sed -i '' "s|SG_CHECKOUT=$T;|SG_CHECKOUT=$T/co;|" "$T/s/env.sh"
-printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; sleep 12; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; sleep 4; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
 printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
 [ $rc = 0 ] && head -1 "$T/st/review-gui_9.md" | grep -q APPROVE && [ "$(cat "$T/st/review-gui_9.sha" 2>/dev/null)" = "$(/usr/bin/git -C "$W" rev-parse HEAD)" ] \
@@ -339,12 +340,12 @@ unset AGY_RESET SG_SHARED; rm -f "$T/bin/agy" "$T/st/agy-limited"
 # 14) the timeout must reach the process the CLI spawns, and the wait must say it is still working. The alarm is
 # set on the CLI, but the CLI execs the model in a child that ignores the alarm, so the review runs past its
 # timeout with no output and no line anywhere to show it is alive (#491 follow-up: a 360 s review ran 9 min, silent).
-printf '#!/bin/bash\n( sleep 61; echo "VERDICT: APPROVE" ) &\nwait\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
-printf '{"review_models":["claude:hung"],"model_retry_budget":1,"review_timeout_seconds":35,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+printf '#!/bin/bash\n( sleep 23; echo "VERDICT: APPROVE" ) &\nwait\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:hung"],"model_retry_budget":1,"review_timeout_seconds":6,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-gui_9".* "$T/st/cq/"*mtimeout*; t=$(date +%s)
-out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 > "$T/hb"); rc=$?; el=$(( $(date +%s) - t ))
-sleep 1; left=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep -c '[s]leep 61'); who=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep '[s]leep 61')
-[ $rc != 0 ] && [ $el -ge 35 ] && [ $el -lt 60 ] && [ "$left" = 0 ] && /usr/bin/grep -q 'after 35s' "$T/st/cq/"*mtimeout* 2>/dev/null \
+out=$(cd "$W" && SG_CAP_HEARTBEAT=3 bash "$T/s/review.sh" --worktree main 9 > "$T/hb"); rc=$?; el=$(( $(date +%s) - t ))
+sleep 1; left=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep -c '[s]leep 23'); who=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep '[s]leep 23')
+[ $rc != 0 ] && [ $el -ge 6 ] && [ $el -lt 20 ] && [ "$left" = 0 ] && /usr/bin/grep -q 'after 6s' "$T/st/cq/"*mtimeout* 2>/dev/null \
   && ok "14 a child the CLI spawns is killed at the timeout, and nothing it spawned survives (${el}s)" \
   || ko "14 the spawned child outlives the timeout: rc=$rc ${el}s survivors=$left [$who] $(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 /usr/bin/grep -q 'still running' "$T/hb" && ok "14 the wait says the review is still running" || ko "14 the wait is silent: $(cat "$T/hb")"
@@ -686,7 +687,7 @@ n=$( [ -f "$T/rcalls" ] && wc -l < "$T/rcalls" | tr -d ' ' || echo 0 )   # a zer
 
 # 24b) grok files a real defect as Debt in most runs (measured on a planted diff). Its debt-only CHANGES must keep its
 # verdict: the downgrade of #653 would turn that habit into an approval and the fix round would never run.
-printf '#!/bin/bash\ncat > /dev/null; printf %s\n' "'VERDICT: CHANGES\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'" > "$T/bin/grok"
+printf '#!/bin/bash\nprintf %s\n' "'VERDICT: CHANGES\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'" > "$T/bin/grok"
 chmod +x "$T/bin/grok"
 printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*
