@@ -17,6 +17,8 @@ IDLE = re.compile(rf"^{STAMP} FRONTIER idle: ")
 NO_SLOT = re.compile(r"(\d+) no slot")
 HOLD = re.compile(rf"^{STAMP} DISPATCH HOLD: ")
 GATE_HOLD = re.compile(r"promotion proof|nightly")
+# The gate-history caller field (14th): who asked for the gate. A row without it, or with another word, is unknown.
+CALLERS = ("child", "entry", "tip", "other", "unknown")
 LOAD = re.compile(rf"^{STAMP} LOAD (\d+(?:\.\d+)?) (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)$")
 
 
@@ -120,6 +122,8 @@ def main():
     print(f"passes held for the gate: {held_gate}")
 
     durations = []
+    by_caller = {c: 0.0 for c in CALLERS}
+    entry_shas, entry_red = set(), set()
     for line in lines(st / "gate-history"):
         parts = line.split("\t")
         if len(parts) < 5:
@@ -127,9 +131,19 @@ def main():
         finish, start = _float(parts[0]), _float(parts[4])
         if start is not None and inside(finish):
             durations.append(finish - start)
+            caller = parts[13] if len(parts) > 13 and parts[13] in CALLERS else "unknown"
+            by_caller[caller] += finish - start
+            if caller == "entry":
+                entry_shas.add(parts[3])
+                if (parts[7] if len(parts) > 7 and parts[7] else parts[2]) == "fail":
+                    entry_red.add(parts[3])
     print(f"gate runs: {len(durations)}")
     print(f"gate total seconds: {num(sum(durations))}")
     print(f"gate median seconds: {num(statistics.median(durations)) if durations else 0}")
+    for c in CALLERS:
+        print(f"gate lock seconds, {c}: {num(by_caller[c])}")
+    print(f"entry gate refused share: {ratio(len(entry_red), len(entry_shas)):.2f} "
+          f"({len(entry_red)} of {len(entry_shas)} children)")
 
     cooldown = 0
     try:

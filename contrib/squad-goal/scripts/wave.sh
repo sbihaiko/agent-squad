@@ -603,7 +603,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     [ -z "$of" ] || : > "$of"
     # SG_GATE_CARD names the card this gate answers for: its attempt is journaled and projected to Gate Tries (#1255).
     # SG_GATE_WAVE names the wave the gate is for, so the wave's Gating fact reads it (#1257).
-    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
+    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_CALLER=entry SG_GATE_KIND=fast SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
     oc= rs= ran= notran=
     [ -z "$of" ] || IFS=$'\t' read -r oc rs ran notran < "$of" 2>/dev/null
     [ -z "$of" ] || rm -f "$of"
@@ -732,7 +732,7 @@ wave_check() {
     # Each gate round marks the held landing lock (#1290): health.sh reads the last mark as the landing's progress, so a landing
     # that runs several rounds (a red tip, the child that broke it leaves, the tip again) is busy, not held past its bounds.
     touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
-    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${w#wave/}" && eval "$tipgate") >"$clog" 2>&1; rc=$?
+    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${w#wave/}" SG_GATE_CALLER=tip && eval "$tipgate") >"$clog" 2>&1; rc=$?
     oc=
     [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null
     [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null && { rm -f "$clog" "$of"; return 3; }   # 3: the gate lock is held, so the check did not run

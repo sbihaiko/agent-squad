@@ -44,7 +44,9 @@
 # and a gate stopped before any check answered is unproven. The result stays pass or fail, as the hub reads it. The reason is one
 # line, `-` when none; ran and not run list the checks, `-` when none; slots is the count of gate slots the gate took. The red field
 # is `-`, `red` for a measured red this gate recorded, `red-stands <sha>` for a red of the same tree that this attempt did not
-# clear, `cleared-green <sha>` or `cleared-fix <red sha>..<sha>` for the two ways a red is cleared (#1170). The duration
+# clear, `cleared-green <sha>` or `cleared-fix <red sha>..<sha>` for the two ways a red is cleared (#1170). The caller field (#1410)
+# is SG_GATE_CALLER: child (the child's own last check), entry (the wave entry or a fix branch landing), tip (the wave-tip gate)
+# or other; a row from before the field has 13 fields, and the loop report reads it as an unknown caller. The duration
 # is finish minus start, and start is read inside the lock, after the wait: it is the gate's run time, never its queue time. A gate
 # that sets SG_GATE_STATUS=self writes no history line, as it writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
@@ -190,7 +192,7 @@ append_line() {  # <path> <line>: one short write at the end of the file, never 
 gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red>
   fin=$(date +%s)   # the finish epoch the line carries, and the epoch the obligation's deadline counts from (note)
   mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}"
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}"
   append_line "$st/gate-history" "$line"
 }
 case "${1:-}" in
