@@ -174,6 +174,42 @@ def test_the_marks_and_the_legend_match_the_desktop_fill():
     assert LEADTIME.CLUSTER_RADIUS_PX == MANY["r"] and LEADTIME.DOT_RADIUS_PX == LONE["r"], (LONE["r"], MANY["r"])
 
 
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
+def test_the_phone_draws_the_small_marks_the_payload_names():
+    """#1432: the phone draws a lone card at 3 px, a cluster at 5 px and the outline at 1.5 px, the payload's own sizes."""
+    assert CHART["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}
+    svg = run_js(f"mltChart({json.dumps(CHART)})")["svg"]
+    circles = re.findall(r"<circle [^>]*>", svg)
+    radii = sorted(float(re.search(r"\br=([^\s>]+)", c).group(1)) for c in circles)
+    assert radii == [3, 5], f"the phone draws no 3 px and 5 px mark: {radii}"
+    widths = [float(re.search(r"stroke-width=([^\s>]+)", c).group(1)) for c in circles]
+    assert widths == [1.5, 1.5], f"the phone's outlines are not 1.5 px: {widths}"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
+def test_the_phone_applies_the_payloads_outline_rather_than_a_literal():
+    """#1432: the outline the page draws is the payload's own `mark.outline`, never a number the view keeps. The fixture
+    serves a value no default names, so a hard-coded 1.5 fails here."""
+    chart = json.loads(json.dumps(CHART))
+    chart["mark"]["outline"] = 2.75
+
+    circles = re.findall(r"<circle [^>]*>", run_js(f"mltChart({json.dumps(chart)})")["svg"])
+    widths = [float(re.search(r"stroke-width=([^\s>]+)", c).group(1)) for c in circles]
+    assert widths == [2.75, 2.75], f"the phone ignores the payload's outline: {widths}"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
+def test_a_payload_without_mark_keeps_the_outline_it_had():
+    """#1432: `mark` is new on the wire, so a cached or older payload carries none. The phone then keeps its 1.5 px
+    ring instead of drawing `stroke-width=undefined`, which the browser drops."""
+    chart = {k: v for k, v in CHART.items() if k != "mark"}
+
+    circles = re.findall(r"<circle [^>]*>", run_js(f"mltChart({json.dumps(chart)})")["svg"])
+    assert circles, "the phone drew no mark for a payload without `mark`"
+    widths = [re.search(r"stroke-width=([^\s>]+)", c).group(1) for c in circles]
+    assert widths == ["1.5", "1.5"], f"a payload without `mark` loses the ring: {widths}"
+
+
 def test_the_route_serves_each_cluster_range_the_pin_reads(hub):  # noqa: F811
     """The pin takes a cluster's lead and closed ranges from the payload (board_leadtime.py:254-255 sets them): every
     cluster of the route's own answer carries `{min, max, text}` and `{start, end, text}`, and its dots carry `n`,

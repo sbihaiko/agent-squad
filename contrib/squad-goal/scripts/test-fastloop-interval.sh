@@ -25,7 +25,7 @@ printf 'export SG_STATE=%s SG_STATE_BASE=%s SG_REPO=x/alpha SG_OWNER=x SG_PROJEC
 printf 'open("%s","a").write("beat\\n")\n' "$LOG" > "$F/childcc.py"
 for s in autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$F/$s.sh"; chmod +x "$F/$s.sh"; done
 board() { printf '{"repo":"x/alpha","items": [%s]}\n' "$1" > "$BC"; }   # board <items json>: the cache the hub writes
-card() { printf '{"n": %s, "t": "t", "s": "OPEN", "st": "%s", "l": []}' "$1" "$2"; }
+card() { printf '{"n": %s, "r": "x/alpha", "t": "t", "s": "OPEN", "st": "%s", "l": []}' "$1" "$2"; }
 beats() { local c; c=$(/usr/bin/grep -c beat "$LOG" 2>/dev/null); echo "${c:-0}"; }
 lane() { : > "$LOG"; rm -f "$T/lst/fastloop.pid"; env SG_FAST_INTERVAL=$1 SG_FAST_POLL=0.2 bash "$F/fastloop.sh" >"$T/lane.out" 2>&1 & LP=$!; }
 lane_end() { kill "$LP" 2>/dev/null; wait "$LP" 2>/dev/null; pkill -P "$LP" 2>/dev/null; return 0; }

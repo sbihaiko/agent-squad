@@ -461,6 +461,34 @@ def test_a_lone_dot_names_its_own_card_date_range_and_lead_range(lt):
                                "text": "6h"}, "one value names both ends of a one-card range"
 
 
+# SPEC 1327 #1432: the marks are small. The numbers are literals here, never the module's own constants, so a later
+# change that grows a mark fails this test; the payload names the same three sizes the page draws.
+def test_the_marks_are_small_and_the_payload_names_their_size(lt):
+    lone = _chart(lt, [_closed(1, 5, days_ago=2)])
+    cluster = _chart(lt, [_closed(n, 5, days_ago=2) for n in (1, 2)])
+
+    assert [c["r"] for c in lone["clusters"]] == [3], "a lone card draws 3 px"
+    assert [c["r"] for c in cluster["clusters"]] == [5], "a cluster draws 5 px"
+    assert lone["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}
+
+
+# #1432: every chart the module builds carries the same size dict, whatever names its window: the control chart over all
+# closed cards, one over a timeframe, and one whose marks cluster into a fit range. A path that drops `mark` would leave
+# the page to invent its own sizes.
+@pytest.mark.parametrize("kind", ["all", "timeframe", "fit"])
+def test_every_chart_kind_carries_the_one_mark_size_dict(lt, kind):
+    items = [_closed(n, 5, days_ago=2) for n in (1, 2)]
+    if kind == "all":
+        chart = _chart(lt, items)
+    elif kind == "timeframe":
+        chart = _chart(lt, items, timeframe=30)
+    else:
+        chart = _chart(lt, [_at(n, NOW - timedelta(hours=h)) for n, h in ((1, 5), (2, 4), (3, 3))], timeframe=30)
+        assert chart["clusters_fit"], "the fit path drew no clusters_fit"
+
+    assert chart["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}, kind
+
+
 def test_the_cluster_radius_never_grows_with_its_count(lt):
     few = _chart(lt, [_closed(n, 5, days_ago=2) for n in range(1, 4)])["clusters"][0]["r"]
     many = _chart(lt, [_closed(n, 5, days_ago=2) for n in range(1, 13)])["clusters"][0]["r"]

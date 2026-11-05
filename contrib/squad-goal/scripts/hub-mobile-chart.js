@@ -31,7 +31,8 @@ const mltChart = c => {
   const refs = MLT_REF.map(([key, col, dash]) => mltLine(c[key], col, dash, w, h)).join("");
   const dots = c.dots || [];
   const roll = dots.length ? `<polyline fill=none stroke="var(--chart-bar)" stroke-width=3 points="${dots.map(d => `${mltX(d.x, w)},${mltY(d.rolling.y, h)}`).join(" ")}"></polyline>` : "";   // the trend is the strongest line (#1332)
-  const marks = (c.clusters || []).map((k, i) => `<circle data-lt-k="${i}" cx=${mltX(k.x, w)} cy=${mltY(k.y, h)} r=${k.r} fill="${k.count > 1 ? "var(--chart-ink)" : "var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2 style="cursor:pointer"></circle>`).join("");   // one hollow dot per card, one filled dot per cluster (#1331)
+  const outline = (c.mark && c.mark.outline) ?? 1.5;   // a payload from before `mark` keeps the 1.5 px ring (#1432)
+  const marks = (c.clusters || []).map((k, i) => `<circle data-lt-k="${i}" cx=${mltX(k.x, w)} cy=${mltY(k.y, h)} r=${k.r} fill="${k.count > 1 ? "var(--chart-ink)" : "var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=${outline} style="cursor:pointer"></circle>`).join("");   // one hollow dot per card, one filled dot per cluster, at the payload's own sizes (#1331, #1432)
   const svg = `<svg data-lt viewBox="0 0 ${MLT_P + w + 4} ${h + 2 * MLT_P + 8}" role="img" aria-label="Lead time">${grid}${xs}${axes}${refs}${roll}${marks}</svg>`;   // no right gutter: the values moved under the plot (#1333)
   return { svg, legend: mltLegend(c) };
 };

@@ -121,7 +121,7 @@ def rows_of(nodes, repo):
     for n in nodes:
         c = n.get("content") or {}
         if c.get("number") is None or (c.get("repository") or {}).get("nameWithOwner") != repo or n.get("isArchived"): continue
-        out.append({"fd": _key(c.get("fullDatabaseId")), "nid": c.get("id"),
+        out.append({"fd": _key(c.get("fullDatabaseId")), "nid": c.get("id"), "r": repo,
                     **_inputs(c.get("state"), c.get("stateReason"), n.get("fieldValueByName") or {}, n.get("updatedAt"),
                               [x["name"] for x in (c.get("labels") or {}).get("nodes") or []])})
     return out

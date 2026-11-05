@@ -202,6 +202,21 @@ def test_loop_bugs_lane_comes_first_and_no_spec_lane_last(hub):
     assert [r["n"] for r in bugs["all"]] == [895]
 
 
+def test_a_child_whose_spec_card_reads_todo_sits_in_that_spec_lane(hub):
+    """#1431: the janitor returns a reopened spec's card to Todo, so the board draws the spec's children in its lane. A spec
+    card in Todo is a lane like one in Doing, and a ticket of it never falls to No spec."""
+    g = [{"name": "Todo", "items": [_row(1367, "Todo", ["spec"], sp=True), _row(1373, "Todo", [], pa=1367)]},
+         {"name": "Closed", "end": True, "n": 0, "items": []}]
+    summary = {"specs": [{"n": 1367, "st": "Todo", "closed": 0, "total": 1}], "waves": []}
+    model = _build(g, sum=summary)
+    ids = [lane["id"] for lane in model["lanes"]]
+    assert "s1367" in ids, f"the spec card in Todo drew no lane: {ids}"
+    assert "none" not in ids, f"the child fell to No spec: {ids}"
+    lane = next(ln for ln in model["lanes"] if ln["id"] == "s1367")
+    assert [r["n"] for r in lane["all"]] == [1373], lane
+    assert lane["title"] == "card 1367", lane
+
+
 def test_spec_lane_carries_number_title_column_and_closed_progress(hub):
     model = _build(GROUPS)
     lane = next(ln for ln in model["lanes"] if ln["id"] == "s889")

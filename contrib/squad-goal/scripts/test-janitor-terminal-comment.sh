@@ -23,7 +23,7 @@ a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in
   *--include*repos/x/y/branches/gui%2F2201-a*) echo '{"commit":{"sha":"abcdef1234567890"}}';;
   *--include*repos/x/y/branches/gui%2F2205-b*) echo '{"commit":{"sha":"5555555aaaaaaaa"}}';;
-  *repos/x/y/branches*) printf 'gui/2201-a abcdef1234567890\ngui/2205-b 5555555aaaaaaaa\ngui/2211-c 1111111bbbbbbbb\n';;
+  *repos/x/y/branches*) printf 'gui/2201-a abcdef1234567890\ngui/2205-b 5555555aaaaaaaa\ngui/2211-c 1111111bbbbbbbb\ngui/2212-1222 1212121cccccccc\n';;
   *compare/dev...*) echo behind;;
   *--include*commits/abcdef1234567890/check-runs*) echo '{"check_runs":[{"name":"test (3.11)","status":"completed","conclusion":"success"}]}';;
   *--include*commits/5555555aaaaaaaa/check-runs*) echo '{"check_runs":[{"name":"test (3.13)","status":"completed","conclusion":"success"}]}';;
@@ -47,12 +47,17 @@ case "$a" in
     /usr/bin/grep -q '^STATUS o 4 Todo 2209$' "TMPDIR/board.calls" 2>/dev/null && c=Todo || c=Closed   # the board keeps the move: a second pass reads Todo
     printf '2209\t%s\thttps://api.github.com/repos/x/y\n' "$c"
     printf '2211\tClosed\thttps://api.github.com/repos/x/y\n'
+    /usr/bin/grep -q '^STATUS o 4 Todo 2212$' "TMPDIR/board.calls" 2>/dev/null && c2=Todo || c2=Closed   # the board keeps the move: a second pass reads Todo
+    printf '2212\t%s\thttps://api.github.com/repos/x/y\n' "$c2"   # a reopened spec: its card sits Closed while a ticket is in flight (#1431)
+    printf '2213\tTodo\thttps://api.github.com/repos/x/y\n'       # the spec's ticket, in flight
     printf '2210\tTodo\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     printf '{"number":2202,"title":"Issue 2202","body":"","state":"OPEN","labels":{"nodes":[{"name":"wontfix"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
     printf ',{"number":2209,"title":"Issue 2209","body":"","state":"OPEN","labels":{"nodes":[{"name":"ready-for-agent"},{"name":"rework"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
     printf ',{"number":2211,"title":"Issue 2211","body":"","state":"OPEN","labels":{"nodes":[{"name":"ready-for-agent"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
+    printf ',{"number":2212,"title":"Issue 2212","body":"","state":"OPEN","labels":{"nodes":[{"name":"spec"}]},"subIssuesSummary":{"total":1,"completed":0},"subIssues":{"nodes":[{"number":2213}]},"comments":{"nodes":[]}}'
+    printf ',{"number":2213,"title":"Issue 2213","body":"","state":"OPEN","labels":{"nodes":[{"name":"ready-for-agent"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
     printf ']}}}}';;
   *issues/2201*|*issues/2204*|*issues/2205*) echo $'closed\tcompleted\tIssue';;
   *issues/2203*) echo $'closed\tnot_planned\tIssue';;
@@ -65,6 +70,20 @@ sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:
 mkdir -p "$T/co/runs/run-a"; echo run-a > "$T/st/active-runs.txt"
 printf 'CHILD — GitHub issue(s) 2201, 2203, 2204, 2210:\n' > "$T/co/runs/run-a/request.txt"
 printf '%s\n' '{"event":"run_start","run_id":"run-a","ts":"2026-10-14T08:00:00Z"}' '{"event":"spawn_accepted","child":"a","definition":"GitHub issue #2201"}' '{"event":"spawn_accepted","child":"b","definition":"GitHub issue #2203"}' '{"event":"spawn_accepted","child":"c","definition":"GitHub issue #2210"}' '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}' > "$T/co/runs/run-a/record.jsonl"
+# #1431: a spec's children land their own commits under the parent's number (#665). The spec #2212 is open again with a
+# ticket in flight, and its child's branch is in dev; the spec's card still returns to Todo, because a spec's own work is
+# never a branch. #2212 holds both facts the reopen rule's skip reads (a work branch in dev and a commit in dev naming it),
+# and #2211 holds the in-dev branch fact without the spec label: it is the same-run control, the plain issue that keeps
+# its Closed card while the spec returns to Todo.
+git -C "$T/co" init -q
+git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A child of the spec landed (#2212)"
+git -C "$T/co" update-ref refs/remotes/origin/dev HEAD
+git -C "$T/co" log --format=%s origin/dev | /usr/bin/grep -q '(#2212)$' || { echo "FAIL fixture: no commit in dev names #2212"; exit 1; }
+# The fixture states the facts the reopen rule's skip reads: #2212 both, a commit in dev naming it (named_in_land) and a
+# work branch in dev (branch_in_dev_count); #2211 the in-dev branch. Read through the same stubbed route the janitor uses.
+gh api repos/x/y/branches | /usr/bin/grep -q '^gui/2211-' && gh api repos/x/y/branches | /usr/bin/grep -q '^gui/2212-' \
+  && [ "$(gh api repos/x/y/compare/dev...1111111bbbbbbbb -q .status)" = behind ] && [ "$(gh api repos/x/y/compare/dev...1212121cccccccc -q .status)" = behind ] \
+  || { echo "FAIL fixture: #2211/#2212 have no work branch in dev"; exit 1; }
 run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run); r1=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null); : > "$T/gh.calls"; o2=$(run); r2=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null)
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
@@ -111,4 +130,15 @@ note 2205 | /usr/bin/grep -q 'dashboard' && ko "#2205 belongs to no run but its 
 /usr/bin/grep -q 'card -> Todo.*2209\|#2209: card -> Todo' "$T/st/cycle.log" && ok "cycle.log names the move" || ko "#2209 move not named"
 # An open issue whose work branch is in dev keeps its Closed card: Todo would cycle it through the later rules (#1420).
 ! /usr/bin/grep -q ' 2211$' "$T/board.calls" && ok "an open issue whose branch is in dev keeps its Closed card over two passes" || ko "#2211 moved: $(cat "$T/board.calls")"
+# A reopened spec is never a branch delivery (#1431): its card sits Closed while a ticket of it is in flight and its child's
+# branch is in dev, and it returns to Todo with the same reason, once. It never keeps Closed and never gains the reverted tag.
+# #2211 is the plain control in the same run: the same in-dev branch keeps its Closed card, so the two assertions together
+# fail if the reopen rule drops its spec split.
+[ "$(/usr/bin/grep -c '^STATUS o 4 Todo 2212$' "$T/board.calls")" = 1 ] && ok "a reopened spec's card moves Closed to Todo once over two passes" || ko "#2212 not moved once: $(cat "$T/board.calls")"
+/usr/bin/grep -q '^REASON reopened 2212$' "$T/board.calls" && ok "the spec move names SG_MOVE_REASON=reopened" || ko "#2212 move has no reopened reason"
+[ "$(/usr/bin/grep -E '^(STATUS|ADD|REMOVE).* 2212$' "$T/board.calls" | /usr/bin/grep -vc '^STATUS o 4 Todo 2212$')" = 0 ] && ok "the spec card never stays in a terminal column" || ko "#2212 written elsewhere: $(/usr/bin/grep ' 2212$' "$T/board.calls")"
+! /usr/bin/grep -q 'issues/2212/labels' "$T/gh.calls" && ok "the reopened spec gains no reverted tag" || ko "#2212 tagged: $(/usr/bin/grep 'issues/2212' "$T/gh.calls")"
+[ "$(count 2212)" = 0 ] && ok "a reopened spec gets no Closed comment" || ko "#2212 commented while open: $(note 2212)"
+/usr/bin/grep -q 'TERMINAL-REOPENED #2212' "$T/st/cycle.log" && ok "the spec reopen is named in cycle.log" || ko "#2212 not named: $(/usr/bin/grep 2212 "$T/st/cycle.log")"
+! /usr/bin/grep -q ' 2211$' "$T/board.calls" && ok "the plain issue with the spec's identical facts keeps its Closed card" || ko "#2211 moved: $(cat "$T/board.calls")"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

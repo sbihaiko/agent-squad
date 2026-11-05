@@ -89,6 +89,7 @@ test-hubmux-check-board.sh 0.81
 test-hubmux-live.sh 0.12
 test-hubstream.sh 8.84
 test-issue-ledger.sh 2.21
+test-issue-state-door.sh 2.61
 test-janitor-board-facts.sh 1.24
 test-janitor-board-reconcile.sh 4.71
 test-janitor-board-vocab.sh 1.58

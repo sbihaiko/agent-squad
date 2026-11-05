@@ -464,7 +464,7 @@ def test_the_items_read_carries_the_close_reason_so_no_card_is_read_again(hub, t
     rows = {r["n"]: r for r in (json.loads(line) for line in out.splitlines()) if "_page" not in r}
     assert rows[1]["cr"] == "not_planned"
     assert rows[2]["cr"] == "completed"
-    assert all("r" not in row for row in rows.values()), "the close reason owns its own key; `r` stays the row's repository"
+    assert all(row["r"] == "x/y" for row in rows.values()), "the close reason owns its own key; `r` stays the row's repository (#1429)"
 
 
 def test_the_history_name_is_derived_from_the_repository(tmp_path):

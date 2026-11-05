@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for sg_todo_cards with a go list (#800): a go-labelled issue whose card the board read does not carry
 # is named on stderr and in alerts.log, and a known node id that answers Todo rescues it into the Todo list. Hermetic:
-# a stub gh answers the fields, the items route (through the --jq the caller passes), the node read and the issue's own
+# a stub gh answers the fields, the items route (through the --jq the caller passes), the one-card read and the issue's own
 # read; its own SG_STATE.
 # #1031: the go list that names an issue was read at another time, and the rows it is checked against come from a cache
 # shared by the owner and project. An issue the list still names go-labelled is named that only when the issue itself
@@ -21,7 +21,6 @@ cat > "$T/bin/gh" <<'GH'
 jqf=""; prev=""; all="$*"
 for a in "$@"; do [ "$prev" = "--jq" ] && jqf="$a"; prev="$a"; done
 case "$all" in
-  *graphql*) case "$all" in *PVTI_800*) echo '{"data":{"node":{"isArchived":false,"content":{"number":800},"fieldValueByName":{"name":"Todo"}}}}';; *) echo '{"data":{"node":null}}';; esac; exit 0;;
   *"/fields"*) echo '[{"id":"F1","name":"Status","options":[{"id":"o1","name":"Todo"},{"id":"o2","name":"Code Review"}]}]'; exit 0;;
   *"/issues/"*) case "$all" in
       *"/issues/801"*) echo '{"number":801,"state":"open","labels":[{"name":"bug"},{"name":"go"}]}'; exit 0;;
@@ -29,6 +28,8 @@ case "$all" in
       *"/issues/804"*) echo '{"number":804,"state":"open","labels":[{"name":"bug"}]}'; exit 0;;
       *"/issues/805"*) echo '{"number":805,"state":"open","labels":[{"name":"bug"},{"name":"go"}]}'; exit 0;;
     esac; exit 1;;
+  *"/items/PVTI_800"*) echo '{"isArchived":false,"content":{"number":800},"fields":[{"name":"Status","value":{"name":"Todo"}}]}'; exit 0;;   # the one-card read (#1300, #1303)
+  *"/items/PVTI_"*) exit 1;;   # a card the fixture does not carry
   *"/items"*) if [ -n "$jqf" ]; then jq -r "$jqf" "$T_ITEMS"; else cat "$T_ITEMS"; fi; exit 0;;
 esac
 exit 1
@@ -63,7 +64,7 @@ echo "$out" | /usr/bin/grep -qx 803 && ko "a closed issue is not listed as Todo"
 # #1031: closing an issue drops it from the go set on the next cycle. The rows are the hub cache, read before the close,
 # and still carry #803's Todo card; the issue itself answers closed, so it leaves the rows the pass reads, while #801,
 # which answers open and go-labelled, stays.
-printf '{"t": %s, "repo": "o/r", "items": [{"n":801,"st":"Todo"},{"n":803,"st":"Todo"}]}' "$(date +%s)" > "$T/hub.json"
+printf '{"t": %s, "repo": "o/r", "items": [{"n":801,"st":"Todo","r":"o/r"},{"n":803,"st":"Todo","r":"o/r"}]}' "$(date +%s)" > "$T/hub.json"
 cached=$(SG_BOARD_CACHE="$T/hub.json" sg_todo_cards "801,803" 2>"$T/err3")
 echo "$cached" | /usr/bin/grep -qx 801 && ok "an open go-labelled issue the cache rows carry stays in the go set" || ko "an open go-labelled issue the cache rows carry stays in the go set (rows: $(echo $cached))"
 echo "$cached" | /usr/bin/grep -qx 803 && ko "a closed issue the cache rows still carry drops out of the go set" || ok "a closed issue the cache rows still carry drops out of the go set"

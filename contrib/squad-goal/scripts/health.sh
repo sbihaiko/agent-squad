@@ -225,9 +225,42 @@ wl=$(/bin/ps -axwwo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/aw
   END { for (p in m) { if (pp[p] in m) continue
     if (pp[p] == 1) { f = 0; for (q in m) if (q != p && pg[q] == pg[p]) f = 1; if (f) continue }
     print p } }' | sort -n | tr '\n' ' '); wl=${wl% }
+# #1427: the count is this profile's loops, not the machine's. A second profile runs the same watch.sh under its own state
+# directory, and counting it made a healthy machine alert -- the false alert that taught the reader to ignore the real one.
+# One state directory per profile holds its supervisor, locks and pid files (address.sh), so a candidate is another profile's
+# loop only when another state dir positively names it: the lock pidfile its loop holds (`locks/watch/pid`) or the watch.sh
+# lane its live supervisor holds (`watchd.pid`). This profile's own lock pidfile, lane and the process's own SG_STATE
+# (`/proc` on Linux; macOS hides another process's environment, so the pidfiles and the fail-open count stand for it there)
+# name this profile's loops. A candidate no state dir names stays counted: a stray of this profile that holds no pidfile is
+# exactly the duplicate this alert exists for, and dropping it would hide the real one.
+mestate=${SG_STATE%/}; sbase=$(dirname "$mestate")
+# A pidfile names a number or nothing: a malformed or dead pid names no live supervisor, so it is read as absent.
+pidval() { local v; v=$(cat "$1" 2>/dev/null); case $v in ''|*[!0-9]*) return 1;; esac; printf '%s\n' "$v"; }
+wlockpid=$(pidval "$mestate/locks/watch/pid") || wlockpid=
+wd=$(pidval "$mestate/watchd.pid") || wd=; [ -n "$wd" ] && ! kill -0 "$wd" 2>/dev/null && wd=
+# what the other state directories beside this one name: their loop's lock pidfile, and the lane child of their live supervisor
+fpid=; fwd=
+for d in "$sbase"/*; do [ -d "$d" ] && [ "${d%/}" != "$mestate" ] || continue
+  x=$(pidval "$d/locks/watch/pid") && fpid="$fpid $x"
+  x=$(pidval "$d/watchd.pid") && kill -0 "$x" 2>/dev/null && fwd="$fwd $x"
+done
+# The environment of one process: SG_STATE, when the platform exposes it (/proc); one record of the NUL-separated list, read
+# whole, so a value mid-buffer is never parsed truncated.
+pstate() { [ -r "/proc/$1/environ" ] && /usr/bin/awk 'BEGIN{RS="\0"} index($0,"SG_STATE=")==1 { print substr($0,10); exit }' "/proc/$1/environ" 2>/dev/null; }
+wkeep=
+for p in $wl; do
+  pp=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')
+  [ "$p" = "$wlockpid" ] && { wkeep="$wkeep $p"; continue; }
+  [ -n "$wd" ] && [ "$pp" = "$wd" ] && { wkeep="$wkeep $p"; continue; }
+  s=$(pstate "$p"); [ -n "$s" ] && [ "${s%/}" = "$mestate" ] && { wkeep="$wkeep $p"; continue; }
+  case " $fpid " in *" $p "*) continue;; esac
+  case " $fwd " in *" $pp "*) continue;; esac
+  wkeep="$wkeep $p"
+done
+wl=${wkeep# }
 nw=$(printf '%s\n' $wl | grep -c .)
 # The pid watchd holds for its watch.sh is the watch.sh child of the pid in watchd.pid; any other counted pid is the stray. Read-only: nothing here kills.
-wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid"); held=
+held=
 [ -n "$wd" ] && for p in $wl; do [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && held="$held $p"; done; held=${held# }
 [ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive (pids $wl; watchd pid ${wd:-none} holds ${held:-none}): watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
 # health.json shape (#1294, asserted in test-health.sh): `causes` holds one entry per alert, so a repeating failure with two groups

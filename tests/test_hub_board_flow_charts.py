@@ -1176,6 +1176,56 @@ def test_a_lone_card_draws_a_hollow_dot_and_a_cluster_draws_one_filled_dot(hub, 
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_drawn_marks_are_small_and_agree_with_the_payload(hub, board, tmp_path):
+    """#1432: the page draws a lone card at 3 px, a cluster at 5 px and the outline at 1.5 px, the sizes the payload
+    serves. The figures are literals, so a later change that grows a mark fails here."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-09T09:00:00Z"),
+                3: _done(3, "2026-10-09T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["all"]
+    assert chart["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}
+    out = _lt_chart(hub, tmp_path, "lt-small-marks.js", chart)
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    lone, cluster = sorted(re.findall(r"<circle [^>]*>", plot), key=lambda tag: float(_svg_attr(tag, "r")))
+    assert float(_svg_attr(lone, "r")) == 3, "a lone card does not draw 3 px"
+    assert float(_svg_attr(cluster, "r")) == 5, "a cluster does not draw 5 px"
+    assert float(_svg_attr(lone, "stroke-width")) == 1.5, "a lone card's outline is not 1.5 px"
+    assert float(_svg_attr(cluster, "stroke-width")) == 1.5, "a cluster's outline is not 1.5 px"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_page_applies_the_payloads_outline_rather_than_a_literal(hub, board, tmp_path):
+    """#1432: the outline is the payload's own `mark.outline`, never a number the view keeps. `_lt_chart` serializes the
+    chart it is handed into the JS it runs, so the mutated 2.75 reaches `ltChart`; a hard-coded 1.5 fails here."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["all"]
+    chart["mark"]["outline"] = 2.75
+
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", _lt_chart(hub, tmp_path, "lt-outline.js", chart), re.S).group(1)
+    widths = [float(_svg_attr(tag, "stroke-width")) for tag in re.findall(r"<circle [^>]*>", plot)]
+    assert widths and all(width == 2.75 for width in widths), f"the page ignores the payload's outline: {widths}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_chart_without_mark_keeps_the_outline_it_had(hub, board, tmp_path):
+    """#1432: `mark` is new on the wire, so an older or cached chart carries none. The page then keeps its 1.5 px ring
+    instead of drawing `stroke-width=undefined`, which the browser drops. The two payloads are drawn side by side: the
+    widths must differ, so a view that hard-codes 1.5 for every chart fails on the one that names 2.75."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    named = hub.flow_lead()["lead"]["control"]["all"]
+    named["mark"]["outline"] = 2.75
+    bare = {k: v for k, v in named.items() if k != "mark"}
+
+    def widths(expression, name):
+        plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", _lt_chart(hub, tmp_path, name, expression), re.S).group(1)
+        return [_svg_attr(tag, "stroke-width") for tag in re.findall(r"<circle [^>]*>", plot)]
+
+    kept, named_widths = widths(bare, "lt-no-mark.js"), widths(named, "lt-named-mark.js")
+    assert kept and all(width == "1.5" for width in kept), f"a chart without `mark` loses the ring: {kept}"
+    assert named_widths and all(width == "2.75" for width in named_widths), f"a chart with `mark` loses its outline: {named_widths}"
+    assert kept != named_widths, "the fallback and the payload's own outline are one code path"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(hub, board, tmp_path):
     """#1331: the tooltip names the card or the cluster and shows the lead time, the closed dates and each dot's column
     stack; the cluster carries its count, cards, date range and lead-time range in the payload."""

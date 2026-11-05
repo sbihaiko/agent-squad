@@ -975,7 +975,10 @@ def reconcile_board():
                 todo = os.environ.get("SG_TODO", "Todo")
                 col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), todo, spec=is_spec, todo=todo)   # a spec reads Todo while a ticket is in flight, and never a work column (#1131)
                 if is_spec and col == todo and not have_cards.get(n, ""): col = None   # a spec with no card is created by the floor, in Backlog (ADR-0142)
-                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Todo the fold writes nothing, and the spec keeps the owner's column (#550)
+                if is_spec and reverted and shipped:   # an open spec never keeps a terminal column: its own work is never a branch, so the reopen rule below (ADR-0143 rule 2) returns it to Todo with the reason (#1431)
+                    set_expected(n, col, f"spec folds over its sub-issues: a child reopened, the card keeps {col}", rank=15)   # the fold's own read still lands, so a pass whose reopen declines leaves the card where the fold found it
+                    reverted = False   # the reopen loop lifts the card; it carries no reverted tag and no negative reason
+                elif col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Todo the fold writes nothing, and the spec keeps the owner's column (#550)
             if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
                 # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold
@@ -1039,9 +1042,9 @@ def reconcile_board():
             del have_all[str(n)]
             say(f"BOARD-RECONCILE #{n}: card removed (run-parent: a roll-up, never work)")
     if shipped:   # an open issue whose card reads Closed goes back to Todo, once: the reopen is the door (ADR-0143 rule 2, #1420)
-        for n in sorted(k for k in olabels if str(k) in have_all and have_all[str(k)] == "Closed" and k not in specs and not (RUN_PARENT in olabels[k])):
+        for n in sorted(k for k in olabels if str(k) in have_all and have_all[str(k)] == "Closed" and not (RUN_PARENT in olabels[k])):
             if n in held_owner or owner_frozen(n): continue
-            if branch_in_dev_count(n) != "0" or str(n) in named_in_land(): continue   # its work is in dev: Closed is the landing's own write (rule above), so Todo would open a dispatch window and the later rules would cycle the card
+            if n not in specs and (branch_in_dev_count(n) != "0" or str(n) in named_in_land()): continue   # its work is in dev: Closed is the landing's own write (rule above), so Todo would open a dispatch window and the later rules would cycle the card. A spec's own work is never a branch, so a spec never takes this skip (#1431)
             _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775): a close GitHub reports late never sends a landed card back
             if issue_info(n)[0] == "closed": continue
             say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued; card -> Todo (reopened)")
