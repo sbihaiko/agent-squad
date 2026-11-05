@@ -6,7 +6,7 @@
 suite_t0=$(date +%s)   # #1413: the acceptance command of a run is capped (SG_AC_TIMEOUT, 300 s), so the suite times itself
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SHARED="$T/st"   # the shared marks (quota-guard, *-limited) are the suite's own, never the machine's under ~/.cache
-mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$(dirname "$src")/grokmark.py" "$T/s/"; : > "$T/s/codex-reset.py"
 # the registry the review reads: the shipped one plus `nt`, a model whose capabilities say no tools (the no-tools path reads that, not a list)
 jq '.models += [{id:"nt",label:"nt",provider:"claude",subscription:"claude",aliases:["claude:nt"],capabilities:{tools:false},
   routes:{cli:{auth:"subscription",argv:["claude","-p","--model","{model}","{prompt_file}"],served:["nt"]},direct:{auth:"subscription",model:"nt",served:["nt"]}}}]' "$(dirname "$src")/registry.json" > "$T/s/registry.json"
@@ -351,7 +351,7 @@ sleep 1; left=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep -c '[s]leep 23')
 /usr/bin/grep -q 'still running' "$T/hb" && ok "14 the wait says the review is still running" || ko "14 the wait is silent: $(cat "$T/hb")"
 
 # 15) #622: grok answers 402 "usage balance exhausted" on every call. A balance has no reset, so the first such answer
-# writes $SG_SHARED/grok-limited and every later review skips grok until the owner removes it -- no dead try per round.
+# writes $SG_SHARED/grok-limited and every later review skips grok while the marker is fresh (#1417: SG_GROK_LIMIT_TTL, then one probe).
 export SG_SHARED="$T/st"
 printf '#!/bin/bash\necho x >> "$T/grokcalls"\necho "Error: 402 Payment Required: Grok Build usage balance exhausted" >&2; exit 1\n' | sed "s|\$T|$T|" > "$T/bin/grok"
 printf '#!/bin/bash\ncat >/dev/null; echo "VERDICT: APPROVE"\n' > "$T/bin/claude"; chmod +x "$T/bin/grok" "$T/bin/claude"
@@ -361,7 +361,7 @@ bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
 [ -e "$T/st/grok-limited" ] && ok "15 a 402 balance answer writes grok-limited" || ko "15 no grok-limited marker after a 402"
 rm -f "$T/st/review-fix_1-x".* "$T/grokcalls" "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
 [ ! -e "$T/grokcalls" ] && case "$out" in model=claude:ok*) true;; *) false;; esac && ok "15 grok-limited skips grok on the next review" || ko "15 grok tried again: calls=$(wc -l < "$T/grokcalls" 2>/dev/null) '$out'"
-/usr/bin/grep -q 'owner' "$T/st/cq/"*mquota* 2>/dev/null && ok "15 the skip line says the owner clears the marker" || ko "15 skip line: $(cat "$T/st/cq/"*mquota* 2>/dev/null)"
+ /usr/bin/grep -q 'next probe' "$T/st/cq/"*mquota* 2>/dev/null && ok "15 the skip line names the next probe time" || ko "15 skip line: $(cat "$T/st/cq/"*mquota* 2>/dev/null)"
 rm -f "$T/st/grok-limited" "$T/bin/grok"
 # 16) #622, #634: with one reachable model, an answer outside the checklist shape gets its repair turn, not BLOCKED at once.
 printf '#!/bin/bash\ncat >/dev/null; echo x >> "$T/ccalls"; [ "$(wc -l < "$T/ccalls")" -ge 2 ] && { echo "VERDICT: APPROVE"; exit 0; }; printf "Checking.\\nVERDICT: CHANGES\\n1. a finding\\n"\n' | sed "s|\$T|$T|g" > "$T/bin/claude"; chmod +x "$T/bin/claude"

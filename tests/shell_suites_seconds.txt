@@ -158,7 +158,7 @@ test-retired-settings.sh 1.85
 test-revformat-stall.sh 0.74
 test-revformat.sh 10.21
 test-review-diff-bound.sh 26.45
-test-review-grok-probe.sh 60.00
+test-review-grok-probe.sh 53.00
 test-review.sh 266.80
 test-run-state-table.sh 0.03
 test-runreview.sh 4.06

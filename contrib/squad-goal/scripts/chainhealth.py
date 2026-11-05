@@ -3,7 +3,7 @@
 """Which models of a chain may run now, why one may not, and when it is back (#431).
 
 One reader of what review.sh already skips a model over: `codex-limited` (a usage limit; every model that is not claude:,
-grok- or gemini-) and `agy-limited` (gemini-), each an epoch under the shared dir, `quota-guard` with `anthropic_models`,
+grok- or gemini-) and `agy-limited` (gemini-), `grok-limited` (grok-; fresh for SG_GROK_LIMIT_TTL, see grokmark.py), each an epoch under the shared dir, `quota-guard` with `anthropic_models`,
 models.json's `off` and `hours`, and a provider key that is absent (provkey.py). The hub draws what `chain_state` returns and never computes the rule (ADR-0137);
 branchreviewpass.sh prints `summary` into the issue's status file.
 
@@ -19,6 +19,7 @@ import argparse, json, pathlib, sys, time
 
 _HERE = pathlib.Path(__file__).resolve().parent
 if str(_HERE) not in sys.path: sys.path.insert(0, str(_HERE))
+import grokmark   # the grok-limited marker rule, shared with review.sh (#1417)
 import provkey   # a model whose provider needs an absent key (#482)
 
 _modelreg = None
@@ -50,6 +51,36 @@ def _marker(shared, name, now):
     try: t = float((pathlib.Path(shared) / name).read_text().strip())
     except (OSError, ValueError): return None
     return t if t > now else None
+
+def _is_grok(raw):
+    return _bare(raw).startswith(("grok-", "claude-grok-"))
+
+
+def _grok_why(raw, shared, now):
+    """The grok-limited marker as one entry's state: (reason, info) or None with no marker (#1417).
+
+    limited: the marker is fresh; eligible: expired and no probe holds the lock; probing: expired and a probe holds it.
+    The reason names the next probe, never a balance reset."""
+    st = grokmark.probe_state(shared, now)
+    if st is None: return None
+    written = grokmark.written(shared) or 0
+    nxt = int(written + grokmark.ttl())
+    info = {"state": st, "age": int(max(0, now - written)), "next_probe": nxt}
+    if st == "limited":
+        return f"limited: balance spent, marker {info['age'] // 60} min old, next probe {_clock(nxt)}", info
+    if st == "probing":
+        return "probing: one review is trying grok", info
+    return None, info
+
+
+def _grok_states(raws, shared, now):
+    """Per grok entry with a marker, its state, marker age and next probe: the hub draws it as is (#1417)."""
+    out = {}
+    for raw in raws:
+        g = _grok_why(raw, shared, now) if _is_grok(raw) else None
+        if g: out[_bare(raw)] = g[1]
+    return out
+
 
 def _in_window(w, now, hour):
     """The resolver's one window grammar (ADR-0147), read at `now`; a named `hour` moves `now` to it on the same local day."""
@@ -85,6 +116,9 @@ def _v1_why(cfg, key, m, shared, now, hour):
     reg = _resolver()   # the two marker rules have one home, the resolver (ADR-0147 rule 10); their behavior is main's
     if reg.v1_codex(m) and codex: return "usage limit", codex
     if reg.v1_agy(m) and agy: return "usage limit", agy
+    if _is_grok(m):
+        g = _grok_why(m, shared, now)
+        if g and g[0]: return g[0], None
     if provkey.closed(m): return provkey.reason(m), None
     if guard and m in (cfg.get("anthropic_models") or []): return "weekly quota guard", None
     if ((cfg.get("off") or {}).get(key) or {}).get(m): return "switched off", None
@@ -104,6 +138,8 @@ def _registry_why(cfg, name, raw, shared, now, hour):
     regmod = _resolver()
     e = next((x for x in regmod.chain(cfg, name).entries if x.raw == raw), None)
     if e is None: return "not in the registry"
+    g = _grok_why(raw, shared, now) if _is_grok(raw) else None
+    if g and g[0]: return g[0]
     ev = regmod.eligible(e, shared=shared, now=now, hour=hour)
     if not ev.ok: return ev.reason
     if provkey.closed(raw): return provkey.reason(raw)
@@ -133,7 +169,9 @@ def _registry_state(doc, name, shared, now, hour):
     for e in entries:
         why, until = None, None
         ev = regmod.eligible(e, shared=shared, now=now, hour=hour)
-        if provkey.closed(e.raw) and (ev.ok or not str(ev.reason).startswith("usage limit")):
+        g = _grok_why(e.raw, shared, now) if _is_grok(e.raw) else None
+        if g and g[0]: why = g[0]
+        elif provkey.closed(e.raw) and (ev.ok or not str(ev.reason).startswith("usage limit")):
             why = provkey.reason(e.raw)
         elif guard and e.raw in anthropic: why = "weekly quota guard"
         elif not ev.ok: why, until = ev.reason, ev.until
@@ -149,7 +187,8 @@ def _registry_state(doc, name, shared, now, hour):
     elif n > 1 and len(left) == 1: banner = f"{name} chain: only {left[0]} of {n} models available ({detail})"
     elif n > 1 and not left: banner = f"{name} chain: no model available of {n} ({detail})"
     return {"key": name, "total": n, "eligible": len(left), "available": left, "out": out, "banner": banner,
-            "notice": f"out of the chain: {detail}" if out else None, "divergence": [], "divergence_notice": None}
+            "notice": f"out of the chain: {detail}" if out else None, "divergence": [], "divergence_notice": None,
+            "grok": _grok_states([e.raw for e in entries], shared, now)}
 
 
 def chain_state(cfg, key="review_models", shared=".", now=None, hour=None):
@@ -174,7 +213,7 @@ def chain_state(cfg, key="review_models", shared=".", now=None, hour=None):
     rows = _divergence(doc, key, name, shared, now, hour)
     return {"key": key, "total": n, "eligible": len(left), "available": left, "out": out, "banner": banner,
             "notice": f"out of the chain: {detail}" if out else None,
-            "divergence": rows,
+            "divergence": rows, "grok": _grok_states(chain, shared, now),
             "divergence_notice": ("registry and v1 differ: " + "; ".join(
                 f"{r['model']}: v1 {r['v1']}, registry {r['registry']}" for r in rows)) if rows else None}
 

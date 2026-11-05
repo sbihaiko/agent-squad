@@ -241,15 +241,17 @@ GROK_V2 = {"chains": {"review": [{"id": "grok-4.7", "raw": "grok-4.7"}, {"id": "
 def _grok(ch, doc, shared, age, hold=False, monkeypatch=None, ttl=None):
     import fcntl
     (shared / "grok-limited").write_text(str(int(NOON - age)))
-    if ttl and monkeypatch: monkeypatch.setenv("SG_GROK_LIMIT_TTL", str(ttl))
+    if ttl and monkeypatch:
+        monkeypatch.setenv("SG_GROK_LIMIT_TTL", str(ttl))
     held = None
     if hold:
         held = open(shared / "grok-probe.lock", "a")
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
-        return ch.chain_state(doc, "review_models" if "chains" not in doc else "review_models", shared, now=NOON)
+        return ch.chain_state(doc, "review_models", shared, now=NOON)
     finally:
-        if held: held.close()
+        if held:
+            held.close()
 
 
 @pytest.mark.parametrize("doc", [GROK_V1, GROK_V2], ids=["v1", "v2"])

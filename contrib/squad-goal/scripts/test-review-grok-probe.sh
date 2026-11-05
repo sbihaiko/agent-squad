@@ -52,10 +52,10 @@ reset; echo "$old" > "$M"; export GROK_SLEEP=6 GROK_MODE=402
 rev 8 fix/1-x >/dev/null & rp=$!; sleep 2; pkill -KILL -P $rp 2>/dev/null; kill -KILL $rp 2>/dev/null; wait $rp 2>/dev/null
 rev 9 fix/2-y >/dev/null; n=$(calls)
 [ "$n" = 1 ] && ok "5 killing only the holder keeps the lock: no second probe" || ko "5 holder killed: calls=$n"
-sleep 6; unset GROK_SLEEP; echo "$old" > "$M"; rev 9 fix/2-y >/dev/null
+sleep 6; unset GROK_SLEEP; echo "$old" > "$M"; rm -f "$T/st/review-"*; rev 9 fix/2-y >/dev/null
 [ "$(calls)" = 2 ] && ok "5b the lock frees when the last holder exits" || ko "5b after the child: calls=$(calls)"
 
-reset; export SG_GROK_LIMIT_TTL=2; echo "$old" > "$M"; rev >/dev/null; e1=$(cat "$M"); sleep 3; rev >/dev/null; e2=$(cat "$M")
+reset; export SG_GROK_LIMIT_TTL=2; echo "$old" > "$M"; rev >/dev/null; e1=$(cat "$M"); sleep 3; rm -f "$T/st/review-"*; rev >/dev/null; e2=$(cat "$M")
 [ "$(calls)" = 2 ] && [ "$e2" -gt "$e1" ] && ok "6 two expiry cycles renew twice" || ko "6 cycles: calls=$(calls) $e1 $e2"
 unset SG_GROK_LIMIT_TTL
 

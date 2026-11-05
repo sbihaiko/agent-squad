@@ -264,7 +264,7 @@ capraw() { local c w
   # setpgrp resets the environment, so PATH travels as an argument; <&0 keeps the prompt on stdin (a background job reads /dev/null);
   # 3>&- so neither the model nor the watchdog holds the script's stdout: a caller that captures it would wait for them.
   perl -e 'setpgrp(0,0); $ENV{PATH}=$ARGV[0]; shift; exec @ARGV or exit 127' "$PATH" "$@" <&0 3>&- 9>&- & c=$!
-  ( sleep "$tmo"; kill -TERM -"$c" 2>/dev/null; sleep 2; kill -KILL -"$c" 2>/dev/null ) 2>/dev/null 3>&- 9>&- & w=$!
+  ( sleep "$tmo"; kill -TERM -"$c" 2>/dev/null; sleep 2; kill -KILL -"$c" 2>/dev/null ) 2>/dev/null 3>&- 9>&- 8>&- & w=$!   # fd 8 is the grok probe lock: the watchdog outlives a killed review and must not hold it (#1417)
   # cap() kills this wait when the head moves; the model's group is a different one, so pass it on, and take the watchdog along.
   trap 'kill -TERM -"$c" 2>/dev/null; pkill -P $w 2>/dev/null; kill $w 2>/dev/null' TERM
   wait $c 2>/dev/null; local r=$?; pkill -P $w 2>/dev/null; kill $w 2>/dev/null; wait $w 2>/dev/null
@@ -296,6 +296,9 @@ python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_SHARED/codex-limited"
 tries=$(jq -r '.model_retry_budget // 2' "$cfg"); prev=""
 tbound=$(jq -r '.review_timeout_bound // 3' "$cfg"); tomit=$(jq -r '.review_timeout_omit_seconds // 21600' "$cfg")
 streak() { python3 "$(dirname "$0")/review-timeouts.py" "$SG_STATE/review-timeouts.json" "$@" --bound "$tbound" --window "$tomit"; }   # omitted|timeout|clear <model>: the timeout streak of one review model (#749)
+# the grok-limited marker is fresh for SG_GROK_LIMIT_TTL, then one review probes grok under a kernel lock on fd 8 (#1417, grokmark.py)
+gm() { python3 "$(dirname "$0")/grokmark.py" "$@"; }
+gclock() { date -r "$1" '+%F %T'; }
 omit_say() { local line; line=$(printf 'MODEL_OMIT %s %s on branch %s: %s.' "${chainname:-review}" "$m" "$bm" "$1")
   printf '%s\n' "$line" >&2; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; printf '%s\n' "$line" > "$(sg_cq_status "$iss" "momit$$-$ms")"; }
 # A branch pass may pin the review to one model and one try (SG_REVIEW_CHAIN_DEPTH): an old branch may not
@@ -350,7 +353,7 @@ eligible() { local m=$1 rt rn
   [ -n "$rt" ] || return 1   # no row: the model is not reachable, so the leash never counts it
   case $rn in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && return 1;; esac
   case $rn in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && return 1;; esac
-  case $rn in grok) [ -e "$SG_SHARED/grok-limited" ] && return 1;; esac
+  case $rn in grok) [ "$(gm state "$SG_SHARED" | cut -d' ' -f1)" = fresh ] && return 1;; esac   # an expired marker leaves grok reachable: one review probes it
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
   may_run review_models "$m" || return 1
   streak omitted "$m" >/dev/null && return 1
@@ -371,8 +374,9 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
   # until the reset the error itself names, instead of spending one dead try per review round
   case $runner in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && continue;; esac
-  # a spent grok balance (402) has no reset: grok is skipped until the owner tops it up and removes the marker (#622)
-  case $runner in grok) [ -e "$SG_SHARED/grok-limited" ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"; continue; };; esac
+  # a grok 402 marker is fresh for SG_GROK_LIMIT_TTL (#1417): a fresh one skips grok and names the next probe
+  case $runner in grok) read -r gs gu <<< "$(gm state "$SG_SHARED")"
+    [ "$gs" = fresh ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; the next probe is after %s.\n" "$m" "$bm" "$(gclock "$gu")" > "$(sg_cq_status "$iss" "mquota$$-$ms")"; continue; };; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
@@ -380,6 +384,16 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on branch %s: outside its window in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mhours$$-$ms")"; continue; }
   same "$m" "$author" && { printf "MODEL_SELF review %s skipped on branch %s: it wrote this branch, and another reviewer is reachable.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mself$$-$ms")"; continue; }
   om=$(streak omitted "$m") && { omit_say "$om"; continue; }
+  # an expired marker: exactly one review tries grok. The lock is on fd 8, which the grok try and its children inherit (capraw keeps it), so it
+  # outlives a killed review while grok runs; the marker is read again under the lock.
+  exec 8>&-; groklock=""
+  case $runner in grok) if [ -e "$SG_SHARED/grok-limited" ]; then
+      exec 8>>"$SG_SHARED/grok-probe.lock"
+      if gm lock 8; then read -r gs gu <<< "$(gm state "$SG_SHARED")"; [ "$gs" = fresh ] || groklock=1; else gs=probing; fi
+      if [ -z "$groklock" ]; then exec 8>&-
+        [ "$gs" = fresh ] && sa="the next probe is after $(gclock "$gu")" || sa="another review is probing grok now"
+        printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; %s.\n" "$m" "$bm" "$sa" > "$(sg_cq_status "$iss" "mquota$$-$ms")"; continue; fi
+    fi;; esac
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
   echo "$m" > "$SG_STATE/review-$pr.model"   # the model this review tries now: the hub reads it for the pass that holds the child (#598)
@@ -472,11 +486,13 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$e" > "$SG_SHARED/agy-limited"; fi
       printf "MODEL_QUOTA review %s skipped until %s on branch %s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$bm" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
       rc=99; break; fi
-    # grok 402 "usage balance exhausted" (#622): account-wide, no reset in the answer, so the marker holds until the owner removes it
+    # grok 402 "usage balance exhausted" (#622): account-wide. The marker holds its write epoch and expires after SG_GROK_LIMIT_TTL (#1417);
+    # a 402 renews the epoch, and a real answer from a probe removes the marker, both under the probe lock.
     case $runner in grok) if grep -qE "402 Payment Required|balance exhausted" "$e" "$o" 2>/dev/null; then
-      date +%s > "$SG_SHARED/grok-limited"
-      printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
-      rc=99; break; fi;; esac
+      gm renew "$SG_SHARED"; read -r gs gu <<< "$(gm state "$SG_SHARED")"
+      printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; the next probe is after %s.\n" "$m" "$bm" "$(gclock "$gu")" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
+      rc=99; break; fi
+      [ -n "$groklock" ] && [ $rc = 0 ] && gm clear "$SG_SHARED";; esac
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$-$ms-$i")"; timed_out=1; tm=$(streak timeout "$m"); [ -n "$tm" ] && omit_say "$tm"; break; }
     # the verdict goes on line 1 in the exact form the loop parses (review.sh, the loop's own passes and hub.py read line 1): the model may
     # have written it bold, in another case, or after a paragraph of narration -- revformat.py owns that normalization.
