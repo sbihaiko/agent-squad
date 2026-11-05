@@ -66,7 +66,7 @@
 # at the tip, `SG_WAVE_TIP_GATES` (the fast gate by default, run in the wave's throwaway clone with the checkout's python),
 # carries the same rule and is the one that runs today. When that check is red, `land` runs each child's own suite again
 # against the tip, the last entrant first (`SG_WAVE_CHILD_GATES`; the default is the shell suite of each script that child's
-# commit changes). The first child whose suite fails leaves the wave -- its commits are dropped from the tip, its issue goes
+# commit changes), then its Python test delta through the gate lock and slots (`SG_WAVE_CHILD_PYTEST`, #1409). The first child whose suite fails leaves the wave -- its commits are dropped from the tip, its issue goes
 # back to the queue -- and the wave without it lands. A red tip no child's suite names is a landing that failed, as before.
 # Exit: 0 entered (or the wave branch was cut, or the wave landed), 1 not entered (requeued after a failed gate, a conflict or a
 # refused push; held where it stands when the review did not approve the child), 2 a bad call or a wave branch that is not there.
@@ -676,6 +676,26 @@ held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([
 # name it). A 75 without that line is the check's own hold deadline, which is a failed check, not a hold (#955).
 waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* waited [0-9.]+s for caps\.gates'; }
 
+# child_pytest <clone> <from> <to> <issue> (#1409): the Python test delta of one child's change, run against the wave tip in the
+# clone, through gate.sh: under the gate lock and holding gate slots, never beside them. `SG_WAVE_CHILD_PYTEST` replaces the
+# command (SG_WAVE_CHILD, _FROM and _TO are set); the default selects the files the child's commit reaches (squad.testselect, as
+# the fast gate does), read in a detached tree at the child's commit, and runs them in the clone. An empty selection passes: the
+# child changed nothing pytest covers. Exit 0: passed; 1: failed; 9: the gate lock or slots were not free, so nothing ran.
+child_pytest() {
+  local S=$1 from=$2 to=$3 iss=$4 cmd out grc
+  if [ -n "${SG_WAVE_CHILD_PYTEST:-}" ]; then cmd=$SG_WAVE_CHILD_PYTEST
+  else
+    cmd='sel=$(d=$(mktemp -d) && /usr/bin/git worktree add -q --detach "$d" "$SG_WAVE_CHILD_TO" && (cd "$d" && "$SG_WAVE_PY" -m squad.testselect --stage wave-tip --base "$SG_WAVE_CHILD_FROM"); r=$?; /usr/bin/git worktree remove --force "$d" 2>/dev/null; exit $r) || sel="all: the selector failed"
+case $sel in none:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;; esac
+"$SG_WAVE_PY" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-2}" -m "not heavy" "$@"'
+  fi
+  out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_WAVE="${run:-}" SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
+  [ $grc = 73 ] && held_by "$out" >/dev/null && return 9
+  [ $grc = 75 ] && waited_out "$out" && return 9
+  [ $grc = 0 ] && return 0
+  printf '%s\n' "$out" | tail -5 >&2; return 1
+}
+
 # child_gate <clone> <from> <to> <issue>: one child's own suite against the wave tip, run in the clone. `SG_WAVE_CHILD_GATES`
 # replaces it (with SG_WAVE_CHILD the issue, SG_WAVE_CHILD_FROM/_TO the child's commit range); the default is the shell suite
 # test-<script>.sh of every script the child's commit changes, as fast-gate.sh reads a changed script. Exit 0: it passed.
@@ -686,7 +706,8 @@ child_gate() {
     s="$S/contrib/squad-goal/scripts/test-$n.sh"; [ -f "$s" ] || continue
     hm=$(mktemp -d); (cd "$S" && env $(env | sed -n 's/^\(SG_[A-Za-z0-9_]*\)=.*/-u \1/p' | tr '\n' ' ') HOME="$hm" bash "$s") || rc=1; rm -rf "$hm"
   done
-  return $rc
+  [ $rc = 0 ] || return $rc
+  child_pytest "$S" "$from" "$to" "$iss"
 }
 
 # wave_check <clone> <w>: the wave tip's check, and, when it is red, the child that broke it. Each child's own suite runs
@@ -696,7 +717,7 @@ child_gate() {
 # held past its bounded wait; 5: the check is unproven (spec 1163, #1174), so the wave lands with its obligation and no child is
 # blamed. The gate's word decides: pass and unproven admit, fail is the red path.
 wave_check() {
-  local S=$1 w=$2 rc found cx clog oc of
+  local S=$1 w=$2 rc crc found cx clog oc of
   [ -n "$tipgate" ] || return 0
   of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
@@ -726,7 +747,9 @@ wave_check() {
     found=""; while read -r sha; do
       [ -n "$sha" ] || continue
       touch "$SG_STATE/locks/single-wland/round" 2>/dev/null   # each child's own suite is a gate round too (#1290)
-      child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")" || { found=$sha; break; }
+      child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")"; crc=$?
+      [ $crc = 9 ] && { rm -f "$clog" "$of"; return 3; }   # the child's pytest found the gate lock or slots busy: nothing ran, no child is blamed (#1409)
+      [ $crc = 0 ] || { found=$sha; break; }
     done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)   # newest first: the last entrant is tried first
     [ -n "$found" ] || { rm -f "$of"; echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause (the check's own output is $clog)"; return 1; }
     cx=$(child_of "$S" "$found")
