@@ -1193,6 +1193,32 @@ def test_the_drawn_marks_are_small_and_agree_with_the_payload(hub, board, tmp_pa
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_page_applies_the_payloads_outline_rather_than_a_literal(hub, board, tmp_path):
+    """#1432: the outline is the payload's own `mark.outline`, never a number the view keeps. The fixture serves a value
+    no default names, so a hard-coded 1.5 fails here."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["all"]
+    chart["mark"]["outline"] = 2.75
+
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", _lt_chart(hub, tmp_path, "lt-outline.js", chart), re.S).group(1)
+    widths = [float(_svg_attr(tag, "stroke-width")) for tag in re.findall(r"<circle [^>]*>", plot)]
+    assert widths and all(width == 2.75 for width in widths), f"the page ignores the payload's outline: {widths}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_chart_without_mark_keeps_the_outline_it_had(hub, board, tmp_path):
+    """#1432: `mark` is new on the wire, so an older or cached chart carries none. The page then keeps its 1.5 px ring
+    instead of drawing `stroke-width=undefined`, which the browser drops."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = hub.flow_lead()["lead"]["control"]["all"]
+    del chart["mark"]
+
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", _lt_chart(hub, tmp_path, "lt-no-mark.js", chart), re.S).group(1)
+    widths = [_svg_attr(tag, "stroke-width") for tag in re.findall(r"<circle [^>]*>", plot)]
+    assert widths and all(width == "1.5" for width in widths), f"a chart without `mark` loses the ring: {widths}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(hub, board, tmp_path):
     """#1331: the tooltip names the card or the cluster and shows the lead time, the closed dates and each dot's column
     stack; the cluster carries its count, cards, date range and lead-time range in the payload."""

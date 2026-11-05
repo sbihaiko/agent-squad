@@ -165,5 +165,5 @@ def test_the_served_hub_page_draws_the_lead_time_marks_small(tmp_path):
     assert sorted(seen["counts"]) == [1, 2], f"the served page does not hold a lone card and a cluster: {seen['counts']}"
     radii = sorted(mark["r"] for mark in seen["marks"])
     assert radii == [3, 5], f"the served page does not draw a 3 px lone card and a 5 px cluster: {seen['marks']}"
-    assert [mark["stroke"] for mark in seen["marks"]] == [1.5, 1.5], \
-        f"the served page's outlines are not 1.5 px: {seen['marks']}"
+    assert [mark["stroke"] for mark in seen["marks"]] == [seen["payload"]["outline"]] * len(seen["marks"]), \
+        f"the served page does not apply the payload's outline {seen['payload']['outline']}: {seen['marks']}"

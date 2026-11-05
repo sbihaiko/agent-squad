@@ -472,6 +472,23 @@ def test_the_marks_are_small_and_the_payload_names_their_size(lt):
     assert lone["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}
 
 
+# #1432: every chart the module builds carries the same size dict, whatever names its window: the control chart over all
+# closed cards, one over a timeframe, and one whose marks cluster into a fit range. A path that drops `mark` would leave
+# the page to invent its own sizes.
+@pytest.mark.parametrize("kind", ["all", "timeframe", "fit"])
+def test_every_chart_kind_carries_the_one_mark_size_dict(lt, kind):
+    items = [_closed(n, 5, days_ago=2) for n in (1, 2)]
+    if kind == "all":
+        chart = _chart(lt, items)
+    elif kind == "timeframe":
+        chart = _chart(lt, items, timeframe=30)
+    else:
+        chart = _chart(lt, [_at(n, NOW - timedelta(hours=h)) for n, h in ((1, 5), (2, 4), (3, 3))], timeframe=30)
+        assert chart["clusters_fit"], "the fit path drew no clusters_fit"
+
+    assert chart["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}, kind
+
+
 def test_the_cluster_radius_never_grows_with_its_count(lt):
     few = _chart(lt, [_closed(n, 5, days_ago=2) for n in range(1, 4)])["clusters"][0]["r"]
     many = _chart(lt, [_closed(n, 5, days_ago=2) for n in range(1, 13)])["clusters"][0]["r"]
