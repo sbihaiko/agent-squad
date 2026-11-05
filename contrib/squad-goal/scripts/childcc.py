@@ -180,6 +180,13 @@ def reviewed(rd, child, n, wt, rv):
     finally: caps_cmd("release", "reviews", holder); HELD.update(step="enter", rk=None); publish()
     out = (e.stdout + e.stderr).strip()
     if out: print(f"CHILD REVIEW {rd.name} {child}: {out}", flush=True)
+    if e.returncode == 6:   # #1406: no change past its base, so nothing to review: the issue is requeued at once with the child's reason, never three hold passes
+        k = review_paths(wt)[0].name[len("review-"):-len(".md")]
+        try: why = (pathlib.Path(st) / f"reason-{k}").read_text().strip().splitlines()[0]
+        except (OSError, IndexError): why = "the child made no change"
+        subprocess.run(["bash", wave, "requeue", str(n), f"the child made no change past its base in run {rd.name}: {why}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})
+        record_requeue(rd.name, n, head)   # the head the child was requeued on, so the pass waits for a new one (ADR-0149)
+        return "nochange"
     if e.returncode != 0: rv.unlink(missing_ok=True)
     return True
 def review_paths(wt):   # the verdict and the sha the entry reads, named by the child's own branch (review.sh's rule)
@@ -283,7 +290,9 @@ def enter(rd, child, n, d, approved=False, own=False):
         if fix_running(fx): FIX_WAIT.add(f"{rd.name} {child}")   # a live fix run bounds its own child, so the deferral deadline never counts it (#931)
         return False, f"CHILD FIX WAIT #{n} ({rd.name} {child}): its fix run {pathlib.Path(fx.read_text().strip()).name} has no verdict yet", False
     if not approved and own: return False, f"CHILD RUN-OWNED #{n} ({rd.name} {child}): its run approved no head for it; delivery holds", False
-    if not approved and not reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}"): return False, "", None   # no review slot: the child waits, and the landing waits for it
+    rvd = False if approved else reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}")
+    if rvd == "nochange": return False, f"CHILD NO CHANGE #{n} ({rd.name} {child}): nothing to review past its base; the issue is requeued", True
+    if not approved and not rvd: return False, "", None   # no review slot: the child waits, and the landing waits for it
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
     if "WAVE REQUEUE" in out or "WAVE STOP" in out: record_requeue(rd.name, n, head_of(wt))   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue

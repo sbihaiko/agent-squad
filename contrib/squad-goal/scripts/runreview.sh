@@ -9,6 +9,8 @@
 # verdict. The run tries again within the gate's deadline, and holds the child when the deadline runs out; 1 CHANGES or
 # BLOCKED: the issue goes back to the queue at once (wave.sh requeue) with every blocking finding, and the issue's
 # `requeue` fact holds the reviewed head (ADR-0149), so childcc never requeues it a second time. The run holds the child.
+# 6 "no change" (#1406): the child's head equals its base, so there is nothing to review; the issue is requeued once with the
+# child's reason (no review retry, no model call), and the run exits 1.
 # 4 "fix" (#570): the run offers a fix round (SQUAD_REVIEW_FIX=1: it holds the grant of the child's next entry) and the review
 # is CHANGES whose findings are new or changed. Nothing is requeued; the run fixes the child in its worktree and reviews the new
 # head again (SQUAD_REVIEW_ROUND names the round). Findings a round left as they were count toward the stall (revformat.py,
@@ -23,7 +25,7 @@
 # Stdout is the review (the run record keeps it as the gate's findings).
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/env.sh"; . "$here/caps.sh"; . "$here/ghcall.sh"
-run=$1 child=$2 iss=$3; NONE=3 FIX=4 AGAIN=5
+run=$1 child=$2 iss=$3; NONE=3 FIX=4 AGAIN=5 NOCHANGE=6
 { [ -n "$run" ] && [ -n "$child" ]; } || { echo "usage: runreview.sh <run> <child> <issue>" >&2; exit 2; }
 [ -n "$iss" ] || { echo "RUNREVIEW $run $child: no issue, no review here" >&2; exit $NONE; }
 [ -e "$SG_STATE/auto/wave-$run" ] || { echo "RUNREVIEW $run $child: the run has no wave, no review here (#$iss)" >&2; exit $NONE; }
@@ -36,6 +38,19 @@ trap 'sg_caps release reviews "$holder" >/dev/null 2>&1' EXIT
 out=$(bash "$here/childreview.sh" "$run" "$iss" 2>&1); rc=$?
 printf '%s\n' "$out" >&2
 md="$SG_STATE/review-$key.md"
+# #1406: exit 6 is a child with no change past its base. Its review input is empty and never changes, so it is no "try again":
+# the issue is requeued once at this head with the child's own reason, and the run exits 1 (no review slot or model spent).
+if [ "$rc" = $NOCHANGE ]; then
+  rb9=$(printf '%s\n' "$out" | sed -n 's/.*no change past \([0-9a-f]*\),.*/\1/p' | head -1)
+  why=$(head -1 "$SG_STATE/reason-$key" 2>/dev/null); [ -n "$why" ] || why="the child made no change"
+  if [ "$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" requeued "$SG_REPO#$iss" "$run" 2>/dev/null)" = "$head" ]; then
+    echo "RUNREVIEW $run $child: ${head:0:9} was already requeued, no change to review (#$iss)" >&2
+  else
+    SG_REQUEUE_RUN=$run bash "$here/wave.sh" requeue "$iss" "the child made no change past ${rb9:-its base} in run $run: $why" >&2
+    SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" requeue "$SG_REPO#$iss" "$run" "$head" >/dev/null 2>&1   # ADR-0149
+  fi
+  exit 1
+fi
 [ "$rc" = 0 ] && [ -s "$md" ] || { echo "RUNREVIEW $run $child: no verdict for ${head:0:9} (exit $rc), try again (#$iss)" >&2; exit $AGAIN; }
 cat "$md"
 v=$(head -1 "$md" | tr -d '*'); v=${v#VERDICT: }; v=${v%% *}
