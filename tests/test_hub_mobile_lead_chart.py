@@ -151,6 +151,9 @@ def test_the_drawn_legend_names_who_is_who_and_each_reference_value():
         assert name in out["legend"] and value in out["legend"], (name, value)
     assert "mltsolid" in out["legend"] and "mltdash" in out["legend"] and "mltdot" in out["legend"]
     assert "lttg" not in out["svg"], "the phone chart draws the desktop gutter"
+    assert "Lead time (log)" in out["svg"] and "Lead time (linear)" not in out["svg"], "the axis title is the desktop's log title"
+    served = {k: v for k, v in CHART.items() if k != "scale"}
+    assert "Lead time (log)" in run_js(f"mltChart({json.dumps(served)})")["svg"], "the title reads a field the route no longer serves"
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
