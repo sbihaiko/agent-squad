@@ -2282,11 +2282,33 @@ def closed_since(items, now_ts, window_secs):
         if ts is not None and since <= ts <= now_ts: out += 1
     return out
 
+def arrivals_fact(items, now_ts, window_secs):
+    """The two arrival rows the card draws under the hero figure, both over the same window: Bugs counts every card
+    carrying `bug` or any label beginning with `loop-bug` (the prefix rule the loop itself dispatches by, ADR-0146, so
+    a loop defect is never missed), and Loop-bugs counts the prefix alone, always a subset of Bugs and never subtracted
+    from it. Each row carries its count and its share over every card opened in the window, so the card reads `7 of 10
+    opened`.
+
+    A row counts what came in, not what is still open: a card opened and closed inside the window is an arrival. Both
+    rows read `o`, the creation stamp the board cache already carries on every card (#1361); the snapshot gains no
+    field for them, and a card with no readable stamp is never invented as an arrival. A share over a zero denominator
+    is None: `0 of 0` is worded from the count and the denominator, never from a ratio over nothing."""
+    since, opened = now_ts - window_secs, []
+    for i in items or []:
+        ts = _close_instant(i.get("o"))
+        if ts is not None and since <= ts <= now_ts: opened.append(i)
+    total = len(opened)
+    def row(n): return {"n": n, "of": total, "share": round(n / total, 3) if total else None}
+    def loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
+    bugs = sum(1 for i in opened if "bug" in (i.get("l") or []) or loop_defect(i))
+    return {"opened": total, "bugs": row(bugs), "loop_bugs": row(sum(1 for i in opened if loop_defect(i)))}
+
 def throughput_fact(now=None):
     """How fast the board is closing cards over the last window: its close count, the six rolling slots it is compared
     with (the newest is the window), which finished slots are available, one median and the bar maximum over those, the
     trend word and the age of the oldest source read. The window is the last four hours back from the sampler's clock,
-    never a calendar day.
+    never a calendar day. Under the hero figure the fact carries the two arrival rows — Bugs and Loop-bugs — counting
+    cards opened in the same window by the creation stamps the board cache already carries (#1361).
 
     A finished slot is unavailable when it ends before the earliest close stamp of the two sources; it enters neither the
     median nor the maximum. A slot with no close inside an available span is a measured zero. The window's own figure
@@ -2319,6 +2341,7 @@ def throughput_fact(now=None):
             ([board_cache.get("t") or 0] if items else [])
     oldest = min((r for r in reads if r), default=0) or None
     return {"window_secs": w, "window": window_n, "today": window_n,   # `today` is the key the page draws until #1363 moves the card
+            "arrivals": arrivals_fact(items, now_ts, w),   # the Bugs and Loop-bugs rows, off the cache's `o` stamps alone
             "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
             "max": max(avail + [window_n]), "trend": trend,
             "as_of": oldest, "age_secs": now_ts - oldest if oldest else None}
