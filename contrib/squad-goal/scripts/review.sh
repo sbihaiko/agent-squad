@@ -372,6 +372,85 @@ author=${SG_REVIEW_AUTHOR:-$(head -1 "$SG_STATE/author-$pr" 2>/dev/null)}
 same() { [ -n "$2" ] && [ "$(route_of "$1" | cut -f3)" = "$(route_of "$2" | cut -f3)" ]; }   # one model when the registry gives one wire string (ADR-0147)
 others=0; for m in $chain; do same "$m" "$author" || { eligible "$m" && others=$((others+1)); }; done
 [ "$others" -gt 0 ] && [ "$others" -lt "$reachable" ] && reachable=$others || author=""
+# dispatch_run <prompt> <out> <err>: one try of the route in rroute/runner/wire/tools, at effort of "$m" and timeout "$tmo".
+# The chain walk and the shadow review (#1403) both call it, so a runner's command shape has one writer. The prompt and
+# the two files are local, so a caller's own names are never overwritten (bash resolves them in direct() and cap() too).
+dispatch_run() { local p=$1 o=$2 e=$3
+    case $rroute:$runner in
+      # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
+      # otherwise load into this call and pay tens of thousands of input tokens of tool schemas before a line of the review.
+      # A reviewer with no tools (#504): one direct call to the gateway, thinking off. `claude -p` sends nothing that turns a gateway
+      # model's thinking off, and DeepSeek V4.1 Flash then thinks 32k tokens a turn and never answers; off, it answers in
+      # seconds. The answer is reshaped into the CLI's JSON, so the checks and the token ledger below read one shape.
+      direct:*|gateway:*|cli:claude) if [ "$tools" = 0 ]; then
+          jq -Rs --arg m "$wire" '{model:$m, max_tokens:8000, thinking:{type:"disabled"}, messages:[{role:"user", content:.}]}' < "$p.nt" > "$p.body"
+          direct "$p.body"; r=$?
+          # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
+          # complaint, instead of losing the whole review to MODEL_FORMAT. Both calls' tokens are counted.
+          if [ $r = 0 ] && jq -er 'select(.is_error|not) | .result' "$o" > "$o.t" 2>/dev/null \
+             && ! frem=$(answer_check "$o.t" "$o.n") && [ -n "$frem" ]; then
+            mv "$o" "$o.1"
+            jq --rawfile a "$o.t" --arg f "$(repair_ask "$frem")" '.messages += [{role:"assistant", content:$a}, {role:"user", content:$f}]' "$p.body" > "$p.body2"
+            direct "$p.body2"; r=$?
+            jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
+          fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
+        else
+          cap claude -p --output-format json --strict-mcp-config --model "$wire" --effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
+        fi;;
+      # grok's reasoning effort defaults to high and cannot be disabled; unset, a review ran minutes long and timed out (479-623 s
+      # medians, #1848). The call takes the chain entry's effort, and the fast lane takes low as the claude leg does; an entry
+      # that names none falls to effort_of's default, so a shipped entry always names one (tests/test_modelreg.py pins it).
+      cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --reasoning-effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --prompt-file "$p" --output-format json --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
+      cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
+      cli:codex) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
+           --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
+      *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; : > "$e"; fmt=1; lim=$i; false > "$o";;   # no stale stderr, no second MODEL_FAIL, no more tries for a model that never ran
+    esac; }
+# #1403: a sampled shadow review of a published grok verdict. The next chain entry reads the same head and the same
+# prompt; its answer is never published, and one ledger line (shadow: true) carries it, so review-grok-measure.py can
+# count the grok Blocking findings it would have missed. The source is the live loop only: every grok verdict with a
+# Blocking finding until 30 samples, then one in four, and never more than 10 shadow runs a day. A shadow never moves
+# this review's outcome: any failure ends it silently, and its spend is logged as the review's own token line.
+shadow_run() { local gm=$1 gb=${2:-0} sm seen=0 found="" so="$out.$$.shadow" se="$out.$$.shadow.err" sc sverd stu sblk sdebt
+  python3 "$(dirname "$0")/review-shadow.py" decide "$SG_STATE/review-ledger.jsonl" --blocking "$gb" >/dev/null 2>&1 || return 0
+  for sm in $chain; do
+    if [ $seen = 0 ]; then [ "$sm" = "$gm" ] && seen=1; continue; fi
+    same "$sm" "$author" && continue
+    eligible "$sm" || continue
+    found=$sm; break
+  done
+  [ -n "$found" ] || return 0
+  sm=$found; m=$sm
+  IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
+  [ -n "$rroute" ] || return 0
+  eff=$([ -n "$lane" ] && echo low || effort_of "$m")
+  tmo=$(row_of "$m" 6); [ -n "$tmo" ] || tmo=$(jq -r --arg m "$m" "$bare"' (.review_timeout_seconds_by_model // {}) as $t | $t[$m] // ([$t | to_entries[] | select((.key|bare) == ($m|bare)) | .value] | first) // .review_timeout_seconds // 480' "$cfg")
+  [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT
+  rm -f "$so" "$se"
+  dispatch_run "$p" "$so" "$se"
+  [ -s "$so" ] || return 0
+  # the tokens of a shadow call are spend like any other: one line, under the review it shadows
+  case $rroute:$runner in
+    direct:*|gateway:*|cli:claude) stu=$(jq -r 'select(type=="object" and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens // 0)] | @tsv' "$so" 2>/dev/null);;
+    cli:codex) stu=$(awk 'f{gsub(/[^0-9]/,""); if($0!=""){print; exit}} /tokens used/{f=1; sub(/.*tokens used/,""); gsub(/[^0-9]/,""); if($0!=""){print; exit}}' "$se" 2>/dev/null); stu="${stu:-0}	0	0";;
+  esac
+  if [ -n "$stu" ]; then printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "review:$pr#shadow" "$m" "$stu" >> "$SG_STATE/token-usage.tsv"
+  else printf "%s\t%s\t%s\t0\t0\t0\tno-usage\n" "$(date +%FT%T)" "review:$pr#shadow" "$m" >> "$SG_STATE/token-usage.tsv"; fi
+  # the direct, gateway and claude lanes write the answer in a JSON envelope, exactly as the published path reads it:
+  # unwrap .structured_output or .result before the shape check, or the answer's first line is `{` and no line is
+  # recorded (and a raw envelope's findings are invisible to the summary). A shadow outside the shape is no sample.
+  case $rroute:$runner in
+    direct:*|gateway:*|cli:claude) jq -r 'if (.structured_output|type)=="object" then (.structured_output|tojson) else .result end' "$so" > "$so.r" 2>/dev/null && mv -f "$so.r" "$so"; rm -f "$so.r";;
+  esac
+  if ! answer_check "$so" "$so.n" >/dev/null 2>&1; then rm -f "$so.n"; return 0; fi
+  [ -s "$so.n" ] && mv -f "$so.n" "$so"
+  sverd=$(head -1 "$so" 2>/dev/null)
+  case "$sverd" in "VERDICT: APPROVE"|"VERDICT: CHANGES") ;; *) return 0;; esac
+  sc=$(python3 "$(dirname "$0")/revformat.py" --summary "$so" 2>/dev/null)
+  sblk=$(printf '%s' "$sc" | sed -n 's/.*blocking=\([0-9][0-9]*\).*/\1/p'); sdebt=$(printf '%s' "$sc" | sed -n 's/.*debt=\([0-9][0-9]*\).*/\1/p')
+  python3 "$(dirname "$0")/review-shadow.py" record "$SG_STATE/review-ledger.jsonl" --key "$pr" --head "$head" --model "$m" \
+    --verdict "$sverd" --blocking "${sblk:-0}" --debt "${sdebt:-0}" --effort "$eff" 2>/dev/null
+  return 0; }
 used=0
 for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
@@ -411,36 +490,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
   [ -e "$p.orig" ] && cp "$p.orig" "$p"; rep=0; lim=$tries   # rep=1: this model had its one repair try (#625); the prompt goes back to the plain one
   i=0; while [ "$i" -lt "$lim" ]; do i=$((i+1))
     rm -f "$o"; t1=$(date +%s); bad=""
-    case $rroute:$runner in
-      # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
-      # otherwise load into this call and pay tens of thousands of input tokens of tool schemas before a line of the review.
-      # A reviewer with no tools (#504): one direct call to the gateway, thinking off. `claude -p` sends nothing that turns a gateway
-      # model's thinking off, and DeepSeek V4.1 Flash then thinks 32k tokens a turn and never answers; off, it answers in
-      # seconds. The answer is reshaped into the CLI's JSON, so the checks and the token ledger below read one shape.
-      direct:*|gateway:*|cli:claude) if [ "$tools" = 0 ]; then
-          jq -Rs --arg m "$wire" '{model:$m, max_tokens:8000, thinking:{type:"disabled"}, messages:[{role:"user", content:.}]}' < "$p.nt" > "$p.body"
-          direct "$p.body"; r=$?
-          # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
-          # complaint, instead of losing the whole review to MODEL_FORMAT. Both calls' tokens are counted.
-          if [ $r = 0 ] && jq -er 'select(.is_error|not) | .result' "$o" > "$o.t" 2>/dev/null \
-             && ! frem=$(answer_check "$o.t" "$o.n") && [ -n "$frem" ]; then
-            mv "$o" "$o.1"
-            jq --rawfile a "$o.t" --arg f "$(repair_ask "$frem")" '.messages += [{role:"assistant", content:$a}, {role:"user", content:$f}]' "$p.body" > "$p.body2"
-            direct "$p.body2"; r=$?
-            jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
-          fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
-        else
-          cap claude -p --output-format json --strict-mcp-config --model "$wire" --effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
-        fi;;
-      # grok's reasoning effort defaults to high and cannot be disabled; unset, a review ran minutes long and timed out (479-623 s
-      # medians, #1848). The call takes the chain entry's effort, and the fast lane takes low as the claude leg does; an entry
-      # that names none falls to effort_of's default, so a shipped entry always names one (tests/test_modelreg.py pins it).
-      cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --reasoning-effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --prompt-file "$p" --output-format json --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
-      cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
-      cli:codex) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
-           --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
-      *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; : > "$e"; fmt=1; lim=$i; false > "$o";;   # no stale stderr, no second MODEL_FAIL, no more tries for a model that never ran
-    esac
+    dispatch_run "$p" "$o" "$e"
     rc=$?; exec 8>&-   # the grok try is over: fd 8 (the probe lock) closes, so later subprocesses never hold it (#1417)
     # #1385: capraw decides the deadline inside the call and returns 142 from there. Nothing here reclassifies a green
     # answer: the time cap() spends polling, and both calls of a no-tools repair, are not this answer's own span.
@@ -532,7 +582,10 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       { echo "VERDICT: APPROVE"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
     fi
     # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope
-    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; printf '%s\n' "$m" > "$o.vm" && mv -f "$o.vm" "$SG_STATE/review-$pr.verdict-model"; ledger "$m" "$eff"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"; exit 0; }
+    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; printf '%s\n' "$m" > "$o.vm" && mv -f "$o.vm" "$SG_STATE/review-$pr.verdict-model"; ledger "$m" "$eff"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"
+      # a published grok verdict may be shadow-reviewed by the next chain entry (#1403); it never changes this outcome
+      [ "$runner" = grok ] && shadow_run "$m" "$(python3 "$(dirname "$0")/revformat.py" --summary "$out" 2>/dev/null | sed -n 's/.*blocking=\([0-9][0-9]*\).*/\1/p')"
+      exit 0; }
   done
   [ "$timed_out" = 1 ] || streak clear "$m"
   # #925: a timed-out try is no model failure. The MODEL_TIMEOUT above already names what happened; a MODEL_FAIL beside it
