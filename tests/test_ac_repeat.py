@@ -8,7 +8,6 @@ import pytest
 
 from squad import acrepeat as A
 from squad import record
-from squad.engine_errors import ResumeRefused
 from tests.flows import run_engine, scope_gate
 
 pytestmark = pytest.mark.anyio
@@ -87,14 +86,25 @@ async def test_a_passing_gate_between_the_failures_does_not_start_the_count_agai
     assert (v.verdict, v.exit_code) == ("needs-human", 10) and "ac_repeated" in v.reasons
 
 
-async def test_a_resume_of_a_refused_run_spends_no_round(tmp_path):
-    run = runs(tmp_path) / "run"
-    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, run, adapter={"repeat_last": True})
-    assert (await eng.run()).verdict == "needs-human"
-    again = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, run, adapter={"repeat_last": True})
-    with pytest.raises(ResumeRefused):
-        await again.resume()
-    assert actor_rounds(run) == 2
+async def test_a_stopped_run_resumed_on_refused_evidence_ends_without_a_round(tmp_path):
+    stopped = runs(tmp_path) / "run-b"
+    first = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, stopped, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
+    assert (await first.run()).verdict == "stopped"
+    refused = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run-a", adapter={"repeat_last": True})
+    assert (await refused.run()).verdict == "needs-human"
+    v = await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, stopped, adapter={"repeat_last": True}).resume()
+    assert (v.verdict, v.exit_code) == ("needs-human", 10)
+    assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
+    assert actor_rounds(stopped) == 1
+
+
+async def test_a_corrupt_sibling_record_does_not_stop_a_run_on_its_own_streak(tmp_path):
+    (runs(tmp_path) / "torn").mkdir(parents=True)
+    (runs(tmp_path) / "torn" / "record.jsonl").write_text('{"event": "outcome", "pos": 1\n{"partial')
+    v = await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run", adapter={"repeat_last": True}).run()
+    assert (v.verdict, v.exit_code) == ("needs-human", 10)
+    assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
+    assert actor_rounds(runs(tmp_path) / "run") == 2
 
 
 async def test_the_same_evidence_is_not_redispatched_into_a_new_run(tmp_path):
@@ -146,6 +156,15 @@ def test_a_different_criterion_is_a_different_finding():
 def test_the_order_of_findings_is_not_significant():
     one, two = "ac-verify:ac_failed:one", "ac-verify:ac_failed:two"
     assert A.fingerprint([one, two], {}) == A.fingerprint([two, one], {})
+
+
+def test_the_same_finding_on_another_item_gate_or_head_is_another_refusal():
+    fp = A.fingerprint(["ac-verify:ac_failed:one"], {})
+    base = A.digest(fp, "issue-1", "ac_gate", "h1")
+    assert base == A.digest(fp, "issue-1", "ac_gate", "h1")
+    assert base != A.digest(fp, "issue-2", "ac_gate", "h1")
+    assert base != A.digest(fp, "issue-1", "other_gate", "h1")
+    assert base != A.digest(fp, "issue-1", "ac_gate", "h2")
 
 
 def test_a_new_commit_starts_the_count_again():

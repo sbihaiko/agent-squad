@@ -18,7 +18,9 @@ fails (ADR-0134). Two opt-ins change that, each kept generic to this one executo
 
 `max_by: "task"` never reads the streak.
 """
-from squad import acrepeat, record
+import json
+
+from squad import acrepeat
 from squad.engine_errors import Defect
 from squad.runners.walk import walk_children
 from squad.stall import signature
@@ -55,7 +57,10 @@ class LoopRunner:
             outcome, reasons = "fail", []
         if st is not None and st.dropped:
             reasons = [*reasons, *(f"task_exhausted:{t}" for t in st.dropped)]
-        return ctx.finish(node, entry, sc, outcome, reasons, elapsed=ctx.clock() - t0, **extra)
+        done = ctx.finish(node, entry, sc, outcome, reasons, elapsed=ctx.clock() - t0, **extra)
+        if outcome == "needs-human" and extra.get("ac_fingerprint"):
+            remember_refusal(ctx, extra["ac_fingerprint"])
+        return done
 
 
 class _State:
@@ -86,7 +91,8 @@ class _State:
         head = ev["workspace"]["head"] if ev.get("workspace") else (heads[-1] if heads else self.ac.head)
         evidence = dict(ev.get("evidence") or {})
         fp = acrepeat.fingerprint(res.reasons, evidence)
-        self.ac_findings, self.ac_evidence, self.ac_digest = list(res.reasons), evidence, acrepeat.digest(fp)
+        self.ac_findings, self.ac_evidence = list(res.reasons), evidence
+        self.ac_digest = acrepeat.digest(fp, sc.item, child, head)
         return self.ac.failed(fp, head) or refused_elsewhere(ctx, self.ac_digest)
 
     def same_failure(self, reasons):
@@ -124,12 +130,32 @@ class _State:
         return "waves_stalled" if self.streak >= self.stall_after["count"] else None
 
 
+REFUSALS = "ac-refused.jsonl"
+
+
 def refused_elsewhere(ctx, digest):
-    """True when a sibling run in the same runs folder already ended needs-human on this evidence (#1380)."""
+    """True when a sibling run already ended needs-human on this evidence (#1380). Reads the refusal index, never a sibling record."""
     here = ctx.record.path.parent
-    return any(e["event"] == "outcome" and e.get("ac_fingerprint") == digest and e.get("outcome") == "needs-human"
-               for path in here.parent.glob("*/record.jsonl") if path.parent != here
-               for e in record.read(path))
+    return any(e["digest"] == digest and e["run"] != here.name for e in _refusals(here))
+
+
+def remember_refusal(ctx, digest):
+    here = ctx.record.path.parent
+    if any(e["digest"] == digest and e["run"] == here.name for e in _refusals(here)):
+        return
+    with _index(here).open("a") as out:
+        out.write(json.dumps({"digest": digest, "run": here.name}) + "\n")
+
+
+def _refusals(here):
+    path = _index(here)
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _index(here):
+    return here.parent.parent / REFUSALS
 
 
 def _last_reasons(events, task):
