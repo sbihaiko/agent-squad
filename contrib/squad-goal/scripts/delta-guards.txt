@@ -87,6 +87,8 @@ contrib/squad-goal/scripts/refusal.sh	contrib/squad-goal/scripts/test-refusal-co
 contrib/squad-goal/scripts/refusal.sh	contrib/squad-goal/scripts/test-refusal-names.sh
 contrib/squad-goal/scripts/review.sh	contrib/squad-goal/scripts/test-review.sh
 contrib/squad-goal/scripts/review.sh	contrib/squad-goal/scripts/test-review-diff-bound.sh
+contrib/squad-goal/scripts/review.sh	contrib/squad-goal/scripts/test-review-grok-probe.sh
+contrib/squad-goal/scripts/grokmark.py	contrib/squad-goal/scripts/test-review-grok-probe.sh
 contrib/squad-goal/scripts/runreview.sh	contrib/squad-goal/scripts/test-runreview.sh
 contrib/squad-goal/scripts/shell-suites.sh	contrib/squad-goal/scripts/test-shell-suites-gate.sh
 contrib/squad-goal/scripts/shell-suites.sh	contrib/squad-goal/scripts/test-shell-suites-hermetic.sh
