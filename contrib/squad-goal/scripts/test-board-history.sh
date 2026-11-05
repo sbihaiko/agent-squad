@@ -45,4 +45,25 @@ grep -q 'budget_fact(_hist.history_path' "$here/hub.py" \
 ! grep -q 'instTile("GraphQL"' "$here/hub.py" \
   && ok "the card draws no GraphQL tile (removed by the owner)" || ko "the card draws a GraphQL tile the owner removed"
 
+# (#1394) A record that closed before the card's last moves is re-read: the Status clock can lag the move it stamps, so a
+# complete record whose last known Status is not the card's current one is stale even when both clocks agree.
+"$py" - "$T/s" <<'PY' >"$T/out2.txt" 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import board_history as bh
+ev = [{"t": "2026-11-05T01:28:14Z", "type": "status", "status": "Code Complete"}]
+stored = {1393: {"issue_updated": "2026-11-05T01:28:14Z", "status_updated": "2026-11-05T01:28:14Z",
+                 "events": ev, "complete": True, "cursor": None}}
+items = [{"n": 1393, "issue_updated": "2026-11-05T01:28:14Z", "status_updated": "2026-11-05T01:28:14Z",
+          "status": "Closed"}]
+print("due", bh.due_reads(items, stored))
+stored[1393]["events"] = ev + [{"t": "2026-11-05T01:28:16Z", "type": "status", "status": "Gating"},
+                               {"t": "2026-11-05T01:28:41Z", "type": "status", "status": "Closed"}]
+print("settled", bh.due_reads(items, stored))
+PY
+grep -q '^due \[1393\]$' "$T/out2.txt" \
+  && ok "a complete record behind the card's current Status is re-read" || ko "a stale complete record is never re-read: $(cat "$T/out2.txt")"
+grep -q '^settled \[\]$' "$T/out2.txt" \
+  && ok "the re-read record is settled, so the pass does not loop" || ko "the settled record is still due: $(cat "$T/out2.txt")"
+
 rm -rf "$T"; exit $fail

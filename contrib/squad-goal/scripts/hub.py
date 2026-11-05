@@ -3970,7 +3970,7 @@ def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
 HISTORY_EVERY = 60   # seconds between history passes; a pass reads only the timelines that are due (#1024)
 HISTORY_TIMELINE = ("query($owner:String!,$name:String!,$number:Int!,$after:String){rateLimit{cost}"
                     "repository(owner:$owner,name:$name){issue(number:$number){number updatedAt "
-                    "projectItems(first:20){nodes{project{number} fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{updatedAt}}}} "
+                    "projectItems(first:20){nodes{project{number} fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name updatedAt}}}} "
                     "timelineItems(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{__typename "
                     "... on ProjectV2ItemStatusChangedEvent{createdAt status} "
                     "... on LabeledEvent{createdAt label{name}} ... on UnlabeledEvent{createdAt label{name}} "
