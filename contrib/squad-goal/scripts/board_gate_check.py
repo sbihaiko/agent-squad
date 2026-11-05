@@ -21,9 +21,15 @@ the path is a live write of its own and needs the owner's grant (ADR-0024).
 
 usage: board_gate_check.py --issue <n> [--repo <owner/name>] [--wave <run>] [--since <ISO instant>] [--json]
        --board <hub-board.json> --history <store> --journal <journal> --gate-log <gate-history> --transitions <moves>
-       board_gate_check.py --record-guard [--since <ISO instant>] [--json] [--history <store>] [--journal <journal>]
-       The paths default to SG_BOARD_CACHE and SG_STATE, the live profile's own places.
-Exit: 0 pass, 1 a check failed, 2 an input could not be read.
+       board_gate_check.py --record-guard [--since <ISO instant>] [--json] [--board <hub-board.json>]
+       [--history <store>] [--journal <journal>]
+       The board cache is --board, else SG_BOARD_CACHE: the live profile's own place. The history store and the
+       attempt journal sit beside it, so --history and --journal default to the paths derived from it; a named
+       --history or --journal wins. The gate log and the proved moves default to SG_STATE, else /tmp/sg-state.
+       `--record-guard` reads no board cache, gate log or proved moves: it accepts --board (or SG_BOARD_CACHE) only
+       as the file both of its stores are derived from.
+Exit: 0 pass, 1 a check failed, 2 an input could not be read (including no path named for one of the record-guard's
+two stores, and a history store that holds no record for the named card).
 
 `--record-guard` is the owner's guard (#1430): it compares the attempt journal with the history store and exits 1 naming
 every attempt whose card never read Gating. It runs beside the board checks and reads those two stores only, so it
@@ -153,10 +159,36 @@ def gate_windows(attempts, log):
 
 def _covers_gating(run, at, settle):
     """True when one history interval is a Gating stretch that covers the attempt's instant: the interval holds it, its
-    entry was recorded no later than the settle bound after it, and it has not ended before it."""
+    entry was recorded no later than the settle bound after it, and it was left no earlier than the settle bound before
+    it. The poll may record either end late or early, so the same bound widens both ends."""
     if not run["on_board"] or run["column"] != GATING: return False
     entered, left = _instant(run["from"]), _instant(run["to"])
-    return entered is not None and entered <= at + settle and (left is None or left >= at)
+    return entered is not None and entered <= at + settle and (left is None or left >= at - settle)
+
+
+def _closed_before(runs, at, settle):
+    """True when one Closed interval says the card was already in dev when the gate ran: the interval opened at least
+    the settle bound before the attempt and still held the card at it. A Closed entry that arrives within the bound of
+    the attempt is the poll recording a landing around the gate, so it settles nothing, and a Closed interval that ended
+    before the attempt means the card left dev again (a reopen)."""
+    for run in runs:
+        if not run["on_board"] or run["column"] != CLOSED: continue
+        opened, left = _instant(run["from"]), _instant(run["to"])
+        if opened is not None and opened + settle <= at and (left is None or left >= at):
+            return True
+    return False
+
+
+def _wave_cards(journal):
+    """{wave: {card}} for the waves the journal's own per-card attempts name (#1430). A wave's entry gate journals an
+    attempt for the child it admits (wave.sh names SG_GATE_CARD for each), so a wave-level attempt (the tip gate, card 0)
+    is read on the cards that journal names for its wave. A wave no attempt names is skipped: the guard reads the journal
+    and the store only."""
+    out = {}
+    for rec in gate_attempts.attempts(journal) if journal else []:
+        wave, n = str(rec.get("w") or ""), _card_of(rec)
+        if wave and n > 0: out.setdefault(wave, set()).add(n)
+    return out
 
 
 def gating_recorded(journal, store, since=None):
@@ -164,24 +196,28 @@ def gating_recorded(journal, store, since=None):
 
     Every gate attempt the journal holds, whose card is ahead of dev, leaves a Gating stretch on the board. The attempt
     record carries one instant, the moment it drew its verdict; the card's stretch covers it when the history store's
-    Gating interval holds that instant. The board's poll may record the entry late, so an interval that starts within
-    SETTLE_SECONDS after the attempt covers it too. A card whose store already reads Closed before the attempt is in dev:
-    the gate re-ran on landed work, and no Gating stretch is expected. A wave-level attempt (card 0) names no card of its
-    own. The guard reads the journal and the store only, so it answers the same after a restart and on a re-read."""
+    Gating interval holds that instant. The board's poll may record either end of the interval late or early, so an
+    interval within SETTLE_SECONDS of the attempt still covers it. A card is in dev when a Closed interval opened at least
+    SETTLE_SECONDS before the attempt and still held it: the gate re-ran on landed work, and no Gating stretch is expected.
+    A wave-level attempt (card 0)
+    is read on the cards the journal names for its wave, so a real wave is never waived. The guard reads the journal and
+    the store only, so it answers the same after a restart and on a re-read."""
+    recs = gate_attempts.attempts(journal) if journal else []
+    wave_cards = _wave_cards(journal)
+    settle = timedelta(seconds=SETTLE_SECONDS)
     problems = []
-    for rec in gate_attempts.attempts(journal) if journal else []:
+    for rec in recs:
         n = _card_of(rec)
-        if n <= 0: continue
+        cards = [n] if n > 0 else sorted(wave_cards.get(str(rec.get("w") or ""), ()))
+        if not cards: continue   # a wave-level attempt no card of the journal names: no card to read
         try: at = datetime.fromtimestamp(int(rec.get("t") or 0), UTC)
         except (TypeError, ValueError): continue
         if since is not None and at < since: continue
-        runs = board_history.intervals((store.get(n) or store.get(str(n)) or {}).get("events") or [])
-        closed = [r for r in runs if r["on_board"] and r["column"] == CLOSED and (_instant(r["from"]) or at) <= at]
-        if closed: continue
-        settle = timedelta(seconds=SETTLE_SECONDS)
-        covered = any(_covers_gating(r, at, settle) for r in runs)
-        if not covered:
-            problems.append(f"#{n} attempt {rec.get('tip') or '-'}/{rec.get('aid') or '-'} at {_stamp(at)}: the card never read {GATING}")
+        for card in cards:
+            runs = board_history.intervals((store.get(card) or store.get(str(card)) or {}).get("events") or [])
+            if _closed_before(runs, at, settle): continue
+            if not any(_covers_gating(r, at, settle) for r in runs):
+                problems.append(f"#{card} attempt {rec.get('tip') or '-'}/{rec.get('aid') or '-'} at {_stamp(at)}: the card never read {GATING}")
     return not problems, problems
 
 
