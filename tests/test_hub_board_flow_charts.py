@@ -102,6 +102,9 @@ def _count(view, name, day):
     return band["count"][view["days"].index(day)]
 
 
+STORAGE = "const localStorage={getItem:()=>null,setItem:()=>{}};"   # the node harness holds no page key, so the flow filters start at their defaults (#1356)
+
+
 def _flow_block(hub):
     """The page's diagram script, between its two markers."""
     m = re.search(r"// flow-charts:\n(.*?)// flow-charts:end", hub.PAGE, re.S)
@@ -279,7 +282,7 @@ def test_a_quiet_day_keeps_each_card_in_its_column(hub, board):
 def test_the_lead_time_chart_names_the_cards_closed_as_not_planned(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         'process.stdout.write(flowLead({type:"task",measure:"on board -> closed",window:{size:20,unit:"issues"},'
         'excluded:[{reason:"not_planned",count:3}],excluded_total:3,series:[],summary:null}));',
     ])
@@ -309,7 +312,7 @@ def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
 def test_a_one_point_run_is_drawn_as_a_visible_mark(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         'process.stdout.write(flowCFD({days:["a","b","c"],ymax:4,yticks:[0,2,4],'
         'xticks:[{i:0,day:"a"},{i:2,day:"c"}],start:"2026-10-01",'
         'bands:[{name:"Todo",lower:[0,null,0],upper:[2,null,1]}]}));',
@@ -328,7 +331,7 @@ def test_a_one_point_run_is_drawn_as_a_visible_mark(hub, tmp_path):
 def test_the_page_splits_each_band_at_a_gap(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         'process.stdout.write(flowCFD({days:["a","b","c","d","e"],ymax:4,yticks:[0,2,4],'
         'xticks:[{i:0,day:"a"},{i:4,day:"e"}],start:"2026-10-01",'
         'bands:[{name:"Todo",lower:[0,0,null,0,0],upper:[2,3,null,1,2]}]}));',
@@ -402,7 +405,7 @@ def test_the_cfd_draws_labelled_axes_with_numbered_ticks_and_dated_ticks(hub, bo
     cfd = _flow(hub)["cfd"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         f"process.stdout.write(flowCFD({json.dumps(cfd)}));",
     ])
     path = tmp_path / "flow-cfd-axis.js"
@@ -428,7 +431,7 @@ def test_every_band_drawn_has_a_legend_entry_in_the_hub_order(hub, board, tmp_pa
     assert names == list(hub.ORDER)
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         f"process.stdout.write(flowCFD({json.dumps(cfd)}));",
     ])
     path = tmp_path / "flow-cfd-legend.js"
@@ -438,6 +441,121 @@ def test_every_band_drawn_has_a_legend_entry_in_the_hub_order(hub, board, tmp_pa
     legend = re.findall(r"<span class=flg><i[^>]*></i>([^<]*)</span>", result.stdout)
     assert legend == names, "every band drawn has exactly one legend entry, in the drawn order"
     assert len(re.findall(r"<polygon ", result.stdout)) == len(names), "the legend counts the bands the chart draws"
+
+
+# SPEC 1356: the cumulative flow takes a Type and a set of visible states. The three bands stack from the last at the
+# foot, so a hidden middle band drops its cards from the two above it and leaves no gap.
+CFD_STACK = {
+    "days": ["2026-10-01"], "zone": "UTC", "start": "2026-10-01",
+    "ymax": 3, "yticks": [0, 1, 2, 3], "xticks": [{"i": 0, "day": "2026-10-01"}], "coverage": None,
+    "bands": [
+        {"name": "Todo", "count": [1], "held": [0]},
+        {"name": "Doing", "count": [1], "held": [0]},
+        {"name": "Closed", "count": [1], "held": [0]}],
+    "reads": [{"day": "2026-10-01", "counts": [{"name": "Todo", "count": 1}, {"name": "Doing", "count": 1},
+                                             {"name": "Closed", "count": 1}], "wip": 2, "throughput": 0}],
+    "last": {"day": "2026-10-01", "wip": 2, "throughput": 0},
+}
+
+
+
+def _polygons(markup):
+    return [(m.group(2), [tuple(map(float, p.split(","))) for p in m.group(1).split()])
+            for m in re.finditer(r'<polygon points="([^"]*)"[^>]*><title>([^<]*)</title>', markup)]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_cumulative_flow_offers_four_types_and_one_state_checkbox_per_band(hub, board, tmp_path):
+    """#1356: the control row carries the four types and one checkbox per board-defined column; it opens on the tasks
+    default the chart route always sent, so the page's first request is the request it always made."""
+    out = _render(hub, tmp_path, "flow-cfd-controls.js", f"flowCFD({json.dumps(CFD_STACK)})")
+    types = re.search(r"<select id=cfdy>(.*?)</select>", out)
+    assert types, "the cumulative flow draws no Type control"
+    assert re.findall(r"<option value=(all|spec|task|bug)([^>]*)>([^<]*)</option>", types.group(1)) == [
+        ("all", "", "All"), ("spec", "", "Specs"), ("task", " selected", "Tasks"), ("bug", "", "Bugs")], \
+        "the Type control offers All, Specs, Tasks and Bugs, and opens on Tasks"
+    states = re.findall(r'<input type=checkbox data-state="([^"]+)"([^>]*)>', out)
+    assert [name for name, _ in states] == ["Todo", "Doing", "Closed"], "one checkbox per band, in the drawn order"
+    assert all(" checked" in attrs for _, attrs in states), "every state shows at first"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_hiding_a_middle_state_drops_its_band_and_restacks_without_a_gap(hub, board, tmp_path):
+    """#1356: hiding a middle band removes it from the plot and the legend, and the bands above it drop by its count."""
+    shown = _render(hub, tmp_path, "flow-cfd-all.js", f"flowCFD({json.dumps(CFD_STACK)})")
+    hidden = _render(hub, tmp_path, "flow-cfd-hidden.js", f"(CF.hidden=['Doing'],flowCFD({json.dumps(CFD_STACK)}))")
+
+    full = dict(_polygons(shown))
+    assert sorted(full) == ["Closed", "Doing", "Todo"]
+    assert len({y for points in full.values() for _, y in points}) == 4, "the drawn stack has four levels with every band"
+
+    kept = dict(_polygons(hidden))
+    assert sorted(kept) == ["Closed", "Todo"], "the hidden band is not drawn"
+    levels = {y for points in kept.values() for _, y in points}
+    assert len(levels) == 3, f"the remaining bands re-stack with no gap: {sorted(levels)}"
+    # A reference computation from the fixture's counts and the page's own layout, never the fixture's lower/upper: the
+    # closed band keeps the floor, the todo band sits on top of it, and no level repeats a hidden band's.
+    page = hub.PAGE
+    flow_h = int(re.search(r"flowW=\d+,flowH=(\d+)", page).group(1))
+    flow_p = int(re.search(r"const flowP=(\d+)", page).group(1))
+    scale = (flow_h - 2 * flow_p) / CFD_STACK["ymax"]
+    def level(v):
+        return flow_h - flow_p - v * scale
+    todo, closed = kept["Todo"], kept["Closed"]
+    assert sorted({y for _, y in closed}) == pytest.approx(sorted([level(0), level(1)])), \
+        "the closed band does not sit on the floor across its own count"
+    assert sorted({y for _, y in todo}) == pytest.approx(sorted([level(1), level(2)])), \
+        "the todo band does not re-stack on the closed one: the hidden band's count is dropped from the stack"
+    assert max(y for _, y in todo) == min(y for _, y in closed), "the band above the hidden one sits on the band below it"
+    assert max(y for _, y in closed) == max(y for _, y in full["Closed"]), "the foot of the stack does not move"
+
+    legend = re.findall(r"<span class=flg><i[^>]*></i>([^<]*)</span>", hidden)
+    assert legend == ["Todo", "Closed"], "the legend lists only the visible states"
+    assert "Doing 1" not in hidden, "the day hover names only the visible states"
+    assert "WIP 2 (whole board)" in hidden and "WIP <b>2</b> (whole board)" in hidden, \
+        "the hover and the notes label WIP as the whole board's, never the drawn subset's"
+    assert re.search(r'<input type=checkbox data-state="Doing"[^>]*>', hidden).group(0).find(" checked") < 0, \
+        "the hidden state's checkbox reads unchecked"
+
+
+def _capturing_store(initial):
+    """The page's own key, captured: `getItem` answers the seed, `setItem` records each write, and the harness prints it."""
+    return ("const STORE=" + json.dumps(initial) + ";"
+            "const localStorage={getItem:k=>k in STORE?STORE[k]:null,setItem:(k,v)=>{STORE[k]=String(v)}};")
+
+
+def _stale_render(hub, tmp_path, name, block=None):
+    """A render whose stored hidden set names a state the payload does not carry; answers the markup and the page key."""
+    seeded = {"squad-flow": json.dumps({"ty": "task", "hidden": ["Some Lane"]})}
+    expression = ("(()=>{const markup=flowCFD(" + json.dumps(CFD_STACK) +
+                  ");return JSON.stringify({markup,key:STORE['squad-flow']});})()")
+    out = _render(hub, tmp_path, name, expression, block=block, storage=_capturing_store(seeded))
+    return json.loads(out)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_hidden_state_the_board_definition_does_not_name_never_shows(hub, board, tmp_path):
+    """#1356: a stored state the payload does not carry adds no checkbox, changes no band, and is pruned from the page
+    key, so the saved set only ever holds board-defined states — proven by the key the page's own save wrote."""
+    plain = _render(hub, tmp_path, "flow-cfd-plain.js", f"flowCFD({json.dumps(CFD_STACK)})")
+    stale = _stale_render(hub, tmp_path, "flow-cfd-stale.js")
+    assert "Some Lane" not in stale["markup"], "an unknown state is never drawn, named or offered"
+    assert "Some Lane" not in plain
+    def boxes(markup):
+        return re.findall(r'<input type=checkbox data-state="([^"]+)"', markup)
+    assert boxes(stale["markup"]) == ["Todo", "Doing", "Closed"] and boxes(stale["markup"]) == boxes(plain), \
+        "an unknown hidden state adds no checkbox: the control set is the plain render's exactly"
+    assert dict(_polygons(stale["markup"])).keys() == dict(_polygons(plain)).keys(), \
+        "an unknown hidden state changes no band"
+    assert json.loads(stale["key"]) == {"ty": "task", "hidden": []}, \
+        "the pruned set is written back to the page key, not only held in memory"
+    # The check bites: with the page's save removed, the same render leaves the stale name in the key.
+    save_line = next(line for line in hub.PAGE.splitlines() if line.startswith("const flowSave="))
+    block = _flow_block(hub).split("const drawFlow")[0].replace(save_line, "const flowSave=()=>{};")
+    assert "const flowSave=()=>{};" in block, "the harness did not replace the page's save line"
+    unsaved = _stale_render(hub, tmp_path, "flow-cfd-stale-nosave.js", block=block)
+    assert json.loads(unsaved["key"]) == {"ty": "task", "hidden": ["Some Lane"]}, \
+        "the assertion reads the page's own write: a render that prunes without saving leaves the stale name"
 
 
 # SPEC 889 #900: the lead-time diagram is the Jira-style control chart, computed by the hub (board_leadtime).
@@ -1169,7 +1287,7 @@ def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, boar
     lead = hub.flow_lead()["lead"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         'LT.tf="30";',   # re-anchored (#1247): the visit's choice, the month view, set by hand
         f"process.stdout.write(flowLead({json.dumps(lead)}));",
     ])
@@ -1188,7 +1306,7 @@ def _drawn_lead_svg(hub, board, tmp_path):
     lead = hub.flow_lead()["lead"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         'LT.tf="30";',   # re-anchored (#1247): the visit's choice, the month view, set by hand
         f"process.stdout.write(flowLead({json.dumps(lead)}));",
     ])
@@ -1427,7 +1545,7 @@ def test_the_cfd_names_a_range_selector_and_a_day_hover_with_counts(hub, board, 
     view = _flow(hub)["cfd"]["ranges"]["all"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         f"process.stdout.write(flowCFD({json.dumps(view)}));",
     ])
     path = tmp_path / "flow-cfd-range.js"
@@ -1518,7 +1636,7 @@ def test_the_board_poll_never_computes_chart_data(hub, board, monkeypatch):
 def test_a_drag_maps_its_plot_fractions_to_the_dates_of_the_range(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         "const r=ltSpan({start:'2026-10-01T00:00:00+00:00',end:'2026-10-11T00:00:00+00:00'},0.5,1);",
         "process.stdout.write(JSON.stringify(r));",
     ])
@@ -1540,10 +1658,10 @@ def test_a_live_run_click_never_leaves_the_tab_the_user_is_on(hub):
     assert 'setTab("flow",{runs:true})' not in hub.PAGE
 
 
-def _render(hub, tmp_path, name, expression, block=None):
+def _render(hub, tmp_path, name, expression, block=None, storage=None):
     # Re-anchored (#1247): the page no longer restores a stored choice, so the harness sets the visit's choice itself: the
     # All timeframe on the log axis, the view these drawings were written against.
-    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};",
+    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", storage or STORAGE,
                          block or _flow_block(hub).split("const drawFlow")[0], 'LT.tf="all";',
                          f"process.stdout.write({expression});"])
     path = tmp_path / name
@@ -1626,7 +1744,7 @@ def test_the_stack_lives_in_the_dot_tooltip_and_gate_time_stays_a_text_metric(hu
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         f"const COLORS={hub.BOARD_COLORS_JSON},COLNAME={hub.BOARD_NAMES_JSON};", "const esc=s=>String(s);",
-        "const ls={};", block, 'LT.tf="all";',
+        "const ls={};", STORAGE, block, 'LT.tf="all";',
         f"process.stdout.write(flowLead({json.dumps(hub.flow_lead(ty=None)['lead'])}));",
     ])
     path = tmp_path / "lt-stack-roles.js"

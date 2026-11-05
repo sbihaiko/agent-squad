@@ -104,6 +104,16 @@ def test_mobile_page_links_back_to_desktop_and_remembers_the_choice(hub):
     assert 'localStorage.setItem("squad-view","desktop")' in body
 
 
+def test_the_mobile_page_carries_no_flow_chart_so_its_filters_have_no_control(hub):
+    """#1356: the phone has no Flow view, so the cumulative flow's Type and visible states have no control there; the
+    page says why, and no chart element reaches the phone."""
+    mod, port = hub
+    _, _, body = get(port, "/mobile")
+    assert "id=\"flowb\"" not in body and "flowCFD" not in body and "id=cfdy" not in body, \
+        "a flow chart or its filter reached the phone without a Flow view"
+    assert "no Flow view" in body, "the mobile page does not say why the flow filters have no control"
+
+
 def test_status_route_serves_since_unknown_without_a_stamp(hub):
     mod, port = hub
     status, ct, body = get(port, "/api/status")

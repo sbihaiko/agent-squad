@@ -176,7 +176,7 @@ def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, boar
     _seed(hub, items)
 
     def last(query):
-        return _last_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]
+        return _last_counts(hub.flow_cfd(*hub.cfd_filters(query)))[backlog]
 
     assert last("ty=task") == 1, "the default type is tasks: only the first card"
     assert last("ty=bug") == 2
@@ -204,7 +204,7 @@ def test_the_kind_field_never_names_the_charts_kind(hub, board):
     _seed(hub, items)
 
     def last(query):
-        return _last_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]
+        return _last_counts(hub.flow_cfd(*hub.cfd_filters(query)))[backlog]
 
     assert last("ty=task") == 3
     assert last("ty=task&fk=issue") == 3, "a Task or Spec card with no bug label is an issue, as on the board"
@@ -278,24 +278,52 @@ def _page_line(hub, prefix):
     return next(line for line in hub.PAGE.splitlines() if line.startswith(prefix))
 
 
+def _page_source(hub, start, end):
+    """The page's own statements from `start` up to `end`, whole lines, so a multi-line function runs unchanged."""
+    return hub.PAGE[hub.PAGE.index(start):hub.PAGE.index(end)].rstrip()
+
+
 def _onchange(hub):
     return re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
 
 
-def _page_harness(hub, answers, drive, onchange="", store=None):
+def _page_harness(hub, answers, drive, onchange="", store=None, render=False, real_draw=True):
     """The page's own bar, chart and persistence lines, run in node over stub elements. `fetch` answers from `answers`,
     keyed by URL, with the hub's own route payloads; the script `drive` acts on the page and prints JSON. `store` seeds
     the page's localStorage, and the page's own save and saveB lines run, so a test reads the key each write reaches
-    (#1275). No hand-written saver stands in for them: a change to the Board record's write line reaches every test."""
+    (#1275). No hand-written saver stands in for them: a change to the Board record's write line reaches every test.
+
+    With `render`, the page's own `drawFlow` line runs unchanged and only its final sink is stubbed: the `#flowb`
+    element's innerHTML setter records each markup the page wrote, so a test reads the DOM the page produced. With
+    `real_draw=False` the same `drawFlow` is a no-op, the negative control that proves those reads bite (#1356 review)."""
     # The LT_TYPES line carries LT_START, the start the payload measures from, which ltOwn reads; the chart range restores
     # from its own key, apart from the Board filter's record under "hub" (#1247, #1275).
-    lines = [_page_line(hub, p) for p in ["const LT_TYPES=", "let LT=", "let FLOWFF=", "const barQuery=", "const flowOpen=",
-                                         "const ltQ=", "const ltZoom=", "const ltGet=", "const flowDetach=",
-                                         "const barMoved=", "const pickFilter=", "const LT_TF=", "const CHART_KEY="]]
+    lines = [_page_line(hub, p) for p in ["const LT_TYPES=", "let LT=", "let FLOWFF=", "const barQuery=",
+                                         "const flowOpen=", "const ltQ=", "const ltZoom=", "const ltGet=",
+                                         "const flowDetach=", "const barMoved=", "const pickFilter=", "const LT_TF=",
+                                         "const CHART_KEY="]]
+    if render:
+        # The page's own layout, re-stack and renderer, as one contiguous slice: the drawn markup is the page's output.
+        lines.append(hub.PAGE[hub.PAGE.index("let flowW="):hub.PAGE.index("const EXREASON=")])
+    else:
+        lines += [_page_line(hub, p) for p in ("const flowFilter=", "const flowSave=", "let CF=")]
     # The two write paths are the page's own lines, never a look-alike: a regression that folded the chart range into
     # the Board record would show here (#1275).
     save = _page_line(hub, "const save=")
     board = _page_line(hub, "const bo=ls.bo||{},saveB=")
+    if render:
+        # The page's real drawFlow runs; only the element's innerHTML sink is stubbed, so DRAWN holds what the page
+        # itself wrote. The negative control swaps the same line for a no-op (#1356 review).
+        draw = ("const fbv=el();let _fb=\"\";"
+                "Object.defineProperty(fbv,'innerHTML',{get:()=>_fb,set:v=>{_fb=String(v);DRAWN.push(_fb)}});"
+                "fbv.clientWidth=1200;EL[\"#flowb\"]=fbv;\n"
+                "const window={innerHeight:800};\n"
+                + ("const drawFlow=()=>{};   // negative control: the page's draw writes nothing\n"
+                   if not real_draw else _page_source(hub, "const drawFlow=", "const flowOpen=") + "\n"))
+    else:
+        draw = ("EL[\"#flowb\"]=el();\n"
+                "const drawFlow=()=>DRAWN.push({...JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)),hidden:[...CF.hidden]});"
+                "   // the draw carries the states hidden when it ran (#1356)")
     stubs = f"""
 const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],POLLED=[];
 const el=()=>({{hidden:true,handlers:{{}},addEventListener(t,f){{this.handlers[t]=f}}}});
@@ -306,10 +334,10 @@ const STORE={json.dumps(store or {})};
 const localStorage=new Proxy({{}},{{get:(t,k)=>k==="getItem"?n=>n in STORE?STORE[n]:null:k==="setItem"?(n,v)=>{{STORE[n]=String(v)}}:STORE[k],set:(t,k,v)=>{{STORE[k]=String(v);return true}}}});
 const ls=JSON.parse(localStorage.hub||"{{}}"),pins=new Set(),q="",per="day",src="";
 let FLOWK=null,FLOWD={{}};
+const COLORS={{}},esc=s=>String(s);
 {save}
 {board}
-EL["#flowb"]=el();
-const drawFlow=()=>DRAWN.push(JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)));
+{draw}
 const pollBoard=()=>POLLED.push(1);
 const flowTabs=()=>{{}};   // the tab strip is not what this harness drives (#1080)
 const BOARD_ROWS=[{{n:1,l:[]}},{{n:2,l:["bug"]}}];   // the two cards the board would read
@@ -329,19 +357,26 @@ def _bar(fw="", fs="", fk="", ty="task"):
     return f"fw={fw}&fs={fs}&fk={fk}&ty={ty}"
 
 
+def _cfd_bar(fw="", fs="", fk="", ty="task"):
+    """The cumulative flow's route query: its own Type state, which opens on the tasks default the route always sent; All
+    adds the extra `every=1` and keeps `ty` at a value the wire already knows, so the old parameter's meaning stands (#1356)."""
+    every = ty == "all"
+    return _bar(fw, fs, fk, "task" if every else ty) + ("&every=1" if every else "")
+
+
 def test_a_kind_pick_redraws_the_open_cumulative_flow_with_the_filtered_route(hub, board):
     backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"]), _item(hub, 3, backlog, labels=["bug"])]
     _seed(hub, items)
-    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.cfd_filters(q))
+               for q in (_cfd_bar(ty="task"), _cfd_bar(ty="task", fk="bug"))}
     out = _page_harness(hub, answers, """
-pickFilter("fkl","fk");
-EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
+CF.ty="task";pickFilter("fkl","fk");
 await flowOpen("cfd");await settle();
 EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});await settle();await settle();
 console.log(JSON.stringify({fetched:FETCHED,bo,last:DRAWN[DRAWN.length-1],store:STORE,polled:POLLED.length}));""",
                            onchange=_onchange(hub))
-    assert out["fetched"] == [f"/api/chart/cfd?{_bar()}", f"/api/chart/cfd?{_bar(fk='bug')}"]
+    assert out["fetched"] == [f"/api/chart/cfd?{_cfd_bar(ty='task')}", f"/api/chart/cfd?{_cfd_bar(ty='task', fk='bug')}"]
     assert out["bo"]["fk"] == ["bug"] and out["polled"] == 1, "the pick is stored as the board's own"
     assert set(out["store"]) == {"hub"} and json.loads(out["store"]["hub"])["bo"]["fk"] == ["bug"], \
         "a kind pick writes the Board key only"
@@ -377,10 +412,10 @@ def test_an_answer_for_an_old_bar_value_is_never_drawn(hub, board):
     backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])]
     _seed(hub, items)
-    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.cfd_filters(q))
+               for q in (_cfd_bar(ty="task"), _cfd_bar(ty="task", fk="bug"))}
     out = _page_harness(hub, answers, """
-pickFilter("fkl","fk");
-EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
+CF.ty="task";pickFilter("fkl","fk");
 const first=flowOpen("cfd");
 EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});
 await first;await settle();await settle();
@@ -500,6 +535,47 @@ def test_the_cumulative_flow_takes_the_type(hub, board):
         return _last_counts(hub.flow_cfd(ty=ty))[backlog]
 
     assert [last("task"), last("bug"), last("spec")] == [2, 1, 1]
+
+
+# -- the cumulative flow's Type and visible states (#1356) ---------------------------------------------------------------
+
+def test_the_cumulative_flow_type_offers_all_and_counts_one_card_of_each_type(hub, board):
+    """#1356: All is a cumulative flow type: it counts the spec, the task and the bug, and each single type counts its own.
+    The wire's own `ty` keeps its accepted values and its tasks default; All rides the extra `every=1` beside it."""
+    backlog = hub.COLUMN["issue_todo"]
+    _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"]),
+                _item(hub, 3, backlog, labels=["spec"])])
+
+    assert hub.board_filters("ty=all")[3] == "task", "an unknown type stays the tasks default the route always sent"
+    assert hub.cfd_filters("ty=task&every=1")[3] is None, "the extra every=1 keeps every type"
+    assert [_last_counts(hub.flow_cfd(*hub.cfd_filters(q)))[backlog]
+            for q in ("ty=task&every=1", "ty=spec", "ty=task", "ty=bug")] == [3, 1, 1, 1], \
+        "All counts one card of each type; a single type counts only its own"
+
+
+def test_the_cumulative_flow_classifies_a_type_as_the_lead_time_chart_does(hub, board):
+    """#1356: the two views agree: a card labelled both spec and bug is a spec in both."""
+    closed = hub.COLUMN["issue_closed"]
+    _seed(hub, [_item(hub, 1, closed, labels=["spec", "bug"], closed_at="2026-10-02T09:00:00Z")])
+
+    assert _last_counts(hub.flow_cfd(ty="spec"))[closed] == 1
+    assert _last_counts(hub.flow_cfd(ty="bug"))[closed] == 0
+    assert _dots(hub.flow_lead(ty="spec")["lead"]["control"]["all"]) == [1]   # re-anchored (#1355): one log axis, no scale key
+
+
+def test_a_state_the_board_definition_does_not_name_never_shows(hub, board):
+    """#1356: the bands are the board definition's columns; a card in a state it does not name counts in no band."""
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    item = _item(hub, 1, "Some Lane")
+    hub.board_cache["items"] = [item]
+    events = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Some Lane"}]
+    hub._hist.record_issue(path, 1, OPENED, OPENED, events, True, now=time.time(), keys=hub.bar_keys(item))
+
+    cfd = hub.flow_cfd(*hub.cfd_filters("ty=task&every=1"))["cfd"]
+
+    assert [b["name"] for b in cfd["bands"]] == list(hub.ORDER), "the bands are exactly the board definition's columns"
+    assert "Some Lane" not in [b["name"] for b in cfd["bands"]], "a state the definition does not name shows no band"
+    assert all(b["count"][-1] == 0 for b in cfd["bands"]), "the card counts in no band"
 
 
 def test_the_drag_zoom_takes_the_type(hub, board):
@@ -665,18 +741,18 @@ def test_the_chip_stops_this_chart_following_and_leaves_the_board_filter_alone(h
     backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])]
     _seed(hub, items)
-    q_all, q_bug = _bar(ty="bug"), _bar(fk="bug", ty="bug")
-    answers = {f"/api/chart/cfd?{q_all}": hub.flow_cfd(*hub.board_filters(q_all)),
-               f"/api/chart/cfd?{q_bug}": hub.flow_cfd(*hub.board_filters(q_bug)),
-               f"/api/chart/lead?{q_all}": hub.flow_lead(*hub.board_filters(q_all)),
-               f"/api/chart/lead?{q_bug}": hub.flow_lead(*hub.board_filters(q_bug))}
+    cfd_all, cfd_bug = _cfd_bar(), _cfd_bar(fk="bug")   # the cumulative flow's own Type, its tasks default (#1356)
+    lead_bug = _bar(fk="bug", ty="bug")   # the control chart opens on Bugs
+    answers = {f"/api/chart/cfd?{cfd_all}": hub.flow_cfd(*hub.cfd_filters(cfd_all)),
+               f"/api/chart/cfd?{cfd_bug}": hub.flow_cfd(*hub.cfd_filters(cfd_bug)),
+               f"/api/chart/lead?{lead_bug}": hub.flow_lead(*hub.board_filters(lead_bug))}
     out = _page_harness(hub, answers, """
 bo.fk=["bug"];
 await flowOpen("cfd");await settle();
 flowDetach();await settle();await settle();
 await flowOpen("lead");await settle();
 console.log(JSON.stringify({fetched:FETCHED,bo,ff:FLOWFF}));""")
-    assert out["fetched"] == [f"/api/chart/cfd?{q_bug}", f"/api/chart/cfd?{q_all}", f"/api/chart/lead?{q_bug}"], \
+    assert out["fetched"] == [f"/api/chart/cfd?{cfd_bug}", f"/api/chart/cfd?{cfd_all}", f"/api/chart/lead?{lead_bug}"], \
         "the stopped chart reads again without the filter, and the other chart still follows it"
     assert out["bo"]["fk"] == ["bug"], "the Board tab's own filter is untouched"
     assert out["ff"] == {"cfd": True}, "only the chart the action named stopped following the filter"
@@ -715,8 +791,8 @@ def test_a_new_board_filter_makes_the_chart_follow_it_again(hub, board):
     """#1147: a new Board filter is a new instruction, so a chart that stopped following reads with it again."""
     backlog = hub.COLUMN["issue_todo"]
     _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
-    q_all, q_bug = _bar(ty="bug"), _bar(fk="bug", ty="bug")
-    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (q_all, q_bug)}
+    q_all, q_bug = _cfd_bar(), _cfd_bar(fk="bug")
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.cfd_filters(q)) for q in (q_all, q_bug)}
     out = _page_harness(hub, answers, """
 bo.fk=["bug"];pickFilter("fkl","fk");
 await flowOpen("cfd");await settle();
@@ -730,12 +806,103 @@ console.log(JSON.stringify({ff:FLOWFF,fetched:FETCHED,bo}));""")
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_cumulative_flow_route_carries_the_chart_type(hub, board):
-    """#1147, #985: the Type is one setting read by both charts; the CFD payload filters by it, so its route sends it."""
+    """#1356: the cumulative flow's Type is its own setting; its route sends it, so the payload counts that type. All is
+    the extra `every=1` beside the fixed `ty` values, so a reader of the old parameter reads the chart it always read."""
     backlog = hub.COLUMN["issue_todo"]
     _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
-    q = _bar(ty="bug")
-    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q))}
+    q, every = _cfd_bar(ty="bug"), _cfd_bar(ty="all")
+    answers = {f"/api/chart/cfd?{k}": hub.flow_cfd(*hub.cfd_filters(k)) for k in (q, every)}
     out = _page_harness(hub, answers, """
-LT.ty="bug";await flowOpen("cfd");await settle();
-console.log(JSON.stringify({fetched:FETCHED}));""")
-    assert out["fetched"] == [f"/api/chart/cfd?{q}"], "the cumulative flow route carries the Type it filters by"
+CF.ty="bug";await flowOpen("cfd");await settle();
+CF.ty="all";await flowOpen("cfd");await settle();
+console.log(JSON.stringify({fetched:FETCHED,last:DRAWN[DRAWN.length-1]}));""")
+    assert "ty=all" not in every and every.endswith("ty=task&every=1"), "All never widens the old parameter's values"
+    assert out["fetched"] == [f"/api/chart/cfd?{q}", f"/api/chart/cfd?{every}"], \
+        "the cumulative flow route carries the Type it filters by"
+    assert _last_counts(out["last"])[backlog] == 2, "All counts every type: the task and the bug"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_flow_filters_restore_from_the_page_key_after_a_reload(hub):
+    """#1356: the Type and the hidden states persist in the page's own key across a redraw and a reload."""
+    block = _flow_block(hub).split("const drawFlow")[0]
+    script = "\n".join([
+        "const STORE={};",
+        "const localStorage={getItem:k=>k in STORE?STORE[k]:null,setItem:(k,v)=>{STORE[k]=String(v)}};",
+        "const COLORS={},COLNAME={};const esc=s=>String(s);const ls={};",
+        block,
+        'CF.ty="spec";CF.hidden=["Doing"];flowSave();',
+        'const stored=JSON.parse(STORE["squad-flow"]);const reload={...flowFilter()};',
+        'STORE["squad-flow"]=\'{"ty":"nope","hidden":"Doing"}\';const bad={...flowFilter()};',
+        "console.log(JSON.stringify({stored,reload,bad}));"])
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["stored"] == {"ty": "spec", "hidden": ["Doing"]}, "the page writes the two filters to its own key"
+    assert out["reload"] == {"ty": "spec", "hidden": ["Doing"]}, "a reload restores both filters"
+    assert out["bad"] == {"ty": "task", "hidden": []}, "a value that is no type opens on the tasks default; a hidden set that is no list is none"
+    assert 'let CF={r:"30",...flowFilter()}' in hub.PAGE, "the chart state restores from the page key at load"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_flow_filter_redraws_the_held_payload_and_reads_no_board(hub, board):
+    """#1356: a visibility change draws the payload the page holds with no read at all, and a Type change reads the chart
+    route only: the board is never read again. The real handler runs on a browser-shaped event and the DOM it produced is
+    read, never a harness record of the filter state (#1356 review)."""
+    # A task in Todo and a spec in Doing: the spec answer has a day and a band, and its counts differ from the task
+    # answer's, so the drawn markup itself proves which payload the page still holds. Each card's history names its own
+    # column, unlike the shared seed, which records every card in Todo.
+    items = [_item(hub, 1, hub.COLUMN["issue_todo"], labels=["bug"]), _item(hub, 2, "Doing", labels=["spec"])]
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    for item, st in ((items[0], hub.COLUMN["issue_todo"]), (items[1], "Doing")):
+        hub._hist.record_issue(path, item["n"], OPENED, OPENED,
+                               [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": st}],
+                               True, now=time.time(), keys=hub.bar_keys(item))
+    hub.board_cache["items"] = items
+    q_first, q_spec = _cfd_bar(), _cfd_bar(ty="spec")
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.cfd_filters(q)) for q in (q_first, q_spec)}
+    # The toggle is the browser's own change event: a checkbox target with its dataset, checked state and input type.
+    drive = """
+const toggle=v=>EL["#flowb"].onchange({type:"change",target:
+  {id:"",tagName:"INPUT",type:"checkbox",value:"on",dataset:{state:v},checked:false}});
+await flowOpen("cfd");await settle();
+EL["#flowb"].onchange({target:{id:"cfdy",value:"spec"}});await settle();await settle();
+const before=DRAWN.length,beforeMarkup=DRAWN[DRAWN.length-1],beforeHtml=EL["#flowb"].innerHTML;
+toggle("Doing");await settle();
+console.log(JSON.stringify({fetched:FETCHED,before,draws:DRAWN.length,last:DRAWN[DRAWN.length-1],beforeMarkup,
+  beforeHtml,afterHtml:EL["#flowb"].innerHTML,ty:CF.ty,hidden:CF.hidden,store:STORE,polled:POLLED.length}));"""
+    out = _page_harness(hub, answers, drive, onchange=_onchange(hub), render=True)
+
+    def legend(markup):
+        return re.findall(r"<span class=flg><i[^>]*></i>([^<]*)</span>", markup)
+
+    bands = [b["name"] for b in answers[f"/api/chart/cfd?{q_spec}"]["cfd"]["bands"]]
+    assert out["ty"] == "spec" and out["hidden"] == ["Doing"], "the page keeps both filters"
+    assert out["fetched"] == [f"/api/chart/cfd?{q_first}", f"/api/chart/cfd?{q_spec}"], \
+        "the Type change reads the chart route, never the board"
+    assert not any("/api/board" in u for u in out["fetched"]), "no filter change reads the board"
+    assert out["polled"] == 0
+    # The page's own drawFlow wrote the element: the markup the handler produced is the element's innerHTML, never a
+    # harness record of the filter state (#1356 review).
+    assert out["afterHtml"] != out["beforeHtml"], "the handler's real drawFlow writes the #flowb element"
+    assert out["afterHtml"] == out["last"], "the element's innerHTML is what the page's drawFlow wrote"
+    assert out["beforeHtml"].count("Loading the chart") == 0, "the drawn chart replaced the loading line"
+    # The count rises only when the handler calls drawFlow: a toggle branch that skips it leaves the count unchanged.
+    assert out["draws"] == out["before"] + 1, "the visibility toggle draws once, after the state is hidden"
+    assert legend(out["beforeMarkup"]) == bands, "the chart before the toggle draws every band"
+    assert "Todo 0" in out["beforeMarkup"] and "Doing 1" in out["beforeMarkup"], \
+        "the drawn payload is still the held type=spec answer, never the unfiltered one"
+    assert legend(out["last"]) == [b for b in bands if b != "Doing"], \
+        "the markup the handler produced lost the hidden band from the legend"
+    assert "<title>Doing</title>" not in out["last"], "the hidden band is still drawn"
+    assert re.search(r'<input type=checkbox data-state="Doing"[^>]*>', out["last"]).group(0).find(" checked") < 0, \
+        "the hidden state's checkbox reads unchecked"
+    assert "Doing 1" not in out["last"], "the hover names only the visible states"
+    assert json.loads(out["store"]["squad-flow"]) == {"ty": "spec", "hidden": ["Doing"]}, \
+        "a filter change writes the page key, never the Board record"
+
+    # The negative control: with the page's drawFlow replaced by a no-op the element keeps its old markup, so the two
+    # assertions above read the page's own draw and would fail on a draw that stops writing #flowb (#1356 review).
+    dead = _page_harness(hub, answers, drive, onchange=_onchange(hub), render=True, real_draw=False)
+    assert dead["draws"] == 0 and dead["afterHtml"] == dead["beforeHtml"] == "", \
+        "a drawFlow that writes nothing leaves the element alone: the proof reads the page's own draw"
