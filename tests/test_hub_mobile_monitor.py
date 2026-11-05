@@ -34,7 +34,7 @@ def _load(hub):
     src = {"landing": {"issue": 73, "ts": NOW - 7200}, "quota": {"codex": None, "agy": None}, "loop": True,
            "gate": {"kind": "fast", "result": "fail", "sha": SHA, "ts": NOW - 300, "took": 127, "avg": 169}}
     return {"cpu": 12, "ram": 97, "gpu": None, "warn": False, "facts": hub.foot_items(src, NOW),
-            "specs": hub.spec_progress(BOARD, moves={})}
+            "speed": {"specs": hub.spec_progress(BOARD, moves={})}}
 
 
 def _routes(hub, loop=None):
@@ -65,14 +65,14 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
       await loadPoll(); await __tick(10);
       const h = id => String(document.getElementById(id).innerHTML || "");
       return { shown: !document.querySelector('[data-panel="monitor"]').hidden, igs: h("igs"), ian: h("ian"),
-               ispec: h("ispec"), sum: document.getElementById("instsr").textContent };
+               ispeed: h("ispeed"), sum: document.getElementById("instsr").textContent };
     """, routes=_routes(hub))
     assert out["shown"], "the Monitor is the default for a new visitor"
     assert out["igs"].count("<svg") == 3 and 'stroke="url(#g-' in out["igs"] and "ldred" in out["igs"]
     assert out["ian"] == "", "the owner removed the Gate tile (#1260)"
     assert "Landed" not in out["ian"], "the owner removed the Landed tile (2026-11-01)"
     assert "Loop" not in out["ian"], "the loop state lives in its own panel (#1071)"
-    assert "Specs" in out["ispec"] and "role=progressbar" in out["ispec"]
+    assert "Specs" in out["ispeed"] and "5/9 tickets · 55%" in out["ispeed"]
     assert out["sum"] == "", "the summary no longer counts the gate; a red gate stays in the footer (#1260)"
 
 

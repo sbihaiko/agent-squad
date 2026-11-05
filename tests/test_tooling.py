@@ -65,6 +65,10 @@ def test_the_wave_check_keeps_the_output_of_a_red_tip():
 
 
 FAST_TIER_JOBS = ("ruff", "mypy", "fast-battery")
+COMPLETE_TIER_JOBS = ("full-xdist", "full-serial", "fast-battery-311", "gui-e2e")
+TIER_JOBS = FAST_TIER_JOBS + COMPLETE_TIER_JOBS
+DEV_TO_STG = "github.head_ref == 'dev'"
+STG_TO_MAIN = "github.head_ref == 'stg' && github.base_ref == 'main'"
 
 
 def _ci_workflow() -> dict:
@@ -102,10 +106,11 @@ def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
     three start together. Whether three runners actually start at once is measured by the first real dev-to-stg run; this
     guard refuses the settings that would hold them in a queue."""
     wf = _ci_workflow()
-    assert tuple(wf["jobs"]) == FAST_TIER_JOBS, f"the fast tier is exactly {FAST_TIER_JOBS}; found {list(wf['jobs'])}"
-    for name, job in wf["jobs"].items():
-        assert job.get("if") == "github.head_ref == 'dev'", (
-            f"{name} starts on one pull request only, dev to stg; found {job.get('if')!r}")
+    fast = tuple(name for name, job in wf["jobs"].items() if job.get("if") == DEV_TO_STG)
+    assert fast == FAST_TIER_JOBS, f"the fast tier is exactly {FAST_TIER_JOBS}; found {fast}"
+    assert tuple(wf["jobs"]) == TIER_JOBS, f"the workflow is the two tiers, {TIER_JOBS}; found {list(wf['jobs'])}"
+    for name in FAST_TIER_JOBS:
+        job = wf["jobs"][name]
         for key in ("needs", "strategy", "environment", "concurrency"):
             assert key not in job, f"{name} carries `{key}:`, which can hold it behind another job or a gate"
         assert job.get("continue-on-error") in (None, False), f"{name} would report green on a red"
@@ -114,16 +119,65 @@ def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
     assert 'python3 -m pytest -n auto -m "not heavy"' in [s.get("run") for s in wf["jobs"]["fast-battery"]["steps"]]
 
 
+def test_complete_tier_jobs_run_on_the_stg_to_main_pull_request_only():
+    """Guard for the complete tier (#1324): a stg-to-main pull request starts exactly the four complete-tier jobs, and a
+    dev-to-stg one starts none of them.
+
+    A job gated on the base branch carries `github.base_ref`: promote-pass.sh reads such a job as no check a dev-to-stg
+    tip waits on, so the fast promotion never waits for a suite that pull request never starts.
+    """
+    wf = _ci_workflow()
+    complete = tuple(name for name, job in wf["jobs"].items() if "base_ref" in str(job.get("if", "")))
+    assert complete == COMPLETE_TIER_JOBS, f"the complete tier is exactly {COMPLETE_TIER_JOBS}; found {complete}"
+    for name in COMPLETE_TIER_JOBS:
+        job = wf["jobs"][name]
+        assert job.get("if") == STG_TO_MAIN, (
+            f"{name} starts on the stg-to-main pull request only; found {job.get('if')!r}")
+        assert job.get("if") != DEV_TO_STG, f"{name} must not start on dev to stg"
+        for key in ("needs", "strategy", "environment", "concurrency"):
+            assert key not in job, f"{name} carries `{key}:`, which can hold it behind another job or a gate"
+        assert job.get("continue-on-error") in (None, False), f"{name} would report green on a red"
+    on = wf.get("on", wf.get(True))
+    assert on["pull_request"]["branches"] == ["stg", "main"], "the workflow runs on the dev-to-stg and stg-to-main pull requests"
+
+
+def test_complete_tier_runs_both_full_suite_modes_the_311_battery_and_the_gui_e2e():
+    """Guard for the complete tier (#1324): the full suite in both modes on Python 3.13, the fast battery on 3.11 and the
+    GUI e2e suite. Each job runs one pytest call, so a job over fifteen minutes is split by test path into a sibling job,
+    never by a matrix (ADR-0163). Each job sets SQUAD_CI_RUNNER=1, so the fixture-bound tests are deselected by id and
+    the ids reach the job log (ADR-0139, #1323)."""
+    wf = _ci_workflow()
+    runs = {name: [s.get("run") for s in wf["jobs"][name]["steps"] if "run" in s] for name in COMPLETE_TIER_JOBS}
+    assert [r for r in runs["full-xdist"] if "pytest" in r] == ["python3 -m pytest -n auto"], runs["full-xdist"]
+    assert [r for r in runs["full-serial"] if "pytest" in r] == ["python3 -m pytest -p no:xdist"], runs["full-serial"]
+    assert [r for r in runs["fast-battery-311"] if "pytest" in r] == ['python3 -m pytest -n auto -m "not heavy"'], \
+        runs["fast-battery-311"]
+    assert [r for r in runs["gui-e2e"] if "pytest" in r] == ["python3 -m pytest tests/test_gui_test_e2e.py -q"], \
+        runs["gui-e2e"]
+    assert _job_python(wf["jobs"]["full-xdist"]) == "3.13"
+    assert _job_python(wf["jobs"]["full-serial"]) == "3.13"
+    assert _job_python(wf["jobs"]["fast-battery-311"]) == "3.11"
+    for name in COMPLETE_TIER_JOBS:
+        job = wf["jobs"][name]
+        assert (job.get("env") or {}).get("SQUAD_CI_RUNNER") == "1", (
+            f"{name} does not set SQUAD_CI_RUNNER=1, so the deselected ids never reach its log (#1323)")
+        assert "matrix" not in (job.get("strategy") or {}), f"{name} splits by matrix, never by test path"
+        for r in runs[name]:
+            assert "--ignore" not in r and "--deselect" not in r, f"{name} excludes a path instead of collecting it: {r}"
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "split by test path" in text, "the workflow names how a job over fifteen minutes is split"
+
+
 def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job():
-    """Guard for the CI rule in CLAUDE.md (#1322): the rule names the fast tier, its guard, and exactly the jobs of
+    """Guard for the CI rule in CLAUDE.md (#1322, #1324): the rule names the two tiers, its guard, and exactly the jobs of
     ci.yml. A job the rule names but the workflow lacks, or the reverse, fails here (ADR-0018). The no-push rule beside
     it carries its own guard too, and the workflow starts no run on a push, so both halves of the rule are checked and
     an edit that drops either one fails."""
     claude = (ROOT / "CLAUDE.md").read_text().splitlines()
     rule = next(line for line in claude if line.startswith("- **CI runs"))
-    assert "fast tier" in rule and "tests/test_tooling.py" in rule, rule
-    named = tuple(re.findall(r"`([a-z-]+)` job", rule))
-    assert set(named) == set(_ci_workflow()["jobs"]) == set(FAST_TIER_JOBS), f"rule names {named}"
+    assert "fast tier" in rule and "complete tier" in rule and "tests/test_tooling.py" in rule, rule
+    named = {n for n in re.findall(r"`([a-z0-9-]+)`", rule) if n not in ("dev", "stg", "main")}
+    assert named == set(_ci_workflow()["jobs"]) == set(TIER_JOBS), f"rule names {sorted(named)}"
     assert "full-proof" not in rule and "shard" not in rule, "the rule claims no job the workflow lacks"
     push_rule = next((line for line in claude if line.startswith("- **No branch push")), None)
     assert push_rule is not None, "CLAUDE.md carries no rule that a branch push starts no CI run"
@@ -183,12 +237,14 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
-    assert on["pull_request"]["branches"] == ["stg"], "CI runs only on the pull request that carries dev to stg"
-    assert set(on) == {"pull_request"}, f"only that pull request starts the run; found {sorted(on)}"
+    assert on["pull_request"]["branches"] == ["stg", "main"], \
+        "CI runs on the dev-to-stg and stg-to-main pull requests, and no other"
+    assert set(on) == {"pull_request"}, f"only a pull request starts the run; found {sorted(on)}"
     assert "push" not in on and "pull_request_target" not in on, "a branch push starts no run"
     assert wf["permissions"] == {"contents": "read"}
-    for job in wf["jobs"].values():
-        assert "dev" in str(job.get("if", "")), f"the job refuses a pull request from any branch but dev: {job.get('if')!r}"
+    for name, job in wf["jobs"].items():
+        gate = str(job.get("if", ""))
+        assert gate in (DEV_TO_STG, STG_TO_MAIN), f"{name} refuses every other pull request: {job.get('if')!r}"
         assert job["timeout-minutes"] == 20, "each job keeps the twenty minutes it gives itself"
     uses = [s["uses"] for j in wf["jobs"].values() for s in j["steps"] if "uses" in s]
     assert uses and all("@v" in u and u.rsplit("@v", 1)[1].isdigit() for u in uses)
@@ -217,7 +273,7 @@ def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
 
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     wf = yaml.safe_load(text)
-    assert tuple(wf["jobs"]) == FAST_TIER_JOBS, "one commit starts the fast tier's jobs and no other (#1062, #1322)"
+    assert tuple(wf["jobs"]) == TIER_JOBS, "one commit starts its tier's jobs and no other (#1062, #1322, #1324)"
     for job in wf["jobs"].values():
         assert "matrix" not in (job.get("strategy") or {}), "a matrix splits a job into legs that wait for runners"
     con = wf["concurrency"]
@@ -267,8 +323,10 @@ def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
                         "--ci-job-names", str(ROOT / ".github" / "workflows" / "ci.yml")],
                        cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert r.stdout.split() == [job.get("name", name) for name, job in wf["jobs"].items()], \
-        f"the check names are the jobs of jobs:, not a step or a with: key: {r.stdout!r}"
+    dev_jobs = [job.get("name", name) for name, job in wf["jobs"].items() if "base_ref" not in str(job.get("if", ""))]
+    assert r.stdout.split() == dev_jobs, \
+        f"the check names are the dev-to-stg jobs of jobs:, not a step, a with: key or a complete-tier job: {r.stdout!r}"
+    assert sorted(dev_jobs) == sorted(FAST_TIER_JOBS), f"the dev-to-stg jobs the pass waits on: {dev_jobs}"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
@@ -338,7 +396,8 @@ def test_ci_fast_tier_runs_the_gui_e2e_suite_from_one_step_and_names_no_mesenai_
     file to the tree walk drops them. Neither pytest command carries `--ignore` or `--deselect`, so the host-bound tests
     are deselected by name when the host is absent (ADR-0139) and the host-free ones run."""
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-    assert text.count("test_gui_test_e2e.py") == 1, "the fast tier runs the GUI e2e suite from exactly one step"
+    assert text.count("test_gui_test_e2e.py") == 2, \
+        "the fast tier runs the GUI e2e suite from one step and the complete tier from its own job"
     assert "MESENAI_REPO" not in text
     for gate in (r for r in _ci_run_lines() if r.startswith("python3 -m pytest")):
         assert "--ignore" not in gate and "--deselect" not in gate, \
@@ -350,9 +409,10 @@ def test_ci_fast_tier_runs_the_gui_e2e_suite_from_one_step_and_names_no_mesenai_
 def test_ci_gate_steps_run_the_fast_battery_once_on_python_313():
     """Guard for the suite rule: the fast-battery job runs the fast battery once, which leaves the `heavy` tests out, and
     one explicit GUI e2e run beside it, which is where that file's `heavy` tests come back."""
-    gates = [r for r in _ci_run_lines() if r.startswith("python3 -m pytest")]
+    job = _ci_workflow()["jobs"]["fast-battery"]
+    gates = [s.get("run") for s in job["steps"] if str(s.get("run", "")).startswith("python3 -m pytest")]
     assert gates == ['python3 -m pytest -n auto -m "not heavy"', "python3 -m pytest tests/test_gui_test_e2e.py -q"], gates
-    assert _job_python(_ci_workflow()["jobs"]["fast-battery"]) == "3.13"
+    assert _job_python(job) == "3.13"
 
 
 # #793: a fixture that runs the real autobug.sh or autofrontier.sh pins its own disk floor. Without the pin the

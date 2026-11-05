@@ -54,17 +54,18 @@ def test_both_profiles_name_one_board_cache(shared_board):
 
 def test_a_profile_never_serves_the_other_repos_specs_from_the_shared_cache(shared_board):
     apps, _ = shared_board
-    alpha = apps["alpha"]["mod"].load_payload()["specs"]
+    payload = apps["alpha"]["mod"].load_payload()
+    assert payload["speed"] is None, "alpha holds no row, so it draws no Throughput card"
+    alpha = payload["specs"]
+    assert (alpha["open"], alpha["done"], alpha["total"]) == (0, 0, 0), "beta's specs reach alpha's row"
     assert "Beta spec" not in alpha["tip"]
-    assert (alpha["open"], alpha["done"], alpha["total"]) == (0, 0, 0)
-    assert alpha["none"]["total"] == 0   # nospec_count reads the same rows: beta's ticket is not alpha's No spec card
 
 
 def test_the_repo_that_wrote_the_cache_keeps_its_rows(shared_board):
     apps, _ = shared_board
     beta = apps["beta"]["mod"].load_payload()["specs"]
     assert "Beta spec" in beta["tip"]
-    assert (beta["open"], beta["done"], beta["total"]) == (1, 4, 11)   # the tile sums the open spec and the No spec group
+    assert (beta["open"], beta["done"], beta["total"]) == (1, 4, 11)   # the row sums the open spec and the No spec group
     assert beta["none"]["total"] == 1
 
 

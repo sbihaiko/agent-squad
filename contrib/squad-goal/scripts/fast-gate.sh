@@ -68,7 +68,12 @@ if [ -n "$memokey" ] && [ -r "$(memo_file "$memokey")" ]; then
     echo "fast-gate: pass ${hsha:0:9} (log $ml) memo: the same tree, merge-base and battery passed, so no battery ran"; exit 0
   fi
 fi
-case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_CALLER=${SG_GATE_CALLER:-child} SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
+# (#1436) A child's own gate asks for two slots and an entry or tip gate for the full count: three children fit a six-slot
+# budget, and a landing is never starved by the children that feed it. A count the caller names always wins.
+case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
+  *) SG_GATE_CALLER=${SG_GATE_CALLER:-child}
+     if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2}; fi
+     SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
 # The base the gate read the tree against goes out beside the scope (GATE_BASE_FILE), so an unproven entry's obligation
 # names it (gate.sh, spec 1163): the commit when the base resolves, else the ref as it was named.
 gbase=$(git rev-parse --verify -q "$base^{commit}" 2>/dev/null)

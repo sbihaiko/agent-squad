@@ -30,7 +30,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #inst .ig svg{width:100%;max-width:90px;height:auto}
 /* An imported PR link is a 44 px target. A failed load read marks the card stale: a note says why, the readings dim. */
 #inst .at a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}
-#inst-stale{margin:0 0 8px;color:var(--warn);font-size:var(--fs-caption)}#inst.stale .igs,#inst.stale .ian,#inst.stale #ispec{opacity:.5}
+#inst-stale{margin:0 0 8px;color:var(--warn);font-size:var(--fs-caption)}#inst.stale .igs,#inst.stale .ian{opacity:.5}
 #loop{padding:12px;border-radius:var(--radius-lg);background:var(--panel);border:1px solid var(--line)}
 #loop.on #loop-text{color:var(--ok)}#loop.off #loop-text{color:var(--err)}#loop.draining #loop-text,#loop.starting #loop-text{color:var(--warn,var(--warn))}
 #loop-ctl{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}#loop-ctl button,#loop-confirm button{min-height:44px;padding:0 14px}#loop-ctl button:disabled{opacity:.45}#loop-reason:not(:empty){color:var(--mute)}

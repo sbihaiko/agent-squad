@@ -378,7 +378,7 @@ def scan(p):
     if h and "v18" in h and h.get("rec") == [st.st_mtime_ns, st.st_size]: return h   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802); v18 keeps the record's write time and size, so a record that grew after its verdict (a resume) is read again, and reads the last invocation's verdict only (#1229)
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
-    node = None
+    node = None; model_cur = None
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
     accepted, done_kids, wts, defs, outs = set(), set(), set(), {}, {}
@@ -405,6 +405,8 @@ def scan(p):
             except Exception: continue
             ts = d.get("ts"); e = d.get("event")
             node = d.get("node") or node   # the last event that names a node is the run's current stage; the record already carries it
+            if e == "call_start" and isinstance(d.get("chain"), list) and d["chain"]: model_cur = d["chain"][0]   # the chain head is the model the node calls first
+            if e == "outcome" and d.get("model"): model_cur = d["model"]   # the last answered call names the model the run is on
             if ts and t0 is None: t0 = ts
             if e == "spawn_accepted" and d.get("child"):
                 accepted.add(d["child"]); defs[d["child"]] = d.get("definition") if isinstance(d.get("definition"), dict) else None   # the definition names the child's workspace (#796)
@@ -456,7 +458,7 @@ def scan(p):
             else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at, "node": node}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "model": model_cur, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at, "node": node}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None or p in hist:   # a finished run is cached; a cached run that resumed leaves the cache
@@ -2207,7 +2209,7 @@ def nospec_count(items, moves=None, window=None, now=None):
     if window is None: window = pending_window()
     since = (time.time() if now is None else now) - NOSPEC_HOURS * 3600
     ends, closed_col = (COLUMN["issue_closed"], COLUMN["abandoned"]), COLUMN["issue_closed"]
-    cols = [(i, drawn_column(i, moves, window)["st"]) for i in items or []]
+    cols = [(i, cache_row_column(i, moves, window)) for i in items or []]
     gone = {i.get("n") for i, st in cols if _columns_module.SPEC_LABEL in (i.get("l") or []) and st in ends}
     done = total = 0
     for i, st in cols:
@@ -2222,7 +2224,7 @@ def nospec_count(items, moves=None, window=None, now=None):
     return {"closed": done, "total": total}
 
 def spec_progress(items, moves=None, window=None, now=None):
-    """The Monitor card's spec tile: closed over total sub-issues, summed over every open spec on the board cache. An open
+    """The Throughput card's last row (#1424): closed over total sub-issues, summed over every open spec on the board cache. An open
     spec is a card with the spec label that the board draws in neither Closed nor Abandoned: its column comes from
     `drawn_column`, with the door's overlay, as the board draws it (#829). The count is the one `task_count` reads, so
     no new GitHub read. The percent rounds down, so 100% means every sub-issue is closed; `frac` is the exact fraction
@@ -2234,7 +2236,7 @@ def spec_progress(items, moves=None, window=None, now=None):
     rows = []   # (fraction, number, tip line) per open spec
     for i in items or []:
         if _columns_module.SPEC_LABEL not in (i.get("l") or []): continue
-        if drawn_column(i, moves, window)["st"] in gone: continue
+        if cache_row_column(i, moves, window) in gone: continue
         sc = task_count(i)
         if sc:
             c, t = (int(x) for x in sc.split("/"))
@@ -2254,10 +2256,12 @@ def spec_progress(items, moves=None, window=None, now=None):
     if not n and not none["total"]: return dict(out, pct=0, frac=0, value="no open spec", state="none", bar=False)
     if not total: return dict(out, pct=0, frac=0, value=f"{n} open · no sub-issue yet", state="info", bar=True)
     pct = done * 100 // total
-    return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} · {pct}%", state="ok" if done == total else "info", bar=True)
+    return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} tickets · {pct}%",   # `tickets`, never a window count
+                state="ok" if done == total else "info", bar=True)
 
 SPEED_SLOTS = 6                 # the rolling slots the window is compared with, the window itself being the newest
 SPEED_WINDOW_SECS = 4 * 3600    # the window's first value; SG_SPEED_WINDOW_SECS moves it without a code change
+LABELS_STALE_SECS = 120         # the board cache's label read may trail the card this long before the card names it (#1424)
 
 def speed_window_secs():
     """The window in seconds: the constant, or SG_SPEED_WINDOW_SECS when it names a positive whole number. Read at call
@@ -2296,26 +2300,43 @@ def closed_since(items, now_ts, window_secs):
         if ts is not None and since <= ts <= now_ts: out += 1
     return out
 
-def arrivals_fact(items, now_ts, window_secs):
-    """The two arrival rows the card draws under the hero figure, both over the same window: Bugs counts every card
-    carrying `bug` or any label beginning with `loop-bug` (the prefix rule the loop itself dispatches by, ADR-0146, so
-    a loop defect is never missed), and Loop-bugs counts the prefix alone, always a subset of Bugs and never subtracted
-    from it. Each row carries its count and its share over every card opened in the window, so the card reads `7 of 10
-    opened`.
+def cache_row_column(i, moves, window):
+    """The board's own column for one cache row. A row a test or an older read hands in with a key missing is never a
+    KeyError: the missing key is one fact the board cannot draw, and the column reads from what the row carries."""
+    return drawn_column({"s": i.get("s"), "st": i.get("st"), "l": i.get("l"), "cr": i.get("cr"),
+                         "i": i.get("i"), "ot": i.get("ot")}, moves, window)["st"]
 
-    A row counts what came in, not what is still open: a card opened and closed inside the window is an arrival. Both
-    rows read `o`, the creation stamp the board cache already carries on every card (#1361); the snapshot gains no
-    field for them, and a card with no readable stamp is never invented as an arrival. A share over a zero denominator
-    is None: `0 of 0` is worded from the count and the denominator, never from a ratio over nothing."""
-    since, opened = now_ts - window_secs, []
-    for i in items or []:
-        ts = _close_instant(i.get("o"))
-        if ts is not None and since <= ts <= now_ts: opened.append(i)
-    total = len(opened)
-    def row(n): return {"n": n, "of": total, "share": round(n / total, 3) if total else None}
+
+def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
+    """The two window rows the card draws under the hero figure (#1424). Both cover the same rows, over the same window
+    and the same kinds: Bugs counts every card carrying `bug` or any label beginning with `loop-bug` (the prefix rule the
+    loop itself dispatches by, ADR-0146, so a loop defect is never missed), and Loop-bugs counts the prefix alone, always
+    a subset of Bugs and never subtracted from it. Each row carries three counts so the card reads `7 in · 4 out · 3 open`:
+
+    `in` is every card created in the window (`o`), a card closed inside it included; `out` is every card closed in the
+    window (`c`, the close stamp the board cache already carries, #1361), read from the stamp alone; `open` is every card
+    the board draws open now, the same `drawn_column` rule the kanban serves, so a closed card and a card in the Abandoned
+    column are no open card. The two rules never override each other, so a row agrees with the kanban it sits beside.
+    A card with no readable stamp is never invented as an arrival or a close."""
+    if moves is None: moves = read_moves() if overlay_on() else {}
+    if window is None: window = pending_window()
+    since, ends = now_ts - window_secs, (COLUMN["issue_closed"], COLUMN["abandoned"])
+    rows = {"bugs": {"in": 0, "out": 0, "open": 0}, "loop_bugs": {"in": 0, "out": 0, "open": 0}}
     def loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
-    bugs = sum(1 for i in opened if "bug" in (i.get("l") or []) or loop_defect(i))
-    return {"opened": total, "bugs": row(bugs), "loop_bugs": row(sum(1 for i in opened if loop_defect(i)))}
+    def open_now(i): return cache_row_column(i, moves, window) not in ends   # the kanban's own column, never a second rule
+    for i in items or []:
+        labels = i.get("l") or []
+        kinds = [k for k, hit in (("bugs", "bug" in labels or loop_defect(i)), ("loop_bugs", loop_defect(i))) if hit]
+        if not kinds: continue
+        o, c = _close_instant(i.get("o")), _close_instant(i.get("c"))
+        came = o is not None and since <= o <= now_ts
+        went = c is not None and since <= c <= now_ts   # the close stamp alone, so a lagging state never hides a close
+        still = open_now(i)
+        for k in kinds:
+            rows[k]["in"] += 1 if came else 0
+            rows[k]["out"] += 1 if went else 0
+            rows[k]["open"] += 1 if still else 0
+    return rows
 
 def tasks_fact(items, now_ts, window_secs, closed_n):
     """The Tasks row under the hero figure: planned delivery closed inside the window (#1362). A task is a closed card with
@@ -2377,9 +2398,14 @@ def throughput_fact(now=None):
             ([board_cache.get("t") or 0] if items else [])
     oldest = min((r for r in reads if r), default=0) or None
     age = now_ts - oldest if oldest else None
+    cache_t = board_cache.get("t") or 0   # the item read that carries each card's labels (#1424)
+    labels_age = now_ts - cache_t if cache_t else None
+    moves = read_moves() if overlay_on() else {}
+    window = pending_window()
     return {"window_secs": w, "window": window_n, "day": sum(s["n"] for s in slots),   # closes in the whole day: none means no history
-            "arrivals": arrivals_fact(items, now_ts, w),   # the Bugs and Loop-bugs rows, off the cache's `o` stamps alone
+            "arrivals": arrivals_fact(items, now_ts, w, moves, window),   # the Bugs and Loop-bugs rows, off the cache's stamps
             "tasks": tasks_fact(items, now_ts, w, window_n),   # planned delivery over the same window as the hero figure
+            "labels": {"age_secs": labels_age, "stale": labels_age is not None and labels_age > LABELS_STALE_SECS},
             "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
             "max": max(avail + [window_n]), "trend": trend,
             "as_of": oldest, "age_secs": age, "stale": age is not None and age > board_stale_bound()}
@@ -2409,17 +2435,22 @@ def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
     and `facts` the footer's own facts as the sampler last read them. The three numbers are the readings themselves, unrounded
-    (#1816): the page builds the cells from them, so the text rounds for display while the ceiling rule judges the reading."""
+    (#1816): the page builds the cells from them, so the text rounds for display while the ceiling rule judges the reading.
+    `specs` is served on its own key, off the board cache alone, so the Throughput card draws it whatever the optional
+    speed fact answers (#1424)."""
     hist = LOAD_STATE.get("cpu") or []
     cpu = hist[-1] if hist else None
+    now = time.time()
+    items = board_cache.get("items") or []
+    moves = read_moves() if overlay_on() else {}
     return {"line": load_line(cpu, LOAD_STATE.get("ram"), LOAD_STATE.get("gpu")),
             "cpu": cpu,
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
-            "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), time.time())],
-            "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
+            "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), now)],
             "subs": subs_gauges(),   # the Monitor's subscription instruments: each weekly window and its reset, off the quota cache
-            "speed": throughput_fact(),   # the Monitor's throughput row: today against the finished days
+            "specs": spec_progress(items, moves, pending_window(), now),   # the cumulative Specs row, never a window count
+            "speed": throughput_fact(now),   # the Monitor's throughput card; the Specs row rides the key above (#1424)
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -2584,7 +2615,7 @@ def run_row(d, port, procs):
     rank = run_rank(st, live=not gone)
     if unreadable: st, b = "unreadable", {**badge_of("unreadable"), "title": UNREADABLE_TIP}
     t1 = r["t1"] or time.time()
-    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share"), "stage": r.get("node")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
+    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share"), "stage": r.get("node"), "model": r.get("model"), "model_label": (model_labels({r["model"]}).get(r["model"]) if r.get("model") else None)}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
 def runs():
     _titles()
@@ -4915,11 +4946,11 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .gc.ok{background:color-mix(in srgb,var(--ok) var(--tint-alpha),var(--card))}#bbody .gc.warn{background:color-mix(in srgb,var(--warn) var(--tint-alpha),var(--card))}#bbody .gc.bad{background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card))}#bbody .gc.ok b,#bbody .gc.warn b,#bbody .gc.bad b{color:var(--on-tint)}
 #bbody .gc.debt{background:color-mix(in srgb,var(--acc) var(--tint-alpha),var(--card))}#bbody .gc.debt b{color:var(--on-tint)}#bbody .gc.unk{border-color:var(--tint-warn-line)}#bbody .gc.unk b{color:var(--warn)}
 #bbody .it:hover{border-color:var(--edge);border-top-color:var(--lc,var(--mute))}
-#bbody .it .id.ghl{padding:0 2px;opacity:.55}.it .id.ghl:hover{opacity:1;color:var(--acc)}.it .id{order:1;margin:0 0 0 auto;background:none;border:0;border-radius:0;padding:0;color:var(--mute);font:var(--fs-caption) var(--font-mono);font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap;text-decoration:none}
+#bbody .it .id.ghl{opacity:1;font-weight:600}#bbody .it .id svg{margin-left:6px;vertical-align:-1px}.it .id.ghl:hover{opacity:1;color:var(--acc)}.it .id{order:0;margin:0;background:color-mix(in srgb,var(--lc,var(--acc)) 12%,transparent);border:1px solid color-mix(in srgb,var(--lc,var(--acc)) 38%,transparent);border-radius:var(--radius-lg);padding:1px 7px;color:var(--lc,var(--acc));font:600 var(--fs-body) var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap;text-decoration:none}
 
 #bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,var(--line));border:1px solid transparent;border-radius:var(--radius-lg);padding:0 6px;margin:0 3px 2px 0;font-size:var(--fs-caption);color:var(--ink-body)}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
-#bbody .it .id:hover{color:var(--acc)}#bbody .it .tt{order:2;flex:1 1 100%;font-size:var(--fs-body);color:var(--fg)}#bbody .it>*{order:3}#bbody .it>.id{order:1}#bbody .it>.tt{order:2}#bbody .it>.lchip,#bbody .it>.bugc,#bbody .it>.rpo,#bbody .it>.pbg,#bbody .it>.cir,#bbody .it>.fz,#bbody .it>.pnd,#bbody .it>.pst{order:0;margin:0}#bbody .it>.dt{float:none}#bbody .it>.gstrip,#bbody .it>.blk,#bbody .it>.clos,#bbody .it>.prr,#bbody .it>.perr,#bbody .it>.ft{flex:1 1 100%;margin-top:2px}#bbody .it .hld{flex:1 1 100%;font-size:var(--fs-caption);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#bbody .it .hld::before{content:"\25CF ";color:var(--s5)}#bbody .cell .it .lbs{display:none}
-#bbody .lchip{border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-caption);font-weight:600;border:1px solid var(--line-strong);line-height:20px;white-space:nowrap;color:var(--mute)}#bbody .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,var(--line-strong))}
+#bbody .it .id:hover{color:var(--acc)}#bbody .it .tt{order:2;flex:1 1 100%;font-size:var(--fs-body);color:var(--fg)}#bbody .it>*{order:3}#bbody .it>.id{order:-2}#bbody .it>.fz{order:-1}#bbody .it>.lchip[data-k=spec]{order:1;margin-left:auto}#bbody .it>.tt{order:2}#bbody .it>.lchip,#bbody .it>.bugc,#bbody .it>.rpo,#bbody .it>.pbg,#bbody .it>.cir,#bbody .it>.fz,#bbody .it>.pnd,#bbody .it>.pst{order:0;margin:0}#bbody .it>.dt{float:none}#bbody .it>.gstrip,#bbody .it>.blk,#bbody .it>.clos,#bbody .it>.prr,#bbody .it>.perr,#bbody .it>.ft{flex:1 1 100%;margin-top:2px}#bbody .it .hld{flex:1 1 100%;font-size:var(--fs-caption);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#bbody .it .hld::before{content:"\25CF ";color:var(--s5)}#bbody .cell .it .lbs{display:none}
+#bbody .lchip{border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-caption);font-weight:600;border:1px solid var(--line-strong);line-height:20px;white-space:nowrap;color:var(--mute)}#bbody .lchip[data-k=spec]{color:var(--mute);border-color:var(--line);font-weight:400}#bbody .it>.fz{order:-1}
 #bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}#bbody .bmv{display:inline-block;margin-left:8px;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .bmv:disabled{opacity:.5;cursor:default}#bbody .it .spb{display:inline-block;margin-top:4px;margin-left:6px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .spb:hover{border-color:var(--acc)}#spdlg{margin:6px 0;padding:8px 10px;border-radius:var(--radius-md);border:1px solid var(--acc);background:var(--inset);font-size:var(--fs-body)}#spdlg button{margin:6px 6px 0 0;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#spnote{margin:4px 0;font-size:var(--fs-caption);color:var(--ok)}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:var(--fs-caption);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--acc);text-decoration:none}
@@ -5067,9 +5098,9 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
 #lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden;display:block;position:relative;padding:7px 22px 8px 10px}#lrun .r>div{min-width:0}#lrun .r.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .r.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}   /* the panel's own run keeps its accent bar beside the amber one */
-#lrun .r1{display:flex;align-items:center;gap:6px;min-width:0}#lrun .r1 .load{flex:none;margin:0;padding:0;border:0;background:none;color:var(--warn);font-size:var(--fs-caption)}#lrun .r1 b{flex:0 0 auto;white-space:nowrap}
+#lrun .r1{display:flex;align-items:center;gap:6px;min-width:0}#lrun .r1 .load{flex:none;margin:0;padding:0;border:0;background:none;color:var(--warn);font-size:var(--fs-caption)}#lrun .r1 b{flex:0 0 auto;white-space:nowrap;color:var(--lc,inherit)}
 #lrun .r2{margin-top:1px;color:var(--ink-body);font-size:var(--fs-caption);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
-#lrun .r .pn{position:absolute;top:6px;right:7px;opacity:0;pointer-events:none}#lrun .r:hover .pn,#lrun .r:focus-visible .pn{opacity:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child{margin-bottom:0}
+#lrun .r .pn{position:absolute;top:6px;right:7px;opacity:0;pointer-events:none}#lrun .r:hover .pn,#lrun .r:focus-visible .pn{opacity:1}#lrun .r3{margin-top:1px;color:var(--mute);font-size:var(--fs-caption);font-family:var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child{margin-bottom:0}
 #lrmore{display:block;width:100%;margin:2px 0 0;text-align:center}
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#list{max-width:900px}
 /*BOARD_LANES_CSS*/
@@ -5077,7 +5108,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:var(--radius-md)}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-caption);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:6px;border-radius:var(--radius-lg);background:var(--raise);margin-top:6px}#ispeed .spr i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--fg)}#ispeed .spr .spt{left:0;top:0;bottom:0;width:0;border-radius:var(--radius-lg);background:var(--mute)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#ispeed .spw{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;margin-top:6px;font-size:var(--fs-caption);min-width:0}#ispeed .spwl{font-weight:600;color:var(--mute)}#ispeed .spwv{color:var(--fg);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}#ispeed .spw.ok .spwl{color:var(--ok)}#ispeed .spw.warn .spwl{color:var(--warn)}#ispeed .spw.err .spwl{color:var(--err)}#ispeed .spwt{grid-column:1/-1;display:block;height:4px;border-radius:var(--radius-lg);background:var(--raise);overflow:hidden}#ispeed .spwt i{display:block;height:100%;background:var(--ok)}#ispeed .spw.warn .spwt i{background:var(--warn)}#ispeed .spw.err .spwt i{background:var(--err)}#ispeed .spw.mute .spwt i{background:var(--mute)}#ispeed .spage{font-size:var(--fs-caption);color:var(--warn);margin-top:6px}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:6px;border-radius:var(--radius-lg);background:var(--raise);margin-top:6px}#ispeed .spr i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--fg)}#ispeed .spr .spt{left:0;top:0;bottom:0;width:0;border-radius:var(--radius-lg);background:var(--mute)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#ispeed .spw{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;margin-top:6px;font-size:var(--fs-caption);min-width:0}#ispeed .spwl{font-weight:600;color:var(--mute)}#ispeed .spwv{color:var(--fg);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}#ispeed .spw.ok .spwl{color:var(--ok)}#ispeed .spw.warn .spwl{color:var(--warn)}#ispeed .spw.err .spwl{color:var(--err)}#ispeed .spwt{grid-column:1/-1;display:block;height:4px;border-radius:var(--radius-lg);background:var(--raise);overflow:hidden}#ispeed .spwt i{display:block;height:100%;background:var(--ok)}#ispeed .spw.warn .spwt i{background:var(--warn)}#ispeed .spw.err .spwt i{background:var(--err)}#ispeed .spw.mute .spwt i{background:var(--mute)}#ispeed .spw.spec .spwl{color:var(--acc)}#ispeed .spw.spec .spwt i{background:var(--acc)}#ispeed .spws{grid-column:1/-1;font-size:calc(var(--fs-caption) - 2px);color:var(--mute)}#ispeed .spage{font-size:var(--fs-caption);color:var(--warn);margin-top:6px}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
@@ -5129,7 +5160,6 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
 #inst .at .av{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#inst .at.err .av{color:var(--err)}#inst .at a{color:var(--acc);text-decoration:none}#inst .at a:hover{text-decoration:underline}
 #inst .at details>summary{cursor:pointer;color:var(--mute)}#inst .at details>ul{margin:4px 0 0;padding:0 0 0 14px;color:var(--mute);overflow-wrap:anywhere}
-#ispec{margin-bottom:8px}#inst .at .so{margin-left:auto;font-weight:400;color:var(--mute);font-variant-numeric:tabular-nums}#inst .pb{display:block;height:6px;margin:5px 0 2px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}#inst .pf{display:block;height:100%;border-radius:var(--radius-sm);background:var(--acc);transition:width var(--motion-duration-long) var(--motion-entry-easing)}#inst .at.ok .pf{background:var(--ok)}
 #inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-caption);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 /* The Monitor's loop switch (#923, #1234): the phone serves this block alone, so the switch is styled here and not only
@@ -5178,7 +5208,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <div id=win>
 <script id=sbboot>try{if(sideState(JSON.parse(localStorage.hub||"{}").side,matchMedia("(min-width: 601px)").matches))document.documentElement.classList.add("sbshut")}catch(e){}</script>
 <aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbbody>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=iloop></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </div></aside>
@@ -5217,6 +5247,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 {const p=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";document.title=p?`Hub | ${decodeURIComponent(p)}`:"Hub";}   // the tab names the profile it shows, so two open hubs are told apart
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
 const HUB_REPO=/*HUB_REPO*/;
+let SPECLC=new Map();   // issue number -> its spec colour, filled by the board read so the live-runs card can wear it
 let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set(),slots=[],hl=null,boardRows=[],ENDED=[];   // ENDED: the rows of /api/ended (#984)
 const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
 // SIDEBAR{
@@ -5294,7 +5325,13 @@ function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
 function instSum(facts){const n=instTiles(facts).filter(x=>x.tone==="err").length;return n?n+" fail":""}   // no tile, so no count; a red gate stays in the footer (#1260)
-function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
+function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
+ const spec=(()=>{const v=esc(spc.value||"no open spec"),sub=spc.so?esc(spc.so):"";
+  const pb=spc.bar?`<span class=spwt><i style="width:${100*Math.max(0,Math.min(1,Number(spc.frac)||0))}%"></i></span>`:"";
+  const tip=spc.tip?esc(spc.tip).replace(/"/g,"&quot;"):"";
+  return `<div class="spw spec" role=img aria-label="Specs: ${v}${sub?", "+sub:""}"${tip?` title="${tip}"`:""}><span class=spwl>Specs</span><span class=spwv>${v}</span>`+(sub?`<span class=spws>${sub}</span>`:"")+pb+`</div>`})();
+ if(!sp){if(!(spc.open||(spc.none||{}).total))return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
+  return `<div class=spd><div class=spdh><b>Throughput</b></div><div class=spn>no history yet</div>`+spec+`</div>`}
  const hi=Math.max(sp.max||0,sp.window||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi)),hrs=+(sp.window_secs/3600).toFixed(2);
  const tag=sp.trend==="up"?["\u25B2","accelerating","up"]:sp.trend==="down"?["\u25BC","slowing","down"]:sp.trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
  const none=!sp.day,med=sp.median==null?"unknown":sp.median;
@@ -5302,15 +5339,18 @@ function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><spa
   +(sp.median==null?"":`<i class=spmed style="left:${at(sp.median)}%" title="median ${sp.median}"></i>`)+`<i class="spt ${tag[2]}" style="width:${at(sp.window)}%"></i></div>`
   +`<div class=spl><span>median ${med}</span><span>max ${sp.max}</span></div>`;
  const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
- const row=(cls,name,word,r)=>{const n=(r||{}).n||0,of=(r||{}).of||0,t=cls==="ok"||of?cls:"mute";
-  return `<div class="spw ${t}" role=img aria-label="${name}: ${n} of ${of} ${word}"><span class=spwl>${name}</span><span class=spwv>${n} of ${of} ${word}</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`};
+ const win=`title="last ${hrs} h: in counts every card created in the window, closed ones too"`;   // #1424: the window and what `in` means
+ const row=(cls,name,r)=>{const n=(r||{}).in||0,o=(r||{}).out||0,k=(r||{}).open||0,t=n?cls:"mute";
+  const v=n?`${n} in \u00b7 ${o} out \u00b7 ${k} open`:"0 in", w=n?Math.max(0,Math.min(100,100*o/n)):0,
+   pb=n?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
+  return `<div class="spw ${t}" role=img aria-label="${name}: ${v}" ${win}><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
+ const tasks=(()=>{const n=(sp.tasks||{}).n||0,of=(sp.tasks||{}).of||0,t=of?"ok":"mute";
+  return `<div class="spw ${t}" role=img aria-label="Tasks: ${n} of ${of} closed"><span class=spwl>Tasks</span><span class=spwv>${n} of ${of} closed</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`})();
  const arr=sp.arrivals||{}, stale=sp.stale?`<div class=spage>\u00b7 read ${Math.floor(sp.age_secs/60)} m ago</div>`:"";
+ const lab=sp.labels||{}, lnote=lab.stale?`<div class=spage>\u00b7 labels ${Math.floor(lab.age_secs/60)} min old</div>`:"";
  return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`+hero+bar
-  +row("ok","Tasks","closed",sp.tasks)+row("warn","Bugs","opened",arr.bugs)+row("err","Loop-bugs","opened",arr.loop_bugs)+stale+`</div>`}
+  +tasks+row("warn","Bugs",arr.bugs)+row("err","Loop-bugs",arr.loop_bugs)+spec+stale+lnote+`</div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
-function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.state:"";   // the hub decides the count, the text and the state; the page only draws them
- const w=100*Math.max(0,Math.min(1,Number(p.frac)||0)),bar=p.bar?`<span class=pb role=progressbar aria-label="Open spec progress" aria-valuemin=0 aria-valuemax=${Number(p.total)||0} aria-valuenow=${Number(p.done)||0}><span class=pf style="width:${w}%"></span></span>`:"";
- return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
 let instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
 function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
@@ -5318,7 +5358,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.known?`url(#g-${x.k})`:"none")}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispeed",speedRow((d||{}).speed,(d||{}).specs));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
 }
@@ -5361,8 +5401,9 @@ const liveStage=r=>{const n=r.stage||"";if(!n)return"";const m=/^route\.router\.
 function liveRow(r,shown){
  const s=liveSlot(r),on=shown&&(shown.has?shown.has(r.id):shown.includes(r.id))?` show`:"",t=liveTitle(r);
  const st=r.cpu?"":liveStage(r),dot=`<i class="dot${s.k?" "+s.k:""}"></i>`,stg=st?`<span class=stg title="the node the run is at">· ${esc(st)}</span>`:"";
+ const bid=(r.issues||[])[0],lc=bid==null?"":((typeof SPECLC!=="undefined"&&SPECLC&&SPECLC.get(String(bid)))||"");   // the number wears its spec colour, as the board card does (#1429)
  const lab=`<b title="${iq(labelTip(r))}">${esc(name(r).replace(/^implement /,""))}</b>`,slot=`<span class="slot${s.k?" "+s.k:""}">${esc(s.text)}</span>`;
- return `<div class="r${on}${s.k?" "+s.k:""}" data-id="${esc(r.id)}" tabindex=0 role=button><div class=r1>${dot}${lab}${stg}${loadMark(r)}${slot}</div>${t?`<div class=r2 title="${iq(t)}">${esc(t)}</div>`:""}<span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`
+ return `<div class="r${on}${s.k?" "+s.k:""}" data-id="${esc(r.id)}" tabindex=0 role=button${lc?` style="--lc:${lc}"`:""}><div class=r1>${dot}${lab}${stg}${loadMark(r)}${slot}</div>${t?`<div class=r2 title="${iq(t)}">${esc(t)}</div>`:""}${r.model?`<div class=r3 title="the model this run is on now">${esc(r.model_label||r.model)}</div>`:""}<span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`
 }
 function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
@@ -6059,7 +6100,7 @@ const CN=all.map(g=>g.name);   // every column of this board: what colOf reads t
 lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
-const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));   // a finished spec is no option (#981); one color per spec option on the board (#917)
+const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardSpec(x)]).filter(p=>p[1]!=null&&Number.isFinite(Number(p[1]))).map(p=>[p[0],specColor(SLOTS,p[1])]));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
 const fs=keptSpecs(bo.fs||[],boardGroups,b.sum);
 if(!b.err&&fs.length!==(bo.fs||[]).length){bo.fs=fs;saveB()}   // a saved key whose spec finished is dropped (#981)
 const hidKept=keptHidden(bo.hidden||[],all);
@@ -6080,7 +6121,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${waveChip(x)}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -6619,13 +6660,88 @@ def kimi_usages(tok):
     """The one HTTP read the probe makes: the subscription's own usage document."""
     req = urllib.request.Request(KIMI_USAGES, headers={"authorization": f"Bearer {tok}"})
     with urllib.request.urlopen(req, timeout=15, context=ca_context()) as r: return json.loads(r.read().decode("utf8", "replace"))
+KIMI_PROXY_DEFAULT = "http://127.0.0.1:18765"   # the bridge's local server, loopback only
+KIMI_MODEL = "kimi-for-coding"                  # a one-token call is the smallest Kimi call the bridge accepts
+KIMI_REFRESH_BACKOFF = 300                      # a failed renewal is remembered, never retried on every poll
+KIMI_REFRESH_STATE = {"until": 0.0, "reason": None}
+def kimi_proxy():
+    """The bridge's address, read per call so a configured port is the port used."""
+    return os.environ.get("SG_CCP_PROXY", KIMI_PROXY_DEFAULT).rstrip("/")
+class _KimiNoRedirect(urllib.request.HTTPRedirectHandler):
+    """A refresh answer must be the bridge's own: a redirect is refused, never followed to another host."""
+    def redirect_request(self, *a, **kw): return None
+KIMI_OPENER = urllib.request.build_opener(_KimiNoRedirect)
+def kimi_refresh_open(req, timeout=30):
+    """The seam the refresh POST crosses; a test answers here so the real request is built and sent by `kimi_refresh`."""
+    return KIMI_OPENER.open(req, timeout=timeout)
+def kimi_refresh():
+    """The bridge renews its Kimi token only on a Kimi call, so the probe makes the smallest one on the bridge's own
+    inference route and lets the bridge write its own store; the probe writes no credential.
+
+    Plan decision for #1428, Option A: the probe renews when no access token is live, by making the one call the bridge
+    would make anyway. Confirmed against the installed bridge (0.1.45): it serves only GET /v1/models and POST
+    /v1/messages on loopback with no auth, a `kimi-for-coding` call is accepted, and its store's mtime moves with a
+    Kimi call. A 200 that is not a bridge message did not renew anything, so it raises rather than passing as one."""
+    body = json.dumps({"model": KIMI_MODEL, "max_tokens": 1,
+                       "messages": [{"role": "user", "content": "."}]}).encode()
+    req = urllib.request.Request(f"{kimi_proxy()}/v1/messages", data=body, method="POST",
+                                 headers={"content-type": "application/json", "anthropic-version": "2023-06-01"})
+    with kimi_refresh_open(req) as r: raw = r.read()
+    try: d = json.loads(raw.decode("utf8", "replace"))
+    except ValueError: raise RuntimeError(f"the bridge answered no message: {raw[:80]!r}")
+    if not isinstance(d, dict) or not isinstance(d.get("content"), list):
+        raise RuntimeError(f"the bridge answered no message: {str(d)[:80]}")
+def kimi_refresh_source():
+    """Where a refresh token sits. "bridge" is the only path this probe may use: the renewal runs through the bridge,
+    which renews from its own store. "cli" says only the CLI's store holds one, and the CLI renews that itself; None
+    says neither store holds one. The paths are named so a reason never sends the owner after the wrong store."""
+    try:
+        d = json.loads(KIMI_AUTH.read_text())
+        if isinstance(d.get("refresh"), str) and d["refresh"]: return "bridge"
+    except Exception: pass
+    try:
+        d = json.loads(KIMI_CLI_AUTH.read_text())
+        if isinstance(d.get("refresh_token"), str) and d["refresh_token"]: return "cli"
+    except Exception: pass
+    return None
+def kimi_why(s, cap=160):
+    """A reason the panel shows whole: cut on a word boundary with an ellipsis, never mid-word."""
+    if len(s) <= cap: return s
+    cut = s[:cap - 1].rsplit(" ", 1)[0] or s[:cap - 1]
+    return cut + "…"
+def kimi_renew(now=None):
+    """Renew an expired token once through the bridge and answer why none is live, or None when one is. A failed
+    renewal backs off for KIMI_REFRESH_BACKOFF seconds: the panel polls every couple of minutes, and a Kimi call per
+    poll would cost the account and flood the log with the same reason."""
+    now = time.time() if now is None else now
+    if now < KIMI_REFRESH_STATE["until"]: return KIMI_REFRESH_STATE["reason"]
+    try: kimi_refresh()
+    except Exception as e:
+        why = kimi_why(f"no live Kimi token and the bridge refresh failed: {type(e).__name__}: {e}")
+    else:
+        if kimi_token(now): return None
+        why = kimi_why("no live Kimi token: the bridge answered and its store still holds no live token")
+    KIMI_REFRESH_STATE.update(until=now + KIMI_REFRESH_BACKOFF, reason=why)
+    return why
 def q_kimi():
-    """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An absent or expired token
-    reads as no reading with its reason, never as a guess."""
-    tok = kimi_token()
-    # `keep`: the token lives fifteen minutes and only a kimi call refreshes it, so this is no new reading, never one
-    # that stopped tracking the account; quota_store keeps the last good windows, and quota_row still ages them out.
-    if not tok: return {"windows": [], "unavailable": True, "keep": True, "err": "no live Kimi token: the bridge refreshes it on the next kimi call"}
+    """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An expired token is renewed
+    once through the bridge's own path; a renewal that fails or leaves no live token reads as no reading with its
+    reason, never as a guess."""
+    tok = kimi_token(); why = None
+    if not tok:
+        src = kimi_refresh_source()
+        if src == "bridge":
+            why = kimi_renew()
+            if why is None: tok = kimi_token()
+        elif src == "cli":
+            why = ("no live Kimi token: only the CLI's store holds a refresh token, and the CLI renews that itself; "
+                   "the probe writes no credential")
+        else:
+            why = "no live Kimi token: neither the bridge's store nor the CLI's store holds a refresh token"
+    # `keep`: the token lives fifteen minutes, so this is no new reading, never one that stopped tracking the account;
+    # quota_store keeps the last good windows, and quota_row still ages them out.
+    if not tok:
+        return {"windows": [], "unavailable": True, "keep": True, "err": kimi_why(why or "no live Kimi token")}
     d = kimi_usages(tok)
     u = d.get("usages") or {}
     ws = []

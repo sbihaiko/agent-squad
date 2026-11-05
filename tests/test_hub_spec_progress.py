@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -57,17 +58,17 @@ BOARD = [
 def test_the_bar_totals_open_specs_only(hub):
     p = hub.spec_progress(BOARD, moves={})
     assert (p["done"], p["total"], p["open"], p["pct"], p["state"], p["bar"]) == (5, 9, 3, 55, "info", True)
-    assert p["value"] == "5/9 · 55%" and p["so"] == "3 open"
+    assert p["value"] == "5/9 tickets · 55%" and p["so"] == "3 open"
     assert p["frac"] == pytest.approx(5 / 9)
     assert p["tip"].split("\n") == ["#7 Spec 7 — no sub-issue", "#1 Spec 1 — 2/5", "#2 Spec 2 — 3/4"]
 
 
 def test_percent_rounds_down_and_reads_100_only_when_all_done(hub):
     p = hub.spec_progress([_item(1, "Todo", si=(199, 200))], moves={})
-    assert (p["pct"], p["value"], p["state"]) == (99, "199/200 · 99%", "info")
+    assert (p["pct"], p["value"], p["state"]) == (99, "199/200 tickets · 99%", "info")
     assert p["frac"] == pytest.approx(0.995)
     p = hub.spec_progress([_item(1, "Todo", si=(4, 4))], moves={})
-    assert (p["pct"], p["value"], p["state"]) == (100, "4/4 · 100%", "ok")
+    assert (p["pct"], p["value"], p["state"]) == (100, "4/4 tickets · 100%", "ok")
 
 
 def test_no_open_spec_reads_no_open_spec(hub):
@@ -101,7 +102,7 @@ def test_a_pending_move_to_abandoned_is_not_counted(hub, monkeypatch):
 def test_the_load_route_serves_the_bar(hub, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", dict(hub.board_cache, items=BOARD))
     monkeypatch.setattr(hub, "read_moves", lambda: {})
-    assert hub.load_payload()["specs"]["value"] == "5/9 · 55%"
+    assert hub.load_payload()["specs"]["value"] == "5/9 tickets · 55%"
 
 
 def _run(hub, expr):
@@ -115,30 +116,72 @@ def _run(hub, expr):
     return json.loads(out.stdout)
 
 
-def test_the_page_draws_the_tile(hub):
-    html = _run(hub, f"specBar({json.dumps(hub.spec_progress(BOARD, moves={}))})")
-    assert 'class="at info"' in html and "<span class=so>3 open</span>" in html and "5/9 · 55%" in html
-    assert "role=progressbar" in html and "aria-valuemax=9" in html and "aria-valuenow=5" in html
-    assert f"width:{100 * 5 / 9}%" in html and 'title="#7 Spec 7' in html
-    done = _run(hub, f"specBar({json.dumps(hub.spec_progress([_item(1, 'Todo', si=(4, 4))], moves={}))})")
-    assert 'class="at ok"' in done and "width:100%" in done
-    empty = _run(hub, f"specBar({json.dumps(hub.spec_progress([], moves={}))})")
-    assert "no open spec" in empty and "progressbar" not in empty and 'class="at"' in empty
-    assert "no open spec" in _run(hub, "specBar(undefined)")
+def _specs_row(hub, p):
+    """The Throughput card's Specs row for one spec fact, drawn by the page's own speedRow."""
+    sp = {"window": 0, "window_secs": 4 * 3600, "day": 0, "median": None, "min": None, "max": 0, "trend": None,
+          "stale": False, "age_secs": 60, "labels": {"age_secs": 60, "stale": False},
+          "tasks": {"n": 0, "of": 0, "share": None},
+          "arrivals": {"bugs": {"in": 0, "out": 0, "open": 0}, "loop_bugs": {"in": 0, "out": 0, "open": 0}},
+          "specs": p}
+    return _run(hub, f"speedRow({json.dumps(sp)})")
+
+
+def test_the_throughput_card_draws_the_specs_row_with_the_old_tile_counts(hub):
+    """#1424: the Specs card moved into the Throughput card; the row shows the same counts the old tile showed."""
+    p = hub.spec_progress(BOARD, moves={})
+    html = _specs_row(hub, p)
+    assert 'class="spw spec"' in html and "5/9 tickets · 55%" in html, html
+    assert "<span class=spws>3 open</span>" in html, html
+    assert f"width:{100 * p['frac']}%" in html, html
+    assert 'role=img aria-label="Specs: 5/9 tickets · 55%, 3 open"' in html, html
+
+
+def test_the_card_draws_the_specs_row_the_hub_serves_for_one_fixture(hub, monkeypatch):
+    """#1424: the row is drawn from the payload the hub serves, over the same fixture the old Specs card read, so a
+    wiring gap between `spec_progress` and the card cannot pass: the served counts are the computed counts."""
+    monkeypatch.setattr(hub, "board_cache", dict(hub.board_cache, items=BOARD, t=time.time()))
+    monkeypatch.setattr(hub, "read_moves", lambda: {})
+    payload = hub.load_payload()
+    assert payload["specs"] == hub.spec_progress(BOARD, moves={})
+    html = _run(hub, f"speedRow({json.dumps(payload['speed'])}, {json.dumps(payload['specs'])})")
+    assert 'class="spw spec"' in html, html
+    assert "<span class=spwv>5/9 tickets · 55%</span>" in html, html
+    assert "<span class=spws>3 open</span>" in html, html
+
+
+def test_the_specs_row_survives_a_hub_with_no_throughput_history(hub):
+    """#1424: the Specs row comes off the board cache, never off the optional speed fact: a hub with no slot history
+    still draws it."""
+    p = hub.spec_progress(BOARD, moves={})
+    html = _run(hub, f"speedRow(null, {json.dumps(p)})")
+    assert "no history yet" in html and 'class="spw spec"' in html, html
+    assert "5/9 tickets · 55%" in html, html
+
+
+def test_no_separate_specs_card_is_drawn(hub):
+    """The separate Specs card is gone: the page holds no spec tile slot and no specBar renderer."""
+    assert "id=ispec" not in hub.PAGE
+    assert "function specBar(" not in hub.PAGE
+
+
+def test_the_cache_row_column_is_the_kanban_column(hub):
+    """The Specs row counts the column the kanban draws, so the cache wrapper never reshapes a row's facts."""
+    for i in BOARD:
+        assert hub.cache_row_column(i, {}, 120.0) == hub.drawn_column(i, {}, 120.0)["st"]
 
 
 def test_the_fill_has_a_reduced_motion_rule(hub):
-    """#1140: the fill's partial block folded into the one shared block, which names it; no partial block survives."""
+    """#1140: no partial reduced-motion block survives: the one shared block is all the card needs."""
     blocks = re.findall(r"@media \(prefers-reduced-motion: reduce\)\{(.*?)\}\}", hub.PAGE, re.S)
     assert len(blocks) == 1, "the page carries the one shared reduced-motion block"
-    assert "#inst .pf" in blocks[0].split("{", 1)[0], "the shared block does not name the progress fill"
+    assert "@media" not in hub.INST_CSS, "a partial reduced-motion block survives in the Instruments card"
 
 
-def test_the_bar_sits_below_the_tiles_and_above_the_load_lines(hub):
+def test_the_throughput_card_sits_above_the_load_lines(hub):
     """The Monitor carries the one loop switch and no late-writes row (owner): the instruments lead, the switch closes the card."""
     page = hub.PAGE
     assert "id=iloop" in page and "id=ilate" not in page
-    assert page.index("id=igs") < page.index("id=ian") < page.index("id=ispec") < page.index("id=iloop")
+    assert page.index("id=igs") < page.index("id=ispeed") < page.index("id=ian") < page.index("id=iloop")
 
 
 # ---- the No spec group: bugs and single tickets (owner) ----
@@ -183,14 +226,14 @@ def test_the_open_card_of_a_closed_spec_counts_as_no_spec(hub):
 def test_the_monitor_tile_adds_the_no_spec_group(hub):
     p = hub.spec_progress(BOARD + NOSPEC, moves={}, now=NOW)
     assert (p["done"], p["total"], p["open"]) == (7, 13, 3)
-    assert p["so"] == "3 open + no spec" and p["value"] == "7/13 · 53%"
+    assert p["so"] == "3 open + no spec" and p["value"] == "7/13 tickets · 53%"
     assert p["none"] == {"closed": 2, "total": 4}
     assert p["tip"].split("\n")[-1] == "No spec — 2/4"
 
 
 def test_the_tile_draws_no_spec_alone(hub):
     p = hub.spec_progress(NOSPEC, moves={}, now=NOW)
-    assert (p["open"], p["so"], p["value"], p["state"], p["bar"]) == (0, "no spec", "2/4 · 50%", "info", True)
+    assert (p["open"], p["so"], p["value"], p["state"], p["bar"]) == (0, "no spec", "2/4 tickets · 50%", "info", True)
     assert p["tip"] == "No spec — 2/4"
 
 

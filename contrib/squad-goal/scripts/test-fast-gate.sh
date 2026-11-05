@@ -490,6 +490,20 @@ out=$(pycase_nc "$T/wt-novenv"); rc=$?
 /usr/bin/grep -q 'sg_gate_python' "$d/fast-gate.sh" && ok "fast-gate names sg_gate_python" || ko "fast-gate keeps its own interpreter lookup"
 /usr/bin/grep -q 'py=python3' "$d/fast-gate.sh" && ko "fast-gate keeps a hand-rolled interpreter fallback" || ok "fast-gate keeps no hand-rolled interpreter fallback"
 
+# (#1436) A child's own gate asks for two gate slots, so three children land at once on a six-slot budget; an entry or a tip
+# gate keeps the full count. The budget is the plugin's here, so the count a gate took reaches its command as SQUAD_GATE_WORKERS.
+ws=$T/ws; mkdir -p "$ws"
+printf '#!/bin/bash\nprintf "%%s\\n" "$SQUAD_GATE_WORKERS" > "%s"\n' "$T/workers" > "$T/wbase.sh"
+wcase() {  # <env assignment>...: one passing child gate, the count it took written by its battery stub
+  rm -f "$T/workers"
+  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_CALLER "$@" SG_STATE="$ws" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/wbase.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" >/dev/null 2>&1)
+  cat "$T/workers" 2>/dev/null
+}
+w=$(wcase); [ "$w" = 2 ] && ok "a child gate with no count named takes two gate slots" || ko "child gate slots: '$w', want 2"
+w=$(wcase SG_GATE_CALLER=entry); [ "$w" = 6 ] && ok "an entry gate keeps the full count" || ko "entry gate slots: '$w', want 6"
+w=$(wcase SG_GATE_CALLER=entry SG_GATE_WORKERS=3); [ "$w" = 3 ] && ok "a count named by the caller wins over the kind's default" || ko "named count: '$w', want 3"
+w=$(wcase SG_GATE_CALLER=child SG_GATE_WORKERS=5); [ "$w" = 5 ] && ok "a child gate named a count of its own: it wins" || ko "child named count: '$w', want 5"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail
