@@ -14,6 +14,7 @@ test-board-clear-run.sh 0.65
 test-board-define.sh 0.79
 test-board-fast.sh 0.18
 test-board-forward.sh 2.62
+test-board-gate-check.sh 1.03
 test-board-history.sh 0.34
 test-board-lag.sh 0.97
 test-board-migrate.sh 0.15
