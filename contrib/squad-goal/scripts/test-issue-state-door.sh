@@ -5,9 +5,12 @@
 # Hermetic: a stub gh answers the Status field and the cards route through the --jq the caller passes; its own SG_STATE.
 # The door's repository filter is Python's, not the stub's: the raw projection is asserted to carry the other
 # repository's card, so a door that stops filtering is red.
-# Scope: the repository half of the acceptance criterion. A stamp-free cache is not trusted at all; a stamped and fresh
-# cache is the board's own copy, so a card the live board no longer lists is that cache's answer to give, not this
-# door's to second-guess.
+# Scope: both halves of the acceptance criterion. Repository: a card of another repository never reaches the door, by
+# the whole-board read or by a hub cache row. Membership: the hub marks a row it wrote for an open issue the board does
+# not carry `nc`, and such a row is not a card -- the door neither prints it as one nor counts it as carried, and the
+# go read names it UNREAD (#800). A stamp-free cache is not trusted at all. A stamped and fresh cache is the hub's own
+# board pass, so a card removed from the board is named no longer than the freshness bound plus one pass; the door
+# never reads the board to second-guess a fresh cache, and nothing here claims more than that.
 # mirrors: issue_state.py
 # usage: bash test-issue-state-door.sh [issue_state.py]
 src=${1:-$(dirname "$0")/issue_state.py}; here=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0; trap 'rm -rf "$T"' EXIT
@@ -73,6 +76,14 @@ before=$(reads); legacy=$(SG_BOARD_CACHE="$T/legacy.json" door); after=$(reads)
 printf '%s\n' "$legacy" | /usr/bin/grep -q $'^1\t' && ko "an unstamped cache row is named" || ok "an unstamped cache row is not named"
 printf '%s\n' "$legacy" | /usr/bin/grep -q $'^11\t' && ko "an unstamped cache of another repository names its card" || ok "an unstamped cache of another repository names no card"
 printf '%s\n' "$legacy" | /usr/bin/grep -qx $'10\tDoing' && ok "a real Doing card still reported from the board" || ko "a real Doing card still reported from the board (rows: $legacy)"
+# an open issue the board does not carry is not a board card: the hub writes it with `nc`, and the door never prints it
+# as a row. The go read still names it UNREAD, which is what a go-labelled issue whose card no read carries gets (#800).
+printf '{"t": %s, "repo": "o/r", "items": [{"n":10,"st":"Doing","r":"o/r"},{"n":999,"r":"o/r","st":null,"nc":true}]}' "$(date +%s)" > "$T/nocard.json"
+before=$(reads); nocard=$(SG_BOARD_CACHE="$T/nocard.json" door --go 999,10); after=$(reads)
+[ "$before" = "$after" ] && ok "a fresh cache answers the go read with no board read" || ko "a fresh cache answers the go read with no board read ($before then $after reads)"
+printf '%s\n' "$nocard" | /usr/bin/grep -q $'^999\t' && ko "an issue the board does not carry is printed as a board row" || ok "an issue the board does not carry is not printed as a board row"
+printf '%s\n' "$nocard" | /usr/bin/grep -q $'^UNREAD\t.*999' && ok "a go issue the board does not carry is named UNREAD" || ko "a go issue the board does not carry is named UNREAD (rows: $nocard)"
+printf '%s\n' "$nocard" | /usr/bin/grep -qx $'10\tDoing' && ok "a real Doing card with no live run stays reported" || ko "a real Doing card with no live run stays reported (rows: $nocard)"
 # a cache file of another board is never this board's: the board answers, and claims no card of its own
 printf '{"t": %s, "repo": "o/other", "items": [{"n":11,"st":"Doing","r":"o/other"},{"n":1,"st":"Doing","r":"o/other"}]}' "$(date +%s)" > "$T/foreign.json"
 before=$(reads); foreign=$(SG_BOARD_CACHE="$T/foreign.json" door); after=$(reads)
