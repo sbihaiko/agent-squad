@@ -1230,4 +1230,23 @@ r=$(SG_WAVE_TIP_GATES='[ -e "$SG_STATE/locks/single-wland/round" ] && echo marke
 [ $rc = 0 ] && ok "W1290: the two-round landing lands the wave without the child that broke it" || ko "W1290: exit $rc: '$r'"
 rm -rf "$T/st/locks/single-wland"
 
+# W1409 (#1409): a Python-only red at the wave tip names the child whose own pytest delta fails. The child's pytest runs
+# through gate.sh: under the gate lock (SG_SERIAL_HELD names gate) and holding gate slots (SQUAD_GATE_WORKERS), never beside them.
+# SG_WAVE_CHILD_PYTEST replaces the delta command, as SG_WAVE_CHILD_GATES replaces the shell suites; the default child shell suites pass here.
+W96=wave/run-96; start2 run-96 >/dev/null; child 1940 g1940 "origin/$W96"; en2 run-96 1940 >/dev/null; child 1941 g1941 "origin/$W96"; en2 run-96 1941 >/dev/null
+printf 'run-96\n' > "$T/st/auto/disp-1941"; rm -f "$T/st/py.log"; : > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES='! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q "work 1941"' SG_WAVE_CHILD_PYTEST='echo "$SG_WAVE_CHILD held=${SG_SERIAL_HELD:-none} workers=${SQUAD_GATE_WORKERS:-none}" >> "$SG_STATE/py.log"; [ "$SG_WAVE_CHILD" = 1941 ] && exit 1; exit 0' land2 run-96 2>&1); rc=$?
+[ $rc = 0 ] && ok "W1409: the wave without the child whose pytest delta fails lands" || ko "W1409: exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*"#1941"*) ok "W1409: the red names the child whose pytest delta fails";; *) ko "W1409: no child named: '$r'";; esac
+[ "$(head -1 "$T/st/py.log" 2>/dev/null | cut -d' ' -f1)" = 1941 ] && ok "W1409: the newest child's delta runs first" || ko "W1409: pytest order: '$(cat "$T/st/py.log" 2>/dev/null)'"
+/usr/bin/grep -q '^1941 held=gate workers=[1-9]' "$T/st/py.log" 2>/dev/null && ok "W1409: the child's pytest runs under the gate lock with gate slots" || ko "W1409: lock/slots not held: '$(cat "$T/st/py.log" 2>/dev/null)'"
+$O cat-file -e dev:g1941 2>/dev/null && ko "W1409: the failing child landed" || ok "W1409: the failing child did not land"
+$O cat-file -e dev:g1940 2>/dev/null && ok "W1409: the other child landed" || ko "W1409: the other child did not land"
+[ "$(/usr/bin/grep -c '^o 3 Todo 1941$' "$T/board.log")" = 1 ] && ok "W1409: the failing child is requeued once" || ko "W1409: requeue: '$(cat "$T/board.log")'"
+# A green tip runs no child pytest.
+W95=wave/run-95; start2 run-95 >/dev/null; child 950 g950 "origin/$W95"; en2 run-95 950 >/dev/null
+rm -f "$T/st/py.log"
+r=$(SG_WAVE_TIP_GATES=true SG_WAVE_CHILD_PYTEST='echo ran >> "$SG_STATE/py.log"; exit 1' land2 run-95 2>&1); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/st/py.log" ] && ok "W1409: a green tip runs no child pytest" || ko "W1409: exit $rc, py.log: '$(cat "$T/st/py.log" 2>/dev/null)': '$r'"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
