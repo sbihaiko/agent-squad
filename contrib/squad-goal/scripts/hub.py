@@ -5020,6 +5020,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
 #tab-set .snav{display:flex;flex-direction:column;gap:4px;position:sticky;top:6px;max-height:calc(100vh - 130px);overflow:auto}#tab-set .snav button{text-align:left;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--panel);color:var(--fg);min-height:44px}
 #tab-set .snav button small{display:block;color:var(--mute);font-size:var(--fs-caption)}#tab-set .snav button.on{border-color:var(--acc);background:var(--bubble)}
+#tab-set .snav button small.err,.sp>summary .sr.err{color:var(--err);font-weight:600}   /* a state that needs a look: the same err tone in both places (#1282) */
 #tab-set .ssel{display:none}#tab-set details.sp:not(.on){display:none}
 #sbar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin-top:12px;max-width:1120px;background:var(--panel);border-top:1px solid var(--line);z-index:2}#sbar[hidden]{display:none}
 #sbar.dirty{background:var(--tint-warn);border-top-color:var(--tint-warn-line)}#sbar button{height:var(--ctl-h);padding:0 12px}#sbar.dirty #ssave{background:var(--warn);color:var(--on-tone)}#schg{color:var(--mute);font-size:var(--fs-caption)}#schg.err{color:var(--err);font-weight:600}#schg.ok{color:var(--ok)}
@@ -5432,14 +5433,13 @@ let limS=null,limMsg="",limDiff=null,limPend=null;   // limPend holds the typed 
 const limN=v=>v==null?"—":tk(v);
 const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const s=limS,v=limPend||s;setChip("lim",s.guard==="off"?"off":s.paused?"paused":"on");
+ const s=limS,v=limPend||s;setChip("lim",s.guard==="off"?"off":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
   setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
   setTile("Pauses over",limN(s.pause_line)+" tokens/h","neutral"),
-  setTile("Last change",s.last_change?moment(s.last_change.at)+" · "+s.last_change.text:"none recorded","neutral"),
- ],`Profile: ${esc(s.profile||"none in force")}`)
+ ],`Profile file: <code>${esc(s.profile||"none in force")}</code>`)   // the note row is the profile path alone; the last change stays data, never a fifth fact
  +setSettings("lim",[
   setRow("token guard",`<select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select>`),
   setRow("daily token cap",`<input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap">`),
@@ -6131,10 +6131,13 @@ function moment(t){const s=String(t??"").replace(" ","T"),m=s.match(/^(\d{4}-\d\
 function span(s){const n=Number(s);if(s===null||s===undefined||s===""||!Number.isFinite(n)||n<0)return "?";   // a bad reading is never zero
  const x=Math.round(n);if(x<90)return x+"s";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`}
 function setTile(k,v,tone,tip){const t=SETT_TONES.includes(tone)?tone:"neutral";return `<div class="tile ${t}"${tip?` title="${esc(tip)}"`:""}><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`}
-function setNow(theme,tiles,note){return `<div class=setblk data-blk=now data-theme="${esc(theme)}"><h3 class=blkh>Now</h3><div class=now>${tiles.filter(Boolean).join("")}</div>${note?`<p class=note>${note}</p>`:""}</div>`}
+function setNow(theme,tiles,note){return `<div class=setblk data-blk=now data-theme="${esc(theme)}"><h3 class=blkh>Now</h3><div class=now>${tiles.filter(Boolean).join("")}</div>${note?`<p class=note>${note}</p>`:""}</div>`}   // the note is caller-escaped HTML: a caller passes text only through esc(), and the note holds one row, never a fact
 function setRow(label,control,tip){return `<div class=setrow${tip?` title="${esc(tip)}"`:""}><span class=sl>${esc(label)}</span><span class=sc>${control}</span></div>`}
 function setSettings(theme,rows,note){return `<div class=setblk data-blk=settings data-theme="${esc(theme)}"><h3 class=blkh>Settings</h3>${rows.filter(Boolean).join("")}${note?`<p class=note>${note}</p>`:""}</div>`}
-function setChip(theme,text){const sr=$("#"+theme+"sr");if(sr)sr.textContent=text;const nv=$("#"+theme+"nav");if(nv)nv.textContent=text}
+/* One text in both places, and one err tone when the state needs it: tone defaults to neutral, which clears "err"
+   from both chips, so a call site that needs the tone passes it (Spend & limits does, on a paused dispatch). */
+function setChip(theme,text,tone){const sr=$("#"+theme+"sr"),nv=$("#"+theme+"nav"),cls=tone==="err"?"err":"";
+ if(sr){sr.textContent=text;sr.className="sr"+(cls?" "+cls:"")}if(nv){nv.textContent=text;nv.className=cls}}
 /* The Save dialog groups its lines by the file the hub names, so one confirm covers several files without doubt. */
 function diffByFile(groups){const out=[];for(const g of groups||[]){if(!g||!(g.lines||[]).length)continue;out.push(g.file||"(the project files)");for(const l of g.lines)out.push("  "+l)}return out.join("\n")}
 /* A read-only view disables every control under its roots, an anchor included, and adds any control a render writes later.
