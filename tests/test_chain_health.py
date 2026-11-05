@@ -300,7 +300,7 @@ def test_the_review_and_the_hub_share_one_rule(tmp_path):
 def test_review_sh_skip_decision_and_chain_state_agree_on_one_marker(ch, tmp_path, age, hold):
     """review.sh's eligible() grok line and chain_state read one marker; both skip it exactly when it is limited or probing."""
     import fcntl
-    line = next(l for l in (SCRIPTS / "review.sh").read_text().splitlines() if l.lstrip().startswith("case $rn in grok)"))
+    line = next(row for row in (SCRIPTS / "review.sh").read_text().splitlines() if row.lstrip().startswith("case $rn in grok)"))
     now = int(time.time())
     if age is not None:
         (tmp_path / "grok-limited").write_text(str(now - age))
