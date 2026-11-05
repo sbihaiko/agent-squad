@@ -61,4 +61,20 @@ unset SG_GROK_LIMIT_TTL
 
 reset; echo "$old" > "$M"; jq '.model_retry_budget=3' "$T/s/models.json" > "$T/m" && mv "$T/m" "$T/s/models.json"; rev >/dev/null
 [ "$(calls)" = 1 ] && ok "7 a retry budget above one still breaks on a 402" || ko "7 budget 3: calls=$(calls)"
+# 8: a 402 with no marker on disk (another review cleared it) still writes under the lock, and the lock is free once the try is over
+reset; echo "$old" > "$M"; export GROK_SLEEP=1; GROK_MODE=402
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat >/dev/null; (cd "$T/s" && python3 -c "import grokmark;print(grokmark.lock_held('$SG_SHARED'))") > "$T/lockseen"; echo "VERDICT: APPROVE"
+J
+rev >/dev/null; unset GROK_SLEEP
+[ "$(cat "$T/lockseen" 2>/dev/null)" = False ] && ok "8 fd 8 is closed after the grok try: a later model holds no lock" || ko "8 lock seen by the next model: $(cat "$T/lockseen" 2>/dev/null)"
+rm -f "$M"; python3 - "$T/s/grokmark.py" "$SG_SHARED" <<'PY'
+import fcntl, os, subprocess, sys
+f = open(os.path.join(sys.argv[2], "grok-probe.lock"), "a"); fcntl.flock(f, fcntl.LOCK_EX)
+r = subprocess.run([sys.executable, sys.argv[1], "renew", sys.argv[2]], env=dict(os.environ, SG_GROK_LOCK_BOUND="0.3"))
+sys.exit(0 if r.returncode == 1 and not os.path.exists(os.path.join(sys.argv[2], "grok-limited")) else 1)
+PY
+[ $? = 0 ] && ok "9 a renew with no marker waits for the probe lock and writes nothing past its bound" || ko "9 renew wrote without the lock"
+[ "$(python3 "$T/s/grokmark.py" when 0 | cut -c1-2)" -ge 19 ] && ok "10 the next probe time is formatted by python" || ko "10 when"
 rm -rf "$T"; exit $fail

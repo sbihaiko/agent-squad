@@ -298,7 +298,7 @@ tbound=$(jq -r '.review_timeout_bound // 3' "$cfg"); tomit=$(jq -r '.review_time
 streak() { python3 "$(dirname "$0")/review-timeouts.py" "$SG_STATE/review-timeouts.json" "$@" --bound "$tbound" --window "$tomit"; }   # omitted|timeout|clear <model>: the timeout streak of one review model (#749)
 # the grok-limited marker is fresh for SG_GROK_LIMIT_TTL, then one review probes grok under a kernel lock on fd 8 (#1417, grokmark.py)
 gm() { python3 "$(dirname "$0")/grokmark.py" "$@"; }
-gclock() { date -r "$1" '+%F %T'; }
+gclock() { gm when "$1"; }
 omit_say() { local line; line=$(printf 'MODEL_OMIT %s %s on branch %s: %s.' "${chainname:-review}" "$m" "$bm" "$1")
   printf '%s\n' "$line" >&2; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; printf '%s\n' "$line" > "$(sg_cq_status "$iss" "momit$$-$ms")"; }
 # A branch pass may pin the review to one model and one try (SG_REVIEW_CHAIN_DEPTH): an old branch may not
@@ -353,7 +353,7 @@ eligible() { local m=$1 rt rn
   [ -n "$rt" ] || return 1   # no row: the model is not reachable, so the leash never counts it
   case $rn in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && return 1;; esac
   case $rn in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && return 1;; esac
-  case $rn in grok) [ "$(gm state "$SG_SHARED" | cut -d' ' -f1)" = fresh ] && return 1;; esac   # an expired marker leaves grok reachable: one review probes it
+  case $rn in grok) case $(gm probe "$SG_SHARED") in limited|probing) return 1;; esac;; esac   # an expired marker leaves grok reachable unless a review holds the probe lock
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
   may_run review_models "$m" || return 1
   streak omitted "$m" >/dev/null && return 1
@@ -434,7 +434,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
       *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; : > "$e"; fmt=1; lim=$i; false > "$o";;   # no stale stderr, no second MODEL_FAIL, no more tries for a model that never ran
     esac
-    rc=$?
+    rc=$?; exec 8>&-   # the grok try is over: fd 8 (the probe lock) closes, so later subprocesses never hold it (#1417)
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
     # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens. A
     # call whose answer carries no usage is not a zero, it is a FLOOR: a claude call -- a model that reports tokens -- whose

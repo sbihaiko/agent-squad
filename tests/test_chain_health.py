@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -292,3 +293,29 @@ def test_the_review_and_the_hub_share_one_rule(tmp_path):
     out = subprocess.run([sys.executable, str(SCRIPTS / "grokmark.py"), "state", str(tmp_path), str(int(NOON))],
                          capture_output=True, text=True)
     assert out.stdout.split() == ["fresh", str(int(NOON - 100) + 21600)]
+
+
+@pytest.mark.parametrize("age,hold", [(None, False), (3600, False), (21600 + 60, False), (21600 + 60, True)],
+                         ids=["none", "fresh", "expired", "probing"])
+def test_review_sh_skip_decision_and_chain_state_agree_on_one_marker(ch, tmp_path, age, hold):
+    """review.sh's eligible() grok line and chain_state read one marker; both skip it exactly when it is limited or probing."""
+    import fcntl
+    line = next(l for l in (SCRIPTS / "review.sh").read_text().splitlines() if l.lstrip().startswith("case $rn in grok)"))
+    now = int(time.time())
+    if age is not None:
+        (tmp_path / "grok-limited").write_text(str(now - age))
+    held = None
+    if hold:
+        held = open(tmp_path / "grok-probe.lock", "a")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        script = (f'gm() {{ python3 "{SCRIPTS}/grokmark.py" "$@"; }}; SG_SHARED="{tmp_path}"; rn=grok\n'
+                  f'f() {{\n{line}\nreturn 0; }}\nf')
+        skipped = subprocess.run(["bash", "-c", script], capture_output=True, text=True).returncode == 1
+        state = ch.chain_state({"review_models": ["grok-4.7"], "anthropic_models": []}, "review_models", tmp_path,
+                               now=float(now))
+    finally:
+        if held:
+            held.close()
+    assert skipped == (state["out"] != [])
+    assert skipped == (age is not None and (age < 21600 or hold))
