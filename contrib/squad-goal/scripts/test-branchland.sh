@@ -99,7 +99,9 @@ reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" CHECKS='{"check_run
 case "$r" in *"BRANCHLAND WAIT gui/7-x"*"local gate"*) ok "gate fail: says why";; *) ko "gate fail silent: '$r'";; esac
 /usr/bin/grep -qh "local gate, CI off" "$T/st/cq/"x__y#7-status~* 2>/dev/null && /usr/bin/grep -qh "mypy: 3 errors" "$T/st/cq/"x__y#7-status~* && ok "gate fail: the failure is recorded on the issue" || ko "gate fail: no status comment: $(cat "$T/st/cq/"* 2>&1)"
 ! /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "gate fail: closes nothing, moves no card" || ko "gate fail wrote"
-[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && [ -z "$r2" ] && ok "gate fail: runs once per head" || ko "gate fail reran: $(cat "$T/gate.log") '$r2'"
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && case "$r2" in
+  *"asked for changes"*) ok "gate fail: one gate, and the fix round it opened owns the tip (#1396)";;
+  *) ko "gate fail reran: $(cat "$T/gate.log") '$r2'";; esac
 # A failed gate reruns only what failed, once (SG_LOCAL_GATE_RERUN_CMD stubs it): a red that machine load caused passes alone and the
 # branch lands; a red that is real fails again and the branch waits.
 RERUN_OK="echo \"rerun \$SG_GATE_FAILED\" >> $T/rerun.log; exit 0"; RERUN_KO="echo rerun >> $T/rerun.log; echo 'still red'; exit 1"
@@ -130,10 +132,16 @@ GATE_FIXED="echo \"\$PWD \$(/usr/bin/git rev-parse HEAD)\" >> $T/gate.log; test 
 reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_FIXED" CHECKS='{"check_runs":[]}' bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "an inherited red, not fixed on dev: nothing lands" || ko "an inherited red landed: '$r'"
 (cd "$T/w" && $G checkout -q dev && $G pull -q origin dev 2>/dev/null && echo z > fixed && $G add fixed && $G -c user.email=a@b -c user.name=t commit -q -m "fix on dev" && $G push -q origin dev 2>/dev/null)
+rev APPROVE
+# (#1396) The red the first gate named belongs to the tip until its fix round answers, so a base head that moves under it costs
+# no second gate. The fixed tip is a new question: it is gated again, and lands on the rebased tree.
+r=$(SG_LOCAL_GATE_CMD="$GATE_FIXED" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && ok "dev moved under a red tip: the gate is not paid again" || ko "the gate reran under the fix round: $(cat "$T/gate.log" 2>&1) '$r'"
+(cd "$T/w" && $G checkout -q gui/7-x && echo w2 > w2 && $G add w2 && $G -c user.email=a@b -c user.name=t commit -q -m "work again" && $G push -q origin gui/7-x 2>/dev/null)
 rev APPROVE; r=$(SG_LOCAL_GATE_CMD="$GATE_FIXED" CHECKS='{"check_runs":[]}' bl)
-[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "dev moved: the failed gate runs again" || ko "dev moved, the gate did not rerun: $(cat "$T/gate.log" 2>&1) '$r'"
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "the fixed tip is gated again" || ko "a new tip inherited the skip: $(cat "$T/gate.log" 2>&1) '$r'"
 case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "the fix on dev: the branch lands, gated on the rebased tip";; *) ko "the rebased tip did not land: '$r'";; esac
-[ "$($O log --format=%s dev | head -2 | tr '\n' ,)" = "work,fix on dev," ] && ok "dev holds the fix and the work, linear" || ko "dev history: $($O log --format=%s dev | head -3 | tr '\n' ,)"
+[ "$($O log --format=%s dev | head -3 | tr '\n' ,)" = "work again,work,fix on dev," ] && ok "dev holds the fix and the work, linear" || ko "dev history: $($O log --format=%s dev | head -3 | tr '\n' ,)"
 [ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && ok "the rebased gate checkout is removed" || ko "a gate worktree is left: $($G -C "$T/co" worktree list)"
 reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$RED" bl)
 [ ! -e "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a red check runs no gate and lands nothing" || ko "a red check ran the gate or landed"
@@ -381,4 +389,36 @@ case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a ruff fix beside a generated tr
 fixc=$($O log --format=%H -n1 --grep='^Apply ruff --fix at the landing' dev)
 [ -n "$fixc" ] && [ "$($O show --name-only --format= "$fixc")" = "lint.py" ] && ok "the ruff fix commit carries only the .py file" || ko "the ruff fix commit carries: '$($O show --name-only --format= "$fixc" 2>&1 | tr '\n' ' ')'"
 [ "$($O show dev:graphify-out/graph.json 2>/dev/null)" = "{}" ] && ok "the generated file on dev is the branch's, not the trial's" || ko "dev carries the generated file the gate rewrote"
+# (#1396) A red the branch owns at an approved tip opens ONE fix round: the landing pass writes the CHANGES review the fix pass
+# reads, the way its rebase-conflict path already does. The round then owns the tip, so a base head that moves under it costs no
+# second gate. An inconclusive gate (exit 4) is the machine's, never the branch's: it opens no round and leaves the approval alone.
+GATE_KO_LOG="echo gate >> $T/gate.log; echo 'FAILED tests/test_a.py::test_one - boom'; exit 1"
+moved=0; movebase() { moved=$((moved+1)); (cd "$T/w" && $G checkout -q -B dev origin/dev && echo "b$moved" > "b$moved" \
+  && $G add "b$moved" && $G -c user.email=a@b -c user.name=t commit -q -m "base $moved" && $G push -q origin dev) >/dev/null 2>&1; }
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+case "$(head -1 "$T/st/review-gui_7-x.md" 2>/dev/null)" in
+  "VERDICT: CHANGES"*) ok "a branch-owned red writes the CHANGES review the fix pass reads";;
+  *) ko "no CHANGES review after a red gate: '$(head -2 "$T/st/review-gui_7-x.md" 2>&1)'";; esac
+/usr/bin/grep -q "tests/test_a.py::test_one" "$T/st/review-gui_7-x.md" 2>/dev/null \
+  && ok "the review names the failing id" || ko "the review names no failing id: $(cat "$T/st/review-gui_7-x.md" 2>&1)"
+[ -s "$T/st/review-gui_7-x.sha" ] && [ "$(cat "$T/st/review-gui_7-x.sha")" = "$($O rev-parse gui/7-x)" ] \
+  && ok "the review is kept at the tip it read" || ko "the review sha is not the tip: '$(cat "$T/st/review-gui_7-x.sha" 2>&1)'"
+ls "$T/st/auto"/branchland-fixpending-gui_7-x-* >/dev/null 2>&1 \
+  && ok "a fix-pending marker names the tip" || ko "no fix-pending marker: $(ls "$T/st/auto" 2>&1)"
+movebase; r2=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] \
+  && ok "a base head that moves under the fix round pays no second gate" || ko "the gate ran again under a fix round: $(cat "$T/gate.log")"
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_INC" CHECKS='{"check_runs":[]}' bl)
+case "$(head -1 "$T/st/review-gui_7-x.md" 2>/dev/null)" in
+  "VERDICT: APPROVE"*) ok "an inconclusive gate leaves the approval alone";;
+  *) ko "an inconclusive gate replaced the approval: '$(head -1 "$T/st/review-gui_7-x.md" 2>&1)'";; esac
+ls "$T/st/auto"/branchland-fixpending-gui_7-x-* >/dev/null 2>&1 \
+  && ko "an inconclusive gate opened a fix round" || ok "an inconclusive gate opens no fix round"
+# A new tip is a new question: the skip names the tip it answered for, so the fixed tip is gated again.
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+(cd "$T/w" && $G checkout -q gui/7-x && echo zz > zz && $G add zz && $G -c user.email=a@b -c user.name=t commit -q -m "fix the gate" \
+  && $G push -q origin gui/7-x) >/dev/null 2>&1; rev APPROVE
+r2=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] \
+  && ok "a new tip is gated again" || ko "a new tip inherited the skip of the old one: $(cat "$T/gate.log")"
 rm -rf "$T"; exit $fail

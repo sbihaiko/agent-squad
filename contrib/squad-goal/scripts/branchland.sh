@@ -60,6 +60,11 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base gaid
   # journal holds one attempt per cycle, never three.
   gaid="branchland-$i-${sha:0:9}-${base:-nobase}"
   [ -e "$A/branchland-wait-$(printf '%s' "$br" | tr '/' '_')-${sha:0:9}-gate$base" ] && return 1
+  # (#1396) A red this tip already opened a fix round for is not paid again: the round owns the tip while its window holds,
+  # however many base heads move under it. The marker names the tip, so a fixed tip is a new question and is gated again. Past
+  # the window the gate runs once more, so a fix run that died without pushing a new tip never strands the branch.
+  local fpm; fpm="$A/branchland-fixpending-$(printf '%s' "$br" | tr '/' '_')-${sha:0:9}"
+  [ -s "$fpm" ] && [ $(( $(date +%s) - $(cat "$fpm" 2>/dev/null || echo 0) )) -lt "${SG_BRANCHFIX_TTL:-1800}" ] && return 1
   wt=$(mktemp -d "${TMPDIR:-/tmp}/sg-gate.XXXXXX")
   if ! /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "refs/heads/$br" "+refs/heads/$land:refs/sg-gate/$land" >/dev/null 2>&1 || ! /usr/bin/git -C "$SG_CHECKOUT" worktree add -q --detach "$wt/tip" "$sha" >/dev/null 2>&1; then
     rm -rf "$wt"; say wait "$br" "$sha" gateco "the local gate has no clean checkout of ${sha:0:9}"; return 1; fi
@@ -111,6 +116,26 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
   local res=failed; [ "$rc" = 4 ] && res=inconclusive
   { printf 'Status update — branch %s @ %s: local gate, CI off: %s at %s (exit %s). The branch does not land.\n\n```\n' "$br" "${sha:0:9}" "$res" "$sha" "$rc"
     printf '%s\n' "$out" | grep -E '^(FAILED|E  |ERROR)' | sort -u | head -20; printf '%s\n' "$out" | tail -30; printf '```\n'; } > "$(sg_cq_status "$i" "branchland$$")"
+  # (#1396) A gate that named a defect (exit 1) is the branch's, and an approved tip nobody can fix is stranded: the landing
+  # pass opens the round the fix pass reads, the way its rebase-conflict path does. An inconclusive gate (exit 4) is the
+  # machine's or the loop tooling's, never the branch's: it opens no round, and the next base head re-gates — which is the
+  # recovery when the base itself was at fault.
+  if [ "$rc" = 1 ]; then
+    local rbk ids t; rbk=$(printf '%s' "$br" | tr / _)
+    ids=$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u)
+    { printf 'VERDICT: CHANGES\n\n## Blocking\n'
+      if [ -n "$ids" ]; then
+        printf '%s\n' "$ids" | while IFS= read -r t; do
+          [ -n "$t" ] && printf -- '- %s — the landing gate fails on %s rebased onto %s — the tip cannot land — make it pass the gate.\n' "$t" "$t" "$land"
+        done
+      else
+        printf -- '- whole change — the landing gate on %s rebased onto %s failed: %s — the tip cannot land — make it pass the gate.\n' \
+          "${sha:0:9}" "$land" "$(printf '%s' "$out" | tail -1)"
+      fi
+    } > "$SG_STATE/review-$rbk.md"
+    printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"
+    date +%s > "$fpm"
+  fi
   say wait "$br" "$sha" "gate$base" "the local gate (CI off) $res on ${sha:0:9} rebased onto $land ${base:-?}: $(printf '%s' "$out" | tail -1)"; return 1; }
 
 # redfix <branch> <tip> <red line>: 0 when the tip is on top of the red base head (#809): the head the red line names is an ancestor

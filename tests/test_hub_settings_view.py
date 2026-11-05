@@ -192,11 +192,32 @@ def test_the_models_chip_counts_what_the_table_counts(hub):
     assert got == ["2 on · 1 at limit", "2 on · 1 at limit"], got
 
 
-def test_one_intro_line_and_a_how_it_works_disclosure(hub):
+def test_the_theme_explains_its_rules_once_above_the_chains_and_the_chip_counts_models(hub):
+    """Re-anchored (#1283): the rules are stated once, in the one disclosure above the Chains heading, so neither
+    the lead paragraph nor the paragraph under the Models table remains. The summary and the nav line are the models
+    answer's counts, never a coding model or another run fact, and the chain rows keep their controls and chips."""
     b = _render(hub)["b"]
-    assert b.count('class="note lead"') == 1
-    assert re.search(r"<details class=hlp><summary>How it works</summary>", b)
+    assert b.count('class="note lead"') == 0, "the theme still carries a lead paragraph"
+    assert "On or off, for every chain" not in b, "the Models table keeps its paragraph"
+    assert b.count("<summary>How it works</summary>") == 1, "the theme carries more than one explanation"
+    assert b.index("<summary>How it works</summary>") < b.index("<h3>Chains</h3>"), "the disclosure sits below Chains"
     assert "id=msv" not in b, "the panel keeps its own Save: the Save is page-level"
+    # The chain rows keep their controls, whatever the fixture names its models.
+    chains = b[b.index("<h3>Chains</h3>"):]
+    rows = re.findall(r'<div class="mr[^"]*"[^>]*data-row="[^"]+">(.*?)(?=<div class="mr|<div class=madd)', chains, re.S)
+    assert rows, "the chains carry no rows"
+    for row in rows:
+        for ctl in ("data-ef=", "data-hr=", "data-mv=", "data-rm="):
+            assert ctl in row, f"a chain row lost {ctl}"
+    assert len(re.findall(r"<div class=madd><select data-add=", chains)) == 4, "a chain lost its add list"
+    chips = re.findall(r'<span class="stc[^"]*">(.*?)</span>', chains)
+    assert "at limit" in chips and any(c.startswith("off") for c in chips), "the chain rows lost their state chips"
+    # The summary and the nav line are built from the models answer's counts, even when it names another model.
+    got = _node(hub, f"const f={json.dumps(FIXTURE)};f.counts={{on:3,at_limit:0}};f.last_coding='z';"
+                     "mdl=f;mdlSrv=JSON.stringify(mdl);mdlRender();"
+                     'console.log(JSON.stringify([$("#mdlsr").textContent,$("#mdlnav").textContent]))')
+    assert got == ["3 on · 0 at limit", "3 on · 0 at limit"], got
+    assert not any("z" in t or "Last coding" in t for t in got), f"the summary reports a run fact: {got}"
 
 
 def test_the_diff_shows_before_and_after_per_chain_and_a_model_switch(hub):
