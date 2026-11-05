@@ -253,9 +253,11 @@ capraw() { local c w
   [ $r -gt 128 ] && return 142; return $r; }
 # cap: capraw, but every 10 s checks that the branch tip is still the reviewed one; a new push kills the model at once (SUPERSEDED, no verdict).
 # The wait also says it is alive: a review that runs for minutes otherwise looks stuck, since the model writes nothing until it finishes.
-cap() { capraw "$@" <&0 & local pid=$! n=0   # <&0: a background job would otherwise read /dev/null instead of the prompt file
-  while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1))
-    [ $((n % 15)) = 0 ] && echo "review $m on $lbl still running, $((n*2))s of ${tmo}s" >&3   # fd 3 is the script's own stdout; 1 is the model's output file here
+# SG_CAP_POLL is the poll interval in seconds (default 2) and SG_CAP_HEARTBEAT the gap between two "still running" lines (default 30);
+# the head check keeps its tick count. A test sets both small.
+cap() { capraw "$@" <&0 & local pid=$! n=0 poll=${SG_CAP_POLL:-2} t0=$SECONDS hb=0   # <&0: a background job would otherwise read /dev/null instead of the prompt file
+  while kill -0 $pid 2>/dev/null; do sleep "$poll"; n=$((n+1))
+    [ $((SECONDS-t0-hb)) -ge "${SG_CAP_HEARTBEAT:-30}" ] && hb=$((hb+${SG_CAP_HEARTBEAT:-30})) && echo "review $m on $lbl still running, $((SECONDS-t0))s of ${tmo}s" >&3   # fd 3 is the script's own stdout; 1 is the model's output file here
     [ $((n % 5)) = 0 ] || continue
     [ "$(curhead 2>/dev/null || echo $head)" = "$head" ] || { touch "$p.superseded"; kill -TERM -$pid 2>/dev/null; pkill -P $pid 2>/dev/null; break; }; done
   wait $pid 2>/dev/null; }

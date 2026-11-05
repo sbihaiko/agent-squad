@@ -17,7 +17,9 @@
 # repository and the live scripts/models.json, naming both chains, and never writes the live file (#1261, ADR-0140).
 # --no-compare is the explicit mode live-guard's per-cycle pass uses: it compares nothing. models-apply.sh is the one writer.
 # A publish writes $dest/PUBLISHED (`<sha> <utc>`, atomic): the tested sha, the source HEAD (#700). --check prints
-# `publish <sha>` while PUBLISHED is missing or names another sha. A publish with a failed copy writes no PUBLISHED. A source with no git has no sha and no PUBLISHED.
+# `publish <sha>` while PUBLISHED is missing or names another sha. A publish reads the destination back after the copy and
+# the drop: a shipped file that is missing, holds other bytes or lost its executable bit, or a retired name still
+# present, is a failed publish (exit 1, one line naming each mismatch, no success count, no PUBLISHED). A source with no git has no sha and no PUBLISHED.
 # A publish closes every issue named by a `Closes #n` trailer in the commits it makes live -- the previously published sha
 # (exclusive) to the source HEAD -- with one comment naming the sha and the published time (#732). The loop's loop-bug stop
 # reads the issue state alone (ADR-0149), so it lifts by itself; a TDD RED commit names its issue and closes nothing
@@ -148,36 +150,49 @@ close_named() { # close_named FROM TO UTC
   done
 }
 
-sha=$(git -C "$src" rev-parse HEAD 2>/dev/null); bad=
+# The retired files present at the destination, relative to it: the one list the drop and the check both read.
+retired() {
+  local n s f
+  for n in $RETIRED; do
+    for f in "$dest/scripts/test-${n%.*}"*.sh "$dest/scripts/$n"; do
+      if [ -e "$f" ]; then printf '%s\n' "${f#"$dest"/}"; fi
+    done
+  done
+  for s in $RETIRED_SUITES; do
+    if [ -e "$dest/scripts/$s" ]; then printf '%s\n' "scripts/$s"; fi
+  done
+  for n in $RETIRED_DATA; do
+    if [ -e "$dest/$n" ]; then printf '%s\n' "$n"; fi
+  done
+}
+# The publish claims only what arrived: every shipped file reads back with the same bytes and, when the source is
+# executable, the executable bit; no retired file is left. A mismatch is a failed publish (#1379).
+verify() {
+  local f rc=0
+  for f in $(shipped); do
+    if ! cmp -s "$src/$f" "$dest/$f"; then echo "publish-live: mismatch $f: missing or other bytes at $dest"; rc=1
+    elif [ -x "$src/$f" ] && [ ! -x "$dest/$f" ]; then echo "publish-live: mismatch $f: executable bit missing at $dest"; rc=1; fi
+  done
+  for f in $(retired); do echo "publish-live: mismatch $f: retired file still at $dest"; rc=1; done
+  return $rc
+}
+
+sha=$(git -C "$src" rev-parse HEAD 2>/dev/null)
 rc=0
 for f in $(shipped); do
   if [ -f "$dest/$f" ] && cmp -s "$src/$f" "$dest/$f" && { [ ! -x "$src/$f" ] || [ -x "$dest/$f" ]; }; then continue; fi
   if [ -n "$check" ]; then echo "copy $f"; rc=1; continue; fi
-  { mkdir -p "$dest/$(dirname "$f")" && cp -p "$src/$f" "$dest/$f.new.$$" && mv "$dest/$f.new.$$" "$dest/$f"; } || bad=1  # new inode: a running copy keeps reading the old one
+  mkdir -p "$dest/$(dirname "$f")" && cp -p "$src/$f" "$dest/$f.new.$$" && mv "$dest/$f.new.$$" "$dest/$f" || rm -f "$dest/$f.new.$$"   # new inode: a running copy keeps reading the old one; a failed chain leaves no temp behind
 done
-for n in $RETIRED; do
-  stem=${n%.*}
-  for f in "$dest/scripts/test-$stem"*.sh "$dest/scripts/$n"; do
-    [ -e "$f" ] || continue
-    b=$(basename "$f")
-    if [ -n "$check" ]; then echo "drop scripts/$b"; rc=1; continue; fi
-    rm -f "$f"; echo "publish-live: dropped scripts/$b"
-  done
+for f in $(retired); do
+  if [ -n "$check" ]; then echo "drop $f"; rc=1; continue; fi
+  rm -f "$dest/$f"; echo "publish-live: dropped $f"
 done
-for s in $RETIRED_SUITES; do
-  [ -e "$dest/scripts/$s" ] || continue
-  if [ -n "$check" ]; then echo "drop scripts/$s"; rc=1; continue; fi
-  rm -f "$dest/scripts/$s"; echo "publish-live: dropped scripts/$s"
-done
-for n in $RETIRED_DATA; do
-  [ -e "$dest/$n" ] || continue
-  if [ -n "$check" ]; then echo "drop $n"; rc=1; continue; fi
-  rm -f "$dest/$n"; echo "publish-live: dropped $n"
-done
+[ -n "$check" ] || verify || { echo "publish-live: the destination does not hold the shipped files; the publish failed and nothing is recorded" >&2; exit 1; }
 prev=$(cut -d' ' -f1 "$dest/PUBLISHED" 2>/dev/null)
 if [ -n "$sha" ] && [ "$prev" != "$sha" ]; then
   if [ -n "$check" ]; then echo "publish $sha"; rc=1
-  elif [ -z "$bad" ]; then
+  else
     utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     close_named "$prev" "$sha" "$utc"
     printf '%s %s\n' "$sha" "$utc" > "$dest/PUBLISHED.new.$$" && mv "$dest/PUBLISHED.new.$$" "$dest/PUBLISHED"
