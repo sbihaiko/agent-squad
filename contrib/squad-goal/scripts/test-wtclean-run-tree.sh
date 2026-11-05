@@ -6,6 +6,7 @@
 # that still has remains ends for good a day after its verdict: the loop never resumes a run. A tree that holds another
 # registered worktree is kept: its removal deletes the inner tree with it. An ended run with no open wave leaves active-runs.txt
 # an hour after its record last moved, whatever keeps its tree (#708), and a fresh ~/wt-* tree at the base tip is not a landed one.
+# A line whose run folder is gone leaves active-runs.txt on the next pass and is named in the log (#1433).
 src=${1:-$(dirname "$0")/wtclean.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/st/auto" "$T/hm"; cp "$src" "$T/s/wtclean.sh"
 printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR= SG_REPO=x/y SG_OWNER=x SG_BASE=main SG_LAND_BRANCH=main\n' "$T/co" "$T/st" > "$T/s/env.sh"
@@ -51,6 +52,12 @@ line lhuman '{"event": "run_start", "pos": 1}' "$(v needs-human)"
 line lpaused '{"event": "run_start", "pos": 1}' "$(v stopped '["paused:owner"]')"
 line lresumed '{"event": "run_start", "pos": 1}' "$(v stopped)" '{"event": "resume", "pos": 3}'
 line lnew '{"event": "run_start", "pos": 1}' "$(v completed)"; touch "runs/run-lnew/record.jsonl"
+# #1433: a line whose run folder is gone names no run at all (ADR-0167: a listed folder that is gone holds no slot), so rule A
+# drops it on the next pass and says which. A run that finished inside SG_RUN_LINE_SECONDS keeps its line (lnew above): the
+# janitor's per-run rules read it for that window, and a run that just started keeps it whatever its record holds.
+line lgone '{"event": "run_start", "pos": 1}' "$(v completed)"; rm -rf runs/run-lgone
+mkdir -p runs/run-lnever; echo "work" > runs/run-lnever/request.txt   # a launch with no record yet: its folder stands, so its line stays
+echo "$T/co/runs/run-lnever" >> "$T/st/active-runs.txt"
 $G worktree add -q -b gui/cn worktrees/child/cn origin/main; mkdir -p worktrees/child/cn/runs/run-cn; echo "$(v completed)" > worktrees/child/cn/runs/run-cn/record.jsonl
 $G worktree add -q -b squad/run-cn/c worktrees/child/cn/runs/run-cn/ws/c origin/main; echo work > worktrees/child/cn/runs/run-cn/ws/c/f
 $G worktree add -q -b fresh/1 "$T/hm/wt-fresh" origin/main   # made a moment ago at the base tip: a gate may be starting in it
@@ -79,6 +86,12 @@ case "$lines" in *run-ended*) ko "an ended run kept its active-runs line: $lines
 case "$lines" in *run-lover*) ko "a run whose wave is over kept its active-runs line: $lines";; *) ok "a failed run whose wave is over leaves active-runs.txt";; esac
 for k in going lwave lresumed lnew; do case "$lines" in *"run-$k"*) ok "active-runs keeps $k";; *) ko "active-runs dropped $k";; esac; done
 for k in lws lrem lunp lhuman lpaused; do case "$lines" in *"run-$k"*) ko "an ended run with no open wave kept its line ($k): $lines";; *) ok "an ended run leaves active-runs.txt whatever keeps its tree ($k)";; esac; done
+# #1433: a line whose run folder is gone is dropped on the next pass and named in the log, whatever its verdict; a finished run
+# inside the lease window keeps its line, and a run that never got a record keeps its own too (the janitor's launch window).
+case "$lines" in *run-lgone*) ko "#1433: a line whose run folder is gone kept its active-runs line: $lines";; *) ok "#1433: a line whose run folder is gone leaves active-runs.txt";; esac
+case "$out" in *"RUN GONE run-lgone"*) ok "#1433: the pass names the run whose folder is gone";; *) ko "#1433: the dropped line is silent: $out";; esac
+case "$lines" in *run-lnever*) ok "#1433: a launch whose folder stands and has no record yet keeps its line";; *) ko "#1433: a launch with no record lost its line: $lines";; esac
+case "$lines" in *run-lnew*) ok "#1433: a run that finished inside the lease window keeps its line";; *) ko "#1433: a fresh finished run lost its line: $lines";; esac
 [ -f runs/run-lws/ws/c/f ] && [ -d runs/run-lunp/ws/c ] && ok "the dropped runs keep their trees" || ko "a dropped run lost its tree: $out"
 [ -d "$T/hm/wt-fresh" ] && ok "a fresh ~/wt-* tree at the base tip: kept" || ko "wt-fresh removed: $out"
 rm -rf "$T"; exit $fail
