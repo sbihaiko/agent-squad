@@ -30,6 +30,9 @@ def wiper(name, remove, cmds=("true",), **out):
     return {**step, "effect": effect}
 
 
+STOP = {"output": None, "spend": 0.1, "turns": 1, "stop_reason": "spend_cap"}   # a fix entry that ends on its cap and passes nothing
+
+
 def waves(n, fail="continue", stall=None, task=False):
     """The wave graph: an inner loop re-enters the router while a wave passes; the final gate runs once after the stop word.
     `stall` opts the loop into #93's stall exit: {"count": k} ends the run `waves_stalled` after k waves land nothing,
@@ -121,11 +124,12 @@ async def test_a_landing_that_breaks_an_earlier_childs_held_out_command_is_undon
     repo = sibling_repo(tmp_path)
     script = {"router": routed(req(), req("diagnosing-bugs")),
               "route.router.1": writer("a.txt", cmds=["test -f a.txt && test -f base.txt"]),
-              "route.router.2": wiper("b.txt", "base.txt", cmds=["test -f b.txt"])}
+              "route.router.2": [wiper("b.txt", "base.txt", cmds=["test -f b.txt"]), STOP]}
     v = await make(tmp_path, script, target=repo).run()
     first, second = lands(tmp_path)
     assert (first["outcome"], second["outcome"]) == ("pass", "fail")
-    assert second["reasons"] == ["ac_regression:route.router.1"]   # route.router.2 passed its own command
+    assert second["reasons"][0] == "ac_regression:route.router.1"   # route.router.2 passed its own command
+    assert second["reasons"][1] == "review_fix_failed"
     assert (repo / "base.txt").exists() and not (repo / "b.txt").exists()   # the merge was undone
     assert not git.dirty(repo)
     assert len(sh(repo, "git", "log", "--merges", "--format=%s").splitlines()) == 1
@@ -386,7 +390,71 @@ async def test_a_plain_command_green_in_its_child_and_red_in_the_merged_target_f
     (The final gate applies the same routing: test_ac_verify_routes.py.)"""
     repo = sibling_repo(tmp_path)
     script = {"router": routed(req(), req("diagnosing-bugs")),
-              "route.router.1": writer("a.txt", cmds=["test ! -e b.txt"]), "route.router.2": writer("b.txt")}
+              "route.router.1": writer("a.txt", cmds=["test ! -e b.txt"]), "route.router.2": [writer("b.txt"), STOP]}
     eng = make(tmp_path, script, target=repo)
     v = await eng.run()
-    assert v.verdict != "completed" and v.reasons == ["ac_regression:route.router.1"]
+    assert v.verdict != "completed" and "ac_regression:route.router.1" in v.reasons
+
+
+def wiped_three(tmp_path, owner_steps):
+    """Three children: router.1 declares a command that needs base.txt, router.2 lands clean, router.3 wipes base.txt."""
+    cmd = "test -f a.txt && test -f base.txt"
+    return {"router": routed(req(), req("diagnosing-bugs"), req()),
+            "route.router.1": writer("a.txt", cmds=[cmd]), "route.router.2": writer("c.txt", cmds=["test -f c.txt"]),
+            "route.router.3": owner_steps}
+
+
+def entries_of(tmp_path):
+    out = {}
+    for e in ev(tmp_path, "outcome"):
+        if e["node"].startswith("route.router."):
+            out.setdefault(e["node"], []).append(e["entry"])
+    return out
+
+
+@pytest.mark.anyio
+async def test_a_regression_goes_to_the_child_whose_landing_moved_it_and_the_ledger_names_the_attribution(tmp_path):
+    """#1392: router.1 declared the command and landed it green; router.3's landing turned it red. The fix entry goes to
+    router.3 alone, with the command and its declaring child as the finding, and the land record carries the ledger rows."""
+    repo = sibling_repo(tmp_path)
+    script = wiped_three(tmp_path, [wiper("d.txt", "base.txt", cmds=["test -f d.txt"]), writer("base.txt", cmds=["test -f d.txt"])])
+    eng = make(tmp_path, script, target=repo)
+    v = await eng.run()
+    assert v.verdict == "completed"
+    assert entries_of(tmp_path) == {"route.router.1": [1], "route.router.2": [1], "route.router.3": [1, 2]}
+    calls = [c for c in eng.adapter.calls if c.node == "route.router.3"]
+    assert "test -f a.txt && test -f base.txt" in calls[1].prompt and "route.router.1" in calls[1].prompt
+    assert not [c for c in eng.adapter.calls if c.node in ("route.router.1", "route.router.2") and c.entry > 1]
+    first, _second, third = lands(tmp_path)
+    [fix] = third["effect"]["fixes"]
+    [row] = fix["regressions"]
+    assert row == {"declared_by": "route.router.1", "landed_head": first["effect"]["head"], "broken_by": "route.router.3", "owner": "route.router.3"}
+    assert fix["entry"] == 2 and fix["outcome"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_the_fix_entry_and_the_review_round_of_a_regression_fix_keep_their_own_counters(tmp_path):
+    """The regression fix is entry 2 of the owner. Its head is review round 2 and a review fix after it is entry 3: the
+    entry is read from the child's outcomes, the round from its review rounds, and neither rereads the other's count."""
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = sibling_repo(tmp_path)
+    script = wiped_three(tmp_path, [wiper("d.txt", "base.txt", cmds=["test -f d.txt"]), writer("base.txt", cmds=["test -f d.txt"]),
+                                    writer("e.txt", cmds=["test -f d.txt"])])
+    eng = make(tmp_path, script, tweak=gated(stub(tmp_path, [0, 4, 0])), target=repo)
+    assert (await eng.run()).verdict == "completed"
+    assert entries_of(tmp_path)["route.router.3"] == [1, 2, 3]
+    rounds = [(r["round"], r["verdict"]) for r in ev(tmp_path, "review_round") if r["node"] == "route.router.3"]
+    assert rounds == [(1, "approve"), (2, "fix"), (3, "approve")]
+    assert [r["round"] for r in ev(tmp_path, "review_round") if r["node"] == "route.router.1"] == [1]
+
+
+@pytest.mark.anyio
+async def test_a_regression_with_no_passing_landing_in_the_ledger_has_no_owner(tmp_path):
+    """A declaring child with no passing `land` event carries no landed head: the regression has no owner and gets no fix."""
+    eng = make(tmp_path, {"router": routed(req())}, target=sibling_repo(tmp_path))
+    d = eng.dispatch
+    d.landed = {"route.router.1": {"outcome": "fail", "effect": {"head": "abc"}}}
+    assert d.regression_owner("route.router.2", ["route.router.1"]) == (None, [])
+    d.landed = {"route.router.1": {"outcome": "pass", "effect": {"head": None}}}
+    assert d.regression_owner("route.router.2", ["route.router.1"]) == (None, [])
