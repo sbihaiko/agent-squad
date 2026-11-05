@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -230,3 +231,91 @@ def test_a_timeout_streak_that_has_ended_is_not_a_reason(ch, tmp_path):
     (tmp_path / "review-timeouts.json").write_text(json.dumps(
         {"claude:claude-opus-5-5": {"streak": 3, "until": int(NOON) - 60}}))
     assert ch.chain_state(CFG, "review_models", tmp_path, now=NOON)["out"] == []
+
+
+# #1417: the grok-limited marker holds its write epoch; it is fresh for SG_GROK_LIMIT_TTL (default 6 h), then expired.
+GROK_V1 = {"review_models": ["grok-4.7", "claude:claude-opus-5-5"], "anthropic_models": []}
+GROK_V2 = {"chains": {"review": [{"id": "grok-4.7", "raw": "grok-4.7"}, {"id": "claude-opus-5-5", "raw": "claude:claude-opus-5-5"}]},
+           "anthropic_models": []}
+
+
+def _grok(ch, doc, shared, age, hold=False, monkeypatch=None, ttl=None):
+    import fcntl
+    (shared / "grok-limited").write_text(str(int(NOON - age)))
+    if ttl and monkeypatch:
+        monkeypatch.setenv("SG_GROK_LIMIT_TTL", str(ttl))
+    held = None
+    if hold:
+        held = open(shared / "grok-probe.lock", "a")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        return ch.chain_state(doc, "review_models", shared, now=NOON)
+    finally:
+        if held:
+            held.close()
+
+
+@pytest.mark.parametrize("doc", [GROK_V1, GROK_V2], ids=["v1", "v2"])
+def test_a_fresh_grok_marker_is_limited_with_age_and_next_probe(ch, tmp_path, doc):
+    s = _grok(ch, doc, tmp_path, 3600)
+    assert [o["model"] for o in s["out"]] == ["grok-4.7"]
+    assert "limited" in s["out"][0]["reason"] and "next probe" in s["out"][0]["reason"]
+    assert s["grok"]["grok-4.7"]["state"] == "limited"
+    assert s["grok"]["grok-4.7"]["next_probe"] == int(NOON - 3600) + 21600
+
+
+@pytest.mark.parametrize("doc", [GROK_V1, GROK_V2], ids=["v1", "v2"])
+def test_an_expired_grok_marker_is_eligible(ch, tmp_path, doc):
+    s = _grok(ch, doc, tmp_path, 21600 + 60)
+    assert s["out"] == [] and s["eligible"] == 2
+    assert s["grok"]["grok-4.7"]["state"] == "eligible"
+
+
+@pytest.mark.parametrize("doc", [GROK_V1, GROK_V2], ids=["v1", "v2"])
+def test_an_expired_marker_with_the_lock_held_reads_probing(ch, tmp_path, doc):
+    s = _grok(ch, doc, tmp_path, 21600 + 60, hold=True)
+    assert s["grok"]["grok-4.7"]["state"] == "probing"
+    assert [o["model"] for o in s["out"]] == ["grok-4.7"] and "probing" in s["out"][0]["reason"]
+
+
+@pytest.mark.parametrize("doc", [GROK_V1, GROK_V2], ids=["v1", "v2"])
+def test_the_ttl_comes_from_the_environment(ch, tmp_path, monkeypatch, doc):
+    s = _grok(ch, doc, tmp_path, 3600, monkeypatch=monkeypatch, ttl=600)
+    assert s["grok"]["grok-4.7"]["state"] == "eligible"
+
+
+def test_the_review_and_the_hub_share_one_rule(tmp_path):
+    """review.sh asks grokmark.py; the reader reads the same module, so the two never disagree."""
+    out = subprocess.run([sys.executable, str(SCRIPTS / "grokmark.py"), "state", str(tmp_path), str(int(NOON))],
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.split()[0] == "none"
+    (tmp_path / "grok-limited").write_text(str(int(NOON - 100)))
+    out = subprocess.run([sys.executable, str(SCRIPTS / "grokmark.py"), "state", str(tmp_path), str(int(NOON))],
+                         capture_output=True, text=True)
+    assert out.stdout.split() == ["fresh", str(int(NOON - 100) + 21600)]
+
+
+@pytest.mark.parametrize("age,hold", [(None, False), (3600, False), (21600 + 60, False), (21600 + 60, True)],
+                         ids=["none", "fresh", "expired", "probing"])
+def test_review_sh_skip_decision_and_chain_state_agree_on_one_marker(ch, tmp_path, age, hold):
+    """review.sh's eligible() grok line and chain_state read one marker; both skip it exactly when it is limited or probing."""
+    import fcntl
+    line = next(row for row in (SCRIPTS / "review.sh").read_text().splitlines() if row.lstrip().startswith("case $rn in grok)"))
+    now = int(time.time())
+    if age is not None:
+        (tmp_path / "grok-limited").write_text(str(now - age))
+    held = None
+    if hold:
+        held = open(tmp_path / "grok-probe.lock", "a")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        script = (f'gm() {{ python3 "{SCRIPTS}/grokmark.py" "$@"; }}; SG_SHARED="{tmp_path}"; rn=grok\n'
+                  f'f() {{\n{line}\nreturn 0; }}\nf')
+        skipped = subprocess.run(["bash", "-c", script], capture_output=True, text=True).returncode == 1
+        state = ch.chain_state({"review_models": ["grok-4.7"], "anthropic_models": []}, "review_models", tmp_path,
+                               now=float(now))
+    finally:
+        if held:
+            held.close()
+    assert skipped == (state["out"] != [])
+    assert skipped == (age is not None and (age < 21600 or hold))

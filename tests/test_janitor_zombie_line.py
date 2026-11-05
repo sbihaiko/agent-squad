@@ -77,3 +77,21 @@ def test_rule_c_and_reap_leave_the_same_active_runs_state_for_the_same_dead_run(
         assert ev["event"] == "verdict" and ev["reasons"] == ["killed/no-process"], ev
     janitor(jan, SG_SQUAD=str(ROOT), SG_TAKEOVER_SECONDS="1000000000000")   # the next pass reads a finished run: the line stays
     assert listed(j_act) == [RUN], f"the next janitor pass dropped the finished line: {listed(j_act)}"
+
+
+@pytest.mark.heavy
+def test_a_killed_run_whose_wave_is_open_prints_one_held_by_wave_line(tmp_path):
+    """Rule O leaves a killed run's issue to its open wave (ADR-0166) and says so: one line, no drop, no board write (#1423)."""
+    from tests.test_janitor_card_done_base import N, writes
+    sandbox(tmp_path, "echo 0", wave="open", card="Doing")
+    rec = tmp_path / "co/runs/run-stacked/record.jsonl"
+    rec.write_text(rec.read_text().replace('"verdict":"pass","reasons":[],"exit_code":0', '"verdict":"failed","reasons":["killed/no-process"],"exit_code":1'))
+    old = time.time() - 3600
+    os.utime(rec, (old, old))
+    janitor(tmp_path, SG_SQUAD=str(ROOT))
+    cl = tmp_path / "st/cycle.log"
+    log = cl.read_text() if cl.exists() else ""
+    want = f"HELD-BY-WAVE #{N}: run run-stacked ended failed, its wave is open; the landing pass owns the issue"
+    assert log.count(want) == 1, log
+    assert (tmp_path / "st/auto" / f"disp-{N}").exists()
+    assert "board" not in writes(tmp_path), writes(tmp_path)

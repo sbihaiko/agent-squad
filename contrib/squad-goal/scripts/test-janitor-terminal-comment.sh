@@ -13,17 +13,17 @@ cat > "$T/s/board.sh" <<'J'
 case "$1" in
   --run-fields|--clear-run) :;;
   --add) echo "ADD $2 $3 $4 $5" >> "TMPDIR/board.calls";;
-  *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls";;
+  *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls"; if [ -n "$SG_MOVE_REASON" ]; then echo "REASON $SG_MOVE_REASON $4" >> "TMPDIR/board.calls"; fi;;
 esac
 J
-sed -i '' "s|TMPDIR|$T|" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+sed -i "" "s|TMPDIR|$T|g" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in
   *--include*repos/x/y/branches/gui%2F2201-a*) echo '{"commit":{"sha":"abcdef1234567890"}}';;
   *--include*repos/x/y/branches/gui%2F2205-b*) echo '{"commit":{"sha":"5555555aaaaaaaa"}}';;
-  *repos/x/y/branches*) printf 'gui/2201-a abcdef1234567890\ngui/2205-b 5555555aaaaaaaa\n';;
+  *repos/x/y/branches*) printf 'gui/2201-a abcdef1234567890\ngui/2205-b 5555555aaaaaaaa\ngui/2211-c 1111111bbbbbbbb\n';;
   *compare/dev...*) echo behind;;
   *--include*commits/abcdef1234567890/check-runs*) echo '{"check_runs":[{"name":"test (3.11)","status":"completed","conclusion":"success"}]}';;
   *--include*commits/5555555aaaaaaaa/check-runs*) echo '{"check_runs":[{"name":"test (3.13)","status":"completed","conclusion":"success"}]}';;
@@ -43,11 +43,16 @@ case "$a" in
     printf '2201\tCode Complete\thttps://api.github.com/repos/x/y\n2202\tTodo\thttps://api.github.com/repos/x/y\n'
     printf '2203\tTodo\thttps://api.github.com/repos/x/y\n2204\tCode Complete\thttps://api.github.com/repos/x/y\n'
     printf '2205\tClosed\thttps://api.github.com/repos/x/y\n2206\tClosed\thttps://api.github.com/repos/x/y\n'
-    printf '2208\tClosed\thttps://api.github.com/repos/x/y\n2209\tClosed\thttps://api.github.com/repos/x/y\n'
+    printf '2208\tClosed\thttps://api.github.com/repos/x/y\n'
+    /usr/bin/grep -q '^STATUS o 4 Todo 2209$' "TMPDIR/board.calls" 2>/dev/null && c=Todo || c=Closed   # the board keeps the move: a second pass reads Todo
+    printf '2209\t%s\thttps://api.github.com/repos/x/y\n' "$c"
+    printf '2211\tClosed\thttps://api.github.com/repos/x/y\n'
     printf '2210\tTodo\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     printf '{"number":2202,"title":"Issue 2202","body":"","state":"OPEN","labels":{"nodes":[{"name":"wontfix"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
+    printf ',{"number":2209,"title":"Issue 2209","body":"","state":"OPEN","labels":{"nodes":[{"name":"ready-for-agent"},{"name":"rework"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
+    printf ',{"number":2211,"title":"Issue 2211","body":"","state":"OPEN","labels":{"nodes":[{"name":"ready-for-agent"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
     printf ']}}}}';;
   *issues/2201*|*issues/2204*|*issues/2205*) echo $'closed\tcompleted\tIssue';;
   *issues/2203*) echo $'closed\tnot_planned\tIssue';;
@@ -100,4 +105,10 @@ note 2205 | /usr/bin/grep -q 'dashboard' && ko "#2205 belongs to no run but its 
 # and an issue that is open again (#2209 was reopened by hand) gets no comment, only a log line.
 [ "$(count 2209)" = 0 ] && ok "a Closed card whose issue is open again gets no terminal comment" || ko "#2209 commented while open: $(note 2209)"
 /usr/bin/grep -q 'TERMINAL-REOPENED #2209' "$T/st/cycle.log" && ok "the skipped comment is named in cycle.log" || ko "#2209 not named: $(/usr/bin/grep 2209 "$T/st/cycle.log")"
+# A reopened issue's Closed card returns to Todo under SG_MOVE_REASON=reopened, once (#1420, ADR-0143 rule 2).
+[ "$(/usr/bin/grep -c '^STATUS o 4 Todo 2209$' "$T/board.calls")" = 1 ] && ok "a reopened issue's card moves Closed to Todo once over two passes" || ko "#2209 not moved once: $(cat "$T/board.calls")"
+/usr/bin/grep -q '^REASON reopened 2209$' "$T/board.calls" && ok "the move names SG_MOVE_REASON=reopened" || ko "#2209 move has no reopened reason"
+/usr/bin/grep -q 'card -> Todo.*2209\|#2209: card -> Todo' "$T/st/cycle.log" && ok "cycle.log names the move" || ko "#2209 move not named"
+# An open issue whose work branch is in dev keeps its Closed card: Todo would cycle it through the later rules (#1420).
+! /usr/bin/grep -q ' 2211$' "$T/board.calls" && ok "an open issue whose branch is in dev keeps its Closed card over two passes" || ko "#2211 moved: $(cat "$T/board.calls")"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

@@ -43,17 +43,42 @@ def last_status(rec):
     return ""
 
 
+def last_closed(rec):
+    """True when the record's last close or reopen event closed the card, False when that event reopened it or the record
+    holds none: a card the record never saw close stands open."""
+    for e in reversed(rec.get("events") or []):
+        if e.get("type") == "closed": return True
+        if e.get("type") == "reopened": return False
+    return False
+
+
 def due_reads(items, stored):
-    """The numbers to read: a card with no complete record, one whose Status moved past its record, or one whose record
-    stops before the Status the card carries now. Neither the item's nor the issue's own updatedAt is a reason: the first
-    moves on writes that touch no Status, the second on any edit. The third rule is what a lagging Status clock leaves
-    behind (#1394): a timeline read while GitHub had not yet published a move is complete by its own page cursor, and the
-    clock that stamps the move can agree with the record's, so only the value itself says the record is behind."""
+    """The numbers to read: a card with no complete record, one whose Status moved past its record, one whose record
+    stops before the Status the card carries now, or one whose closed state disagrees with the record's last close or
+    reopen. Neither the item's nor the issue's own updatedAt is a reason: the first moves on writes that touch no Status,
+    the second on any edit. The third rule is what a lagging Status clock leaves behind (#1394): a timeline read while
+    GitHub had not yet published a move is complete by its own page cursor, and the clock that stamps the move can agree
+    with the record's, so only the value itself says the record is behind. The fourth is what a close that moves no card
+    leaves behind (#1419): the issue closes through the API and its card keeps its Status, so no clock moves and the
+    record never reads the ClosedEvent. Every item states its closed flag (`closed`, a required bool; a caller that cannot
+    say the issue's state must not call this function): it is compared with the record's last close or reopen, and only a
+    disagreement is a reason."""
     return [i["n"] for i in items
             if (rec := stored.get(i["n"])) is None
             or not rec.get("complete")
             or i["status_updated"] > rec["status_updated"]
-            or bool(i.get("status")) and last_status(rec) != i["status"]]
+            or bool(i.get("status")) and last_status(rec) != i["status"]
+            or bool(i["closed"]) != last_closed(rec)]
+
+
+def due_items(items, stored):
+    """The numbers a history pass reads, from the board's own rows. A row states the issue's number (`n`), the Status
+    field's updatedAt (`su`), and the issue's own state (`s`). The closed flag comes from the issue state -- the value
+    the issue API answers and the items read carries as `content.state` -- never from the card's Status (`st`), which a
+    close through the API leaves where it was (#1419). Every row states its state; a row that names none is read once
+    and then stands open against its record."""
+    return due_reads([{"n": i["n"], "status_updated": i.get("su") or "",
+                       "closed": str(i.get("s") or "").lower() == "closed"} for i in items], stored)
 
 
 def backfill_batch(numbers, store):

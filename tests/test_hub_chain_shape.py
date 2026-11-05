@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -68,7 +69,7 @@ def test_an_unregistered_entry_has_no_subscription_and_keeps_its_plain_box(hub):
 
 
 def test_a_spent_grok_pool_shows_spent_on_every_chain_that_uses_it(hub, tmp_path):
-    (tmp_path / "grok-limited").write_text("no-reset\n")
+    (tmp_path / "grok-limited").write_text(f"{int(time.time())}\n")   # #1417: a marker holds its epoch and expires; a fresh one is spent
     got = hub.models_get()
     for chain in ("coding_models", "review_models", "vision_models", "router_models"):
         quota = got["boxes"][chain]["grok-4.7"]["quota"]

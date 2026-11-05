@@ -30,11 +30,11 @@ def test_history_path_is_one_file_per_repository():
 def test_status_move_on_a_closed_item_is_read_and_no_other_move_is_not():
     items = [
         {"n": 1, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
-         "item_updated": "2026-10-09T00:00:00Z"},
+         "item_updated": "2026-10-09T00:00:00Z", "closed": False},
         {"n": 2, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-05T00:00:00Z",
-         "item_updated": "2026-10-05T00:00:00Z", "closed": True},
+         "item_updated": "2026-10-05T00:00:00Z", "closed": False},
         {"n": 3, "issue_updated": "2026-10-07T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
-         "item_updated": "2026-10-01T00:00:00Z"},
+         "item_updated": "2026-10-01T00:00:00Z", "closed": False},
     ]
     stored = {
         1: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z", "complete": True},
@@ -45,12 +45,24 @@ def test_status_move_on_a_closed_item_is_read_and_no_other_move_is_not():
 
 
 def test_a_card_with_no_stored_record_is_read_once():
-    items = [{"n": 9, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"}]
+    items = [{"n": 9, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
+              "closed": False}]
     assert bh.due_reads(items, {}) == [9]
 
 
+def test_a_close_that_moves_no_card_is_read_from_the_board_row():
+    stored = {7: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
+                  "events": [{"t": "2026-10-01T00:00:00Z", "type": "added"},
+                             {"t": "2026-10-01T00:00:00Z", "type": "status", "status": "Backlog"}],
+                  "complete": True}}
+    row = {"n": 7, "su": "2026-10-01T00:00:00Z", "st": "Backlog", "s": "CLOSED"}
+    assert bh.due_items([row], stored) == [7], "the issue closed while its card kept Status Backlog"
+    assert bh.due_items([dict(row, s="OPEN")], stored) == [], "an open card against an open record is no reason"
+
+
 def test_a_short_timeline_is_due_again_until_it_is_complete():
-    items = [{"n": 4, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"}]
+    items = [{"n": 4, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
+              "closed": False}]
     stored = {4: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
                   "complete": False, "cursor": "C1"}}
     assert bh.due_reads(items, stored) == [4]

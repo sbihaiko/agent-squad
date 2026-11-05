@@ -1038,6 +1038,16 @@ def reconcile_board():
         if str(n) in have_all and board_write(["--remove", owner, str(proj), str(n)], n, "the issue is a run parent"):
             del have_all[str(n)]
             say(f"BOARD-RECONCILE #{n}: card removed (run-parent: a roll-up, never work)")
+    if shipped:   # an open issue whose card reads Closed goes back to Todo, once: the reopen is the door (ADR-0143 rule 2, #1420)
+        for n in sorted(k for k in olabels if str(k) in have_all and have_all[str(k)] == "Closed" and k not in specs and not (RUN_PARENT in olabels[k])):
+            if n in held_owner or owner_frozen(n): continue
+            if branch_in_dev_count(n) != "0" or str(n) in named_in_land(): continue   # its work is in dev: Closed is the landing's own write (rule above), so Todo would open a dispatch window and the later rules would cycle the card
+            _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775): a close GitHub reports late never sends a landed card back
+            if issue_info(n)[0] == "closed": continue
+            say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued; card -> Todo (reopened)")
+            if board_write([owner, str(proj), "Todo", str(n)], n, "the issue is open again", "reopened"):
+                have_all[str(n)] = "Todo"; expected.pop(n, None)
+                say(f"BOARD-RECONCILE #{n}: card -> Todo (the issue is open again)")
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
         have = have_all.get(str(n))
         note = None
@@ -1193,7 +1203,9 @@ if owner and proj and repo0:
         again = False
         why = "; ".join(i["reasons"]) or "no reason recorded"
         for n in sorted(marks, key=int):
-            if holding(n): again = True; continue   # a live run works it, or a wave still carries it: not ours to release, not yet
+            if holding(n):   # a live run works it, or a wave still carries it: not ours to release, not yet
+                if n in delivering and n not in byissue: say(f"HELD-BY-WAVE #{n}: run {f.name} ended {i['name']}, its wave is open; the landing pass owns the issue")   # observability only (#1423, ADR-0166)
+                again = True; continue
             ist = sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip()
             if ist != "open": again = again or ist != "closed"; continue
             pc = pr_count(n)
