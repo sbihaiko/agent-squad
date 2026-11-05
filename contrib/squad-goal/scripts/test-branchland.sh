@@ -381,4 +381,36 @@ case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a ruff fix beside a generated tr
 fixc=$($O log --format=%H -n1 --grep='^Apply ruff --fix at the landing' dev)
 [ -n "$fixc" ] && [ "$($O show --name-only --format= "$fixc")" = "lint.py" ] && ok "the ruff fix commit carries only the .py file" || ko "the ruff fix commit carries: '$($O show --name-only --format= "$fixc" 2>&1 | tr '\n' ' ')'"
 [ "$($O show dev:graphify-out/graph.json 2>/dev/null)" = "{}" ] && ok "the generated file on dev is the branch's, not the trial's" || ko "dev carries the generated file the gate rewrote"
+# (#1396) A red the branch owns at an approved tip opens ONE fix round: the landing pass writes the CHANGES review the fix pass
+# reads, the way its rebase-conflict path already does. The round then owns the tip, so a base head that moves under it costs no
+# second gate. An inconclusive gate (exit 4) is the machine's, never the branch's: it opens no round and leaves the approval alone.
+GATE_KO_LOG="echo gate >> $T/gate.log; echo 'FAILED tests/test_a.py::test_one - boom'; exit 1"
+moved=0; movebase() { moved=$((moved+1)); (cd "$T/w" && $G checkout -q -B dev origin/dev && echo "b$moved" > "b$moved" \
+  && $G add "b$moved" && $G -c user.email=a@b -c user.name=t commit -q -m "base $moved" && $G push -q origin dev) >/dev/null 2>&1; }
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+case "$(head -1 "$T/st/review-gui_7-x.md" 2>/dev/null)" in
+  "VERDICT: CHANGES"*) ok "a branch-owned red writes the CHANGES review the fix pass reads";;
+  *) ko "no CHANGES review after a red gate: '$(head -2 "$T/st/review-gui_7-x.md" 2>&1)'";; esac
+/usr/bin/grep -q "tests/test_a.py::test_one" "$T/st/review-gui_7-x.md" 2>/dev/null \
+  && ok "the review names the failing id" || ko "the review names no failing id: $(cat "$T/st/review-gui_7-x.md" 2>&1)"
+[ -s "$T/st/review-gui_7-x.sha" ] && [ "$(cat "$T/st/review-gui_7-x.sha")" = "$($O rev-parse gui/7-x)" ] \
+  && ok "the review is kept at the tip it read" || ko "the review sha is not the tip: '$(cat "$T/st/review-gui_7-x.sha" 2>&1)'"
+ls "$T/st/auto"/branchland-fixpending-gui_7-x-* >/dev/null 2>&1 \
+  && ok "a fix-pending marker names the tip" || ko "no fix-pending marker: $(ls "$T/st/auto" 2>&1)"
+movebase; r2=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] \
+  && ok "a base head that moves under the fix round pays no second gate" || ko "the gate ran again under a fix round: $(cat "$T/gate.log")"
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_INC" CHECKS='{"check_runs":[]}' bl)
+case "$(head -1 "$T/st/review-gui_7-x.md" 2>/dev/null)" in
+  "VERDICT: APPROVE"*) ok "an inconclusive gate leaves the approval alone";;
+  *) ko "an inconclusive gate replaced the approval: '$(head -1 "$T/st/review-gui_7-x.md" 2>&1)'";; esac
+ls "$T/st/auto"/branchland-fixpending-gui_7-x-* >/dev/null 2>&1 \
+  && ko "an inconclusive gate opened a fix round" || ok "an inconclusive gate opens no fix round"
+# A new tip is a new question: the skip names the tip it answered for, so the fixed tip is gated again.
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+(cd "$T/w" && $G checkout -q gui/7-x && echo zz > zz && $G add zz && $G -c user.email=a@b -c user.name=t commit -q -m "fix the gate" \
+  && $G push -q origin gui/7-x) >/dev/null 2>&1; rev APPROVE
+r2=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] \
+  && ok "a new tip is gated again" || ko "a new tip inherited the skip of the old one: $(cat "$T/gate.log")"
 rm -rf "$T"; exit $fail
