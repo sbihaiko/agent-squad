@@ -79,6 +79,44 @@ check("the y axis states the log scale", ">Lead time (log)</text>" in out, out[:
 title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
 check("the tooltip names the cluster, its cards, the lead range and the closed date",
       title.startswith("7 issues: #1, #2, #3, #4, #5 +2 more · lead 10h · closed ") and "Done" in title, title)
+# #1354: every exclusion names its reason beside its count, and a spec measured from its board entry says so, in the
+# head line and in its dot's tooltip.
+def render_lead(chart, name, excluded=()):
+    lead = {"type": "spec", "measure": chart["measure"], "window": {"size": 20, "unit": "issues"},
+            "excluded": [{"reason": r, "count": n} for r, n in excluded],
+            "excluded_cards": {r: [9] for r, _ in excluded}, "excluded_text": lt.excluded_text(dict(excluded)),
+            "excluded_reasons": lt.exclusion_words(dict(excluded)),
+            "excluded_total": sum(n for _, n in excluded),
+            "control": {"all": chart}, "columns": []}
+    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};",
+                         block.split("const drawFlow")[0], 'LT.tf="all";',
+                         f"process.stdout.write(flowLead({json.dumps(lead)}));"])
+    path = pathlib.Path(os.environ["T"]) / name
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+named = lt.control_chart([card(1, closed, 5), {"n": 9, "column": "Backlog", "c": closed.isoformat(), "o": None,
+                                               "hours": 0.0, "reason": lt.NO_START}], timeframe=30, now=now)
+check("an exclusion states its reason beside its count",
+      named["excluded_text"] == "1 never entered the start column", named["excluded_text"])
+named_out = render_lead(named, "lt-exclusion.js", excluded=[(lt.NO_START, 1)])
+check("the page head states an exclusion's reason", "excluded 1: 1 never entered the start column" in named_out,
+      named_out[:300])
+fallback_row = card(3, closed, 12)
+fallback_row.update(fallback=True, columns={"Backlog": 12.0})
+fallback = lt.control_chart([fallback_row], timeframe=30, now=now)
+check("a card's fallback measure is named in the chart text",
+      fallback["fallback"]["count"] == 1 and "1 card measured from its first time on the board" in fallback["text"],
+      fallback["text"])
+fallback_out = render_lead(fallback, "lt-fallback.js")
+check("the page head states the fallback measure", "1 card measured from its first time on the board" in fallback_out,
+      fallback_out[:300])
+titles = re.findall(r"<circle[^>]*><title>([^<]*)</title>", fallback_out)
+check("the dot's tooltip states the fallback measure",
+      bool(titles) and "measured from its first time on the board" in titles[0], titles)
+
 hub_spec = importlib.util.spec_from_file_location("hub_lead", os.environ["HUB_SRC"])
 hub = importlib.util.module_from_spec(hub_spec); hub_spec.loader.exec_module(hub)
 check("a resize names the rendered plot size, and a bad size falls back to the default frame",

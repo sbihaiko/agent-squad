@@ -174,6 +174,19 @@ def column_stretches(runs, lo, hi):
     return out
 
 
+def _on_board_hours(runs, lo, hi):
+    """Each on-board run inside `lo`..`hi`, in order, as (column, hold, hours): the run's start and end clamped to the
+    window, and a run that names no interval left out. The one walk both the lead observation and the board time sum, so
+    the column and gap accounting has a single source (SPEC 1218, #1354)."""
+    for r in runs:
+        if not r["on_board"]:
+            continue
+        a, b = max(_instant(r["from"]), lo), min(_instant(r["to"]) if r["to"] else hi, hi)
+        if b <= a:
+            continue
+        yield r["column"], r["hold"], (b - a).total_seconds() / 3600
+
+
 def lead_observation(runs, start=None, end=None, complete=True, now=None):
     """One card's lead observation: the flowing and held hours from its FIRST entry into `start` (a return there never
     restarts the clock) to its last entry into `end`, or to `now` while it is still open (censored). None when the card
@@ -202,14 +215,11 @@ def lead_observation(runs, start=None, end=None, complete=True, now=None):
     else:
         hi = _instant(closed["from"])
     flowing = held = 0.0
-    for r in runs[k:]:
-        if not r["on_board"] or (r["column"] in (None, PARKED) and r["hold"] is None):
+    for column, hold, hours in _on_board_hours(runs[k:], lo, hi):
+        if column in (None, PARKED) and hold is None:
             continue
-        a, b = max(_instant(r["from"]), lo), min(_instant(r["to"]) if r["to"] else hi, hi)
-        if b <= a:
-            continue
-        if r["hold"]: held += (b - a).total_seconds() / 3600
-        else: flowing += (b - a).total_seconds() / 3600
+        if hold: held += hours
+        else: flowing += hours
     start_lo = runs[k - 1]["from"] if entered["approx"] and k > 0 else entered["from"]
     stretches = column_stretches(runs[k:], lo, hi)
     columns = {}
@@ -220,6 +230,40 @@ def lead_observation(runs, start=None, end=None, complete=True, now=None):
             "approx": any(r["approx"] and lo < _instant(r["from"]) <= hi for r in runs),
             "unknown_first": not complete or bool(next((r["unknown"] for r in runs if r["on_board"]), False)),
             "censored": censored, "start_lo": start_lo, "start_hi": entered["from"]}
+
+
+def board_time(runs, end=None, complete=True):
+    """One card's time on the board, from its FIRST time on the board to its last entry into `end` (Closed by default):
+    every hour it spent there counts, the parked Backlog wait included (#1354). The lead-time chart uses it only for the
+    view's default start column (Todo): a closed card the history read that never entered Todo is measured from its board
+    entry instead, whatever its Type, because a spec is a document and its card moves with its tickets (ADR-0142), and a
+    bug or a task can be born or moved past that column too. The start is the only substitute: `end` stays the reader's
+    choice, so a card with no entry into `end` is not measured at all, and a start the reader chose by hand never reaches
+    this function (#1248). The shape is `lead_observation`'s, uncensored: `columns` sums every on-board run under the
+    column the card wore, Backlog for a parked or unnamed one, and the unaccounted gaps are Backlog too, so the stack
+    always adds up to `flowing`. None when the card was never on the board, or closed without an entry into `end`."""
+    end = end or _columns.ROLE["issue_closed"]
+    k = next((i for i, r in enumerate(runs) if r["on_board"]), None)
+    if k is None:
+        return None
+    lo = _instant(runs[k]["from"])
+    closed = next((r for r in reversed(runs) if r["column"] == end), None)
+    if closed is None or _instant(closed["from"]) < lo:
+        return None
+    hi = _instant(closed["from"])
+    columns = {}
+    for column, _hold, hours in _on_board_hours(runs[k:], lo, hi):
+        column = PARKED if column in (None, PARKED) else column
+        columns[column] = columns.get(column, 0.0) + hours
+    hours = (hi - lo).total_seconds() / 3600
+    gap = hours - sum(columns.values())
+    if gap > 1e-9:   # time off the board inside the window is still the card's wait, never a float rounding sliver
+        columns[PARKED] = columns.get(PARKED, 0.0) + gap
+    return {"start": runs[k]["from"], "end": closed["from"], "flowing": hours, "held": 0.0,
+            "columns": columns, "gate": columns.get(GATING, 0.0), "censored": False,
+            "approx": any(r["approx"] and lo < _instant(r["from"]) <= hi for r in runs),
+            "unknown_first": not complete or bool(next((r["unknown"] for r in runs if r["on_board"]), False)),
+            "start_lo": runs[k]["from"], "start_hi": runs[k]["from"]}
 
 
 def lead_span(runs, start=None, end=None, complete=True):

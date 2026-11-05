@@ -247,17 +247,20 @@ def test_a_diff_line_names_its_theme_once(hub):
     assert got == ["Spend & limits · token guard: on", "Spend & limits · token cap: 1 -> 2"]
 
 
-def test_access_names_the_phone_check_command(hub):
+def test_access_holds_a_this_device_section_with_the_mobile_link_and_command(hub):
+    """#1285: the link is not a rule, so it leaves the rule list for a "This device" heading that holds both the mobile
+    view link and the mobile start command. The rule container `accb` holds neither."""
     mod, _ = hub
-    if shutil.which("node") is None:
-        pytest.skip("node is required")
-    acc = re.search(r"^const accHtml=.*?\};$", mod.PAGE, re.M | re.S).group(0)
-    esc = re.search(r"^const esc=.*$", mod.PAGE, re.M).group(0)
-    sett = _between(mod.PAGE, "// SETT{", "// }SETT")
-    out = subprocess.run(["node", "-"], input=f"{esc}\n{sett}\n{acc}\nconsole.log(accHtml({{access:{{}}}}))",
-                         capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    assert "/agent-squad:start-mobile" in out.stdout
+    acc = _between(mod.PAGE, "<details id=acc", "</details>")
+    rules = re.search(r"<div id=accb>(.*?)</div>", acc, re.S)
+    assert rules, "the Access theme holds its rule container"
+    assert "mobile-link" not in rules.group(1), rules.group(1)
+    assert "/agent-squad:start-mobile" not in rules.group(1), rules.group(1)
+    sec = re.search(r"<div class=sdev><h4>This device</h4>(.*?)</div>", acc, re.S)
+    assert sec, "the Access theme holds a This device section"
+    assert 'id=mobile-link' in sec.group(1), sec.group(1)
+    assert "/agent-squad:start-mobile" in sec.group(1), sec.group(1)
+    assert re.search(r"<h4>This device</h4>.*<p class=note>.*<code>/agent-squad:start-mobile</code>", acc, re.S)
 
 
 # ---------------------------------------------------------------- review of #913: the phone header, a clean bar, a marked row

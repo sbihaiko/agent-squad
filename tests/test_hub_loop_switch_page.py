@@ -53,6 +53,12 @@ def hub(monkeypatch, tmp_path):
     mod.loop_watchd = watchd
     tn = {"host": TN_HOST, "allow": ["alice@example.com"]}
     mod.tailnet_block = lambda: dict(tn)
+    real_source = mod.tailnet_source
+
+    def stub():   # a test of the production seam calls `stub.real`, never the stub
+        return dict(tn), str(tmp_path / ".env")
+    stub.real = real_source
+    mod.tailnet_source = stub
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield mod, srv.server_port, calls, tn, state
@@ -65,6 +71,18 @@ def ask(port, method, body=None, *, origin=None, host=None):
     headers = {"Host": host or f"127.0.0.1:{port}", "Content-Type": "application/json",
                "Origin": origin if origin is not None else f"http://127.0.0.1:{port}"}
     c.request(method, "/api/loop", body=None if body is None else json.dumps(body), headers=headers)
+    r = c.getresponse()
+    data = json.loads(r.read() or b"{}")
+    c.close()
+    return r.status, data
+
+
+def get_json(port, path, *, host=None, origin=None):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    headers = {"Host": host or f"127.0.0.1:{port}"}
+    if origin is not None:
+        headers["Origin"] = origin
+    c.request("GET", path, headers=headers)
     r = c.getresponse()
     data = json.loads(r.read() or b"{}")
     c.close()
@@ -86,8 +104,74 @@ def test_a_loopback_get_reads_the_view_with_the_access_rules(hub):
     assert code == 200
     assert {"state", "who", "when", "live", "log", "write", "reason"} <= set(v)
     assert v["write"] is True and v["tailnet"] is False
-    assert v["access"] == {"loop_write": False, "terminals_send": False}
+    assert v["access"] == {"loop_write": False, "terminals_send": False}   # kept on the loop answer for every existing client (#1285 adds /api/access beside it)
     assert v["actions"] == ["start"]
+
+
+def test_the_access_route_answers_on_its_own(hub):
+    """#1285: the reach and the two tailnet rules have their own read, with the reach and the file that holds the rules."""
+    mod, port, _, _, _ = hub
+    code, v = get_json(port, "/api/access")
+    assert code == 200
+    assert v["tailnet"] is False and v["reach"] is True and v["login"] == ""
+    assert v["access"] == {"loop_write": False, "terminals_send": False}
+    assert v["file"].endswith(".env"), v["file"]
+
+
+def test_the_access_file_names_the_env_when_only_the_env_holds_the_block(hub):
+    """#1285: a project file with no `tailnet` block does not win the named home; the `.env` that holds the block does.
+    This calls the production `tailnet_source` (the fixture stub carries it as `.real`), so a wrong path choice is caught."""
+    mod, _, _, _, state = hub
+    checkout = state.parent
+    (checkout / "docs" / "squad").mkdir(parents=True, exist_ok=True)
+    (checkout / "docs" / "squad" / "defaults.yaml").write_text((ROOT / "docs" / "squad" / "defaults.yaml").read_text())
+    (checkout / ".env").write_text("SQUAD_TAILNET_HOST=box.tail1.ts.net\n")
+    tn, path = mod.tailnet_source.real()
+    assert tn.get("host") == "box.tail1.ts.net", tn
+    assert path == str(checkout / ".env"), path
+
+
+def test_the_access_file_names_the_tracked_project_file_when_it_holds_the_block(hub):
+    """#1285: a tracked project file that itself holds the `tailnet` block wins the named home over the personal `.env`."""
+    mod, _, _, _, state = hub
+    checkout = state.parent
+    (checkout / "docs" / "squad").mkdir(parents=True, exist_ok=True)
+    proj = checkout / "docs" / "squad" / "defaults.yaml"
+    proj.write_text("tailnet:\n  host: proj.tail1.ts.net\n")
+    (checkout / ".env").write_text("SQUAD_TAILNET_ALLOW=alice@example.com\n")
+    tn, path = mod.tailnet_source.real()
+    assert tn.get("host") == "proj.tail1.ts.net", tn
+    assert tn.get("allow") == ["alice@example.com"], tn
+    assert path == str(proj.resolve()), path
+
+
+def test_the_access_route_needs_no_loop_answer(hub, monkeypatch):
+    """The Access theme no longer depends on the loop answer for its reach fact (#1285)."""
+    mod, port, _, _, _ = hub
+
+    def no_loop(*a, **k): raise RuntimeError("the loop answer is not read here")
+    monkeypatch.setattr(mod, "loop_audit_last", no_loop)
+    monkeypatch.setattr(mod, "loop_state", no_loop)
+    code, v = get_json(port, "/api/access")
+    assert code == 200 and v["reach"] is True and v["tailnet"] is False
+
+
+def test_a_refused_access_read_marks_the_rules_withheld(hub):
+    """#1285: a refused read names no rule, login or file, and says so, so the page never reads it as an empty rule.
+    The GET seam refuses such a request before any route, so the view's own answer is tested here."""
+    mod, _, _, _, _ = hub
+    v = mod.access_view(mod.Access(False, "not on the allow list", "", True))
+    assert v["reach"] is False and v["withheld"] is True and v["reason"] == "not on the allow list"
+    assert v["access"] == {} and v["file"] == "" and v["login"] == ""
+
+
+def test_a_tailnet_read_states_the_reach_and_the_rules(hub, monkeypatch):
+    mod, port, _, tn, _ = hub
+    as_tailnet(mod, monkeypatch)
+    tn["terminals_send"] = True
+    code, v = get_json(port, "/api/access", origin=f"https://{TN_HOST}", host=TN_HOST)
+    assert code == 200 and v["tailnet"] is True and v["reach"] is True and v["login"] == "alice@example.com"
+    assert v["access"] == {"loop_write": False, "terminals_send": True}
 
 
 @pytest.mark.parametrize("state,actions", [("off", ["start"]), ("on", ["drain", "stop-now"]), ("draining", ["start", "stop-now"]), ("starting", [])])
@@ -191,11 +275,13 @@ def run_js(expr):
     return r.stdout
 
 
-VIEW = {"state": "on", "who": "owner", "when": "2026-10-31T16:02:00-03:00", "write": True, "reason": "", "tailnet": False,
-        "access": {"loop_write": False, "terminals_send": False},
+VIEW = {"state": "on", "who": "owner", "when": "2026-10-31T16:02:00-03:00", "write": True, "reason": "",
         "live": {"runs": ["/x/runs/run-20261031-1", "run-20261031-2"], "gates": ["gate pid 4242"]},
         "health": {"live_runs": 2, "live_gates": 1, "cycle_age": 45, "starting_left": None},
         "log": [{"at": "2026-10-31T16:02:00-03:00", "who": "owner", "from": "loopback", "action": "start"}]}
+
+# The answer /api/access gives the Access theme (#1285): the reach, the two tailnet rules and the file they live in.
+ACCESS = {"tailnet": False, "reach": True, "access": {"loop_write": False, "terminals_send": True}, "file": "/p/.env"}
 
 
 def js_view(**over):
@@ -334,11 +420,103 @@ def test_a_draining_loop_offers_stop_now_only():
     assert "value=drain" not in out and re.search(r"<input[^>]*value=stop-now[^>]*checked", out)
 
 
-def test_the_access_theme_holds_the_tailnet_rule():
-    out = run_js(f"accHtml({js_view()})")
-    assert "SQUAD_TAILNET_LOOP_WRITE" in out and "SQUAD_TAILNET_TERMINALS_SEND" in out and "refused" in out
-    out = run_js(f"accHtml({js_view(access={'loop_write': True, 'terminals_send': False}, tailnet=True)})")
-    assert "allowed" in out and "tailnet" in out
+def test_the_access_theme_states_three_toned_tiles_of_allowed_or_refused():
+    """#1285: three Now tiles, each with one of the hub's tones, and every value is allowed or refused. The setting's name
+    sits in the tile's hover, never in the value cell, so no environment variable name is a value."""
+    out = run_js(f"accHtml({json.dumps(ACCESS)})")
+    tiles = re.findall(r'<div class="tile (\w+)"[^>]*><span class=tk>(.*?)</span><span class=tv>(.*?)</span></div>', out)
+    assert [k for _, k, _ in tiles] == ["Reached", "Loop write from the tailnet", "Terminal send from the tailnet"], out
+    assert [v for _, _, v in tiles] == ["allowed", "refused", "allowed"], out
+    assert [t for t, _, _ in tiles] == ["ok", "err", "ok"], out
+    assert all(v in ("allowed", "refused") for _, _, v in tiles)
+    assert 'title="SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"' in out, "the loop write tile's hover names its setting"
+    assert 'title="SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)"' in out, "the terminal send tile's hover names its setting"
+    assert 'title="the request from this machine (loopback)"' in out, "the reached tile's hover names the route"
+
+
+def test_the_access_theme_names_the_file_it_reads_in_one_line():
+    out = run_js(f"accHtml({json.dumps(ACCESS)})")
+    assert out.count("Read from <code>/p/.env</code>.") == 1, out
+
+
+def test_the_access_theme_escapes_the_file_path_once():
+    """A path with markup characters renders as text, and never twice escaped (#1285)."""
+    out = run_js(f"accHtml({json.dumps({**ACCESS, 'file': '/a&b/<c>/.env'})})")
+    assert "<code>/a&amp;b/&lt;c&gt;/.env</code>" in out, out
+    assert "&amp;amp;" not in out and "<c>" not in out, out
+
+
+def test_the_access_reach_states_allowed_or_refused_and_its_route():
+    """A reach the seam refused reads refused; the route and the refusal reason sit in the hover, never the value (#1285)."""
+    out = run_js(f"accHtml({json.dumps({**ACCESS, 'reach': False, 'tailnet': True, 'reason': 'not on the list'})})")
+    assert re.search(r'<div class="tile err"[^>]*><span class=tk>Reached</span><span class=tv>refused</span>', out), out
+    assert 'title="the request over the tailnet, through the hub was refused: not on the list"' in out, out
+
+
+def test_a_withheld_read_shows_neutral_values_and_never_refused_for_a_rule():
+    """A refused viewer never read the rules, so the two rule tiles show a neutral withheld value, never "refused", which would
+    claim a rule the page did not read. The reach tile keeps its own refused answer (#1285)."""
+    out = run_js(f"accHtml({json.dumps({'tailnet': False, 'reach': False, 'withheld': True, 'access': {}, 'file': ''})})")
+    tiles = re.findall(r'<div class="tile (\w+)"[^>]*><span class=tk>(.*?)</span><span class=tv>(.*?)</span></div>', out)
+    assert [(k, v) for _, k, v in tiles] == [("Reached", "refused"), ("Loop write from the tailnet", "withheld"),
+                                             ("Terminal send from the tailnet", "withheld")], out
+    assert [t for t, _, _ in tiles][1:] == ["neutral", "neutral"], out
+    assert "SQUAD_TAILNET_LOOP_WRITE" in out and "SQUAD_TAILNET_TERMINALS_SEND" in out, "the hovers keep the setting names"
+    assert "Read from" not in out, out
+
+
+def test_a_genuinely_refused_rule_still_reads_refused():
+    out = run_js(f"accHtml({json.dumps(ACCESS)})")
+    assert re.search(r"<span class=tk>Loop write from the tailnet</span><span class=tv>refused</span>", out), out
+
+
+def test_a_refused_http_read_of_the_access_route_is_rejected_before_the_view_runs(hub, monkeypatch):
+    """The wire route is gated: a request the seam refuses gets 403 and the view never runs, so no rule, login or file
+    path leaves the hub (#1285)."""
+    mod, port, _, _, _ = hub
+    monkeypatch.setattr(mod, "access", lambda h, m: mod.Access(False, "not on the allow list", "", True))
+    ran = []
+    monkeypatch.setattr(mod, "access_view", lambda a: ran.append(a) or {})
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("GET", "/api/access", headers={"Host": TN_HOST, "Origin": f"https://{TN_HOST}"})
+    r = c.getresponse()
+    body = r.read().decode()
+    c.close()
+    assert r.status == 403 and "not on the allow list" in body, (r.status, body)
+    assert ran == [] and ".env" not in body and "alice" not in body
+
+
+def run_draws(steps):
+    """Run each drawing step in order (`acc` sets the access answer, `loop` the loop answer) and read back both reach
+    lines after every step (#1285)."""
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    src = page()
+    body = "const out=[];"
+    for kind, v in steps:
+        body += (f"accV={json.dumps(v)};accDraw();" if kind == "acc" else f"loopV={json.dumps(v)};loopDraw();")
+        body += "out.push([$('#accnav').textContent,$('#accsr').textContent]);"
+    js = ("const esc=s=>String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]);\n"
+          "const STORE={};const $=s=>STORE[s]||(STORE[s]={textContent:'',innerHTML:'',dataset:{}});\n"
+          + src[src.index("// loop-switch:start"):src.index("async function loopPoll(")]
+          + "\n" + body + "process.stdout.write(JSON.stringify(out));")
+    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def test_the_access_chip_and_nav_line_follow_the_access_answer_not_the_loop():
+    """#1285: the theme's status chip and the nav's small line follow the access answer. A loop answer that disagrees,
+    drawn before and after, changes neither line, so a later reintroduction of the coupling in loopDraw fails here."""
+    got = run_draws([
+        ("acc", {**ACCESS, "tailnet": False}),
+        ("loop", {**VIEW, "tailnet": True}),        # the loop answer disagrees and must write nothing
+        ("acc", {**ACCESS, "tailnet": True}),
+        ("loop", {**VIEW, "tailnet": False}),       # and again, the other way
+    ])
+    assert got == [["loopback", "loopback"], ["loopback", "loopback"], ["tailnet", "tailnet"], ["tailnet", "tailnet"]], got
+    assert "loopV.tailnet" not in page(), "no reach fact reads the loop answer"
+    assert re.search(r'fetch\("/api/access"\)', page())
 
 
 def test_the_switch_runs_watchd_for_its_own_profile_not_the_hub_cwd(monkeypatch, tmp_path):

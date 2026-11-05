@@ -126,13 +126,31 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #periods button[aria-pressed=true]{box-shadow:inset 0 -2px 0 var(--acc)}
 #cchart{width:100%;margin:8px 0}
 #cchart svg{width:100%;height:auto;display:block}
+/* The phone's lead-time chart (#1333): the plot, then the legend and the reference values under it, with no gutter. */
+#ltplot{width:100%;margin:8px 0}
+#ltplot svg{width:100%;height:auto;display:block;touch-action:pan-y}
+.mltlg{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0;color:var(--mute);font-size:var(--fs-caption)}
+.mltlg span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.mltlg b{color:var(--fg);font-weight:600}
+.mltlg i{display:inline-block;width:16px;height:6px;border-radius:var(--radius-sm)}
+.mltlg i.mlthollow{width:10px;height:10px;border-radius:var(--radius-full);background:var(--chart-bg);border:1px solid var(--chart-ink)}
+.mltlg i.mltfilled{width:10px;height:10px;border-radius:var(--radius-full);background:var(--chart-ink)}
+.mltlg i.mltroll{height:3px;background:var(--chart-bar)}
+.mltlg i.mltsolid{height:2px;border-radius:0;background:var(--chart-series-8)}
+.mltlg i.mltdash{height:2px;border-radius:0;background:repeating-linear-gradient(90deg,var(--chart-ok) 0 6px,transparent 6px 9px)}
+.mltlg i.mltdot{height:2px;border-radius:0;background:repeating-linear-gradient(90deg,var(--chart-series-5) 0 2px,transparent 2px 6px)}
+#ltbars,#ltzoom{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+#ltbars button[aria-pressed=true]{box-shadow:inset 0 -2px 0 var(--acc)}
+#ltzoom button{flex:1;text-align:center}
+#ltpin{border:1px solid var(--line);border-radius:var(--radius-md);padding:8px;margin:8px 0;background:var(--panel)}
+#ltpin p{margin:0 0 6px}
 .row{padding:10px 4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .row .mut{color:var(--mute);font-size:var(--fs-caption)}
 /* A More screen fills the screen, scrolls its content and keeps its Back at the bottom edge, in the thumb zone (#1142). */
 [data-screen]{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
 [data-screen][hidden]{display:none}
-#cost-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
-#cost-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(8px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#cost-content,#lead-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#cost-actions,#lead-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(8px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
@@ -293,8 +311,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <h2>More</h2>
 <div id="more-menu">
 <button data-more="cost" type="button">Cost and usage</button>
+<button data-more="lead" type="button">Lead time</button>
 
-<a class="more-link" href="./#set">Settings</a>
+<a class="more-link" id="more-settings" href="./#set">Settings</a>
 </div>
 <p class="msg">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
 <article data-screen="cost" data-src="/api/stats" hidden>
@@ -308,6 +327,25 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div class="list"></div>
 <p class="msg"></p></div>
 <div id="cost-actions"><button data-back type="button">Back</button></div>
+</article>
+<article data-screen="lead" data-src="/api/chart/lead" hidden>
+<div id="lead-content"><h2>Lead time</h2>
+<div id="ltbars">
+<button data-ltf="2" type="button">48h</button>
+<button data-ltf="7" type="button">1 week</button>
+<button data-ltf="30" type="button">1 month</button>
+<button data-ltf="all" type="button">All</button>
+</div>
+<div id="ltplot"></div>
+<div id="ltlegend"></div>
+<div id="ltpin" hidden><p id="ltpintext"></p><button data-ltpin="dismiss" type="button">Dismiss</button></div>
+<div id="ltzoom">
+<button data-ltzoom="in" type="button">Zoom in</button>
+<button data-ltzoom="out" type="button">Zoom out</button>
+<button data-ltzoom="reset" type="button">Reset</button>
+</div>
+<p class="msg"></p></div>
+<div id="lead-actions"><button data-back type="button">Back</button></div>
 </article>
 </section>
 </main>
@@ -354,6 +392,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 /*STREAM*/
 const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, live: () => false };
 /*GESTURE*/
+/*CHART*/
 /*MOVE*/
 /*RUN*/
 /*BOARD_FILTER*/
@@ -433,6 +472,13 @@ function qcardNodes(v, act, submit) {
 const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
 $("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
+
+// settings-handoff:begin
+// #1286: Settings opens the desktop tab on the theme last used there, kept under "hub"; Loop when none was used
+const SET_THEMES = ["lop","lim","sub","mdl","slk","acc"];
+const lastSetTheme = (() => { try { const t = JSON.parse(localStorage.getItem("hub") || "{}").sth; return SET_THEMES.includes(t) ? t : "lop"; } catch (e) { return "lop"; } })();
+$("more-settings").href = "./#set-" + lastSetTheme;
+// settings-handoff:end
 
 const tabs = [...document.querySelectorAll("nav [data-tab]")];
 // Each tab keeps its own page scroll (#1008): the scroll of the tab left is saved, the scroll of the tab shown is restored.
@@ -1103,8 +1149,57 @@ const MORE = {
     if (t.unpriced || t.uncounted) rows.push(rowEl("Note", [`${t.unpriced} review calls unpriced, ${t.uncounted} with no usage count: the total is a floor.`]));
     rows.push(...d.models.map(m => rowEl(m.model, [`${money(m.spend)} · ${m.calls} calls`])));
     el.querySelector(".list").replaceChildren(...rows);
+  },
+  lead(el, d) {
+    const L = d && d.lead;
+    if (!L || !L.control) { el.querySelector(".msg").textContent = "The hub sent no lead-time chart."; return; }
+    MLT.base = L.control; MLT.start = L.start || "";
+    if (!MLT.zc) leadDraw();   // a zoom reads on until Reset, so the screen's poll never draws over it
   }
 };
+// The lead-time screen (#1333): the phone draws the payload /api/chart/lead serves, the desktop page's own route, and
+// computes none of its numbers (ADR-0137). The timeframe switches inside that one payload; the axis is always log (#1355); zoom and reset
+// read the desktop's /api/leadtime through one explicit button each, never a drag. A tap pins one mark's tooltip.
+let MLT = { tf: "2", base: null, start: "", zc: null, zr: null, seq: 0 };   // `seq` numbers every view action: an answer numbered older than the last one never draws (#1333)
+const leadEl = () => document.querySelector('[data-screen="lead"]');
+const leadView = () => MLT.zc || (MLT.base ? MLT.base[MLT.tf] : null);
+function leadDraw() {
+  const el = leadEl(), c = leadView(); if (!el || !c) return;
+  const part = mltChart(c);
+  el.querySelector("#ltplot").innerHTML = part.svg;
+  el.querySelector("#ltlegend").innerHTML = part.legend;   // the legend and the reference values follow the plot, with no gutter
+  for (const b of el.querySelectorAll("#ltbars [data-ltf]")) b.setAttribute("aria-pressed", String(b.dataset.ltf === MLT.tf));
+}
+function leadPin(k) {
+  const el = leadEl(); if (!el) return;
+  el.querySelector("#ltpin").hidden = !k;
+  el.querySelector("#ltpintext").textContent = k ? mltPin(k) : "";
+}
+async function leadZoom(dir) {
+  const el = leadEl(), msg = el.querySelector(".msg"), seq = ++MLT.seq;   // this action outranks every answer older than it
+  if (dir === "reset") { MLT.zr = MLT.zc = null; leadPin(null); leadDraw(); msg.textContent = ""; return; }
+  const c = leadView(), z = mltZoom(c && c.range, dir); if (!z) return;
+  const q = "/api/leadtime?from=" + encodeURIComponent(z.from) + "&to=" + encodeURIComponent(z.to) +
+    "&a=" + encodeURIComponent(MLT.start || "");   // `a` is the span the payload serves (#1333)
+  try {
+    const d = await call(q, true);
+    if (seq !== MLT.seq) return;   // a later zoom or timeframe holds the screen: a stale answer never draws (#1333)
+    if (d.error) { msg.textContent = "The hub refused the zoom."; return; }
+    MLT.zr = z; MLT.zc = d; leadPin(null); leadDraw(); msg.textContent = "";
+  } catch (e) { if (seq === MLT.seq) msg.textContent = e.message; }
+}
+leadEl().addEventListener("click", e => {
+  const b = e.target ? e.target.closest("button") : null;
+  if (!b) return;
+  if (b.dataset.ltf) { ++MLT.seq; MLT.tf = b.dataset.ltf; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }
+  else if (b.dataset.ltzoom) leadZoom(b.dataset.ltzoom);
+  else if (b.dataset.ltpin === "dismiss") leadPin(null);
+});
+document.querySelector('[data-screen="lead"] #ltplot').addEventListener("click", e => {
+  const m = e.target ? e.target.closest("circle[data-lt-k]") : null, c = leadView();
+  if (!m || !c) return;
+  leadPin((c.clusters || [])[Number(m.dataset.ltK)]);
+});
 async function loadMore() {
   if (!moreScreen) return;
   const name = moreScreen, seq = ++moreSeq, el = document.querySelector(`[data-screen="${name}"]`);

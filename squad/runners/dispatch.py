@@ -203,26 +203,92 @@ class Dispatch:
             if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
                 self.ac_before, _ = await self.ac_survey()
             head_before = git.head(self.e.target)
-            review, rounds, why = await self.review_of(node, name, d, path, head_before, sc)
-            if not path.exists():      # a passed writer whose worktree is gone: its work cannot land, and the record says so
-                r = actions.ActionResult(False, ["land_workspace_missing"], head_before)
-            elif why:                  # a held child is not merged: its worktree stays, with every fix round on its branch
-                r = actions.ActionResult(False, why, head_before)
+            fixes, last, why = self.regression_replay(name)      # a resume reads the fix entries the record holds, never runs them again (ADR-0107)
+            failed = next((f for f in fixes if f["outcome"] != "pass"), None)
+            if failed:
+                review, rounds, r = None, 0, actions.ActionResult(False, [*why, "review_fix_failed", *failed["reasons"]], head_before)
             else:
-                try:
-                    r = await anyio.to_thread.run_sync(actions.merge_land, self.e.target, path, branch, f"squad: land {name} ({self.e.run_id})", 300 * self.e.scale)
-                except subprocess.TimeoutExpired:
-                    r = actions.ActionResult(False, ["land_timeout"], head_before)
-            if r.ok:
-                r = await self.landing_check(name, head_before)
-                if r.ok and name in self.ac_before:      # the child's own command, run at its own landing: no earlier result, so it never undoes the merge
-                    r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
+                start = self.last(name)["entry"] if fixes and self.last(name)["entry"] > self.last_round(name) else 1    # a fix entry nobody reviewed is read first
+                review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc, start)
+            while not r.ok and r.extra.get("owner") == name:
+                regressed = r.extra["regressed"]
+                if regressed == last:      # the same regression after a fix entry: failed attempts that do not change stop the loop (ADR-0134)
+                    r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", "regression_unchanged"], head_before, r.extra)
+                    break
+                last = regressed
+                fix = await self.fix_regression(node, name, d, sc, r)
+                fixes.append({**fix, "regressions": r.extra["regressions"]})
+                if fix["outcome"] != "pass":
+                    r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", *fix["reasons"]], head_before, r.extra)
+                    break
+                review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc, fix["entry"])
+            for k in ("owner", "regressed", "findings"):      # the loop's working fields: the record keeps the attribution rows
+                r.extra.pop(k, None)
+            if fixes:
+                r.extra["fixes"] = fixes
+            if r.ok and name in self.ac_before:      # the child's own command, run at its own landing: no earlier result, so it never undoes the merge
+                r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
             self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
                                                    outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
                                                    effect={"name": "review" if r.reasons and r.reasons[0].startswith("review_") else "merge_land",
                                                            "before": head_before, "head": r.head, **r.extra,
                                                            **({"review": review, "rounds": rounds} if review else {})})   # `before` is read here: the landing check replaces the merge's result
         return False
+
+    async def land_child(self, node, name, d, path, branch, head_before, sc, start=1):
+        """Review one passed child, merge its branch and check the landing. Return (last review, rounds, landing result).
+        Review round n reads the head of entry n (`rounds`), so `start` is the entry whose head is read first: 1 for a new
+        landing, the regression fix entry's number after it. A round the record holds is replayed, never read again."""
+        review, rounds, why = await self.review_of(node, name, d, path, head_before, sc, start)
+        if not path.exists():      # a passed writer whose worktree is gone: its work cannot land, and the record says so
+            r = actions.ActionResult(False, ["land_workspace_missing"], head_before)
+        elif why:                  # a held child is not merged: its worktree stays, with every fix round on its branch
+            r = actions.ActionResult(False, why, head_before)
+        else:
+            try:
+                r = await anyio.to_thread.run_sync(actions.merge_land, self.e.target, path, branch, f"squad: land {name} ({self.e.run_id})", 300 * self.e.scale)
+            except subprocess.TimeoutExpired:
+                r = actions.ActionResult(False, ["land_timeout"], head_before)
+        if r.ok:
+            r = await self.landing_check(name, head_before)
+        return review, rounds, r
+
+    async def fix_regression(self, node, name, d, sc, r):
+        """The owner's fix entry answers a route-stage regression as CHANGES does (ADR-0151): the finding names the regressed
+        commands, the child that declared each, and its landed head. The entry is the child's next one, read from its outcomes
+        and never from its review rounds. The run must fund it first (ADR-0108): an unfunded entry fails
+        `review_fix_unfunded`. A diagnostic names the entry before it starts, so a resume replays it (`regression_replay`).
+        Return {entry, outcome, reasons}."""
+        entry = self.last(name)["entry"] + 1
+        fund = self.e.budget.hold(d["spend"], d.get("spend_tokens"))
+        if fund is None:
+            return {"entry": entry, "outcome": "fail", "reasons": ["review_fix_unfunded"]}
+        self.held[name] = fund
+        x = r.extra
+        self.e.record.append("diagnostic", source="regression_fix", node=name, entry=entry,
+                             payload={"regressions": x["regressions"], "regressed": x["regressed"], "reasons": list(r.reasons)})
+        out = await self.e.runs.fix(node, name, entry, {"verdict": "fix", "findings": x["findings"], "stderr": ""}, sc.deadline_at, self.coder(node, name, d))
+        return {"entry": entry, "outcome": out["outcome"], "reasons": list(out.get("reasons", []))}
+
+    def regression_replay(self, name):
+        """The regression fix entries the record holds for a child, as `land` rows, and the last regression they answered.
+        An entry with an outcome is reused; one with a `call_start` and no outcome crashed mid-session and is not run again
+        under its grant (as in `rounds`); one never launched is left out and runs again. Return (rows, regressed, the landing reasons of the last entry)."""
+        e, rows, last, why = self.e, {}, None, []
+        for x in e.record.events:
+            if x["event"] != "diagnostic" or x["source"] != "regression_fix" or x["node"] != name:
+                continue
+            n, p = x["entry"], x["payload"]
+            out = e.outcomes.event(name, n)
+            if out is None and any(c["event"] == "call_start" and c["node"] == name and c["entry"] == n for c in e.record.events):
+                cap = self.children[name]["reservation"]
+                out = e.runs.outcome(name, "fail", ["crashed", "launched_no_outcome"], None, {"cap": cap}, n)
+                e.budget.unmeasured += cap
+            if out is None:
+                continue
+            rows[n] = {"entry": n, "outcome": out["outcome"], "reasons": list(out.get("reasons", [])), "regressions": p["regressions"]}
+            last, why = [(c, k) for c, k in p["regressed"]], list(p["reasons"])
+        return list(rows.values()), last, why
 
     def review_base(self, path):
         """The target's side of a review's `{base}`: the point the child's branch was cut from. A target head read when the
@@ -242,7 +308,7 @@ class Dispatch:
             return None
         return await self.tries(node, name, d, path, base, 1, e.budget.run_spend_remaining >= d["spend"])
 
-    async def review_of(self, node, name, d, path, head_before, sc):
+    async def review_of(self, node, name, d, path, head_before, sc, start=1):
         """The review of one passed child, or (None, 0, None) when the graph declares none or its worktree is gone.
         The reading itself starts when the child passes (`Children.review_child`), so the readings of several passing
         children overlap; `rounds` then decides that round and every fix round it asks for, in request order, after the
@@ -256,9 +322,9 @@ class Dispatch:
         if pending is not None:
             await pending["event"].wait()
             first = pending["got"]
-        return await self.rounds(node, name, d, path, self.review_base(path) or head_before, sc, first)
+        return await self.rounds(node, name, d, path, self.review_base(path) or head_before, sc, first, start)
 
-    async def rounds(self, node, name, d, path, base, sc, first=None):
+    async def rounds(self, node, name, d, path, base, sc, first=None, start=1):
         """Review one passed child, and fix it while its review asks (#570). Round n reviews the head of entry n; a `fix`
         verdict starts entry n+1 of the same child in its worktree with the full review, and its new head is round n+1.
         The command decides fix or hold (its stall rule, ADR-0134); code offers a round only when it already holds the next
@@ -272,7 +338,7 @@ class Dispatch:
         coder to test the premise of its last fix before a third one (`repeated_round`, #882: a repeat of the record's
         rounds, since a requeued worktree holds no last fix).
         Return (the last review, the rounds, the reasons that hold the child or None)."""
-        e, n = self.e, 1
+        e, n = self.e, start
         standing = None          # the review of a head a failed fix entry left in place: the same findings, not a new reading
         while True:
             reading = standing
@@ -549,8 +615,28 @@ class Dispatch:
             self.ac_before = after
             return actions.ActionResult(True, [], git.head(self.e.target))
         await anyio.to_thread.run_sync(lambda: git.run(["reset", "--hard", head_before], self.e.target, timeout=300 * self.e.scale))
-        return actions.ActionResult(False, [f"ac_regression:{c}" for c in moved], head_before,
-                                    {"evidence": {f"ac_regression:{c}": evidence.get(c, {}) for c in moved}})
+        extra = {"evidence": {f"ac_regression:{c}": evidence.get(c, {}) for c in moved}}
+        owner, regressions = self.regression_owner(name, moved)
+        if owner:
+            extra.update(owner=owner, regressed=[(c, sorted(evidence.get(c, {}))) for c in moved], regressions=regressions,
+                         findings="\n\n".join(f"{g['declared_by']} landed at {g['landed_head']} and passed this command before your landing; it fails after it:\n{k.split(':', 1)[1]}\n{out}"
+                                              for g in regressions for k, out in evidence.get(g["declared_by"], {}).items()))
+        return actions.ActionResult(False, [f"ac_regression:{c}" for c in moved], head_before, extra)
+
+    def regression_owner(self, name, moved):
+        """Who owns a regression, read from the ledger: each regressed command belongs to the child that declared it, and that
+        child's `land` event holds its landed head. The command passed there and at the target before this landing, so only
+        the landing child's merge moved it, and that child owns the fix. Return (owner or None, one row per regressed child).
+        No owner when a declaring child has no passing landing in the ledger, or the landing child's worktree is gone."""
+        rows = []
+        for c in moved:
+            land = self.landed.get(c)
+            head = ((land or {}).get("effect") or {}).get("head") if land and land["outcome"] == "pass" else None
+            if not head:
+                return None, []
+            rows.append({"declared_by": c, "landed_head": head, "broken_by": name, "owner": name})
+        tree = self.child_tree(name)
+        return (name, rows) if tree and os.path.isdir(tree) else (None, [])
 
     def ledger(self, disp):
         """One compact row per finished child of a dispatch, in request order: the only thing a router reads of its children's work."""

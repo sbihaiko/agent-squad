@@ -152,15 +152,26 @@ def test_an_open_card_is_observed_to_the_reading_instant():
     assert obs["censored"] is True and obs["flowing"] == 48.0 and obs["end"] is None
 
 
-def test_a_card_that_never_entered_todo_is_excluded_and_named(hub, board):  # noqa: F811
+def test_a_card_that_never_entered_todo_is_measured_from_its_board_entry(hub, board):  # noqa: F811
+    """Re-anchored (#1354): a card read on the board that never entered the default start column is measured from its
+    first time there, and the chart names that measure, instead of dropping it as an unnamed no_start."""
     never = [{"t": "2026-10-01T00:00:00Z", "type": "added"}, {"t": "2026-10-01T00:00:00Z", "type": "status", "status": "Doing"},
              {"t": "2026-10-02T00:00:00Z", "type": "status", "status": "Closed"}, {"t": "2026-10-02T00:00:00Z", "type": "closed"}]
     _seed(hub, {1: (_card(1, st="Closed", s="CLOSED", c="2026-10-02T00:00:00Z"), never),
                 2: (_card(2, st="Closed", s="CLOSED", c="2026-10-03T00:00:00Z"),
                     _life("2026-10-01T00:00:00Z", ("2026-10-03T00:00:00Z", "Closed")))})
     chart = hub.lead_zoom("tf=all&a=Todo")
-    assert [d["n"] for d in chart["dots"]] == [2]
-    assert chart["excluded"] == {"no_start": 1}
+    assert [(d["n"], d["hours"]) for d in chart["dots"]] == [(1, 24.0), (2, 48.0)]
+    assert chart["fallback"]["cards"] == [1] and chart["excluded_total"] == 0
+
+
+def test_a_card_off_the_board_keeps_its_no_start_exclusion(hub, board):  # noqa: F811
+    """A card that closed without ever being on the board has no board entry to measure from: it stays named."""
+    never = [{"t": "2026-10-01T00:00:00Z", "type": "status", "status": "Doing"},
+             {"t": "2026-10-02T00:00:00Z", "type": "status", "status": "Closed"}, {"t": "2026-10-02T00:00:00Z", "type": "closed"}]
+    _seed(hub, {1: (_card(1, st="Closed", s="CLOSED", c="2026-10-02T00:00:00Z"), never)})
+    chart = hub.lead_zoom("tf=all&a=Todo")
+    assert chart["dots"] == [] and chart["excluded"] == {"no_start": 1}
     assert chart["excluded_cards"] == {"no_start": [1]}
 
 
@@ -234,7 +245,7 @@ def test_the_legend_carries_the_km_median_its_interval_the_cohort_wip_and_the_ex
     from tests.test_hub_board_flow_charts import _render
     now = datetime.now(UTC)
     t = lambda h: (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
-    never = [{"t": t(20), "type": "added"}, {"t": t(20), "type": "status", "status": "Doing"},
+    never = [{"t": t(20), "type": "status", "status": "Doing"},   # never on the board, so no board entry to measure from
              {"t": t(3), "type": "status", "status": "Closed"}, {"t": t(3), "type": "closed"}]
     _seed(hub, {1: (_card(1, st="Closed", s="CLOSED", c=t(10)), _life(t(12), (t(10), "Closed"))),
                 2: (_card(2, st="Todo", s="OPEN"), _life(t(30))),
@@ -248,5 +259,5 @@ def test_the_legend_carries_the_km_median_its_interval_the_cohort_wip_and_the_ex
     legend = "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out))
     assert "not estimable" in legend, "a curve that never reaches one half reads not estimable"
     assert chart["survival"]["text"] in out and chart["wip"]["text"] in out
-    assert out.count("excluded") == 1 and re.search(r'title="1 never entered the start column: #4"[^>]*>excluded 1<', out), \
+    assert out.count("excluded") == 1 and re.search(r'title="1 never entered the start column: #4"[^>]*>excluded 1: 1 never entered the start column<', out), \
         "the excluded count sits beside the percentile and names the card"

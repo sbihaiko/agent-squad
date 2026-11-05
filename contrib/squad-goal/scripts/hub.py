@@ -2063,7 +2063,21 @@ def loop_view(a):
             "health": loop_health(live),   # the Loop theme's Now tiles (#1280)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
-            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
+            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # kept for every client that already reads the loop answer
+
+
+def access_view(a):
+    """Settings > Access reads the reach and the two tailnet rules on their own route (#1285), an additive answer beside the
+    loop route so the theme never waits on the loop answer. `reach` is this request's own access result; each rule says
+    allowed or refused, and `file` names the file the rule is read from: the project file when it holds the block, else the
+    project's personal `.env`, and none when no file holds one. A request the seam refuses gets its reach and no rule, login
+    or file, marked `withheld` so the page says the values stay with the owner rather than reading as an empty rule."""
+    if not a.allowed:
+        return {"tailnet": a.tailnet, "login": "", "reach": False, "reason": a.reason, "withheld": True, "access": {}, "file": ""}
+    tn, path = tailnet_source()
+    return {"tailnet": a.tailnet, "login": a.login, "reach": a.allowed, "reason": "",
+            "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True},
+            "file": path}
 
 def loop_refusal(a, origin_ok, tn):
     """The reason a loop write is refused, or '' when it may run: the access rule, then the tailnet grant, then the origin and body."""
@@ -2362,12 +2376,13 @@ def throughput_fact(now=None):
     reads = ([max((r.get("t") or 0 for r in store.values()), default=0)] if store else []) + \
             ([board_cache.get("t") or 0] if items else [])
     oldest = min((r for r in reads if r), default=0) or None
-    return {"window_secs": w, "window": window_n, "today": window_n,   # `today` is the key the page draws until #1363 moves the card
+    age = now_ts - oldest if oldest else None
+    return {"window_secs": w, "window": window_n, "day": sum(s["n"] for s in slots),   # closes in the whole day: none means no history
             "arrivals": arrivals_fact(items, now_ts, w),   # the Bugs and Loop-bugs rows, off the cache's `o` stamps alone
             "tasks": tasks_fact(items, now_ts, w, window_n),   # planned delivery over the same window as the hero figure
             "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
             "max": max(avail + [window_n]), "trend": trend,
-            "as_of": oldest, "age_secs": now_ts - oldest if oldest else None}
+            "as_of": oldest, "age_secs": age, "stale": age is not None and age > board_stale_bound()}
 
 def subs_gauges(now=None):
     """Each subscription's weekly window for the Monitor: its used share and when it resets, or why there is no reading.
@@ -3827,9 +3842,18 @@ def lead_rows(a=None, b=None, now=None):
     """The rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held time of its
     column intervals in the history store, from its FIRST entry into `a` to its last entry into `b` (#1024, #1248). A closed
     card the store has not read is not_read, one that never entered `a` is no_start, and one with no entry into `b` is
-    no_transition. Each read card carries its observation `obs` for the survival reading: an open card is observed to
-    `now`, censored (#1250). A delivered row also carries `columns`, the hours it spent in each column, and `gate`, its
-    Gating hours, for the chart's stack (#1256). The row's bar keys filter it (#904)."""
+    no_transition. A closed card the store read that never entered the view's DEFAULT start column (LEAD_START, Todo),
+    whatever its Type, is measured from its first time on the board instead, because such a card can close without ever
+    reaching the work column: a spec is a document and moves with its tickets (ADR-0142), and a bug or a task can be born
+    or moved past it. The row carries `fallback` when it does (#1354), and only an entry into the row's end column counts:
+    the fallback replaces the start the reader never reached, never the end they chose. The fallback belongs to the
+    default start alone: a card that entered a user-chosen start column keeps its no_start exclusion, and so does a card
+    the chosen start column never saw, because that choice is never silently replaced (#1248). No `a` is Created, the
+    card's first time on the board; an empty `a` is that same selection, never a column named empty. Each read card
+    carries its observation `obs` for the survival reading: an open card is observed to `now`, censored (#1250). A
+    delivered row also carries `columns`, the hours it spent in each column, and `gate`, its Gating hours, for the
+    chart's stack (#1256). The row's bar keys filter it (#904)."""
+    a, b = a or None, b or None   # a selection cleared to empty is the default, Created or closed, never a column name
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     now = now or dt.datetime.now(dt.UTC)
     rows = []
@@ -3839,16 +3863,27 @@ def lead_rows(a=None, b=None, now=None):
         runs = _hist.intervals(read["events"]) if read else []
         obs = _hist.lead_observation(runs, start=a, end=b, complete=read["complete"], now=None if closed else now) if read else None
         span = obs if closed and obs and not obs["censored"] else None
+        entered = None
+        if closed and read and span is None:   # the only rows whose reason and fallback read it: lazily, never per card
+            entered = any((r["on_board"] if a is None else r["column"] == a) for r in runs)
+        # #1354: the default view measures from Todo, but a card can close without ever entering it. Measure such a card
+        # from its first time on the board, the Backlog wait included, and say so. The end column is the reader's, so the
+        # card must have entered it: never measure a span the chart does not ask for. A user-chosen start keeps its
+        # exclusion, and a chosen span is never silently replaced.
+        fallback = False
+        if closed and read and obs is None and not entered and a in (None, LEAD_START):
+            end = b or COLUMN["issue_closed"]
+            if any(r["column"] == end for r in runs):
+                on_board = _hist.board_time(runs, end=b, complete=read["complete"])
+                if on_board is not None: obs, span, fallback = on_board, on_board, True
         if _columns_module.not_planned(i.get("cr")): reason = _leadtime.NOT_DELIVERED
         elif closed and read is None: reason = _leadtime.NOT_READ
-        elif closed and span is None:
-            entered = any((r["on_board"] if a is None else r["column"] == a) for r in runs)
-            reason = _leadtime.NO_TRANSITION if entered else _leadtime.NO_START
+        elif closed and span is None: reason = _leadtime.NO_TRANSITION if entered else _leadtime.NO_START
         else: reason = None
         row = {"n": i["n"], "column": _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))[0], "reason": reason,
                "c": i.get("c") if closed else None, "o": i.get("o"), "t": i.get("t", ""), **bar_keys(i),
                "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False,
-               "columns": None, "gate": 0.0,
+               "columns": None, "gate": 0.0, "fallback": fallback,
                "obs": None if obs is None else {"start_lo": obs["start_lo"], "start_hi": obs["start_hi"],
                                                 "hours": obs["flowing"] + obs["held"], "censored": obs["censored"],
                                                 "unknown_start": obs["unknown_first"]}}
@@ -4002,6 +4037,8 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
           "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"], "start": LEAD_START,
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_cards": lead["excluded_cards"],
+                     "excluded_text": _leadtime.excluded_text(lead["excluded"]),
+                     "excluded_reasons": _leadtime.exclusion_words(lead["excluded"]),
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
                      "control": control, "columns": ORDER, "coverage": coverage}}
 
@@ -5016,6 +5053,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--inset);margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
 #lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
 #accb .kr b{font-weight:600;font-size:var(--fs-caption);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
+.sdev{padding:8px 0 0;border-top:1px solid var(--line)}.sdev h4{margin:0 0 4px;font-size:var(--fs-caption);color:var(--mute)}.sdev a{margin-right:10px}.sdev p{margin:6px 0 0}
 #ldg{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-lg);padding:16px;width:min(520px,92vw)}#ldg::backdrop{background:var(--scrim)}#ldg .lrad{display:flex;gap:8px;align-items:flex-start;padding:8px 0;cursor:pointer}#ldg .lrad small{display:block;color:var(--mute)}#ldg ul{margin:4px 0 0;padding-left:18px}#ldg .lact{display:flex;gap:6px;margin-top:10px}
 header.top{position:relative;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
 header.top h1{font-size:var(--fs-display);margin:0}header.top .spx{flex:1}
@@ -5037,7 +5075,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:var(--radius-md)}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-caption);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:16px;border-radius:var(--radius-lg);background:linear-gradient(90deg,var(--raise),var(--raise-2))}#ispeed .spr i{position:absolute;top:0;bottom:0;width:2px;background:var(--mute)}#ispeed .spr .spmed{width:3px;background:var(--warn-strong)}#ispeed .spr .spt{width:10px;height:10px;top:3px;border-radius:var(--radius-full);background:var(--acc);margin-left:-5px;box-shadow:0 0 0 2px var(--well)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err-deep)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:6px;border-radius:var(--radius-lg);background:var(--raise);margin-top:6px}#ispeed .spr i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--fg)}#ispeed .spr .spt{left:0;top:0;bottom:0;width:0;border-radius:var(--radius-lg);background:var(--mute)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#ispeed .spw{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;margin-top:6px;font-size:var(--fs-caption);min-width:0}#ispeed .spwl{font-weight:600;color:var(--mute)}#ispeed .spwv{color:var(--fg);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}#ispeed .spw.ok .spwl{color:var(--ok)}#ispeed .spw.warn .spwl{color:var(--warn)}#ispeed .spw.err .spwl{color:var(--err)}#ispeed .spwt{grid-column:1/-1;display:block;height:4px;border-radius:var(--radius-lg);background:var(--raise);overflow:hidden}#ispeed .spwt i{display:block;height:100%;background:var(--ok)}#ispeed .spw.warn .spwt i{background:var(--warn)}#ispeed .spw.err .spwt i{background:var(--err)}#ispeed .spw.mute .spwt i{background:var(--mute)}#ispeed .spage{font-size:var(--fs-caption);color:var(--warn);margin-top:6px}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
@@ -5155,14 +5193,14 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>loopback</small></button></nav>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
 <div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
 <details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>off</span></summary><div class=sb id=lopb></div></details>
 <details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr>on</span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
-<details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>loopback</span></summary><div class=sb><div id=accb></div><div class=kr><span class=l>This device</span><a id=mobile-link href="#">mobile view</a></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
+<details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>&#8212;</span></summary><div class=sb><div id=accb></div><div class=sdev><h4>This device</h4><a id=mobile-link href="#">mobile view</a><p class=note>The phone check runs <code>/agent-squad:start-mobile</code> on this machine.</p></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
 <dialog id=sdlg aria-label="Confirm the settings change"><b>Save these settings?</b><pre id=sdpre></pre><p class=m>Written to the project files. Runs already started keep the chains they recorded.</p><div class=sact><button id=sdok>Confirm and save</button><button id=sdno>Back</button></div></dialog>
@@ -5255,14 +5293,18 @@ function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
 function instSum(facts){const n=instTiles(facts).filter(x=>x.tone==="err").length;return n?n+" fail":""}   // no tile, so no count; a red gate stays in the footer (#1260)
 function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
- const {today,median,min,max,trend}=sp,hi=Math.max(max||0,today||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi));
- const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
- const mark=(v,cls,lbl)=>v==null?"":`<i class="${cls}" style="left:${at(v)}%" title="${lbl} ${v}"></i>`;
- return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`
-  +`<div class=spr role=img aria-label="cards closed today: ${today}, median ${median==null?"unknown":median}, minimum ${min==null?"unknown":min}, maximum ${max==null?"unknown":max}">`
-  +mark(min,"spmin","minimum")+mark(median,"spmed","median")+mark(max,"spmax","maximum")+`<i class="spt ${tag[2]}" style="left:${at(today)}%" title="today ${today}"></i></div>`
-  +`<div class=spl><span>min ${min==null?"?":min}</span><span>med ${median==null?"?":median}</span><span>max ${max==null?"?":max}</span></div>`
-  +`<div class=spn><b>${today==null?"?":today}</b> cards closed today${trend==null?" \u00b7 no finished day to compare":""}</div></div>`}
+ const hi=Math.max(sp.max||0,sp.window||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi)),hrs=+(sp.window_secs/3600).toFixed(2);
+ const tag=sp.trend==="up"?["\u25B2","accelerating","up"]:sp.trend==="down"?["\u25BC","slowing","down"]:sp.trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
+ const none=!sp.day,med=sp.median==null?"unknown":sp.median;
+ const bar=none?"":`<div class=spr role=img aria-label="cards closed in the last ${hrs} h: ${sp.window}, median ${med}, maximum ${sp.max}">`
+  +(sp.median==null?"":`<i class=spmed style="left:${at(sp.median)}%" title="median ${sp.median}"></i>`)+`<i class="spt ${tag[2]}" style="width:${at(sp.window)}%"></i></div>`
+  +`<div class=spl><span>median ${med}</span><span>max ${sp.max}</span></div>`;
+ const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
+ const row=(cls,name,word,r)=>{const n=(r||{}).n||0,of=(r||{}).of||0,t=cls==="ok"||of?cls:"mute";
+  return `<div class="spw ${t}" role=img aria-label="${name}: ${n} of ${of} ${word}"><span class=spwl>${name}</span><span class=spwv>${n} of ${of} ${word}</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`};
+ const arr=sp.arrivals||{}, stale=sp.stale?`<div class=spage>\u00b7 read ${Math.floor(sp.age_secs/60)} m ago</div>`:"";
+ return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`+hero+bar
+  +row("ok","Tasks","closed",sp.tasks)+row("warn","Bugs","opened",arr.bugs)+row("err","Loop-bugs","opened",arr.loop_bugs)+stale+`</div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
 function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.state:"";   // the hub decides the count, the text and the state; the page only draws them
  const w=100*Math.max(0,Math.min(1,Number(p.frac)||0)),bar=p.bar?`<span class=pb role=progressbar aria-label="Open spec progress" aria-valuemin=0 aria-valuemax=${Number(p.total)||0} aria-valuenow=${Number(p.done)||0}><span class=pf style="width:${w}%"></span></span>`:"";
@@ -5889,9 +5931,8 @@ const flowCFD=c=>{const names=c.bands.map(b=>b.name),kept=CF.hidden.filter(h=>na
     (c.legacy?` · ${fig(c.legacy)} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these`:"")+
     ` · a darker stripe at a band's base is its held cards${CF.hidden.length?" · held cards in hidden states are not drawn":""}`;
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${shown.map(polys).join("")}${shown.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+legend+`<p class=fnote>${notes}</p>`;};   // the legend, then one line of notes (#1149)
-const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date",no_transition:"no transition into the chosen columns",no_start:"never entered the start column",not_read:"not yet read by the history pass"};   // the cards the chart leaves out, in words (#921, #1248)
-const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.reason]||e.reason}`+((cards||{})[e.reason]?.length?": "+cards[e.reason].map(n=>"#"+n).join(", "):"")).join("; ");return `<em class=ltex${named?` title="${esc(named)}"`:""}>excluded ${total}</em>`};   // the one exclusion total, its reasons and cards named in its hover (#1145, #1248)
-const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
+const ltEx=(exc,cards,total,words,reasons)=>{const R=reasons||{},named=exc.map(e=>`${e.count} ${R[e.reason]||e.reason}`+((cards||{})[e.reason]?.length?": "+cards[e.reason].map(n=>"#"+n).join(", "):"")).join("; "),said=words||exc.map(e=>`${e.count} ${R[e.reason]||e.reason}`).join("; ");return `<em class=ltex${named?` title="${esc(named)}"`:""}>excluded ${total}${said?`: ${esc(said)}`:""}</em>`};   // the one exclusion total with its reason beside its count (#1145, #1248, #1354); its wording is the payload's, one source in Python; its hover names the cards
+const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total,c.excluded_text,c.excluded_reasons);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
 let LT={tf:"2",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); only the average reference shows at first, and the median and p85 are toggles (#1332)
@@ -5959,7 +6000,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
     `<text class=lttg x=${ltP+LT_FRAME.width+22} y=${t.ty} text-anchor=start fill=var(--chart-axis)>${esc(t.name)} ${esc(t.text)}</text>`).join("");   // the name and the value read together in grayscale, whichever line they belong to; each sits in the reserved right gutter, laid out apart (#1332)
   const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.count,shown=k.cards.slice(0,5).map(n=>"#"+n).join(", ")+(m>5?` +${m-5} more`:""),title=m>1?`${m} issues: ${shown}`:`#${k.dots[0].n} ${k.dots[0].title}`;   // a lone card is one hollow dot; a cluster is one outlined filled dot of the payload's one fixed radius (#1331)
     const cx=ltX(k.x),cy=ltY(k.y),strip=k.dots.map(d=>d.stack.map(b=>`${b.column} ${b.text}`).join(", ")).join(" · ");   // the tooltip's stage strip: each dot's column stack, no stacked bar in the plot (#1331)
-    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates and the stage strip; the plot draws no count and no bar (#1331)
+    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}${k.dots.some(d=>d.fallback)?" · measured from its first time on the board":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates, the stage strip and a card's fallback measure (#1331, #1354); the plot draws no count and no bar
   const legend=`<p class="flg ltlg"><span><i class=lthollow></i>Card</span><span><i class=ltfilled></i>Cluster</span><span><i class=ltroll></i>Rolling mean</span>${LT.band&&bp?`<span><i class=ltband></i>Rolling spread ±1 SD</span>`:""}</p>`+   // the series legend names every mark the plot draws; the head line is the one place that states the window (#1304, #1332)
     `<p class="flg ltlg"><span><i class=ltsolid></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i class=ltdash></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i class=ltdot></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b></span></p>`+ltKM(c);   // one summary row names each reference line beside its value and pattern; the one exclusion total sits in the header (#1248, #1250, #1334)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
@@ -5967,8 +6008,8 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   return ctl+legend+`<svg data-lt viewBox="0 0 ${ltP+LT_FRAME.width+gut} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}${gutter}</svg>`+rows;};   // the layout reserves the right gutter for the reference tags (#1332)
 const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
-    (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
-  LT.cols=l.columns||[];if(!c)return head+`<p class=fnote>no closed card yet · ${ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
+    (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}${c.fallback&&c.fallback.count?` · ${esc(c.fallback.text)}`:""}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334); a card's fallback measure is named (#1354)
+  LT.cols=l.columns||[];if(!c)return head+`<p class=fnote>no closed card yet · ${ltEx(l.excluded,l.excluded_cards,l.excluded_total,l.excluded_text,l.excluded_reasons)}</p>`;
   return head+ltChart(c,l.coverage);};   // the chart actually drawn decides emptiness: an empty timeframe never hides a zoom that holds cards (#1334)
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0);flowH=flowHeight(window.innerHeight)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
@@ -6114,7 +6155,7 @@ function paintHL(){
 let TAB="board",lastRead=0,readStale=false;
 const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
 const HASH={board:"#kanban",runs:"#runs",flow:"#flow",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
-function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||null}   // a card link opens Kanban, where the card is (#1274)
+function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||(/^#set-[a-z]+$/.test(location.hash)?"set":null)}   // a card link opens Kanban, where the card is (#1274); a themed Settings link opens Settings (#1286)
 function tabNext(k,i,n){return k==="ArrowRight"?(i+1)%n:k==="ArrowLeft"?(i+n-1)%n:k==="Home"?0:k==="End"?n-1:-1}
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
@@ -6196,21 +6237,29 @@ const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on
  +`<label class=lrad><input type=radio name=lm value=stop-now${drain?"":" checked"}><span><b>Stop now</b><small>Kills these at once; their work in progress is lost:</small><ul>${r.map(x=>`<li>run ${esc(loopRun(x))}</li>`).join("")}${g.map(x=>`<li>${esc(x)}</li>`).join("")}${r.length||g.length?"":"<li>no live run or gate</li>"}</ul></span></label>`
  +`<div class=lact><button value=ok id=lok>Confirm</button><button value=no id=lno>Back</button></div>`};
 const accHtml=v=>{const a=v.access||{},yn=x=>x?"allowed":"refused",ty=x=>x?"ok":"err";
+ const rv=x=>v.withheld?"withheld":yn(x),rt=x=>v.withheld?"neutral":ty(x);   // a refused viewer never read a rule: no "refused" for it (#1285)
+ const route=v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)";
+ const reachTip=v.reach?`the request ${route}`:`the request ${route} was refused${v.reason?`: ${v.reason}`:""}`;   // the tone is the access answer; the route is the transport, in the hover
+ const note=v.file?`Read from <code>${esc(v.file)}</code>.`:v.withheld?"This read is refused; the two rules are withheld and stay with the owner.":"";
  return setNow("acc",[
-  setTile("Reached",v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)",v.tailnet?"warn":"ok"),
-  setTile("Loop write from the tailnet",yn(a.loop_write),ty(a.loop_write),"SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"),
-  setTile("Terminal send from the tailnet",yn(a.terminals_send),ty(a.terminals_send),"SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)"),
-  setTile("Run dashboards","read only, through the hub","neutral"),
-  setTile("Phone check","/agent-squad:start-mobile","neutral")])
+  setTile("Reached",yn(v.reach),ty(v.reach),reachTip),
+  setTile("Loop write from the tailnet",rv(a.loop_write),rt(a.loop_write),"SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"),
+  setTile("Terminal send from the tailnet",rv(a.terminals_send),rt(a.terminals_send),"SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)")],note)
  +setSettings("acc",[],`Read here; the owner sets each value in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.`)};
+// The Access theme reads its own route (#1285): the reach and the two rules never ride on the loop answer, so a stopped
+// loop still states them.
+let accV=null,accBusy=false;
+const accDraw=()=>{if(!accV)return;const reach=accV.tailnet?"tailnet":"loopback";   // the theme's chip and the nav's small line, one live fact
+ const sr=$("#accsr");if(sr)sr.textContent=reach;const nv=$("#accnav");if(nv)nv.textContent=reach;
+ const c=$("#accb"),ah=accHtml(accV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}};
+async function accPoll(){if(accBusy)return;accBusy=true;try{accV=await (await fetch("/api/access")).json();accDraw()}catch(e){}finally{accBusy=false}}
 // loop-switch:end
 // One switch, in the Monitor where the owner looks (owner, from #1071's cleanup): the Loop panel keeps the change log,
 // and no second button carries the same id (ADR-0162). The run history left for the bottom of the Runs tab (#1277).
 function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=null?hp.live_runs:((loopV.live||{}).runs||[]).length;
- setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));setChip("acc",loopV.tailnet?"tailnet":"loopback");
+ setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
- const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}
- const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}}
+ const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
@@ -6220,6 +6269,7 @@ document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop
 $("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok")return;const m=(d.querySelector('input[name="lm"]:checked')||{}).value;
  if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
 setInterval(loopPoll,5000);loopPoll();
+setInterval(accPoll,5000);accPoll();
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
@@ -6281,6 +6331,7 @@ setInterval(squadChartTick,5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
+const themeHash=(location.hash.match(/^#set-(lop|lim|sub|mdl|slk|acc)$/)||[])[1];if(themeHash)sTheme=themeHash;   // the phone's Settings link names the theme (#1286)
 setTab(tabFromLocation()||(TABS[ls.tab]?ls.tab:"board"));   // the phone menu links here with #set (#913); a hash picks its tab (#1274)
 // The open page follows the hub build that served it (#1114)
 const SERVED_BUILD=__BUILD__;let hubNote=null;
@@ -7419,6 +7470,9 @@ def with_overlay(body, dash=False):
 MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:"
 
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
+# The phone's lead-time drawing (#1333): the desktop payload's numbers, laid out for the phone. Rules stay out of the
+# view (ADR-0137): the module computes no number the hub serves.
+CHART_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-chart.js").read_text()
 MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
 QUESTION_JS = (pathlib.Path(__file__).resolve().parent / "hub-question-card.js").read_text()
 RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_text()
@@ -7537,7 +7591,7 @@ def mobile_photo(page):
                 .replace(MOBILE_SEND, MOBILE_PHOTO_ROW)
                 .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
 
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES)))
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES)))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -7623,17 +7677,56 @@ def tailnet_seam():
     return _SEAM["seam"]
 
 _PROJECT = {}
-def tailnet_block():
-    """The `tailnet` block of the project file under the profile's checkout (squad/project_settings.py). Empty when the file or
-    the squad package does not load, so the seam refuses every tailnet request."""
+def _project_holds_tailnet(ps, path):
+    """True when the tracked project file itself holds a `tailnet` block, so it wins the named home over the personal `.env`."""
+    strip = getattr(ps, "without_tailnet", None)
+    try:
+        text = pathlib.Path(path).read_text()
+    except OSError:
+        return False
+    return strip is not None and strip(text) != text
+
+def _file_sig(path):
+    """The stat signature of `path`, or None when it is absent: a moved mtime or size means the file changed, so a cached
+    read is stale. The request path stats two small files and reads neither while the signature holds."""
+    try:
+        st = pathlib.Path(path).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+def tailnet_source():
+    """The `tailnet` block and the file it is read from, from one cached load of `squad/project_settings.py`. The project
+    route and the loop seam share the cache, so both read the same block within a request. Empty, with no named file, when
+    the file or the squad package does not load or no file holds the block: the seam then refuses every tailnet request.
+    The tracked project file wins the name; a block that lives only in `.env` names `.env`. A changed project file or
+    `.env` signature re-reads; an unchanged one answers from the cache, keyed on both files and the checkout."""
+    checkout = CHECKOUT or "."
+    proj = pathlib.Path(checkout) / "docs" / "squad" / "defaults.yaml"
+    env = pathlib.Path(checkout) / ".env"
+    sig = (str(pathlib.Path(checkout).resolve()), _file_sig(proj), _file_sig(env))
+    hit = _PROJECT.get("source")
+    if hit and hit[0] == sig: return dict(hit[1]), hit[2]
     try:
         if "ps" not in _PROJECT:
             (_PROJECT["ps"],) = load_squad(tailnet_roots(), ("project_settings",))
-        data, _ = _PROJECT["ps"].load(CHECKOUT)
+        data, info = _PROJECT["ps"].load(checkout)
     except Exception as e:
         log_once(f"hub: tailnet settings unavailable, every tailnet request is refused: {type(e).__name__}: {' '.join(str(e).split())}")
-        return {}
-    return (data or {}).get("tailnet") or {}
+        _PROJECT["source"] = (sig, {}, "")
+        return {}, ""
+    block = (data or {}).get("tailnet") or {}
+    path = (info or {}).get("path")
+    if path and _project_holds_tailnet(_PROJECT["ps"], path): home = path          # the tracked file holds the block
+    elif block and env.is_file(): home = str(env)                                 # only `.env` holds it
+    else: home = ""                                                               # no file holds a block: name none
+    _PROJECT["source"] = (sig, block, home)
+    return dict(block), home
+
+def tailnet_block():
+    """The `tailnet` block of the project file under the profile's checkout. Empty when the file or the squad package does
+    not load, so the seam refuses every tailnet request."""
+    return tailnet_source()[0]
 
 class Access(NamedTuple):
     allowed: bool
@@ -7917,6 +8010,7 @@ class H(BaseHTTPRequestHandler):
             out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
+        elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/conversation"):
             page = conversation_payload(self.path.partition("?")[2])

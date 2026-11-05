@@ -30,6 +30,9 @@ def wiper(name, remove, cmds=("true",), **out):
     return {**step, "effect": effect}
 
 
+STOP = {"output": None, "spend": 0.1, "turns": 1, "stop_reason": "spend_cap"}   # a fix entry that ends on its cap and passes nothing
+
+
 def waves(n, fail="continue", stall=None, task=False):
     """The wave graph: an inner loop re-enters the router while a wave passes; the final gate runs once after the stop word.
     `stall` opts the loop into #93's stall exit: {"count": k} ends the run `waves_stalled` after k waves land nothing,
@@ -121,11 +124,12 @@ async def test_a_landing_that_breaks_an_earlier_childs_held_out_command_is_undon
     repo = sibling_repo(tmp_path)
     script = {"router": routed(req(), req("diagnosing-bugs")),
               "route.router.1": writer("a.txt", cmds=["test -f a.txt && test -f base.txt"]),
-              "route.router.2": wiper("b.txt", "base.txt", cmds=["test -f b.txt"])}
+              "route.router.2": [wiper("b.txt", "base.txt", cmds=["test -f b.txt"]), STOP]}
     v = await make(tmp_path, script, target=repo).run()
     first, second = lands(tmp_path)
     assert (first["outcome"], second["outcome"]) == ("pass", "fail")
-    assert second["reasons"] == ["ac_regression:route.router.1"]   # route.router.2 passed its own command
+    assert second["reasons"][0] == "ac_regression:route.router.1"   # route.router.2 passed its own command
+    assert second["reasons"][1] == "review_fix_failed"
     assert (repo / "base.txt").exists() and not (repo / "b.txt").exists()   # the merge was undone
     assert not git.dirty(repo)
     assert len(sh(repo, "git", "log", "--merges", "--format=%s").splitlines()) == 1
@@ -386,7 +390,134 @@ async def test_a_plain_command_green_in_its_child_and_red_in_the_merged_target_f
     (The final gate applies the same routing: test_ac_verify_routes.py.)"""
     repo = sibling_repo(tmp_path)
     script = {"router": routed(req(), req("diagnosing-bugs")),
-              "route.router.1": writer("a.txt", cmds=["test ! -e b.txt"]), "route.router.2": writer("b.txt")}
+              "route.router.1": writer("a.txt", cmds=["test ! -e b.txt"]), "route.router.2": [writer("b.txt"), STOP]}
     eng = make(tmp_path, script, target=repo)
     v = await eng.run()
-    assert v.verdict != "completed" and v.reasons == ["ac_regression:route.router.1"]
+    assert v.verdict != "completed" and "ac_regression:route.router.1" in v.reasons
+
+
+def wiped_three(tmp_path, owner_steps):
+    """Three children: router.1 declares a command that needs base.txt, router.2 lands clean, router.3 wipes base.txt."""
+    cmd = "test -f a.txt && test -f base.txt"
+    return {"router": routed(req(), req("diagnosing-bugs"), req()),
+            "route.router.1": writer("a.txt", cmds=[cmd]), "route.router.2": writer("c.txt", cmds=["test -f c.txt"]),
+            "route.router.3": owner_steps}
+
+
+def entries_of(tmp_path):
+    out = {}
+    for e in ev(tmp_path, "outcome"):
+        if e["node"].startswith("route.router."):
+            out.setdefault(e["node"], []).append(e["entry"])
+    return out
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_regression_goes_to_the_child_whose_landing_moved_it_and_the_ledger_names_the_attribution(tmp_path):
+    """#1392: router.1 declared the command and landed it green; router.3's landing turned it red. The fix entry goes to
+    router.3 alone, with the command and its declaring child as the finding, and the land record carries the ledger rows."""
+    repo = sibling_repo(tmp_path)
+    script = wiped_three(tmp_path, [wiper("d.txt", "base.txt", cmds=["test -f d.txt"]), writer("base.txt", cmds=["test -f d.txt"])])
+    eng = make(tmp_path, script, target=repo)
+    v = await eng.run()
+    assert v.verdict == "completed"
+    assert entries_of(tmp_path) == {"route.router.1": [1], "route.router.2": [1], "route.router.3": [1, 2]}
+    calls = [c for c in eng.adapter.calls if c.node == "route.router.3"]
+    assert "test -f a.txt && test -f base.txt" in calls[1].prompt and "route.router.1" in calls[1].prompt
+    assert not [c for c in eng.adapter.calls if c.node in ("route.router.1", "route.router.2") and c.entry > 1]
+    first, _second, third = lands(tmp_path)
+    [fix] = third["effect"]["fixes"]
+    [row] = fix["regressions"]
+    assert row == {"declared_by": "route.router.1", "landed_head": first["effect"]["head"], "broken_by": "route.router.3", "owner": "route.router.3"}
+    assert fix["entry"] == 2 and fix["outcome"] == "pass"
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_the_fix_entry_and_the_review_round_of_a_regression_fix_keep_their_own_counters(tmp_path):
+    """The regression fix is entry 2 of the owner. Its head is review round 2 and a review fix after it is entry 3: the
+    entry is read from the child's outcomes, the round from its review rounds, and neither rereads the other's count."""
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = sibling_repo(tmp_path)
+    script = wiped_three(tmp_path, [wiper("d.txt", "base.txt", cmds=["test -f d.txt"]), writer("base.txt", cmds=["test -f d.txt"]),
+                                    writer("e.txt", cmds=["test -f d.txt"])])
+    eng = make(tmp_path, script, tweak=gated(stub(tmp_path, [0, 4, 0])), target=repo)
+    assert (await eng.run()).verdict == "completed"
+    assert entries_of(tmp_path)["route.router.3"] == [1, 2, 3]
+    rounds = [(r["round"], r["verdict"]) for r in ev(tmp_path, "review_round") if r["node"] == "route.router.3"]
+    assert rounds == [(1, "approve"), (2, "fix"), (3, "approve")]
+    assert [r["round"] for r in ev(tmp_path, "review_round") if r["node"] == "route.router.1"] == [1]
+
+
+@pytest.mark.anyio
+async def test_a_regression_with_no_passing_landing_in_the_ledger_has_no_owner(tmp_path):
+    """A declaring child with no passing `land` event carries no landed head: the regression has no owner and gets no fix."""
+    eng = make(tmp_path, {"router": routed(req())}, target=sibling_repo(tmp_path))
+    d = eng.dispatch
+    d.landed = {"route.router.1": {"outcome": "fail", "effect": {"head": "abc"}}}
+    assert d.regression_owner("route.router.2", ["route.router.1"]) == (None, [])
+    d.landed = {"route.router.1": {"outcome": "pass", "effect": {"head": None}}}
+    assert d.regression_owner("route.router.2", ["route.router.1"]) == (None, [])
+
+
+def cut_record(tmp_path, keep):
+    """Resume a regression-fix run from a record cut after the first event `keep` says is the last one kept; the target goes
+    back to the head of router.2's landing, the state a crash there leaves."""
+    events = read(tmp_path / "record.jsonl")
+    cut = next(e["pos"] for e in events if keep(e))
+    (tmp_path / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events if e["pos"] <= cut))
+    return [e for e in events if e["event"] == "land"][1]["effect"]["head"]
+
+
+async def regression_fix_run(tmp_path):
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = sibling_repo(tmp_path / "t")
+    script = wiped_three(tmp_path, [wiper("d.txt", "base.txt", cmds=["test -f d.txt"]), writer("base.txt", cmds=["test -f d.txt"])])
+    eng = make(tmp_path, script, tweak=gated(stub(tmp_path, [0, 0])), target=repo)
+    eng.dispatch.prune = lambda: None
+    assert (await eng.run()).verdict == "completed"
+    return repo
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_resume_after_a_regression_fix_entry_reviews_its_head_and_keeps_the_fixes_row(tmp_path):
+    """The run stops after the fix entry's outcome and before its review round. The resume reviews entry 2's head as round 2
+    before it merges, runs no entry again, and the land record keeps the `fixes` row."""
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = await regression_fix_run(tmp_path)
+    head2 = next(r["head"] for r in ev(tmp_path, "review_round") if r["node"] == "route.router.3" and r["round"] == 2)
+    base = cut_record(tmp_path, lambda e: e["event"] == "outcome" and e["node"] == "route.router.3" and e["entry"] == 2)
+    git.run(["reset", "--hard", base], repo)
+    (tmp_path / "review.log").unlink()
+    eng2 = make(tmp_path, {}, tweak=gated(stub(tmp_path, [0, 0])), target=repo)
+    assert (await eng2.resume()).verdict == "completed" and eng2.adapter.calls == []
+    [line] = (tmp_path / "review.log").read_text().splitlines()
+    assert line.split()[1] == "2" and line.split()[3] == head2
+    third = lands(tmp_path)[-1]
+    assert third["node"] == "route.router.3" and third["outcome"] == "pass"
+    [fix] = third["effect"]["fixes"]
+    assert fix["entry"] == 2 and fix["outcome"] == "pass" and fix["regressions"][0]["declared_by"] == "route.router.1"
+    assert [(r["round"], r["verdict"]) for r in ev(tmp_path, "review_round") if r["node"] == "route.router.3"] == [(1, "approve"), (2, "approve")]
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_regression_fix_entry_that_crashed_is_not_run_again_on_resume(tmp_path):
+    """The run stops after the fix entry's `call_start` and before its outcome: the resume records it crashed, runs no entry
+    again, and the landing fails `review_fix_failed` with the fix row kept."""
+    from tests.test_review_fix import stub
+    from tests.test_review_gate import gated
+    repo = await regression_fix_run(tmp_path)
+    base = cut_record(tmp_path, lambda e: e["event"] == "call_start" and e["node"] == "route.router.3" and e["entry"] == 2)
+    git.run(["reset", "--hard", base], repo)
+    (tmp_path / "review.log").unlink()
+    eng2 = make(tmp_path, {}, tweak=gated(stub(tmp_path, [0, 0])), target=repo)
+    assert (await eng2.resume()).verdict != "completed" and eng2.adapter.calls == []
+    third = lands(tmp_path)[-1]
+    assert third["outcome"] == "fail" and "review_fix_failed" in third["reasons"] and "launched_no_outcome" in third["reasons"]
+    assert [f["entry"] for f in third["effect"]["fixes"]] == [2] and not (tmp_path / "review.log").exists()

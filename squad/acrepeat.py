@@ -3,7 +3,9 @@
 Two identical ac-verify failures in a row mean another round cannot satisfy the criterion, so the reading is a decision
 for the owner. A failure reads the same when its findings, with line numbers, shas and whitespace removed, name the same
 criteria with the same output, in any order. A changed finding, a new commit or a passing ac-verify gate starts the count again.
+A refusal that another run already holds (#1380) keys on the item, the gate node and the head as well, so a new commit clears it.
 """
+import hashlib
 import re
 
 REPEATS = 2
@@ -19,6 +21,11 @@ def fingerprint(findings, evidence):
     """The reading of one failure: each finding with its evidence, normalized, sorted so order is not significant."""
     evidence = evidence or {}
     return tuple(sorted(normalize(f) + "\n" + normalize(evidence.get(f, "")) for f in findings))
+
+
+def digest(fp, item, gate, head):
+    """The identity of one refused reading: the item, the gate node and the head name it, so only the same evidence on the same commit refuses another run (#1380)."""
+    return hashlib.sha256("\x1e".join([str(item), gate, str(head), *fp]).encode()).hexdigest()
 
 
 class Streak:

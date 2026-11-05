@@ -59,6 +59,10 @@ def _section(page, sid):
     return m.group(0)
 
 
+SPEED = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
+         "stale": False, "age_secs": 60, "tasks": {"n": 4, "of": 10, "share": 0.4},
+         "arrivals": {"opened": 10, "bugs": {"n": 7, "of": 10, "share": 0.7},
+                      "loop_bugs": {"n": 4, "of": 10, "share": 0.4}}}
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "write": True, "reason": "", "tailnet": False,
              "access": {"loop_write": False, "terminals_send": False},
              "live": {"runs": ["/x/runs/run-20261102-1"], "gates": []}, "log": []}
@@ -120,6 +124,10 @@ def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
     monitor = _section(page, "inst")
     assert monitor.index("id=igs") < monitor.index("id=ispeed")
     assert monitor.index("id=ispeed") < monitor.index("id=ispec")
+    card = _run(page, f"speedRow({json.dumps(SPEED)})", _monitor_blocks(page))
+    sentences = ["Tasks: 4 of 10 closed", "Bugs: 7 of 10 opened", "Loop-bugs: 4 of 10 opened"]
+    positions = [card.index(f'aria-label="{s}"') for s in sentences]
+    assert positions == sorted(positions), "the three rows are out of order"
 
 
 def test_the_loop_switch_closes_the_monitor_card(hub):
@@ -151,8 +159,51 @@ def test_the_monitor_carries_no_queue_tile(hub):
 
 def test_a_reader_learns_the_throughput_and_its_direction_in_one_row(hub):
     page = hub.PAGE
-    row = _run(page, 'speedRow({today:5,median:3,min:1,max:6,trend:"up"})', _monitor_blocks(page))
-    assert "accelerating" in row and "5" in row and "cards closed today" in row
+    row = _run(page, f"speedRow({json.dumps(SPEED)})", _monitor_blocks(page))
+    assert "accelerating" in row and "10" in row and "cards closed in the last 4 h" in row
+
+
+PHONE_WIDTH = 390   # the hub's phone width: docs/evidence/926/README.md measures the phone at 390 px
+
+
+def _rendered(hub, sp, measure):
+    """Draws the card in the hub's own page at the phone width and returns what `measure` reads from it, in Chrome."""
+    sync = pytest.importorskip("playwright.sync_api")
+    with sync.sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(channel="chrome")
+        except sync.Error as e:   # no Chrome on this machine: the rendered check cannot run here
+            pytest.skip(f"Chrome is not available: {' '.join(str(e).split())[:200]}")
+        page = browser.new_page(viewport={"width": PHONE_WIDTH, "height": 844})
+        page.set_content(hub.PAGE)
+        page.evaluate("(sp) => { document.querySelector('#ispeed').innerHTML = speedRow(sp); }", sp)
+        out = measure(page)
+        browser.close()
+    return out
+
+
+@pytest.mark.heavy
+def test_the_card_fits_the_sidebar_at_the_phone_width_on_rendered_dimensions(hub):
+    def measure(page):
+        return page.evaluate("""() => {
+            const side = document.querySelector('#side').getBoundingClientRect();
+            const card = document.querySelector('#ispeed .spd').getBoundingClientRect();
+            const rows = [...document.querySelectorAll('#ispeed .spw')].map(e => e.scrollWidth - e.clientWidth);
+            return {docW: document.documentElement.scrollWidth, sideRight: side.right, cardLeft: card.left,
+                    cardRight: card.right, rowCount: rows.length, rowOverflow: Math.max(0, ...rows)};
+        }""")
+    got = _rendered(hub, SPEED, measure)
+    assert got["rowCount"] == 3 and got["docW"] <= PHONE_WIDTH, got
+    assert got["cardLeft"] >= 0 and got["cardRight"] <= got["sideRight"] + 0.5 <= PHONE_WIDTH + 0.5, got
+    assert got["rowOverflow"] <= 0, got
+
+
+@pytest.mark.heavy
+def test_each_row_carries_its_full_sentence_in_its_accessible_name_on_the_rendered_page(hub):
+    def measure(page):
+        return [page.get_by_role("img", name=s, exact=True).count()
+                for s in ("Tasks: 4 of 10 closed", "Bugs: 7 of 10 opened", "Loop-bugs: 4 of 10 opened")]
+    assert _rendered(hub, SPEED, measure) == [1, 1, 1]
 
 def test_the_monitor_carries_no_late_writes_row(hub):
     """The owner removed it: no late-writes row and no reader that builds one."""
