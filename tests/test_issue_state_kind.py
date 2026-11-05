@@ -117,7 +117,7 @@ def test_a_shell_caller_reads_the_gaps_through_the_door(tmp_path, monkeypatch, c
 def test_fresh_hub_board_cache_serves_status_and_kind_without_a_board_read(tmp_path, monkeypatch, capsys):
     cache = tmp_path / "hub-board.json"
     cache.write_text(json.dumps({"t": time.time(), "repo": "x/y", "items": [
-        {"n": 854, "st": "Todo", "s": "open", "k": "bug"}
+        {"n": 854, "st": "Todo", "s": "open", "k": "bug", "r": "x/y"}
     ]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
     monkeypatch.setenv("SG_STATE", str(tmp_path))   # main reads SG_STATE: the test sets it, never the caller's env

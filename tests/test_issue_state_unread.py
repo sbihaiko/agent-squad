@@ -130,7 +130,7 @@ def test_a_node_id_seen_in_one_read_is_kept_for_the_next(tmp_path):
 def test_fresh_cache_go_read_rescues_missing_requested_issue_without_board_read(tmp_path, monkeypatch, capsys):
     cache = tmp_path / "hub-board.json"
     cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
-                                 "items": [{"n": 801, "st": "Todo"}]}))
+                                 "items": [{"n": 801, "st": "Todo", "r": "owner/ariel"}]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
     monkeypatch.setenv("SG_REPO", "owner/ariel")
     binding = FakeBinding({"801": "Todo"}, nodes={"800": "Todo"})
@@ -146,7 +146,7 @@ def test_fresh_cache_go_read_rescues_missing_requested_issue_without_board_read(
 def test_fresh_cache_is_bypassed_for_another_repository(tmp_path, monkeypatch):
     cache = tmp_path / "hub-board.json"
     cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
-                                 "items": [{"n": 801, "st": "Todo"}]}))
+                                 "items": [{"n": 801, "st": "Todo", "r": "owner/ariel"}]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
     monkeypatch.setenv("SG_REPO", "owner/ariel")
     monkeypatch.setattr(issue_state, "board_state", lambda repo="": issue_state.State(FakeBinding({"999": "Done"})))
@@ -176,7 +176,7 @@ def test_missing_and_stale_cache_fall_back_to_board_read(tmp_path, monkeypatch, 
             cache.write_text(json.dumps(payload))
         assert issue_state.main(["issue_state.py", "--go", "801"]) == 0
         assert capsys.readouterr().out.splitlines() == ["801\tTodo"]
-    assert calls == [None, None]
+    assert calls == ["owner/ariel", "owner/ariel"], "the door names SG_REPO when no --repo does (#1429)"
 
 
 def test_go_check_prints_the_unread_line_and_alerts(tmp_path, monkeypatch, capsys):
@@ -294,7 +294,7 @@ def test_issue_facts_is_none_for_an_answer_about_another_issue(tmp_path):
 def test_the_fresh_cache_path_applies_the_same_naming_rule(tmp_path, monkeypatch, capsys):
     cache = tmp_path / "hub-board.json"
     cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
-                                 "items": [{"n": 801, "st": "Todo"}]}))
+                                 "items": [{"n": 801, "st": "Todo", "r": "owner/ariel"}]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
     monkeypatch.setenv("SG_REPO", "owner/ariel")   # the cache names this repository, so the cache path answers it
     monkeypatch.setenv("SG_STATE", str(tmp_path))
