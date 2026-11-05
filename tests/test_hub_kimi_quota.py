@@ -129,7 +129,8 @@ def _bridge_answer(hub, monkeypatch, answer=None, on_call=None):
     def open_refresh(req, timeout=30):
         sent.append({"url": req.full_url, "method": req.get_method(),
                      "body": json.loads(req.data), "headers": dict(req.headers)})
-        if on_call: on_call()
+        if on_call:
+            on_call()
         return answer if answer is not None else _Answer()
 
     monkeypatch.setattr(hub, "kimi_refresh_open", open_refresh)
@@ -253,7 +254,8 @@ def _bridge_server(hub, monkeypatch, status, body):
                          "anthropic-version": self.headers.get("anthropic-version")})
             self.send_response(status)
             self.send_header("content-type", "application/json")
-            if status // 100 == 3: self.send_header("location", "http://127.0.0.1:1/elsewhere")
+            if status // 100 == 3:
+                self.send_header("location", "http://127.0.0.1:1/elsewhere")
             self.send_header("content-length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -285,7 +287,8 @@ def test_the_refresh_call_refuses_a_redirect(hub, monkeypatch):
     """The answer must be the bridge's own: a redirect is refused, never followed to another host."""
     srv, seen = _bridge_server(hub, monkeypatch, 302, b"")
     try:
-        with pytest.raises(urllib.error.HTTPError) as e: hub.kimi_refresh()
+        with pytest.raises(urllib.error.HTTPError) as e:
+            hub.kimi_refresh()
     finally:
         srv.shutdown(); srv.server_close()
     assert e.value.code == 302

@@ -6660,36 +6660,88 @@ def kimi_usages(tok):
     """The one HTTP read the probe makes: the subscription's own usage document."""
     req = urllib.request.Request(KIMI_USAGES, headers={"authorization": f"Bearer {tok}"})
     with urllib.request.urlopen(req, timeout=15, context=ca_context()) as r: return json.loads(r.read().decode("utf8", "replace"))
-KIMI_PROXY = os.environ.get("SG_CCP_PROXY", "http://127.0.0.1:18765")   # the bridge's local server
-KIMI_MODEL = "kimi-for-coding"   # a one-token call is the smallest Kimi call the bridge accepts
-def kimi_refreshable():
-    """True when the bridge's store holds a refresh token, so the bridge's own path can renew the access token."""
-    try: return bool(json.loads(KIMI_AUTH.read_text()).get("refresh"))
-    except Exception: return False
+KIMI_PROXY_DEFAULT = "http://127.0.0.1:18765"   # the bridge's local server, loopback only
+KIMI_MODEL = "kimi-for-coding"                  # a one-token call is the smallest Kimi call the bridge accepts
+KIMI_REFRESH_BACKOFF = 300                      # a failed renewal is remembered, never retried on every poll
+KIMI_REFRESH_STATE = {"until": 0.0, "reason": None}
+def kimi_proxy():
+    """The bridge's address, read per call so a configured port is the port used."""
+    return os.environ.get("SG_CCP_PROXY", KIMI_PROXY_DEFAULT).rstrip("/")
+class _KimiNoRedirect(urllib.request.HTTPRedirectHandler):
+    """A refresh answer must be the bridge's own: a redirect is refused, never followed to another host."""
+    def redirect_request(self, *a, **kw): return None
+KIMI_OPENER = urllib.request.build_opener(_KimiNoRedirect)
+def kimi_refresh_open(req, timeout=30):
+    """The seam the refresh POST crosses; a test answers here so the real request is built and sent by `kimi_refresh`."""
+    return KIMI_OPENER.open(req, timeout=timeout)
 def kimi_refresh():
-    """The bridge renews its Kimi token only on a Kimi call, so the probe makes the smallest one through the running
-    bridge; the bridge writes its own store, and the probe writes no credential."""
+    """The bridge renews its Kimi token only on a Kimi call, so the probe makes the smallest one on the bridge's own
+    inference route and lets the bridge write its own store; the probe writes no credential.
+
+    Plan decision for #1428, Option A: the probe renews when no access token is live, by making the one call the bridge
+    would make anyway. Confirmed against the installed bridge (0.1.45): it serves only GET /v1/models and POST
+    /v1/messages on loopback with no auth, a `kimi-for-coding` call is accepted, and its store's mtime moves with a
+    Kimi call. A 200 that is not a bridge message did not renew anything, so it raises rather than passing as one."""
     body = json.dumps({"model": KIMI_MODEL, "max_tokens": 1,
                        "messages": [{"role": "user", "content": "."}]}).encode()
-    req = urllib.request.Request(f"{KIMI_PROXY}/v1/messages", data=body, method="POST",
+    req = urllib.request.Request(f"{kimi_proxy()}/v1/messages", data=body, method="POST",
                                  headers={"content-type": "application/json", "anthropic-version": "2023-06-01"})
-    with urllib.request.urlopen(req, timeout=30) as r: r.read()
+    with kimi_refresh_open(req) as r: raw = r.read()
+    try: d = json.loads(raw.decode("utf8", "replace"))
+    except ValueError: raise RuntimeError(f"the bridge answered no message: {raw[:80]!r}")
+    if not isinstance(d, dict) or not isinstance(d.get("content"), list):
+        raise RuntimeError(f"the bridge answered no message: {str(d)[:80]}")
+def kimi_refresh_source():
+    """Where a refresh token sits. "bridge" is the only path this probe may use: the renewal runs through the bridge,
+    which renews from its own store. "cli" says only the CLI's store holds one, and the CLI renews that itself; None
+    says neither store holds one. The paths are named so a reason never sends the owner after the wrong store."""
+    try:
+        d = json.loads(KIMI_AUTH.read_text())
+        if isinstance(d.get("refresh"), str) and d["refresh"]: return "bridge"
+    except Exception: pass
+    try:
+        d = json.loads(KIMI_CLI_AUTH.read_text())
+        if isinstance(d.get("refresh_token"), str) and d["refresh_token"]: return "cli"
+    except Exception: pass
+    return None
+def kimi_why(s, cap=160):
+    """A reason the panel shows whole: cut on a word boundary with an ellipsis, never mid-word."""
+    if len(s) <= cap: return s
+    cut = s[:cap - 1].rsplit(" ", 1)[0] or s[:cap - 1]
+    return cut + "…"
+def kimi_renew(now=None):
+    """Renew an expired token once through the bridge and answer why none is live, or None when one is. A failed
+    renewal backs off for KIMI_REFRESH_BACKOFF seconds: the panel polls every couple of minutes, and a Kimi call per
+    poll would cost the account and flood the log with the same reason."""
+    now = time.time() if now is None else now
+    if now < KIMI_REFRESH_STATE["until"]: return KIMI_REFRESH_STATE["reason"]
+    try: kimi_refresh()
+    except Exception as e:
+        why = kimi_why(f"no live Kimi token and the bridge refresh failed: {type(e).__name__}: {e}")
+    else:
+        if kimi_token(now): return None
+        why = kimi_why("no live Kimi token: the bridge answered and its store still holds no live token")
+    KIMI_REFRESH_STATE.update(until=now + KIMI_REFRESH_BACKOFF, reason=why)
+    return why
 def q_kimi():
     """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An expired token is renewed
     once through the bridge's own path; a renewal that fails or leaves no live token reads as no reading with its
     reason, never as a guess."""
     tok = kimi_token(); why = None
-    if not tok and kimi_refreshable():
-        try: kimi_refresh()
-        except Exception as e: why = f"no live Kimi token and the bridge refresh failed: {e}"
+    if not tok:
+        src = kimi_refresh_source()
+        if src == "bridge":
+            why = kimi_renew()
+            if why is None: tok = kimi_token()
+        elif src == "cli":
+            why = ("no live Kimi token: only the CLI's store holds a refresh token, and the CLI renews that itself; "
+                   "the probe writes no credential")
         else:
-            tok = kimi_token()
-            if not tok: why = "no live Kimi token: the bridge refresh answered no live token"
+            why = "no live Kimi token: neither the bridge's store nor the CLI's store holds a refresh token"
     # `keep`: the token lives fifteen minutes, so this is no new reading, never one that stopped tracking the account;
     # quota_store keeps the last good windows, and quota_row still ages them out.
     if not tok:
-        return {"windows": [], "unavailable": True, "keep": True,
-                "err": (why or "no live Kimi token: the bridge holds no refresh token to renew it")[:160]}
+        return {"windows": [], "unavailable": True, "keep": True, "err": kimi_why(why or "no live Kimi token")}
     d = kimi_usages(tok)
     u = d.get("usages") or {}
     ws = []
