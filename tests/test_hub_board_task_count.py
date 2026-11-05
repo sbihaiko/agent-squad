@@ -166,6 +166,16 @@ def test_a_card_that_only_the_fallback_read_returned_gets_its_count_too(hub, mon
     assert _row(hub.board(), 153)["sc"] == "3/5"
 
 
+def test_an_issue_the_board_does_not_carry_is_marked_not_a_card(hub, monkeypatch):
+    """#1429: the fallback row is an open issue, not a card. It says so with `nc`, so a reader of board cards can tell
+    an issue with no card from a card with no column -- the two used to look the same, both carrying `st` None."""
+    fallback = [{"n": 153, "t": "an issue that never reached the board", "s": "OPEN", "c": None, "st": None,
+                 "l": ["gui"], "si": {"total": 5, "completed": 3}}]
+    _pass_calls(hub, monkeypatch, [], fallback)
+    row = next(i for i in hub.board_cache["items"] if i["n"] == 153)
+    assert row.get("nc") is True, "a fallback row claims to be a board card"
+
+
 def test_the_summary_survives_the_board_cache(hub, monkeypatch):
     items = [_item(153, "a spec", "Todo", {"total": 5, "completed": 3})]
     _pass_calls(hub, monkeypatch, items)

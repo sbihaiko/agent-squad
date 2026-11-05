@@ -352,3 +352,10 @@ def test_an_open_issue_not_on_the_project_is_never_read_or_added(board, monkeypa
 def test_the_full_read_runs_every_ten_to_fifteen_minutes(board):
     assert 600 <= board.FULL_EVERY <= 900
     assert board.FAST_EVERY == 15
+
+
+def test_every_row_the_fast_read_joins_names_its_repository():
+    """#1429: a cache reader places a row by its own stamp, so a row the fast read writes without `r` would be read as
+    another board's card, or as a cache no build wrote. Every row it joins carries the repository it read."""
+    rows = board_fast.rows_of([node(11, status="Doing")], REPO)
+    assert [r["r"] for r in rows] == [REPO], "a joined row does not name its repository"

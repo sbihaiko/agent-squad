@@ -841,7 +841,12 @@ def _fresh_hub_items(require_fresh=True, repo=None):
     The hub stamps every row with its repository (`r`). One project may hold cards of several repositories and an
     issue number repeats between them, so a row that names another repository is that repository's card, never this
     board's (#1429). A cache row with no stamp proves no repository and is a cache written before the stamp: such a
-    cache is not trusted at all, and the caller reads the board itself."""
+    cache is not trusted at all, and the caller reads the board itself.
+
+    A row the hub marked `nc` is an open issue the board does not carry, not a card: it is dropped here, so a reader
+    of board cards never names an issue no card stands for. Membership is the hub's board pass, the read that wrote
+    the cache: a card removed from the board leaves the next cache the pass writes, so it is named no longer than the
+    freshness bound below (300 s) plus one pass. This door never reads the board to second-guess a fresh cache."""
     path = pathlib.Path(os.environ.get("SG_BOARD_CACHE", "/nonexistent"))
     try:
         data = json.loads(path.read_text())
@@ -858,6 +863,7 @@ def _fresh_hub_items(require_fresh=True, repo=None):
                     if i.get("st") is not None: return None   # an unstamped card: the cache is not this build's
                     continue                                   # an issue with no card carries no state to name
                 if str(i["r"]) != expected_repo: continue      # another repository's card, dropped
+                if i.get("nc"): continue                       # an open issue the board does not carry: not a card
                 rows.append(i)
             return rows
     except (OSError, ValueError, TypeError, KeyError):

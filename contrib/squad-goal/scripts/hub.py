@@ -3146,7 +3146,9 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             for i in gh_list(f"repos/{REPO}/issues", "state=open", until):
                 if i.get("pull_request") is None and i["number"] not in have:
                     s = i.get("sub_issues_summary") or {}
-                    items.append({"n": i["number"], "r": REPO, "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
+                    # `nc` says this row is not a card: it is an open issue the board does not carry (#1429). A reader
+                    # that names board cards drops it, so an issue with no card is never read as one with no column.
+                    items.append({"n": i["number"], "r": REPO, "nc": True, "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             nodes, complete = open_relations(until)   # every page of open issues; never one REST call per card
             if not complete: gaps.append("relations read incomplete: a page with no cursor, or past the page cap")
