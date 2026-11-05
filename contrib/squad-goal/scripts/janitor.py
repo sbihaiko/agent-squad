@@ -1041,6 +1041,9 @@ def reconcile_board():
     if shipped:   # an open issue whose card reads Closed goes back to Todo, once: the reopen is the door (ADR-0143 rule 2, #1420)
         for n in sorted(k for k in olabels if str(k) in have_all and have_all[str(k)] == "Closed" and k not in specs and not (RUN_PARENT in olabels[k])):
             if n in held_owner or owner_frozen(n): continue
+            if branch_in_dev_count(n) != "0" or str(n) in named_in_land(): continue   # its work is in dev: Closed is the landing's own write (rule above), so Todo would open a dispatch window and the later rules would cycle the card
+            _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775): a close GitHub reports late never sends a landed card back
+            if issue_info(n)[0] == "closed": continue
             say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued; card -> Todo (reopened)")
             if board_write([owner, str(proj), "Todo", str(n)], n, "the issue is open again", "reopened"):
                 have_all[str(n)] = "Todo"; expected.pop(n, None)
