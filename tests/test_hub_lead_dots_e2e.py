@@ -47,7 +47,7 @@ try {
     const control = payload.lead && payload.lead.control && payload.lead.control["2"];
     return {
       marks: circles.map(c => ({ r: c.r.baseVal.value, stroke: parseFloat(getComputedStyle(c).strokeWidth) })),
-      payload: control ? control.mark : null,
+      mark: control ? control.mark : null,
       counts: control ? control.clusters.map(k => k.count) : [],
     };
   });
@@ -160,10 +160,11 @@ def test_the_served_hub_page_draws_the_lead_time_marks_small(tmp_path):
         hub.wait(timeout=10)
         _stop_supervisor(tmp_path)
 
-    assert seen["payload"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}, \
-        f"the served payload does not name the small sizes: {seen['payload']}"
+    # `mark` is `control.mark`: the page's own route answer for the 48h chart, the one the script renders from.
+    assert seen["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}, \
+        f"the served payload does not name the small sizes: {seen['mark']}"
     assert sorted(seen["counts"]) == [1, 2], f"the served page does not hold a lone card and a cluster: {seen['counts']}"
     radii = sorted(mark["r"] for mark in seen["marks"])
     assert radii == [3, 5], f"the served page does not draw a 3 px lone card and a 5 px cluster: {seen['marks']}"
-    assert [mark["stroke"] for mark in seen["marks"]] == [seen["payload"]["outline"]] * len(seen["marks"]), \
-        f"the served page does not apply the payload's outline {seen['payload']['outline']}: {seen['marks']}"
+    assert [mark["stroke"] for mark in seen["marks"]] == [seen["mark"]["outline"]] * len(seen["marks"]), \
+        f"the served page does not apply the payload's outline {seen['mark']['outline']}: {seen['marks']}"

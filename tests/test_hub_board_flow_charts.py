@@ -1194,8 +1194,8 @@ def test_the_drawn_marks_are_small_and_agree_with_the_payload(hub, board, tmp_pa
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_page_applies_the_payloads_outline_rather_than_a_literal(hub, board, tmp_path):
-    """#1432: the outline is the payload's own `mark.outline`, never a number the view keeps. The fixture serves a value
-    no default names, so a hard-coded 1.5 fails here."""
+    """#1432: the outline is the payload's own `mark.outline`, never a number the view keeps. `_lt_chart` serializes the
+    chart it is handed into the JS it runs, so the mutated 2.75 reaches `ltChart`; a hard-coded 1.5 fails here."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     chart = hub.flow_lead()["lead"]["control"]["all"]
     chart["mark"]["outline"] = 2.75
@@ -1208,14 +1208,21 @@ def test_the_page_applies_the_payloads_outline_rather_than_a_literal(hub, board,
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_a_chart_without_mark_keeps_the_outline_it_had(hub, board, tmp_path):
     """#1432: `mark` is new on the wire, so an older or cached chart carries none. The page then keeps its 1.5 px ring
-    instead of drawing `stroke-width=undefined`, which the browser drops."""
+    instead of drawing `stroke-width=undefined`, which the browser drops. The two payloads are drawn side by side: the
+    widths must differ, so a view that hard-codes 1.5 for every chart fails on the one that names 2.75."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = hub.flow_lead()["lead"]["control"]["all"]
-    del chart["mark"]
+    named = hub.flow_lead()["lead"]["control"]["all"]
+    named["mark"]["outline"] = 2.75
+    bare = {k: v for k, v in named.items() if k != "mark"}
 
-    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", _lt_chart(hub, tmp_path, "lt-no-mark.js", chart), re.S).group(1)
-    widths = [_svg_attr(tag, "stroke-width") for tag in re.findall(r"<circle [^>]*>", plot)]
-    assert widths and all(width == "1.5" for width in widths), f"a chart without `mark` loses the ring: {widths}"
+    def widths(expression, name):
+        plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", _lt_chart(hub, tmp_path, name, expression), re.S).group(1)
+        return [_svg_attr(tag, "stroke-width") for tag in re.findall(r"<circle [^>]*>", plot)]
+
+    kept, named_widths = widths(bare, "lt-no-mark.js"), widths(named, "lt-named-mark.js")
+    assert kept and all(width == "1.5" for width in kept), f"a chart without `mark` loses the ring: {kept}"
+    assert named_widths and all(width == "2.75" for width in named_widths), f"a chart with `mark` loses its outline: {named_widths}"
+    assert kept != named_widths, "the fallback and the payload's own outline are one code path"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
