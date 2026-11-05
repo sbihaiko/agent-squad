@@ -17,6 +17,8 @@
 # and `enter` says why on one `WAVE REQUEUE` line. A child that entered moves its card to Code Complete: Code Complete means
 # the child is in the wave branch, Done means the wave is in `dev`. The wave branch is rebased on `dev` only before its own
 # final push (the wave's landing pass), never between entries: between them the tip moves only by a child that entered.
+# A child whose own commits and a sibling's commits in the wave change one file never enters (#1434): the entry reads the two
+# diffs, not the issue bodies, so a file neither body names is a conflict before the wave, not a conflict at the landing.
 #
 # The gates are the profile's SG_WAVE_GATES: by default the fast gate (fast-gate.sh): ruff, mypy, the fast battery and the shell suites of the scripts the child changes. `start` works in a
 # throwaway clone, never in a checkout of the owner's, as ffland.sh does. `enter` runs where the child works, so it reads
@@ -515,7 +517,9 @@ fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivere
 enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on the wave tip, and the --ff-only entry.
   # obl is the obligation of an unproven entry and gwhy/gnot the word and the checks the gate named: gates() sets them, and the
   # entry carries them into the run's entry record. grc is the gate's exit code.
-  local run=$1 iss=$2 w br sha files out SG_REQUEUE_RUN=$1; w=$(wave_of "$run")
+  # base is read here, not left to the caller's shell: the sibling check below compares a diff against origin/$base, and an
+  # unset base would silently disable it (#1434 review).
+  local run=$1 iss=$2 w br sha files out SG_REQUEUE_RUN=$1 base=${SG_BASE:-dev}; w=$(wave_of "$run")
   local obl="" gwhy="" gnot="" grc=0
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
@@ -578,6 +582,27 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     printf '%s\n' "$khead" > "$SG_STATE/review-$kkey.sha"; rm -f "$SG_STATE/review-$kkey.base"
     hold "the rebase on $w conflicts: $1; its commits are kept on $kb for one rebase round, not requeued"; return 1
   }
+  # sibling_diff (#1434, ADR-0150 rule 2 derived): the files the child's own commits change and a sibling's commits in $w
+  # change too, one path per line, exit 0; exit 1 when the two diffs are disjoint; exit 2 when either diff cannot be read, so
+  # the entry reports a WAVE-ERROR instead of reading an unreadable diff as a clean pass. The body rule (siblings.py) reads
+  # what an issue names; this reads what each commit touches, so a file no body names is a conflict before the wave instead
+  # of at the landing. A sibling's commits are what $w carries above $base (the wave is cut from $base and only children
+  # enter it); the child's own are what HEAD carries above its merge-base with $w, the range its review reads. Both ends of a
+  # renamed path are read, so a sibling that renames a file the child edits is still seen as a shared path.
+  diff_names() { $G diff --name-only --no-renames "$@" 2>/dev/null || return 1
+                 $G diff --name-only --find-renames "$@" 2>/dev/null || return 1; }
+  sibling_diff() {
+    local mine theirs shared
+    [ -n "$base" ] || return 2
+    $G rev-parse -q --verify "origin/$w" >/dev/null 2>&1 || return 2
+    $G rev-parse -q --verify "origin/$base" >/dev/null 2>&1 || return 2
+    mine=$(diff_names "origin/$w...HEAD") || return 2
+    theirs=$(diff_names "origin/$base...origin/$w") || return 2
+    shared=$(comm -12 <(printf '%s\n' "$mine" | sed '/^$/d' | LC_ALL=C sort -u) \
+                      <(printf '%s\n' "$theirs" | sed '/^$/d' | LC_ALL=C sort -u))
+    [ -n "$shared" ] || return 1
+    printf '%s\n' "$shared"
+  }
   rebase_on_tip() {
     $G fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>/dev/null || {
       echo "WAVE-ERROR $w is not on $remote (the run cuts it from $base at its start): #$iss enters no wave"; return 2; }
@@ -587,6 +612,18 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       [ -n "$files" ] || { refuse "the rebase on $w conflicts: git said: $(printf '%s\n' "$out" | /usr/bin/grep -v '^[[:space:]]*$' | tail -1)"; return 1; }
       keep_conflict "${files% }"; return 1
     fi
+    # A sibling's diff on one of the child's files is refused once the rebase is clean (#1434): the pair costs the wave a
+    # landing conflict, and git alone names no cause for it. The child's issue goes back to the queue, and a later run
+    # builds it alone. A diff the entry cannot read is a WAVE-ERROR, never a clean pass (#1434 review): exit 2 from
+    # sibling_diff is reported and the child enters no wave. A rebase that conflicts is the case above: it keeps the
+    # child's commits for one fix round (#1344).
+    local shared src=0 list="" p
+    shared=$(sibling_diff) || src=$?
+    case "$src" in
+      2) echo "WAVE-ERROR the sibling diff of $w over $base cannot be read: #$iss enters no wave"; return 2;;
+      0) while IFS= read -r p; do [ -n "$p" ] && list="${list:+$list, }\"$p\""; done <<< "$shared"
+         refuse "the diff of a sibling in $w changes the same file ($list): a merge_conflict of one wave, so the child waits for a run that builds it alone"; return 1;;
+    esac
   }
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
