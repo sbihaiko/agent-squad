@@ -2,11 +2,13 @@
 
 A changed finding, a new commit or a passing gate starts the count again. Findings read the same once line numbers,
 shas and whitespace are removed; the criterion each names is kept, and order is not significant.
+#1380: the same evidence is not redispatched into a new run while it stands; a changed finding clears the refusal.
 """
 import pytest
 
 from squad import acrepeat as A
 from squad import record
+from squad.engine_errors import ResumeRefused
 from tests.flows import run_engine, scope_gate
 
 pytestmark = pytest.mark.anyio
@@ -32,49 +34,82 @@ def says(*commands):
     return [{"output": {"spec": {"ac_commands": [c]}}, "spend": 0.1} for c in commands]
 
 
+def runs(tmp_path):
+    """The runs folder of one test: every run of the test is a sibling here, as runs are in production."""
+    return tmp_path / "runs"
+
+
 async def test_two_identical_ac_failures_end_the_run_as_needs_human(tmp_path):
-    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True})
+    run = runs(tmp_path) / "run"
+    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, run, adapter={"repeat_last": True})
     v = await eng.run()
     assert (v.verdict, v.exit_code) == ("needs-human", 10)
     assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
-    loop = [e for e in record.read(tmp_path / "record.jsonl") if e["event"] == "outcome" and e["node"] == "work"][-1]
+    loop = [e for e in record.read(run / "record.jsonl") if e["event"] == "outcome" and e["node"] == "work"][-1]
     assert loop["outcome"] == "needs-human"
     assert "a.py:12 expected 4 got 5 at 1234abcd" in loop["repeated"][AC_KEY]
-    assert actor_rounds(tmp_path) == 2
+    assert actor_rounds(run) == 2
 
 
 async def test_two_identical_ac_failures_across_a_resume_end_as_needs_human(tmp_path):
-    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
+    run = runs(tmp_path) / "run"
+    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, run, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
     first = await eng.run()
     assert first.verdict == "stopped"
-    eng2 = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True})
+    eng2 = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, run, adapter={"repeat_last": True})
     v = await eng2.resume()
     assert (v.verdict, v.exit_code) == ("needs-human", 10)
     assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
-    assert actor_rounds(tmp_path) == 2
+    assert actor_rounds(run) == 2
 
 
 async def test_two_failures_with_different_evidence_do_not_end_across_a_resume(tmp_path):
+    run = runs(tmp_path) / "run"
     cmd = counting_fail(tmp_path)
-    first = run_engine(ac_graph(), {"actor": says(cmd)}, tmp_path, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
+    first = run_engine(ac_graph(), {"actor": says(cmd)}, run, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
     assert (await first.run()).verdict == "stopped"
-    second = run_engine(ac_graph(), {"actor": says(cmd)}, tmp_path, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
+    second = run_engine(ac_graph(), {"actor": says(cmd)}, run, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
     assert (await second.resume()).verdict == "stopped"
-    third = run_engine(ac_graph(), {"actor": says(cmd)}, tmp_path, adapter={"repeat_last": True})
+    third = run_engine(ac_graph(), {"actor": says(cmd)}, run, adapter={"repeat_last": True})
     v = await third.resume()
     assert v.verdict != "needs-human" and "ac_repeated" not in v.reasons
 
 
 async def test_different_consecutive_findings_do_not_end_the_run(tmp_path):
-    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE, FAIL_TWO, PASS)}, tmp_path)
+    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE, FAIL_TWO, PASS)}, runs(tmp_path) / "run")
     v = await eng.run()
     assert (v.verdict, v.exit_code) == ("completed", 0)
 
 
 async def test_a_passing_gate_between_the_failures_does_not_start_the_count_again(tmp_path):
-    eng = run_engine(ac_graph(max_=3, between=("scope_gate",)), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True})
+    eng = run_engine(ac_graph(max_=3, between=("scope_gate",)), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run", adapter={"repeat_last": True})
     v = await eng.run()
     assert (v.verdict, v.exit_code) == ("needs-human", 10) and "ac_repeated" in v.reasons
+
+
+async def test_a_resume_of_a_refused_run_spends_no_round(tmp_path):
+    run = runs(tmp_path) / "run"
+    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, run, adapter={"repeat_last": True})
+    assert (await eng.run()).verdict == "needs-human"
+    again = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, run, adapter={"repeat_last": True})
+    with pytest.raises(ResumeRefused):
+        await again.resume()
+    assert actor_rounds(run) == 2
+
+
+async def test_the_same_evidence_is_not_redispatched_into_a_new_run(tmp_path):
+    assert (await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run-a", adapter={"repeat_last": True}).run()).verdict == "needs-human"
+    second = runs(tmp_path) / "run-b"
+    v = await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, second, adapter={"repeat_last": True}).run()
+    assert (v.verdict, v.exit_code) == ("needs-human", 10)
+    assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
+    assert actor_rounds(second) == 1
+
+
+async def test_changed_evidence_in_a_new_run_clears_the_refusal(tmp_path):
+    assert (await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run-a", adapter={"repeat_last": True}).run()).verdict == "needs-human"
+    v = await run_engine(ac_graph(), {"actor": says(FAIL_TWO, PASS)}, runs(tmp_path) / "run-b").run()
+    assert (v.verdict, v.exit_code) == ("completed", 0)
 
 
 def counting_fail(tmp_path):

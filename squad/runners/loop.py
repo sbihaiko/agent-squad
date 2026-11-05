@@ -18,7 +18,7 @@ fails (ADR-0134). Two opt-ins change that, each kept generic to this one executo
 
 `max_by: "task"` never reads the streak.
 """
-from squad import acrepeat
+from squad import acrepeat, record
 from squad.engine_errors import Defect
 from squad.runners.walk import walk_children
 from squad.stall import signature
@@ -42,7 +42,8 @@ class LoopRunner:
             events = ctx.record.events[pos0:]
             repeated_ac = st.ac_repeated(ctx, node, child, sc, res)
             if again and repeated_ac:
-                return self._stop(ctx, node, entry, sc, t0, "needs-human", ["ac_repeated", *st.ac_findings], st, repeated=st.ac_evidence)
+                return self._stop(ctx, node, entry, sc, t0, "needs-human", ["ac_repeated", *st.ac_findings], st,
+                                  repeated=st.ac_evidence, ac_fingerprint=st.ac_digest)
             reason = st.task_max(ctx, node, entry, events) or st.stall(events) or (st.same_failure(res.reasons) if again else None)
             if reason:
                 return self._stop(ctx, node, entry, sc, t0, "fail", [reason, *why], st)
@@ -65,7 +66,7 @@ class _State:
         self.by_task = node.get("max_by") == "task"
         self.attempts, self.unnamed, self.streak, self.dropped = {}, 0, 0, []
         self.last_failure, self.same = None, 0
-        self.ac, self.ac_findings, self.ac_evidence = acrepeat.Streak(), [], {}
+        self.ac, self.ac_findings, self.ac_evidence, self.ac_digest = acrepeat.Streak(), [], {}, None
 
     def ac_repeated(self, ctx, node, child, sc, res):
         """#1378: True when an ac-verify gate fails the same way twice in a row. A passing ac-verify gate walked before the
@@ -84,8 +85,9 @@ class _State:
         heads = [e["workspace"]["head"] for e in rec[:at] if e["event"] == "outcome" and e.get("item") == sc.item and e.get("workspace")]
         head = ev["workspace"]["head"] if ev.get("workspace") else (heads[-1] if heads else self.ac.head)
         evidence = dict(ev.get("evidence") or {})
-        self.ac_findings, self.ac_evidence = list(res.reasons), evidence
-        return self.ac.failed(acrepeat.fingerprint(res.reasons, evidence), head)
+        fp = acrepeat.fingerprint(res.reasons, evidence)
+        self.ac_findings, self.ac_evidence, self.ac_digest = list(res.reasons), evidence, acrepeat.digest(fp)
+        return self.ac.failed(fp, head) or refused_elsewhere(ctx, self.ac_digest)
 
     def same_failure(self, reasons):
         """A repeated entry extends the streak when its failure reads like the last one, else restarts it at one. At `max` it ends the loop."""
@@ -120,6 +122,14 @@ class _State:
         landed = any(e["event"] == "land" and e["outcome"] == "pass" for e in events)
         self.streak = 0 if landed else self.streak + 1
         return "waves_stalled" if self.streak >= self.stall_after["count"] else None
+
+
+def refused_elsewhere(ctx, digest):
+    """True when a sibling run in the same runs folder already ended needs-human on this evidence (#1380)."""
+    here = ctx.record.path.parent
+    return any(e["event"] == "outcome" and e.get("ac_fingerprint") == digest and e.get("outcome") == "needs-human"
+               for path in here.parent.glob("*/record.jsonl") if path.parent != here
+               for e in record.read(path))
 
 
 def _last_reasons(events, task):
