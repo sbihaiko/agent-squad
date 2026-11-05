@@ -54,15 +54,18 @@ def test_both_profiles_name_one_board_cache(shared_board):
 
 def test_a_profile_never_serves_the_other_repos_specs_from_the_shared_cache(shared_board):
     apps, _ = shared_board
-    alpha = apps["alpha"]["mod"].load_payload()["speed"]
-    assert alpha is None, "alpha holds no row, so it draws no Throughput card and beta's specs never reach it"
+    payload = apps["alpha"]["mod"].load_payload()
+    assert payload["speed"] is None, "alpha holds no row, so it draws no Throughput card"
+    alpha = payload["specs"]
+    assert (alpha["open"], alpha["done"], alpha["total"]) == (0, 0, 0), "beta's specs reach alpha's row"
+    assert "Beta spec" not in alpha["tip"]
 
 
 def test_the_repo_that_wrote_the_cache_keeps_its_rows(shared_board):
     apps, _ = shared_board
-    beta = apps["beta"]["mod"].load_payload()["speed"]["specs"]
+    beta = apps["beta"]["mod"].load_payload()["specs"]
     assert "Beta spec" in beta["tip"]
-    assert (beta["open"], beta["done"], beta["total"]) == (1, 4, 11)   # the tile sums the open spec and the No spec group
+    assert (beta["open"], beta["done"], beta["total"]) == (1, 4, 11)   # the row sums the open spec and the No spec group
     assert beta["none"]["total"] == 1
 
 
@@ -71,6 +74,6 @@ def test_each_profile_counts_its_own_specs_after_both_passes_write_the_one_file(
     a, b = apps["alpha"]["mod"], apps["beta"]["mod"]
     a.board_cache.update(repo="x/alpha", items=[_spec(7, "Alpha spec", 1, 2)]); a.save_board()   # alpha's pass writes last
     assert json.loads(cache.read_text())["repo"] == "x/alpha"
-    assert "Alpha spec" in a.load_payload()["speed"]["specs"]["tip"]
-    beta = b.load_payload()["speed"]["specs"]
+    assert "Alpha spec" in a.load_payload()["specs"]["tip"]
+    beta = b.load_payload()["specs"]
     assert "Beta spec" in beta["tip"] and "Alpha spec" not in beta["tip"]

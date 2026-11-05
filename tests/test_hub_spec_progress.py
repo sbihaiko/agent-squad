@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -101,7 +102,7 @@ def test_a_pending_move_to_abandoned_is_not_counted(hub, monkeypatch):
 def test_the_load_route_serves_the_bar(hub, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", dict(hub.board_cache, items=BOARD))
     monkeypatch.setattr(hub, "read_moves", lambda: {})
-    assert hub.throughput_fact()["specs"]["value"] == "5/9 tickets · 55%"
+    assert hub.load_payload()["specs"]["value"] == "5/9 tickets · 55%"
 
 
 def _run(hub, expr):
@@ -135,11 +136,38 @@ def test_the_throughput_card_draws_the_specs_row_with_the_old_tile_counts(hub):
     assert 'role=img aria-label="Specs: 5/9 tickets · 55%, 3 open"' in html, html
 
 
+def test_the_card_draws_the_specs_row_the_hub_serves_for_one_fixture(hub, monkeypatch):
+    """#1424: the row is drawn from the payload the hub serves, over the same fixture the old Specs card read, so a
+    wiring gap between `spec_progress` and the card cannot pass: the served counts are the computed counts."""
+    monkeypatch.setattr(hub, "board_cache", dict(hub.board_cache, items=BOARD, t=time.time()))
+    monkeypatch.setattr(hub, "read_moves", lambda: {})
+    payload = hub.load_payload()
+    assert payload["specs"] == hub.spec_progress(BOARD, moves={})
+    html = _run(hub, f"speedRow({json.dumps(payload['speed'])}, {json.dumps(payload['specs'])})")
+    assert 'class="spw spec"' in html, html
+    assert "<span class=spwv>5/9 tickets · 55%</span>" in html, html
+    assert "<span class=spws>3 open</span>" in html, html
+
+
+def test_the_specs_row_survives_a_hub_with_no_throughput_history(hub):
+    """#1424: the Specs row comes off the board cache, never off the optional speed fact: a hub with no slot history
+    still draws it."""
+    p = hub.spec_progress(BOARD, moves={})
+    html = _run(hub, f"speedRow(null, {json.dumps(p)})")
+    assert "no history yet" in html and 'class="spw spec"' in html, html
+    assert "5/9 tickets · 55%" in html, html
+
+
 def test_no_separate_specs_card_is_drawn(hub):
     """The separate Specs card is gone: the page holds no spec tile slot and no specBar renderer."""
-    page = hub.PAGE
-    assert "id=ispec" not in page and "function specBar(" not in page, page[page.index("id=ispeed"):page.index("id=ispeed") + 200]
-    assert "no open spec" in _specs_row(hub, hub.spec_progress([], moves={}))
+    assert "id=ispec" not in hub.PAGE
+    assert "function specBar(" not in hub.PAGE
+
+
+def test_the_cache_row_column_is_the_kanban_column(hub):
+    """The Specs row counts the column the kanban draws, so the cache wrapper never reshapes a row's facts."""
+    for i in BOARD:
+        assert hub.cache_row_column(i, {}, 120.0) == hub.drawn_column(i, {}, 120.0)["st"]
 
 
 def test_the_fill_has_a_reduced_motion_rule(hub):

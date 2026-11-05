@@ -1010,7 +1010,7 @@ def _speed_html(hub, sp):
     if shutil.which("node") is None:
         pytest.skip("node is required")
     esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
-    i = hub.PAGE.index("function speedRow(sp)")
+    i = hub.PAGE.index("function speedRow(")
     script = f"{esc}\n{hub.PAGE[i:hub.PAGE.index('function instUsage', i)]}\nconsole.log(speedRow({json.dumps(sp)}))"
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -1081,8 +1081,28 @@ def test_the_row_bar_draws_out_over_in(hub):
     assert re.search(r'<i style="width:57\.14\d*%"></i>', row), row
     zero = _speed_html(hub, _speed(arrivals={"bugs": {"in": 0, "out": 0, "open": 3},
                                             "loop_bugs": {"in": 0, "out": 0, "open": 1}}))
-    zero_row = re.search(r'class="spw mute".*?</div>', zero, re.S).group(0)
-    assert zero_row.count("0 in") == 2 and "spwt" not in zero_row, zero_row   # 0 in draws no bar
+    start = zero.index('class="spw mute"')
+    end = zero.find('class="spw ', start + 1)
+    zero_row = zero[start:end if end != -1 else len(zero)]   # the row's own markup, up to the next row
+    assert '<span class=spwv>0 in</span>' in zero_row, zero_row   # the visible text, not only the aria-label
+    assert "spwt" not in zero_row, zero_row   # 0 in draws no bar
+
+
+def test_an_out_over_in_bar_is_capped_at_full(hub):
+    """#1424: cards closed in the window may outnumber the ones created in it, so the track never overflows."""
+    html = _speed_html(hub, _speed(arrivals={"bugs": {"in": 2, "out": 5, "open": 0},
+                                            "loop_bugs": {"in": 0, "out": 0, "open": 0}}))
+    row = re.search(r'class="spw warn".*?</div>', html, re.S).group(0)
+    assert '<i style="width:100%"></i>' in row, row
+    assert "width:250%" not in row, row
+
+
+def test_the_specs_row_carries_the_per_spec_tip(hub):
+    """The old Specs tile's drill-down stays reachable on the row: a wrong count says which spec it came from."""
+    sp = _speed()
+    sp["specs"]["tip"] = "#1 Spec 1 — 2/5\nNo spec — 1/2"
+    html = _speed_html(hub, sp)
+    assert 'title="#1 Spec 1 — 2/5\nNo spec — 1/2"' in html, html
 
 
 def test_the_window_rows_name_the_window_and_that_in_counts_closed_arrivals(hub):
@@ -1138,6 +1158,20 @@ def test_the_stale_label_note_appears_past_two_minutes_and_not_before(hub):
     assert "labels" not in fresh, fresh
     old = _speed_text(hub, _speed(labels={"age_secs": 130, "stale": True}))
     assert re.search(r"labels 2 min old", old), old
+
+
+def test_the_label_stale_bound_is_the_hub_side_120_seconds(hub, tmp_path, monkeypatch):
+    """#1424: the bound derives from the board cache's own stamp: 120 s reads fresh, 121 s reads stale, and a cache
+    with no stamp never claims an age."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    _arrival_items(hub, tmp_path, monkeypatch, [_arrival_card(1, ["bug"], now_ts - 3600)])
+    cache = dict(hub.board_cache)
+    monkeypatch.setattr(hub, "board_cache", dict(cache, t=now_ts - 120))
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["labels"] == {"age_secs": 120, "stale": False}
+    monkeypatch.setattr(hub, "board_cache", dict(cache, t=now_ts - 121))
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["labels"] == {"age_secs": 121, "stale": True}
+    monkeypatch.setattr(hub, "board_cache", dict(cache, t=0))
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["labels"] == {"age_secs": None, "stale": False}
 
 
 def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
@@ -1270,6 +1304,29 @@ def test_the_arrival_rows_follow_the_same_window_override_as_the_hero(hub, tmp_p
     monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
     assert arrivals["bugs"] == {"in": 1, "out": 0, "open": 2}, arrivals
+
+
+def test_a_closed_card_the_board_draws_open_counts_out_by_its_stamp_and_open_by_its_column(hub, tmp_path, monkeypatch):
+    """#1424: `out` reads the close stamp alone and `open` the drawn column alone, so one source never overrides the
+    other: a card closed in the window whose move the board still draws open is one out and one open."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    item = _arrival_card(1, ["bug"], now_ts - 3 * 3600, closed=now_ts - 1800)
+    item.update(i="PVTI_1", ot=now_ts - 3600)   # the read began an hour ago, as the cache writes it
+    moves = {"PVTI_1": {"column": "Todo", "at": "2099-01-01T00:00:00Z", "by": "owner"}}
+    _arrival_items(hub, tmp_path, monkeypatch, [item])
+    assert hub.arrivals_fact([item], now_ts, 4 * 3600, moves, 120.0)["bugs"] == {"in": 1, "out": 1, "open": 1}
+
+
+def test_the_specs_row_is_cumulative_while_the_bug_rows_keep_the_window(hub, tmp_path, monkeypatch):
+    """#1424: the Specs row counts every open spec whatever its age, while the window rows keep the 4 h window."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    bug = _arrival_card(1, ["bug"], now_ts - 8 * 3600, closed=now_ts - 7 * 3600)   # closed outside the No spec window
+    spec = {"n": 2, "t": "Old spec", "s": "OPEN", "st": "Todo", "l": ["spec"],
+            "si": {"completed": 3, "total": 4}, "o": _stamp(now_ts - 30 * 3600)}
+    _arrival_items(hub, tmp_path, monkeypatch, [bug, spec])
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]["bugs"]["in"] == 0
+    served = hub.load_payload()["specs"]
+    assert (served["done"], served["total"], served["value"]) == (3, 4, "3/4 tickets · 75%")
 
 
 def test_the_arrival_rows_read_the_stamp_the_snapshot_already_carries(hub, tmp_path):

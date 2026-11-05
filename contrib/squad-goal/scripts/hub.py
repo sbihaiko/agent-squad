@@ -2312,24 +2312,23 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
     a subset of Bugs and never subtracted from it. Each row carries three counts so the card reads `7 in · 4 out · 3 open`:
 
     `in` is every card created in the window (`o`), a card closed inside it included; `out` is every card closed in the
-    window (`c`, the close stamp the board cache already carries, #1361); `open` is every card the board draws open now,
-    the same `drawn_column` rule the kanban serves, so a closed card and a card in the Abandoned column are no open card.
+    window (`c`, the close stamp the board cache already carries, #1361), read from the stamp alone; `open` is every card
+    the board draws open now, the same `drawn_column` rule the kanban serves, so a closed card and a card in the Abandoned
+    column are no open card. The two rules never override each other, so a row agrees with the kanban it sits beside.
     A card with no readable stamp is never invented as an arrival or a close."""
     if moves is None: moves = read_moves() if overlay_on() else {}
     if window is None: window = pending_window()
     since, ends = now_ts - window_secs, (COLUMN["issue_closed"], COLUMN["abandoned"])
     rows = {"bugs": {"in": 0, "out": 0, "open": 0}, "loop_bugs": {"in": 0, "out": 0, "open": 0}}
     def loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
-    def open_now(i):
-        if str(i.get("s") or "").lower() == "closed": return False
-        return cache_row_column(i, moves, window) not in ends   # the kanban's own column, never a second rule
+    def open_now(i): return cache_row_column(i, moves, window) not in ends   # the kanban's own column, never a second rule
     for i in items or []:
         labels = i.get("l") or []
         kinds = [k for k, hit in (("bugs", "bug" in labels or loop_defect(i)), ("loop_bugs", loop_defect(i))) if hit]
         if not kinds: continue
         o, c = _close_instant(i.get("o")), _close_instant(i.get("c"))
         came = o is not None and since <= o <= now_ts
-        went = str(i.get("s") or "").lower() == "closed" and c is not None and since <= c <= now_ts
+        went = c is not None and since <= c <= now_ts   # the close stamp alone, so a lagging state never hides a close
         still = open_now(i)
         for k in kinds:
             rows[k]["in"] += 1 if came else 0
@@ -2404,7 +2403,6 @@ def throughput_fact(now=None):
     return {"window_secs": w, "window": window_n, "day": sum(s["n"] for s in slots),   # closes in the whole day: none means no history
             "arrivals": arrivals_fact(items, now_ts, w, moves, window),   # the Bugs and Loop-bugs rows, off the cache's stamps
             "tasks": tasks_fact(items, now_ts, w, window_n),   # planned delivery over the same window as the hero figure
-            "specs": spec_progress(items, moves, window, now_ts),   # the cumulative Specs row that closes the card (#1424)
             "labels": {"age_secs": labels_age, "stale": labels_age is not None and labels_age > LABELS_STALE_SECS},
             "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
             "max": max(avail + [window_n]), "trend": trend,
@@ -2435,16 +2433,22 @@ def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
     and `facts` the footer's own facts as the sampler last read them. The three numbers are the readings themselves, unrounded
-    (#1816): the page builds the cells from them, so the text rounds for display while the ceiling rule judges the reading."""
+    (#1816): the page builds the cells from them, so the text rounds for display while the ceiling rule judges the reading.
+    `specs` is served on its own key, off the board cache alone, so the Throughput card draws it whatever the optional
+    speed fact answers (#1424)."""
     hist = LOAD_STATE.get("cpu") or []
     cpu = hist[-1] if hist else None
+    now = time.time()
+    items = board_cache.get("items") or []
+    moves = read_moves() if overlay_on() else {}
     return {"line": load_line(cpu, LOAD_STATE.get("ram"), LOAD_STATE.get("gpu")),
             "cpu": cpu,
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
-            "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), time.time())],
+            "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), now)],
             "subs": subs_gauges(),   # the Monitor's subscription instruments: each weekly window and its reset, off the quota cache
-            "speed": throughput_fact(),   # the Monitor's throughput card, the Specs row included (#1424)
+            "specs": spec_progress(items, moves, pending_window(), now),   # the cumulative Specs row, never a window count
+            "speed": throughput_fact(now),   # the Monitor's throughput card; the Specs row rides the key above (#1424)
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -5318,7 +5322,13 @@ function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
 function instSum(facts){const n=instTiles(facts).filter(x=>x.tone==="err").length;return n?n+" fail":""}   // no tile, so no count; a red gate stays in the footer (#1260)
-function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
+function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
+ const spec=(()=>{const v=esc(spc.value||"no open spec"),sub=spc.so?esc(spc.so):"";
+  const pb=spc.bar?`<span class=spwt><i style="width:${100*Math.max(0,Math.min(1,Number(spc.frac)||0))}%"></i></span>`:"";
+  const tip=spc.tip?esc(spc.tip).replace(/"/g,"&quot;"):"";
+  return `<div class="spw spec" role=img aria-label="Specs: ${v}${sub?", "+sub:""}"${tip?` title="${tip}"`:""}><span class=spwl>Specs</span><span class=spwv>${v}</span>`+(sub?`<span class=spws>${sub}</span>`:"")+pb+`</div>`})();
+ if(!sp){if(!(spc.open||(spc.none||{}).total))return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
+  return `<div class=spd><div class=spdh><b>Throughput</b></div><div class=spn>no history yet</div>`+spec+`</div>`}
  const hi=Math.max(sp.max||0,sp.window||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi)),hrs=+(sp.window_secs/3600).toFixed(2);
  const tag=sp.trend==="up"?["\u25B2","accelerating","up"]:sp.trend==="down"?["\u25BC","slowing","down"]:sp.trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
  const none=!sp.day,med=sp.median==null?"unknown":sp.median;
@@ -5328,13 +5338,11 @@ function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><spa
  const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
  const win=`title="last ${hrs} h: in counts every card created in the window, closed ones too"`;   // #1424: the window and what `in` means
  const row=(cls,name,r)=>{const n=(r||{}).in||0,o=(r||{}).out||0,k=(r||{}).open||0,t=n?cls:"mute";
-  const v=n?`${n} in \u00b7 ${o} out \u00b7 ${k} open`:"0 in", pb=n?`<span class=spwt><i style="width:${100*o/n}%"></i></span>`:"";
+  const v=n?`${n} in \u00b7 ${o} out \u00b7 ${k} open`:"0 in", w=n?Math.max(0,Math.min(100,100*o/n)):0,
+   pb=n?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
   return `<div class="spw ${t}" role=img aria-label="${name}: ${v}" ${win}><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
  const tasks=(()=>{const n=(sp.tasks||{}).n||0,of=(sp.tasks||{}).of||0,t=of?"ok":"mute";
   return `<div class="spw ${t}" role=img aria-label="Tasks: ${n} of ${of} closed"><span class=spwl>Tasks</span><span class=spwv>${n} of ${of} closed</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`})();
- const spec=(()=>{const p=sp.specs||{},v=esc(p.value||"no open spec"),sub=p.so?esc(p.so):"";
-  const pb=p.bar?`<span class=spwt><i style="width:${100*Math.max(0,Math.min(1,Number(p.frac)||0))}%"></i></span>`:"";
-  return `<div class="spw spec" role=img aria-label="Specs: ${v}${sub?", "+sub:""}"><span class=spwl>Specs</span><span class=spwv>${v}</span>`+(sub?`<span class=spws>${sub}</span>`:"")+pb+`</div>`})();
  const arr=sp.arrivals||{}, stale=sp.stale?`<div class=spage>\u00b7 read ${Math.floor(sp.age_secs/60)} m ago</div>`:"";
  const lab=sp.labels||{}, lnote=lab.stale?`<div class=spage>\u00b7 labels ${Math.floor(lab.age_secs/60)} min old</div>`:"";
  return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`+hero+bar
@@ -5347,7 +5355,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.known?`url(#g-${x.k})`:"none")}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispeed",speedRow((d||{}).speed));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispeed",speedRow((d||{}).speed,(d||{}).specs));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
 }
