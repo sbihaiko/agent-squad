@@ -4,6 +4,8 @@ A changed finding, a new commit or a passing gate starts the count again. Findin
 shas and whitespace are removed; the criterion each names is kept, and order is not significant.
 #1380: the same evidence is not redispatched into a new run while it stands; a changed finding clears the refusal.
 """
+import shutil
+
 import pytest
 
 from squad import acrepeat as A
@@ -105,6 +107,30 @@ async def test_a_corrupt_sibling_record_does_not_stop_a_run_on_its_own_streak(tm
     assert (v.verdict, v.exit_code) == ("needs-human", 10)
     assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
     assert actor_rounds(runs(tmp_path) / "run") == 2
+
+
+async def test_a_torn_refusal_file_does_not_stop_a_run_on_its_own_streak(tmp_path):
+    index = runs(tmp_path) / "ac-refused"
+    index.mkdir(parents=True)
+    (index / "0123abcd.torn-run").write_text('{"digest": "0123')
+    v = await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run", adapter={"repeat_last": True}).run()
+    assert (v.verdict, v.exit_code) == ("needs-human", 10)
+    assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
+    assert actor_rounds(runs(tmp_path) / "run") == 2
+
+
+async def test_a_refusal_is_kept_under_the_runs_folder_and_never_above_it(tmp_path):
+    assert (await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run-a", adapter={"repeat_last": True}).run()).verdict == "needs-human"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["runs"]
+    assert any((runs(tmp_path) / "ac-refused").iterdir())
+
+
+async def test_a_refusal_whose_run_folder_is_gone_no_longer_refuses(tmp_path):
+    assert (await run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, runs(tmp_path) / "run-a", adapter={"repeat_last": True}).run()).verdict == "needs-human"
+    shutil.rmtree(runs(tmp_path) / "run-a")
+    v = await run_engine(ac_graph(), {"actor": says(FAIL_ONE, PASS)}, runs(tmp_path) / "run-b").run()
+    assert (v.verdict, v.exit_code) == ("completed", 0)
+    assert actor_rounds(runs(tmp_path) / "run-b") == 2
 
 
 async def test_the_same_evidence_is_not_redispatched_into_a_new_run(tmp_path):

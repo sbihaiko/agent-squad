@@ -18,10 +18,9 @@ fails (ADR-0134). Two opt-ins change that, each kept generic to this one executo
 
 `max_by: "task"` never reads the streak.
 """
-import json
-
 from squad import acrepeat
 from squad.engine_errors import Defect
+from squad.record import atomic_write
 from squad.runners.walk import walk_children
 from squad.stall import signature
 
@@ -57,10 +56,9 @@ class LoopRunner:
             outcome, reasons = "fail", []
         if st is not None and st.dropped:
             reasons = [*reasons, *(f"task_exhausted:{t}" for t in st.dropped)]
-        done = ctx.finish(node, entry, sc, outcome, reasons, elapsed=ctx.clock() - t0, **extra)
         if outcome == "needs-human" and extra.get("ac_fingerprint"):
             remember_refusal(ctx, extra["ac_fingerprint"])
-        return done
+        return ctx.finish(node, entry, sc, outcome, reasons, elapsed=ctx.clock() - t0, **extra)
 
 
 class _State:
@@ -130,32 +128,35 @@ class _State:
         return "waves_stalled" if self.streak >= self.stall_after["count"] else None
 
 
-REFUSALS = "ac-refused.jsonl"
+REFUSALS = "ac-refused"
 
 
 def refused_elsewhere(ctx, digest):
-    """True when a sibling run already ended needs-human on this evidence (#1380). Reads the refusal index, never a sibling record."""
+    """True when a sibling run already ended needs-human on this evidence (#1380). Reads the refusal folder, never a sibling record."""
     here = ctx.record.path.parent
-    return any(e["digest"] == digest and e["run"] != here.name for e in _refusals(here))
+    return any(run != here.name for run in _refusing_runs(here, digest))
 
 
 def remember_refusal(ctx, digest):
     here = ctx.record.path.parent
-    if any(e["digest"] == digest and e["run"] == here.name for e in _refusals(here)):
-        return
-    with _index(here).open("a") as out:
-        out.write(json.dumps({"digest": digest, "run": here.name}) + "\n")
+    _refusals_dir(here).mkdir(exist_ok=True)
+    atomic_write(_refusals_dir(here) / f"{digest}.{here.name}", "")
 
 
-def _refusals(here):
-    path = _index(here)
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+def _refusing_runs(here, digest):
+    """The runs that refused this digest. A refusal whose run folder is gone is cleared as it is read."""
+    runs = []
+    for path in _refusals_dir(here).glob(f"{digest}.*"):
+        run = path.name.partition(".")[2]
+        if (here.parent / run).is_dir():
+            runs.append(run)
+        else:
+            path.unlink(missing_ok=True)
+    return runs
 
 
-def _index(here):
-    return here.parent.parent / REFUSALS
+def _refusals_dir(here):
+    return here.parent / REFUSALS
 
 
 def _last_reasons(events, task):
