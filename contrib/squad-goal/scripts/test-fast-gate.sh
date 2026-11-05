@@ -261,7 +261,7 @@ out2=$(fg); pg2=$(lgof "$(last "$out2")")
 out=$(BASE_FAIL=1 RETRY_FAIL=1 fg); rc=$?
 rg=$(lgof "$(last "$out")")
 [ $rc = 1 ] && [ -n "$rg" ] && [ -f "$rg" ] && case "$rg" in "$SG_STATE"/*) ko "a red names a log inside the state directory: $rg";; *) ok "a red names a log the child may read, outside the state directory";; esac
-# (memo) A pass is kept for its (tree content, dirty state, base ref, base sha, merge-base, battery): a second gate at that key
+# (memo) A pass is kept for its (tree content, dirty state, base ref, merge-base, battery): a second gate at that key
 # prints one memo line and runs no battery. A red gate leaves no memo, and a different base ref or battery is a different key.
 # Each case has its own state directory.
 mg() {  # <state dir> <base> [battery command]: a gate on gui/quality, the memo on unless `memo=0` is set; the stub battery logs to ran.log
@@ -325,9 +325,22 @@ out=$(mg "$mc" memo-base); rc=$?
 [ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a commit that changes a file is a new tree: the entry gate runs a fresh battery" || ko "post-gate commit reused a pass: rc $rc runs $(battery_runs): $out"
 
 cur=$($G -C "$R" rev-parse --abbrev-ref HEAD)
+# (#1408) The key holds no base commit. A landing moves the base ref's commit and the merge-base stays: the pass still answers,
+# and the hit records its reuse. A rebase moves the merge-base, so the same tree runs a fresh battery.
+: > "$T/reuse.journal"
+out1=$(mg "$md" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a gate at a new key runs the battery and keeps its pass" || ko "move setup: rc $rc runs $(battery_runs): $out1"
 $G -C "$R" checkout -q dev && $G -C "$R" commit -q --allow-empty -m moved && $G -C "$R" checkout -q "$cur"
+mbb=$($G -C "$R" merge-base HEAD dev)
+out=$(SG_GATE_CARD=7 SG_GATE_JOURNAL=$T/reuse.journal mg "$md" dev); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && case "$out" in *memo*) true;; *) false;; esac \
+  && ok "a moved base commit with the same merge-base hits the memo: the key holds no base commit" || ko "moved base: rc $rc: $out"
+[ "$(/usr/bin/grep -c gate_reuse "$T/reuse.journal" 2>/dev/null)" = 1 ] && [ "$(lgof "$out")" = "$(lgof "$out1")" ] \
+  && ok "a memo hit records one gate_reuse marker and names the log it used" || ko "reuse record: '$(cat "$T/reuse.journal" 2>&1)' / $out"
+$G -C "$R" rebase -q dev
+[ "$($G -C "$R" merge-base HEAD dev)" != "$mbb" ] && ok "the fixture rebase moves the merge-base" || ko "merge-base fixture: unchanged $mbb"
 out=$(mg "$md" dev); rc=$?
-[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the base's commit is part of the key: a base ref moved to a new commit runs the battery" || ko "moved base: rc $rc runs $(battery_runs): $out"
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a moved merge-base misses the memo: the battery runs" || ko "moved merge-base: rc $rc runs $(battery_runs): $out"
 
 mq=$T/memo-queued; mkdir -p "$mq"; rm -f "$T/ran.log"
 slow="bash $T/base.sh; sleep 2"

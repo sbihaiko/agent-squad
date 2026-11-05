@@ -13,6 +13,7 @@ import importlib.util
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import threading
 from http.server import ThreadingHTTPServer
@@ -244,3 +245,93 @@ def test_the_page_carries_the_theme_and_fits_a_phone(ctx):
     # turns the flex columns around leaves the 300 px sidebar and the board column wider than the screen (#926).
     assert "body.dockb #win{display:block" in phone, phone
     assert "#side{width:auto" in phone, phone
+
+
+# --- the theme's two blocks (#1282): four facts in Now, the three settings in Settings
+
+LIM = {"profile": "/p/profiles/t.sh", "file": "/p/profiles/t.sh", "guard": "on", "cap": 1500000, "factor": 3,
+       "window_h": 24, "pause_line": 187500, "hour_burn": 100, "window_burn": 2400, "paused": False,
+       "last_change": {"at": "2026-11-04 09:12:00", "text": "Spend & limits · token cap: 1000 -> 2000"}}
+
+
+def lim_draw(hub, view):
+    """The theme's own renderer in node over one view: the two blocks the owner reads, and both chips."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    page = hub.PAGE
+    esc = re.search(r"^const esc=.*$", page, re.M)
+    assert esc, "the page lost the esc helper the harness slices out"
+    tk = re.search(r"tk=n=>[^;]*;", page)
+    assert tk, "the page lost the tk helper the harness slices out"
+    sett = page[page.index("// SETT{"):page.index("// }SETT")]
+    lim = page[page.index("let limS=null"):page.index("async function limLoad()")]
+    # The harness runs these slices, not the page: a helper that leaves its region would make the test read a copy.
+    for fn in ("function setTile(", "function setNow(", "function setRow(", "function setSettings(", "function setChip("):
+        assert fn in sett, f"{fn!r} left the // SETT region: fix the harness slice, not the renderer"
+    assert "function limRender(" in lim and "setNow(" in lim, "the theme moved out of the // SETT and limRender slices"
+    harness = """
+const STORE={};
+const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",className:""});
+const setBar=()=>{};
+"""
+    body = "\n".join([harness, esc.group(0), tk.group(0), sett, lim,
+                      f"limS={json.dumps(view)};limRender();",
+                      'console.log(JSON.stringify({html:STORE["#lbody"].innerHTML,'
+                      'sr:STORE["#limsr"].textContent,srcls:STORE["#limsr"].className,'
+                      'nav:STORE["#limnav"].textContent,navcls:STORE["#limnav"].className}))'])
+    p = subprocess.run(["node", "-"], input=body, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def lim_blocks(out):
+    html = out["html"]
+    i, j = html.index("data-blk=now"), html.index("data-blk=settings")
+    i, j = html.rindex("<div class=setblk ", 0, i), html.rindex("<div class=setblk ", 0, j)   # each block whole
+    return html[i:j], html[j:]
+
+
+def test_the_now_block_holds_four_fact_tiles_and_no_input(ctx):
+    now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
+    tiles, note = now.split("<p class=note>", 1)
+    assert re.findall(r'<div class="tile ([a-z]+)">', tiles) == ["ok", "neutral", "neutral", "neutral"], tiles
+    assert re.findall(r"<span class=tk>(.*?)</span>", tiles) == \
+           ["Dispatch", "Last hour", "Window · 24 h", "Pauses over"], tiles
+    # Four tiles and nothing else in the container: a fifth, unlabelled fact cannot slip in.
+    assert re.sub(r'<div class="tile [a-z]+">.*?</div>', "", tiles) == \
+           '<div class=setblk data-blk=now data-theme="lim"><h3 class=blkh>Now</h3><div class=now></div>', tiles
+    for ctl in ("<input", "<select", "<textarea", "<button"):
+        assert ctl not in now, f"the Spend & limits Now block carries {ctl}"
+    # The note row carries the profile path and no other fact: the last change is data, never a fifth line.
+    assert "Last change" not in now, "a fifth fact sits in the Now block, outside its four tiles"
+    assert re.fullmatch(rf"Profile file: <code>{re.escape(LIM['profile'])}</code></p></div>", note), note
+
+
+def test_the_profile_path_is_visible_text_in_now_not_a_tooltip(ctx):
+    now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
+    assert "Profile file" in now and LIM["profile"] in now, now
+    visible = re.sub(r'\btitle="[^"]*"', "", now)   # what a reader sees, with every hover removed
+    assert LIM["profile"] in visible, "the profile path is readable only on a hover"
+
+
+def test_the_settings_block_holds_only_the_three_editable_settings(ctx):
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    assert settings.count("class=setrow") == 3, settings
+    assert re.findall(r"<span class=sl>(.*?)</span>", settings) == \
+           ["token guard", "daily token cap", "pause factor"], settings
+    for fact in ("class=\"tile", "class=tile", "<span class=tk>", "Last hour", "Pauses over", "Profile file"):
+        assert fact not in settings, f"the Settings block carries the fact {fact!r}"
+
+
+def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
+    out = lim_draw(ctx["hub"], dict(LIM, paused=True))
+    now, _ = lim_blocks(out)
+    assert 'class="tile err"' in now and ">paused<" in now, now
+    assert (out["sr"], out["nav"]) == ("paused", "paused"), out
+    assert out["srcls"].split() == ["sr", "err"] and out["navcls"].split() == ["err"], out
+
+
+def test_the_summary_chip_reports_the_same_dispatch_state_as_the_nav_line(ctx):
+    for view, want in ((LIM, "on"), (dict(LIM, paused=True), "paused"), (dict(LIM, guard="off"), "off")):
+        out = lim_draw(ctx["hub"], view)
+        assert out["sr"] == out["nav"] == want, out

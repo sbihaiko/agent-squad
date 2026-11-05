@@ -1039,3 +1039,115 @@ def test_the_window_count_follows_the_board_cache_not_a_quiet_history_store(hub)
     assert hub.closed_since(items, now, 4 * 3600) == 1
     assert hub.closed_since([], now, 4 * 3600) is None
 
+
+# ---------------------------------------------------------------- the arrival rows (owner, 2026-11-04, #1361)
+
+def _arrival_items(hub, tmp_path, monkeypatch, items, now=THROUGHPUT_NOW):
+    """The fact's two inputs for an arrival test: an empty history store and a board cache holding the given items,
+    stamped at the read instant the cache carries."""
+    monkeypatch.setenv("TZ", "UTC")
+    monkeypatch.delenv("SG_SPEED_WINDOW_SECS", raising=False)
+    (tmp_path / "board").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(hub, "BOARD", tmp_path / "board" / "board.json")
+    monkeypatch.setattr(hub, "REPO", "x/y")
+    now_ts = now.timestamp()
+    monkeypatch.setattr(hub, "board_cache", {"t": now_ts, "items": items})
+    return now_ts
+
+
+def _arrival_card(n, labels, opened, closed=None):
+    """One cache row as the items read writes it: `o` the creation stamp, `c` the close stamp, `l` the labels."""
+    row = {"n": n, "s": "open", "c": None, "st": "Todo", "l": list(labels), "o": _stamp(opened)}
+    if closed is not None:
+        row.update(s="closed", c=_stamp(closed))
+    return row
+
+
+def test_the_arrival_rows_count_bugs_and_loop_bugs_opened_in_the_window(hub, tmp_path, monkeypatch):
+    """The Bugs row counts cards carrying `bug` or any `loop-bug` prefix; the Loop-bugs row counts the prefix alone and
+    stays its subset. Both shares run over every card opened in the window, whatever its labels."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_arrival_card(1, ["bug"], now_ts - 3 * 3600),
+             _arrival_card(2, ["bug", "loop-bug:landing"], now_ts - 2 * 3600),
+             _arrival_card(3, ["loop-bug:dispatch"], now_ts - 1 * 3600),
+             _arrival_card(4, ["enhancement"], now_ts - 30 * 60),
+             _arrival_card(5, [], now_ts - 15 * 60),
+             _arrival_card(6, ["bug"], now_ts - 6 * 3600)]   # opened before the window: not an arrival
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert arrivals["opened"] == 5, arrivals
+    assert arrivals["bugs"] == {"n": 3, "of": 5, "share": 0.6}, arrivals
+    assert arrivals["loop_bugs"] == {"n": 2, "of": 5, "share": 0.4}, arrivals
+    assert arrivals["loop_bugs"]["n"] <= arrivals["bugs"]["n"], "the loop-bugs row is never above its Bugs superset"
+
+
+def test_a_defect_opened_and_closed_inside_the_window_counts_as_an_arrival(hub, tmp_path, monkeypatch):
+    """The rows count what came in, not what is still open: a quick fix opened and closed in the window counts."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_arrival_card(1, ["bug"], now_ts - 2 * 3600, closed=now_ts - 1 * 3600)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert arrivals["bugs"]["n"] == 1 and arrivals["bugs"]["of"] == 1, arrivals
+
+
+def test_a_loop_defect_labelled_only_landing_counts_in_both_arrival_rows(hub, tmp_path, monkeypatch):
+    """A card carrying no `bug` label still enters the Bugs row through the prefix rule, and the Loop-bugs row with it."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_arrival_card(1, ["loop-bug:landing"], now_ts - 2 * 3600)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert arrivals["bugs"]["n"] == 1 and arrivals["loop_bugs"]["n"] == 1, arrivals
+    assert arrivals["bugs"]["share"] == 1.0 and arrivals["loop_bugs"]["share"] == 1.0, arrivals
+
+
+def test_no_card_opened_in_the_window_reads_zero_in_both_arrival_rows(hub, tmp_path, monkeypatch):
+    """Nothing opened: both rows read zero with a denominator of zero the card can word (`0 of 0`), and the share
+    stays unworded rather than inventing a ratio over nothing."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_arrival_card(1, ["bug"], now_ts - 8 * 3600)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert arrivals["opened"] == 0, arrivals
+    assert arrivals["bugs"] == {"n": 0, "of": 0, "share": None}, arrivals
+    assert arrivals["loop_bugs"] == {"n": 0, "of": 0, "share": None}, arrivals
+
+
+def test_the_arrival_rows_read_the_creation_stamp_never_the_close_stamp(hub, tmp_path, monkeypatch):
+    """#1361: the rows count arrivals by `o`, the stamp the snapshot already carries. A card closed inside the window
+    but opened before it is no arrival, and a card with no readable creation stamp is never invented as one."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_arrival_card(1, ["bug"], now_ts - 6 * 3600, closed=now_ts - 1 * 3600),
+             {**_arrival_card(2, ["bug"], 0), "o": "not a stamp"}]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert arrivals["opened"] == 0 and arrivals["bugs"]["n"] == 0, arrivals
+
+
+def test_the_arrival_rows_follow_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
+    """SG_SPEED_WINDOW_SECS moves the arrival rows with the hero figure: one window, not two."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_arrival_card(1, ["bug"], now_ts - 90 * 60),
+             _arrival_card(2, ["bug"], now_ts - 30 * 60)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert arrivals["opened"] == 1 and arrivals["bugs"]["n"] == 1 and arrivals["bugs"]["of"] == 1, arrivals
+
+
+def test_the_arrival_rows_read_the_stamp_the_snapshot_already_carries(hub, tmp_path):
+    """The rows run on the rows the items read writes, with no added snapshot field: a REST card taken through the
+    hub's own jq emits the creation stamp the fact counts, labels included."""
+    jq = shutil.which("jq")
+    assert jq, "jq runs the items program the hub reads with"
+    rest = [{"content_type": "Issue", "id": "PVTI_1", "fields": [{"name": "Status", "value": {"name": {"raw": "Todo"}}}],
+             "content": {"id": 911, "number": 1, "repository_url": "https://api.github.com/repos/x/y", "title": "card 1",
+                         "state": "OPEN", "state_reason": None, "closed_at": None,
+                         "labels": [{"name": "bug"}, {"name": "loop-bug:dispatch"}],
+                         "sub_issues_summary": {}, "created_at": _stamp(THROUGHPUT_NOW.timestamp() - 3600)}}]
+    src = tmp_path / "items.json"
+    src.write_text(json.dumps(rest))
+    out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
+    rows = [json.loads(line) for line in out.splitlines() if "_page" not in line]
+    now_ts = THROUGHPUT_NOW.timestamp()
+    assert hub.arrivals_fact(rows, now_ts, 4 * 3600)["bugs"]["n"] == 1, "the snapshot's own row is not an arrival row input"
+

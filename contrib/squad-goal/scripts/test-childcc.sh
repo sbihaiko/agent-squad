@@ -674,4 +674,18 @@ for i in 1 2 3; do SG_CHILDCC_BUDGET=1 SG_CHILDCC_DEFER_MAX=2 dpass dsb >/dev/nu
 [ "$(/usr/bin/grep -c '^enter dsb ' "$WAVE_CALLS")" = 3 ] && ok "one pass per child enters all three healthy siblings" || ko "entries: $(cat "$WAVE_CALLS")"
 ! /usr/bin/grep -q '^requeue ' "$WAVE_CALLS" && ok "a child the pass budget never reached is never requeued: over-reach is fixed" || ko "requeued a budget-skipped child: $(cat "$WAVE_CALLS")"
 
+# A child with no change past its base (#1406): childreview.sh exits 6. The issue is requeued once at once, with the reason,
+# never held three passes, and the head is recorded so the next pass does not review it again.
+cat > "$T/childreview.sh" <<'CR'
+#!/bin/bash
+echo "$* $(git rev-parse HEAD)" >> "$FIX_DIR/cr.calls"
+k=$(git symbolic-ref --quiet --short HEAD | tr / _); echo "provisional: the fix already exists at this head" > "$SG_STATE/reason-$k"
+echo "CHILDREVIEW x: no change past abc, nothing to review (#5950)" >&2; exit 6
+CR
+export GH_NUMS="5950:Doing"; run nch 5950 n; wtree nch; echo wave/nch > "$T/st/auto/wave-nch"; echo wave/nch > "$T/st/auto/waved-nch"
+: > "$WAVE_CALLS"; : > "$T/cr.calls"; out=$(pass nch); rc=$?; pass nch >/dev/null
+[ "$(/usr/bin/grep -c '^nch 5950' "$T/cr.calls")" = 1 ] && ok "a no-change child is reviewed once" || ko "no-change reviews: $(cat "$T/cr.calls")"
+[ "$(/usr/bin/grep -c '^requeue 5950 ' "$WAVE_CALLS")" = 1 ] && /usr/bin/grep -q '^requeue 5950 .*the child made no change.*the fix already exists' "$WAVE_CALLS" && ok "a no-change child is requeued once with the reason" || ko "no-change requeue: $(cat "$WAVE_CALLS")"
+! /usr/bin/grep -q '^enter nch' "$WAVE_CALLS" && [ "$rc" != 3 ] && ok "a no-change child enters nothing and holds no wave" || ko "no-change: exit $rc, waves $(cat "$WAVE_CALLS")"
+
 rm -rf "$T"; exit $fail
