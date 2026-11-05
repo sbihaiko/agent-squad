@@ -96,6 +96,17 @@ if [ -z "$check" ] && [ -n "${SG_SQUAD:-}" ]; then
     sh=$(git -C "$src" rev-parse HEAD); qh=$(git -C "$SG_SQUAD" rev-parse HEAD)
     git -C "$SG_SQUAD" merge-base --is-ancestor "$sh" "$qh" 2>/dev/null || {
       echo "publish-live: refused: source $srctop at ${sh:0:8} is not in the history of SG_SQUAD $sqtop at ${qh:0:8}; fast-forward SG_SQUAD first" >&2; exit 3; }
+  elif [ -n "$srctop" ] && [ -z "$sqtop" ]; then
+    # SG_SQUAD is the plugin cache, no git repo (#1422): it holds the commit the plugin was installed at, and a squad/ or
+    # pyproject.toml change since then means the live scripts may call a symbol the cache lacks.
+    reinstall='claude plugin uninstall agent-squad@agent-squad && claude plugin install agent-squad@agent-squad'
+    sh=$(git -C "$srctop" rev-parse HEAD)
+    isha=$(jq -r --arg p "${SG_SQUAD%/}" '[.. | objects | select((.installPath? // "" | rtrimstr("/")) == $p)][0].gitCommitSha // empty' \
+      "${HOME}/.claude/plugins/installed_plugins.json" 2>/dev/null)
+    git -C "$srctop" diff --quiet "${isha:-none}" HEAD -- squad pyproject.toml >/dev/null 2>&1; drc=$?
+    if [ "$drc" != 0 ]; then
+      echo "publish-live: refused: SG_SQUAD $SG_SQUAD was installed at ${isha:+${isha:0:8}}${isha:-unreadable}, source $srctop is at ${sh:0:8} with a squad change or an unreadable install sha; reinstall: $reinstall" >&2; exit 3
+    fi
   fi
 fi
 

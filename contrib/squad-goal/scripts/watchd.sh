@@ -78,6 +78,11 @@ loop_bug_open() {
 case "${1:-status}" in
   start) alive && { drain_cancel; echo "watchd already running pid=$pid"; exit 0; }
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
+    # The live scripts call squad.caps.free_runs. A plugin cache older than the live copy lacks it, and every beat then prints
+    # a traceback and dispatches nothing (#1422): one probe refuses the start and names the recovery.
+    if [ -n "${SG_SQUAD:-}" ] && ! ( cd / && PYTHONPATH="$SG_SQUAD" python3 -c 'import squad.caps as C; C.free_runs' ) >/dev/null 2>&1; then
+      printf 'watchd start refused: SG_SQUAD %s has no squad.caps.free_runs; reinstall the plugin: claude plugin uninstall agent-squad@agent-squad && claude plugin install agent-squad@agent-squad\n' "$SG_SQUAD" >&2; exit 1
+    fi
     lb=$(loop_bug_open); lb_rc=$?
     case $lb_rc in
       0) printf 'watchd start refused: #%s is a loop defect; the fix lands outside the loop and its publish closes it (ADR-0146)\n' "$lb" >&2; exit 1;;
