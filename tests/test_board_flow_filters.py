@@ -304,7 +304,7 @@ def _page_harness(hub, answers, drive, onchange="", store=None, render=False, re
                                          "const CHART_KEY="]]
     if render:
         # The page's own layout, re-stack and renderer, as one contiguous slice: the drawn markup is the page's output.
-        lines.append(hub.PAGE[hub.PAGE.index("let flowW="):hub.PAGE.index("const EXREASON=")])
+        lines.append(hub.PAGE[hub.PAGE.index("let flowW="):hub.PAGE.index("const ltEx=")])
     else:
         lines += [_page_line(hub, p) for p in ("const flowFilter=", "const flowSave=", "let CF=")]
     # The two write paths are the page's own lines, never a look-alike: a regression that folded the chart range into

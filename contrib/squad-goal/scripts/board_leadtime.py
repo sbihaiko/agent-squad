@@ -23,6 +23,34 @@ def utc(text):
     return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
 
 
+# #1354: every card the chart leaves out states its reason in words. The page prints the reason beside the count, and
+# the payload carries the same words, so neither a reader of the hub alone nor the page sees a bare number.
+EXCLUSION_WORDS = {
+    NOT_DELIVERED: "closed as not planned",
+    "abandoned": "closed as abandoned",
+    OPEN: "still open",
+    "no_opened": "no opened date",
+    NO_TRANSITION: "no transition into the chosen columns",
+    NO_START: "never entered the start column",
+    NOT_READ: "not yet read by the history pass",
+}
+
+
+def exclusion_text(reason):
+    """One exclusion reason in words; an unknown reason stays its own key."""
+    return EXCLUSION_WORDS.get(reason, reason)
+
+
+def excluded_text(excluded):
+    """The exclusions in words beside their counts, one reason per entry (#1354)."""
+    return "; ".join(f"{count} {exclusion_text(reason)}" for reason, count in sorted(excluded.items()))
+
+
+def exclusion_words(excluded):
+    """The word for each exclusion reason the payload carries, so the page prints the hub's one vocabulary (#1354)."""
+    return {reason: exclusion_text(reason) for reason in excluded}
+
+
 def _exclusion(row):
     if row.get("reason") in (NO_TRANSITION, NO_START, NOT_READ):
         return row["reason"]
@@ -161,6 +189,7 @@ TIMEFRAME_SELECTS = "end transition"  # Timeframe keeps a card by the instant it
 # number and no stacked bar.
 CLUSTER_RADIUS_PX = 7   # every cluster's dot: one radius, whatever the count it holds
 DOT_RADIUS_PX = 4.5     # a lone card's dot radius
+FALLBACK_LABEL = "measured from its first time on the board"   # a card that never entered the default start column (#1354)
 
 
 def _stamp(moment):
@@ -314,7 +343,7 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
                "text": _duration(hrs), "flowing": flowing, "held": held,
                "flowing_text": _duration(flowing), "held_text": _duration(held),
                "approx": row.get("approx", False), "unknown_first": row.get("unknown_first", False),
-               **_stack_fields(row, position), "x": x, "y": position(hrs),
+               "fallback": bool(row.get("fallback")), **_stack_fields(row, position), "x": x, "y": position(hrs),
                "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
                            "low_text": _duration(low), "high_text": _duration(high),
                            "y": position(mean), "y_low": position(low), "y_high": position(high)}}
@@ -351,7 +380,14 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
         scope = f"{start:%b} {start.day} to {end:%b} {end.day}"
     else:
         scope = f"last {timeframe * 24} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
-    text = f"{scope}, {measure}, {summary['plotted_text']}; Timeframe selects by {TIMEFRAME_SELECTS}"
+    # #1354: a dot measured from its board entry rather than the chosen start column says so, so the chart never
+    # claims a measure it did not use.
+    fallback_cards = sorted(row["n"] for row in plotted if row.get("fallback"))
+    fallback = {"count": len(fallback_cards), "cards": fallback_cards,
+                "text": f"{len(fallback_cards)} {'card' if len(fallback_cards) == 1 else 'cards'} {FALLBACK_LABEL}"
+                        if fallback_cards else ""}
+    note = f", {fallback['text']}" if fallback_cards else ""
+    text = f"{scope}, {measure}, {summary['plotted_text']}{note}; Timeframe selects by {TIMEFRAME_SELECTS}"
     return {
         "plot_frame": plot_frame,
         "measure": measure,
@@ -377,6 +413,9 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
         "excluded": excluded,
         "excluded_cards": excluded_cards,
         "excluded_total": excluded_total,
+        "excluded_text": excluded_text(excluded),
+        "excluded_reasons": exclusion_words(excluded),
+        "fallback": fallback,
         "text": text,
     }
 

@@ -3828,9 +3828,18 @@ def lead_rows(a=None, b=None, now=None):
     """The rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held time of its
     column intervals in the history store, from its FIRST entry into `a` to its last entry into `b` (#1024, #1248). A closed
     card the store has not read is not_read, one that never entered `a` is no_start, and one with no entry into `b` is
-    no_transition. Each read card carries its observation `obs` for the survival reading: an open card is observed to
-    `now`, censored (#1250). A delivered row also carries `columns`, the hours it spent in each column, and `gate`, its
-    Gating hours, for the chart's stack (#1256). The row's bar keys filter it (#904)."""
+    no_transition. A closed card the store read that never entered the view's DEFAULT start column (LEAD_START, Todo),
+    whatever its Type, is measured from its first time on the board instead, because such a card can close without ever
+    reaching the work column: a spec is a document and moves with its tickets (ADR-0142), and a bug or a task can be born
+    or moved past it. The row carries `fallback` when it does (#1354), and only an entry into the row's end column counts:
+    the fallback replaces the start the reader never reached, never the end they chose. The fallback belongs to the
+    default start alone: a card that entered a user-chosen start column keeps its no_start exclusion, and so does a card
+    the chosen start column never saw, because that choice is never silently replaced (#1248). No `a` is Created, the
+    card's first time on the board; an empty `a` is that same selection, never a column named empty. Each read card
+    carries its observation `obs` for the survival reading: an open card is observed to `now`, censored (#1250). A
+    delivered row also carries `columns`, the hours it spent in each column, and `gate`, its Gating hours, for the
+    chart's stack (#1256). The row's bar keys filter it (#904)."""
+    a, b = a or None, b or None   # a selection cleared to empty is the default, Created or closed, never a column name
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     now = now or dt.datetime.now(dt.UTC)
     rows = []
@@ -3840,16 +3849,27 @@ def lead_rows(a=None, b=None, now=None):
         runs = _hist.intervals(read["events"]) if read else []
         obs = _hist.lead_observation(runs, start=a, end=b, complete=read["complete"], now=None if closed else now) if read else None
         span = obs if closed and obs and not obs["censored"] else None
+        entered = None
+        if closed and read and span is None:   # the only rows whose reason and fallback read it: lazily, never per card
+            entered = any((r["on_board"] if a is None else r["column"] == a) for r in runs)
+        # #1354: the default view measures from Todo, but a card can close without ever entering it. Measure such a card
+        # from its first time on the board, the Backlog wait included, and say so. The end column is the reader's, so the
+        # card must have entered it: never measure a span the chart does not ask for. A user-chosen start keeps its
+        # exclusion, and a chosen span is never silently replaced.
+        fallback = False
+        if closed and read and obs is None and not entered and a in (None, LEAD_START):
+            end = b or COLUMN["issue_closed"]
+            if any(r["column"] == end for r in runs):
+                on_board = _hist.board_time(runs, end=b, complete=read["complete"])
+                if on_board is not None: obs, span, fallback = on_board, on_board, True
         if _columns_module.not_planned(i.get("cr")): reason = _leadtime.NOT_DELIVERED
         elif closed and read is None: reason = _leadtime.NOT_READ
-        elif closed and span is None:
-            entered = any((r["on_board"] if a is None else r["column"] == a) for r in runs)
-            reason = _leadtime.NO_TRANSITION if entered else _leadtime.NO_START
+        elif closed and span is None: reason = _leadtime.NO_TRANSITION if entered else _leadtime.NO_START
         else: reason = None
         row = {"n": i["n"], "column": _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))[0], "reason": reason,
                "c": i.get("c") if closed else None, "o": i.get("o"), "t": i.get("t", ""), **bar_keys(i),
                "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False,
-               "columns": None, "gate": 0.0,
+               "columns": None, "gate": 0.0, "fallback": fallback,
                "obs": None if obs is None else {"start_lo": obs["start_lo"], "start_hi": obs["start_hi"],
                                                 "hours": obs["flowing"] + obs["held"], "censored": obs["censored"],
                                                 "unknown_start": obs["unknown_first"]}}
@@ -4003,6 +4023,8 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
           "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"], "start": LEAD_START,
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_cards": lead["excluded_cards"],
+                     "excluded_text": _leadtime.excluded_text(lead["excluded"]),
+                     "excluded_reasons": _leadtime.exclusion_words(lead["excluded"]),
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
                      "control": control, "columns": ORDER, "coverage": coverage}}
 
@@ -5894,9 +5916,8 @@ const flowCFD=c=>{const names=c.bands.map(b=>b.name),kept=CF.hidden.filter(h=>na
     (c.legacy?` · ${fig(c.legacy)} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these`:"")+
     ` · a darker stripe at a band's base is its held cards${CF.hidden.length?" · held cards in hidden states are not drawn":""}`;
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${shown.map(polys).join("")}${shown.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+legend+`<p class=fnote>${notes}</p>`;};   // the legend, then one line of notes (#1149)
-const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date",no_transition:"no transition into the chosen columns",no_start:"never entered the start column",not_read:"not yet read by the history pass"};   // the cards the chart leaves out, in words (#921, #1248)
-const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.reason]||e.reason}`+((cards||{})[e.reason]?.length?": "+cards[e.reason].map(n=>"#"+n).join(", "):"")).join("; ");return `<em class=ltex${named?` title="${esc(named)}"`:""}>excluded ${total}</em>`};   // the one exclusion total, its reasons and cards named in its hover (#1145, #1248)
-const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
+const ltEx=(exc,cards,total,words,reasons)=>{const R=reasons||{},named=exc.map(e=>`${e.count} ${R[e.reason]||e.reason}`+((cards||{})[e.reason]?.length?": "+cards[e.reason].map(n=>"#"+n).join(", "):"")).join("; "),said=words||exc.map(e=>`${e.count} ${R[e.reason]||e.reason}`).join("; ");return `<em class=ltex${named?` title="${esc(named)}"`:""}>excluded ${total}${said?`: ${esc(said)}`:""}</em>`};   // the one exclusion total with its reason beside its count (#1145, #1248, #1354); its wording is the payload's, one source in Python; its hover names the cards
+const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total,c.excluded_text,c.excluded_reasons);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
 let LT={tf:"2",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); only the average reference shows at first, and the median and p85 are toggles (#1332)
@@ -5964,7 +5985,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
     `<text class=lttg x=${ltP+LT_FRAME.width+22} y=${t.ty} text-anchor=start fill=var(--chart-axis)>${esc(t.name)} ${esc(t.text)}</text>`).join("");   // the name and the value read together in grayscale, whichever line they belong to; each sits in the reserved right gutter, laid out apart (#1332)
   const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.count,shown=k.cards.slice(0,5).map(n=>"#"+n).join(", ")+(m>5?` +${m-5} more`:""),title=m>1?`${m} issues: ${shown}`:`#${k.dots[0].n} ${k.dots[0].title}`;   // a lone card is one hollow dot; a cluster is one outlined filled dot of the payload's one fixed radius (#1331)
     const cx=ltX(k.x),cy=ltY(k.y),strip=k.dots.map(d=>d.stack.map(b=>`${b.column} ${b.text}`).join(", ")).join(" · ");   // the tooltip's stage strip: each dot's column stack, no stacked bar in the plot (#1331)
-    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates and the stage strip; the plot draws no count and no bar (#1331)
+    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}${k.dots.some(d=>d.fallback)?" · measured from its first time on the board":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates, the stage strip and a card's fallback measure (#1331, #1354); the plot draws no count and no bar
   const legend=`<p class="flg ltlg"><span><i class=lthollow></i>Card</span><span><i class=ltfilled></i>Cluster</span><span><i class=ltroll></i>Rolling mean</span>${LT.band&&bp?`<span><i class=ltband></i>Rolling spread ±1 SD</span>`:""}</p>`+   // the series legend names every mark the plot draws; the head line is the one place that states the window (#1304, #1332)
     `<p class="flg ltlg"><span><i class=ltsolid></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i class=ltdash></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i class=ltdot></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b></span></p>`+ltKM(c);   // one summary row names each reference line beside its value and pattern; the one exclusion total sits in the header (#1248, #1250, #1334)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
@@ -5972,8 +5993,8 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   return ctl+legend+`<svg data-lt viewBox="0 0 ${ltP+LT_FRAME.width+gut} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}${gutter}</svg>`+rows;};   // the layout reserves the right gutter for the reference tags (#1332)
 const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
-    (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
-  LT.cols=l.columns||[];if(!c)return head+`<p class=fnote>no closed card yet · ${ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
+    (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}${c.fallback&&c.fallback.count?` · ${esc(c.fallback.text)}`:""}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334); a card's fallback measure is named (#1354)
+  LT.cols=l.columns||[];if(!c)return head+`<p class=fnote>no closed card yet · ${ltEx(l.excluded,l.excluded_cards,l.excluded_total,l.excluded_text,l.excluded_reasons)}</p>`;
   return head+ltChart(c,l.coverage);};   // the chart actually drawn decides emptiness: an empty timeframe never hides a zoom that holds cards (#1334)
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0);flowH=flowHeight(window.innerHeight)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
