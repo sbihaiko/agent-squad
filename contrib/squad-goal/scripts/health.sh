@@ -227,17 +227,35 @@ wl=$(/bin/ps -axwwo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/aw
     print p } }' | sort -n | tr '\n' ' '); wl=${wl% }
 # #1427: the count is this profile's loops, not the machine's. A second profile runs the same watch.sh under its own state
 # directory, and counting it made a healthy machine alert -- the false alert that taught the reader to ignore the real one.
-# A candidate counts only when this state dir names it: the lock pidfile the loop holds (`locks/watch/pid`), the lane pid
-# watchd holds (`watchd.pid`), or the process's own SG_STATE where the OS exposes it (`/proc`, on Linux; macOS hides another
-# process's environment, and the two pidfiles stand for it there).
-wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid")
-wlockpid=$(cat "$SG_STATE/locks/watch/pid" 2>/dev/null); mestate=${SG_STATE%/}
-pstate() { [ -r "/proc/$1/environ" ] && tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | sed -n 's/^SG_STATE=//p' | head -n 1; }
+# One state directory per profile holds its supervisor, locks and pid files (address.sh), so a candidate is another profile's
+# loop only when another state dir positively names it: the lock pidfile its loop holds (`locks/watch/pid`) or the watch.sh
+# lane its live supervisor holds (`watchd.pid`). This profile's own lock pidfile, lane and the process's own SG_STATE
+# (`/proc` on Linux; macOS hides another process's environment, so the pidfiles and the fail-open count stand for it there)
+# name this profile's loops. A candidate no state dir names stays counted: a stray of this profile that holds no pidfile is
+# exactly the duplicate this alert exists for, and dropping it would hide the real one.
+mestate=${SG_STATE%/}; sbase=$(dirname "$mestate")
+# A pidfile names a number or nothing: a malformed or dead pid names no live supervisor, so it is read as absent.
+pidval() { local v; v=$(cat "$1" 2>/dev/null); case $v in ''|*[!0-9]*) return 1;; esac; printf '%s\n' "$v"; }
+wlockpid=$(pidval "$mestate/locks/watch/pid") || wlockpid=
+wd=$(pidval "$mestate/watchd.pid") || wd=; [ -n "$wd" ] && ! kill -0 "$wd" 2>/dev/null && wd=
+# what the other state directories beside this one name: their loop's lock pidfile, and the lane child of their live supervisor
+fpid=; fwd=
+for d in "$sbase"/*; do [ -d "$d" ] && [ "${d%/}" != "$mestate" ] || continue
+  x=$(pidval "$d/locks/watch/pid") && fpid="$fpid $x"
+  x=$(pidval "$d/watchd.pid") && kill -0 "$x" 2>/dev/null && fwd="$fwd $x"
+done
+# The environment of one process: SG_STATE, when the platform exposes it (/proc); one record of the NUL-separated list, read
+# whole, so a value mid-buffer is never parsed truncated.
+pstate() { [ -r "/proc/$1/environ" ] && /usr/bin/awk 'BEGIN{RS="\0"} index($0,"SG_STATE=")==1 { print substr($0,10); exit }' "/proc/$1/environ" 2>/dev/null; }
 wkeep=
 for p in $wl; do
+  pp=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')
   [ "$p" = "$wlockpid" ] && { wkeep="$wkeep $p"; continue; }
-  [ -n "$wd" ] && [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && { wkeep="$wkeep $p"; continue; }
-  s=$(pstate "$p"); [ -n "$s" ] && [ "${s%/}" = "$mestate" ] && wkeep="$wkeep $p"
+  [ -n "$wd" ] && [ "$pp" = "$wd" ] && { wkeep="$wkeep $p"; continue; }
+  s=$(pstate "$p"); [ -n "$s" ] && [ "${s%/}" = "$mestate" ] && { wkeep="$wkeep $p"; continue; }
+  case " $fpid " in *" $p "*) continue;; esac
+  case " $fwd " in *" $pp "*) continue;; esac
+  wkeep="$wkeep $p"
 done
 wl=${wkeep# }
 nw=$(printf '%s\n' $wl | grep -c .)
