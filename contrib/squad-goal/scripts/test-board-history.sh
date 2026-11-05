@@ -55,7 +55,7 @@ ev = [{"t": "2026-11-05T01:28:14Z", "type": "status", "status": "Code Complete"}
 stored = {1393: {"issue_updated": "2026-11-05T01:28:14Z", "status_updated": "2026-11-05T01:28:14Z",
                  "events": ev, "complete": True, "cursor": None}}
 items = [{"n": 1393, "issue_updated": "2026-11-05T01:28:14Z", "status_updated": "2026-11-05T01:28:14Z",
-          "status": "Closed"}]
+          "status": "Closed", "closed": False}]
 print("due", bh.due_reads(items, stored))
 stored[1393]["events"] = ev + [{"t": "2026-11-05T01:28:16Z", "type": "status", "status": "Gating"},
                                {"t": "2026-11-05T01:28:41Z", "type": "status", "status": "Closed"}]
@@ -67,34 +67,48 @@ grep -q '^settled \[\]$' "$T/out2.txt" \
   && ok "the re-read record is settled, so the pass does not loop" || ko "the settled record is still due: $(cat "$T/out2.txt")"
 
 # (#1419) A close that moves no card is never read: the issue closes through the API and its card keeps its Status, so no
-# clock moves. A complete record that ends in Backlog is due while the card is closed, and once read it ends closed and
-# plots its lead row. An edit that changes no state is still no reason to read.
+# clock moves. The rows below are the board's own shape: `s` is the issue's state (`.content.state`, the value the issue
+# API answers), and `st` is the card's Status. A complete record that ends in Backlog is due while the issue is closed
+# and the card never moved; once read it ends closed and plots its lead row. A reopen is the same rule the other way,
+# and an edit that changes no state is still no reason to read.
 "$py" - "$T/s" <<'PY' >"$T/out3.txt" 2>&1
 import sys
 sys.path.insert(0, sys.argv[1])
 import board_history as bh
 ev = [{"t": "2026-11-01T00:00:00Z", "type": "added"},
       {"t": "2026-11-01T00:00:00Z", "type": "status", "status": "Backlog"}]
-stored = {1420: {"issue_updated": "2026-11-01T00:00:00Z", "status_updated": "2026-11-01T00:00:00Z",
-                 "events": ev, "complete": True, "cursor": None}}
-closed = {"n": 1420, "issue_updated": "2026-11-04T00:00:00Z", "status_updated": "2026-11-01T00:00:00Z",
-          "status": "Backlog", "closed": True}
-open_ = dict(closed, closed=False)
-print("due", bh.due_reads([closed], stored))
-print("edited", bh.due_reads([open_], stored))
+base = {"issue_updated": "2026-11-01T00:00:00Z", "status_updated": "2026-11-01T00:00:00Z",
+        "events": ev, "complete": True, "cursor": None}
+stored = {1420: dict(base)}
+row = {"n": 1420, "su": "2026-11-01T00:00:00Z", "st": "Backlog", "s": "CLOSED",
+       "issue_updated": "2026-11-04T00:00:00Z"}
+print("due", bh.due_items([row], stored))
+print("unit", bh.due_reads([{"n": 1420, "status_updated": "2026-11-01T00:00:00Z", "status": "Backlog",
+                             "closed": True}], stored))
+print("edited", bh.due_items([dict(row, s="OPEN")], stored))
 stored[1420]["events"] = ev + [{"t": "2026-11-02T00:00:00Z", "type": "closed"}]
-print("settled", bh.due_reads([closed], stored))
-row = bh.board_time(bh.intervals(stored[1420]["events"]))
-print("row", row is not None, round(row["flowing"], 3), sorted(row["columns"].items()), row["censored"])
+print("settled", bh.due_items([row], stored))
+lead = bh.board_time(bh.intervals(stored[1420]["events"]))
+print("row", lead is not None, round(lead["flowing"], 3), sorted(lead["columns"].items()), lead["censored"])
+reopened = {1421: dict(base, events=ev + [{"t": "2026-11-02T00:00:00Z", "type": "closed"}])}
+print("reopen", bh.due_items([dict(row, n=1421, s="OPEN")], reopened))
+reopened[1421]["events"] = reopened[1421]["events"] + [{"t": "2026-11-03T00:00:00Z", "type": "reopened"}]
+print("resettled", bh.due_items([dict(row, n=1421, s="OPEN")], reopened))
 PY
 grep -q '^due \[1420\]$' "$T/out3.txt" \
-  && ok "a card closed while its complete record ends in Backlog is re-read" || ko "a close that moves no card is never read: $(cat "$T/out3.txt")"
+  && ok "an issue closed through the API while its card keeps Status Backlog is re-read" || ko "a close that moves no card is never read: $(cat "$T/out3.txt")"
+grep -q '^unit \[1420\]$' "$T/out3.txt" \
+  && ok "the rule reads the item's stated closed flag" || ko "unit: $(cat "$T/out3.txt")"
 grep -q '^edited \[\]$' "$T/out3.txt" \
   && ok "an edit that changes no closed state is no reason to read" || ko "an unrelated edit is a reason to read: $(cat "$T/out3.txt")"
 grep -q '^settled \[\]$' "$T/out3.txt" \
   && ok "the re-read record ends closed and is settled" || ko "the closed record is still due: $(cat "$T/out3.txt")"
 grep -qxF "row True 24.0 [('Backlog', 24.0)] False" "$T/out3.txt" \
   && ok "the re-read record plots its lead row from the board entry" || ko "lead row: $(cat "$T/out3.txt")"
+grep -q '^reopen \[1421\]$' "$T/out3.txt" \
+  && ok "an issue reopened while its record last closed is re-read" || ko "a reopen is never read: $(cat "$T/out3.txt")"
+grep -q '^resettled \[\]$' "$T/out3.txt" \
+  && ok "the re-read record ends reopened and is settled" || ko "the reopened record is still due: $(cat "$T/out3.txt")"
 
 "$py" - "$T/s" <<'PY' >"$T/boardtime.txt" 2>&1
 import sys
