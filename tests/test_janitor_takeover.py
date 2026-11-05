@@ -76,6 +76,27 @@ def test_a_run_that_moved_its_record_within_the_bound_is_untouched(tmp_path):
 
 
 @pytest.mark.heavy
+def test_a_gate_older_than_its_own_bound_no_longer_exempts_the_run(tmp_path):
+    """#1390: the exemption is for a gate doing its work or waiting its turn, never for one that has outlived every bound
+    the loop gives a gate. Three dead runs sat behind such a process for hours, the janitor logged nothing about them, and
+    only a hand edit freed their slots."""
+    run = live_run(tmp_path, 3300)
+    gate = run / "gate.sh"
+    gate.write_text("#!/bin/bash\nsleep 60\n")
+    gate.chmod(0o755)
+    waiter = subprocess.Popen(["bash", str(gate)], cwd=run.resolve())
+    try:
+        time.sleep(0.5)
+        janitor(tmp_path, SG_GATE_STUCK_SECONDS="0.1")
+    finally:
+        waiter.kill()
+        waiter.wait()
+    st = tmp_path / "st"
+    assert RUN not in (st / "active-runs.txt").read_text(), "the run behind an overdue gate stayed in active-runs"
+    assert (st / "auto" / f"taken-{RUN}").exists(), "no taken-over marker names the run behind an overdue gate"
+
+
+@pytest.mark.heavy
 def test_a_run_waiting_for_a_gate_slot_is_not_taken_over(tmp_path):
     """#1191: a run waiting its turn in the machine-wide gate queue is not stuck. The child's own entry gate blocks on the
     gate lock inside its worktree, so a gate process is alive in the run folder while the record holds still."""
