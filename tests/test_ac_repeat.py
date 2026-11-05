@@ -54,6 +54,17 @@ async def test_two_identical_ac_failures_across_a_resume_end_as_needs_human(tmp_
     assert actor_rounds(tmp_path) == 2
 
 
+async def test_two_failures_with_different_evidence_do_not_end_across_a_resume(tmp_path):
+    cmd = counting_fail(tmp_path)
+    first = run_engine(ac_graph(), {"actor": says(cmd)}, tmp_path, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
+    assert (await first.run()).verdict == "stopped"
+    second = run_engine(ac_graph(), {"actor": says(cmd)}, tmp_path, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
+    assert (await second.resume()).verdict == "stopped"
+    third = run_engine(ac_graph(), {"actor": says(cmd)}, tmp_path, adapter={"repeat_last": True})
+    v = await third.resume()
+    assert v.verdict != "needs-human" and "ac_repeated" not in v.reasons
+
+
 async def test_different_consecutive_findings_do_not_end_the_run(tmp_path):
     eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE, FAIL_TWO, PASS)}, tmp_path)
     v = await eng.run()
@@ -64,6 +75,12 @@ async def test_a_passing_gate_between_the_failures_does_not_start_the_count_agai
     eng = run_engine(ac_graph(max_=3, between=("scope_gate",)), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True})
     v = await eng.run()
     assert (v.verdict, v.exit_code) == ("needs-human", 10) and "ac_repeated" in v.reasons
+
+
+def counting_fail(tmp_path):
+    """Fails with the same finding each run, and evidence that names the run count, so each failure reads differently."""
+    p = tmp_path / "count"
+    return f'n=$(cat "{p}" 2>/dev/null || echo 0); echo $((n+1)) > "{p}"; echo "a.py:12 expected 4 got $n"; exit 1'
 
 
 def actor_rounds(path):

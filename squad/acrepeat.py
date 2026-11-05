@@ -2,7 +2,7 @@
 
 Two identical ac-verify failures in a row mean another round cannot satisfy the criterion, so the reading is a decision
 for the owner. A failure reads the same when its findings, with line numbers, shas and whitespace removed, name the same
-criteria with the same output, in any order. A changed finding, a new commit or a passing gate starts the count again.
+criteria with the same output, in any order. A changed finding, a new commit or a passing ac-verify gate starts the count again.
 """
 import re
 

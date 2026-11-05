@@ -40,7 +40,7 @@ class LoopRunner:
             elif word != "continue":
                 raise Defect(f"{child}: unknown next word {word}")
             events = ctx.record.events[pos0:]
-            repeated_ac = st.ac_repeated(ctx, child, res, events)
+            repeated_ac = st.ac_repeated(ctx, node, child, sc, res)
             if again and repeated_ac:
                 return self._stop(ctx, node, entry, sc, t0, "needs-human", ["ac_repeated", *st.ac_findings], st, repeated=st.ac_evidence)
             reason = st.task_max(ctx, node, entry, events) or st.stall(events) or (st.same_failure(res.reasons) if again else None)
@@ -67,20 +67,25 @@ class _State:
         self.last_failure, self.same = None, 0
         self.ac, self.ac_findings, self.ac_evidence = acrepeat.Streak(), [], {}
 
-    def ac_repeated(self, ctx, child, res, events):
-        """#1378: True when an ac-verify gate fails the same way twice in a row. A passing ac-verify gate in the walk, or a
-        commit that moves the head, starts the count again. The gate's outcome is read from the whole record, so a
+    def ac_repeated(self, ctx, node, child, sc, res):
+        """#1378: True when an ac-verify gate fails the same way twice in a row. A passing ac-verify gate walked before the
+        failure, or a commit that moves the head, starts the count again. The failure is read from its own entry, so a
         failure replayed on resume counts the same as a fresh one."""
-        if any(e["event"] == "outcome" and e["outcome"] == "pass" and ctx.nodes.get(e["node"], {}).get("check") == "ac-verify" for e in events):
+        walked = node["children"] if child is None else node["children"][:node["children"].index(child)]
+        if any(ctx.nodes[c].get("check") == "ac-verify" for c in walked):
             self.ac.reset()
         if child is None or ctx.nodes[child].get("check") != "ac-verify" or res.outcome != "fail":
             return False
+        entry = ctx.entry_count(child, sc.item)
+        ev = ctx.outcome_event(child, entry, sc.item)
         rec = ctx.record.events
-        at = max(i for i, e in enumerate(rec) if e["event"] == "outcome" and e["node"] == child)
-        heads = [e["workspace"]["head"] for e in rec[:at] if e["event"] == "outcome" and e.get("workspace")]
-        evidence = dict(rec[at].get("evidence") or {})
+        at = next(i for i, e in enumerate(rec) if e["event"] == "outcome" and e["node"] == child
+                  and e["entry"] == entry and e.get("item") == sc.item)
+        heads = [e["workspace"]["head"] for e in rec[:at] if e["event"] == "outcome" and e.get("item") == sc.item and e.get("workspace")]
+        head = ev["workspace"]["head"] if ev.get("workspace") else (heads[-1] if heads else self.ac.head)
+        evidence = dict(ev.get("evidence") or {})
         self.ac_findings, self.ac_evidence = list(res.reasons), evidence
-        return self.ac.failed(acrepeat.fingerprint(res.reasons, evidence), heads[-1] if heads else self.ac.head)
+        return self.ac.failed(acrepeat.fingerprint(res.reasons, evidence), head)
 
     def same_failure(self, reasons):
         """A repeated entry extends the streak when its failure reads like the last one, else restarts it at one. At `max` it ends the loop."""
