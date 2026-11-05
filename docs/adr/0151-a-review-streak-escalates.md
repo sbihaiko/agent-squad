@@ -22,6 +22,7 @@ A child that the reviewer sends back again and again spends money and produces n
 3. **Reviewer severity is calibrated against labeled examples.** A finding that is only Debt or nit never counts as CHANGES.
 4. **An approval binds to the reviewed commit.** A new commit after the approval needs a new review.
 5. **A run that reviews its own children owns them.** childcc never reviews or fixes them. Missing review evidence holds delivery.
+6. **A loop's ac-verify gate that fails identically twice in a row ends the loop needs-human, with the repeated evidence.** Findings read the same once line numbers, shas and whitespace are removed; order is not significant. Only a passing ac-verify gate, a moved head or a changed finding restarts the count. Other gates do not reset it.
 
 ## Consequences
 
@@ -45,5 +46,6 @@ child whose approval stands at its head. The streak is a ledger fact: `tests/tes
 `contrib/squad-goal/scripts/test-issue-ledger.sh` (three CHANGES verdicts end the issue needs-human, an approval resets
 the streak, identical findings twice move the coder, a verdict is one fact per run and round, and a rearm clears it with
 its floor) and `contrib/squad-goal/scripts/test-runreview.sh` (the run's review gate writes the verdict, freezes the card
-and stops the requeue). The severity calibration and the approval binding are a draft until their own tests exist
-(ADR-0018).
+and stops the requeue). `tests/test_ac_repeat.py`: two identical ac-verify failures end the loop needs-human with exactly two actor rounds, across a
+resume too; a passing scope gate between the failures does not reset the count. The severity calibration and the
+approval binding are a draft until their own tests exist (ADR-0018).

@@ -40,6 +40,18 @@ async def test_two_identical_ac_failures_end_the_run_as_needs_human(tmp_path):
     loop = [e for e in record.read(tmp_path / "record.jsonl") if e["event"] == "outcome" and e["node"] == "work"][-1]
     assert loop["outcome"] == "needs-human"
     assert "a.py:12 expected 4 got 5 at 1234abcd" in loop["repeated"][AC_KEY]
+    assert actor_rounds(tmp_path) == 2
+
+
+async def test_two_identical_ac_failures_across_a_resume_end_as_needs_human(tmp_path):
+    eng = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True}, options={"stop_after": "ac_gate"})
+    first = await eng.run()
+    assert first.verdict == "stopped"
+    eng2 = run_engine(ac_graph(), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True})
+    v = await eng2.resume()
+    assert (v.verdict, v.exit_code) == ("needs-human", 10)
+    assert "ac_repeated" in v.reasons and AC_KEY in v.reasons
+    assert actor_rounds(tmp_path) == 2
 
 
 async def test_different_consecutive_findings_do_not_end_the_run(tmp_path):
@@ -48,10 +60,14 @@ async def test_different_consecutive_findings_do_not_end_the_run(tmp_path):
     assert (v.verdict, v.exit_code) == ("completed", 0)
 
 
-async def test_a_passing_gate_between_the_failures_starts_the_count_again(tmp_path):
+async def test_a_passing_gate_between_the_failures_does_not_start_the_count_again(tmp_path):
     eng = run_engine(ac_graph(max_=3, between=("scope_gate",)), {"actor": says(FAIL_ONE)}, tmp_path, adapter={"repeat_last": True})
     v = await eng.run()
-    assert v.verdict == "failed" and "loop_max_exhausted" in v.reasons
+    assert (v.verdict, v.exit_code) == ("needs-human", 10) and "ac_repeated" in v.reasons
+
+
+def actor_rounds(path):
+    return sum(1 for e in record.read(path / "record.jsonl") if e["event"] == "outcome" and e["node"] == "actor")
 
 
 def test_findings_that_differ_only_in_line_numbers_shas_and_whitespace_read_the_same():
@@ -59,6 +75,14 @@ def test_findings_that_differ_only_in_line_numbers_shas_and_whitespace_read_the_
     a = A.fingerprint([key], {key: "t.py:12  boom at 1234abcd\n"})
     b = A.fingerprint([key], {key: "t.py:98 boom at 99ffee0"})
     assert a == b
+
+
+def test_a_line_number_is_stripped_after_any_source_extension():
+    assert A.normalize("a.ts:12 boom") == A.normalize("a.ts:98 boom")
+
+
+def test_a_decimal_number_is_not_mistaken_for_a_sha():
+    assert A.normalize("expected 1234567 got 7654321") != A.normalize("expected 9999999 got 1111111")
 
 
 def test_a_different_criterion_is_a_different_finding():

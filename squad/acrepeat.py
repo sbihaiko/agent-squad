@@ -7,12 +7,12 @@ criteria with the same output, in any order. A changed finding, a new commit or 
 import re
 
 REPEATS = 2
-LINE = re.compile(r"\bline \d+\b|(?<=\.py):\d+")
-SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
+LINE = re.compile(r"\bline \d+\b|(\.[A-Za-z]\w{0,7}):\d+\b")
+SHA = re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
 
 
 def normalize(text):
-    return " ".join(SHA.sub("", LINE.sub("", str(text))).split())
+    return " ".join(SHA.sub("", LINE.sub(lambda m: m.group(1) or "", str(text))).split())
 
 
 def fingerprint(findings, evidence):

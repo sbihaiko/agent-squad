@@ -68,15 +68,17 @@ class _State:
         self.ac, self.ac_findings, self.ac_evidence = acrepeat.Streak(), [], {}
 
     def ac_repeated(self, ctx, child, res, events):
-        """#1378: True when an ac-verify gate fails the same way twice in a row. A gate that passes, or a commit that moves
-        the head, in the walk starts the count again."""
-        if any(e["event"] == "outcome" and e["outcome"] == "pass" and ctx.nodes.get(e["node"], {}).get("kind") == "gate" for e in events):
+        """#1378: True when an ac-verify gate fails the same way twice in a row. A passing ac-verify gate in the walk, or a
+        commit that moves the head, starts the count again. The gate's outcome is read from the whole record, so a
+        failure replayed on resume counts the same as a fresh one."""
+        if any(e["event"] == "outcome" and e["outcome"] == "pass" and ctx.nodes.get(e["node"], {}).get("check") == "ac-verify" for e in events):
             self.ac.reset()
         if child is None or ctx.nodes[child].get("check") != "ac-verify" or res.outcome != "fail":
             return False
-        out = next(e for e in reversed(events) if e["event"] == "outcome" and e["node"] == child)
-        heads = [e["workspace"]["head"] for e in events if e["event"] == "outcome" and e.get("workspace")]
-        evidence = dict(out.get("evidence") or {})
+        rec = ctx.record.events
+        at = max(i for i, e in enumerate(rec) if e["event"] == "outcome" and e["node"] == child)
+        heads = [e["workspace"]["head"] for e in rec[:at] if e["event"] == "outcome" and e.get("workspace")]
+        evidence = dict(rec[at].get("evidence") or {})
         self.ac_findings, self.ac_evidence = list(res.reasons), evidence
         return self.ac.failed(acrepeat.fingerprint(res.reasons, evidence), heads[-1] if heads else self.ac.head)
 
