@@ -3,6 +3,7 @@
 # 1) a reviewer that answers with a VERDICT is accepted: exit 0, rc 0 in review-times.tsv (the bug: rc=$? read the status of the superseded test, so every model "failed")
 # 2) the branch tip moving during the review kills the reviewer and ends BLOCKED (superseded), not a hang.
 # 7) #1501: the aging leash must not kill the only reachable model; 8) with several reachable models it still clamps.
+suite_t0=$(date +%s)   # #1413: the acceptance command of a run is capped (SG_AC_TIMEOUT, 300 s), so the suite times itself
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SHARED="$T/st"   # the shared marks (quota-guard, *-limited) are the suite's own, never the machine's under ~/.cache
 mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$T/s/"; : > "$T/s/codex-reset.py"
@@ -703,4 +704,6 @@ out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
   && ok "13c the grok review takes the chain entry's own effort" \
   || ko "13c the grok review ignored the entry's effort: $(cat "$GROK_ARGS")"
 unset GROK_ARGS
+suite_s=$(( $(date +%s) - suite_t0 ))
+[ "$suite_s" -lt 240 ] && ok "#1413 the suite finishes inside the acceptance cap (${suite_s}s of 240s)" || ko "#1413 the suite took ${suite_s}s, over 240s: an acceptance command of 300 s fails a run whose code is green"
 rm -rf "$T"; exit $fail
