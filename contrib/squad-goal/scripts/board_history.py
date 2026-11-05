@@ -60,8 +60,9 @@ def due_reads(items, stored):
     GitHub had not yet published a move is complete by its own page cursor, and the clock that stamps the move can agree
     with the record's, so only the value itself says the record is behind. The fourth is what a close that moves no card
     leaves behind (#1419): the issue closes through the API and its card keeps its Status, so no clock moves and the
-    record never reads the ClosedEvent. Every item states its closed flag (`closed`, a bool): it is compared with the
-    record's last close or reopen, and only a disagreement is a reason."""
+    record never reads the ClosedEvent. Every item states its closed flag (`closed`, a required bool; a caller that cannot
+    say the issue's state must not call this function): it is compared with the record's last close or reopen, and only a
+    disagreement is a reason."""
     return [i["n"] for i in items
             if (rec := stored.get(i["n"])) is None
             or not rec.get("complete")

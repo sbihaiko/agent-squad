@@ -110,6 +110,45 @@ grep -q '^reopen \[1421\]$' "$T/out3.txt" \
 grep -q '^resettled \[\]$' "$T/out3.txt" \
   && ok "the re-read record ends reopened and is settled" || ko "the reopened record is still due: $(cat "$T/out3.txt")"
 
+# (#1419) The production path, not a hand-built row: `hub._history_due` maps the hub's own board rows to the due set. A row
+# carries the issue state under `s` (`.content.state`) and the card Status under `st` (the jq board read); the fast read adds
+# `su` (the Status clock) and `iu`. So the test drives the exact mapping the bug lived in: an API-closed spec whose card
+# never left Status Backlog is due even though no clock moved, an edit that changes no closed state is not, a reopen is the
+# same rule the other way, and each re-read record settles.
+SG_REPO=sbihaiko/agent-squad SG_OWNER=sbihaiko SG_PROJECT=5 SG_CHECKOUT="$T" \
+"$py" - "$here" "$T/hub-board.json" <<'PY' >"$T/out4.txt" 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import hub
+row = {"n": 1420, "fd": "I_x", "i": "PVTI_x", "t": "a spec", "s": "CLOSED", "cr": "completed",
+       "c": "2026-11-04T00:00:00Z", "st": "Backlog", "k": None, "gt": None, "l": ["spec"],
+       "si": {"total": 0, "completed": 0}, "o": "2026-11-01T00:00:00Z",
+       "su": "2026-11-01T00:00:00Z", "iu": "2026-11-04T00:00:00Z"}
+ev = [{"t": "2026-11-01T00:00:00Z", "type": "added"},
+      {"t": "2026-11-01T00:00:00Z", "type": "status", "status": "Backlog"}]
+base = {"issue_updated": "2026-11-01T00:00:00Z", "status_updated": "2026-11-01T00:00:00Z",
+        "events": ev, "complete": True, "cursor": None}
+stored = {1420: dict(base)}
+print("due", hub._history_due(stored, [row]))
+print("edited", hub._history_due(stored, [dict(row, s="OPEN", iu="2026-11-04T00:00:00Z")]))
+stored[1420]["events"] = ev + [{"t": "2026-11-02T00:00:00Z", "type": "closed"}]
+print("settled", hub._history_due(stored, [row]))
+stored[1421] = dict(base, events=ev + [{"t": "2026-11-02T00:00:00Z", "type": "closed"}])
+print("reopen", hub._history_due(stored, [dict(row, n=1421, s="OPEN")]))
+stored[1421]["events"] = stored[1421]["events"] + [{"t": "2026-11-03T00:00:00Z", "type": "reopened"}]
+print("resettled", hub._history_due(stored, [dict(row, n=1421, s="OPEN")]))
+PY
+grep -q '^due \[1420\]$' "$T/out4.txt" \
+  && ok "the hub's own row marks an API close that moved no card as due" || ko "hub row: $(cat "$T/out4.txt")"
+grep -q '^edited \[\]$' "$T/out4.txt" \
+  && ok "the hub row of an unrelated edit is no read reason" || ko "hub row edit: $(cat "$T/out4.txt")"
+grep -q '^settled \[\]$' "$T/out4.txt" \
+  && ok "the hub row is settled once its record carries the close" || ko "hub row settled: $(cat "$T/out4.txt")"
+grep -q '^reopen \[1421\]$' "$T/out4.txt" \
+  && ok "the hub's own row marks a reopen of a record that last closed as due" || ko "hub row reopen: $(cat "$T/out4.txt")"
+grep -q '^resettled \[\]$' "$T/out4.txt" \
+  && ok "the reopened hub row settles once its record carries the reopen" || ko "hub row resettled: $(cat "$T/out4.txt")"
+
 "$py" - "$T/s" <<'PY' >"$T/boardtime.txt" 2>&1
 import sys
 sys.path.insert(0, sys.argv[1])
