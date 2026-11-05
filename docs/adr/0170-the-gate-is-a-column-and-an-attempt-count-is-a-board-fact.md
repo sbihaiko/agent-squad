@@ -59,5 +59,9 @@ board and the flow bands. `tests/test_board_define.py` and `contrib/squad-goal/s
 hold the applier's number field. `tests/test_board_migrate.py` and
 `contrib/squad-goal/scripts/test-board-migrate.sh` hold a retired option's refusal. `tests/test_board_facts.py`
 holds a ticket in Gating as a ticket in flight, and the page's in-flight list as the facts' own list.
+`tests/test_janitor_wave_gating.py` holds the writer that moves a wave's card into Gating and into Closed, and the
+forward-only rule that keeps a Closed card there. `tests/test_board_gate_record.py` and
+`contrib/squad-goal/scripts/test-board-gate-check.sh` hold the journal-versus-history guard: every gate attempt ahead of
+dev leaves a Gating stretch, and an attempt whose card never read Gating is a defect named by card.
 `tests/test_hub_board_blockers.py` holds the column colours and refuses a ring colour that a named column
 also wears.

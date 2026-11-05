@@ -110,5 +110,14 @@ fixture "$T/st" good; o=$(run --json); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$o" | "$py" -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["ok"] and len(d["checks"])==6 else 1)' \
   && ok "the JSON form reports six green checks" || ko "json: $o"
 
+# --- the record guard (#1430): every attempt ahead of dev must leave a Gating stretch, read from the journal and the store ---
+guard() { "$py" "$src" --record-guard --history "$T/st/hist.jsonl" --journal "$T/st/journal.jsonl" "$@" 2>&1; }
+fixture "$T/st" good; o=$(guard); rc=$?
+[ "$rc" = 0 ] && ok "the record guard passes when every attempt's card read Gating" || ko "record guard exit $rc: $o"
+fixture "$T/st" nogating; o=$(guard); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q "^FAIL gating_recorded: #$case" \
+  && ok "the record guard names an attempt whose card never read Gating" || ko "record guard nogating exit $rc: $o"
+fixture "$T/st" nogating; o2=$(guard); [ "$o" = "$o2" ] && ok "the record guard answers the same on a re-read" || ko "record guard reread: $o vs $o2"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

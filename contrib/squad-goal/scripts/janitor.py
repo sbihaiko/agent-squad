@@ -843,6 +843,7 @@ def reconcile_board():
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
         from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past, CODE_REVIEW
     doing = "Doing" if shipped else "In Progress"
+    GATING = "Gating"   # the shipped column between Code Complete and Closed; board_columns.ROLE names the same word (ADR-0170)
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     stopped = set()   # issues whose newest run stopped needs-human or failed: no stale branch or local landing moves them forward
     specs = set()   # a spec is never work, and its card is a fold over its sub-issues (ADR-0142): a commit subject, a branch or a landing that names it is its children's, so no work rule writes its card and the fold alone sets it (#665)
@@ -867,13 +868,15 @@ def reconcile_board():
         if old and old[0] >= rank: return
         expected[n] = (rank, status, why, run_id, run_ts)
         if status == "Todo" and "nothing landed" in why: no_landing.add(n)
-    def wave_column(n, f, i):   # a card whose wave is in dev is Closed; the push, the approval and the dev CI are reported facts, never a column (ADR-0145)
+    def wave_column(n, f, i):   # a card whose wave is in dev is Closed; a gate that holds the wave is Gating; the push, the approval and the dev CI are reported facts, never a column (ADR-0145, ADR-0170)
         if not shipped: return
         col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
         if col == "Closed":
             run = next(r for r in {f.name, i["run_id"]} if r in _wv)
             _wave_in_dev[str(n)] = ("wave/" + run, _wv[run][0])
             set_expected(n, col, f"the wave of run {i['run_id']} is in dev", i["run_id"], i["run_ts"], 80)
+        elif col == GATING:   # the gate fact reached column_for but no writer set the column (#1430): a live gate, or a red or unproven attempt with none since, holds the card before dev
+            set_expected(n, col, f"a gate holds the wave of run {i['run_id']}", i["run_id"], i["run_ts"], 70)
     def unheld(n, f, i):   # a live run holds the issue, but its spawn batch gave it no child (#480): nobody works it, so it is back in the queue and its dispatch marker goes. A marker written after the batch belongs to a newer dispatch and stays
         set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} gave the issue no child (the router did not choose it, or the engine rejected its spawn)", i["run_id"], i["run_ts"], 20)
         for k in ("disp", "bug"):
@@ -1093,7 +1096,7 @@ def reconcile_board():
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
-        if shipped and want in (doing, CODE_REVIEW) and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603): a live run or a review never moves it back. A spec card carries no delivery of its own, so the fold corrects it (#665)
+        if shipped and want in (doing, CODE_REVIEW, "Code Complete", GATING) and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
         if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue

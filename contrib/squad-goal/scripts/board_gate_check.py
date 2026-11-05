@@ -21,8 +21,13 @@ the path is a live write of its own and needs the owner's grant (ADR-0024).
 
 usage: board_gate_check.py --issue <n> [--repo <owner/name>] [--wave <run>] [--since <ISO instant>] [--json]
        --board <hub-board.json> --history <store> --journal <journal> --gate-log <gate-history> --transitions <moves>
+       board_gate_check.py --record-guard [--since <ISO instant>] [--json] [--history <store>] [--journal <journal>]
        The paths default to SG_BOARD_CACHE and SG_STATE, the live profile's own places.
 Exit: 0 pass, 1 a check failed, 2 an input could not be read.
+
+`--record-guard` is the owner's guard (#1430): it compares the attempt journal with the history store and exits 1 naming
+every attempt whose card never read Gating. It runs beside the board checks and reads those two stores only, so it
+answers the same after a restart and on a re-read; a failure is a defect, never a warning.
 """
 import argparse
 import json
@@ -146,6 +151,40 @@ def gate_windows(attempts, log):
     return windows, unmatched
 
 
+def _covers_gating(run, at, settle):
+    """True when one history interval is a Gating stretch that covers the attempt's instant: the interval holds it, its
+    entry was recorded no later than the settle bound after it, and it has not ended before it."""
+    if not run["on_board"] or run["column"] != GATING: return False
+    entered, left = _instant(run["from"]), _instant(run["to"])
+    return entered is not None and entered <= at + settle and (left is None or left >= at)
+
+
+def gating_recorded(journal, store, since=None):
+    """The journal-versus-history guard (#1430): (ok, problems).
+
+    Every gate attempt the journal holds, whose card is ahead of dev, leaves a Gating stretch on the board. The attempt
+    record carries one instant, the moment it drew its verdict; the card's stretch covers it when the history store's
+    Gating interval holds that instant. The board's poll may record the entry late, so an interval that starts within
+    SETTLE_SECONDS after the attempt covers it too. A card whose store already reads Closed before the attempt is in dev:
+    the gate re-ran on landed work, and no Gating stretch is expected. A wave-level attempt (card 0) names no card of its
+    own. The guard reads the journal and the store only, so it answers the same after a restart and on a re-read."""
+    problems = []
+    for rec in gate_attempts.attempts(journal) if journal else []:
+        n = _card_of(rec)
+        if n <= 0: continue
+        try: at = datetime.fromtimestamp(int(rec.get("t") or 0), UTC)
+        except (TypeError, ValueError): continue
+        if since is not None and at < since: continue
+        runs = board_history.intervals((store.get(n) or store.get(str(n)) or {}).get("events") or [])
+        closed = [r for r in runs if r["on_board"] and r["column"] == CLOSED and (_instant(r["from"]) or at) <= at]
+        if closed: continue
+        settle = timedelta(seconds=SETTLE_SECONDS)
+        covered = any(_covers_gating(r, at, settle) for r in runs)
+        if not covered:
+            problems.append(f"#{n} attempt {rec.get('tip') or '-'}/{rec.get('aid') or '-'} at {_stamp(at)}: the card never read {GATING}")
+    return not problems, problems
+
+
 def lead_row(item, runs, rec, now):
     """The lead-time row the chart reads for this card, from its history alone: the hub's own assembly (hub.lead_rows)."""
     obs = board_history.lead_observation(runs, start=TODO, complete=bool(rec.get("complete")), now=now)
@@ -259,7 +298,7 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="The real-project check of a card's Gating path (SPEC 1218, #1258).")
-    ap.add_argument("--issue", type=int, required=True)
+    ap.add_argument("--issue", type=int)
     ap.add_argument("--repo")
     ap.add_argument("--wave")
     ap.add_argument("--since")
@@ -269,14 +308,36 @@ def main(argv=None):
     ap.add_argument("--gate-log")
     ap.add_argument("--transitions")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--record-guard", action="store_true",
+                    help="compare the whole attempt journal with the history store: exit 1 naming every attempt whose card never read Gating")
     a = ap.parse_args(argv)
     state = pathlib.Path(os.environ.get("SG_STATE") or "/tmp/sg-state")
     board_path = a.board or os.environ.get("SG_BOARD_CACHE")
+    repo = a.repo or os.environ.get("SG_REPO") or ""
+    if a.record_guard:   # the guard reads the journal and the store only: no board cache, no gate log, no transitions are read
+        if not a.history and not board_path:
+            print("board_gate_check: no history store: name --history or SG_BOARD_CACHE", file=sys.stderr)
+            return 2
+        if not a.journal and not board_path:
+            print("board_gate_check: no attempt journal: name --journal or SG_BOARD_CACHE", file=sys.stderr)
+            return 2
+        history_path = pathlib.Path(a.history) if a.history else board_history.history_path(pathlib.Path(board_path), repo)
+        journal_path = pathlib.Path(a.journal) if a.journal else gate_attempts.journal_path(pathlib.Path(board_path), repo)
+        ok, problems = gating_recorded(journal_path, board_history.load_store(history_path),
+                                       since=_instant(a.since) if a.since else None)
+        if a.json:
+            print(json.dumps({"ok": ok, "problems": problems}, indent=2, sort_keys=True))
+        else:
+            for problem in problems: print(f"FAIL gating_recorded: {problem}")
+            print(f"gating record guard: {'pass' if ok else 'fail'}")
+        return 0 if ok else 1
+    if not a.issue:
+        print("board_gate_check: name --issue, or --record-guard for the journal-versus-history guard", file=sys.stderr)
+        return 2
     if not board_path:
         print("board_gate_check: no board cache: name --board or SG_BOARD_CACHE", file=sys.stderr)
         return 2
     board_path = pathlib.Path(board_path)
-    repo = a.repo or os.environ.get("SG_REPO") or ""
     history_path = pathlib.Path(a.history) if a.history else board_history.history_path(board_path, repo)
     journal_path = pathlib.Path(a.journal) if a.journal else gate_attempts.journal_path(board_path, repo)
     log_path = pathlib.Path(a.gate_log) if a.gate_log else state / "gate-history"
