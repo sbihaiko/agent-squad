@@ -914,6 +914,16 @@ def _speed_store(hub, tmp_path, monkeypatch, counts, now=THROUGHPUT_NOW, slot_se
     return path
 
 
+def test_the_fact_counts_the_day_and_flags_the_oldest_source_once_it_passes_the_bound(hub, tmp_path, monkeypatch):
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 6], store_now=int(THROUGHPUT_NOW.timestamp()) - 60)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["day"] == 6 and got["stale"] is False, got
+    assert "today" not in got
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 6], store_now=int(THROUGHPUT_NOW.timestamp()) - 3600, name="stale")
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["stale"] is True and got["age_secs"] == 3600, got
+
+
 def test_the_speed_window_is_the_last_four_hours_never_the_calendar_day(hub, tmp_path, monkeypatch):
     """The same pattern laid around two clocks twelve hours apart reads the same window figure."""
     morning = dt.datetime(2026, 10, 20, 9, 0, tzinfo=dt.UTC)
@@ -995,8 +1005,8 @@ def test_the_speed_window_follows_the_environment_override(hub, tmp_path, monkey
     assert len(got["slots"]) == 6
 
 
-def _speed_text(hub, sp):
-    """The throughput row as the page draws it, run by node: the words the reader sees, markup stripped."""
+def _speed_html(hub, sp):
+    """The throughput card as the page draws it, run by node."""
     if shutil.which("node") is None:
         pytest.skip("node is required")
     esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
@@ -1004,24 +1014,79 @@ def _speed_text(hub, sp):
     script = f"{esc}\n{hub.PAGE[i:hub.PAGE.index('function instUsage', i)]}\nconsole.log(speedRow({json.dumps(sp)}))"
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
-    return re.sub(r"<[^>]+>", " ", out.stdout)
+    return out.stdout
+
+
+def _speed_text(hub, sp):
+    """The throughput card's words, markup stripped."""
+    return re.sub(r"<[^>]+>", " ", _speed_html(hub, sp))
+
+
+def _speed(**kw):
+    """A throughput fact as the hub returns it: four hours, median 9, maximum 21, the two rows, overridden per case."""
+    fact = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
+            "stale": False, "age_secs": 60,
+            "tasks": {"n": 4, "of": 10, "share": 0.4},
+            "arrivals": {"opened": 10, "bugs": {"n": 7, "of": 10, "share": 0.7},
+                         "loop_bugs": {"n": 4, "of": 10, "share": 0.4}}}
+    fact.update(kw)
+    return fact
 
 
 def test_the_throughput_row_with_no_finished_slot_names_the_wait_and_draws_no_trend(hub):
     """No finished slot to compare with: the row names the wait for one and draws no trend word."""
-    text = _speed_text(hub, {"window": 5, "today": 5, "median": None, "min": None, "max": 5, "trend": None})
+    text = _speed_text(hub, _speed(window=5, day=5, median=None, min=None, max=5, trend=None))
     assert "steady" not in text and "accelerating" not in text and "slowing" not in text, text
     assert "first day" in text, text
-    assert re.search(r"5\s+cards closed today", text), text
+    assert re.search(r"5\s+cards closed in the last 4 h", text), text
 
 
 def test_the_throughput_row_names_the_trend_it_compared(hub):
     """The trend word follows the median the screen draws, and the unit says what the number is."""
-    up = _speed_text(hub, {"window": 10, "today": 10, "median": 9, "min": 4, "max": 21, "trend": "up"})
+    up = _speed_text(hub, _speed())
     assert "accelerating" in up and "first day" not in up, up
-    assert "cards closed today" in up and "per day" not in up, up
-    down = _speed_text(hub, {"window": 2, "today": 2, "median": 9, "min": 4, "max": 21, "trend": "down"})
+    assert "cards closed in the last 4 h" in up and "per day" not in up, up
+    down = _speed_text(hub, _speed(window=2, day=2, trend="down"))
     assert "slowing" in down, down
+
+
+def test_the_card_reads_the_three_row_sentences_in_their_tones(hub):
+    html = _speed_html(hub, _speed())
+    assert 'class="spw ok" role=img aria-label="Tasks: 4 of 10 closed"' in html, html
+    assert 'class="spw warn" role=img aria-label="Bugs: 7 of 10 opened"' in html, html
+    assert 'class="spw err" role=img aria-label="Loop-bugs: 4 of 10 opened"' in html, html
+
+
+def test_the_bar_draws_the_median_tick_and_the_window_fill(hub):
+    html = _speed_html(hub, _speed())
+    assert 'class=spmed' in html, html
+    assert 'style="width:47.61904761904762%"' in html, "the window fill is not the window over the maximum"
+
+
+def test_no_close_in_the_day_reads_no_history_with_no_bar(hub):
+    html = _speed_html(hub, _speed(window=0, day=0, median=None, min=None, max=None, trend=None,
+                                   tasks={"n": 0, "of": 0, "share": None},
+                                   arrivals={"opened": 0, "bugs": {"n": 0, "of": 0, "share": None},
+                                             "loop_bugs": {"n": 0, "of": 0, "share": None}}))
+    assert "no history yet" in html and "spr role=img" not in html, html
+
+
+def test_closes_before_the_window_draw_the_bar_at_zero_fill(hub):
+    html = _speed_html(hub, _speed(window=0, day=6, trend="down"))
+    assert 'style="width:0%"' in html and "spr role=img" in html, html
+
+
+def test_nothing_opened_in_the_window_reads_zero_in_both_arrival_rows_in_the_muted_tone(hub):
+    empty = {"n": 0, "of": 0, "share": None}
+    html = _speed_html(hub, _speed(window=0, day=6, trend="down",
+                                   arrivals={"opened": 0, "bugs": empty, "loop_bugs": empty}))
+    assert 'class="spw mute" role=img aria-label="Bugs: 0 of 0 opened"' in html, html
+    assert 'class="spw mute" role=img aria-label="Loop-bugs: 0 of 0 opened"' in html, html
+
+
+def test_the_last_line_names_the_age_only_once_the_oldest_source_is_stale(hub):
+    assert "· read 16 m ago" in _speed_text(hub, _speed(stale=True, age_secs=16 * 60 + 30))
+    assert "· read" not in _speed_text(hub, _speed())
 
 
 def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
