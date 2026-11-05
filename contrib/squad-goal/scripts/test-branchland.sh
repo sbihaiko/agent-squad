@@ -392,7 +392,14 @@ fixc=$($O log --format=%H -n1 --grep='^Apply ruff --fix at the landing' dev)
 # (#1396) A red the branch owns at an approved tip opens ONE fix round: the landing pass writes the CHANGES review the fix pass
 # reads, the way its rebase-conflict path already does. The round then owns the tip, so a base head that moves under it costs no
 # second gate. An inconclusive gate (exit 4) is the machine's, never the branch's: it opens no round and leaves the approval alone.
-GATE_KO_LOG="echo gate >> $T/gate.log; echo 'FAILED tests/test_a.py::test_one - boom'; exit 1"
+# (#1398) The fix round must be told WHY the gate is red: the review carries the assertion python printed, not only the id.
+printf '%s\n' \
+  '_______________________________ test_one ________________________________' \
+  'tests/test_a.py:12: in test_one' \
+  '    assert 1 == 2' \
+  'E   AssertionError: 1 != 2' \
+  'FAILED tests/test_a.py::test_one - AssertionError: 1 != 2' > "$T/ko.txt"
+GATE_KO_LOG="echo gate >> $T/gate.log; cat $T/ko.txt; exit 1"
 moved=0; movebase() { moved=$((moved+1)); (cd "$T/w" && $G checkout -q -B dev origin/dev && echo "b$moved" > "b$moved" \
   && $G add "b$moved" && $G -c user.email=a@b -c user.name=t commit -q -m "base $moved" && $G push -q origin dev) >/dev/null 2>&1; }
 reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
@@ -401,6 +408,11 @@ case "$(head -1 "$T/st/review-gui_7-x.md" 2>/dev/null)" in
   *) ko "no CHANGES review after a red gate: '$(head -2 "$T/st/review-gui_7-x.md" 2>&1)'";; esac
 /usr/bin/grep -q "tests/test_a.py::test_one" "$T/st/review-gui_7-x.md" 2>/dev/null \
   && ok "the review names the failing id" || ko "the review names no failing id: $(cat "$T/st/review-gui_7-x.md" 2>&1)"
+# (#1398) The evidence the fix run needs: what python printed, and that the gate ran the tip rebased onto the base.
+/usr/bin/grep -q "AssertionError: 1 != 2" "$T/st/review-gui_7-x.md" 2>/dev/null \
+  && ok "the review carries the gate's assertion line" || ko "the review carries no assertion line: $(cat "$T/st/review-gui_7-x.md" 2>&1)"
+/usr/bin/grep -q "rebased onto dev" "$T/st/review-gui_7-x.md" 2>/dev/null \
+  && ok "the review says the gate ran the tip rebased onto the base" || ko "the review does not say it read a rebased tip"
 [ -s "$T/st/review-gui_7-x.sha" ] && [ "$(cat "$T/st/review-gui_7-x.sha")" = "$($O rev-parse gui/7-x)" ] \
   && ok "the review is kept at the tip it read" || ko "the review sha is not the tip: '$(cat "$T/st/review-gui_7-x.sha" 2>&1)'"
 ls "$T/st/auto"/branchland-fixpending-gui_7-x-* >/dev/null 2>&1 \
@@ -421,4 +433,16 @@ reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check
 r2=$(SG_LOCAL_GATE_CMD="$GATE_KO_LOG" CHECKS='{"check_runs":[]}' bl)
 [ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] \
   && ok "a new tip is gated again" || ko "a new tip inherited the skip of the old one: $(cat "$T/gate.log")"
+# (#1398) A gate that names no id (a shell suite) still carries several of its error lines, never only the last one.
+printf '%s\n' \
+  'not ok 12 the promotion gate names the proven sha' \
+  'bash: line 3: ffland.sh: No such file or directory' \
+  'FAIL shell suite: the gate died' > "$T/ko2.txt"
+GATE_KO_SHELL="echo gate >> $T/gate.log; cat $T/ko2.txt; exit 1"
+(cd "$T/w" && $G checkout -q gui/7-x && echo yy > yy && $G add yy && $G -c user.email=a@b -c user.name=t commit -q -m "another tip" \
+  && $G push -q origin gui/7-x) >/dev/null 2>&1; rev APPROVE
+r2=$(SG_LOCAL_GATE_CMD="$GATE_KO_SHELL" CHECKS='{"check_runs":[]}' bl)
+n=$(/usr/bin/grep -o ' | ' "$T/st/review-gui_7-x.md" 2>/dev/null | wc -l | tr -d ' ')
+[ "${n:-0}" -ge 2 ] \
+  && ok "a whole-change red carries several of the gate's own lines" || ko "a whole-change red carries only its tail ($n lines): $(cat "$T/st/review-gui_7-x.md" 2>&1)"
 rm -rf "$T"; exit $fail
