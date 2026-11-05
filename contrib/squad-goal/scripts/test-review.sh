@@ -32,7 +32,7 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_FAIL" ] && { echo "API Error: 529 overloaded_error"; exit 1; }; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_ERRJSON" ] && case "$*" in *"--model bad"*) printf '{"is_error":true,"subtype":"error_max_turns","result":"I'"'"'ll review the branch against the issue, reading the code.","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0}}\n'; exit 0;; esac; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; [ -n "$CLAUDE_WAIT" ] && while [ ! -e "$CLAUDE_WAIT" ]; do sleep 1; done; echo "VERDICT: APPROVE"
+cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_FAIL" ] && { echo "API Error: 529 overloaded_error"; exit 1; }; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_ERRJSON" ] && case "$*" in *"--model bad"*) printf '{"is_error":true,"subtype":"error_max_turns","result":"I'"'"'ll review the branch against the issue, reading the code.","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0}}\n'; exit 0;; esac; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; [ -n "$CLAUDE_WAIT" ] && { : > "$CLAUDE_WAIT.started"; while [ ! -e "$CLAUDE_WAIT" ]; do sleep 0.2; done; }; echo "VERDICT: APPROVE"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 export SG_CAP_POLL=0.2   # review.sh cap() polls every 2 s by default; a stub reviewer needs no such wait
@@ -124,17 +124,27 @@ out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md")" = "blocking=0 debt=1" ] && ok "the saved fix round reads blocking=0 and its Debt bullet" || ko "the saved fix round reads: '$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md")'"
 unset CLAUDE_RESOLVED
 # 7) #1501: the aging leash must not kill the only reachable model. Gemini is agy-limited, Opus is
-# outside its hours window and behind quota-guard; the survivor's own timeout (4 s) is longer than
-# the leash (2 s). #1385: the answer is held by the test (`CLAUDE_WAIT` names a file nothing writes),
-# so no scheduling delay can let it finish first; the note must name the survivor's own timeout (4 s),
-# never the 2 s leash -- the bound is the configured value, not a wall clock the box can stretch.
+# outside its hours window and behind quota-guard; the survivor's own timeout (30 s) is longer than
+# the leash (2 s). #1385: the answer is held by the test and released once the stub is inside its call,
+# 3 s in -- past the 2 s leash and well inside the survivor's own 30 s timeout -- so the review must
+# accept it (rc 0, verdict saved). A change that applied the leash, or the per-call deadline, to the
+# sole reachable model rejects that answer and fails here.
 h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wa '%02d-%02d' $a $b
-printf '{"review_models":["gemini-3.8-flash-high","claude:claude-opus-5-5","claude:claude-haiku-4-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"],"hours":{"review_models":{"claude:claude-opus-5-5":"%s"}},"review_timeout_seconds_by_model":{"claude:claude-haiku-4-5":4}}' "$wa" > "$T/s/models.json"
+printf '{"review_models":["gemini-3.8-flash-high","claude:claude-opus-5-5","claude:claude-haiku-4-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"],"hours":{"review_models":{"claude:claude-opus-5-5":"%s"}},"review_timeout_seconds_by_model":{"claude:claude-haiku-4-5":30}}' "$wa" > "$T/s/models.json"
 echo $(( $(date +%s) + 3600 )) > "$T/st/agy-limited"; touch "$T/st/quota-guard"
-rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
-export CLAUDE_WAIT="$T/leash-held"   # never written: the stub waits forever, so the leash or the timeout is the only end
-out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
-[ $rc != 0 ] && /usr/bin/grep -q 'claude:claude-haiku-4-5.*after 4s' "$T/st/cq/x__y#"*mtimeout* && head -1 "$T/st/review-fix_1-x.md" | grep -q BLOCKED && ok "leash + one reachable model: the survivor uses its own timeout (4 s), not the 2 s leash" || ko "leash + one reachable: rc=$rc '$out' $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/leash-held" "$T/leash-held.started"
+CLAUDE_WAIT="$T/leash-held" SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 bash "$T/s/review.sh" --branch fix/1-x 8 >"$T/leash-out" 2>&1 & rp=$!
+for _ in $(seq 1 100); do [ -e "$T/leash-held.started" ] && break; sleep 0.1; done   # the stub is inside its call
+sleep 2.5   # past the 2 s leash, far inside the survivor's own 30 s timeout
+touch "$T/leash-held"
+wait $rp; rc=$?; out=$(cat "$T/leash-out")
+[ $rc = 0 ] && head -1 "$T/st/review-fix_1-x.md" | grep -q 'VERDICT: APPROVE' && ok "leash + one reachable model: an answer past the leash and inside its own 30 s timeout is accepted" || ko "leash + one reachable (accepted): rc=$rc '$out' $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
+# 7b) the survivor's own timeout is its bound: with the answer never released, the review ends on that
+# timeout (4 s), never on the 2 s leash, and the note names the configured value.
+printf '{"review_models":["gemini-3.8-flash-high","claude:claude-opus-5-5","claude:claude-haiku-4-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"],"hours":{"review_models":{"claude:claude-opus-5-5":"%s"}},"review_timeout_seconds_by_model":{"claude:claude-haiku-4-5":4}}' "$wa" > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/leash-held" "$T/leash-held.started"
+CLAUDE_WAIT="$T/leash-held" SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 bash "$T/s/review.sh" --branch fix/1-x 8 >"$T/leash-out" 2>&1; rc=$?; out=$(cat "$T/leash-out")
+[ $rc != 0 ] && /usr/bin/grep -q 'claude:claude-haiku-4-5.*after 4s' "$T/st/cq/x__y#"*mtimeout* && head -1 "$T/st/review-fix_1-x.md" | grep -q BLOCKED && ok "leash + one reachable model: a held answer ends on its own 4 s timeout, not the 2 s leash" || ko "leash + one reachable (held): rc=$rc '$out' $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 # 8) with several reachable models the leash still applies: two healthy claude entries, a 4 s answer held by the test,
 # a 2 s leash -> the first dies at the leash, chain depth 1, BLOCKED. The hold keeps a slow wake from saving the answer.
 printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
@@ -152,6 +162,14 @@ printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
 out=$(PATH="$T/late:$PATH" CLAUDE_SLEEP=4 SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 [ $rc != 0 ] && head -1 "$T/st/review-fix_1-x.md" | grep -q BLOCKED && /usr/bin/grep -q 'after 2s' "$T/st/cq/x__y#"*mtimeout* && ok "leash + a watchdog that wakes late: the deadline still holds" || ko "late watchdog: rc=$rc '$out' $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
+# 8c) #1385: a green answer inside its timeout is never rewritten to a timeout by the wall clock a caller reads after
+# the call returns. The stub answers in 0.2 s under a 3 s timeout, and the poll interval (4 s) outlasts that timeout,
+# so the post-call span is past the lease although the answer was not. The deadline belongs to the call: rc 0, the
+# verdict saved, and no MODEL_TIMEOUT.
+printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_timeout_seconds":3,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; unset CLAUDE_WAIT
+out=$(SG_CAP_POLL=4 CLAUDE_SLEEP=0.2 SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && head -1 "$T/st/review-fix_1-x.md" | grep -q 'VERDICT: APPROVE' && ok "8c an answer inside its timeout survives the poll loop that outlasts it" || ko "8c a green answer was read as a timeout: rc=$rc '$out' $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 # 9) #1820: review.sh takes the branch's own repository as its first argument -- the squad works in two repositories now,
 # and a tooling branch is reviewed through the same chain. Every read of the branch (head, files, diff, the head that
 # supersedes it) goes to the repository it was given; with no argument it is the profile's repository, as before.
