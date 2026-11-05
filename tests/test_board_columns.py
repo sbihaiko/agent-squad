@@ -187,3 +187,11 @@ def test_the_hub_renders_no_closed_branch_lane(table, hub, monkeypatch):
     assert "prev" not in board, "the board still serves a closed-branch lane"
     assert "pr_closed" not in hub.COLUMN, "the hub still reads a lane by a role the table does not name"
     assert '"pr_closed"' not in hub.PAGE, "the page still holds a name for the closed-branch lane"
+
+
+def test_a_reopened_issue_returns_its_card_from_closed_to_todo_only(table):
+    """#1420 (ADR-0143 rule 2): the reopen is the door from Closed to Todo; every other reopened move is refused."""
+    assert not table.refused_for_automated("Closed", "Todo", "reopened")
+    assert table.refused_for_automated("Closed", "Doing", "reopened")
+    assert table.refused_for_automated("Code Complete", "Todo", "reopened")
+    assert table.refused_for_automated("Closed", "Todo")
