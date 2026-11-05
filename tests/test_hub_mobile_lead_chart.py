@@ -98,7 +98,7 @@ def served_lead(hub):  # noqa: F811
                                keys=hub.bar_keys(item))
     hub.board_cache["items"] = items
     payload = hub.flow_lead(*hub.board_filters(""))
-    assert payload["lead"]["control"]["log"]["all"]["clusters"], "the served payload carries no cluster for the cards"
+    assert payload["lead"]["control"]["all"]["clusters"], "the served payload carries no cluster for the cards"
     return payload
 
 
@@ -175,7 +175,7 @@ def test_the_route_serves_each_cluster_range_the_pin_reads(hub):  # noqa: F811
     """The pin takes a cluster's lead and closed ranges from the payload (board_leadtime.py:254-255 sets them): every
     cluster of the route's own answer carries `{min, max, text}` and `{start, end, text}`, and its dots carry `n`,
     `title`, `text` and a date string `closed`, so no range is recomputed in the view (ADR-0137)."""
-    clusters = served_lead(hub)["lead"]["control"]["log"]["all"]["clusters"]
+    clusters = served_lead(hub)["lead"]["control"]["all"]["clusters"]
     lone = next(k for k in clusters if k["count"] == 1)
     many = next(k for k in clusters if k["count"] > 1)
     for k in (lone, many):
@@ -188,7 +188,7 @@ def test_the_route_serves_each_cluster_range_the_pin_reads(hub):  # noqa: F811
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
 def test_a_tap_pins_a_lone_card_from_the_served_cluster(hub):  # noqa: F811
     """A lone cluster carries no `n`, `title`, `text` or string `closed` of its own: they live on its one dot."""
-    lone = next(k for k in served_lead(hub)["lead"]["control"]["log"]["all"]["clusters"] if k["count"] == 1)
+    lone = next(k for k in served_lead(hub)["lead"]["control"]["all"]["clusters"] if k["count"] == 1)
     pinned = run_js(f"mltPin({json.dumps(lone)})")
     assert pinned == "#1 card 1 · lead 2h · closed 2026-10-01 · Todo 2h", pinned
 
@@ -196,7 +196,7 @@ def test_a_tap_pins_a_lone_card_from_the_served_cluster(hub):  # noqa: F811
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
 def test_a_tap_lists_every_card_in_the_served_cluster(hub):  # noqa: F811
     """A cluster lists its cards from the dots it serves and takes its ranges from its own `lead` and `closed`."""
-    many = next(k for k in served_lead(hub)["lead"]["control"]["log"]["all"]["clusters"] if k["count"] > 1)
+    many = next(k for k in served_lead(hub)["lead"]["control"]["all"]["clusters"] if k["count"] > 1)
     pinned = run_js(f"mltPin({json.dumps(many)})")
     assert pinned == "2 issues: #2, #3 · lead 1h · closed Oct 2 · Todo 1h · Todo 1h", pinned
 
@@ -205,7 +205,7 @@ def test_a_tap_lists_every_card_in_the_served_cluster(hub):  # noqa: F811
 def test_a_tap_on_a_served_cluster_pins_its_text(hub):  # noqa: F811
     """`loadMore` hands the screen the route's own answer; a tap on one of its clusters pins that cluster's text."""
     payload = served_lead(hub)
-    index = next(i for i, k in enumerate(payload["lead"]["control"]["log"]["all"]["clusters"]) if k["count"] > 1)
+    index = next(i for i, k in enumerate(payload["lead"]["control"]["all"]["clusters"]) if k["count"] > 1)
     out = move.run_page(hub.MOBILE_PAGE, f"const PAYLOAD = {json.dumps(payload)};" + f"""
       call = p => Promise.resolve(PAYLOAD);   // the screen's own fetch of /api/chart/lead
       moreScreen = "lead"; await loadMore();
@@ -263,7 +263,7 @@ def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
     url = out["sent"][1]["path"]
     assert out["sent"][1]["fresh"] is True, "a zoom reads the hub, never the cache"
     asked = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
-    rng = lead["control"]["log"]["all"]["range"]
+    rng = lead["control"]["all"]["range"]
 
     def ms(m):   # the page reads the payload's stamps through Date, whose resolution is the millisecond
         return m.replace(microsecond=m.microsecond // 1000 * 1000)
@@ -277,11 +277,11 @@ def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
     # Date truncates each endpoint to its 1ms resolution, so each comparison may carry up to 1ms of rounding.
     assert abs(((to - frm) - 2 * (end - start)).total_seconds()) <= 0.002, (asked, url)   # the window doubles
     assert abs(((frm - start) + (to - end)).total_seconds()) <= 0.002, (asked, url)   # around the same middle
-    assert asked["scale"] == ["log"] and asked["a"] == [hub.LEAD_START], (asked, url)
+    assert "scale" not in asked and asked["a"] == [hub.LEAD_START], (asked, url)
     answer = hub.lead_zoom(urllib.parse.urlsplit(url).query)   # the exact query the page sends, through the route's gate
     assert "error" not in answer, answer
     assert answer["measure"] == lead["measure"], (answer["measure"], lead["measure"])
-    assert sum(k["count"] for k in answer["clusters"]) == sum(k["count"] for k in lead["control"]["log"]["all"]["clusters"]), \
+    assert sum(k["count"] for k in answer["clusters"]) == sum(k["count"] for k in lead["control"]["all"]["clusters"]), \
         "the zoomed answer plots the cards the base payload plots"
     assert datetime.fromisoformat(answer["range"]["start"]) == frm, (answer["range"], asked)
     assert datetime.fromisoformat(answer["range"]["end"]) == to, (answer["range"], asked)
@@ -303,11 +303,11 @@ def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
 def test_a_stale_answer_never_draws_over_a_newer_view(hub):  # noqa: F811
-    """Every zoom, timeframe, scale and reset action takes the next sequence number; an answer numbered older never
+    """Every zoom, timeframe and reset action takes the next sequence number; an answer numbered older never
     draws, whether a later zoom, a timeframe switch or a reset superseded it."""
     payload = served_lead(hub)
     out = move.run_page(hub.MOBILE_PAGE, f"const PAYLOAD = {json.dumps(payload)};" + """
-      const BASE = PAYLOAD.lead.control.log.all;
+      const BASE = PAYLOAD.lead.control.all;
       const held = [];
       let holding = false;
       call = p => holding ? new Promise(r => held.push(r)) : Promise.resolve(PAYLOAD);

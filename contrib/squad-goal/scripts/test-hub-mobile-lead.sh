@@ -69,7 +69,7 @@ check("zoom and reset are explicit buttons", all(f'data-ltzoom="{a}"' in body fo
 check("the phone keeps no drag-to-zoom", "onpointerdown" not in edge)
 check("the zoom reads the desktop's /api/leadtime and names the served span",
       re.search(r'const q = "/api/leadtime\?from=" \+ encodeURIComponent\(z\.from\) \+ "&to=" \+ encodeURIComponent\(z\.to\) \+'
-                r'\s+"&scale=" \+ \(MLT\.log \? "log" : "jira"\) \+ "&a=" \+ encodeURIComponent\(MLT\.start', edge) is not None)
+                r'\s+"&a=" \+ encodeURIComponent\(MLT\.start', edge) is not None)
 check("the span the zoom names is the field the payload serves",
       re.search(r"MLT\.start = L\.start", edge) is not None and '"start": LEAD_START' in (pathlib.Path(os.environ["LT_SRC"]).parent / "hub.py").read_text())
 check("every view action takes the next sequence number",
@@ -77,8 +77,8 @@ check("every view action takes the next sequence number",
       and "const el = leadEl(), msg = el.querySelector(\".msg\"), seq = ++MLT.seq;" in edge)
 check("an answer numbered older than the last action never draws",
       re.search(r"if \(seq !== MLT\.seq\) return;[^\n]*\n[^\n]*if \(d\.error\)", edge) is not None)
-check("the timeframe and scale switches take the sequence number too",
-      edge.count("++MLT.seq") >= 3)
+check("the timeframe switch takes the sequence number too",
+      edge.count("++MLT.seq") >= 2 and "data-lscale" not in edge)
 check("the legend names the two mark paints and the three reference swatches",
       all(s in chart_js for s in ("mlthollow", "mltfilled", "mltsolid", "mltdash", "mltdot")))
 sys.exit(fail)
