@@ -7,7 +7,7 @@ issue the run already picked, exit 0 when it may join. Deterministic: it reads t
          non-blank line is "#N" (the to-tickets shape; the REST open-issue list has no sub_issues field). One run takes one ticket of a spec.
   files  issues whose bodies name one repository-relative file (normal form, cluster.paths) are ONE child (cluster.py,
          CL_MODE=files), never two siblings; so tickets of one spec that name a common file share a child and pass.
-Landing still handles a conflict this filter cannot see (a file no body names)."""
+A file no body names is checked at the entry, on the two diffs (wave.sh, #1434); landing still handles what neither reads."""
 import json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
