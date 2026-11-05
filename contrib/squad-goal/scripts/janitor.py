@@ -1194,7 +1194,7 @@ if owner and proj and repo0:
         why = "; ".join(i["reasons"]) or "no reason recorded"
         for n in sorted(marks, key=int):
             if holding(n):   # a live run works it, or a wave still carries it: not ours to release, not yet
-                if n in delivering and n not in byissue: say(f"HELD-BY-WAVE #{n}: run {f.name} ended {i['verdict']}, its wave is open; the landing pass owns the issue")   # observability only (#1423, ADR-0166)
+                if n in delivering and n not in byissue: say(f"HELD-BY-WAVE #{n}: run {f.name} ended {i['name']}, its wave is open; the landing pass owns the issue")   # observability only (#1423, ADR-0166)
                 again = True; continue
             ist = sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip()
             if ist != "open": again = again or ist != "closed"; continue
