@@ -284,7 +284,8 @@ def test_the_lead_time_chart_names_the_cards_closed_as_not_planned(hub, tmp_path
     drawing = "\n".join([
         "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE, block,
         'process.stdout.write(flowLead({type:"task",measure:"on board -> closed",window:{size:20,unit:"issues"},'
-        'excluded:[{reason:"not_planned",count:3}],excluded_total:3,series:[],summary:null}));',
+        'excluded:[{reason:"not_planned",count:3}],excluded_total:3,'
+        'excluded_reasons:{not_planned:"closed as not planned"},series:[],summary:null}));',
     ])
     path = tmp_path / "flow-lead-not-planned.js"
     path.write_text(drawing)
@@ -722,8 +723,9 @@ def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board,
     assert "excluded" not in head, "the head line still states the exclusion"
     assert out.count("excluded") == 1, "the page states the exclusion more than once"
     # Re-anchored (#1334): the one exclusion total sits in the header's summary row, not beside p85.
+    # Re-anchored (#1354): the total states its reason beside its count, so no bare count is served.
     summary_row = re.findall(r"<p class=fhead>(.*?)</p>", out)[1]
-    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1<', summary_row), \
+    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1: 1 closed as not planned<', summary_row), \
         "the one total and its named cards sit in the header's summary row"
     assert "window 20 issues" in head
     assert out.count("20 issues") == 1, "the rolling window is stated twice"
@@ -1779,8 +1781,8 @@ def test_the_header_states_the_summary_in_two_rows(hub, board, tmp_path):
     assert "window 20 issues" in first, "the first row names the window"
     assert "min <b>1d</b>" in second and "max <b>2d</b>" in second, "the second row states the summary"
     assert "2 issues plotted" in second, "the second row states the plotted count"
-    assert re.search(r'title="1 closed as not planned: #3"[^>]*>excluded 1<', second), \
-        "the second row carries the one exclusion total"
+    assert re.search(r'title="1 closed as not planned: #3"[^>]*>excluded 1: 1 closed as not planned<', second), \
+        "the second row carries the one exclusion total with its reason (#1354)"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

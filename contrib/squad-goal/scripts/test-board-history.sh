@@ -66,4 +66,33 @@ grep -q '^due \[1393\]$' "$T/out2.txt" \
 grep -q '^settled \[\]$' "$T/out2.txt" \
   && ok "the re-read record is settled, so the pass does not loop" || ko "the settled record is still due: $(cat "$T/out2.txt")"
 
+"$py" - "$T/s" <<'PY' >"$T/boardtime.txt" 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+import board_history as bh
+# #1354: the lead-time chart measures a closed spec from its first time on the board, the parked Backlog wait included.
+events = [{"t": "2026-11-01T00:00:00Z", "type": "added"}, {"t": "2026-11-01T00:00:00Z", "type": "status", "status": "Backlog"},
+          {"t": "2026-11-02T00:00:00Z", "type": "status", "status": "Closed"},
+          {"t": "2026-11-02T00:00:00Z", "type": "closed"}]
+wait = bh.board_time(bh.intervals(events))
+print("wait", round(wait["flowing"], 3), sorted(wait["columns"].items()), round(sum(wait["columns"].values()), 3))
+moved = [{"t": "2026-11-01T00:00:00Z", "type": "added"}, {"t": "2026-11-01T00:00:00Z", "type": "status", "status": "Backlog"},
+         {"t": "2026-11-01T06:00:00Z", "type": "status", "status": "Doing"},
+         {"t": "2026-11-02T00:00:00Z", "type": "status", "status": "Closed"},
+         {"t": "2026-11-02T00:00:00Z", "type": "closed"}]
+span = bh.board_time(bh.intervals(moved))
+print("moved", round(span["flowing"], 3), sorted(span["columns"].items()), round(sum(span["columns"].values()), 3))
+print("off", bh.board_time(bh.intervals([{"t": "2026-11-01T00:00:00Z", "type": "status", "status": "Closed"},
+                                          {"t": "2026-11-01T00:00:00Z", "type": "closed"}])))
+print("end", bh.board_time(bh.intervals(moved), end="Code Review"))   # the reader's end column, never replaced (#1354)
+PY
+grep -qxF "wait 24.0 [('Backlog', 24.0)] 24.0" "$T/boardtime.txt" \
+  && ok "a closed spec's board time counts the Backlog wait" || ko "board time: $(cat "$T/boardtime.txt")"
+grep -qxF "moved 24.0 [('Backlog', 6.0), ('Doing', 18.0)] 24.0" "$T/boardtime.txt" \
+  && ok "the board-time stack sums the columns the card wore" || ko "board-time stack: $(cat "$T/boardtime.txt")"
+grep -q "^off None$" "$T/boardtime.txt" \
+  && ok "a card never on the board has no board time" || ko "off-board: $(cat "$T/boardtime.txt")"
+grep -q "^end None$" "$T/boardtime.txt" \
+  && ok "a card with no entry into the chosen end column has no board time" || ko "end column: $(cat "$T/boardtime.txt")"
+
 rm -rf "$T"; exit $fail
