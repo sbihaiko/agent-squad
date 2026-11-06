@@ -86,11 +86,15 @@ def test_the_sidebar_carries_no_control_that_writes_a_chain_and_no_link_to_setti
 
 
 def test_the_mobile_menu_opens_settings(hub):
+    """Re-anchored (#1446): the entry is the link the handoff settles. It opens the saved Settings theme and names
+    the desktop view before it navigates, so the desktop page's narrow-screen redirect does not return the owner."""
     _, port = hub
     st, page = _get(port, "/mobile")
     assert st == 200
     menu = _between(page, '<div id="more-menu">', "</div>")
-    assert re.search(r'<a[^>]*href="\./#set"[^>]*>Settings</a>', menu), menu
+    assert re.search(r'<a[^>]*id="more-settings"[^>]*href="\./#set"[^>]*>Settings</a>', menu), menu
+    assert re.search(r'\$\("more-settings"\)\.onclick\s*=\s*\(\)\s*=>\s*localStorage\.setItem\("squad-view","desktop"\)',
+                     page), "the Settings entry does not name the desktop view before it navigates"
 
 
 # ---------------------------------------------------------------- the panel, run in node

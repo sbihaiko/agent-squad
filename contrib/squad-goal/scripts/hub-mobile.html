@@ -478,6 +478,8 @@ $("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
 const SET_THEMES = ["lop","lim","sub","mdl","slk","acc"];
 const lastSetTheme = (() => { try { const t = JSON.parse(localStorage.getItem("hub") || "{}").sth; return SET_THEMES.includes(t) ? t : "lop"; } catch (e) { return "lop"; } })();
 $("more-settings").href = "./#set-" + lastSetTheme;
+// #1446: the entry names the desktop view, so the desktop page's narrow-screen redirect does not return the owner
+$("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
 // settings-handoff:end
 
 const tabs = [...document.querySelectorAll("nav [data-tab]")];

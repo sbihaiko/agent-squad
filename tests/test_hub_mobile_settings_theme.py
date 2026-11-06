@@ -34,10 +34,14 @@ def hub():
     return mod
 
 
+def _handoff_block(page):
+    assert page.count("// settings-handoff:begin") == 1 and page.count("// settings-handoff:end") == 1, "the phone has no single handoff block"
+    return page[page.index("// settings-handoff:begin"):page.index("// settings-handoff:end")]
+
+
 def _phone_link_href(stored):
     page = MOBILE_HTML.read_text()
-    assert page.count("// settings-handoff:begin") == 1 and page.count("// settings-handoff:end") == 1, "the phone has no single handoff block"
-    block = page[page.index("// settings-handoff:begin"):page.index("// settings-handoff:end")]
+    block = _handoff_block(page)
     src = (
         f"const STORED={json.dumps(stored)};"
         "const localStorage={getItem:k=>k==='hub'?STORED:null};"
@@ -86,3 +90,62 @@ def test_the_phone_settings_link_carries_the_last_theme_or_loop(stored, href):
 def test_the_desktop_opens_settings_on_the_themed_hash(hub):
     assert _desktop_tab_and_theme(hub, "#set-acc") == ["set", "acc"]
     assert _desktop_tab_and_theme(hub, "#set-bogus") == ["set", "lop"]
+
+
+def _redirect_condition(hub):
+    """The desktop page's narrow-screen redirect condition, read from the served page (#1446)."""
+    m = re.search(r"<script>if\((.*?)\)location\.replace", hub.PAGE, re.S)
+    assert m, "the desktop page has no narrow-screen redirect"
+    return m.group(1)
+
+
+STORE_STUB = (
+    "const store={};"
+    "const localStorage={getItem:k=>(k in store?store[k]:null),setItem:(k,v)=>{store[k]=String(v)},"
+    "removeItem:k=>{delete store[k]}};"
+    "const matchMedia=q=>({matches:true});"
+)
+
+
+@needs_node
+def test_the_phone_settings_entry_names_the_desktop_view_before_it_navigates(hub):
+    """#1446: the Settings entry writes squad-view=desktop for the saved theme's anchor, so once it runs the desktop
+    page's narrow-screen redirect is false and the owner is not sent back to the phone."""
+    block = _handoff_block(MOBILE_HTML.read_text())
+    cond = _redirect_condition(hub)
+    src = (
+        STORE_STUB +
+        "store['hub']=JSON.stringify({sth:'acc'});"
+        "const els={'more-settings':{href:'./#set'}};const $=id=>els[id];\n"
+        f"{block}\n"
+        "els['more-settings'].onclick();\n"
+        "console.log(JSON.stringify({href:els['more-settings'].href,view:store['squad-view']??null,"
+        f"redirect:Boolean({cond})}}));"
+    )
+    got = json.loads(_node(src))
+    assert got["href"] == "./#set-acc", "the entry does not open the saved Settings theme"
+    assert got["view"] == "desktop", "the entry does not name the desktop view"
+    assert got["redirect"] is False, "the redirect sends the owner back to the phone"
+
+
+@needs_node
+def test_the_desktop_mobile_link_clears_the_view_preference(hub):
+    """#1446: the desktop 'mobile view' link clears squad-view, so the narrow-screen redirect works again."""
+    m = re.search(r'<script>(document\.getElementById\("mobile-link"\).*?)</script>', hub.PAGE, re.S)
+    assert m, "the desktop page has no mobile view link script"
+    cond = _redirect_condition(hub)
+    src = (
+        STORE_STUB +
+        "store['squad-view']='desktop';"
+        "const el={href:'#'};"
+        "const document={getElementById:id=>el};"
+        "const location={pathname:'/p/x'};"
+        f"{m.group(1)}\n"
+        "el.onclick();\n"
+        "console.log(JSON.stringify({href:el.href,view:store['squad-view']??null,"
+        f"redirect:Boolean({cond})}}));"
+    )
+    got = json.loads(_node(src))
+    assert got["href"] == "/p/x/mobile"
+    assert got["view"] is None, "the mobile view link leaves the view preference stored"
+    assert got["redirect"] is True, "the cleared preference leaves the redirect inert"
