@@ -6,7 +6,7 @@ unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this sui
 unset SG_BOARD_VOCAB   # the loop's shipped vocabulary (Closed, not Done) is ambient in a live shell; this suite expects the default
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/basecheck.sh" "$T/s/" 2>/dev/null
+cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -464,5 +464,36 @@ r=$(OPEN="7 9" CHECKS="$GREEN" bl)
 land7; printf 'origin/dev\n' > "$T/st/auto/kept-fix_7-land-run-z"
 r=$(OPEN="7 9" CHECKS="$GREEN" bl)
 /usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && ! /usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && [ ! -e "$T/st/auto/kept-fix_7-land-run-z" ] && ok "an old-form one-line marker closes the branch's own issue alone" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+
+# DEBT (#1500): the lander's one route to the repeat rule. A kept landing branch whose round pushed a head (landround-*.head differs from
+# the tip) and still conflicts with dev goes to `wave.sh landconflict`; one case for each outcome, on the real route.
+landc() { reset; $O update-ref -d refs/heads/gui/7-x; rm -f "$T/st/landround-fix_7-land-run-z.head" "$T/st/auto/kept-fix_7-land-run-z"
+  (cd "$T/w" && $G checkout -q -b "wave/run-z" origin/dev && echo mine > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "wave work (Refs #7)" && $G push -q origin wave/run-z 2>/dev/null \
+  && $G checkout -q -b fix/7-land-run-z wave/run-z && $G push -q origin fix/7-land-run-z 2>/dev/null \
+  && $G checkout -q -b devmove origin/dev && echo other > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "dev g" && $G push -q origin HEAD:dev 2>/dev/null)
+  printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_7-land-run-z.md"; $O rev-parse fix/7-land-run-z > "$T/st/review-fix_7-land-run-z.sha"
+  printf 'pushedround\n' > "$T/st/landround-fix_7-land-run-z.head"; }
+LKM="$T/st/auto/kept-fix_7-land-run-z"
+# moved base: round two starts, no bug, no requeue
+landc; printf 'origin/dev\nissue 7\nround 1 aaaaaaaa\n' > "$LKM"; dv=$($O rev-parse dev)
+r=$(OPEN=7 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$(sed -n 3,4p "$LKM" | tr '\n' ,)" = "round 1 aaaaaaaa,round 2 $dv," ] && ok "a conflict after a pushed round on a moved base starts round two (landconflict)" || ko "moved base: '$(cat "$LKM" 2>&1 | tr '\n' '|')' '$r'"
+! /usr/bin/grep -q 'labels\[\]=bug' "$T/gh.log" && ! /usr/bin/grep -q 'labels\[\]=rework' "$T/gh.log" && ok "a moved base files no bug and requeues nothing" || ko "moved base wrote: $(cat "$T/gh.log")"
+# same sha: the loop bug and the stop of every issue, three issues (a pipe to head would end wave.sh before the third)
+landc; printf 'origin/dev\nissue 7\nissue 9\nissue 10\nround 1 %s\n' "$($O rev-parse dev)" > "$LKM"
+r=$(OPEN="7 9 10" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 3 ] && for n in 7 9 10; do /usr/bin/grep -q "issues/$n/labels.*frozen:owner" "$T/gh.log" || { ko "same sha: #$n not stopped: $(cat "$T/gh.log")"; break; }; done && ok "the same base sha files the loop bug and stops all three issues" || ko "same sha: bugs $(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")"
+! /usr/bin/grep -q 'labels\[\]=rework' "$T/gh.log" && ok "the same base sha requeues nothing" || ko "same sha requeued"
+# after round two: the issues are requeued with rework, five or more of them; the marker and both branches go
+landc; printf 'origin/dev\nissue 7\nissue 9\nissue 10\nissue 11\nissue 12\nissue 13\nround 1 aaaaaaaa\nround 2 bbbbbbbb\n' > "$LKM"
+r=$(OPEN="7 9 10 11 12 13" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$(/usr/bin/grep -c 'labels\[\]=rework' "$T/gh.log")" = 6 ] && [ "$(/usr/bin/grep -c ' Todo ' "$T/board.log")" = 6 ] && ok "a conflict after round two requeues all six issues with rework" || ko "round two: rework $(/usr/bin/grep -c 'labels\[\]=rework' "$T/gh.log"), todo $(/usr/bin/grep -c ' Todo ' "$T/board.log")"
+[ ! -e "$LKM" ] && [ -z "$($O rev-parse -q --verify refs/heads/fix/7-land-run-z)" ] && [ -z "$($O rev-parse -q --verify refs/heads/wave/run-z)" ] && ! /usr/bin/grep -q 'labels\[\]=bug' "$T/gh.log" && ok "the marker, the kept branch and wave/run-z are gone, and no bug is filed" || ko "round two residue: $(ls "$T/st/auto")"
+# a clean pushed round lands through ffland and never meets the repeat rule
+landc; (cd "$T/w" && $G checkout -q -b okround origin/dev && echo wz > wz && $G add wz && $G -c user.email=a@b -c user.name=t commit -q -m "round (Refs #7)" && $G push -q -f origin HEAD:fix/7-land-run-z 2>/dev/null)
+$O rev-parse fix/7-land-run-z > "$T/st/review-fix_7-land-run-z.sha"; printf 'origin/dev\nissue 7\nround 1 aaaaaaaa\n' > "$LKM"; rm -f "$T/lc.called"
+mv "$T/s/wave.sh" "$T/s/wave.real"; printf '#!/bin/bash\necho "$*" >> "%s/lc.called"\n' "$T" > "$T/s/wave.sh"; chmod +x "$T/s/wave.sh"
+r=$(OPEN=7 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl); mv "$T/s/wave.real" "$T/s/wave.sh"
+case "$r" in *"BRANCHLAND LANDED fix/7-land-run-z"*) [ ! -e "$T/lc.called" ] && ok "a clean pushed round lands and landconflict is not called" || ko "landconflict ran: $(cat "$T/lc.called")";; *) ko "the clean round did not land: '$r'";; esac
 
 rm -rf "$T"; exit $fail

@@ -1101,7 +1101,10 @@ wave_conflict() {
       echo "WAVE-NOTE #$n2: $w names it (Refs #$n2) outside the dispatch set of run $run; reported, not frozen"
       printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv"
     done
-    rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; return 1
+    # A dispatched issue the wave head does not carry has no branch to keep: it takes the requeue path below, as it did before the keep.
+    local rest=""; for n in $list; do case " $kset " in *" $n "*) ;; *) rest="${rest:+$rest }$n";; esac; done
+    if [ -z "$rest" ]; then rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; return 1; fi
+    list=$rest; outs=""
   fi
   for n in $list; do
     hit=$(ledger conflict "$n" "$run" "$sig" 2>&1) || { echo "WAVE-LEDGER #$n refused: $hit"; continue; }

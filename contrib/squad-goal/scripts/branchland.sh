@@ -82,7 +82,8 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base gaid
     # round, the loop bug and the fresh build. A head no round has touched is still in its round, and gets the review below.
     if [ -s "$SG_STATE/auto/kept-$rbk" ] && /usr/bin/grep -q '^round ' "$SG_STATE/auto/kept-$rbk" && [ -x "$here/wave.sh" ] \
        && [ -s "$SG_STATE/landround-$rbk.head" ] && [ "$(cat "$SG_STATE/landround-$rbk.head")" != "$sha" ]; then
-      bash "$here/wave.sh" landconflict "$br" "$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-gate/$land" 2>/dev/null)" "$sha" "$files" 2>&1 | head -5
+      lcout=$(bash "$here/wave.sh" landconflict "$br" "$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-gate/$land" 2>/dev/null)" "$sha" "$files" 2>&1)   # captured whole: a pipe to head would kill wave.sh with SIGPIPE mid-round
+      printf '%s\n' "$lcout" | head -5
       say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; fi
     if [ -s "$SG_STATE/auto/kept-$rbk" ]; then rbref=$(head -1 "$SG_STATE/auto/kept-$rbk")
       printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on %s, resolve the conflict in each file, keep the work, and push.\n' \
