@@ -30,22 +30,19 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple, Union
 
+from squad import procs as P
+from squad.procs import ReadError  # re-exported: callers catch it here
+
 RUN_CMD = r"[s]quad start( |$)"   # a squad run's command, as heartbeat.sh reads it; SG_RUN_CMD_RE overrides it
 START_SLACK = 1.0                  # `ps` gives a start in whole seconds
 PS_LSTART = "%a %b %d %H:%M:%S %Y"
-PS_TIMEOUT = 30
 UNKNOWN_EXIT = 3
-
-
-class ReadError(Exception):
-    """A read that could not be made. The answer is unknown: the caller holds, and never reads it as absence."""
 
 
 class Proc(NamedTuple):
@@ -149,19 +146,13 @@ def parse_ps(text: str) -> dict[int, Proc]:
 
 
 # ---------------------------------------------------------------- the read layer
-def read_processes(timeout: float = PS_TIMEOUT) -> dict[int, Proc]:
-    """One snapshot of every process. A `ps` that fails, exits non-zero or names no process raises ReadError: `ps -ax`
-    always names itself, so an empty answer is a failed read."""
-    try:
-        p = subprocess.run(["/bin/ps", "-axwwo", "pid=,lstart=,command="], capture_output=True, text=True, timeout=timeout,
-                           env={**os.environ, "LC_ALL": "C"})
-    except (OSError, subprocess.SubprocessError) as e:
-        raise ReadError(f"cannot read the processes: {type(e).__name__}: {e}") from e
-    if p.returncode != 0:
-        raise ReadError(f"cannot read the processes: ps exit {p.returncode}: {' '.join((p.stderr or '').split())[:200]}")
-    procs = parse_ps(p.stdout)
+def read_processes() -> dict[int, Proc]:
+    """One snapshot of every process, through the one reader (squad/procs.py: libproc and sysctl, no exec, so a sandboxed
+    child reads it too). A failed read raises ReadError; the listing always names this process, so an empty answer is one."""
+    table = P.snapshot()
+    procs = {pid: Proc(p.start, p.command) for pid, p in table.items()}
     if not procs:
-        raise ReadError("cannot read the processes: ps named no process")
+        raise ReadError("cannot read the processes: no process named")
     return procs
 
 

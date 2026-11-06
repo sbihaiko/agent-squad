@@ -27,7 +27,8 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # pid is trusted, so a reader never deletes a lock a live holder may still need.
 
 st=${SG_STATE:-/tmp/sg-state};   # one machine-wide path: TMPDIR is per user on macOS, so a TMPDIR default would split the lock
-ps_=${SG_PS:-/bin/ps}; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
+. "${BASH_SOURCE[0]%/*}/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"
+ps_=$SG_PS; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
 # Mesen GUI run takes -- the fork gate, the e2e and a hand-run suite -- so one marker stops them all without touching a caller. It
 # exits 0, never non-zero: a suite deliberately not run is not a failure, and a red gate would revert every branch in flight.
 case "$n" in gui-suite)
@@ -39,7 +40,7 @@ hold=${SERIAL_HOLD_SECONDS:-${SG_CALL_DEADLINE_SECONDS:-1800}}; cmdn=$(basename 
 ppid_of() { $ps_ -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 runs_as() { $ps_ -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
 # A pid that is alive and not a zombie: a watchdog that exited but is not yet reaped by its parent is gone (#805).
-alive() { kill -0 "$1" 2>/dev/null && [ "$($ps_ -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
+alive() { kill -0 "$1" 2>/dev/null && [ "$($SG_PS -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
 # reap_wd <pid>: the watchdog's own group when it leads one, its children and its pid when it does not, so the sleep it
 # forked is never reparented and left to run out its hold (#1441).
 reap_wd() { local p; [ "$($ps_ -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null

@@ -118,6 +118,7 @@ def janitor(tmp_path: Path, **extra: str) -> subprocess.CompletedProcess[str]:
             "SG_PROJECT": "4",
             "SG_BASE": "main",
             "SG_HUB_DIR": str(tmp_path / "st"),
+            "SG_SQUAD": str(Path(__file__).resolve().parents[1]),   # the janitor reads squad/procs.py from the repository (#1508)
             **extra,
         }
     )

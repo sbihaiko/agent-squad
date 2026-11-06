@@ -59,6 +59,7 @@
 # descendant, five seconds past it so a command that is writing its record is not cut in half, and the outcome is unproven
 # with a reason that says bounded. A defect the command already wrote is fail, and so is any red that stands for the tree.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
+. "$here/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS in every branch, the --run child too (#1508)
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
 }
@@ -309,7 +310,7 @@ case "${1:-}" in
     wd=
     # reap_wd <pid>: the watchdog's own group when it leads one, its children and its pid when it does not, so the sleep it
     # forked is never reparented and left to run out its bound (#1441).
-    reap_wd() { local p; [ "$(${SG_PS:-/bin/ps} -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
+    reap_wd() { local p; [ "$($SG_PS -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
       for p in $(pgrep -P "$1" 2>/dev/null); do kill "$p" 2>/dev/null; done; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
     trap '[ -z "$wd" ] || reap_wd "$wd"; note fail unproven "bounded: the gate was stopped at its deadline and no check reported a defect"; [ "$FOC" = fail ] && exit 1; exit "${note_rc:-143}"' TERM
     "$@" & cpid=$!

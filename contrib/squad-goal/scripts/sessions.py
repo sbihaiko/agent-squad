@@ -1,7 +1,32 @@
 """The Terminals list (#833): the one reader of the local session registry, the protected transcript reader and the one
 redaction step. The hub's routes call it; nothing else reads a session record, a token or a transcript.
 """
-import datetime, json, os, pathlib, re, stat, subprocess, sys, time
+import datetime, importlib.util, json, os, pathlib, re, stat, subprocess, sys, time
+
+_PROCS = []
+
+def _procs():
+    """squad/procs.py, the one process reader, loaded by path: the repository this script sits in first, as caps.sh reads it,
+    then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. That file imports nothing from squad, so it loads alone under any python3 (#1508)."""
+    if not _PROCS:
+        name = "squad_procs"
+        if name in sys.modules: _PROCS.append(sys.modules[name])
+        else:
+            roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]   # a copy outside the repo: the tree it runs in
+            root = next((r for r in roots if (pathlib.Path(r) / "squad" / "procs.py").is_file()), roots[-1])
+            spec = importlib.util.spec_from_file_location(name, pathlib.Path(root) / "squad" / "procs.py")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[name] = mod   # a dataclass in the module reads its own module by name while it loads
+            spec.loader.exec_module(mod)
+            _PROCS.append(mod)
+    return _PROCS[0]
+
+def _snapshot(pids):
+    """{pid: Proc} for the pids; {} when the process table cannot be read."""
+    mod = _procs()
+    try: return mod.snapshot(pids)
+    except mod.ReadError: return {}
 import session_card
 
 ADDRESS = pathlib.Path(__file__).resolve().parent / "address.sh"
@@ -97,9 +122,8 @@ def _socket_ok(path):
     return os.path.realpath(os.path.dirname(path)) in allowed
 
 def _proc_start(pid):
-    out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True).stdout
-    try: return int(time.mktime(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y")))
-    except ValueError: return None
+    p = _snapshot([pid]).get(pid)
+    return None if p is None or p.start is None else int(p.start)
 
 def _alive_since(pid, started, kind=None):
     try: os.kill(pid, 0)
@@ -244,11 +268,10 @@ def argv_of(pid):
     except (OSError, ValueError):
         pass
     try:
-        out = subprocess.run(["ps", "-ww", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True,
-                             timeout=5).stdout
-    except (OSError, ValueError, subprocess.SubprocessError):
+        p = _snapshot([int(pid)]).get(int(pid))
+    except (ValueError, TypeError):
         return []
-    return out.split()
+    return p.command.split() if p else []
 
 
 def argv_mode(pid):

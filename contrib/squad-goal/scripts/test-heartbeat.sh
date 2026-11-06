@@ -4,7 +4,7 @@
 # Stubbed env.sh and ps pattern; the real squad package writes the verdict. usage: bash test-heartbeat.sh [heartbeat.sh]
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); src=${1:-$d/heartbeat.sh}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME" "$T/s" "$T/st" "$T/co/runs"; cp "$src" "$T/s/heartbeat.sh"
+unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME" "$T/s" "$T/st" "$T/co/runs"; cp "$src" "$T/s/heartbeat.sh"; cp "$d/caps.sh" "$T/s/caps.sh"
 printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_SQUAD=%s SG_HUB_DIR=%s\n' "$T/st" "$T/co" "$repo" "$T/hub" > "$T/s/env.sh"
 export SG_RUN_CMD_RE='[n]osuch-squad-process-marker'   # hermetic: a live loop on this machine runs `squad start`, and it must not count here
 hb() { bash "$T/s/heartbeat.sh" 2>&1; }

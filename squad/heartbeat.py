@@ -25,13 +25,12 @@ usage: python3 -m squad.heartbeat <active-runs.txt> <checkout> <stamp dir>
 """
 import os
 import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 from squad import killed as K
-from squad import record
+from squad import procs, record
 
 HB_FLAT_MIN = 5.0      # minutes a call's process tree may hold the same CPU seconds before it is flat
 HB_RECORD_MIN = 5.0    # minutes the record may hold the same size before it is frozen
@@ -69,18 +68,8 @@ def parse_time(text):
 
 
 def _ps_table():
-    """Every process as (pid, ppid, cpu seconds), from one `ps`."""
-    out = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,time="], capture_output=True, text=True, timeout=30).stdout
-    rows = []
-    for line in out.splitlines():
-        f = line.split()
-        if len(f) != 3:
-            continue
-        try:
-            rows.append((int(f[0]), int(f[1]), parse_time(f[2])))
-        except ValueError:
-            continue
-    return rows
+    """Every process as (pid, ppid, cpu seconds), from one read of the process table (squad/procs.py, no exec)."""
+    return [(p.pid, p.ppid, p.cpu) for p in procs.snapshot().values()]
 
 
 def process_tree(root, rows):

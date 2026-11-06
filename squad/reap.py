@@ -47,6 +47,7 @@ from pathlib import Path
 
 from squad import caps as C
 from squad import killed as K
+from squad import procs as PR
 from squad import record
 from squad import run_liveness as RL
 from squad.options import OptionError
@@ -62,14 +63,9 @@ LIVE_PROC = re.compile(r"gate\.sh\b|_bundled/claude|/claude\b|\bclaude-code\b|sq
 def _procs():
     """(pid, cwd, command) for every process: one `ps` and one `lsof` for the cwd, as the janitor reads them."""
     try:
-        ps = subprocess.run(["/bin/ps", "-axwwo", "pid=,command="], capture_output=True, text=True, timeout=30).stdout
-    except (OSError, subprocess.SubprocessError):
+        cmd = {pid: p.command for pid, p in PR.snapshot().items()}
+    except PR.ReadError:
         return None
-    cmd = {}
-    for line in ps.splitlines():
-        pid, _, c = line.strip().partition(" ")
-        if pid.isdigit():
-            cmd[int(pid)] = c.strip()
     lsof = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), None)
     if lsof is None:
         return None

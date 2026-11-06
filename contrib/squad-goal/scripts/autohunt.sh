@@ -19,6 +19,7 @@
 # spends no line of the pass's ledger and is named `HUNT refused`, never read back as a filed issue. A filing that names
 # no pass is a pass of one: one call, one issue, nothing to hold back.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
+. "$here/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS (#1508)
 . "$here/ghcall.sh"   # the one door to GitHub (#8, ADR-0277): a filing is a write, and it is logged like every other
 export SG_GH_PASS=${SG_GH_PASS:-autohunt}   # the pass the call log names for the filer's own calls, when the caller names none
 # The ceiling on the new issues ONE PASS files (#140), declared in one place: the filing below enforces this number and
@@ -112,7 +113,7 @@ except Exception:
   [ -n "$num" ] && echo "HUNT filed #$num" || echo "HUNT filed"
 }
 busy() { echo "$now" > "$A/hunt-activity"; exit 0; }
-lock_held() { local h; h=$(cat "$SG_STATE/locks/$1/pid" 2>/dev/null); [ -n "$h" ] && kill -0 "$h" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$h" 2>/dev/null | cut -c1)" != Z ]; }
+lock_held() { local h; h=$(cat "$SG_STATE/locks/$1/pid" 2>/dev/null); [ -n "$h" ] && kill -0 "$h" 2>/dev/null && [ "$($SG_PS -o stat= -p "$h" 2>/dev/null | cut -c1)" != Z ]; }
 # A work branch whose tip has not been reviewed yet (#357): the review pass will spend a slot on it, so a hunt waits. It is a
 # git read of the remote heads, never a GitHub call.
 review_waiting() {

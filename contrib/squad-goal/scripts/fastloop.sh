@@ -10,7 +10,7 @@
 # within SG_FAST_POLL seconds (2 by default), not at the end of the beat. It reads that file only, never GitHub.
 # The cache is the hub's one board (SG_PROJECT): the bug project's own Todo column (SG_BUG_*) is not in it, so a bug filed there waits for the beat.
 # --interval prints the resolved beat and exits (tests). SG_FASTLOOP_ONCE=1 runs one iteration and exits (tests).
-. "$(dirname "$0")/env.sh"; [ "${1:-}" = --interval ] && { echo "$SG_FAST_INTERVAL"; exit 0; }; here="$(dirname "$0")"; P="$SG_STATE/fastloop.pid"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; [ "${1:-}" = --interval ] && { echo "$SG_FAST_INTERVAL"; exit 0; }; here="$(dirname "$0")"; P="$SG_STATE/fastloop.pid"
 # todos: the numbers of Todo cards in the fresh hub board cache; nothing when it is missing, stale or unreadable.
 todos() { python3 "${here:-$(dirname "$0")}/issue_state.py" --hub-todos 2>/dev/null; }
 # A lane removes the pid file only when the file names it: the lane of a later start may own it by then (#527).
@@ -24,7 +24,7 @@ load_sample() {
 while :; do
   t0=$(todos)   # the cards in Todo at the start of the beat: a card that arrives while the passes run still ends the wait at once
   # A lane whose supervisor died exits: else it runs beside the lane of the next watchd start, two of each pass a beat (#527).
-  [ -n "${SG_FASTLOOP_ONCE:-}" ] || { [ "$PPID" != 1 ] && [ "$(ps -o ppid= -p $$ | tr -d ' ')" = "$PPID" ]; } || { mine; exit 0; }
+  [ -n "${SG_FASTLOOP_ONCE:-}" ] || { [ "$PPID" != 1 ] && [ "$($SG_PS -o ppid= -p $$ | tr -d ' ')" = "$PPID" ]; } || { mine; exit 0; }
   [ -n "${SG_FASTLOOP_ONCE:-}" ] || echo $$ > "$P"   # every beat: watch.sh reads this file to know the lane is up, and a missing one sent the cycle to run childcc inline (#513)
   load_sample
   # $cc is the pass this lane started: a later beat starts none while it lives, and the childcc lock still bars every other pass.
