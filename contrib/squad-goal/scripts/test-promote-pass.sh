@@ -156,8 +156,13 @@ printf '%s 1\n' "$(( $(date +%s) - 8000 ))" > "$SG_STATE/promote-reserve"
 hold >/dev/null; [ $? = 1 ] && ok "a reserve past the lock's bound holds nothing" || ko "a dead reserve held the dispatcher"
 rm -f "$SG_STATE/promote-reserve"
 
-# The promotion is the loop's, on the proof of the dev tip, and never a cycle step (#576, ADR-0145 rule 3): the proof held the gate lock and no wave landed meanwhile.
-/usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh" | /usr/bin/grep -q 'promote-pass\.sh' && ko "watch.sh still runs the promotion" || ok "watch.sh runs no promotion step: the loop promotes on the proof, never from the cycle"
+# The promotion is the loop's, on the proof of the dev tip, and the watch cycle runs it by itself (#1462, ADR-0145 rule 3):
+# one detached step under its own single-flight lock, with the CI proof, past the quiet window -- so two cycles never overlap
+# a pass, a burst of landings earns one proof window, and a pass in flight holds no landing and takes no gate slot.
+w=$(/usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh")
+printf '%s\n' "$w" | /usr/bin/grep -q 'single\.sh" promote bash .*promote-pass\.sh' && ok "watch.sh runs the promotion under single.sh promote" || ko "watch.sh has no single-flight promotion step"
+printf '%s\n' "$w" | /usr/bin/grep -q 'SG_PROMOTE_PROOF=ci' && ok "the cycle's promotion step names the CI proof" || ko "watch.sh runs the promotion without SG_PROMOTE_PROOF=ci"
+printf '%s\n' "$w" | /usr/bin/grep -q 'promote_quiet &&' && ok "the step starts only past the quiet window" || ko "watch.sh runs the promotion without its debounce"
 # ADR-0156: a full pass carries across a covered delta. The proven tip is t1; dev moves by one covered path; the delta carries it
 # and the pass promotes without the full suite. A path outside the map runs the full suite again.
 before=$(runs)

@@ -31,6 +31,11 @@ tm() { orphaned && exit 0; local s=$(date +%s) r; "$@"; r=$?; local e=$(( $(date
 # verdicts: the runs of active-runs.txt whose record carries a verdict, one a line. The closing wait reads local files only (#569).
 verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
   grep -q '"event": *"verdict"' "$f" 2>/dev/null && echo "$r"; done | sort; }
+# promote_quiet: the promotion step's own debounce (ADR-0145 rule 3): the latest landing in landed.tsv is older than the
+# quiet window, so a burst of landings earns one proof window instead of one pass per landing.
+promote_quiet() { local q last; q=${SG_PROMOTE_QUIET_SECONDS:-900}; case "$q" in ''|*[!0-9]*) q=900;; esac
+  last=$(awk -F'\t' '$1 > m { m = $1 } END { printf "%d", m }' "$SG_STATE/landed.tsv" 2>/dev/null); last=${last:-0}
+  [ $(( $(date +%s) - last )) -ge "$q" ]; }
 # land_wave <run>: the completion of one finished run -- the run's finished children enter its wave, and then the wave lands
 # (#375, ADR-0145 rules 9, 10 and 12). The order is the point: a child enters the wave in childcc's pass, which this cycle
 # reaches after this loop, so a landing attempted first finds a wave without the child in it, refuses it, and -- the run
@@ -172,7 +177,16 @@ if v:
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchreview bash "$(dirname "$0")/branchreviewpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch fix round (#401): a reviewed tip whose review says CHANGES gets one fix run on the same branch.
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchfix bash "$(dirname "$0")/branchfixpass.sh" 2>&1 & ) 2>/dev/null
-  # No promotion step (#576, ADR-0145 rule 3): the loop promotes on the proof of the dev tip, but never from this cycle -- the proof's full suite held the gate lock for up to 30 min, and no wave landed meanwhile.
+  # The promotion step (ADR-0145 rule 3): this cycle advances the proven dev tip to stg. It runs detached under its own
+  # single-flight lock, so a pass in flight costs this cycle nothing and two cycles never overlap a pass; a held lock is
+  # named, never waited for. Its own debounce is the quiet window (promote_quiet): while the latest landing is younger
+  # than it, a burst of landings earns one proof window instead of one pass per landing. The proof is the dev tip's CI
+  # (SG_PROMOTE_PROOF=ci), a job on GitHub's runner, never a local suite, so a loaded box and a nightly that owns the
+  # machine refuse nothing; the pass takes no gate slot and holds no landing. Its own lines go to promote.log, its
+  # outcome to this cycle log.
+  promote_quiet && ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?
+    if [ "$rc" = 76 ]; then echo "$(date +%T) PROMOTE waits: a pass in flight holds the promote lock (pid $(cat "$SG_STATE/locks/single-promote/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
+    else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null &
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up

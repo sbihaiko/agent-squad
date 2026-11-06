@@ -227,4 +227,35 @@ rm -f "$ST/fastloop.pid"; : > "$ST/active-runs.txt"; run_cycles 1
 waitfor basecheckpass 30
 [ "$(count basecheckpass)" = 1 ] && ok "14 the cycle reads the base's check once, with nothing to land" || ko "14 the base's check ran $(count basecheckpass) times in one cycle"
 
+# 15) (#1462) The cycle promotes the proven dev tip by itself: one promotion step, detached under its own single-flight lock
+# (`single.sh promote`), with the CI proof, and its own quiet window so a burst of landings earns one proof window instead of
+# one pass per landing. The pass itself is a stub here; it records the proof it was given in its own file, so a detached line
+# never lands in $STEPS after a later case cleared it. The lock's pid is this shell while a "pass is in flight", so the skip is
+# the real single.sh answer, not a fixture.
+cat > "$S/promote-pass.sh" <<EOF
+#!/bin/bash
+echo "promote \${SG_PROMOTE_PROOF:-unset}" >> "$T/promote.steps"
+exit 0
+EOF
+chmod +x "$S/promote-pass.sh"
+PROM=$T/promote.steps; pcount() { local c; c=$(/usr/bin/grep -cx "$1" "$PROM" 2>/dev/null); echo "${c:-0}"; }
+pwait() { local i=0; while [ $i -lt 100 ]; do /usr/bin/grep -qx "$1" "$PROM" 2>/dev/null && return 0; /bin/sleep 0.1; i=$((i+1)); done; return 1; }
+lane_down; rm -f "$ST/landed.tsv" "$ST/cycle.log"; rm -rf "$ST/locks/single-promote"; : > "$PROM"
+run_cycles 1; pwait "promote ci"
+[ "$(pcount "promote ci")" = 1 ] && ok "15 the cycle runs one promotion step with the CI proof" || ko "15 the promotion step ran $(pcount 'promote ci')×, proof '$(tr '\n' ' ' < "$PROM")'"
+/usr/bin/grep -q "PROMOTE pass rc=0" "$ST/cycle.log" 2>/dev/null && ok "15 the step writes its own line to cycle.log" || ko "15 no PROMOTE line in cycle.log: $(cat "$ST/cycle.log" 2>/dev/null)"
+# a pass in flight holds the lock: the next cycle starts no second one, waits for nothing, and names the holder
+: > "$PROM"; rm -rf "$ST/locks/single-promote"; mkdir -p "$ST/locks/single-promote"; echo $$ > "$ST/locks/single-promote/pid"
+run_cycles 1; /bin/sleep 0.3
+[ "$(pcount "promote ci")" = 0 ] && ok "15 a pass in flight is skipped, never doubled" || ko "15 the step ran beside a held pass ($(pcount 'promote ci'))"
+/usr/bin/grep -q "PROMOTE waits" "$ST/cycle.log" 2>/dev/null && ok "15 the skip names the pass that holds the lock" || ko "15 no PROMOTE waits line in cycle.log"
+rm -rf "$ST/locks/single-promote"
+# the debounce: a fresh landing holds the step, and the same landing past the window lets it run
+: > "$PROM"; : > "$ST/cycle.log"
+printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"; run_cycles 1; /bin/sleep 0.3
+[ "$(pcount "promote ci")" = 0 ] && ok "15 a landing inside the quiet window runs no pass" || ko "15 a burst of landings ran a pass per landing"
+printf '%s\twave\n' "$(( $(date +%s) - 1000 ))" > "$ST/landed.tsv"; run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900; pwait "promote ci"
+[ "$(pcount "promote ci")" = 1 ] && ok "15 past the quiet window the proven tip is promoted once" || ko "15 no pass after the quiet window: '$(tr '\n' ' ' < "$PROM")'"
+rm -f "$ST/landed.tsv"
+
 rm -rf "$T"; exit $fail

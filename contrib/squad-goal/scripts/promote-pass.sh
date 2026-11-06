@@ -1,9 +1,12 @@
 #!/bin/bash
-# usage: promote-pass.sh   The owner's promotion pass (#459, ADR-0145 rule 3, #576): no cycle step runs it; started by hand, it earns
-# the local proof of the dev tip and promotes it. It runs under its own single.sh lock, so two passes never overlap. SG_STATE must be set: the pass never reads the
-# machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
+# usage: promote-pass.sh   The promotion pass (#459, ADR-0145 rule 3, #576): the watch cycle runs it once per quiet window
+# under `single.sh promote`, and a hand run does the same; it earns the proof of the dev tip and promotes it. Its own
+# full-proof serial hold means two passes never overlap, whatever started them. SG_STATE must be set: the pass never reads
+# the machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
 # Debounce: no suite for a tip already proved or refused ($SG_STATE/promote-pass.tips, last 50), nor while the latest landing in
-# $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof.
+# $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof. A CI
+# proof skips that window (a landing costs a job on the runner nothing); the watch cycle reads the same window before it
+# starts a pass, so a burst earns one proof there too.
 # A full pass carries across a covered delta (ADR-0156): `delta-pass.sh` runs first, and any refusal or a held delta lock falls
 # through to the full suite, so a tip that moved by a covered path promotes in minutes and never by a weaker proof.
 # One hold of the proof's own lock, in try mode (serial.sh SERIAL_TRY, name `full-proof`): a held lock skips the tick, never
