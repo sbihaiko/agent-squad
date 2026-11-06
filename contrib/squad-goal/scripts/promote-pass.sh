@@ -55,6 +55,8 @@ g() { /usr/bin/git -C "$tree" "$@"; }
 mark() {  # <tip> <reason>: one marker and one line per tip
   echo "$1 $2" >> "$marks"; tail -n 50 "$marks" > "$marks.tmp" && mv "$marks.tmp" "$marks"
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
+refused() {  # <tip> <reason>: logged and answered, never a marker: a transient is unproven, so the next pass takes the same tip (#1490)
+  echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
 if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
   # The proof holds nothing by default (#739 with ADR-0157 rule 1 rewritten, owner decision 2026-10-31): the dispatchers read
@@ -162,6 +164,8 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
         echo "$(date -u +%FT%TZ) promote-pass: $etip waiting for CI: the check has not reported on it yet" >> "$log"
         echo "promote-pass: $etip waiting for CI"; exit 0
       fi
+      # (#1490) promote-stg.sh refused by the gate cap (try mode, exit 73) is a wait, never a verdict on the tip: no marker.
+      [ $rc = 73 ] && { refused "$tip" "not proven: the gate cap is full, retried later"; exit 0; }
       [ $rc = 0 ] || { mark "$etip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$etip" "promoted: the CI checks carried the full pass"; exit 0;;
     fail*) mark "$tip" "not promoted: CI ${v#fail } is red"; exit 1;;
@@ -183,6 +187,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   dleft=$(( due - $(date +%s) )); [ "$dleft" -lt 1 ] && dleft=1
   if bounded "$dleft" bash "$d/delta-pass.sh" > "$state/delta-pass.log" 2>&1; then
     o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
+    { [ $rc = 75 ] || [ $rc = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
     [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
     mark "$tip" "promoted: the delta carried the full pass ($state/delta-pass.log)"; exit 0
   fi
@@ -231,6 +236,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     left=$(( due - $(date +%s) )); [ "$left" -lt 1 ] && left=1
     if bounded "$left" bash "$d/delta-pass.sh" > "$state/delta-pass-over-bound.log" 2>&1; then
       o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rcd=$?
+      { [ $rcd = 75 ] || [ $rcd = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
       [ $rcd = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$tip" "promoted: the full suite was killed by the ${bound}s bound, the delta carried the tip ($state/delta-pass-over-bound.log)"; exit 0
     fi
@@ -243,12 +249,17 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       && mv "$state/promote-indeterminate.$$" "$state/promote-indeterminate"
     echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${bound}s bound and the delta could not carry it" >> "$log"
     o=$(SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" 2>&1); rcb=$?
+    { [ $rcb = 75 ] || [ $rcb = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
     [ $rcb = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
     printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$tip" "$bound" "$gap" >> "$state/promote-bound"
     mark "$tip" "promoted: bound-ended: the ${bound}s bound ended the full suite and the delta could not carry the tip; not covered: $gap"; exit 0
   fi
   if [ "$rc" != 0 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+    # (#1490) A full machine cap is a wait, not a red of the tip: the suite never ran, so no fail line and no marker.
+    if [ "$rc" = 73 ] || { /usr/bin/grep -q 'caps: caps.gates is full' "$out" && /usr/bin/grep -q 'skipped, not queued (try)' "$out"; }; then
+      refused "$tip" "not proven: the gate cap is full, retried later"; exit 0
+    fi
     read -r peak mean < <(awk '{ if ($1 + 0 > p) p = $1 + 0; s += $1 + 0; n++ } END { printf "%d %.2f", p, (n ? s / n : 0) }' "$samples" 2>/dev/null)
     peak=${peak:-0}; mean=${mean:-0}
     # The sample is a fact about the run, never a verdict: the suite is itself the load, so a threshold on this number cannot
@@ -259,6 +270,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   bash "$d/gate.sh" --status full pass "$tip"
   why=$(full_status "$tip" "full suite, both modes, local") || { mark "$tip" "not promoted: $why"; exit 1; }
   o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
+  { [ $rc = 75 ] || [ $rc = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
   [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
   mark "$tip" "promoted: the local full suite answered for the tip"; exit 0
 fi

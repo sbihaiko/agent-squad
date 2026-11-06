@@ -38,7 +38,7 @@ EOF
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The stub suite logs where it ran, the HEAD it ran at, whether the proof lock was held and the landing gate lock was free
 # around it (ADR-0145 rule 3: the proof runs in its own tree under its own lock, and no wave waits on it); $T/suite-rc is its exit.
-printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/full-proof" ] && echo held || echo free)-$([ -d "$SG_STATE/locks/gate" ] && echo gateheld || echo gatefree) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\ns=$(cat "%s/suite-sleep" 2>/dev/null); [ -n "$s" ] && sleep "$s"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" "$T" > "$T/suite"
+printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/full-proof" ] && echo held || echo free)-$([ -d "$SG_STATE/locks/gate" ] && echo gateheld || echo gatefree) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\ns=$(cat "%s/suite-sleep" 2>/dev/null); [ -n "$s" ] && sleep "$s"\n[ -f "%s/suite-out" ] && cat "%s/suite-out"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" "$T" "$T" "$T" "$T" > "$T/suite"
 chmod +x "$T/suite"; export SG_PROMOTE_SUITE="$T/suite"
 runs() { cat "$T/suite.log" 2>/dev/null | wc -l | tr -d " "; }
 lines() { cat "$SG_STATE/promote.log" 2>/dev/null | /usr/bin/grep -c "promote-pass: $1"; }
@@ -237,6 +237,7 @@ case "$1" in
       m="git -C $CHECKS_DIR/w -c user.email=a@b -c user.name=t"
       $m fetch -q origin && $m checkout -q -B dev origin/dev && $m commit -q --allow-empty -m moved-during-proof && $m push -q origin dev
     fi;;
+  *pulls?state=open*) [ -e "$CHECKS_DIR/read-fail" ] && exit 1; echo '{}';;   # (#1490) a transient read failure while the file stands
   *) echo '{}';;
 esac
 EOF
@@ -593,6 +594,42 @@ IFS=$'\t' read -r _ kind res dsha < "$SG_STATE/gate-status-full" 2>/dev/null
 [ ! -e "$SG_STATE/promote-indeterminate" ] && [ ! -e "$SG_STATE/promote-bound" ] && ok "a bounded attempt with a reported defect writes no bound marker" \
   || ko "a red the bound ended was marked bounded"
 pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the defect suite's tree survived the deadline" || ok "the defect suite's tree is stopped at the deadline"
+
+# (#1490) A transient failure is unproven, never a refusal: the pass writes no tip marker, and the next pass promotes the tip.
+# (a) the open dev -> stg pull request cannot be read. The read fails for the whole of this pass (the open-only call reads it
+# too), and the next pass reads it again.
+adv dev read-fail; tr=$(tip dev); rm -f "$T/suite-rc" "$T/suite-out" "$T/checks-"* "$T/read-fail"; : > "$T/read-fail"
+SG_GHREAD="$T/bin/ghread" pass; rc=$?
+! /usr/bin/grep -q "^$tr " "$SG_STATE/promote-pass.tips" 2>/dev/null && [ "$(tip stg)" != "$tr" ] \
+  && ok "a pull request that cannot be read is pending: no tip marker, stg not moved (rc $rc)" \
+  || ko "read failure marked the tip: rc $rc, tips '$(cat "$SG_STATE/promote-pass.tips" 2>/dev/null)', stg $(tip stg)"
+rm -f "$T/read-fail"; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ "$(tip stg)" = "$tr" ] && ok "the next pass promotes the tip once the pull request reads (rc $rc)" \
+  || ko "retry after read failure: rc $rc, stg $(tip stg), dev $tr, out '$(cat "$T/out")'"
+# (b) the suite waits on the full machine's gate slots: exit 73 and the cap line name the wait, so the tip is retried, not failed.
+adv dev cap-full; tf=$(tip dev); sf=$(tip stg); rm -f "$T/suite-rc" "$T"/checks-*
+printf 'caps: caps.gates is full (2 slots), held by run-9: gate skipped, not queued (try)\n' > "$T/suite-out"; echo 73 > "$T/suite-rc"
+pass; rc=$?
+! /usr/bin/grep -q "^$tf " "$SG_STATE/promote-pass.tips" 2>/dev/null && [ "$(tip stg)" = "$sf" ] \
+  && ! /usr/bin/grep -q "^$tf full fail" "$SG_STATE/gate-status-full" 2>/dev/null \
+  && ok "a full gate cap is not proven: no tip marker, no fail line (rc $rc)" \
+  || ko "full cap marked the tip: rc $rc, tips '$(cat "$SG_STATE/promote-pass.tips" 2>/dev/null)', full '$(cat "$SG_STATE/gate-status-full" 2>/dev/null)'"
+rm -f "$T/suite-out" "$T/suite-rc"; pass; rc=$?
+[ "$(tip stg)" = "$tf" ] && ok "the next pass proves and promotes the tip once the cap is free (rc $rc)" \
+  || ko "retry after full cap: rc $rc, stg $(tip stg), dev $tf, out '$(cat "$T/out")'"
+# (c) promote-stg.sh itself is refused by the gate cap: it re-execs under gate.sh in try mode and exits 73 with the cap line. The
+# pass treats that as a wait, as it treats 75: no tip marker, stg not moved, and the next pass promotes the same tip.
+rm -rf "$T/scripts"; cp -R "$d" "$T/scripts"
+printf '#!/bin/bash\necho "caps: caps.gates is full (2 slots), held by run-9: gate skipped, not queued (try)"\nexit 73\n' > "$T/scripts/promote-stg.sh"
+rm -f "$T/suite-rc" "$T/suite-out" "$T/checks-"*
+adv dev stg-cap; tc=$(tip dev); sc=$(tip stg)
+bash "$T/scripts/promote-pass.sh" > "$T/out" 2>&1; rc=$?
+! /usr/bin/grep -q "^$tc " "$SG_STATE/promote-pass.tips" 2>/dev/null && [ "$(tip stg)" = "$sc" ] \
+  && ok "a promote-stg.sh refused by the gate cap writes no tip marker and does not move stg (rc $rc)" \
+  || ko "promote-stg cap marked the tip: rc $rc, tips '$(cat "$SG_STATE/promote-pass.tips" 2>/dev/null)', stg $(tip stg), out '$(cat "$T/out")'"
+pass; rc=$?
+[ "$(tip stg)" = "$tc" ] && ok "the next pass promotes the same tip once the cap is free (rc $rc)" \
+  || ko "retry after promote-stg cap: rc $rc, stg $(tip stg), dev $tc, out '$(cat "$T/out")'"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -KILL -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started

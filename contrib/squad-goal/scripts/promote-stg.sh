@@ -126,7 +126,7 @@ fi
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
 pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) \
-  || refuse "$tip" "not promoted: the open dev -> stg pull request could not be read"
+  || { echo "promote-stg: pending $tip: the open dev -> stg pull request could not be read" >&2; exit 75; }   # a transport failure is unproven, never a verdict (ADR-0164, #1490)
 if [ -z "$pr" ]; then
   o=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head=dev -f base=stg -f "title=Promote dev into stg" \
       -f "body=The dev tip $tip carries its proof. Merge this to move stg." 2>&1) \
