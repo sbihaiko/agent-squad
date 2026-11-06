@@ -307,15 +307,21 @@ case "${1:-}" in
       rm -f "$list"; }
     timedout=$(mktemp "${TMPDIR:-/tmp}/gate-timeout.XXXXXX" 2>/dev/null) || timedout=; [ -z "$timedout" ] || rm -f "$timedout"
     wd=
-    trap 'kill "$wd" 2>/dev/null; note fail unproven "bounded: the gate was stopped at its deadline and no check reported a defect"; [ "$FOC" = fail ] && exit 1; exit "${note_rc:-143}"' TERM
+    # reap_wd <pid>: the watchdog's own group when it leads one, its children and its pid when it does not, so the sleep it
+    # forked is never reparented and left to run out its bound (#1441).
+    reap_wd() { local p; [ "$(${SG_PS:-/bin/ps} -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
+      for p in $(pgrep -P "$1" 2>/dev/null); do kill "$p" 2>/dev/null; done; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
+    trap '[ -z "$wd" ] || reap_wd "$wd"; note fail unproven "bounded: the gate was stopped at its deadline and no check reported a defect"; [ "$FOC" = fail ] && exit 1; exit "${note_rc:-143}"' TERM
     "$@" & cpid=$!
     # The command is the one that knows how to stop its own tree and write what it found; the wrapper's own stop waits a
     # short grace past the deadline, so a command that answers at the deadline is never killed mid-record. A command that
     # does not answer is stopped here, with every descendant (ADR-0163, #1171).
+    set -m   # the watchdog leads its own process group, so reap_wd reaches the sleep it forks
     ( sleep "$(( bound + 5 ))"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - start )) -ge "$bound" ] || exit 0
       [ -z "$timedout" ] || : > "$timedout"; stop_tree "$cpid" ) >/dev/null 2>&1 & wd=$!
+    set +m
     wait "$cpid" 2>/dev/null; rc=$?
-    kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+    reap_wd "$wd"
     if [ -n "$timedout" ] && [ -e "$timedout" ]; then
       rm -f "$timedout"
       note fail unproven "bounded: the gate passed its ${bound}s deadline and no check reported a defect"
