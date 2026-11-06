@@ -30,6 +30,7 @@ This file and the ADRs are never ledgers: no dates, counts, statuses, issue numb
   The CLI and both harness scripts call it and never build an `Engine`. A run keeps its record in its run folder. Guard: `tests/test_launch.py`.
 - **A child session writes only inside its worktree and never touches the live skill copy or the loop state** (`squad/sandbox.py`).
   A PreToolUse hook on every adapter session denies the call with a reason and records `sandbox_deny` (`bypassPermissions` skips `can_use_tool`).
+  The child's CLI runs under `sandbox-exec` (`contrib/squad-goal/scripts/claude-sandboxed.sh`), so the kernel refuses a signal to any process outside the session, whatever spells it; no child starts without it (macOS).
   The janitor alerts when the live copy changes with no publish. A child that runs the fast gate reads one printed verdict line and a log outside the state directory.
   Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`, `contrib/squad-goal/scripts/test-fast-gate.sh`.
 - **A project settings file overlays the plugin defaults** (`docs/squad/defaults.yaml`, `squad/project_settings.py`).

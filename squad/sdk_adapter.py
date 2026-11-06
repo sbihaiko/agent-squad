@@ -319,6 +319,8 @@ class SdkAdapter:
             sp["append"] = "\n\n".join(x for x in (sp.get("append"), req.instructions) if x)
             kw["system_prompt"] = sp
         kw["hooks"] = self._hooks(req)
+        kw["cli_path"] = sandbox.WRAPPER     # #1469: every child's CLI, and so every process it starts, runs under the signal profile
+        kw["env"] = {**kw.get("env", {}), **sandbox.sdk_cli_env()}
         if tail is not None:    # the CLI's stderr is piped only when a callback asks for it
             tail.chained = kw.get("stderr")
             kw["stderr"] = tail
