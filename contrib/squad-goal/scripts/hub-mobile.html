@@ -667,6 +667,9 @@ const mSlots = () => {
 };
 const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
 function cardButton(x, i) {
+  // The card's age at one short rung (#1444): minutes under an hour, hours under a day, days
+  // after it, so the chip is one token the eye reads at phone width.
+  const shortAge = o => { const m = Math.max(0, Math.floor((Date.now() - Date.parse(o)) / 60000)); return m < 60 ? m + "m" : m < 1440 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
   const b = document.createElement("button");
   b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n; b.dataset.hr = x.hr || "";
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
@@ -679,6 +682,16 @@ function cardButton(x, i) {
   // The card's Gate Tries (issue 1255): the count the gate-attempt journal projects rides the row as its chip
   // text, a fact the row carries, so this page names no column of its own.
   if (x.gchip) id.append(chip("gate", x.gchip));
+  // The card's PR/CI chip reads the same row fields the desktop card reads (#1444): the badge
+  // (`pb`) and the CI rollup, where a state the row does not carry reads "unknown", never
+  // "passing". An issue's PRs ride its `prf`, each with the CI state the row carries for it, the
+  // same fields the ticket sheet reads; a row that holds no PR says so. No field is invented here
+  // and no phone-only rule is named.
+  const prs = x.kind === "pr" ? [{ n: x.n, ci: x.rollup }] : (x.prf || []);
+  id.append(chip("pr", prs.length ? (x.pb ? x.pb + " " : "") + prs.map(p => "#" + p.n + " · CI " + (p.ci == null ? "unknown" : p.ci)).join(" ") : "no PR"));
+  if (x.b && x.b.length) id.append(chip("blocked", "blocked"));
+  if (x.ho) id.append(chip("run", "running"));
+  if (x.o) id.append(chip("age", shortAge(x.o)));
   const t = document.createElement("span"); t.textContent = x.t;
   b.append(id, t);
   // The reason the hub refused this card's move is page state the card reads, so every render after the refusal draws it
