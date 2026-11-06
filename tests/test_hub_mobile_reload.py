@@ -9,8 +9,10 @@ import re
 
 import pytest
 
-from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (the fixture and the node harness)
+from tests import test_hub_mobile_move as move
 
+hub = move.hub
+run_page = move.run_page
 
 # The build is a nanosecond count, past the 2**53 a JavaScript number keeps exactly: a one-second gap is a real new build.
 NEW_BUILD_GAP = 10**9
