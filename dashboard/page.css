@@ -1,3 +1,4 @@
+  :root { --edge-rest:color-mix(in srgb, var(--edge), var(--fg) 10%); }   /* the resting border of an inactive indicator: a step lighter than --edge, 3:1 on panel and card */
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:var(--fs-body)/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
   body.noside #left { display:none; }
@@ -162,7 +163,7 @@
   .b.no-verdict-yet { color:var(--none); }
   .card:focus { outline:var(--focus-w) solid var(--focus); } .card:focus-visible > rect { stroke:var(--highlight); stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
-  .group-card .sq rect { fill:var(--inset); stroke:var(--line); stroke-width:1.2; }
+  .group-card .sq rect { fill:var(--inset); stroke:var(--edge-rest); stroke-width:1.2; }
   .group-card .sq text { font:600 var(--fs-caption) sans-serif; fill:var(--mute); }
   .group-card .sq.s-passed rect { fill:var(--tint-ok); stroke:var(--ok); } .group-card .sq.s-passed text { fill:var(--ok); }
   .group-card .sq.s-failed rect { fill:var(--tint-err); stroke:var(--err); } .group-card .sq.s-failed text { fill:var(--err); }
