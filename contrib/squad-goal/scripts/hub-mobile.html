@@ -506,6 +506,24 @@ function show(name) {
 }
 tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 
+// The phone follows the hub's build as the desktop does (#1114). A new build reloads the page once, and the reload waits
+// while a write is in flight, a draft or photo is held in any session, or a move is staged (#1455).
+const SERVED_BUILD = __BUILD__;
+let writesOpen = 0, buildStale = false, reloading = false;
+const writing = p => { writesOpen++; return p.finally(() => { writesOpen--; }); };
+function reloadHeld() {
+  return writesOpen > 0 || !!(pending && pending.live) || $("termview-text").value.trim() !== ""
+    || [...termDrafts.values()].some(d => d.text || d.photo);
+}
+async function checkVersion() {
+  let v;
+  try { v = (await (await fetch("/api/version", { cache: "no-store" })).json()).v; } catch { return; }
+  if (v === undefined) return;
+  if (v !== SERVED_BUILD) buildStale = true;
+  if (buildStale && !reloading && !reloadHeld()) { reloading = true; location.reload(); }
+}
+setInterval(() => { if (!document.hidden) checkVersion(); }, 3000);
+
 // One read per endpoint in flight, with a deadline (#1004). A poll joins the read of its path already in flight; `fresh`
 // (the read after a write) or another query on the endpoint aborts it. An answer older than the endpoint's last request
 // is dropped: its promise never settles, so it never draws over newer state. A caller must not clear a busy flag only in
@@ -633,7 +651,7 @@ async function loopView(fresh) {
 async function loopAct(action, extra) {
   $("loop-reason").textContent = "";
   try {
-    const r = await fetch("/api/loop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra }), cache: "no-store" });
+    const r = await writing(fetch("/api/loop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra }), cache: "no-store" }));
     const out = await r.json();
     if (!r.ok) throw new Error(out.reason || out.err || "The hub answered " + r.status + ".");
     if (action === "stop-now") $("loop-reason").textContent = "Stopped. Killed: " + (loopLive(out.killed).join(", ") || "nothing") + "." + (out.survived ? " Not ended: " + loopLive(out.survived).join(", ") + "." : "");
@@ -1009,7 +1027,7 @@ async function writePending() {
   if (!p || p.why !== "written") return;
   pending = null; undoText(""); $("undo-btn").hidden = true;
   let r;
-  try { r = await fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: p.n }) }); }
+  try { r = await writing(fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: p.n }) })); }
   catch (e) { showCardReason(p.n, "the hub did not answer"); return; }   // a failed request is the only "did not answer"
   let d = {};
   try {
@@ -1374,7 +1392,7 @@ async function sendRunControl() {
   if (!act || !id || runBusy) return;
   runBusy = true; b.disabled = true;
   try {
-    const r = await fetch(runURLs(id).control, { method: "POST", headers: { "Content-Type": "application/json" }, body: controlBody(act) });
+    const r = await writing(fetch(runURLs(id).control, { method: "POST", headers: { "Content-Type": "application/json" }, body: controlBody(act) }));
     if (id === runId) runReply = runControlReply(act, r.status);
   } catch (e) {
     if (id === runId) runReply = { ok: false, text: "The hub did not answer: " + e.message };
@@ -1497,7 +1515,7 @@ async function answerCard(sid, id, picks) {
   const say = msg => { if (sid === termSid) $("termview-sent").textContent = msg; };
   say("Sending");
   try {
-    const r = await fetch("/api/sessions/card/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, card_id: id, answers: picks }) });
+    const r = await writing(fetch("/api/sessions/card/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, card_id: id, answers: picks }) }));
     if (!r.ok) throw new Error("Not sent: the hub refused the request.");
     const res = await r.json();
     const word = { sent: "Sent as a message from another session", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
@@ -1556,7 +1574,7 @@ $("termview-send").onclick = async () => {
   d.pending = true; $("termview-send").disabled = true;
   say("Sending");
   try {
-    const r = await fetch("/api/sessions/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, text, client_id: d.cid }) });
+    const r = await writing(fetch("/api/sessions/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, text, client_id: d.cid }) }));
     if (!r.ok) throw new Error("Not sent: the hub refused the request.");
     const res = await r.json();
     const word = { sent: "Sent: the session's inbox accepted the message", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";

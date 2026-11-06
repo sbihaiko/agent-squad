@@ -7691,7 +7691,7 @@ $("termview-send").onclick = async () => {
   photoSay(sid, "Sending");
   try {
     const q = "kind=image&sid=" + encodeURIComponent(sid) + "&client_id=" + encodeURIComponent(d.cid) + "&text=" + encodeURIComponent(text);
-    const r = await fetch("/api/sessions/attach?" + q, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: photo.bytes });
+    const r = await writing(fetch("/api/sessions/attach?" + q, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: photo.bytes }));
     if (!r.ok) throw new Error("Not sent: the hub refused the request.");
     const res = await r.json();
     const word = { sent: "Sent: the session's inbox accepted the message and the photo", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
@@ -7712,7 +7712,8 @@ def mobile_photo(page):
                 .replace(MOBILE_SEND, MOBILE_PHOTO_ROW)
                 .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
 
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES)))
+BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -8319,7 +8320,6 @@ class H(BaseHTTPRequestHandler):
         body = json.dumps(out).encode(); self.send_response(400 if "err" in out else 200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 
 SELF = pathlib.Path(__file__).resolve(); LOADED = SELF.stat().st_mtime_ns
-BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
 def _build_fact(path):
     """One source file's build fact as this process loaded it: its short SHA-256 and its mtime (#1298)."""
     p = pathlib.Path(path)
