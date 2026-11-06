@@ -95,9 +95,13 @@ case "${1:-status}" in
     rm -f "$SG_STATE/auto/drain"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"
     record_sha
     date +%s > "$SG_STATE/watchd.started"   # the hub drops an older failed start once a later start ran (#923)
-    python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"run"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
+    python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"supervise"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     for _ in 1 2 3 4 5 6 7 8 9 10; do alive && { echo "watchd started pid=$pid"; exit 0; }; sleep 1; done
     echo "watchd failed to start" >&2; exit 1;;
+  # Logs how the driver ended (#1439): a SIGKILL cannot be trapped, and set -m keeps the driver the group `stop` signals.
+  supervise) set -m; bash "$me" run & d=$!; set +m; trap '' TERM INT HUP
+    wait "$d"; rc=$?; sig=; [ "$rc" -gt 128 ] && sig=" (SIG$(kill -l $((rc - 128)) 2>/dev/null))"
+    printf '%s WATCHD driver %s ended: %s%s\n' "$(date '+%F %T')" "$d" "$rc" "$sig" >> "$L"; exit "$rc";;
   run) LK="$SG_STATE/watchd.lock"; child=
     # One supervisor per state directory (#932). `mkdir` is the claim: two runs that both passed `start`'s `alive` check
     # before either wrote the pid cannot both hold it, and the pid inside says who does. A slot whose pid is not a live
