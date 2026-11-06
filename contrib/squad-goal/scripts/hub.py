@@ -7717,8 +7717,11 @@ MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
 MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="var(--bg)"/><circle cx="96" cy="96" r="52" fill="var(--chart-ok)"/></svg>'
-MOBILE_ASSETS = {"/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
-                 "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
+MOBILE_ASSETS = {"/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml")}
+
+def mobile_sw():
+    # The cache is named for this build, so a new build installs a new cache and drops the old one (#1455).
+    return SW_JS.replace("__BUILD__", str(BOOT)).encode()
 
 def test_log_page(d, lg):
     import html as _h
@@ -8144,6 +8147,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): body, ct = mobile_html(), "text/html; charset=utf-8"
+        elif self.path.split("?", 1)[0] == "/mobile/sw.js": body, ct = mobile_sw(), "text/javascript; charset=utf-8"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login, a.allowed).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
