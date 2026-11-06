@@ -803,22 +803,41 @@ wave_check() {
 # refs_of <clone> <range>: every `Refs #N` in the whole message of each commit of the range, each named once.
 refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' '; }
 
-# commit_refs <clone> <range> (#869): one line per non-RED commit of the range that names an issue. `D <sha> <n>`: the commit
+# is_test_path <path>: 0 when the path is test-only. It mirrors the TDD-red test notion in check-tdd-red.sh (TEST_RE): a path
+# under tests/, a fixtures/ path, conftest.py, pytest.ini, test-*.sh and test_*.py (#1474).
+is_test_path() {
+  case "$1" in tests/*|*/tests/*|fixtures/*|*/fixtures/*|conftest.py|*/conftest.py|pytest.ini|*/pytest.ini) return 0;; esac
+  case "${1##*/}" in test-*.sh|test_*.py) return 0;; esac
+  return 1
+}
+
+# red_test_only <clone> <sha> (#1474): 0 when every path the commit changes is test-only. A `TDD RED` commit of that kind is a red
+# test alone, a test and no fix (#533), and delivers nothing. A `TDD RED` commit that also changes code is a squashed red and fix.
+red_test_only() {
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    is_test_path "$f" || return 1
+  done <<< "$($G -C "$1" diff-tree --no-commit-id --name-only -r --root "$2" 2>/dev/null)"
+  return 0
+}
+
+# commit_refs <clone> <range> (#869, #1474): one line per commit of the range that names an issue. `D <sha> <n>`: the commit
 # names exactly one issue (each `Refs #N` counted once), so it delivers that issue. `A <sha> <n> ...`: it names several, and a
 # cluster child that wrote one commit for its block did not say which issue the commit fixed, so it delivers none of them.
+# A `TDD RED` commit delivers by the same rule, unless it changes test-only paths (red_test_only): a squashed red and fix is a
+# delivery (#1474).
 commit_refs() {
-  $G -C "$1" log --format='%H%x1f%B%x1e' "$2" 2>/dev/null | awk -v RS='\036' -F'\037' '
-    NF > 1 && $2 !~ /^\n*TDD RED/ {
-      sha = $1; sub(/^\n+/, "", sha)
-      k = 0; split("", seen); s = $2
-      while (match(s, /Refs #[0-9]+/)) {
-        n = substr(s, RSTART + 6, RLENGTH - 6)
-        if (!(n in seen)) { seen[n] = 1; list[++k] = n }
-        s = substr(s, RSTART + RLENGTH)
-      }
-      if (k == 1) print "D " sha " " list[1]
-      else if (k > 1) { out = "A " sha; for (i = 1; i <= k; i++) out = out " " list[i]; print out }
-    }'
+  local c msg first refs list count
+  for c in $($G -C "$1" rev-list "$2" 2>/dev/null); do
+    msg=$($G -C "$1" log -1 --format=%B "$c" 2>/dev/null)
+    first=$(printf '%s\n' "$msg" | awk 'NF { print; exit }')
+    case "$first" in "TDD RED"*) red_test_only "$1" "$c" && continue;; esac
+    list=$(printf '%s\n' "$msg" | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | awk '!seen[$0]++' | tr '\n' ' ')
+    count=$(printf '%s' "$list" | wc -w | tr -d ' ')
+    if [ "$count" = 1 ]; then echo "D $c ${list% }"
+    elif [ "$count" -gt 1 ]; then echo "A $c ${list% }"; fi
+  done
 }
 
 # netfail <what> <stderr>: a fetch or a push that failed on the network (DNS, connect, timeout, a 5xx answer, a TLS
@@ -1045,7 +1064,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
   # `dropped`: the issues whose child the tip check removed from the tree this landing pushes (#1416). Only this pass sets it,
   # so a refusal an earlier pass wrote never excludes an issue. wave_check adds to it; a repeat after a refused push keeps it.
-  local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped=""
+  local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped="" rfs="" nontest=""
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
@@ -1141,6 +1160,15 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     anyref=$(sc log --format=%B "origin/$base..HEAD" 2>/dev/null | /usr/bin/grep -cE 'Refs #[0-9]+')   # a RED commit's Refs counts here (#1003)
     issues=$(printf '%s\n' "$rows" | awk '$1 == "D" { print $3 }' | sort -un | tr '\n' ' ')
     amb=$(printf '%s\n' "$rows" | awk '$1 == "A" { for (i = 3; i <= NF; i++) print $i }' | sort -un | tr '\n' ' ')
+    # (#1474) The one issue a wave names closes when its only Refs sit on a test-only RED commit and a fix commit names none: the
+    # wave changes code, and its single `Refs #N` is N. A wave that changes test files only delivers nothing (#533), and so does a
+    # wave that names two issues (#869).
+    rfs=$(refs_of "$S" "origin/$base..HEAD")
+    nontest=$(sc diff --name-only "origin/$base" HEAD 2>/dev/null | while IFS= read -r f; do is_test_path "$f" || { echo "$f"; break; }; done)
+    if [ -z "$issues" ] && [ -z "$amb" ] && [ -n "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
+      issues=$(printf '%s' "$rfs" | tr -d ' ')
+      echo "WAVE-NOTE $w: the only Refs of the wave name #$issues, on a test-only RED commit, and its fix commit names none; the landing closes #$issues"
+    fi
     # ONE push of the wave's tip to the base: one ref update, one CI run, and a push git refuses unless it is a fast-forward,
     # so no merge commit can land. Nothing else is pushed -- no child branch, and the wave branch goes once its work is in.
     out=$(sc push -q origin "HEAD:refs/heads/$base" 2>&1) && break
@@ -1222,10 +1250,21 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       echo "WAVE-NOTE $w: no commit names an issue (no Refs), and no issue of run $run has an entered child it did not requeue, so the landing closes nothing"
     fi
   fi
+  # (#1474) A wave whose commits name an issue and that closes none says why, in place of "no Refs": the Refs of a test-only RED
+  # commit deliver nothing (#533), a commit that names several issues closes none of them (#869), and the rest are Refs outside
+  # the dispatch set or dropped by the tip check.
+  local reason=""
+  if [ -z "$issues" ] && [ "${anyref:-0}" -gt 0 ]; then
+    if [ -n "$amb" ]; then reason="a commit names several issues, so it closes none of them"
+    elif [ -z "$nontest" ]; then reason="the wave changes test files only, so its Refs deliver nothing (#533)"
+    else reason="the Refs of the wave name no issue it delivers"; fi
+  fi
   deliver "$run" "$w" "$sha" "$issues" "$tipobl" || return 1
   [ -n "$fb" ] && for n in $issues; do rm -f "$SG_STATE/auto/disp-$n"; done
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
-  echo "WAVE $w $sha landed in $base (${named:-no issue named: the wave carries no Refs})"
+  if [ -n "$named" ]; then echo "WAVE $w $sha landed in $base ($named)"
+  elif [ -n "$reason" ]; then echo "WAVE $w $sha landed in $base (no issue closed: $reason)"
+  else echo "WAVE $w $sha landed in $base (no issue named: the wave carries no Refs)"; fi
   return 0
 }
 
