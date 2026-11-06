@@ -22,16 +22,17 @@
 # clock never restarts. Past the deadline every descendant is stopped, TERM then KILL. A defect a check reported before the
 # deadline is a fail the bound never turns into a pass (#1170); an attempt that reported nothing is recorded bounded.
 d=$(cd "$(dirname "$0")" && pwd)
-# ci_job_names <workflow file>: the check-run name of every job under jobs:, one per line. The reader stays inside the
-# jobs: block (a line at column zero ends it), so a step's `name:`, a `with: name:` or any other four-space `name:`
-# outside a job never becomes a check run whose absence would hold every tip forever (ADR-0164, #1322). Only a job that
-# names itself is read: the shard names are read apart, from the matrix the same file carries. A file that names no job
-# answers nothing, and its caller reads that as pending, never as a vacuous pass.
-# A job gated on base_ref runs only on a pull request into that branch (the complete tier on stg-to-main, #1324), so the
-# dev-to-stg pass never waits on it: the gate may stand on any line of the job.
+# ci_job_names <workflow file> [gated]: the check-run name of every job under jobs:, one per line; with `gated`, only the
+# jobs whose `if:` names base_ref. The reader stays inside the jobs: block (a line at column zero ends it), so a step's
+# `name:`, a `with: name:` or any other four-space `name:` outside a job never becomes a check run whose absence would hold
+# every tip forever (ADR-0164, #1322). Only a job that names itself is read: the shard names are read apart, from the matrix
+# the same file carries. A file that names no job answers nothing, and its caller reads that as pending, never as a vacuous
+# pass. A job gated on base_ref runs only on a pull request into that branch, so it never runs on the dev-to-stg pull
+# request the promotion reads (#1461): the caller refuses the promotion and names it, never recording a pass over the jobs
+# that did run.
 ci_job_names() {
-  awk '
-    function flush() { if (cur != "" && !gated) print cur; cur = ""; gated = 0 }
+  awk -v want="${2:-}" '
+    function flush() { if (cur != "" && (want != "gated" || gated)) print cur; cur = ""; gated = 0 }
     /^jobs:[[:space:]]*$/ { injobs = 1; next }
     /^[^[:space:]#]/ { if (injobs) flush(); injobs = 0 }
     !injobs { next }
@@ -53,6 +54,8 @@ g() { /usr/bin/git -C "$tree" "$@"; }
 . "$d/caps.sh"
 mark() {  # <tip> <reason>: one marker and one line per tip
   echo "$1 $2" >> "$marks"; tail -n 50 "$marks" > "$marks.tmp" && mv "$marks.tmp" "$marks"
+  echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
+refused() {  # <tip> <reason>: logged and answered, never a marker: a transient is unproven, so the next pass takes the same tip (#1490)
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
 if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
@@ -102,11 +105,12 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # defected <log>: a check already reported a defect before the deadline, so the bound never turns it into a pass.
   defected() { /usr/bin/grep -qE '^(FAILED|ERROR) |errors? during collection|^[^ ]+:[0-9]+: error: |^[A-Z][A-Z]*[0-9]+ ' "$1"; }
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
-  # ADR-0164 (#1051, #1062): the check job of ci.yml on the tip, plus every full-proof shard that file names, is the full
-  # pass when all are green. The shard job is withdrawn while #1062 is open, so the names come from the file and a restored
-  # matrix is read with no second change. Green writes the full line and the squad/full-proof status, then promotes with no
-  # suite; a red job holds the tip and names it; a job that is missing, running or timed out holds nothing, and the proof
-  # below answers as before.
+  # ADR-0164 (#1051, #1062, #1461): every job of ci.yml on the tip, and every full-proof shard that file names, is the full
+  # pass when all are green. Both tiers run on the dev-to-stg pull request, so the complete tier is one of the checks this
+  # pass reads; a job the file gates to another pull request is refused by name, never skipped. The shard job is withdrawn
+  # while #1062 is open, so the names come from the file and a restored matrix is read with no second change. Green writes
+  # the full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job
+  # that is missing, running or timed out holds nothing, and the proof below answers as before.
   # SG_CI_WORKFLOW names the workflow file the shard names are read from: the repository's own by default, a fixture in a test.
   ci_file=${SG_CI_WORKFLOW:-$d/../../../.github/workflows/ci.yml}
   shard_list=$(/usr/bin/grep -o 'shard: \[[0-9, ]*\]' "$ci_file" 2>/dev/null | tr -dc '0-9 ')
@@ -118,9 +122,17 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     [ "$st" = success ] || { echo "the commit status $ctx did not read back as success (${st:-missing})"; return 1; }
   }
   # The check names are read here, in this shell, not inside ci_verdict's command substitution: the record below names
-  # the same list the verdict demanded.
+  # the same list the verdict demanded. Every job of the file is a check the dev tip waits on, the complete tier included
+  # (#1461). A job the file gates to another pull request never runs on this one, so the tip can never prove it: the pass
+  # refuses by name instead of reading the rest as a full pass.
   ci_names=()
   while IFS= read -r n; do [ -n "$n" ] && ci_names+=("$n"); done < <(ci_job_names "$ci_file")
+  ci_gated=()
+  while IFS= read -r n; do [ -n "$n" ] && ci_gated+=("$n"); done < <(ci_job_names "$ci_file" gated)
+  if [ "${#ci_gated[@]}" -gt 0 ]; then
+    gated_list=$(printf '%s, ' "${ci_gated[@]}"); gated_list=${gated_list%, }
+    mark "$tip" "not promoted: the workflow gates $gated_list to another pull request, so the dev tip never proves it"; exit 1
+  fi
   ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
     local cr n st c v=pass sh names=()
     [ "${#ci_names[@]}" -gt 0 ] || { echo pending; return; }   # a workflow that names no job proves nothing
@@ -142,7 +154,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
       # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322).
       ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
-      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, the CI shards and the fast tier: $ci_jobs" || echo "CI fast tier: $ci_jobs (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
+      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, the CI shards and the CI checks: $ci_jobs" || echo "the CI checks: $ci_jobs (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
       # #1495: the CI proof is read on the tip promote-stg.sh promotes, which may be a later one than $tip when a landing moved
       # dev while the pass waited for the gate lock. A refusal is keyed to the tip it evaluated; a tip whose checks have not
       # reported (exit 75) is a wait with no marker, so a later pass retries.
@@ -152,8 +164,10 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
         echo "$(date -u +%FT%TZ) promote-pass: $etip waiting for CI: the check has not reported on it yet" >> "$log"
         echo "promote-pass: $etip waiting for CI"; exit 0
       fi
+      # (#1490) promote-stg.sh refused by the gate cap (try mode, exit 73) is a wait, never a verdict on the tip: no marker.
+      [ $rc = 73 ] && { refused "$tip" "not proven: the gate cap is full, retried later"; exit 0; }
       [ $rc = 0 ] || { mark "$etip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-      mark "$etip" "promoted: the CI shards carried the full pass"; exit 0;;
+      mark "$etip" "promoted: the CI checks carried the full pass"; exit 0;;
     fail*) mark "$tip" "not promoted: CI ${v#fail } is red"; exit 1;;
   esac
   # (#1192) A tip whose CI has not answered yet is measured by waiting, never by a local suite. The suite saturates the machine
@@ -173,6 +187,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   dleft=$(( due - $(date +%s) )); [ "$dleft" -lt 1 ] && dleft=1
   if bounded "$dleft" bash "$d/delta-pass.sh" > "$state/delta-pass.log" 2>&1; then
     o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
+    { [ $rc = 75 ] || [ $rc = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
     [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
     mark "$tip" "promoted: the delta carried the full pass ($state/delta-pass.log)"; exit 0
   fi
@@ -221,6 +236,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     left=$(( due - $(date +%s) )); [ "$left" -lt 1 ] && left=1
     if bounded "$left" bash "$d/delta-pass.sh" > "$state/delta-pass-over-bound.log" 2>&1; then
       o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rcd=$?
+      { [ $rcd = 75 ] || [ $rcd = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
       [ $rcd = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$tip" "promoted: the full suite was killed by the ${bound}s bound, the delta carried the tip ($state/delta-pass-over-bound.log)"; exit 0
     fi
@@ -233,12 +249,17 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       && mv "$state/promote-indeterminate.$$" "$state/promote-indeterminate"
     echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${bound}s bound and the delta could not carry it" >> "$log"
     o=$(SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" 2>&1); rcb=$?
+    { [ $rcb = 75 ] || [ $rcb = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
     [ $rcb = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
     printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$tip" "$bound" "$gap" >> "$state/promote-bound"
     mark "$tip" "promoted: bound-ended: the ${bound}s bound ended the full suite and the delta could not carry the tip; not covered: $gap"; exit 0
   fi
   if [ "$rc" != 0 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+    # (#1490) A full machine cap is a wait, not a red of the tip: the suite never ran, so no fail line and no marker.
+    if [ "$rc" = 73 ] || { /usr/bin/grep -q 'caps: caps.gates is full' "$out" && /usr/bin/grep -q 'skipped, not queued (try)' "$out"; }; then
+      refused "$tip" "not proven: the gate cap is full, retried later"; exit 0
+    fi
     read -r peak mean < <(awk '{ if ($1 + 0 > p) p = $1 + 0; s += $1 + 0; n++ } END { printf "%d %.2f", p, (n ? s / n : 0) }' "$samples" 2>/dev/null)
     peak=${peak:-0}; mean=${mean:-0}
     # The sample is a fact about the run, never a verdict: the suite is itself the load, so a threshold on this number cannot
@@ -249,6 +270,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   bash "$d/gate.sh" --status full pass "$tip"
   why=$(full_status "$tip" "full suite, both modes, local") || { mark "$tip" "not promoted: $why"; exit 1; }
   o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
+  { [ $rc = 75 ] || [ $rc = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
   [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
   mark "$tip" "promoted: the local full suite answered for the tip"; exit 0
 fi
@@ -259,8 +281,8 @@ g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 [ "$(g rev-parse origin/dev)" = "$tip" ] || exit 0   # dev moved under the read: a later pass takes the new tip
 g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg
-# ADR-0164 (#1051): the dev-to-stg pull request starts the four shards on the tip, so promote-stg.sh opens it before the quiet
-# window passes and the shards run while it does. Best effort: a failure there leaves the proof below to answer.
+# ADR-0164 (#1051, #1461): the dev-to-stg pull request starts both CI tiers on the tip, so promote-stg.sh opens it before the
+# quiet window passes and the checks run while it does. Best effort: a failure there leaves the proof below to answer.
 SG_PROMOTE_OPEN_ONLY=1 bash "$d/promote-stg.sh" >/dev/null 2>&1
 last=$(awk -F'\t' '$1 > m {m = $1} END {print m + 0}' "$state/landed.tsv" 2>/dev/null); last=${last:-0}
 # ADR-0164: the guards below protect a local suite from a loaded box. When SG_PROMOTE_PROOF=ci names the dev-to-stg check as

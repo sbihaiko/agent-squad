@@ -38,7 +38,7 @@ EOF
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The stub suite logs where it ran, the HEAD it ran at, whether the proof lock was held and the landing gate lock was free
 # around it (ADR-0145 rule 3: the proof runs in its own tree under its own lock, and no wave waits on it); $T/suite-rc is its exit.
-printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/full-proof" ] && echo held || echo free)-$([ -d "$SG_STATE/locks/gate" ] && echo gateheld || echo gatefree) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\ns=$(cat "%s/suite-sleep" 2>/dev/null); [ -n "$s" ] && sleep "$s"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" "$T" > "$T/suite"
+printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/full-proof" ] && echo held || echo free)-$([ -d "$SG_STATE/locks/gate" ] && echo gateheld || echo gatefree) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\ns=$(cat "%s/suite-sleep" 2>/dev/null); [ -n "$s" ] && sleep "$s"\n[ -f "%s/suite-out" ] && cat "%s/suite-out"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" "$T" "$T" "$T" "$T" > "$T/suite"
 chmod +x "$T/suite"; export SG_PROMOTE_SUITE="$T/suite"
 runs() { cat "$T/suite.log" 2>/dev/null | wc -l | tr -d " "; }
 lines() { cat "$SG_STATE/promote.log" 2>/dev/null | /usr/bin/grep -c "promote-pass: $1"; }
@@ -237,6 +237,7 @@ case "$1" in
       m="git -C $CHECKS_DIR/w -c user.email=a@b -c user.name=t"
       $m fetch -q origin && $m checkout -q -B dev origin/dev && $m commit -q --allow-empty -m moved-during-proof && $m push -q origin dev
     fi;;
+  *pulls?state=open*) [ -e "$CHECKS_DIR/read-fail" ] && exit 1; echo '{}';;   # (#1490) a transient read failure while the file stands
   *) echo '{}';;
 esac
 EOF
@@ -263,7 +264,7 @@ shards "$tg" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc
 [ "$(runs)" = "$n" ] && ok "four green shards run no suite" || ko "green shards ran the suite ($(runs) runs, was $n)"
 IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
 [ "$kind $res $sha" = "full pass $tg" ] && ok "four green shards write the full pass line for the tip" || ko "shard full line: '$kind $res $sha'"
-/usr/bin/grep -q "promote-pass: $tg promoted: the CI shards carried the full pass" "$SG_STATE/promote.log" && ok "the promotion record names the CI shards as the proof" \
+/usr/bin/grep -q "promote-pass: $tg promoted: the CI checks carried the full pass" "$SG_STATE/promote.log" && ok "the promotion record names the CI checks as the proof" \
   || ko "shard record: $(/usr/bin/grep "$tg" "$SG_STATE/promote.log")"
 /usr/bin/grep -q -- "-X POST repos/x/emu/statuses/$tg .*context=squad/full-proof .*CI shards" "$T/gh.log" && ok "the CI route writes the squad/full-proof status, naming the CI shards" \
   || ko "CI route wrote no full-proof status: $(/usr/bin/grep "statuses/$tg" "$T/gh.log")"
@@ -305,9 +306,33 @@ adv dev check-alone; ta=$(tip dev); n=$(runs)
 shards "$ta" none none none none; SG_CI_WORKFLOW="$T/ci-no-shards.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$ta" ] && ok "with no shard named, a green check job promotes the tip (#1062)" \
   || ko "check alone: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
-/usr/bin/grep -q "promote-pass: $ta promoted: the CI shards carried the full pass" "$SG_STATE/promote.log" && ok "the check-alone promotion records its proof" \
+/usr/bin/grep -q "promote-pass: $ta promoted: the CI checks carried the full pass" "$SG_STATE/promote.log" && ok "the check-alone promotion records its proof" \
   || ko "check-alone record: $(/usr/bin/grep "$ta" "$SG_STATE/promote.log")"
 export SG_CI_WORKFLOW="$T/ci-shards.yml"
+
+# ADR-0164 (#1461): the complete tier is part of the CI proof, because it runs on the pull request the pass reads. A red
+# complete-tier job holds the tip and names it; seven green checks, the complete tier included, promote with no suite, and
+# the record names every job it read.
+printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n  full-xdist:\n    name: full-xdist\n  full-serial:\n    name: full-serial\n  fast-battery-311:\n    name: fast-battery-311\n  gui-e2e:\n    name: gui-e2e\n' > "$T/ci-complete.yml"
+tierchecks() {  # <sha> <conclusion of full-serial>: every job green except that one
+  local s=$1 c=$2 j out=""
+  for j in ruff mypy fast-battery full-xdist fast-battery-311 gui-e2e; do
+    out="$out{\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"success\"},"
+  done
+  echo "{\"check_runs\":[${out}{\"name\":\"full-serial\",\"status\":\"completed\",\"conclusion\":\"$c\"}]}" > "$T/checks-$s"
+}
+adv dev complete-red; tcr=$(tip dev); before=$(tip stg); n=$(runs)
+tierchecks "$tcr" failure; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red complete-tier job holds the tip and runs no suite" \
+  || ko "red complete tier: rc $rc, stg $(tip stg), runs $(runs) was $n"
+/usr/bin/grep "promote-pass: $tcr" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI full-serial is red" && ok "the refusal names the red complete-tier job" \
+  || ko "red complete-tier line: $(/usr/bin/grep "$tcr" "$SG_STATE/promote.log")"
+adv dev complete-green; tcn=$(tip dev); n=$(runs)
+tierchecks "$tcn" success; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tcn" ] && [ "$(runs)" = "$n" ] && ok "seven green checks, the complete tier included, promote the tip" \
+  || ko "green complete tier: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
+/usr/bin/grep -q -- "description=the CI checks: ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e " "$T/gh.log" \
+  && ok "the record names every job of both tiers" || ko "record: $(/usr/bin/grep "statuses/$tcn" "$T/gh.log")"
 
 # ADR-0164: when the proof is the dev-to-stg check (SG_PROMOTE_PROOF=ci), no local suite runs, so the guards that protect a
 # local suite from a loaded box refuse nothing: the load average, the free memory and a nightly that owns the machine. A green
@@ -373,11 +398,21 @@ out=$(bash "$d/promote-pass.sh" --ci-job-names "$T/ci-step-names.yml" 2>&1)
 [ "$out" = $'ruff\nmypy\nfast-battery' ] && ok "the check names come from the job block, never a step, with: key or a name: outside it (#1322)" \
   || ko "job names: '$out'"
 
-# #1324: a job gated to a stg-to-main pull request is not a check a dev-to-stg tip waits on, whichever line of the job carries its gate.
+# #1461: every job of the workflow is a check the dev tip waits on, the complete tier included, whichever line of the job
+# carries its gate. A job gated to another pull request never runs on the dev-to-stg one, so the pass refuses the promotion
+# and names it, rather than recording a full pass over the jobs that did run.
 printf 'jobs:\n  ruff:\n    name: ruff\n  full-xdist:\n    if: github.base_ref == '"'"'main'"'"'\n    name: full-xdist\n  full-serial:\n    name: full-serial\n    if: github.base_ref == '"'"'main'"'"'\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n' > "$T/ci-tiers.yml"
 out=$(bash "$d/promote-pass.sh" --ci-job-names "$T/ci-tiers.yml" 2>&1)
-[ "$out" = $'ruff\nmypy\nfast-battery' ] && ok "a job gated to stg-to-main is not a check the dev-to-stg tip waits on (#1324)" \
+[ "$out" = $'ruff\nfull-xdist\nfull-serial\nmypy\nfast-battery' ] && ok "the check names are every job of the workflow, a gated one included (#1461)" \
   || ko "tier job names: '$out'"
+adv dev gated-job; tgj=$(tip dev); before=$(tip stg); n=$(runs)
+SG_CI_WORKFLOW="$T/ci-tiers.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] \
+  && ok "a job gated to another pull request refuses the promotion and runs no suite" \
+  || ko "gated job: rc $rc, stg $(tip stg), runs $(runs) was $n"
+/usr/bin/grep "promote-pass: $tgj" "$SG_STATE/promote.log" | /usr/bin/grep -q "gates full-xdist, full-serial to another pull request" \
+  && ok "the refusal names the jobs the dev tip could never prove" \
+  || ko "gated job line: $(/usr/bin/grep "$tgj" "$SG_STATE/promote.log")"
 
 # #1322: the promotion record names the jobs the pass read, so a renamed job set is recorded as it is, never a stale literal.
 printf 'jobs:\n  lint:\n    name: lint\n  types:\n    name: types\n  battery:\n    name: battery\n' > "$T/ci-renamed.yml"
@@ -386,7 +421,7 @@ CHECK_JOBS="lint types battery" shards "$tx" none none none none
 SG_CI_WORKFLOW="$T/ci-renamed.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tx" ] && ok "a renamed fast tier promotes on its own check names (#1322)" \
   || ko "renamed tier: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
-/usr/bin/grep -q -- "description=CI fast tier: lint, types, battery " "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
+/usr/bin/grep -q -- "description=the CI checks: lint, types, battery " "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
   || ko "status description: $(/usr/bin/grep "statuses/$tx" "$T/gh.log")"
 
 # A tip inside the quiet window opens the dev-to-stg pull request, so its four shards start before the proof reads them.
@@ -559,6 +594,42 @@ IFS=$'\t' read -r _ kind res dsha < "$SG_STATE/gate-status-full" 2>/dev/null
 [ ! -e "$SG_STATE/promote-indeterminate" ] && [ ! -e "$SG_STATE/promote-bound" ] && ok "a bounded attempt with a reported defect writes no bound marker" \
   || ko "a red the bound ended was marked bounded"
 pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the defect suite's tree survived the deadline" || ok "the defect suite's tree is stopped at the deadline"
+
+# (#1490) A transient failure is unproven, never a refusal: the pass writes no tip marker, and the next pass promotes the tip.
+# (a) the open dev -> stg pull request cannot be read. The read fails for the whole of this pass (the open-only call reads it
+# too), and the next pass reads it again.
+adv dev read-fail; tr=$(tip dev); rm -f "$T/suite-rc" "$T/suite-out" "$T/checks-"* "$T/read-fail"; : > "$T/read-fail"
+SG_GHREAD="$T/bin/ghread" pass; rc=$?
+! /usr/bin/grep -q "^$tr " "$SG_STATE/promote-pass.tips" 2>/dev/null && [ "$(tip stg)" != "$tr" ] \
+  && ok "a pull request that cannot be read is pending: no tip marker, stg not moved (rc $rc)" \
+  || ko "read failure marked the tip: rc $rc, tips '$(cat "$SG_STATE/promote-pass.tips" 2>/dev/null)', stg $(tip stg)"
+rm -f "$T/read-fail"; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ "$(tip stg)" = "$tr" ] && ok "the next pass promotes the tip once the pull request reads (rc $rc)" \
+  || ko "retry after read failure: rc $rc, stg $(tip stg), dev $tr, out '$(cat "$T/out")'"
+# (b) the suite waits on the full machine's gate slots: exit 73 and the cap line name the wait, so the tip is retried, not failed.
+adv dev cap-full; tf=$(tip dev); sf=$(tip stg); rm -f "$T/suite-rc" "$T"/checks-*
+printf 'caps: caps.gates is full (2 slots), held by run-9: gate skipped, not queued (try)\n' > "$T/suite-out"; echo 73 > "$T/suite-rc"
+pass; rc=$?
+! /usr/bin/grep -q "^$tf " "$SG_STATE/promote-pass.tips" 2>/dev/null && [ "$(tip stg)" = "$sf" ] \
+  && ! /usr/bin/grep -q "^$tf full fail" "$SG_STATE/gate-status-full" 2>/dev/null \
+  && ok "a full gate cap is not proven: no tip marker, no fail line (rc $rc)" \
+  || ko "full cap marked the tip: rc $rc, tips '$(cat "$SG_STATE/promote-pass.tips" 2>/dev/null)', full '$(cat "$SG_STATE/gate-status-full" 2>/dev/null)'"
+rm -f "$T/suite-out" "$T/suite-rc"; pass; rc=$?
+[ "$(tip stg)" = "$tf" ] && ok "the next pass proves and promotes the tip once the cap is free (rc $rc)" \
+  || ko "retry after full cap: rc $rc, stg $(tip stg), dev $tf, out '$(cat "$T/out")'"
+# (c) promote-stg.sh itself is refused by the gate cap: it re-execs under gate.sh in try mode and exits 73 with the cap line. The
+# pass treats that as a wait, as it treats 75: no tip marker, stg not moved, and the next pass promotes the same tip.
+rm -rf "$T/scripts"; cp -R "$d" "$T/scripts"
+printf '#!/bin/bash\necho "caps: caps.gates is full (2 slots), held by run-9: gate skipped, not queued (try)"\nexit 73\n' > "$T/scripts/promote-stg.sh"
+rm -f "$T/suite-rc" "$T/suite-out" "$T/checks-"*
+adv dev stg-cap; tc=$(tip dev); sc=$(tip stg)
+bash "$T/scripts/promote-pass.sh" > "$T/out" 2>&1; rc=$?
+! /usr/bin/grep -q "^$tc " "$SG_STATE/promote-pass.tips" 2>/dev/null && [ "$(tip stg)" = "$sc" ] \
+  && ok "a promote-stg.sh refused by the gate cap writes no tip marker and does not move stg (rc $rc)" \
+  || ko "promote-stg cap marked the tip: rc $rc, tips '$(cat "$SG_STATE/promote-pass.tips" 2>/dev/null)', stg $(tip stg), out '$(cat "$T/out")'"
+pass; rc=$?
+[ "$(tip stg)" = "$tc" ] && ok "the next pass promotes the same tip once the cap is free (rc $rc)" \
+  || ko "retry after promote-stg cap: rc $rc, stg $(tip stg), dev $tc, out '$(cat "$T/out")'"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -KILL -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started

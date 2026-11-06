@@ -8,12 +8,14 @@ d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; gp=; sup=
 trap 'bash "$T/watchd.sh" stop >/dev/null 2>&1; kill -9 "$sup" "$gp" 2>/dev/null; rm -rf "$T"' EXIT
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME"
+. "$d/watchd-fixture.sh"   # the process reader a fake env.sh needs (#1514)
+reader=$(fake_reader "$(cd "$d/../../.." && pwd)")
 cp "$d/watchd.sh" "$T/watchd.sh"
-python3 - "$T/watchd.sh" "$SG_STATE" "$d" <<'PY'
+python3 - "$T/watchd.sh" "$SG_STATE" "$d" "$reader" <<'PY'
 import pathlib,sys
-f,st,d=sys.argv[1],sys.argv[2],sys.argv[3]
+f,st,d,reader=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
 p=pathlib.Path(f); t=p.read_text()
-t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
+t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE=; export SG_STATE SG_PROFILE; %s'%(st,reader),1)
 t=t.replace('. "$(dirname "$0")/ghcall.sh"   # the one seam the start\'s loop-bug read goes through (ADR-0146)',
             'gh_aggregate() { [ -e "$SG_STATE/gh-fail" ] && return 1; cat "$SG_STATE/issues.json"; }')
 t=t.replace('"$(dirname "$me")/watch.sh"','"%s/watch.sh"'%d)
@@ -70,6 +72,29 @@ bad="$T/badsq"; mkdir -p "$bad/squad"; : > "$bad/squad/__init__.py"; printf 'X =
 out=$(SG_SQUAD="$bad" bash "$T/watchd.sh" start 2>&1); rc=$?
 [ "$rc" -ne 0 ] && [ ! -e "$SG_STATE/watchd.pid" ] && ok "a SG_SQUAD without free_runs refuses the start" || ko "a SG_SQUAD without free_runs did not refuse (rc=$rc)"
 case "$out" in *"claude plugin uninstall agent-squad@agent-squad && claude plugin install agent-squad@agent-squad"*) ok "the refusal carries the reinstall command";; *) ko "the refusal lacks the reinstall command: $out";; esac
+
+# 7. The fake install the watchd suites start from carries the free_runs the real package carries (#1514): the start check
+# reads squad.caps.free_runs of the plugin, so a stub with another signature is a guess that drifts from what it mirrors.
+fake_squad "$T/fakesq"
+# Each probe reads the module it claims to read: it runs from / and refuses the user site, so the cwd cannot shadow the
+# tree, and it prints the module's own path, so a real squad that site-packages hold cannot stand in for the fake.
+sigprobe() { ( cd / && PYTHONPATH="$1" python3 -s -c 'import inspect,os,squad.caps as C;print(os.path.realpath(C.__file__));print(inspect.signature(C.free_runs))' ); }
+realroot=$(cd "$d/../../.." && pwd -P); fakeroot=$(cd "$T/fakesq" && pwd -P)
+real=$(sigprobe "$realroot"); fake=$(sigprobe "$fakeroot")
+real_file=$(printf '%s\n' "$real" | sed -n 1p); fake_file=$(printf '%s\n' "$fake" | sed -n 1p)
+real_sig=$(printf '%s\n' "$real" | sed -n 2p); fake_sig=$(printf '%s\n' "$fake" | sed -n 2p)
+case "$real_file" in "$realroot"/squad/caps.py) ok "the real probe reads the repository's squad.caps";; *) ko "the real probe read $real_file";; esac
+case "$fake_file" in "$fakeroot"/squad/caps.py) ok "the fake probe reads the fake install's squad.caps";; *) ko "the fake probe read $fake_file";; esac
+[ "$real_sig" = "$fake_sig" ] && ok "the fake install carries the real free_runs signature" || ko "the fake install carries $fake_sig, the real one is $real_sig"
+
+# 8. The fake is derived from the package it mirrors, never a hand-kept guess (#1514): a shim package whose free_runs has a
+# signature of its own yields a fake that carries that signature, so a change to squad/caps.py reaches every suite that
+# stands a fake install without an edit here.
+shim=$T/shimrepo; mkdir -p "$shim/squad"; : > "$shim/squad/__init__.py"
+printf 'def free_runs(c, active_runs, root=".", tag=None): return 0\n' > "$shim/squad/caps.py"
+fake_squad "$T/derived" "$shim"
+derived_sig=$(sigprobe "$T/derived" | sed -n 2p); shim_sig=$(sigprobe "$shim" | sed -n 2p)
+[ "$derived_sig" = "$shim_sig" ] && ok "the fake derives free_runs from the package it mirrors" || ko "the fake carries $derived_sig, the shim carries $shim_sig"
 
 [ "$fail" = 0 ] && echo "all cases passed" || echo "FAILURES"
 exit "$fail"

@@ -487,6 +487,7 @@ def test_try_mode_skips_at_once_with_one_line_naming_the_ceiling_and_its_holder(
     assert len(lines) == 1 and "caps.reviews" in lines[0] and "first" in lines[0] and "skipped" in lines[0]
 
 
+@pytest.mark.heavy     # a wait that runs out its 1 s bound, plus the steps around it (#1511)
 def test_a_step_that_waits_logs_one_line_and_expires_with_exit_75(tmp_path):
     for i in range(4):
         cli(tmp_path, "take", "reviews", f"filler-{i}", "--pid", str(os.getpid()))

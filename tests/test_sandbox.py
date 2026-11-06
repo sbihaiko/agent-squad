@@ -194,6 +194,7 @@ def test_a_migrate_with_no_path_names_the_live_file_as_its_reason(tmp_path):
     assert reason and str((home / ".claude" / "skills").resolve()) in reason, reason
 
 
+@pytest.mark.heavy     # a git repository, a gate pass and its log: over 1 s whatever the reader costs (#1511)
 def test_a_child_can_read_the_fast_gate_result_without_naming_the_state_dir(tmp_path):
     """#945: the gate kept its only evidence in SG_STATE, and the wall denies that name to the child that ran the gate, so
     the child could not verify its own gate. With no SG_FAST_LOG_DIR set, the gate now prints its verdict and names a log in

@@ -98,8 +98,17 @@ printf '%s\t%s\t1\n' "$(date +%s)" "$tb" > "$SG_STATE/promote-indeterminate"
 rm -f "$SG_STATE/gate-status-full" "$SG_STATE/gate-status-delta"
 SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out-bound-red" 2>&1; rc=$?
 out=$(cat "$T/out-bound-red")
-[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI check on the dev tip is red"*) ok "bound proof: a red check on the tip refuses the merge";; *) ko "bound proof red: out '$out'";; esac || ko "bound proof red: rc $rc, stg $(tip stg), out '$out'"
+[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI check on the dev tip is red"*"check (3.11) failure"*) ok "bound proof: a red check on the tip refuses the merge by name";; *) ko "bound proof red: out '$out'";; esac || ko "bound proof red: rc $rc, stg $(tip stg), out '$out'"
 rm -f "$SG_STATE/promote-indeterminate"
+# (#1517) A cancelled or timed-out check is an unfinished proof (ADR-0164): it holds nothing, as a running or absent check does.
+for c in cancelled timed_out; do
+  adv dev bound-$c; tb=$(tip dev); printf '{"check_runs":[{"id":1,"name":"full-serial","status":"completed","conclusion":"%s"}]}' "$c" > "$T/checks.json"
+  printf '%s\t%s\t1\n' "$(date +%s)" "$tb" > "$SG_STATE/promote-indeterminate"
+  rm -f "$SG_STATE/gate-status-full" "$SG_STATE/gate-status-delta" "$T/pr"
+  SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out-bound-$c" 2>&1; rc=$?
+  [ $rc = 0 ] && [ "$(tip stg)" = "$tb" ] && ok "bound proof: a $c check is an unfinished proof and promotes" || ko "bound proof $c: rc $rc, stg $(tip stg), out '$(cat "$T/out-bound-$c")'"
+  rm -f "$SG_STATE/promote-indeterminate"
+done
 
 # The local proof: the promotion gate's own status line, and nothing else.
 export SG_PROMOTE_PROOF=local

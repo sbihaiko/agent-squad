@@ -210,7 +210,7 @@ const box = {
   __dispatch: (t, ev) => { for (const fn of docListeners[t] || []) fn(ev); },
   localStorage: { _m: new Map(), getItem(k) { return this._m.has(k) ? this._m.get(k) : null; }, setItem(k, v) { this._m.set(k, String(v)); } },
   navigator: { serviceWorker: { register: () => Promise.resolve() } },
-  location: { pathname: "/x/y/mobile", href: "/x/y/mobile" },
+  location: { pathname: "/x/y/mobile", href: "/x/y/mobile", hash: __HASH__ },   // the hash the address holds before the page loads (#1459)
   sessionStorage: { _m: new Map(), getItem(k) { return this._m.has(k) ? this._m.get(k) : null; }, setItem(k, v) { this._m.set(k, String(v)); } },
 };
 box.sessionStorage = box.sessionStorage;
@@ -254,17 +254,19 @@ BOARD_ONE = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": N
                         {"name": "Todo", "n": 0, "items": []}]}
 
 
-def run_page(page, driver, board=None, promote=None, routes=None, history_state=None, history_below=False):
+def run_page(page, driver, board=None, promote=None, routes=None, history_state=None, history_below=False, hash=None):
     """The served mobile page booted under node over the stub DOM, then one driver run inside it. The driver is one async
     body: it reads and sets the page's own names (`pending`, `$`, `stageMove`) and returns the facts the test asserts.
     `routes` answers any other path the driver's screen asks, and records every POST it takes. `history_state` is the entry
-    the page boots on; `history_below` puts a page entry under it, as a reload of a layer's entry has."""
+    the page boots on; `history_below` puts a page entry under it, as a reload of a layer's entry has. `hash` is the hash
+    the address holds before the page loads (#1459)."""
     entries = [{"state": {}}, {"state": history_state}] if history_below else [{"state": history_state}]
     script = (DOM_HARNESS.replace("__PAGE__", json.dumps(page))
                          .replace("__DRIVER__", json.dumps(driver))
                          .replace("__BOARD__", json.dumps(board or [BOARD_ONE]))
                          .replace("__ROUTES__", json.dumps(routes or {}))
                          .replace("__PROMOTE__", json.dumps(promote))
+                         .replace("__HASH__", json.dumps(hash or ""))
                          .replace("__ENTRIES__", json.dumps(entries))
                          .replace("__INDEX__", str(len(entries) - 1)))
     path = pathlib.Path(tempfile.mkdtemp()) / "page.js"

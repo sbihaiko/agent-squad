@@ -402,6 +402,7 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*GESTURE*/
 /*CHART*/
 /*MOVE*/
+/*LINK*/
 /*RUN*/
 /*BOARD_FILTER*/
 /*CARD_RULES*/
@@ -497,7 +498,7 @@ $("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
 const LAYER = {
   sheet: {
     show(s) { if (Number.isInteger(s.n) && !view.sheet) openCard(s.n); },
-    hide() { view = { ...view, sheet: false }; offBoard = null; issueKey = ""; $("sheet").hidden = true; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; },
+    hide() { view = { ...view, sheet: false }; offBoard = null; issueKey = ""; linkSheet = null; $("sheet").hidden = true; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; },
   },
   psheet: {
     show() { $("psheet").hidden = false; $("profile").setAttribute("aria-expanded", "true"); },
@@ -883,10 +884,16 @@ function setLink(url) {
   $("sh-link").hidden = !ok;
   $("sh-link").href = ok ? url : "#";
 }
+// The card the sheet names now (#1459): an issue read that answers for any other card is dropped, so two card links in a
+// row leave the second card's issue on the sheet, whatever order the reads land in.
+function sheetKey() {
+  const x = view.sheet ? (offBoard || shown[view.card]) : null;
+  return x ? (x.r || "") + "#" + x.n : "";
+}
 async function loadIssue(x, key) {
   try {
     const d = await call("/api/issue?n=" + x.n + (x.r ? "&r=" + encodeURIComponent(x.r) : ""));
-    if (key !== issueKey) return;
+    if (key !== sheetKey()) return;
     issueD = d.err ? null : d;
     if (d.err) { $("sh-meta").innerHTML = sheetMeta(x, null); $("sh-body").textContent = d.err; return; }
     setLink(d.url);
@@ -899,7 +906,7 @@ async function loadIssue(x, key) {
     $("sh-last").innerHTML = d.last
       ? `<h3>Last comment</h3><p class="mut">${escHTML(d.last.by || "")} · ${escHTML(String(d.last.at || "").slice(0, 16).replace("T", " "))}</p>${d.last.html}`
       : "";
-  } catch (e) { if (key === issueKey) $("sh-body").textContent = e.message; }
+  } catch (e) { if (key === sheetKey()) $("sh-body").textContent = e.message; }
 }
 // A card of the selection is scrolled above the sheet (#919): the sheet covers 60% of the screen, so the card it names
 // stays in sight above it.
@@ -908,6 +915,7 @@ function scrollCardIntoView(x) {
   if (el) el.scrollIntoView({ block: "start" });
 }
 function openCard(n) {
+  linkSheet = null;   // every open but a card link's own clears the card a hash opened
   // A blocker link opens that ticket in the same sheet (#919), never a new tab: the card is found in its own column, and
   // the board is drawn there before the sheet reads it.
   // A card in a collapsed lane opens its lane first: the sheet never names a card the column does not draw (#893).
@@ -959,6 +967,52 @@ function renderSheet() {
   scrollCardIntoView(x);
   loadIssue(x, key);
 }
+// The phone's card link (#1459): `#issue=N` names one card, and the rule module (hub-mobile-link.js) names what the board
+// does with it. The handler asks the rule for the result and says it on the board's own line, then opens the card, so a
+// folded lane opens and a card the board does not draw is read in the same sheet. A link that arrives before the first
+// board read waits for it, so it never lands on a blank board.
+// What the last card link opened, so a hash that stops naming it closes that sheet, and no card of the same number in
+// another repository is closed in its place: the sheet card's own key, or LINK_OFF for a sheet that reads the issue
+// alone. That sheet's key changes as the page redraws it, so the link keeps the fact that it opened an off-board sheet,
+// never the key the sheet happens to show.
+const LINK_OFF = "off";
+let linkWanted = null, linkSheet = null;
+// The facts come from the page's own reads: the label filter, the spec mode and a column the carousel leaves out each
+// drop a card, and a lane holds it or a defect dropped it. `dropped` names which read hid the card, so the line says the
+// neutral fact and no caller names the owner's filter for another read's doing.
+const linkFacts = n => {
+  const g = ((board && board.groups) || []).find(g => g.items.some(x => x.n === n));
+  if (!g) return { onBoard: false, shown: false, placed: false, collapsed: false, dropped: "" };
+  const x = g.items.find(c => c.n === n);
+  const dropped = !labelOk(bo.labels || [], bo.lmode, x) ? "labels" : !spOk(x) ? "spec" : g.end ? "column" : "";
+  const lane = dropped ? null : laneModelOf(g).lanes.find(l => l.cards.some(c => c.n === n));
+  return { onBoard: true, shown: !dropped, placed: !!lane, collapsed: !!(lane && lane.collapsed), dropped };
+};
+function linkTake() {
+  if (linkWanted === null || !board) return;
+  const n = linkWanted; linkWanted = null;
+  $("bmsg").textContent = linkResult(n, linkFacts(n)).say;
+  openCard(n);
+  const x = shown[view.card];
+  linkSheet = !offBoard && x && x.n === n ? cardKey(x) : LINK_OFF;   // the card the link named, never another one
+}
+// A hash that stops naming a card undoes what the last card link did: the sheet it opened closes and its line clears, so a
+// tab or an anchor the owner asked for is never hidden behind a stale card.
+function linkDrop() {
+  $("bmsg").textContent = "";
+  if (linkSheet === null) return;
+  const was = linkSheet; linkSheet = null;
+  const mine = was === LINK_OFF ? !!offBoard : view.sheet && sheetKey() === was;
+  if (mine) { view = { ...view, sheet: false }; renderSheet(); }
+}
+function linkOpen() {
+  const n = linkHash(location.hash);
+  if (n === null) { linkDrop(); return; }
+  linkWanted = n;
+  if (tabNow !== "board") show("board");   // a card link opens the board, where the card is (as the desktop does, #1274)
+  if (board) linkTake();   // a board already read opens the card now; a board still being read waits for applyBoard
+}
+addEventListener("hashchange", linkOpen);
 function renderFilters() {
   const m = specMode(), sel = bo.labels || [];
   $("bsp").textContent = "Specs: " + SP[m][0];
@@ -1011,6 +1065,7 @@ function applyBoard(b) {
   $("bmsg").textContent = "";
   refresh();
   if (pendingSheet !== null) { const n = pendingSheet; pendingSheet = null; openCard(n); }
+  linkTake();   // a card link that waited for this read opens now (#1459)
   freshNow = new Set();
 }
 squadStream.on("board", b => { try { applyBoard(b); } catch (e) { $("bmsg").textContent = e.message; } });
@@ -1671,6 +1726,8 @@ every("terminals", () => { if (!termOpen() && !squadStream.live()) loadSessions(
 function tabOf(s) { const t = s === "status" ? "monitor" : s; return tabs.some(b => b.dataset.tab === t) ? t : tabs[0].dataset.tab; }
 const last = localStorage.getItem("squad-mobile-tab");
 show(tabOf(last));
+// A card link in the address opens its card once the board's read answers (#1459).
+if (linkHash(location.hash) !== null) linkOpen();
 // A reload restores the layer its entry names on that entry, so no entry is pushed and Back still closes the layer (#1450).
 const was = history.state;
 if (was && was.layer) {

@@ -116,16 +116,17 @@ prove "$tip"
 . "$d/ghcall.sh"
 # ADR-0164 (#1196): delivery outranks the proof, but only an unfinished proof. A failed one always holds. Under the bound proof
 # nothing else measured the tip, so the pull request's own CI check is the only evidence left: a red check on the tip refuses the
-# merge by name. A check still running or absent holds nothing, so a slow CI never keeps delivery back. The ci proof already
+# merge by name. Only `failure` is a measured red: a `cancelled` or `timed_out` check is an unfinished proof (#1517), and it
+# holds nothing, as a running or absent check does, so a slow or cut-short CI never keeps delivery back. The ci proof already
 # reads that check, and the local proof is the owner's own full suite, which outranks a CI run of a narrower scope.
 if [ "$proof" = bound ]; then
-  red=$(gh_api "repos/$SG_REPO/commits/$tip/check-runs" -q '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") | .name + " " + .conclusion] | join(", ")' 2>/dev/null) || red=""
+  red=$(gh_api "repos/$SG_REPO/commits/$tip/check-runs" -q '[.check_runs[] | select(.conclusion == "failure") | .name + " " + .conclusion] | join(", ")' 2>/dev/null) || red=""
   [ -z "$red" ] || refuse "$tip" "not promoted: the CI check on the dev tip is red ($red)"
 fi
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
 pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) \
-  || refuse "$tip" "not promoted: the open dev -> stg pull request could not be read"
+  || { echo "promote-stg: pending $tip: the open dev -> stg pull request could not be read" >&2; exit 75; }   # a transport failure is unproven, never a verdict (ADR-0164, #1490)
 if [ -z "$pr" ]; then
   o=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head=dev -f base=stg -f "title=Promote dev into stg" \
       -f "body=The dev tip $tip carries its proof. Merge this to move stg." 2>&1) \

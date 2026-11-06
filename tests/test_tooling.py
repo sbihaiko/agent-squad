@@ -68,7 +68,6 @@ FAST_TIER_JOBS = ("ruff", "mypy", "fast-battery")
 COMPLETE_TIER_JOBS = ("full-xdist", "full-serial", "fast-battery-311", "gui-e2e")
 TIER_JOBS = FAST_TIER_JOBS + COMPLETE_TIER_JOBS
 DEV_TO_STG = "github.head_ref == 'dev'"
-STG_TO_MAIN = "github.head_ref == 'stg' && github.base_ref == 'main'"
 
 
 def _ci_workflow() -> dict:
@@ -101,16 +100,16 @@ def test_each_fast_tier_job_runs_its_own_command():
 
 
 def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
-    """Guard for the fast tier (#1322): the dev-to-stg pull request starts exactly the ruff, mypy and fast-battery jobs.
-    Each runs on Python 3.13 alone, with no `needs:` and no other job-level setting that serializes or softens it, so the
-    three start together. Whether three runners actually start at once is measured by the first real dev-to-stg run; this
-    guard refuses the settings that would hold them in a queue."""
+    """Guard for the fast tier (#1322): the fast tier is exactly the ruff, mypy and fast-battery jobs, and every one starts
+    on the dev-to-stg pull request. Each runs on Python 3.13 alone, with no `needs:` and no other job-level setting that
+    serializes or softens it, so the three start together. Whether three runners actually start at once is measured by the
+    first real dev-to-stg run; this guard refuses the settings that would hold them in a queue."""
     wf = _ci_workflow()
-    fast = tuple(name for name, job in wf["jobs"].items() if job.get("if") == DEV_TO_STG)
-    assert fast == FAST_TIER_JOBS, f"the fast tier is exactly {FAST_TIER_JOBS}; found {fast}"
+    assert set(FAST_TIER_JOBS) <= set(wf["jobs"]), f"the fast tier is exactly {FAST_TIER_JOBS}; found {list(wf['jobs'])}"
     assert tuple(wf["jobs"]) == TIER_JOBS, f"the workflow is the two tiers, {TIER_JOBS}; found {list(wf['jobs'])}"
     for name in FAST_TIER_JOBS:
         job = wf["jobs"][name]
+        assert job.get("if") == DEV_TO_STG, f"{name} starts on the dev-to-stg pull request; found {job.get('if')!r}"
         for key in ("needs", "strategy", "environment", "concurrency"):
             assert key not in job, f"{name} carries `{key}:`, which can hold it behind another job or a gate"
         assert job.get("continue-on-error") in (None, False), f"{name} would report green on a red"
@@ -119,26 +118,27 @@ def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
     assert 'python3 -m pytest -n auto -m "not heavy"' in [s.get("run") for s in wf["jobs"]["fast-battery"]["steps"]]
 
 
-def test_complete_tier_jobs_run_on_the_stg_to_main_pull_request_only():
-    """Guard for the complete tier (#1324): a stg-to-main pull request starts exactly the four complete-tier jobs, and a
-    dev-to-stg one starts none of them.
+def test_every_complete_tier_job_runs_on_the_pull_request_whose_head_is_dev():
+    """Guard for #1461: every complete-tier job starts on the dev-to-stg pull request, and no job is gated on a base branch.
 
-    A job gated on the base branch carries `github.base_ref`: promote-pass.sh reads such a job as no check a dev-to-stg
-    tip waits on, so the fast promotion never waits for a suite that pull request never starts.
+    The promotion of a dev tip reads the checks of that pull request. The complete tier ran on a stg-to-main pull request
+    alone, and promote-main.sh fast-forwards main from stg, so that pull request never existed: the complete tier never ran
+    on the path that reaches main, and the promotion recorded a full pass over the fast tier alone. Each complete-tier job
+    now starts on the dev-to-stg pull request, and promote-pass.sh reads it as one of the checks the dev tip waits on.
     """
     wf = _ci_workflow()
-    complete = tuple(name for name, job in wf["jobs"].items() if "base_ref" in str(job.get("if", "")))
-    assert complete == COMPLETE_TIER_JOBS, f"the complete tier is exactly {COMPLETE_TIER_JOBS}; found {complete}"
+    gated_on_base = tuple(name for name, job in wf["jobs"].items() if "base_ref" in str(job.get("if", "")))
+    assert gated_on_base == (), (
+        f"a job gated on a base branch never runs on the dev-to-stg pull request: {gated_on_base}")
     for name in COMPLETE_TIER_JOBS:
         job = wf["jobs"][name]
-        assert job.get("if") == STG_TO_MAIN, (
-            f"{name} starts on the stg-to-main pull request only; found {job.get('if')!r}")
-        assert job.get("if") != DEV_TO_STG, f"{name} must not start on dev to stg"
+        assert job.get("if") == DEV_TO_STG, (
+            f"{name} starts on the dev-to-stg pull request, never on another pair; found {job.get('if')!r}")
         for key in ("needs", "strategy", "environment", "concurrency"):
             assert key not in job, f"{name} carries `{key}:`, which can hold it behind another job or a gate"
         assert job.get("continue-on-error") in (None, False), f"{name} would report green on a red"
     on = wf.get("on", wf.get(True))
-    assert on["pull_request"]["branches"] == ["stg", "main"], "the workflow runs on the dev-to-stg and stg-to-main pull requests"
+    assert on["pull_request"]["branches"] == ["stg"], "the workflow runs on the dev-to-stg pull request, the one promotion carries"
 
 
 def test_complete_tier_runs_both_full_suite_modes_the_311_battery_and_the_gui_e2e():
@@ -229,22 +229,22 @@ def test_every_process_table_read_of_a_command_asks_for_the_full_one():
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
     """Guard for the CI rule: the one pull request that carries dev to stg starts the run, and nothing else.
 
-    The jobs run with a read-only token. No branch push starts a run: a work branch is
-    proven by the local fast gate, and the landing by the promotion proof. A pull request to any other branch starts
-    none, and neither does a pull request to stg from a branch other than dev.
+    Both tiers run on that pull request, so the complete tier proves the tip the promotion carries. The jobs run with a
+    read-only token. No branch push starts a run: a work branch is proven by the local fast gate, and the landing by the
+    promotion proof. A pull request to any other branch starts none, and neither does a pull request to stg from a branch
+    other than dev.
     """
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
-    assert on["pull_request"]["branches"] == ["stg", "main"], \
-        "CI runs on the dev-to-stg and stg-to-main pull requests, and no other"
+    assert on["pull_request"]["branches"] == ["stg"], "CI runs on the dev-to-stg pull request, and no other"
     assert set(on) == {"pull_request"}, f"only a pull request starts the run; found {sorted(on)}"
     assert "push" not in on and "pull_request_target" not in on, "a branch push starts no run"
     assert wf["permissions"] == {"contents": "read"}
     for name, job in wf["jobs"].items():
         gate = str(job.get("if", ""))
-        assert gate in (DEV_TO_STG, STG_TO_MAIN), f"{name} refuses every other pull request: {job.get('if')!r}"
+        assert gate == DEV_TO_STG, f"{name} refuses every other pull request: {job.get('if')!r}"
         assert job["timeout-minutes"] == 20, "each job keeps the twenty minutes it gives itself"
     uses = [s["uses"] for j in wf["jobs"].values() for s in j["steps"] if "uses" in s]
     assert uses and all("@v" in u and u.rsplit("@v", 1)[1].isdigit() for u in uses)
@@ -308,8 +308,8 @@ def test_the_shard_job_stays_withdrawn_until_its_heavy_tests_can_pass_on_a_runne
 
 
 def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
-    """Guard for ADR-0164 (#1051, #1322): the promotion reads the check-run names of the fast tier's jobs from ci.yml,
-    so ruff, mypy and the fast battery are part of the full pass, and no job name is a literal in the script.
+    """Guard for ADR-0164 (#1051, #1322, #1461): the promotion reads the check-run names of every job in ci.yml, so the
+    fast tier and the complete tier are both part of the full pass, and no job name is a literal in the script.
 
     The names come from the job block alone (the script's `--ci-job-names` seam reads `ci.yml` structurally), and the
     answer is exactly the workflow's job names: a step name or a `with:` key at the same indentation never becomes a
@@ -323,10 +323,10 @@ def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
                         "--ci-job-names", str(ROOT / ".github" / "workflows" / "ci.yml")],
                        cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
-    dev_jobs = [job.get("name", name) for name, job in wf["jobs"].items() if "base_ref" not in str(job.get("if", ""))]
-    assert r.stdout.split() == dev_jobs, \
-        f"the check names are the dev-to-stg jobs of jobs:, not a step, a with: key or a complete-tier job: {r.stdout!r}"
-    assert sorted(dev_jobs) == sorted(FAST_TIER_JOBS), f"the dev-to-stg jobs the pass waits on: {dev_jobs}"
+    job_names = [job.get("name", name) for name, job in wf["jobs"].items()]
+    assert r.stdout.split() == job_names, \
+        f"the check names are every job of jobs:, not a step, a with: key or a subset: {r.stdout!r}"
+    assert sorted(job_names) == sorted(TIER_JOBS), f"the jobs the promotion waits on: {job_names}"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
