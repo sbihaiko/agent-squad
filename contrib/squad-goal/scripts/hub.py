@@ -573,8 +573,11 @@ def proc_starts(text):
     return {pid: p.start for pid, p in liveness().parse_ps(text).items()}
 
 def procs_mod():
-    """squad/procs.py, the one process reader (#1508), from the roots the hub resolves every squad module from."""
-    (PR,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("procs",))
+    """squad/procs.py, the one process reader (#1508). The tree this file sits in answers first, as caps.sh reads it: an
+    SG_SQUAD checkout behind this change holds an older procs.py with no snapshot, and every table would read empty."""
+    own = str(pathlib.Path(__file__).resolve().parents[3])
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    (PR,) = load_squad([own, *[r for r in roots if r != own]] if (pathlib.Path(own) / "squad" / "procs.py").is_file() else roots, ("procs",))
     return PR
 
 def process_table():

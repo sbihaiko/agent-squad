@@ -123,3 +123,23 @@ def test_1508_every_shell_reader_sources_the_seam_at_top_level():
         if not re.search(r'^(?![\s#])[^\n]*?\.\s+"[^\n]*/caps\.sh"', text, re.M):
             missing.append(f.name)
     assert not missing, f"expand $SG_PS without a top-level source of caps.sh: {missing}"
+
+
+def test_1508_a_script_reads_its_own_tree_before_a_foreign_sg_squad(tmp_path, monkeypatch):
+    """SG_SQUAD may name another checkout, behind this change, whose procs.py has no snapshot. The script's own tree answers
+    first, as caps.sh reads it, so the foreign module is never loaded."""
+    import importlib.util
+    foreign = tmp_path / "old" / "squad"
+    foreign.mkdir(parents=True)
+    (foreign / "procs.py").write_text("STALE = True\n")
+    monkeypatch.setenv("SG_SQUAD", str(foreign.parent))
+    monkeypatch.setenv("SG_CHECKOUT", str(foreign.parent))
+    monkeypatch.delitem(sys.modules, "squad_procs", raising=False)
+    monkeypatch.syspath_prepend(str(ROOT / "contrib/squad-goal/scripts"))
+    spec = importlib.util.spec_from_file_location("sessions_under_test", ROOT / "contrib/squad-goal/scripts/sessions.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    try:
+        assert hasattr(mod._procs(), "snapshot")
+    finally:
+        sys.modules.pop("squad_procs", None)

@@ -47,8 +47,12 @@ sg_missing_tool() {
 # lives in supplies the module; the live copy reads SG_SQUAD. The interpreter is the battery's (sg_gate_python). Both paths are
 # kept as quoted words, so a checkout or an interpreter whose path holds a space still reads the table.
 _sg_ps_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$_sg_ps_root/squad/procs.py" ] || _sg_ps_root=${SG_SQUAD:-.}
-_sg_ps_py=$(sg_gate_python); case $_sg_ps_py in /*|"") ;; */*) _sg_ps_py=$PWD/$_sg_ps_py;; esac
-sg_ps() { PYTHONPATH="$_sg_ps_root${PYTHONPATH:+:$PYTHONPATH}" "$_sg_ps_py" -m squad.procs ps "$@"; }
+# The interpreter is found on the first read, never at source time: a script that never reads the table pays no git call.
+_sg_ps_py=
+sg_ps() {
+  [ -n "$_sg_ps_py" ] || { _sg_ps_py=$(sg_gate_python); case $_sg_ps_py in /*) ;; */*) _sg_ps_py=$PWD/$_sg_ps_py;; esac; }
+  PYTHONPATH="$_sg_ps_root${PYTHONPATH:+:$PYTHONPATH}" "$_sg_ps_py" -m squad.procs ps "$@"
+}
 # SG_PS: the one word callers expand (`$SG_PS -o pid= -p 1`): the sg_ps function, unless the caller names its own reader.
 # It is not exported: a shell function does not reach a child, and each script sources this file for its own.
 : "${SG_PS:=sg_ps}"
