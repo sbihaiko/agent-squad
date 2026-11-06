@@ -8,8 +8,8 @@ src=${1:-$(dirname "$0")/launch.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $
 unset SG_BASE SG_WORKFLOW SG_SHARED
 mkdir -p "$T/bin" "$T/s" "$T/st" "$T/co/runs" "$T/squad"
 cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/registry.json" "$T/s/"
-# models.json: one coding model, no hours window. SG_ALLOW_MODEL skips the gate anyway.
-printf '{"coding_models":["test-model"],"hours":{}}\n' > "$T/s/models.json"
+# models.json: one coding model, no hours window, one declared context window. SG_ALLOW_MODEL skips the gate anyway.
+printf '{"schema_version":2,"chains":{"coding":[{"id":"test-model","route":"gateway","ctx":"128k"}]}}\n' > "$T/s/models.json"
 printf 'print("hub")\n' > "$T/s/hub.py"
 # caffeinate: create a run folder in cwd/runs, then refuse 5 s later (a start that dies long after its folder shows up
 # is the observed shape: at folder time the log is still empty, so only a copy that outlives launch.py captures it)
@@ -38,6 +38,8 @@ for _ in $(seq 1 20); do /usr/bin/grep -q 'vendor/skills is not clean' "$log" 2>
 /usr/bin/grep -q 'vendor/skills is not clean' "$log" 2>/dev/null && ok "launch.log captures what the squad wrote after the folder appeared" || ko "launch.log contents: $(cat "$log" 2>/dev/null) out=$o"
 # The launch picks by the models.json coding chain, so the run reads the same order for its own fallback (#617).
 /usr/bin/grep -q -- '--model-order test-model ' "$SG_ARGV" 2>/dev/null && ok "the coding chain's order goes to the run" || ko "no --model-order in the argv: $(cat "$SG_ARGV" 2>/dev/null) out=$o"
+# A chain entry's declared context window goes to the run too (#1470): the engine skips an entry the prompt would overrun.
+/usr/bin/grep -q -- '--model-ctx test-model=128k ' "$SG_ARGV" 2>/dev/null && ok "the coding chain's context window goes to the run" || ko "no --model-ctx in the argv: $(cat "$SG_ARGV" 2>/dev/null) out=$o"
 # A node of the graph whose model (an alias resolved to its provider id) the panel switched off refuses the start, and no run folder
 # appears (#60). The request's own "Coding model:" line is fine here: the gate that read only that line is what let this through.
 rm -rf "$T/co/runs"; mkdir -p "$T/co/runs" "$T/co/docs/squad/workflows"
