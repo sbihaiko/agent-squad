@@ -22,7 +22,7 @@ EMPTY_BOARD = ('{ t: 2, err: null, labels: [], lc: {}, cases: [], flow: null, '
 CARD_CLOSES = {
     "close button": '$("sh-close").onclick();',
     "escape": '__dispatch("keydown", { key: "Escape" });',
-    "swipe down": ('__dispatch("touchstart", { target: $("sheet"), touches: [{ clientX: 200, clientY: 600 }] });'
+    "swipe down": ('__dispatch("touchstart", { target: $("sheet-content").querySelector(".grab"), touches: [{ clientX: 200, clientY: 600 }] });'
                    '__dispatch("touchend", { changedTouches: [{ clientX: 200, clientY: 720 }] });'),
     "tab change": 'show("runs");',
     "board update": f'__state.board = [{EMPTY_BOARD}]; await loadBoard();',
