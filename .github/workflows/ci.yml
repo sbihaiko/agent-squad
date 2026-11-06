@@ -2,14 +2,16 @@ name: ci
 
 on:
   pull_request:
-    branches: ["stg", "main"]
+    branches: ["stg"]
 
-# CI runs two tiers, one per promotion pull request. The fast tier runs on dev to stg, the pass the owner promotes through:
-# ruff, mypy and the fast battery, three jobs each on Python 3.13. The complete tier runs on stg to main, the pass that
-# carries work to the line the owner trusts: the full suite on 3.13 with `-n auto`, the full suite on 3.13 serial, the
-# fast battery on 3.11 and the GUI e2e suite. No branch push starts a run; a work branch is proven by the local fast gate,
-# and a landing by the promotion proof. A pull request of any other pair starts neither tier, because each job's own
-# condition refuses it.
+# CI runs both tiers on the one pull request that carries dev to stg, the pass the loop promotes through. The fast tier is
+# ruff, mypy and the fast battery, three jobs each on Python 3.13. The complete tier is the full suite on 3.13 with `-n auto`,
+# the full suite on 3.13 serial, the fast battery on 3.11 and the GUI e2e suite. Every job gates on
+# `github.head_ref == 'dev'`, so every check the promotion reads runs on the tip it promotes. The complete tier ran on a
+# stg-to-main pull request alone, and promote-main.sh fast-forwards main from stg, so that pull request never existed and
+# the complete tier never ran on the path that reached main. No branch push starts a run; a work branch is proven by the
+# local fast gate, and a landing by the promotion proof. A pull request of any other pair starts nothing, because each job's
+# own condition refuses it.
 # Each tier's jobs have no `needs:` between them, so they start together and the pull request reports in the time of the
 # slowest one. The fast-battery job carries one explicit GUI e2e run beside the battery: the battery's `-m "not heavy"`
 # leaves that file's `heavy` tests out, and they ran on every promotion before this tier existed. The complete tier's GUI
@@ -17,7 +19,7 @@ on:
 # also simulates a runner (SQUAD_CI_RUNNER=1), so every deselected test prints its id and reason in the job log (#1323).
 # The heavy tests run inside the two full-suite jobs. No job runs a Python x mode x shard matrix: a matrix over one job
 # split a commit into legs that waited behind each other for runners (#149), and a check no runner picks up answers
-# nothing. A complete-tier job that takes over fifteen minutes on a real stg-to-main run is split by test path into sibling
+# nothing. A complete-tier job that takes over fifteen minutes on a real dev-to-stg run is split by test path into sibling
 # jobs, each with its own check-run name, never into matrix legs (ADR-0163).
 # The group names the commit, so no queue holds a pull request behind another and GitHub cancels none.
 # A group shared by one branch's pushes cannot say that: GitHub queues the group's pending runs and cancels the runs
@@ -28,8 +30,8 @@ on:
 # The full-proof shards (#1051) are withdrawn while #1062 is open: they were never green on a runner, so they held every
 # promotion and shipped nothing. When the heavy tests they run are hermetic, they return with their guard
 # (tests/test_tooling.py); promote-pass.sh reads their names from this file, so a restored matrix needs no second change.
-# promote-pass.sh reads only the job names a dev-to-stg tip waits on: a job gated on `base_ref` is a complete-tier job
-# (#1324) and never a check that pass waits for.
+# promote-pass.sh reads every job name in this file as a check the dev-to-stg tip waits on, and it refuses the promotion
+# by name when a job is gated on `base_ref`: such a job never runs on that pull request, so the dev tip could never prove it.
 concurrency:
   group: ci-${{ github.head_ref }}-${{ github.sha }}
   cancel-in-progress: false
@@ -90,7 +92,7 @@ jobs:
 
   full-xdist:
     name: full-xdist
-    if: github.head_ref == 'stg' && github.base_ref == 'main'   # the complete tier: the pass that carries stg to main
+    if: github.head_ref == 'dev'   # the complete tier: the pass the promotion reads, on the tip it carries
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -107,7 +109,7 @@ jobs:
 
   full-serial:
     name: full-serial
-    if: github.head_ref == 'stg' && github.base_ref == 'main'
+    if: github.head_ref == 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -124,7 +126,7 @@ jobs:
 
   fast-battery-311:
     name: fast-battery-311
-    if: github.head_ref == 'stg' && github.base_ref == 'main'
+    if: github.head_ref == 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -141,7 +143,7 @@ jobs:
 
   gui-e2e:
     name: gui-e2e
-    if: github.head_ref == 'stg' && github.base_ref == 'main'
+    if: github.head_ref == 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
