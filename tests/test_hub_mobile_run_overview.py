@@ -24,7 +24,7 @@ NOW = time.time()
 LIVE = {"id": RUN, "running": True, "live": True, "label": "implement #7", "state": "running", "badge": "running",
         "issues": [7], "titles": {"7": "Phone run overview"}, "age": 60, "spend": 1.25, "rank": 0, "kind": "code",
         "started": NOW - 1800, "ended": None}
-DONE = {"id": ENDED, "running": False, "live": False, "label": "fix #9", "state": "completed", "badge": "done",
+DONE = {"id": ENDED, "running": False, "live": False, "label": "fix #9", "state": "completed", "badge": "done", "verdict": "completed",
         "tip": "the run finished its verdict", "issues": [9], "titles": {"9": "Old fix"}, "age": 2500, "spend": 3.4,
         "rank": 1, "kind": "code", "started": NOW - 5400, "ended": NOW - 2500}
 OPEN = {"whole": False, "nodes": [], "released": []}
@@ -42,12 +42,12 @@ def routes(runs=None, ended=None, info=None):
     }
 
 
-OPEN_LIVE = """
+OPEN_LIVE_BODY = """
   await loadRuns();
   $("runs-live").onclick({ target: $("runs-live").querySelector(".runrow") });
   await __tick(20);
-  return facts();
 """
+OPEN_LIVE = OPEN_LIVE_BODY + "\n  return facts();\n"
 OPEN_ENDED = """
   await loadRuns();
   $("runs-ended").onclick({ target: $("runs-ended").querySelector(".runrow") });
@@ -130,13 +130,13 @@ def test_an_ended_run_draws_no_pause_and_shows_its_verdict(hub):
     assert out["overview"] is True
     assert out["pauseHidden"] is True, "an ended run draws no pause or resume"
     assert out["age"].startswith("ended ") and "ago" in out["age"]
-    assert out["verdictHidden"] is False and out["verdict"] == "done"
+    assert out["verdictHidden"] is False and out["verdict"] == "completed"
 
 
 @pytest.mark.node_bound
 @pytest.mark.skipif(NODE is None, reason="node is needed for the run view")
 def test_the_desktop_dashboard_is_one_tap_from_the_overview(hub):
-    body = OPEN_LIVE + """
+    body = OPEN_LIVE_BODY + """
   $("rundesk-btn").onclick({ target: $("rundesk-btn") });
   return { ...facts(), src: $("runframe").src };
 """

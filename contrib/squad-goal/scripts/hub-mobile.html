@@ -184,6 +184,12 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #runctl-msg.err{color:var(--err)}
 #runbody{position:relative;flex:1;min-height:0}
 #runframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+#runframe[hidden]{display:none}
+#runoverview{position:absolute;inset:0;overflow:auto;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+#runoverview[hidden]{display:none}
+#runoverview .runov-row{margin:0 0 10px}
+#runov-issues{white-space:pre-line}
+#runov-verdict-row[hidden]{display:none}
 #termview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
 #termview[hidden]{display:none}
 #termview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
@@ -377,8 +383,8 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section id="runview" hidden>
 <div id="runview-head"><span id="runview-name"></span></div>
-<div id="runbody"><iframe id="runframe" title="Run dashboard"></iframe><div id="edge" data-role="edge"></div></div>
-<div id="runview-actions"><button id="runview-back" type="button">Back</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg"></p></div></div>
+<div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe><div id="edge" data-role="edge"></div></div>
+<div id="runview-actions"><button id="runview-back" type="button">Back</button><button id="rundesk-btn" type="button">Desktop dashboard</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg"></p></div></div>
 </section>
 <nav>
 <button data-tab="monitor">Monitor</button>
@@ -1364,6 +1370,8 @@ async function loadRuns() {
     $("runs-live").replaceChildren(...rows.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
     $("runs-ended").replaceChildren(...ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
     $("runs-msg").textContent = "";
+    for (const r of [...rows, ...ended]) runRows[r.id] = r;
+    if (runId && !$("runview").hidden) drawRunOverview(runRows[runId]);
     // Then the history's groups in their own read, so a rejected or failed query costs the history alone. A hub older than
     // the page ignores the query and answers the bare array: the history stays honestly empty (#1277).
     let a = Array.isArray(d) ? null : d;
@@ -1381,7 +1389,7 @@ async function loadRunControl() {
   const read = async p => { try { return await (await fetch(p, { cache: "no-store" })).json(); } catch (e) { return null; } };
   const info = await read(u.info), state = await read(u.state);
   if (id !== runId) return;
-  const v = runControlView(info, state), b = $("runctl-btn"), msg = $("runctl-msg");
+  const v = runControlView(info, state, runRows[id] ? runRows[id].running : undefined), b = $("runctl-btn"), msg = $("runctl-msg");
   b.dataset.act = v.act || ""; b.textContent = v.label; b.hidden = !v.act || runBusy;
   $("runctl-limits").textContent = RUN_LIMITS;
   msg.textContent = runReply ? runReply.text : v.note;
@@ -1400,13 +1408,31 @@ async function sendRunControl() {
   runBusy = false; b.disabled = false;
   if (id === runId) loadRunControl();
 }
+// The run screen opens on its overview, the facts the row carries; the desktop dashboard is one tap away behind it.
+const runRows = {};
+function showDesk(on) {
+  $("runoverview").hidden = on; $("runframe").hidden = !on;
+  $("rundesk-btn").textContent = on ? "Overview" : "Desktop dashboard";
+}
+function drawRunOverview(row) {
+  if (!row) return;
+  const st = $("runov-state");
+  st.textContent = row.badge || ""; st.className = "run-state b " + String(row.state || "").replace(/ /g, "-");
+  $("runov-age").textContent = runAgeLabel(row, Date.now() / 1000);
+  $("runov-spend").textContent = money(row.spend);
+  const v = runVerdict(row);
+  $("runov-verdict").textContent = v; $("runov-verdict-row").hidden = !v;
+  $("runov-issues").textContent = runIssueLines(row);
+}
 function openRun(id, url, name) {
   runId = id || null; runReply = null;
   $("runframe").src = url; $("runview-name").textContent = name; $("runview").hidden = false;
+  showDesk(false); drawRunOverview(runRows[runId]);
   $("runctl-btn").hidden = true; $("runctl-msg").textContent = "";
   loadRunControl();
 }
-function closeRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; runId = null; }
+function closeRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); runId = null; }
+$("rundesk-btn").onclick = () => showDesk($("runoverview").hidden === false);
 for (const id of ["runs-live", "runs-ended", "runs-history"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b && b.dataset.id) openRun(b.dataset.id, b.dataset.url, b.dataset.name); };
 $("runview-back").onclick = closeRun;
 $("runctl-btn").onclick = sendRunControl;
@@ -1421,7 +1447,7 @@ document.addEventListener("touchend", e => {
   if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();
 }, { passive: true });
 every("runs", () => { if ($("runview").hidden) loadRuns(); }, 10000);
-every("runs", () => { if (runId && !$("runview").hidden) loadRunControl(); }, 10000);   // the run may pause, resume or end while the screen is open
+every("runs", () => { if (runId && !$("runview").hidden) { loadRuns(); loadRunControl(); } }, 10000);   // the run may pause, resume or end while the screen is open
 // terminals:begin
 const termOpen = () => !$("termview").hidden;
 let termSid = null, termCursor = null, termBusy = false;
