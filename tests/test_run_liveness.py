@@ -109,19 +109,16 @@ def test_a_process_snapshot_is_read_only_when_a_run_needs_it(tmp_path):
     assert RL.live_runs(listed, str(tmp_path), fails, NOW, LAUNCH) == []
 
 
-@pytest.mark.parametrize("out", [None, "", "garbage only\n"])
-def test_a_ps_that_fails_or_answers_nothing_is_a_read_failure(monkeypatch, out):
-    def run(*a, **k):
-        if out is None:
-            raise OSError("no ps")
-        return subprocess.CompletedProcess(a, 0, out, "")
-    monkeypatch.setattr(RL.subprocess, "run", run)
+def test_a_failed_process_read_is_a_read_failure(monkeypatch):
+    def boom(pids=None):
+        raise RL.ReadError("cannot list the processes")
+    monkeypatch.setattr(RL.P, "snapshot", boom)
     with pytest.raises(RL.ReadError):
         RL.read_processes()
 
 
-def test_a_ps_with_a_non_zero_exit_is_a_read_failure(monkeypatch):
-    monkeypatch.setattr(RL.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "  1 Tue Nov  3 10:00:00 2026 /sbin/launchd\n", "ps: error"))
+def test_an_empty_process_table_is_a_read_failure(monkeypatch):
+    monkeypatch.setattr(RL.P, "snapshot", lambda pids=None: {})
     with pytest.raises(RL.ReadError):
         RL.read_processes()
 

@@ -489,8 +489,8 @@ def own_roots():
 
 def project_dirs():
     own = own_roots(); ds = set(own)
-    for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
-        m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
+    for p in process_table().values():
+        m = re.search(r"squad\.dashboard_server\s+(\S+)", p.command)
         if m and pathlib.Path(m.group(1)).parent in own: ds.add(pathlib.Path(m.group(1)).parent)
     return [d for d in ds if d.is_dir()]
 
@@ -571,6 +571,20 @@ def proc_starts(text):
     """The process reading of one `ps` (LC_ALL=C, pid and lstart first): {pid: start epoch, or None where the start does not
     parse}, parsed by the one reader (squad/run_liveness.py parse_ps)."""
     return {pid: p.start for pid, p in liveness().parse_ps(text).items()}
+
+def procs_mod():
+    """squad/procs.py, the one process reader (#1508), from the roots the hub resolves every squad module from."""
+    (PR,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("procs",))
+    return PR
+
+def process_table():
+    """{pid: Proc} for every process, from one read of the process table (no exec, so a sandboxed child reads it too).
+    {} when the read fails, logged once: a caller then sees no process, never a guessed one."""
+    try:
+        return procs_mod().snapshot()
+    except Exception as e:
+        log_once(f"hub: the process table could not be read: {type(e).__name__}: {' '.join(str(e).split())}")
+        return {}
 
 def read_procs():
     """The process reading the run list judges liveness on: every pid with its start, from one `ps`. A read that fails is
@@ -963,22 +977,7 @@ def proc_snapshot():
             except Exception: continue
         if out: return out
     except Exception: pass
-    out = {}
-    for l in sh("/bin/ps", "-axwwo", "pid=,ppid=,time=,command=").splitlines():
-        f = l.split(None, 3)
-        if len(f) < 4 or not f[0].isdigit(): continue
-        out[int(f[0])] = (int(f[1]) if f[1].isdigit() else 0, _ps_time(f[2]), f[3])
-    return out
-
-def _ps_time(t):
-    """`ps -o time=` prints CPU time as [[dd-]hh:]mm:ss[.ss]; seconds, 0.0 when it cannot be read."""
-    d, dash, rest = t.partition("-")
-    if not dash: rest = d
-    secs = 0.0
-    try:
-        for p in rest.split(":"): secs = secs * 60 + float(p)
-        return secs + (int(d) * 86400 if dash else 0)
-    except ValueError: return 0.0
+    return {pid: (p.ppid, p.cpu, p.command) for pid, p in process_table().items()}
 
 def attribute_pass():
     """CPU per run over the last interval, as a share of the machine. The sampler calls it only while the machine is
@@ -2088,14 +2087,8 @@ def loop_refusal(a, origin_ok, tn):
     return "" if origin_ok else "forbidden"
 
 def _ps_rows():
-    """Every process as (pid, ppid, command), from one `ps`."""
-    try: out = subprocess.run(["/bin/ps", "-axwwo", "pid=,ppid=,command="], capture_output=True, text=True, timeout=30).stdout
-    except (OSError, subprocess.SubprocessError): return []
-    rows = []
-    for line in out.splitlines():
-        f = line.split(None, 2)
-        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit(): rows.append((int(f[0]), int(f[1]), f[2] if len(f) > 2 else ""))
-    return rows
+    """Every process as (pid, ppid, command), from one read of the process table."""
+    return [(p.pid, p.ppid, p.command) for p in process_table().values()]
 
 def loop_kill(root):
     """End `root` and every process under it: TERM, then KILL what is left. True when `root` is gone after it."""
@@ -2620,7 +2613,7 @@ def run_row(d, port, procs):
 def runs():
     _titles()
     out = []; load_rows = []
-    ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
+    ps_lines = [f"{p.pid} {p.command}" for p in process_table().values()]
     procs = read_procs()
     own = own_roots()
     for l in ps_lines:

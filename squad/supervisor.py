@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import NamedTuple
 
-from squad import sandbox, terminal_audit
+from squad import procs, sandbox, terminal_audit
 from squad.redact import redact, safe_cut
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,8 +87,12 @@ def start_argv(state: Path) -> list[str]:
 
 
 def lstart(pid: int) -> str:
-    out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
-    return out.stdout.strip()
+    """The start of `pid` as ps lstart prints it; "" when the process is gone or the read fails."""
+    try:
+        p = procs.snapshot([pid]).get(pid)
+    except procs.ReadError:
+        return ""
+    return "" if p is None else procs.format_lstart(p.start)
 
 
 _SO_PEERCRED = 17  # Linux only; the socket module does not expose it on macOS

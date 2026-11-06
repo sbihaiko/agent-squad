@@ -1,8 +1,8 @@
 #!/bin/bash
 # Monitor stream: one line per run verdict. Run from the target checkout.
 # active-runs.txt holds a run id (under ./runs) or an absolute run folder (launch.py writes absolute paths).
-. "$(dirname "$0")/env.sh"
-orphaned() { [ "$(/bin/ps -o ppid= -p $$ | tr -d ' ')" = 1 ]; }   # the supervisor is gone (#959): this lane runs no further step
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"
+orphaned() { [ "$($SG_PS -o ppid= -p $$ | tr -d ' ')" = 1 ]; }   # the supervisor is gone (#959): this lane runs no further step
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 # One watch.sh per repository. Its lock lives in that repository's own state directory, so one supervisor never pauses another.

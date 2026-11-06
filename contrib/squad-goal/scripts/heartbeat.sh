@@ -3,7 +3,7 @@
 # (a headless case at 0% CPU; record.jsonl cannot see it, the agent sits inside one long Bash call).
 # Kills it so the agent's `dotnet test` reports a failure, and prints one line per kill. Judges only the leaf
 # test host (testhost / `dotnet exec --runtimeconfig ... UI*Tests`), never the idle `dotnet test`/vstest parents.
-. "$(dirname "$0")/env.sh"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"
 flat=${HB_FLAT_MIN:-5}; st="$SG_STATE/hb"; mkdir -p "$st"; now=$(date +%s); live=" "
 while read -r pid t cmd; do
   set -- $cmd; exe=${1##*/}   # judge the executable only: a shell whose command line merely mentions testhost is not one
@@ -16,12 +16,13 @@ while read -r pid t cmd; do
 echo "HUNG TEST pid=$pid cpu=${s}s flat for ${flat}m, killed: $(echo "$cmd" | cut -c1-110)"; kill "$pid" 2>/dev/null; rm -f "$f"
     fi
   else echo "$s $now" > "$f"; fi
-done < <(/bin/ps -axwwo pid=,time=,command=)
+done < <($SG_PS -axwwo pid=,time=,command=)
 for f in "$st"/*; do [ -e "$f" ] || continue; case "$live" in *" $(basename "$f") "*) ;; *) rm -f "$f";; esac; done
 # runs that never reached a verdict while no squad process is alive were killed (session restart, crash): each gets a killed verdict
 # in its own record (squad.killed, the one writer), so the hub shows it as ended and the footer stops counting it live.
 # A record that moved in the last HB_DEAD_IDLE_MIN minutes (default 1) is a launch window, not a death. SG_RUN_CMD_RE is the squad process pattern.
-alive=$(/bin/ps -axwwo command= | grep -cE "${SG_RUN_CMD_RE:-[s]quad start( |\$)}")
+table=$($SG_PS -axwwo command=) || { echo "HEARTBEAT: the process read failed; no run is marked dead"; exit 0; }   # an unknown table is never an empty one (#1508)
+alive=$(printf '%s\n' "$table" | grep -cE "${SG_RUN_CMD_RE:-[s]quad start( |\$)}")
 open=0; marked=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do case "$r" in /*) rf=$r;; *) rf=${SG_CHECKOUT:-.}/runs/$r;; esac
   grep -q '"event": *"verdict"' "$rf/record.jsonl" 2>/dev/null && continue
   open=$((open+1))

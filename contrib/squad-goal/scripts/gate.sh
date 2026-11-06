@@ -309,7 +309,7 @@ case "${1:-}" in
     wd=
     # reap_wd <pid>: the watchdog's own group when it leads one, its children and its pid when it does not, so the sleep it
     # forked is never reparented and left to run out its bound (#1441).
-    reap_wd() { local p; [ "$(${SG_PS:-/bin/ps} -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
+    reap_wd() { local p; [ "$($SG_PS -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
       for p in $(pgrep -P "$1" 2>/dev/null); do kill "$p" 2>/dev/null; done; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
     trap '[ -z "$wd" ] || reap_wd "$wd"; note fail unproven "bounded: the gate was stopped at its deadline and no check reported a defect"; [ "$FOC" = fail ] && exit 1; exit "${note_rc:-143}"' TERM
     "$@" & cpid=$!

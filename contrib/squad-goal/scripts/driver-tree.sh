@@ -3,8 +3,12 @@
 # until none is left (a supervisor may restart a lane while it stops), then KILL what a last scan still finds. A lane outlives
 # a supervisor killed first (it is reparented to pid 1), so the tree is found by its root, not by its parent. It never signals
 # a process group: a driver that shares the suite's group would take the suite down with it.
+. "${BASH_SOURCE[0]%/*}/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS (#1508)
+# A suite that sources this file and then clears every SG_ name (`unset "${!SG_@}"`) would leave the scan with no reader, find
+# nothing and leak its drivers, so the reader is kept under a name of its own.
+DT_PS=$SG_PS
 driver_tree_pids() {
-  /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | DT_ROOT="$1" DT_SELF="$$" awk '
+  ${SG_PS:-$DT_PS} -axwwo pid=,ppid=,command= 2>/dev/null | DT_ROOT="$1" DT_SELF="$$" awk '
     { ppid[$1] = $2; line[$1] = $0 }
     END {
       for (p in line) if (index(line[p], ENVIRON["DT_ROOT"])) want[p] = 1

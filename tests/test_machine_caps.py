@@ -9,14 +9,13 @@ import os
 import subprocess
 import sys
 import time
-import types
 from pathlib import Path
 
 import anyio
 import pytest
 import yaml
 
-from squad import caps, defaults, record
+from squad import caps, defaults, procs, record
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
@@ -95,12 +94,13 @@ def counting_ps(monkeypatch):
     """Every process `squad/caps.py` itself starts, as the argv it was given. This module's process count is the cost a
     poll pays, so it is what a fork storm is measured in."""
     calls = []
+    real = procs.snapshot
 
-    def run(argv, *a, **k):
-        calls.append(argv)
-        return subprocess.run(argv, *a, **k)
+    def snapshot(pids=None):
+        calls.append(pids)
+        return real(pids)
 
-    monkeypatch.setattr(caps, "subprocess", types.SimpleNamespace(run=run))
+    monkeypatch.setattr(procs, "snapshot", snapshot)
     return calls
 
 

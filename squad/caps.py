@@ -27,16 +27,15 @@ free slots than that admission holds.
 Guard: `tests/test_machine_caps.py`.
 """
 import contextlib
-import datetime
 import fcntl
 import json
 import os
 import re
-import subprocess
 import time
 from pathlib import Path
 
 from squad import defaults as D
+from squad import procs
 from squad import project_settings as P
 from squad import run_liveness as RL
 from squad.options import OptionError
@@ -115,21 +114,10 @@ def _procs(pids):
     if not want:
         return {}
     try:
-        out = subprocess.run(["/bin/ps", "-o", "pid=,lstart=,command=", "-p", ",".join(str(p) for p in want)],
-                             capture_output=True, text=True, check=False).stdout
-    except OSError:
+        table = procs.snapshot(want)
+    except procs.ReadError:
         return {}
-    found = {}
-    for line in out.splitlines():
-        parts = line.strip().split(None, 6)      # pid, the five fields of lstart, then the command and its arguments
-        if len(parts) < 6:
-            continue
-        try:
-            found[int(parts[0])] = (datetime.datetime.strptime(" ".join(parts[1:6]), "%a %b %d %H:%M:%S %Y").timestamp(),
-                                    parts[6] if len(parts) > 6 else "")
-        except ValueError:
-            continue
-    return found
+    return {pid: (p.start, p.command) for pid, p in table.items() if p.start is not None}
 
 
 def started_at(pids):

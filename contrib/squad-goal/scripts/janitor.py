@@ -66,7 +66,7 @@
     notice. It repeats at most once per bound, it never dispatches, and a pass that dispatches drops the file, so the next idle
     starts the clock again. A dry pass raises no alert and writes no bound.
 Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
-import calendar, json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
+import calendar, importlib.util, json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 acts = []
@@ -150,16 +150,23 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
             if not dry:
                 queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
                 alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
-procs = {}
-for l in sh("/bin/ps", "-ewwo", "pid=,ppid=,command=").splitlines():
-    p = l.split(None, 2)
-    if len(p) == 3 and p[0].isdigit(): procs[int(p[0])] = (int(p[1]), p[2])
-starts = {}
-for l in sh("/bin/ps", "-eo", "pid=,lstart=").splitlines():
-    p = l.split(None, 5)
-    if len(p) == 6 and p[0].isdigit():
-        try: starts[int(p[0])] = time.mktime(time.strptime(" ".join(p[1:]).strip(), "%a %b %d %H:%M:%S %Y"))
-        except ValueError: pass
+def _procs_module():
+    """squad/procs.py, the one process reader, loaded by path from the repository this script serves (SG_SQUAD, SG_CHECKOUT,
+    else the one it sits in). That file imports nothing from squad, so it loads alone under any python3 (#1508)."""
+    name = "squad_procs"
+    if name in sys.modules: return sys.modules[name]
+    roots = [r for r in (os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), str(pathlib.Path(__file__).resolve().parents[3])) if r]
+    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "procs.py").is_file()), roots[-1])
+    spec = importlib.util.spec_from_file_location(name, pathlib.Path(root) / "squad" / "procs.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod   # a dataclass in the module reads its own module by name while it loads
+    spec.loader.exec_module(mod)
+    return mod
+PR = _procs_module()
+try: _table = PR.snapshot()
+except PR.ReadError: _table = {}   # no read: no process is judged gone or alive on it
+procs = {pid: (p.ppid, p.command) for pid, p in _table.items()}
+starts = {pid: p.start for pid, p in _table.items() if p.start is not None}
 cwd = {}; pid = None
 for l in sh(LSOF, "-d", "cwd", "-Fpn").splitlines():
     if l.startswith("p"): pid = int(l[1:])

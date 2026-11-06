@@ -9,13 +9,14 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # The state directory the locks live in: the caller's SG_STATE, else the seam's own base (address.sh) -- a path spelled here
 # would be a second dialect of the state rule the seam owns (test_squad_goal_state_split).
 if [ -z "${SG_STATE:-}" ]; then . "$(dirname "$0")/address.sh"; SG_STATE=$(sg_state_base); fi
+. "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS (#1508)
 st=$SG_STATE; n=$1; shift; L="$st/locks/single-$n"; mkdir -p "$st/locks"
 # SG_SINGLE_WAIT=<polls>: a caller that must not skip its step in silence waits up to that many one-second polls for the holder
 # (#471), and still exits 76 when the lock stays held; the caller reads the holder from $L/pid to say why.
 w=${SG_SINGLE_WAIT:-0}
 HELD=76   # the one "the lock is held" code (#1290): never a command's own exit
 # A zombie holder is dead: its parent has not reaped it, and kill -0 still answers (#1057).
-alive() { kill -0 "$1" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
+alive() { kill -0 "$1" 2>/dev/null && [ "$($SG_PS -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
 while [ "$w" -gt 0 ] && [ -d "$L" ] && h=$(cat "$L/pid" 2>/dev/null) && [ -n "$h" ] && alive "$h"; do sleep 1; w=$((w-1)); done
 if ! mkdir "$L" 2>/dev/null; then
   h=$(cat "$L/pid" 2>/dev/null)

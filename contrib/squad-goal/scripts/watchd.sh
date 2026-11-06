@@ -2,17 +2,17 @@
 # usage: watchd.sh start|stop|drain|reload|status   (run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873)
 # Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
-. "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
 . "$(dirname "$0")/ghcall.sh"   # the one seam the start's loop-bug read goes through (ADR-0146)
 # The slot is the one fact a supervisor holds (#932): watchd.pid is what a reader looks at, and watchd.lock/pid is what a
 # second `run` is refused by. alive() reads the slot, so a pid file a dying duplicate removed no longer reads as "not running".
 # A live supervisor is a `watchd.sh run` of any copy of the skill: the repository's scripts and the live ones are two paths
 # to one loop, and a proof that matched one absolute path read the other copy's holder as stale and ran a second loop (#1312).
-is_watchd() { /bin/ps -p "$1" -ww -o command= 2>/dev/null | grep -qE '(^|[ /])watchd\.sh run$'; }
+is_watchd() { $SG_PS -p "$1" -ww -o command= 2>/dev/null | grep -qE '(^|[ /])watchd\.sh run$'; }
 alive() { pid=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$pid" ] || { [ -s "$P" ] && pid=$(cat "$P"); }; [ -n "$pid" ] && is_watchd "$pid"; }
 # orphans: the lanes of this profile's state directory that pid 1 holds, so their supervisor is gone, one "<pid> <lane>" a line (#959).
 # A lane is named by its own pid file under $SG_STATE, whichever copy of the skill it runs from (#1313), so a profile never reads another's lanes.
-orphans() { /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | awk '$2 == 1 { for (i = 3; i <= NF; i++) if ($i ~ /(^|\/)(watch|fastloop|cqflush)\.sh$/) { print $1, $i; break } }' | while read -r p l; do
+orphans() { $SG_PS -axwwo pid=,ppid=,command= 2>/dev/null | awk '$2 == 1 { for (i = 3; i <= NF; i++) if ($i ~ /(^|\/)(watch|fastloop|cqflush)\.sh$/) { print $1, $i; break } }' | while read -r p l; do
   case ${l##*/} in watch.sh) f=$SG_STATE/locks/watch/pid;; fastloop.sh) f=$SG_STATE/fastloop.pid;; cqflush.sh) f=$SG_STATE/cqflush.pid;; esac
   [ "$(cat "$f" 2>/dev/null)" = "$p" ] && printf '%s %s\n' "$p" "${l##*/}"; done; }
 # The drivers run the skill this script sits in: its PUBLISHED sha, else its git HEAD, goes to driver.sha, so live-guard.sh
@@ -51,7 +51,7 @@ drain_busy() {
       return 0
     fi; }
   g=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
-  [ -n "$g" ] && kill -0 "$g" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$g" 2>/dev/null | cut -c1)" != Z ] && return 0
+  [ -n "$g" ] && kill -0 "$g" 2>/dev/null && [ "$($SG_PS -o stat= -p "$g" 2>/dev/null | cut -c1)" != Z ] && return 0
   return 1
 }
 # The wait before the next drain read: SG_DRAIN_POLL, doubled for each failed read in a row, at most SG_DRAIN_BACKOFF_MAX.
@@ -144,7 +144,7 @@ case "${1:-status}" in
     # guard path runs this stop from inside watch.sh, a child of the supervisor and a member of its group, so
     # `kill -- -$pid` would spare the supervisor and it would restart the cycle (#489). A stop from outside the group
     # keeps the group-wide signal; a stop from inside it is handed to a helper that is not in the group.
-    if [ "$(ps -o pgid= -p $$ | tr -d ' ')" = "$pid" ]; then
+    if [ "$($SG_PS -o pgid= -p $$ | tr -d ' ')" = "$pid" ]; then
       python3 -I -c 'import os,signal,sys; os.kill(int(sys.argv[1]), signal.SIGTERM)' "$pid"
     else
       kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"

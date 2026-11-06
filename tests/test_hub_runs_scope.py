@@ -27,6 +27,16 @@ def hub():
     return mod
 
 
+def _table(lines):
+    """The process table the hub reads (squad/procs.py, #1508): one Proc per `pid command` line."""
+    from squad import procs
+    out = {}
+    for line in lines:
+        pid, _, command = line.partition(" ")
+        out[int(pid)] = procs.Proc(int(pid), 1, int(pid), None, command)
+    return out
+
+
 @pytest.fixture
 def machine(hub, monkeypatch):
     """Two profiles' dashboards alive on one machine: one under this profile's checkout, one under another's."""
@@ -35,16 +45,15 @@ def machine(hub, monkeypatch):
     for co in (mine, other):
         (co / "runs" / "run-a").mkdir(parents=True)
     run_mine, run_other = mine / "runs" / "run-a", other / "runs" / "run-a"
-    ps = "\n".join(f"{100 + i} /usr/bin/python3 -m squad.dashboard_server {d}" for i, d in enumerate((run_mine, run_other)))
+    ps = [f"{100 + i} /usr/bin/python3 -m squad.dashboard_server {d}" for i, d in enumerate((run_mine, run_other))]
 
     def fake_sh(cmd, *args, **kw):
-        if cmd == "/bin/ps":
-            return ps
         if cmd == hub.LSOF:
             return "n127.0.0.1:5555"
         return ""
 
     monkeypatch.setattr(hub, "sh", fake_sh)
+    monkeypatch.setattr(hub, "process_table", lambda: _table(ps))
     monkeypatch.setattr(hub, "CHECKOUT", str(mine))
     monkeypatch.setattr(hub, "STATE", base / "state")
     monkeypatch.delenv("SG_PROJECTS", raising=False)
@@ -70,17 +79,16 @@ def test_a_dashboard_started_by_any_interpreter_is_listed(hub, machine, monkeypa
     hub showed no live run at all (#1751)."""
     mine, other = machine
     run_mine = mine / "runs" / "run-a"
-    ps = (f"4242 /Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
-          f" -m squad.dashboard_server {run_mine}")
+    ps = [(f"4242 /Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+           f" -m squad.dashboard_server {run_mine}")]
 
     def fake_sh(cmd, *args, **kw):
-        if cmd == "/bin/ps":
-            return ps
         if cmd == hub.LSOF:
             return "n127.0.0.1:5555"
         return ""
 
     monkeypatch.setattr(hub, "sh", fake_sh)
+    monkeypatch.setattr(hub, "process_table", lambda: _table(ps))
     assert [r["project"] for r in hub.runs() if r.get("port")] == ["mine"]
 
 

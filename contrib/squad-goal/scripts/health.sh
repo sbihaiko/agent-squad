@@ -7,10 +7,10 @@
 # which pass owns it, and a sustained snapshot miss rate is named from the call log; both also land in health.json as a short `brief`
 # the hub's footer shows. ghspend.py makes no request, so this pass spends nothing from the bucket it reports on.
 # Each cause alerts ONCE (alerts.log + macOS notification) when it appears and re-arms when it clears. HEALTH_DRY=1 prints only; HEALTH_NOTIFY overrides the notifier.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/startability.sh"; export SG_GH_PASS=health; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/startability.sh"; export SG_GH_PASS=health; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
-alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | grep -q "$2"; }
+alive() { [ -s "$1" ] && $SG_PS -p "$(cat "$1")" -ww -o command= 2>/dev/null | grep -q "$2"; }
 # akeys[i] is the alert key of causes[i]: the marker name, which says when an alert has already gone out. It is the cause
 # name, except a repeating failure, whose key also names its reason (#1294), so each group alerts once on its own.
 causes=(); detail=(); briefs=(); akeys=()
@@ -240,7 +240,7 @@ wr=${SG_WATCH_CMD_RE:-'squad-goal/scripts/watch\.sh$'}
 # loop's process group, so a match with parent pid 1 that shares a group with another match is a fork too. Two loops started by two
 # watchd runs sit in two groups and both count. One ps snapshot gives pid, parent, group and command together; the regex goes in the
 # environment, never in awk's argv.
-wl=$(/bin/ps -axwwo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/awk -v me=$$ '{ pp[$1]=$2; pg[$1]=$3; c=$0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); if ($1 != me && c ~ ENVIRON["WR"]) m[$1]=1 }
+wl=$($SG_PS -axwwo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/awk -v me=$$ '{ pp[$1]=$2; pg[$1]=$3; c=$0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); if ($1 != me && c ~ ENVIRON["WR"]) m[$1]=1 }
   END { for (p in m) { if (pp[p] in m) continue
     if (pp[p] == 1) { f = 0; for (q in m) if (q != p && pg[q] == pg[p]) f = 1; if (f) continue }
     print p } }' | sort -n | tr '\n' ' '); wl=${wl% }
@@ -268,7 +268,7 @@ done
 pstate() { [ -r "/proc/$1/environ" ] && /usr/bin/awk 'BEGIN{RS="\0"} index($0,"SG_STATE=")==1 { print substr($0,10); exit }' "/proc/$1/environ" 2>/dev/null; }
 wkeep=
 for p in $wl; do
-  pp=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')
+  pp=$($SG_PS -p "$p" -o ppid= 2>/dev/null | tr -d ' ')
   [ "$p" = "$wlockpid" ] && { wkeep="$wkeep $p"; continue; }
   [ -n "$wd" ] && [ "$pp" = "$wd" ] && { wkeep="$wkeep $p"; continue; }
   s=$(pstate "$p"); [ -n "$s" ] && [ "${s%/}" = "$mestate" ] && { wkeep="$wkeep $p"; continue; }
@@ -280,7 +280,7 @@ wl=${wkeep# }
 nw=$(printf '%s\n' $wl | grep -c .)
 # The pid watchd holds for its watch.sh is the watch.sh child of the pid in watchd.pid; any other counted pid is the stray. Read-only: nothing here kills.
 held=
-[ -n "$wd" ] && for p in $wl; do [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && held="$held $p"; done; held=${held# }
+[ -n "$wd" ] && for p in $wl; do [ "$($SG_PS -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && held="$held $p"; done; held=${held# }
 [ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive (pids $wl; watchd pid ${wd:-none} holds ${held:-none}): watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
 # health.json shape (#1294, asserted in test-health.sh): `causes` holds one entry per alert, so a repeating failure with two groups
 # over the count is listed twice and the length of the list counts the groups. `briefs` is keyed by cause name, so it carries the
@@ -291,7 +291,7 @@ held=
 # that broke it leaves, the tip again), so wave.sh marks each round's start in the lock's round file: that mark is the progress, not
 # the landing's start. The lock's pid mtime is the instant the holder took it, which is what the alert names; a new holder restarts it.
 lkd="$SG_STATE/locks/single-wland"; lhp=$(cat "$lkd/pid" 2>/dev/null)
-if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$lhp" 2>/dev/null | cut -c1)" != Z ]; then
+if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$($SG_PS -o stat= -p "$lhp" 2>/dev/null | cut -c1)" != Z ]; then
   lw=${SERIAL_WAIT_SECONDS:-900}; case $lw in ''|*[!0-9]*) lw=900;; esac
   lb=${SG_GATE_BOUND_SECONDS:-${SG_PROMOTE_BOUND_SECONDS:-900}}; case $lb in ''|*[!0-9]*|0) lb=900;; esac
   ls=$(mtime "$lkd/pid"); rs=$(mtime "$lkd/round"); [ "$rs" -gt "$ls" ] && lp=$rs || lp=$ls   # the round mark, when a round has begun since the lock was taken
