@@ -147,7 +147,8 @@ def test_the_left_edge_swipe_is_the_browser_back_and_no_page_handler():
 def test_the_move_gesture_starts_in_the_thumb_zone():
     html = PAGE.read_text()
     assert "const thumb = inThumbZone(p.clientY, window.innerHeight)" in html
-    assert 'pm: !!(thumb && card && card.dataset.pm === "1"' in html, "a card outside the thumb zone arms the one write"
+    assert 'pm: !!(!handle && thumb && card && card.dataset.pm === "1"' in html, "a card outside the thumb zone arms the one write"
+    assert "handle = !!(e.target.closest && e.target.closest(\".grab\"))" in html, "the grab handle is not the promotion band's exclusion (#1454)"
 
 
 def test_every_dismissal_control_sits_in_a_bottom_footer():

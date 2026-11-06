@@ -77,7 +77,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #sheet-actions{flex:none;display:flex;align-items:center;gap:8px;margin-top:8px}
 #sheet-actions button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #sheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate var(--motion-duration-exit) var(--motion-exit-easing),display 0s allow-discrete}
-.grab{display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin:0 auto -30px}
+.grab{display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin:0 auto}
 .grab::before{content:"";width:40px;height:4px;border-radius:var(--radius-sm);background:var(--line)}
 #sh-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 #sh-head button,#sh-next{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
@@ -1171,9 +1171,10 @@ document.addEventListener("touchstart", e => {
   const owner = gestureOwner(rolesOf(e.target));
   if (owner === "none") { touch = null; return; }
   const p = e.touches[0], card = e.target.closest ? e.target.closest(".card") : null;
-  const thumb = inThumbZone(p.clientY, window.innerHeight);   // a dismissal and the one write start where the thumb is (#1142)
-  touch = { owner, x: p.clientX, y: p.clientY, thumb, handle: !!(e.target.closest && e.target.closest(".grab")), atTop: $("sheet-content").scrollTop === 0, nested: owner === "sheet" && nestedIn(e.target, $("sheet")),
-            card: card && card.closest("#cards") ? card : null, pm: !!(thumb && card && card.dataset.pm === "1" && card.closest("#cards")) };
+  const thumb = inThumbZone(p.clientY, window.innerHeight);   // the one write starts where the thumb is (#1142)
+  const handle = !!(e.target.closest && e.target.closest(".grab"));   // the grab handle closes the sheet and never stages a move (#1454)
+  touch = { owner, x: p.clientX, y: p.clientY, thumb, handle, atTop: $("sheet-content").scrollTop === 0, nested: owner === "sheet" && nestedIn(e.target, $("sheet")),
+            card: card && card.closest("#cards") ? card : null, pm: !!(!handle && thumb && card && card.dataset.pm === "1" && card.closest("#cards")) };
   suppressClick = false;
 }, { passive: true });
 document.addEventListener("touchmove", e => {
