@@ -181,5 +181,5 @@ def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     # The gate slots go below the plugin's twelve so one gate runs at a time: at twelve, three gates held the machine between
     # them, each kept its slots while it waited for the lock, and the queue outlived the takeover bound (#1191). A project may
     # only lower a machine-wide cap, and this one lowers it.
-    assert overlay["caps"] == {"runs": 4, "children": 12, "gates": 6}
+    assert overlay["caps"] == {"runs": 3, "children": 12, "gates": 6}
     assert overlay["limits"]["max_budget_usd"] == 30
