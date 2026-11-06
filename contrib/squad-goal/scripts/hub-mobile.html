@@ -224,6 +224,8 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #undo-text{flex:1;font-size:var(--fs-body)}
 #undo button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #undo button[hidden]{display:none}
+:root:has(#undo:not([hidden])){--sq-ov-bottom:calc(142px + env(safe-area-inset-bottom))}
+:root:has(#sheet:not([hidden])){--sq-ov-bottom:calc(60dvh + 12px)}
 /* Motion in the language of the desktop lane fade (owner, 2026-11-01): what comes in eases out, what goes eases in, and
    nothing waits on it. A sheet slides up from the bottom edge and back down. A card the last render did not draw fades in;
    a lane that shuts folds its cards away; reduced motion turns all of it off. */
@@ -1108,10 +1110,10 @@ document.addEventListener("touchmove", e => {
 document.addEventListener("touchend", e => {
   if (!touch) return;
   const p = e.changedTouches[0], t = endGesture(), dx = p.clientX - t.x, dy = p.clientY - t.y;
-  if (t.card && Math.abs(dx) > 10) suppressClick = true;
-  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested, thumb: t.thumb });
-  if (g) { step(g); return; }
+  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested, thumb: t.thumb, promotable: t.pm });
   const mv = moveDrag({ promotable: t.pm, dx, dy });
+  suppressClick = !!t.card && (!!g || !!mv);
+  if (g) { step(g); return; }
   // The released card is resolved by its number against the board as it now stands: a 10 s read can reorder the column
   // during the drag, and the index taken at touchstart would then name another card (#829).
   const n = t.card ? String(t.card.dataset.n) : "";

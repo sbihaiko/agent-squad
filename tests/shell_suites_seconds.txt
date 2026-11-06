@@ -202,6 +202,7 @@ test-wave-lifecycle.sh 18.50
 test-wave-norefs.sh 18.04
 test-wave-probe.sh 2.64
 test-wave-redrefs.sh 22.78
+test-wave-refparse.sh 1.20
 test-wave-requeue-caller-checkout.sh 24.48
 test-wave-requeue-cap.sh 3.35
 test-wave.sh 106.19
