@@ -51,10 +51,9 @@ const anchorView = (v, cols, id) => {
   const far = cols.findIndex(c => at(c) >= 0);
   return far >= 0 ? { ...v, col: far, card: at(cols[far]) } : { ...v, sheet: false };
 };
-const EDGE_PX = 24, PULL_MIN = 60;
-const runsGesture = ({ x0, dx, dy, atTop, thumb }) => {
+const PULL_MIN = 60;
+const runsGesture = ({ dx, dy, atTop }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);
-  if (x0 <= EDGE_PX && dx >= SWIPE_MIN && ax > ay) return thumb ? { act: "back" } : null;
   if (atTop && dy >= PULL_MIN && ay > ax) return { act: "refresh" };
   return null;
 };

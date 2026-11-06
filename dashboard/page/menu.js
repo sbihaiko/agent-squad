@@ -22,14 +22,30 @@ function buttonRows() {
   const els = [...document.querySelectorAll("#left .tools button[title], #left .tools label.btn, #view button[title], #replay button[title]")].filter((b) => b.offsetParent !== null);
   return els.map((b) => `<tr><td>${esc(b.firstChild && b.firstChild.nodeType === 3 ? b.firstChild.textContent.trim() : b.textContent.trim())}</td><td>${esc(b.getAttribute("title") || "")}</td></tr>`).join("");
 }
+let helpOpener = null;
+// The page behind a layer is inert: every sibling from the layer up to the body.
+function inertBehind(layer, on) {
+  for (let el = layer; el !== document.body; el = el.parentElement)
+    for (const sib of el.parentElement.children) if (sib !== el) sib.inert = on;
+}
 function openHelp() {
   $("help-rows").innerHTML = core.HELP.map((r) => `<tr><td>${esc(r.how)}</td><td>${esc(r.what)}</td></tr>`).join("");
   $("help-btns").innerHTML = buttonRows();
   $("help-legend").innerHTML = swatches();
+  helpOpener = document.activeElement;
   $("help").hidden = false; $("b-help").setAttribute("aria-expanded", "true");
+  inertBehind($("help"), true);
+  $("b-help-close").focus();
 }
-function closeHelp() { $("help").hidden = true; $("b-help").setAttribute("aria-expanded", "false"); }
+function closeHelp() {
+  if ($("help").hidden) return;
+  $("help").hidden = true; $("b-help").setAttribute("aria-expanded", "false");
+  inertBehind($("help"), false);
+  (helpOpener && helpOpener.isConnected && helpOpener !== document.body ? helpOpener : $("b-help")).focus();
+}
 function toggleHelp() { if ($("help").hidden) openHelp(); else closeHelp(); }
+// Captured on window so the top layer takes Escape before the page's own document handler sees it.
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("help").hidden) { e.stopPropagation(); closeHelp(); } }, true);
 // #footer (the hint and the replay bar's row) sets the floor; keep the side legend above the row, at any width. The row's
 // own top is measured rather than its height, so the bottom sheet that lifts the row lifts the legend's floor too.
 (function trackFooterHeight() {
