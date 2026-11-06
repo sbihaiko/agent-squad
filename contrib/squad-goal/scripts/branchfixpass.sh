@@ -9,7 +9,7 @@
 # retries the tip.
 # Stop (ADR-0134): a round fails when the review of the next tip has the same findings (line numbers, shas and whitespace removed).
 # auto/branchfix-fp-<key> keeps the findings of the last dispatched round and auto/branchfix-same-<key> the count of failed rounds in
-# a row. At SG_BRANCHFIX_STALLS (default 3) the rounds stop: one status line on the issue and the label frozen:owner, once. Changed
+# a row. At SG_BRANCHFIX_STALLS (default 2) the branch is stalled and its rounds stop: one status line on the issue and the label frozen:owner, once. Changed
 # findings restart the count. At most SG_FIX_PASS_MAX fix runs (default 3) start per pass. watch.sh runs this under single.sh.
 # A loop defect is fixed outside the loop (ADR-0146, #841): no fix run for a branch whose issue carries `loop-bug` or a `loop-bug:*`
 # label, and none at all while LOOP STOP holds. Each such tip gets one BRANCHFIX SKIP line (auto/branchfix-skip-<key>-<sha9>).
@@ -17,7 +17,7 @@
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=branchfix
 SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/workbranches.sh"
-remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; max=${SG_FIX_PASS_MAX:-3}; cap=${SG_BRANCHFIX_STALLS:-3}
+remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; max=${SG_FIX_PASS_MAX:-3}; cap=${SG_BRANCHFIX_STALLS:-2}
 export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
 sg_work_branches "$remote" || { echo "BRANCHFIX: $wb_err"; exit 0; }
@@ -109,11 +109,11 @@ while read -r sha br i; do
   fp=$(python3 "$here/revformat.py" --fingerprint "$f"); same=$(python3 "$here/revformat.py" --stall "$A" branchfix "$key" "$fp")
   if [ "$same" -ge "$cap" ]; then
     [ "$(cat "$A/branchfix-stop-$key" 2>/dev/null)" = "$fp" ] && continue
-    printf 'Status update — branch %s @ %s: %s fix rounds left the same review findings, so the loop stopped its fix rounds (ADR-0134). The card is frozen for the owner (frozen:owner). A push with other findings restarts the rounds.\n' "$br" "$s9" "$same" > "$(sg_cq_status "$i" "branchfix$$")"
+    printf 'Status update — branch %s @ %s is stalled: %s fix rounds left the same review findings, so the loop stopped its fix rounds (ADR-0134). The card is frozen for the owner (frozen:owner). A push with other findings restarts the rounds.\n' "$br" "$s9" "$same" > "$(sg_cq_status "$i" "branchfix$$")"
     o=$(gh_send --method POST "repos/$SG_REPO/issues/$i/labels" -f "labels[]=frozen:owner") \
       || { echo "BRANCHFIX STOP $br: the label write failed, the next pass retries: $o"; continue; }
     echo "$fp" > "$A/branchfix-stop-$key"
-    echo "BRANCHFIX STOP $br @ $s9 (issue #$i): $same fix rounds with no change; card frozen for the owner"; continue
+    echo "BRANCHFIX STOP $br @ $s9 (issue #$i): stalled after $same fix rounds with no change; card frozen for the owner"; continue
   fi
   b=$(mktemp)
   { echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for the child below; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. The child's spend: $(bash "$here/envelope-spend.sh" 2>/dev/null)."

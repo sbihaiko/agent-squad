@@ -64,17 +64,17 @@ push gui/7-x; rev gui/7-x CHANGES "c.sh:9 a new finding"
 r=$(NORUN=1 fp); r=$(fp)
 [ "$(n gui/7-x)" = 3 ] && ok "a launch with no run id frees the tip for the next pass" || ko "after a failed launch gui/7-x dispatched $(n gui/7-x) times"
 # 4) the same findings at a new tip count as one failed round with no change (ADR-0134); a line number that moved is the same
-#    finding. The round of case 3 and two more fail alike; at the third the rounds stop: one status line, the card frozen, once
+#    finding. The round of case 3 and the first pass here fail alike; the next pass stops the branch: one status line, the card frozen, once
 : > "$T/launch.log"; o=
 for k in 1 2 3 4 5; do push gui/7-x; rev gui/7-x CHANGES "c.sh:$((9+k)) a new finding"; o+=$(fp)$'\n'; o+=$(fp)$'\n'; done
-[ "$(n gui/7-x)" = 2 ] && ok "after three fix rounds with no change the rounds stop" || ko "unchanged findings dispatched $(n gui/7-x) times: '$o'"
+[ "$(n gui/7-x)" = 1 ] && ok "after two fix rounds with no change the rounds stop" || ko "unchanged findings dispatched $(n gui/7-x) times: '$o'"
 [ "$(printf '%s' "$o" | /usr/bin/grep -c '^BRANCHFIX STOP gui/7-x')" = 1 ] && ok "the stop is said once" || ko "stop lines: '$o'"
 [ "$(/usr/bin/grep -c 'issues/7/labels.*frozen:owner' "$T/gh.log")" = 1 ] && ok "the card is frozen for the owner once (frozen:owner, through the door)" || ko "label writes: $(/usr/bin/grep labels "$T/gh.log")"
 s=$(cat "$T/st/cq/"*"#7-status~"* 2>/dev/null)
 case "$s" in *"gui/7-x"*"frozen:owner"*) ok "the issue gets one status line through the status queue";; *) ko "no status line: '$s' $(ls "$T/st/cq")";; esac
 # 5) changed findings restart the count
 push gui/7-x; rev gui/7-x CHANGES "d.sh:1 another finding"; r=$(fp)
-[ "$(n gui/7-x)" = 3 ] && ok "changed findings restart the count" || ko "after changed findings gui/7-x dispatched $(n gui/7-x) times: '$r'"
+[ "$(n gui/7-x)" = 2 ] && ok "changed findings restart the count" || ko "after changed findings gui/7-x dispatched $(n gui/7-x) times: '$r'"
 # 6) the pass is bounded
 : > "$T/launch.log"; for i in 10 11 12; do push "gui/$i-b"; rev "gui/$i-b" CHANGES "e.sh:$i fix"; done
 r=$(OPEN="10 11 12" SG_FIX_PASS_MAX=2 fp)
@@ -199,4 +199,12 @@ printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\
 r=$(OPEN="33" fp)
 [ "$($O rev-parse "refs/heads/$rb")" = "$K" ] && ok "a run that added no head leaves the kept branch as it is" || ko "the kept branch moved to $($O rev-parse "refs/heads/$rb"), want $K"
 case "$r" in *"(rebase round"*) ko "a run with no head was pushed as a round: '$r'";; *) ok "a run with no head pushes no round";; esac
+# 22) (#1425) two fix rounds with the same blocking finding are the most the pass dispatches under the default cap: the third
+#     pass stops the branch as stalled and dispatches no third run.
+: > "$T/launch.log"
+push gui/11-s; rev gui/11-s CHANGES "d.sh:1 the same finding"; r=$(OPEN="7 8 9 11" fp)
+push gui/11-s; rev gui/11-s CHANGES "d.sh:2 the same finding"; r=$(OPEN="7 8 9 11" fp)
+push gui/11-s; rev gui/11-s CHANGES "d.sh:3 the same finding"; r=$(OPEN="7 8 9 11" fp)
+[ "$(n gui/11-s)" = 2 ] && ok "22 the third pass with the same finding dispatches no third fix run" || ko "22 dispatched $(n gui/11-s) fix runs: '$r'"
+case "$r" in *"BRANCHFIX STOP gui/11-s"*"stalled"*) ok "22 the stop names the branch as stalled";; *) ko "22 no stalled stop line: '$r'";; esac
 exit $fail

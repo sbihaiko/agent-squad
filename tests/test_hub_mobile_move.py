@@ -215,6 +215,17 @@ const box = {
 };
 box.sessionStorage = box.sessionStorage;
 box.window = box;
+const popQueue = [];
+box.history = {
+  entries: [{ state: __HISTORY__ }], index: 0,
+  get state() { return this.entries[this.index].state; },
+  pushState(s) { this.entries.length = this.index + 1; this.entries.push({ state: s }); this.index++; },
+  replaceState(s) { this.entries[this.index].state = s; },
+  back() { if (this.index > 0) { this.index--; popQueue.push(1); } },
+};
+box.__popOne = () => { if (popQueue.length) { popQueue.shift(); box.__dispatch("popstate", {}); } };
+box.__popAll = () => { while (popQueue.length) box.__popOne(); };
+box.__pending = () => popQueue.length;
 box.document = {
   hidden: false,
   getElementById: id => { const hit = root.descendants().find(e => e.id === id); return hit || null; },
@@ -242,7 +253,7 @@ BOARD_ONE = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": N
                         {"name": "Todo", "n": 0, "items": []}]}
 
 
-def run_page(page, driver, board=None, promote=None, routes=None):
+def run_page(page, driver, board=None, promote=None, routes=None, history_state=None):
     """The served mobile page booted under node over the stub DOM, then one driver run inside it. The driver is one async
     body: it reads and sets the page's own names (`pending`, `$`, `stageMove`) and returns the facts the test asserts.
     `routes` answers any other path the driver's screen asks, and records every POST it takes."""
@@ -250,7 +261,8 @@ def run_page(page, driver, board=None, promote=None, routes=None):
                          .replace("__DRIVER__", json.dumps(driver))
                          .replace("__BOARD__", json.dumps(board or [BOARD_ONE]))
                          .replace("__ROUTES__", json.dumps(routes or {}))
-                         .replace("__PROMOTE__", json.dumps(promote)))
+                         .replace("__PROMOTE__", json.dumps(promote))
+                         .replace("__HISTORY__", json.dumps(history_state)))
     path = pathlib.Path(tempfile.mkdtemp()) / "page.js"
     path.write_text(script)
     p = subprocess.run([NODE, str(path)], capture_output=True, text=True, timeout=60)

@@ -149,6 +149,9 @@ HOST_ROOTS = ("MESENAI_REPO", "MESENAI_ROOT")
 HOST_ABSENT_REASON = f"no MesenAI checkout on this runner: {' and '.join(HOST_ROOTS)} absent"
 NODE_BOUND_MARKER = "node_bound"
 NODE_ABSENT_REASON = "no node on this runner: the test runs the page's JavaScript under node"
+SANDBOX_BOUND_MARKER = "sandbox_bound"
+SANDBOX_ABSENT_REASON = "no macOS sandbox-exec on this runner: the OS signal wall (#1469) is not enforceable here (ADR-0139)"
+SANDBOX_WALL_REASON = "this run is inside the signal wall: a process outside the session cannot be started from here (#1469)"
 CI_RUNNER_SWITCH = "SQUAD_CI_RUNNER"
 
 
@@ -174,6 +177,15 @@ def node_present():
     return not ci_runner_simulated() and shutil.which("node") is not None
 
 
+def sandbox_present():
+    return not ci_runner_simulated() and os.path.exists("/usr/bin/sandbox-exec")
+
+
+def inside_signal_wall():
+    """True in a session the adapter started: its CLI carries the signal profile, and every process it starts inherits the variable."""
+    return bool(os.environ.get("SQUAD_SIGNAL_PROFILE"))
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -181,6 +193,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "node_bound: needs the node binary; deselected, never skipped, when it is absent (ADR-0139)")
+    config.addinivalue_line(
+        "markers",
+        "sandbox_bound: needs macOS sandbox-exec; deselected, never skipped, when it is absent (ADR-0139)")
     config._absent_deselected = []
 
 
@@ -209,6 +224,10 @@ def pytest_collection_modifyitems(config, items):
     # The same rule for node: a runner without the binary deselects the test that runs the page under it (ADR-0139).
     if not node_present():
         _deselect_absent(config, items, NODE_BOUND_MARKER, NODE_ABSENT_REASON)
+    if not sandbox_present():
+        _deselect_absent(config, items, SANDBOX_BOUND_MARKER, SANDBOX_ABSENT_REASON)
+    elif inside_signal_wall():
+        _deselect_absent(config, items, SANDBOX_BOUND_MARKER, SANDBOX_WALL_REASON)
 
 
 def _deselect_absent(config, items, marker_name, absent_reason):

@@ -7,15 +7,20 @@ pass through the adapter.
 
 A denial returns a reason the agent reads, so it can continue another way, and the adapter writes a `sandbox_deny` event.
 """
+import importlib.util
 import os
 import re
 import shlex
+import shutil
 from dataclasses import dataclass, field
 
 WRITE_TOOLS = {"Edit": "file_path", "MultiEdit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 MATCHER = "|".join([*WRITE_TOOLS, "Bash"])
 MIGRATE = re.compile(r"modelreg(?:\.py)?\s+migrate\b")
 _SHELL_OP = re.compile(r"\d*(?:>>?|<|\||&|;)")
+# #1469: the kernel refuses a signal to a process outside the session, whatever spells it; the two allows keep the session's own.
+SIGNAL_PROFILE = "(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))"
+WRAPPER = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "contrib", "squad-goal", "scripts", "claude-sandboxed.sh")
 
 
 @dataclass
@@ -24,6 +29,21 @@ class Matcher:
     matcher: str | None = None
     hooks: list = field(default_factory=list)
     timeout: float | None = None
+
+
+def bundled_cli():
+    """The CLI the SDK starts when no path is given: its bundled copy, else `claude` on PATH. Found without importing the SDK."""
+    spec = importlib.util.find_spec("claude_agent_sdk")
+    for loc in (spec.submodule_search_locations or []) if spec else []:
+        bundled = os.path.join(loc, "_bundled", "claude")
+        if os.path.isfile(bundled):
+            return bundled
+    return shutil.which("claude") or "claude"
+
+
+def sdk_cli_env():
+    """The env the wrapper reads to start the CLI under the signal profile."""
+    return {"SQUAD_CLAUDE_CLI": bundled_cli(), "SQUAD_SIGNAL_PROFILE": SIGNAL_PROFILE}
 
 
 def _inside(path, root):
