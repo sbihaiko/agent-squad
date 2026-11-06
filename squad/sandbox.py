@@ -111,6 +111,96 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
         for needle in bash_needles(env, home):
             if needle in cmd:
                 return f"sandbox: a command that names {needle} is denied; the live skill copy and the loop state are not this session's to touch"
+        return signal_reason(cmd)
+    return None
+
+
+# #1468: a child ran `pkill -P 1` to time pkill. The loop supervisor's parent is pid 1 (watchd starts it in a new session),
+# so it died and the loop stayed down for three hours. The wall is a deny list on the command text: each segment is read,
+# and a segment split is crude on purpose -- it also cuts a quoted `bash -c '...'` body and a loop body into segments, so a
+# signal hidden there is read the same. A kill of the session's own processes ($!, %job, a pid, its own group) passes.
+_SEGMENT = re.compile(r"\|\||&&|(?<![<>])&|[;|\n()`]|\$\(")
+_PREFIX = {"time", "nohup", "sudo", "command", "exec", "builtin", "env", "nice", "do", "then", "else", "{", "!"}
+_KILLERS = {"kill", "pkill", "killall"}
+_LAUNCHCTL_STOPS = {"stop", "kill", "bootout", "remove", "unload", "disable", "kickstart"}
+_LOOP_NAMES = re.compile(r"(?<![\w.-])(watchd|watch\.sh|fastloop|cqflush|hubctl|hub|launchd)(?:\.sh|\.pid|\.lock)?(?![\w.-])")
+
+
+def _segment_words(seg):
+    try:
+        words = shlex.split(seg, posix=True)
+    except ValueError:
+        words = [w.strip("'\"") for w in seg.split()]
+    while words and (words[0] in _PREFIX or re.fullmatch(r"[A-Za-z_]\w*=.*", words[0])):
+        words = words[1:]
+    return words
+
+
+def _pkill_parent_one(args):
+    for i, a in enumerate(args):
+        val = None
+        if a in ("-P", "--parent"):
+            val = args[i + 1] if i + 1 < len(args) else ""
+        elif a.startswith("--parent="):
+            val = a.split("=", 1)[1]
+        elif a.startswith("-P") and len(a) > 2:
+            val = a[2:]
+        if val is not None and "1" in val.split(","):
+            return True
+    return False
+
+
+def _kill_everyone(args):
+    signal, targets, i = None, [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            targets += args[i + 1:]
+            break
+        if a in ("-s", "-n") and signal is None:
+            signal, i = args[i + 1] if i + 1 < len(args) else "", i + 2
+            continue
+        if a.startswith("-") and signal is None:
+            signal = a
+        else:
+            targets.append(a)
+        i += 1
+    return any(t in ("1", "-1") for t in targets) or (not targets and signal == "-1")
+
+
+def signal_reason(cmd, depth=0):
+    """Why a Bash command that signals outside the session is denied, or None (#1468)."""
+    killing = False
+    for seg in _SEGMENT.split(cmd):
+        words = _segment_words(seg)
+        if not words:
+            continue
+        verb, args = os.path.basename(words[0]), words[1:]
+        if verb in ("sh", "bash", "zsh", "dash") and "-c" in args and depth < 3:
+            body = args[args.index("-c") + 1] if args.index("-c") + 1 < len(args) else ""
+            if inner := signal_reason(body, depth + 1):
+                return inner
+            continue
+        if verb == "xargs":
+            fed = next((os.path.basename(w) for w in args if not w.startswith("-")), "")
+            if fed in _KILLERS:
+                return (f"sandbox: a {fed} fed by xargs is denied; this session cannot prove the pid list is its own, "
+                        f"and a signal outside it can stop the loop")
+            continue
+        if verb == "launchctl" and args and args[0] in _LAUNCHCTL_STOPS:
+            return f"sandbox: launchctl {args[0]} is denied; a launchd job is the loop's, not this session's"
+        if verb not in _KILLERS:
+            continue
+        killing = True
+        if verb == "killall":
+            return "sandbox: killall is denied; a signal by name reaches processes outside this session, the loop's among them"
+        if verb == "pkill" and _pkill_parent_one(args):
+            return ("sandbox: pkill by parent 1 is denied; that signal reaches every process launchd started, "
+                    "the loop supervisor among them")
+        if verb == "kill" and _kill_everyone(args):
+            return "sandbox: kill of pid 1 or -1 is denied; it signals every process of this user, the loop supervisor among them"
+    if killing and (m := _LOOP_NAMES.search(cmd)):
+        return f"sandbox: a signal to {m.group(1)} is denied; that process is the loop's, not this session's"
     return None
 
 
