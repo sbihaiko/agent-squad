@@ -1038,6 +1038,7 @@ def run_arrow(mod, tmp_path, scenario):
     return json.loads(p.stdout)
 
 
+@pytest.mark.node_bound
 def test_the_arrow_is_disabled_and_relabelled_while_its_request_is_open(hub, tmp_path):
     mod, _ = hub
     out = run_arrow(mod, tmp_path, DEFERRED)
@@ -1045,18 +1046,21 @@ def test_the_arrow_is_disabled_and_relabelled_while_its_request_is_open(hub, tmp
     assert out["during"]["label"] != "→ Todo", "the arrow keeps its label while the write is open"
 
 
+@pytest.mark.node_bound
 def test_a_second_tap_during_the_request_sends_no_second_write(hub, tmp_path):
     mod, _ = hub
     out = run_arrow(mod, tmp_path, DEFERRED)
     assert out["postsDuringSecondTap"] == 1, "a second tap while the write is open sent a second request"
 
 
+@pytest.mark.node_bound
 def test_a_refused_arrow_returns_to_its_label_and_is_enabled(hub, tmp_path):
     mod, _ = hub
     out = run_arrow(mod, tmp_path, REFUSED)
     assert out["after"] == {"disabled": False, "label": "→ Todo", "inserted": 1}
 
 
+@pytest.mark.node_bound
 def test_an_unanswered_arrow_returns_to_its_label_and_is_enabled(hub, tmp_path):
     mod, _ = hub
     out = run_arrow(mod, tmp_path, UNANSWERED)
