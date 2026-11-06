@@ -42,6 +42,6 @@ for f in commit_refs child_of refs_of landed_key; do
 done
 /usr/bin/grep -nE "$P" "$W" | /usr/bin/grep -qE 'refs=" \$\(' && ok "the landing per-commit lookup calls $P" || ko "the salvage lookup (refs=) does not call $P"
 out=$(awk -v n="$P" '$0 ~ "^" n "\\(\\) *\\{" { s = 1 } !s { print } s && /^}/ { s = 0 }' "$W" \
-  | /usr/bin/grep -E '[Rr]efs[: ]*#' | /usr/bin/grep -vE '^[[:space:]]*#|printf|echo|--grep')
+  | /usr/bin/grep -E '[Rr]efs[: ]*#' | /usr/bin/grep -vE '^[[:space:]]*#|--grep' | /usr/bin/grep -E '(^|[^[:alnum:]_-])(grep|sed|awk)[[:space:]]|=~')
 [ -z "$out" ] && ok "no parse regex outside $P (the --grep prefilter of landed_key excepted)" || ko "parse regex outside $P: $out"
 exit $fail
