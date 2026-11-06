@@ -28,6 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 HUB = {}   # the hub under test, while its fixture runs: `post` reads the board only after a background write has answered (#1300)
 GHREAD_PY = ROOT / "contrib/squad-goal/scripts/ghread.py"
+NODE = shutil.which("node")
 
 BACKLOG = {"n": 7, "i": 101, "t": "a ticket", "s": "OPEN", "st": "Backlog", "l": ["enhancement"]}
 TODO = {"n": 8, "i": 102, "t": "already started", "s": "OPEN", "st": "Todo", "l": []}
@@ -980,3 +981,83 @@ def test_the_writer_call_carries_the_repository_the_hub_resolved(hub, monkeypatc
     monkeypatch.setattr(mod.subprocess, "run", fake)
     mod.promote_write(7, add=True)
     assert (kw.get("env") or {}).get("SG_REPO") == mod.REPO, kw
+
+
+ARROW_END = "b.disabled=false}});"
+ARROW_RUNNER = r"""
+const SRC = __SRC__;
+let handler = null;
+const document = { addEventListener: (t, f) => { if (t === "click") handler = f; } };
+const log = { posts: 0, polls: 0, inserted: [] };
+let reply = null;
+const fetch = (url, opts) => { log.posts++; return reply(url, opts); };
+const pollBoard = () => { log.polls++; };
+const esc = s => String(s);
+const card = { insertAdjacentHTML: (pos, html) => { log.inserted.push(html); } };
+const btn = { disabled: false, textContent: "→ Todo", dataset: { n: "7" }, closest: sel => (sel === ".it" ? card : null) };
+const ev = { target: { closest: sel => (sel === "#bbody .pmp" ? btn : null) }, preventDefault() {}, stopPropagation() {} };
+new Function("document", "fetch", "pollBoard", "esc", SRC)(document, fetch, pollBoard, esc);
+const json = (status, body) => ({ ok: status < 300, status, headers: { get: () => "application/json" }, json: async () => body });
+(async () => {
+  const out = {};
+__SCENARIO__
+  console.log(JSON.stringify(out));
+})();
+"""
+DEFERRED = """
+  const releases = [];
+  reply = () => new Promise(r => releases.push(r));
+  const first = handler(ev);
+  out.during = { disabled: btn.disabled, label: btn.textContent };
+  handler(ev);
+  out.postsDuringSecondTap = log.posts;
+  releases.forEach(r => r(json(200, { ok: true })));
+  await first;
+  out.afterSuccess = { disabled: btn.disabled, label: btn.textContent, polls: log.polls };
+"""
+REFUSED = """
+  reply = async () => json(400, { err: "not in Backlog" });
+  await handler(ev);
+  out.after = { disabled: btn.disabled, label: btn.textContent, inserted: log.inserted.length };
+"""
+UNANSWERED = """
+  reply = async () => { throw new Error("down"); };
+  await handler(ev);
+  out.after = { disabled: btn.disabled, label: btn.textContent, inserted: log.inserted.length };
+"""
+
+
+def run_arrow(mod, tmp_path, scenario):
+    page = mod.PAGE
+    start = page.index('document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp")')
+    src = page[start:page.index(ARROW_END, start) + len(ARROW_END)]
+    script = tmp_path / "arrow.js"
+    script.write_text(ARROW_RUNNER.replace("__SRC__", json.dumps(src)).replace("__SCENARIO__", scenario))
+    p = subprocess.run([NODE, str(script)], capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def test_the_arrow_is_disabled_and_relabelled_while_its_request_is_open(hub, tmp_path):
+    mod, _ = hub
+    out = run_arrow(mod, tmp_path, DEFERRED)
+    assert out["during"]["disabled"] is True
+    assert out["during"]["label"] != "→ Todo", "the arrow keeps its label while the write is open"
+
+
+def test_a_second_tap_during_the_request_sends_no_second_write(hub, tmp_path):
+    mod, _ = hub
+    out = run_arrow(mod, tmp_path, DEFERRED)
+    assert out["postsDuringSecondTap"] == 1, "a second tap while the write is open sent a second request"
+
+
+def test_a_refused_arrow_returns_to_its_label_and_is_enabled(hub, tmp_path):
+    mod, _ = hub
+    out = run_arrow(mod, tmp_path, REFUSED)
+    assert out["after"] == {"disabled": False, "label": "→ Todo", "inserted": 1}
+
+
+def test_an_unanswered_arrow_returns_to_its_label_and_is_enabled(hub, tmp_path):
+    mod, _ = hub
+    out = run_arrow(mod, tmp_path, UNANSWERED)
+    assert out["after"] == {"disabled": False, "label": "→ Todo", "inserted": 1}
