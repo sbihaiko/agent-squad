@@ -17,6 +17,9 @@
 #     only while neither the full line nor the delta record says fail for that tip. Nothing else measured the tip, so a CI check
 #     that reported a defect on it refuses the merge by name (#1196); a check still running or absent holds nothing. The merge
 #     carries the marker's meaning: no test reached every part of the tip, and the nightly proves it later.
+# The script prints `promote-stg: tip <sha>` for the tip it evaluated, so a caller keys a refusal to that tip, never to a tip it
+# proved earlier (#1495). Under the ci proof a tip whose checks have not reported prints `promote-stg: pending <sha>` and exits 75
+# (EX_TEMPFAIL): a wait, no refusal, no marker. Any other non-zero exit is a refusal.
 # Exit 0: the dev tip is in stg (promoted, or already there). Exit 1: nothing promoted; the one reason goes to $SG_STATE/promote.log
 # once per tip and reason (the dedupe list keeps its last 20 lines), so a pass that repeats says nothing new, and to stderr.
 # A later green tip carries the earlier work with it. The consolidation is one pull request (#743, owner rule for every project):
@@ -97,11 +100,13 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     [ "$dk" = delta ] && [ "$dT" = "$1" ] && [ "$dres" = fail ] && refuse "$1" "not promoted: the delta proof of the dev tip is a fail"
   else
     st=$(ci_state "$1" 2>/dev/null)
+    [ "$st" = running ] && { echo "promote-stg: pending $1: CI is running"; exit 75; }   # the checks have not reported: a wait, never a refusal (#1495)
     [ "$st" = green ] || refuse "$1" "not promoted: CI is ${st:-unknown} (green needed)"
   fi; }
 g init -q . 2>/dev/null; g remote add origin "$remote"
 o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-stg: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 tip=$(g rev-parse origin/dev) || exit 1
+echo "promote-stg: tip $tip"
 g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg: no pull request is opened
 # A promotion leaves a merge commit in stg, so stg is never an ancestor of the next dev tip. The work stg holds and dev lacks
 # must be those merge commits alone; any plain commit is the owner's to resolve before a merge.

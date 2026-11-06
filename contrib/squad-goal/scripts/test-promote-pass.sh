@@ -228,7 +228,15 @@ export SG_CI_WORKFLOW="$T/ci-shards.yml"
 cat > "$T/bin/ghread" <<'EOF'
 #!/bin/bash
 case "$1" in
-  *check-runs*) s=${1#*commits/}; s=${s%%/*}; cat "$CHECKS_DIR/checks-$s" 2>/dev/null || echo '{"check_runs":[]}';;
+  *check-runs*) s=${1#*commits/}; s=${s%%/*}
+    if [ -f "$CHECKS_DIR/checks-$s" ]; then cat "$CHECKS_DIR/checks-$s"
+    elif [ -f "$CHECKS_DIR/checks-default" ]; then cat "$CHECKS_DIR/checks-default"   # a tip no case named (#1495): the moved tip
+    else echo '{"check_runs":[]}'; fi
+    # #1495: reading the proved tip's checks once moves dev, as a landing does while the pass waits for the gate lock.
+    if [ -f "$CHECKS_DIR/move-on" ] && [ "$s" = "$(cat "$CHECKS_DIR/move-on")" ]; then rm -f "$CHECKS_DIR/move-on"
+      m="git -C $CHECKS_DIR/w -c user.email=a@b -c user.name=t"
+      $m fetch -q origin && $m checkout -q -B dev origin/dev && $m commit -q --allow-empty -m moved-during-proof && $m push -q origin dev
+    fi;;
   *) echo '{}';;
 esac
 EOF
@@ -393,6 +401,39 @@ rm -f "$SG_STATE/landed.tsv"
 shards "$to" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$to" ] && ok "the next pass reads the shards that ran on the opened pull request, and promotes by CI" \
   || ko "next pass after the pull request: rc $rc, stg $(tip stg), dev $to"
+
+# #1495: the CI path promotes through the CI proof of the tip promote-stg.sh reads, never through the proved tip. A landing that
+# moves dev between the proof of A and the promotion makes B the tip: B promotes when its CI is green, waits (no marker, exit 0)
+# when its CI is pending, and a refusal names B, never A.
+moved() {  # <B's checks: green, pending or red>: prove A by CI, move dev to B while the pass runs, then pass
+  adv dev "moved-$1"; ma=$(tip dev); before=$(tip stg)
+  shards "$ma" success success success success
+  case "$1" in
+    green) shards default success success success success;;
+    pending) printf '{"check_runs":[{"name":"ruff","status":"in_progress","conclusion":null}]}' > "$T/checks-default";;
+    red) printf '{"check_runs":[{"name":"ruff","status":"completed","conclusion":"failure"}]}' > "$T/checks-default";;
+  esac
+  printf '%s' "$ma" > "$T/move-on"; : > "$SG_STATE/promote-pass.tips"
+  SG_GHREAD="$T/bin/ghread" pass; rc=$?; mb=$(tip dev); rm -f "$T/checks-default" "$T/move-on"; }
+moved green
+[ $rc = 0 ] && [ "$mb" != "$ma" ] && [ "$(tip stg)" = "$mb" ] && ok "CI green on A and dev moved to B with CI green: the pass promotes B (#1495)" \
+  || ko "moved green: rc $rc, A $ma, B $mb, stg $(tip stg), out '$(cat "$T/out")'"
+/usr/bin/grep -q "stale" "$SG_STATE/promote.log" && ko "a moved tip wrote a stale refusal: $(/usr/bin/grep stale "$SG_STATE/promote.log")" || ok "a moved tip writes no stale refusal (#1495)"
+moved pending
+[ $rc = 0 ] && [ "$mb" != "$ma" ] && [ "$(tip stg)" = "$before" ] && ok "dev moved to B with CI pending: the pass exits 0 and promotes nothing (#1495)" \
+  || ko "moved pending: rc $rc, A $ma, B $mb, stg $(tip stg), out '$(cat "$T/out")'"
+[ ! -s "$SG_STATE/promote-pass.tips" ] && ok "a pending B leaves no marker for A or B, so a later pass retries (#1495)" \
+  || ko "moved pending marker: $(cat "$SG_STATE/promote-pass.tips")"
+moved red
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && ok "dev moved to B with CI red: the pass refuses (#1495)" || ko "moved red: rc $rc, stg $(tip stg)"
+/usr/bin/grep -q "^$mb " "$SG_STATE/promote-pass.tips" && ! /usr/bin/grep -q "^$ma " "$SG_STATE/promote-pass.tips" \
+  && ok "the refusal marker names B, never the proved tip A (#1495)" || ko "moved red marker: A $ma, B $mb: $(cat "$SG_STATE/promote-pass.tips")"
+# The local-suite and delta invocations keep the local proof; only the CI path calls promote-stg.sh under the ci proof.
+nl=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
+nc=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=ci bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
+na=$(/usr/bin/grep -c 'bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
+[ "$nl" = 3 ] && [ "$nc" = 1 ] && [ "$na" = 6 ] && ok "the local-suite and delta calls pass the local proof, the CI call the ci proof (#1495)" \
+  || ko "promote-stg.sh calls: local $nl, ci $nc, all $na"
 
 # #1086: an interpreter that lacks a tool the suite runs refuses the pass before any suite runs. The refusal names the tool,
 # writes no marker and no status, and the same tip is proved by a later pass once an interpreter holds the tool.

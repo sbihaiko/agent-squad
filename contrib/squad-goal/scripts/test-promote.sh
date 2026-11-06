@@ -73,7 +73,8 @@ out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 adv dev one-absent; before=$(tip stg); ci running
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && ok "a missing CI run promotes nothing" || ko "running CI: rc $rc, stg $(tip stg), out '$out'"
-case "$out" in *running*) ok "the refusal says the CI is running";; *) ko "the refusal does not say running: '$out'";; esac
+case "$out" in *running*) ok "the pending line says the CI is running";; *) ko "the pending line does not say running: '$out'";; esac
+[ $rc = 75 ] && ok "a CI that has not reported is the distinct pending exit (#1495)" || ko "running CI exit: $rc"
 
 # (#790) The real CI path (no SG_CI_STATE_CMD): the tip's check runs are read through gh and classified by the base check's own
 # classifier. Red, unknown and running promote nothing; green promotes.

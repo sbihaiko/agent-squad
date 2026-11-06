@@ -143,9 +143,17 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322).
       ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
       why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, the CI shards and the fast tier: $ci_jobs" || echo "CI fast tier: $ci_jobs (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
-      o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
-      [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-      mark "$tip" "promoted: the CI shards carried the full pass"; exit 0;;
+      # #1495: the CI proof is read on the tip promote-stg.sh promotes, which may be a later one than $tip when a landing moved
+      # dev while the pass waited for the gate lock. A refusal is keyed to the tip it evaluated; a tip whose checks have not
+      # reported (exit 75) is a wait with no marker, so a later pass retries.
+      o=$(SG_PROMOTE_PROOF=ci bash "$d/promote-stg.sh" 2>&1); rc=$?
+      etip=$(printf '%s\n' "$o" | sed -n 's/^promote-stg: tip //p' | tail -n 1); etip=${etip:-$tip}
+      if [ $rc = 75 ]; then
+        echo "$(date -u +%FT%TZ) promote-pass: $etip waiting for CI: the check has not reported on it yet" >> "$log"
+        echo "promote-pass: $etip waiting for CI"; exit 0
+      fi
+      [ $rc = 0 ] || { mark "$etip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+      mark "$etip" "promoted: the CI shards carried the full pass"; exit 0;;
     fail*) mark "$tip" "not promoted: CI ${v#fail } is red"; exit 1;;
   esac
   # (#1192) A tip whose CI has not answered yet is measured by waiting, never by a local suite. The suite saturates the machine
