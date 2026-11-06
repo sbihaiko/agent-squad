@@ -971,7 +971,9 @@ function renderSheet() {
 // does with it. The handler asks the rule for the result and says it on the board's own line, then opens the card, so a
 // folded lane opens and a card the board does not draw is read in the same sheet. A link that arrives before the first
 // board read waits for it, so it never lands on a blank board.
-let linkWanted = null, linkSheet = null;   // the card a hash opened, so a hash that stops naming it closes that sheet
+// The sheet a hash opened, by the key of its own card, so a hash that stops naming it closes that sheet, and no card of
+// the same number in another repository is closed in its place.
+let linkWanted = null, linkSheet = null;
 // The facts come from the page's own reads: the filter keeps the card in its column or drops it, and a lane holds it or a
 // defect dropped it. A filter and a dropped card are told apart, so the line never names the owner's filter for a defect.
 const linkFacts = n => {
@@ -986,23 +988,22 @@ function linkTake() {
   const n = linkWanted; linkWanted = null;
   $("bmsg").textContent = linkResult(n, linkFacts(n)).say;
   openCard(n);
-  linkSheet = n;
+  linkSheet = sheetKey();   // the sheet the link opened, by its own card's key: a bare number would name another card
 }
 // A hash that stops naming a card undoes what the last card link did: the sheet it opened closes and its line clears, so a
 // tab or an anchor the owner asked for is never hidden behind a stale card.
 function linkDrop() {
   $("bmsg").textContent = "";
-  if (linkSheet === null) return;
+  if (!linkSheet) return;
   const was = linkSheet; linkSheet = null;
-  const cur = offBoard ? offBoard.n : (shown[view.card] || {}).n;
-  if (view.sheet && cur === was) { view = { ...view, sheet: false }; renderSheet(); }
+  if (view.sheet && sheetKey() === was) { view = { ...view, sheet: false }; renderSheet(); }
 }
 function linkOpen() {
   const n = linkHash(location.hash);
   if (n === null) { linkDrop(); return; }
   linkWanted = n;
   if (tabNow !== "board") show("board");   // a card link opens the board, where the card is (as the desktop does, #1274)
-  else linkTake();
+  linkTake();   // a board already read opens the card now, whatever tab the hash left; a board not yet read waits for it
 }
 addEventListener("hashchange", linkOpen);
 function renderFilters() {

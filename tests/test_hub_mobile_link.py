@@ -70,8 +70,9 @@ def test_the_rule_names_every_result_a_link_can_have():
     said = run_js(src, "out.map(x=>x.say)", prelude)
     assert said[0] == "", "a card the board draws needs no line"
     assert all(s.startswith("#7 ") for s in said[1:]), said
-    assert "folded lane" in said[1] and "hidden by the board filters" in said[2] and "not on the board" in said[3], said
-    assert "filter" not in said[4], "a card no lane holds is not a filter's doing: " + said[4]
+    assert "folded lane" in said[1] and "hidden from this view" in said[2] and "not on the board" in said[3], said
+    assert "filter" not in said[2] and "filter" not in said[4], \
+        "the view hides a card through more than a label filter, and no lane holding it is no filter's doing: " + str(said)
     assert "lane" in said[4], said[4]
 
 
@@ -97,6 +98,25 @@ def test_a_card_link_at_the_address_opens_that_card_once_the_board_has_read(hub)
                  drawn: !!$("cards").querySelector('[data-role="card"][data-n="3"]') };
     """, board=[BOARD], hash="#issue=3")
     assert out == {"open": True, "sheet": True, "off": False, "n": 3, "said": "", "drawn": True}, out
+
+
+@pytest.mark.node_bound
+def test_a_card_link_opens_at_once_when_the_board_has_already_loaded(hub):
+    """AC1: the link opens its card from the board the page holds. A hash that lands while the owner is on another tab
+    opens the card without waiting for a further board read: that read may be slow or may never answer, and the card the
+    link names is on the board already."""
+    out = run_page(hub.MOBILE_PAGE, """
+        show("board"); await __tick(20);         // the board is read, drawn and held
+        show("more");                            // the owner is on another tab
+        const realCall = call;
+        call = (path, fresh) => String(path).startsWith("/api/board") ? new Promise(() => {}) : realCall(path, fresh);
+        location.hash = "#issue=3"; __dispatch("hashchange", {});
+        await __tick(10);                        // the read that tab switch started never answers
+        return { tab: tabNow, open: !$("sheet").hidden, sheet: view.sheet,
+                 n: (offBoard || shown[view.card] || {}).n, said: $("bmsg").textContent,
+                 drawn: !!$("cards").querySelector('[data-role="card"][data-n="3"]') };
+    """, board=[BOARD])
+    assert out == {"tab": "board", "open": True, "sheet": True, "n": 3, "said": "", "drawn": True}, out
 
 
 @pytest.mark.node_bound
@@ -130,7 +150,7 @@ def test_a_card_the_filters_hide_names_its_result_and_opens_its_issue(hub):
     assert out["kept"] is False, "the filter left the card in its column, so nothing was hidden"
     assert out["open"] is True and out["off"] is True and out["n"] == 3, out
     assert out["labels"] == ["wave:1"], "the link cleared the owner's filter"
-    assert out["said"] == "#3 is hidden by the board filters: its issue is read on its own.", out
+    assert out["said"] == "#3 is hidden from this view: its issue is read on its own.", out
 
 
 @pytest.mark.node_bound
@@ -179,27 +199,31 @@ def test_a_hash_change_after_the_load_opens_the_named_card(hub):
 @pytest.mark.node_bound
 def test_a_second_card_link_wins_over_a_read_still_in_flight(hub):
     """AC3, back and forward: a link to another card while the first card's issue is still being read leaves the second
-    card on the sheet, never the first card's late read painted over it. Each read answers with its own issue and the
-    first lands after the second, so only the sheet's own key can keep the stale one off: the order cannot."""
+    card on the sheet, never the first card's late read painted over it. Each read is held open by the driver and settled
+    in the order the page must survive: the second card's read answers first, and the first card's answers last, so only
+    the sheet's own key can keep the stale one off: the order cannot."""
     out = run_page(hub.MOBILE_PAGE, """
-        await __tick(20);
         show("board"); await __tick(20);
-        const realCall = call, late = { "2": 200, "4": 10 }, TL = { "2": "two", "4": "four" };   // card 2 lands last
+        const realCall = call, held = {};
         call = (path, fresh) => {
           const m = /[?&]n=(\\d+)/.exec(String(path));
           if (!String(path).startsWith("/api/issue") || !m) return realCall(path, fresh);
           const n = +m[1];                                     // an issue read answers with its own card's title
-          return __tick(late[n] || 0).then(() => ({ n, title: TL[n], body: "body of " + n }));
+          return new Promise(res => { (held[n] = held[n] || []).push(() => res({ n, title: n === 2 ? "two" : "four",
+                                                                             body: "body of " + n })); });
         };
         location.hash = "#issue=2"; __dispatch("hashchange", {});
         await __tick(5);
         location.hash = "#issue=4"; __dispatch("hashchange", {});
-        await __tick(40);   // card 4's read has landed, card 2's has not
+        await __tick(5);
+        const asked = Object.keys(held).sort(), pending = Object.values(held).map(h => h.length);
+        held[4][0](); await __tick(5);   // card 4's read answers
         const mid = { sheet: view.sheet, n: (offBoard || shown[view.card] || {}).n, title: $("sh-title").textContent };
-        await __tick(220);  // card 2's late read lands now
-        return { mid, sheet: view.sheet, n: (offBoard || shown[view.card] || {}).n, title: $("sh-title").textContent,
-                 body: $("sh-body").textContent, said: $("bmsg").textContent };
+        held[2][0](); await __tick(5);   // card 2's read answers last, out of order
+        return { asked, pending, mid, sheet: view.sheet, n: (offBoard || shown[view.card] || {}).n,
+                 title: $("sh-title").textContent, body: $("sh-body").textContent, said: $("bmsg").textContent };
     """, board=[BOARD])
+    assert out["asked"] == ["2", "4"] and out["pending"] == [1, 1], "neither read answered before the driver settled it"
     assert out["mid"] == {"sheet": True, "n": 4, "title": "#4 four"}, out
     assert out["sheet"] is True and out["n"] == 4, out
     assert out["title"] == "#4 four", "card 2's late read painted over the sheet's card: " + out["title"]
