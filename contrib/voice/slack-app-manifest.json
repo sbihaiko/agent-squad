@@ -1,0 +1,41 @@
+{
+  "display_information": {
+    "name": "Operator",
+    "description": "The agent-squad operator, in a voice conversation with its owner."
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Operator",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "channels:history",
+        "channels:manage",
+        "channels:read",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "im:history",
+        "im:read",
+        "im:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
