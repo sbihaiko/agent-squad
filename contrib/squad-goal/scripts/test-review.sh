@@ -6,7 +6,7 @@
 suite_t0=$(date +%s)   # #1413: the acceptance command of a run is capped (SG_AC_TIMEOUT, 300 s), so the suite times itself
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SHARED="$T/st"   # the shared marks (quota-guard, *-limited) are the suite's own, never the machine's under ~/.cache
-mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$(dirname "$src")/grokmark.py" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$(dirname "$src")/grokmark.py" "$(dirname "$src")/review-shadow.py" "$T/s/"; : > "$T/s/codex-reset.py"
 # the registry the review reads: the shipped one plus `nt`, a model whose capabilities say no tools (the no-tools path reads that, not a list)
 jq '.models += [{id:"nt",label:"nt",provider:"claude",subscription:"claude",aliases:["claude:nt"],capabilities:{tools:false},
   routes:{cli:{auth:"subscription",argv:["claude","-p","--model","{model}","{prompt_file}"],served:["nt"]},direct:{auth:"subscription",model:"nt",served:["nt"]}}}]' "$(dirname "$src")/registry.json" > "$T/s/registry.json"
@@ -774,6 +774,32 @@ awk -F'\t' '$3=="grok-4.7" && $4==1200 && $5==90 && $6==400 && NF==6 {f=1} END{e
   && ok "29 a grok review asks for json, logs its reported tokens, and the verdict parses from the text field" \
   || ko "29 grok json: rc=$rc line1='$l1' ledger='$(tail -1 "$T/st/token-usage.tsv" 2>/dev/null)' args='$(cat "$GROK_ARGS")'"
 unset GROK_ARGS
+# 24e) #1403: a sampled shadow review of a published grok verdict. The next chain entry reads the same head; its answer
+# is never published and never moves the verdict -- one ledger line (shadow: true) carries it, so the measure can count
+# the grok Blocking findings the next entry would have missed. The claude lane answers in its real --output-format json
+# envelope, so the shadow must unwrap .result before the shape check: a bare verdict here hid that bug (#1403).
+printf '#!/bin/bash\nprintf %s\n' "'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n'" > "$T/bin/grok"; chmod +x "$T/bin/grok"
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat >/dev/null; echo "\$*" >> "\$SHADOW_CALLS"; printf '%s' '{"result":"","structured_output":{"verdict":"APPROVE","blocking":[],"debt":[],"resolved":[]},"usage":{"input_tokens":10,"output_tokens":5},"is_error":false,"subtype":"success"}'
+J
+chmod +x "$T/bin/claude"; export SHADOW_CALLS="$T/shadow-calls"
+printf '{"review_models":["grok-4.7","claude:claude-opus-5-5"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/review-ledger.jsonl" "$SHADOW_CALLS"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+sl=$(tail -1 "$T/st/review-ledger.jsonl" 2>/dev/null)
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && [ -s "$SHADOW_CALLS" ] \
+  && jq -e '.shadow==true and .model=="claude:claude-opus-5-5" and .verdict=="VERDICT: APPROVE" and .blocking==0 and .debt==0 and .head=="aaa111"' <<<"$sl" >/dev/null 2>&1 \
+  && ok "24e a grok Blocking verdict is shadow-reviewed by the next chain entry, the verdict unchanged" \
+  || ko "24e shadow: rc=$rc verdict='$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)' ledger='$sl'"
+# a grok verdict with no Blocking finding is not sampled: only the published row is in the ledger.
+printf '#!/bin/bash\nprintf %s\n' "'VERDICT: CHANGES\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'" > "$T/bin/grok"; chmod +x "$T/bin/grok"
+rm -f "$T/st/review-fix_1-x".* "$T/st/review-ledger.jsonl" "$SHADOW_CALLS"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ ! -s "$SHADOW_CALLS" ] && [ "$(wc -l < "$T/st/review-ledger.jsonl" 2>/dev/null | tr -d ' ')" = 1 ] \
+  && ok "24e a grok verdict with no Blocking finding is not shadow-reviewed" \
+  || ko "24e debt-only shadow: rc=$rc calls=$(wc -l < "$SHADOW_CALLS" 2>/dev/null) ledger=$(cat "$T/st/review-ledger.jsonl" 2>/dev/null)"
+unset SHADOW_CALLS
 suite_s=$(( $(date +%s) - suite_t0 ))
 # #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
 # the code, so a green suite must not turn red for it. The runtime guards are the measured line in

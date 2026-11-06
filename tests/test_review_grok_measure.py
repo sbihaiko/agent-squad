@@ -216,6 +216,72 @@ def test_only_one_grok_model_showing_debt_only_names_that_model(tmp_path: Path) 
     assert out["decision"]["models"] == ["grok-4.7"]
 
 
+def srow(head="aaa111", model="claude-opus-5-5", verdict="VERDICT: APPROVE", blocking=0, debt=0) -> dict:
+    """One shadow ledger line (#1403): the next chain entry's answer on the head grok reviewed."""
+    row_ = row(head=head, model=model, verdict=verdict, blocking=blocking, debt=debt)
+    row_["shadow"] = True
+    return row_
+
+
+def test_a_grok_blocking_finding_the_shadow_entry_missed_is_a_catch(tmp_path: Path) -> None:
+    ledger(tmp_path, [row(blocking=2, debt=1), srow()])
+
+    out = measure(tmp_path)
+
+    assert out["paired_heads"] == 1
+    assert out["next_entry_catch"] == 2
+    assert out["shadow_reviews"] == 1
+
+
+def test_a_grok_blocking_finding_the_shadow_entry_also_reported_is_not_a_catch(tmp_path: Path) -> None:
+    ledger(tmp_path, [row(blocking=2, debt=1), srow(verdict="VERDICT: CHANGES", blocking=2, debt=1)])
+
+    out = measure(tmp_path)
+
+    assert out["paired_heads"] == 1
+    assert out["next_entry_catch"] == 0
+
+
+def test_a_shadow_entry_reporting_fewer_findings_is_a_partial_catch(tmp_path: Path) -> None:
+    # three grok Blocking findings, one also filed by the shadow: the other two are the miss, not zero.
+    ledger(tmp_path, [row(blocking=3, debt=1), srow(verdict="VERDICT: CHANGES", blocking=1, debt=1)])
+
+    out = measure(tmp_path)
+
+    assert out["paired_heads"] == 1
+    assert out["next_entry_catch"] == 2
+
+
+def test_a_legacy_two_model_pair_counts_grok_blocking_findings_too(tmp_path: Path) -> None:
+    # the legacy pair has no finding-by-finding alignment either: the approving model reported none, so every grok
+    # Blocking finding on that head is a miss, the same unit a shadow pair counts (#1403).
+    ledger(tmp_path, [row(blocking=2, debt=0), row(head="aaa111", model="claude-opus-5-5", verdict="VERDICT: APPROVE")])
+
+    out = measure(tmp_path)
+
+    assert out["paired_heads"] == 1
+    assert out["next_entry_catch"] == 2
+
+
+def test_a_shadow_line_is_not_a_published_review(tmp_path: Path) -> None:
+    ledger(tmp_path, [row(blocking=1, debt=0), srow()])
+
+    out = measure(tmp_path)
+
+    assert out["reviews"] == 1
+    assert out["grok_reviews"] == 1
+    assert out["debt_only_by_model"] == {"grok-4.7": {"reviews": 1, "debt_only": 0}}
+
+
+def test_a_shadow_on_a_head_where_grok_flagged_nothing_is_no_pair(tmp_path: Path) -> None:
+    ledger(tmp_path, [row(verdict="VERDICT: APPROVE", blocking=0, debt=0), srow()])
+
+    out = measure(tmp_path)
+
+    assert out["paired_heads"] == 0
+    assert out["next_entry_catch"] is None
+
+
 def test_a_state_dir_is_required() -> None:
     result = run()
 

@@ -130,12 +130,12 @@ def test_the_phone_run_row_draws_the_shared_state_word_and_mark(hub):  # noqa: F
 
 # --- the thumb zone ------------------------------------------------------------------------------------------------
 
-def test_the_close_gesture_starts_in_the_thumb_zone():
+def test_the_close_gesture_starts_on_the_grab_handle():
     src = GESTURE_JS.read_text()
     assert run_js(src, "inThumbZone(900, 1000)") is True
     assert run_js(src, "inThumbZone(599, 1000)") is False
-    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,thumb:true})') == {"act": "close"}
-    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,thumb:false})') is None
+    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,handle:true})') == {"act": "close"}
+    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,handle:false,thumb:true})') is None
 
 
 def test_the_left_edge_swipe_is_the_browser_back_and_no_page_handler():
@@ -147,7 +147,8 @@ def test_the_left_edge_swipe_is_the_browser_back_and_no_page_handler():
 def test_the_move_gesture_starts_in_the_thumb_zone():
     html = PAGE.read_text()
     assert "const thumb = inThumbZone(p.clientY, window.innerHeight)" in html
-    assert 'pm: !!(thumb && card && card.dataset.pm === "1"' in html, "a card outside the thumb zone arms the one write"
+    assert 'pm: !!(!handle && thumb && card && card.dataset.pm === "1"' in html, "a card outside the thumb zone arms the one write"
+    assert "handle = !!(e.target.closest && e.target.closest(\".grab\"))" in html, "the grab handle is not the promotion band's exclusion (#1454)"
 
 
 def test_every_dismissal_control_sits_in_a_bottom_footer():

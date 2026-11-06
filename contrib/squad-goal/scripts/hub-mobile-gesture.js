@@ -1,13 +1,14 @@
 // Gesture rules of the mobile Board tab. Pure: no DOM and no network. The hub inlines this text into hub-mobile.html.
 const GESTURE_OWNERS = ["sheet", "card", "header", "gap"];
 const SWIPE_MIN = 40;
-// The thumb zone is the bottom 40% of the viewport: a dismissal and the one write start there, where the thumb reaches (#1142).
+// The thumb zone is the bottom 40% of the viewport: the one write starts there, where the thumb reaches (#1142).
 const THUMB_TOP = 0.6;
 const inThumbZone = (y, h) => h > 0 && y >= h * THUMB_TOP;
 const gestureOwner = roles => roles.find(r => GESTURE_OWNERS.includes(r)) || "none";
 // A swipe that starts in a nested scroller or a control of the sheet (`nested`) is that element's, never a card step (#1007).
 // A rightward drag on a promotable card is the move's (hub-mobile-move.js); every other horizontal swipe on a card is a column step.
-const gestureAct = ({ owner, dx, dy, atTop, nested, thumb, promotable }) => {
+// A sheet closes only on a downward swipe that starts on its grab handle (`handle`), never from the body (#1454).
+const gestureAct = ({ owner, dx, dy, atTop, nested, handle, promotable }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);
   if (Math.max(ax, ay) < SWIPE_MIN) return null;
   if (ax > ay) {
@@ -16,7 +17,7 @@ const gestureAct = ({ owner, dx, dy, atTop, nested, thumb, promotable }) => {
     if (owner === "sheet" && dx < 0 && !nested) return { act: "card", step: 1 };
     return null;
   }
-  return owner === "sheet" && dy > 0 && atTop && thumb ? { act: "close" } : null;
+  return owner === "sheet" && dy > 0 && atTop && handle ? { act: "close" } : null;
 };
 const moveIndex = (i, count, step) => count ? Math.min(count - 1, Math.max(0, i + step)) : 0;
 const afterGesture = (v, g) => {

@@ -76,6 +76,11 @@ def _is_grok(model: str) -> bool:
         return False        # a model the registry cannot resolve has no known vendor, so it is not the exempt one
 
 
+def _shadow(row: dict) -> bool:
+    """A shadow line is the next chain entry's answer on grok's head (#1403), never a published review."""
+    return row.get("shadow") is True
+
+
 def _counts(row: dict) -> tuple[int, int] | None:
     blocking, debt = row.get("blocking"), row.get("debt")
     if isinstance(blocking, int) and isinstance(debt, int):
@@ -104,9 +109,12 @@ def measure(state: Path) -> dict:
     if rows is None:
         out.update({"reviews": None, "grok_reviews": None, "grok_debt_only": None, "debt_only_rate": None,
                     "debt_only_by_model": None, "unattributed_rows": None, "grok_fix_rounds": None,
-                    "grok_fix_round_verdict_changes": None, "grok_fix_round_kept_changes": None})
+                    "grok_fix_round_verdict_changes": None, "grok_fix_round_kept_changes": None,
+                    "shadow_reviews": None})
     else:
-        attributed = [r for r in rows if _counts(r) is not None]
+        # a shadow line answers on grok's head, so it is measured by _paired and never counted as a review of a model
+        published = [r for r in rows if not _shadow(r)]
+        attributed = [r for r in published if _counts(r) is not None]
         grok = [r for r in attributed if _is_grok(str(r.get("model", "")))]
         by_model: dict[str, dict[str, int]] = {}
         for r in attributed:
@@ -127,12 +135,13 @@ def measure(state: Path) -> dict:
             else:
                 kept += 1
         out.update({
-            "reviews": len(rows),
+            "reviews": len(published),
+            "shadow_reviews": len(rows) - len(published),
             "grok_reviews": len(grok),
             "grok_debt_only": sum(1 for r in grok if _debt_only(r)),
             "debt_only_rate": _rate(sum(1 for r in grok if _debt_only(r)), len(grok)),
             "debt_only_by_model": by_model,
-            "unattributed_rows": len(rows) - len(attributed),
+            "unattributed_rows": len(published) - len(attributed),
             "grok_fix_rounds": fix_rounds,
             "grok_fix_round_verdict_changes": changed,
             "grok_fix_round_kept_changes": kept,
@@ -153,32 +162,49 @@ def measure(state: Path) -> dict:
 
 
 def _paired(rows: list[dict] | None) -> dict:
-    """A head that grok called blocking and another model approved: the defect the next entry would have missed."""
+    """A head that grok called blocking and another model approved or shadow-reviewed: the Blocking findings the next
+    entry would have missed, counted in findings on both paths. A shadow line reports its own Blocking count (#1403), so
+    the count it did not file is the miss (`max(0, grok - shadow)`); a count alone cannot align findings one by one, so
+    the difference is a floor on a head where the shadow filed more. The legacy pair has no shadow count: the approving
+    model filed none, so every grok Blocking finding on that head is the miss."""
     if rows is None:
         return {"paired_heads": None, "next_entry_catch": None, "next_entry_approved_unflagged": None,
                 "next_entry_catch_reason": "unavailable: no review-ledger.jsonl in the state directory"}
-    heads: dict[tuple, dict[str, list[dict]]] = {}
+    heads: dict[tuple, dict] = {}
     for r in rows:
         if _counts(r) is None:
             continue
-        heads.setdefault((r.get("key"), r.get("head")), {}).setdefault(r.get("model", "?"), []).append(r)
+        head = heads.setdefault((r.get("key"), r.get("head")), {"models": {}, "shadow": []})
+        if _shadow(r):
+            head["shadow"].append(r)
+        else:
+            head["models"].setdefault(r.get("model", "?"), []).append(r)
     pairs = catch = unflagged = 0
-    for models in heads.values():
+    for head in heads.values():
+        models, shadow = head["models"], head["shadow"]
+        grok_blocking = max(((_counts(r) or (0, 0))[0] for m, rs in models.items() if _is_grok(m)
+                             for r in rs if r.get("verdict") == CHANGES), default=0)
+        if shadow and grok_blocking >= 1:
+            # one sample answers for one head: the grok Blocking findings the shadow entry did not file are the miss
+            pairs += 1
+            shadow_blocking = max((_counts(r) or (0, 0))[0] for r in shadow)
+            catch += max(0, grok_blocking - shadow_blocking)
+            continue
         if len(models) < 2:
             continue
         pairs += 1
-        flagged = any(_is_grok(m) and any(r.get("verdict") == CHANGES and (_counts(r) or (0, 0))[0] >= 1 for r in rs)
-                      for m, rs in models.items())
+        flagged = grok_blocking >= 1
         approved = any(not _is_grok(m) and any(r.get("verdict") == "VERDICT: APPROVE" for r in rs)
                        for m, rs in models.items())
-        catch += 1 if flagged and approved else 0
+        catch += grok_blocking if flagged and approved else 0
         unflagged += 1 if approved and not flagged else 0
     return {
         "paired_heads": pairs,
         "next_entry_catch": catch if pairs else None,
         "next_entry_approved_unflagged": unflagged if pairs else None,
         "next_entry_catch_reason": None if pairs else
-        "unavailable: no two models reviewed one head; review.sh saves only the winning answer per branch",
+        "unavailable: no two models reviewed one head and no shadow reviewed a grok Blocking head; "
+        "review.sh saves only the winning answer per branch",
     }
 
 
