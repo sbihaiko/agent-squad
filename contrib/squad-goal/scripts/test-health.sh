@@ -47,7 +47,8 @@ o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q fork-parked && ko "a pa
 echo "$o" | /usr/bin/grep -q 'HEALTH watchd-down' && ok "watchd down -> alert" || ko "no watchd-down: $o"
 [ $(($(wc -l < "$T/notify.calls"))) = 2 ] && ok "one notification per cause (watchd, fastloop)" || ko "notifications: $(cat "$T/notify.calls")"
 bash "$T/s/health.sh" >/dev/null; [ $(($(wc -l < "$T/notify.calls"))) = 2 ] && ok "same cause: no second alert" || ko "alerted twice"
-printf '#!/bin/bash\nsleep 60\n' > "$T/s/watchd.sh"; bash "$T/s/watchd.sh" run & wp=$!; echo $wp > "$T/st/watchd.pid"; bash "$T/s/fastloop.sh" 2>/dev/null; printf '#!/bin/bash\nsleep 60\n' > "$T/s/fastloop.sh"; bash "$T/s/fastloop.sh" & fp=$!; echo $fp > "$T/st/fastloop.pid"; sleep 1
+# #1467: the stub refuses a start, so a case where the supervisor is down reports it and never relights
+printf '#!/bin/bash\n[ "$1" = start ] && { echo "stub: start refused"; exit 1; }\nsleep 60\n' > "$T/s/watchd.sh"; bash "$T/s/watchd.sh" run & wp=$!; echo $wp > "$T/st/watchd.pid"; bash "$T/s/fastloop.sh" 2>/dev/null; printf '#!/bin/bash\nsleep 60\n' > "$T/s/fastloop.sh"; bash "$T/s/fastloop.sh" & fp=$!; echo $fp > "$T/st/fastloop.pid"; sleep 1
 o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'watchd-down cleared' && ok "watchd back -> cleared" || ko "not cleared: $o"
 touch -t 202001010000 "$T/st/cycle.log"; o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'HEALTH watch-stalled' && ok "silent cycle.log -> watch-stalled" || ko "no stall: $o"
 mkdir -p "$T/co/runs/run-n"; echo r > "$T/co/runs/run-n/request.txt"; touch -t 202001010000 "$T/co/runs/run-n/request.txt"; echo run-n > "$T/st/active-runs.txt"
@@ -375,4 +376,59 @@ o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing
   && ok "a landing whose last gate round is past the bounds alerts, naming the held instant" || ko "a stale gate round did not alert: $o"
 kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "the round-progress landing clears its cause" || ko "round-progress cause not cleared: $o"
+# ---- #1467: a pass that finds the supervisor dead relights it, through the same stops a start obeys. The stub start is a real
+# `watchd.sh run` child, so the process check that reads the slot finds it, exactly as the live script's own start leaves it.
+rm -f "$T/st/watchd.pid" "$T/st/relights" "$T/st/start-mode" "$T/st/auto/off" "$T/st/auto/drain-waiter" "$T/st/auto/health-watchd-down"; : > "$T/bin/started"   # each cause alerts once: re-arm watchd-down
+cat > "$T/s/watchd.sh" <<'WD'
+#!/bin/bash
+d=$(dirname "$0")
+case "${1:-status}" in
+  run) /bin/sleep 60;;
+  start) echo start >> "$d/../bin/started"
+         case "$(cat "$d/../st/start-mode" 2>/dev/null)" in
+           refuse) echo "watchd start refused: #1467 is a loop defect; the fix lands outside the loop" >&2; exit 1;;
+           held)   echo "watchd already running pid=4242"; exit 0;;
+           *)      bash "$0" run </dev/null >/dev/null 2>&1 & echo $! > "$d/../st/watchd.pid"; echo "watchd started pid=$!"; exit 0;;   # detached as the live start's Popen is: a held stdout would hang the pass's $(...)
+         esac;;
+esac
+WD
+chmod +x "$T/s/watchd.sh"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'HEALTH watchd-down: relit: watchd started pid=' && ok "a dead supervisor is relit and the relight is reported" || ko "no relight: $o"
+[ "$(($(wc -l < "$T/st/relights" 2>/dev/null)))" = 1 ] && ok "the relight is recorded" || ko "relights file: $(cat "$T/st/relights" 2>/dev/null)"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH watchd-down:' && ko "a relit supervisor still alerts down: $o" || ok "the pass after a relight is quiet"
+/usr/bin/grep -q '"relights":1' "$T/st/health.json" && ok "health.json carries the relight count" || ko "relights not in health.json: $(cat "$T/st/health.json")"
+# a pid file that is stale or absent while the supervisor runs: start answers "already running", nothing is restarted or recorded
+rm -f "$T/st/watchd.pid"; echo held > "$T/st/start-mode"; rm -f "$T/st/relights"; sz=$(wc -l < "$T/bin/started")
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'HEALTH watchd-down:' && ko "already running still alerted down: $o" || ok "a supervisor that is already up is not reported down"
+[ "$(wc -l < "$T/bin/started")" -gt "$sz" ] && ok "the relight went through the start path" || ko "start was never called"
+[ -s "$T/st/relights" ] && ko "an already-running supervisor was recorded as a relight" || ok "no relight is recorded for a supervisor that never died"
+rm -f "$T/st/start-mode"
+# the hub's off switch and a drain are stops the start path would override: the pass reads them first and calls nothing
+: > "$T/bin/started"; touch "$T/st/auto/off"; rm -f "$T/st/watchd.pid"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'the loop switch is off' && ok "the off switch refuses the relight and names it" || ko "off switch not named: $o"
+[ -s "$T/bin/started" ] && ko "the off switch still called start" || ok "with the loop switch off, start is never called"
+rm -f "$T/st/auto/off" "$T/st/auto/health-watchd-down"; /bin/sleep 60 & dw=$!; echo "$dw" > "$T/st/auto/drain-waiter"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'a drain is in progress' && ok "a drain refuses the relight and names it" || ko "drain not named: $o"
+[ -s "$T/bin/started" ] && ko "a drain still called start" || ok "during a drain, start is never called"
+kill "$dw" 2>/dev/null; rm -f "$T/st/auto/drain-waiter"
+# the refusals the start path itself carries (a loop-bug open) reach the alert unchanged, and nothing is recorded as a relight
+echo refuse > "$T/st/start-mode"; rm -f "$T/st/relights" "$T/st/auto/health-watchd-down"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'watchd start refused: #1467 is a loop defect' && ok "a start refusal reaches the alert" || ko "start refusal missing: $o"
+[ -s "$T/st/relights" ] && ko "a refused start was recorded as a relight" || ok "a refused start is not a relight"
+rm -f "$T/st/start-mode"
+# a supervisor that keeps dying is named: three relights in the hour stay quiet, a fourth raises loop-flapping (#1467 debt)
+rm -f "$T/st/relights" "$T/st/watchd.pid"; now=$(date +%s)
+printf '%s\n%s\n' "$((now - 60))" "$((now - 30))" > "$T/st/relights"
+bash "$T/s/health.sh" >/dev/null
+/usr/bin/grep -q 'loop-flapping' "$T/st/health.json" && ko "three relights in the hour raised loop-flapping" || ok "three relights in the hour stay quiet"
+rm -f "$T/st/watchd.pid"; printf '%s\n%s\n%s\n' "$((now - 90))" "$((now - 60))" "$((now - 30))" > "$T/st/relights"
+bash "$T/s/health.sh" >/dev/null
+/usr/bin/grep -q 'loop-flapping' "$T/st/health.json" && ok "a fourth relight in the hour raises loop-flapping" || ko "no loop-flapping at four: $(cat "$T/st/health.json")"
+/usr/bin/grep -q '"relights":4' "$T/st/health.json" && ok "health.json counts the relights in the window" || ko "count: $(cat "$T/st/health.json")"
+rm -f "$T/st/relights" "$T/st/watchd.pid"; pkill -f "$T/s/watchd.sh run" 2>/dev/null
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail

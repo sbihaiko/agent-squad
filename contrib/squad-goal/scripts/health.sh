@@ -15,7 +15,26 @@ alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | 
 # name, except a repeating failure, whose key also names its reason (#1294), so each group alerts once on its own.
 causes=(); detail=(); briefs=(); akeys=()
 add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); akeys+=("${4:-$1}"); }
-alive "$SG_STATE/watchd.pid" 'watchd.sh run' || add watchd-down "watchd is not running: no merges, dispatch or cleanup until it is restarted (watchd.sh start)"
+# ADR-0146/ADR-0162: a relight is a start. The pass relights a supervisor it proved dead through the same path `watchd.sh
+# start` uses, so every refusal that path carries holds here too (a loop-bug open, orphaned lanes, a broken install); the two
+# stops that path would override -- the hub's off switch and a drain in progress -- are read here, before any call. `alive` is
+# a process check on the slot, so a pid file that is stale or absent beside a live supervisor never reads as down by itself.
+relight() {
+  local w
+  [ -e "$SG_STATE/auto/off" ] && { echo "the loop switch is off ($SG_STATE/auto/off)"; return 1; }
+  w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && kill -0 "$w" 2>/dev/null && { echo "a drain is in progress (waiter $w)"; return 1; }
+  bash "$(dirname "$0")/watchd.sh" start 2>&1
+}
+# A relight is recorded, and a loop that keeps dying is named: more than three relights inside one hour is `loop-flapping`, so a
+# supervisor that dies and is brought back on every pass does not read as a healthy loop between deaths.
+relights() { [ -s "$SG_STATE/relights" ] && awk -v n="$now" '$1 > n - 3600' "$SG_STATE/relights" 2>/dev/null | wc -l | tr -d ' ' || echo 0; }
+last_relight() { local r; r=$(tail -1 "$SG_STATE/relights" 2>/dev/null); case $r in ''|*[!0-9]*) echo 0 ;; *) echo "$r" ;; esac; }
+if alive "$SG_STATE/watchd.pid" 'watchd.sh run'; then :
+elif ro=$(relight); then
+  case "$ro" in *"already running"*) ;;   # a stale or missing pid file beside a live supervisor: it never went down, so nothing is recorded
+  *) printf '%s\n' "$now" >> "$SG_STATE/relights"; add watchd-down "relit: $ro"; rln=$(relights); [ "${rln:-0}" -gt 3 ] && add loop-flapping "$rln relights in the last hour: the supervisor keeps dying and the pass brings it back each time" ;;
+  esac
+else add watchd-down "watchd is not running: $ro"; fi
 alive "$SG_STATE/fastloop.pid" 'fastloop.sh' || add fastloop-down "fastloop (autopilot every SG_FAST_INTERVAL s) is not running"
 c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(mtime "$c"))) -gt 360 ] && alive "$SG_STATE/watchd.pid" 'watchd.sh run' && add watch-stalled "cycle.log silent for $(( (now - $(mtime "$c")) / 60 )) min while watchd is up"
 # #1226: this pass runs while the loop is stopped too, so it frees what a dead run holds (squad/reap.py): the caps reclaim of dead
@@ -279,7 +298,7 @@ if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$lhp
   la=$(( now - lp ))
   [ "$ls" -gt 0 ] && [ "$la" -gt $(( lw + lb )) ] && add landing-held "the landing lock has been held by pid $lhp since $(date -r "$ls" '+%F %T' 2>/dev/null || date -d "@$ls" '+%F %T' 2>/dev/null || printf '%s' "$ls") (no gate round began for ${la}s, past the ${lw}s gate wait plus the ${lb}s gate bound): the landing is stuck, not queued"
 fi
-{ printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf '],"briefs":{'; bn=0; for i in "${!causes[@]}"; do [ -n "${briefs[$i]}" ] || continue; [ $bn = 0 ] || printf ','; bn=1; printf '"%s":"%s"' "${causes[$i]}" "${briefs[$i]}"; done; printf '}}\n'; } > "$SG_STATE/health.json"
+{ printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"relights":%s,"last_relight":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard" "$(relights)" "$(last_relight)"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf '],"briefs":{'; bn=0; for i in "${!causes[@]}"; do [ -n "${briefs[$i]}" ] || continue; [ $bn = 0 ] || printf ','; bn=1; printf '"%s":"%s"' "${causes[$i]}" "${briefs[$i]}"; done; printf '}}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
 # The marker is written after the pass, not inside it: one cause may arrive as several lines (a repeating failure names one per
 # group, #1294), and every one of them must reach the alert readers on the pass it appears. The marker still holds the alert
