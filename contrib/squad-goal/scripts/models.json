@@ -11,12 +11,6 @@
         "hrs": "mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC"
       },
       {
-        "id": "kimi-for-coding",
-        "raw": "claude-kimi-for-coding",
-        "route": "gateway",
-        "effort": "low"
-      },
-      {
         "id": "claude-haiku-5-5",
         "route": "gateway"
       },
@@ -27,11 +21,6 @@
       },
       {
         "id": "gpt-6-luna",
-        "route": "gateway"
-      },
-      {
-        "id": "nemotron-super",
-        "raw": "claude-nemotron-super",
         "route": "gateway"
       }
     ],
@@ -121,6 +110,10 @@
     ],
     "router": [
       {
+        "id": "claude-haiku-5-5",
+        "route": "gateway"
+      },
+      {
         "id": "gpt-6-luna",
         "route": "gateway"
       },
@@ -129,10 +122,6 @@
         "raw": "claude-grok-4.5",
         "route": "gateway",
         "effort": "low"
-      },
-      {
-        "id": "claude-haiku-5-5",
-        "route": "gateway"
       }
     ],
     "editorial": [
