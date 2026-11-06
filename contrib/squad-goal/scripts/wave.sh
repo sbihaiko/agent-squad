@@ -1006,6 +1006,68 @@ file_conflict_bug() {
   else echo "WAVE-BUG #$n filing refused: $out"; fi
 }
 
+# The landing round (#1500). A landing conflict keeps the wave head on fix/<n>-land-<run>, <n> the lowest issue the wave head carries
+# of the run's dispatch set. The marker auto/kept-fix_<n>-land-<run> keeps the bare base ref on line 1 (every #1344 reader stays
+# as it is), then one `issue <n>` line for each issue it closes and one `round <k> <base sha>` line for each round that started.
+# land_marker <run>: the kept landing marker of the run, or exit 1.
+land_marker() { local f; for f in "$SG_STATE"/auto/kept-fix_*-land-"$1"; do [ -s "$f" ] && { printf '%s\n' "$f"; return 0; }; done; return 1; }
+# remote_git <git args>: git outside any checkout, for a push that needs no object (a branch delete).
+remote_git() { local t rc; t=$(mktemp -d) || return 1; $G -C "$t" init -q . >/dev/null 2>&1; $G -C "$t" push -q "$remote" "$@" >/dev/null 2>&1; rc=$?; rm -rf "$t"; return $rc; }
+# round_review <review key> <branch head> <files>: the CHANGES review that asks the one rebase round, read at the kept head.
+round_review() {
+  printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on origin/%s, resolve the conflict in each file, keep the work, and push.\n' \
+    "$base" "${3:-no path named by git}" "$base" > "$SG_STATE/review-$1.md"
+  printf '%s\n' "$2" > "$SG_STATE/review-$1.sha"; rm -f "$SG_STATE/review-$1.base"
+  printf '%s\n' "$2" > "$SG_STATE/landround-$1.head"   # the kept head this round started at: the lander reads a head that moved as a round that pushed
+}
+# land_round <run> <marker> <base sha> <files> <at>: a conflict on a kept landing branch. Checked in order: the base sha of the last
+# round again means the round did not resolve the conflict (the loop bug, whatever the round count); a moved base starts the next
+# round; after round two the issue lines are requeued as a fresh build with rework, and the marker and both branches go. Returns 1.
+land_round() {
+  local run=$1 m=$2 bsha=$3 files=$4 at=${5:-unknown} key kb w issues n rounds last head
+  key=$(basename "$m"); key=${key#kept-}; kb=fix/${key#fix_}; w=$(wave_of "$run")
+  issues=$(sed -n 's/^issue //p' "$m"); rounds=$(/usr/bin/grep -c '^round ' "$m"); last=$(/usr/bin/grep '^round ' "$m" | tail -1 | awk '{print $3}')
+  if [ -n "$last" ] && [ "$bsha" = "$last" ]; then
+    echo "WAVE CONFLICT $kb: the rebase on $base conflicts again at the same base ${bsha:0:9}; round $rounds did not resolve it"
+    for n in $issues; do
+      file_conflict_bug "$n" "$run" "$kb" "$at" "$files"
+      c=2; stop "$n" "the rebase round on $kb left the same conflict on $base at ${bsha:0:9}: $kb cannot land"
+    done
+    return 1
+  fi
+  if [ "$rounds" -ge 2 ]; then
+    echo "WAVE CONFLICT $kb: the rebase on $base conflicts after round $rounds; ${issues//$'\n'/, } requeued as a fresh build"
+    for n in $issues; do
+      requeue "$n" "the rebase on $base conflicts in ${files:-no path named by git} after $rounds rebase rounds: $kb cannot land"
+      gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=rework" >/dev/null 2>&1 || echo "WAVE-LABEL #$n rework refused"
+    done
+    rm -f "$m" "$SG_STATE/review-${key}".* "$SG_STATE/landround-$key.head"
+    remote_git --delete "$kb" "$w" || echo "WAVE-NOTE the delete of $kb and $w from $remote was refused"
+    return 1
+  fi
+  head=$($G ls-remote "$remote" "refs/heads/$kb" 2>/dev/null | awk '{print $1}')
+  printf 'round %s %s\n' "$((rounds + 1))" "$bsha" >> "$m"
+  [ -n "$head" ] && round_review "$key" "$head" "$files"
+  echo "WAVE CONFLICT $kb: the rebase on $base conflicts at $at${files:+ in $files}; round $((rounds + 1)) of 2 asked on the moved base ${bsha:0:9}, nothing requeued"
+  return 1
+}
+# keep_landing <run> <wave> <clone> <keep set> <files> <at>: the first landing conflict of a wave keeps the wave head on its work branch.
+# Returns 1 when the branch could not be kept, and the caller takes the requeue path.
+keep_landing() {
+  local run=$1 w=$2 S=$3 set=$4 files=$5 at=$6 low kb key head m
+  low=$(printf '%s\n' $set | sort -n | head -1); kb=fix/$low-land-$run; key=fix_$low-land-$run
+  $G -C "$S" push -q origin "refs/remotes/origin/$w:refs/heads/$kb" >/dev/null 2>&1
+  $G -C "$S" fetch -q origin "+refs/heads/$kb:refs/remotes/origin/$kb" 2>/dev/null
+  head=$($G -C "$S" rev-parse -q --verify "refs/remotes/origin/$kb" 2>/dev/null)
+  { [ -n "$head" ] && $G -C "$S" merge-base --is-ancestor "origin/$w" "$head" 2>/dev/null; } || return 1
+  m="$SG_STATE/auto/kept-$key"
+  { printf 'origin/%s\n' "$base"; for n in $(printf '%s\n' $set | sort -un); do printf 'issue %s\n' "$n"; done
+    printf 'round 1 %s\n' "$($G -C "$S" rev-parse "origin/$base")"; } > "$m.tmp" && mv "$m.tmp" "$m"
+  round_review "$key" "$head" "$files"
+  echo "WAVE CONFLICT $w: the rebase on $base conflicts at $at${files:+ in $files}; $(printf '#%s\n' $set | sort -u | paste -sd, - | sed 's/,/, /g') kept on $kb for one rebase round, not requeued"
+  return 0
+}
+
 # wave_conflict <run> <wave> <run folder> <clone> <rebase output> <conflicting paths> (#844): a rebase of the wave on the base that conflicts is terminal
 # for this wave head. The same rebase on the next cycle cannot succeed, so the landing is not retried: the issues the run was
 # dispatched for (the Refs of the wave when the run names none) go back to the queue through requeue, so its loop cap and the
@@ -1026,8 +1088,22 @@ wave_conflict() {
   # first. A conflict that names no path keeps the base sha, so an unnamed conflict never matches another one.
   if [ -n "$files" ]; then sig=$(printf '%s\n' $files | sort -u | tr '\n' ' '); sig=${sig% }
   else sig="base $($G -C "$S" rev-parse "origin/$base" 2>/dev/null)"; fi
+  for n in $list; do wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"; done
+  local km kset="" bsha
+  bsha=$($G -C "$S" rev-parse "origin/$base" 2>/dev/null)
+  if km=$(land_marker "$run"); then   # a kept landing branch is in its round: the repeat rule replaces the same-paths rule (#1500)
+    land_round "$run" "$km" "$bsha" "$files" "$at"
+    rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; return 1
+  fi
+  for n in $refs; do case " $list " in *" $n "*) kset="${kset:+$kset }$n";; esac; done
+  if [ -n "$kset" ] && keep_landing "$run" "$w" "$S" "$kset" "$files" "$at"; then
+    for n2 in $outs; do
+      echo "WAVE-NOTE #$n2: $w names it (Refs #$n2) outside the dispatch set of run $run; reported, not frozen"
+      printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv"
+    done
+    rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; return 1
+  fi
   for n in $list; do
-    wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"
     hit=$(ledger conflict "$n" "$run" "$sig" 2>&1) || { echo "WAVE-LEDGER #$n refused: $hit"; continue; }
     case $hit in
       first) named="${named:+$named, }#$n"; firsts="$firsts $n";;
@@ -1302,11 +1378,20 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   return 0
 }
 
+# landconflict <kept branch> <base sha> <ignored> <files>: the lander met a conflict on a kept landing branch (#1500); the repeat rule decides.
+landconflict() {
+  local br=$1 bsha=$2 files=${4:-} key run m
+  key=$(printf '%s' "$br" | tr / _); run=${br#fix/*-land-}; m="$SG_STATE/auto/kept-$key"
+  [ -s "$m" ] || { echo "WAVE-ERROR landconflict: $br has no kept marker"; return 2; }
+  SG_REQUEUE_RUN=$run land_round "$run" "$m" "$bsha" "$files" unknown
+}
+
 case "${1:-}" in
   start) shift; start "$@";;
   enter) shift; enter "$@";;
   land) shift; land "$@";;
   expired) shift; expired "$@";;
+  landconflict) shift; landconflict "$@";;
   requeue) shift; requeue "$@";;
   fail) shift; fail "$@";;
   probe-retry) shift; probe_retry "$@";;
