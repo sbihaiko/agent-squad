@@ -46,9 +46,9 @@ sg_missing_tool() {
 # sandbox-exec, so the read goes through squad.procs (libproc, KERN_PROCARGS2) and prints the ps text. The repository the script
 # lives in supplies the module; the live copy reads SG_SQUAD. The interpreter is the battery's (sg_gate_python). Both paths are
 # kept as quoted words, so a checkout or an interpreter whose path holds a space still reads the table.
-SG_PS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$SG_PS_ROOT/squad/procs.py" ] || SG_PS_ROOT=${SG_SQUAD:-.}
-SG_PS_PY=$(sg_gate_python); case $SG_PS_PY in /*|"") ;; */*) SG_PS_PY=$PWD/$SG_PS_PY;; esac
-sg_ps() { PYTHONPATH="$SG_PS_ROOT" "$SG_PS_PY" -m squad.procs ps "$@"; }
+_sg_ps_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$_sg_ps_root/squad/procs.py" ] || _sg_ps_root=${SG_SQUAD:-.}
+_sg_ps_py=$(sg_gate_python); case $_sg_ps_py in /*|"") ;; */*) _sg_ps_py=$PWD/$_sg_ps_py;; esac
+sg_ps() { PYTHONPATH="$_sg_ps_root${PYTHONPATH:+:$PYTHONPATH}" "$_sg_ps_py" -m squad.procs ps "$@"; }
 # SG_PS: the one word callers expand (`$SG_PS -o pid= -p 1`): the sg_ps function, unless the caller names its own reader.
 # It is not exported: a shell function does not reach a child, and each script sources this file for its own.
 : "${SG_PS:=sg_ps}"

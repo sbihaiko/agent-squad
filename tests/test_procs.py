@@ -107,3 +107,19 @@ def test_1508_shell_reader_survives_a_space_in_the_checkout_and_the_interpreter(
                          capture_output=True, text=True, env=env, cwd=tmp_path)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip().isdigit(), out.stdout
+
+
+def test_1508_every_shell_reader_sources_the_seam_at_top_level():
+    """`SG_PS` is a shell function, never exported, so a script that expands it must source caps.sh itself, at top level:
+    a source inside one branch leaves another branch, or a fresh `bash script --run` child, with no reader at all."""
+    scripts = ROOT / "contrib/squad-goal/scripts"
+    missing = []
+    for f in sorted(scripts.glob("*.sh")):
+        if f.name.startswith("test-") or f.name == "caps.sh":
+            continue
+        text = f.read_text()
+        if "$SG_PS" not in text and "${SG_PS" not in text:
+            continue
+        if not re.search(r'^(?![\s#])[^\n]*?\.\s+"[^\n]*/caps\.sh"', text, re.M):
+            missing.append(f.name)
+    assert not missing, f"expand $SG_PS without a top-level source of caps.sh: {missing}"

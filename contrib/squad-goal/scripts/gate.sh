@@ -59,6 +59,7 @@
 # descendant, five seconds past it so a command that is writing its record is not cut in half, and the outcome is unproven
 # with a reason that says bounded. A defect the command already wrote is fail, and so is any red that stands for the tree.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
+. "$here/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS in every branch, the --run child too (#1508)
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
 }
