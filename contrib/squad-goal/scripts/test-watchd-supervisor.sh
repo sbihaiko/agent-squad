@@ -6,19 +6,37 @@
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME"
+repo=$(cd "$d/../../.." && pwd)
+. "$d/watchd-fixture.sh"   # the squad package and the process reader a fake install needs (#1514)
 st=$T/st; S=$T/skill/scripts; mkdir -p "$st" "$S"
+fake_squad "$T/skill"; reader=$(fake_reader "$repo")
 cp "$d/watchd.sh" "$S/watchd.sh"
 printf 'gh_aggregate() { return 1; }\n' > "$S/ghcall.sh"   # offline: the start's loop-bug read has no answer
-printf 'SG_STATE=%s; SG_PROFILE=; SG_SQUAD=%s\nexport SG_STATE SG_PROFILE SG_SQUAD\n' "$st" "$T/skill" > "$S/env.sh"
+printf 'SG_STATE=%s; SG_PROFILE=; SG_SQUAD=%s\nexport SG_STATE SG_PROFILE SG_SQUAD\n%s\n' "$st" "$T/skill" "$reader" > "$S/env.sh"
 printf '#!/bin/bash\necho "watch" >> "$SG_STATE/lanes.log"\nmkdir -p "$SG_STATE/locks/watch"; echo $$ > "$SG_STATE/locks/watch/pid"\nwhile :; do sleep 0.5; done\n' > "$S/watch.sh"
 printf '#!/bin/bash\necho $$ > "$SG_STATE/fastloop.pid"\nwhile :; do sleep 0.5; done\n' > "$S/fastloop.sh"
 printf '#!/bin/bash\necho $$ > "$SG_STATE/cqflush.pid"\nwhile :; do sleep 0.5; done\n' > "$S/cqflush.sh"
 chmod +x "$S"/*.sh
-lp=
-. "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; [ -n "$lp" ] && kill -9 "$lp" 2>/dev/null; driver_tree_kill "$T"; rm -rf "$T"' EXIT
+lp=; la=; lb=; X=
+. "$d/driver-tree.sh"
+# The suite ends every process it started, on the pass path and the fail path alike, before its temp folder goes (#1514).
+# stopall is idempotent: the check at the end calls it before it asserts, so the assertion reads the cleaned state on both
+# paths, and the trap's repeat on an early exit changes nothing. The orphaned lanes are held by pid 1, so a stop cannot
+# reach them and each recorded pid is killed here.
+stopall() {
+  bash "$S/watchd.sh" stop >/dev/null 2>&1
+  [ -n "$lp" ] && kill -9 "$lp" 2>/dev/null
+  [ -n "$X" ] && SG_STATE="$X/a" bash "$X/repo/watchd.sh" stop >/dev/null 2>&1
+  [ -n "$la" ] && kill -9 "$la" 2>/dev/null
+  [ -n "$lb" ] && kill -9 "$lb" 2>/dev/null
+  driver_tree_kill "$T"; return 0
+}
+trap 'stopall; rm -rf "$T"' EXIT
 waitfor() { for _ in $(seq 1 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
 orphan() { SG_STATE="$st" bash -c 'bash "$1" >/dev/null 2>&1 & echo $!; sleep 0.3' _ "$1"; }
-ppid_of() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+# The reader caps.sh names, kept by driver-tree.sh as DT_PS under a name the suite's own unset never clears: a bare `ps` is
+# refused inside a child's sandbox (#1508).
+ppid_of() { ${DT_PS:-ps} -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 
 lp=$(orphan "$S/watch.sh")
 waitfor '[ "$(ppid_of "$lp")" = 1 ]' && ok "the lane outlives its shell and is held by pid 1" || ko "the lane was not orphaned"
@@ -41,10 +59,11 @@ bash "$S/watchd.sh" reload >"$T/r2" 2>&1; rc=$?
 { [ "$rc" = 0 ] && /usr/bin/grep -q "not running" "$T/r2" && [ "$(bash "$S/watchd.sh" status 2>/dev/null)" = "watchd not running" ]; } && ok "reload after a deliberate stop starts nothing" || ko "reload after a stop relit the loop: $(cat "$T/r2")"
 
 # A lane is one profile's by its state directory's pid file, whichever copy of the skill it runs from (#1313).
-X=$T/cross; mkdir -p "$X/a" "$X/b"
+X=$T/cross; mkdir -p "$X/a" "$X/b"; fake_squad "$X"
 for c in repo live; do
   mkdir -p "$X/$c"; cp "$d/watchd.sh" "$X/$c/"
-  printf ': "${SG_STATE:=%s}"; SG_PROFILE=; SG_SQUAD=%s\nexport SG_STATE SG_PROFILE SG_SQUAD\n' "$X/a" "$X" > "$X/$c/env.sh"
+  printf 'gh_aggregate() { return 1; }\n' > "$X/$c/ghcall.sh"   # the one seam watchd.sh sources beside itself (ADR-0146)
+  printf ': "${SG_STATE:=%s}"; SG_PROFILE=; SG_SQUAD=%s\n%s\nexport SG_STATE SG_PROFILE SG_SQUAD\n' "$X/a" "$X" "$reader" > "$X/$c/env.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/locks/watch"; echo $$ > "$SG_STATE/locks/watch/pid"\nwhile :; do sleep 0.5; done\n' > "$X/$c/watch.sh"
   printf '#!/bin/bash\necho $$ > "$SG_STATE/fastloop.pid"\nwhile :; do sleep 0.5; done\n' > "$X/$c/fastloop.sh"
   printf '#!/bin/bash\necho $$ > "$SG_STATE/cqflush.pid"\nwhile :; do sleep 0.5; done\n' > "$X/$c/cqflush.sh"
@@ -64,5 +83,16 @@ waitfor '[ "$(ppid_of "$la")" = 1 ] && [ -s "$X/a/locks/watch/pid" ]' && ok "a l
 out=$(SG_STATE="$X/a" bash "$X/repo/watchd.sh" start 2>&1); rc=$?
 { [ "$rc" != 0 ] && echo "$out" | /usr/bin/grep -q "refused" && echo "$out" | /usr/bin/grep -q "pid $la"; } && ok "a start from the repository copy refuses and names the live-copy lane of its profile" || ko "a start from the repository copy did not see the live-copy lane: rc=$rc $out"
 kill -9 "$la" 2>/dev/null; waitfor '! kill -0 '"$la"' 2>/dev/null' || ko "the profile a lane stayed"
+# Nothing the suite started outlives it, on the pass path and the fail path alike (#1514): the cleanup runs first, so the
+# assertion below reads the state after it, and the trap's repeat of the same cleanup changes nothing. An orphaned lane is
+# held by pid 1 and a lane's children name no root, so the recorded pids are read beside the tree of the temp root.
+stopall
+left() { driver_tree_pids "$T" | tr '\n' ' ' | sed 's/ $//'; }
+clean() { for _ in $(seq 1 20); do [ -z "$(left)" ] && return 0; sleep 0.25; done; return 1; }
+clean && ok "no process of this suite outlives it" || ko "processes of this suite outlived it: $(left)"
+for p in "$lp" "$la" "$lb"; do
+  if [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; then ok "a recorded lane pid ends with the suite (${p:-none})"
+  else ko "a recorded lane outlived the suite (pid $p)"; kill -9 "$p" 2>/dev/null; fi
+done
 
 [ $fail = 0 ] && echo "test-watchd-supervisor: all checks green" || { echo "test-watchd-supervisor: failed"; exit 1; }
