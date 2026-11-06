@@ -754,7 +754,7 @@ function cardButton(x, i) {
   b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n; b.dataset.hr = x.hr || "";
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
   // The card wears its spec's color and its wave as a text chip (#917); the rules are the desktop board's (board-lanes.js).
-  b.setAttribute("style", "--lc:" + specColor(mSlots(), cardSpec(x)));
+  b.setAttribute("style", "--lc:" + cardColor(mSlots(), x));
   const chip = (k, text) => { const c = document.createElement("span"); c.className = "lchip"; c.dataset.k = k; c.textContent = text; return c; };
   if (x.pa != null && !x.sp) id.append(chip("spec", x.pa));
   const w = laneWaveOf(x);
@@ -843,7 +843,7 @@ function renderBoard() {
     if (!l.collapsed) for (const x of l.cards) {
       // A card whose data, place, reason and color did not change keeps its node (#1004); only a changed card is rebuilt.
       const k = cardKey(x), isNew = fresh.has(k);
-      const sig = JSON.stringify([x, i, reasons[x.n] || null, specColor(mSlots(), cardSpec(x)), isNew]);
+      const sig = JSON.stringify([x, i, reasons[x.n] || null, cardColor(mSlots(), x), isNew]);
       const old = cardNodes.get(k);
       const b = old && old.sig === sig && !isNew ? old.el : cardButton(x, i);
       i++;
