@@ -24,9 +24,9 @@ lp=; la=; lb=; X=
 # paths, and the trap's repeat on an early exit changes nothing. The orphaned lanes are held by pid 1, so a stop cannot
 # reach them and each recorded pid is killed here.
 stopall() {
-  bash "$S/watchd.sh" stop >/dev/null 2>&1
+  [ -f "$S/watchd.sh" ] && bash "$S/watchd.sh" stop >/dev/null 2>&1
   [ -n "$lp" ] && kill -9 "$lp" 2>/dev/null
-  [ -n "$X" ] && SG_STATE="$X/a" bash "$X/repo/watchd.sh" stop >/dev/null 2>&1
+  [ -n "$X" ] && [ -f "$X/repo/watchd.sh" ] && SG_STATE="$X/a" bash "$X/repo/watchd.sh" stop >/dev/null 2>&1
   [ -n "$la" ] && kill -9 "$la" 2>/dev/null
   [ -n "$lb" ] && kill -9 "$lb" 2>/dev/null
   driver_tree_kill "$T"; return 0
@@ -34,9 +34,12 @@ stopall() {
 trap 'stopall; rm -rf "$T"' EXIT
 waitfor() { for _ in $(seq 1 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
 orphan() { SG_STATE="$st" bash -c 'bash "$1" >/dev/null 2>&1 & echo $!; sleep 0.3' _ "$1"; }
-# The reader caps.sh names, kept by driver-tree.sh as DT_PS under a name the suite's own unset never clears: a bare `ps` is
-# refused inside a child's sandbox (#1508).
-ppid_of() { ${DT_PS:-ps} -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+# driver-tree.sh keeps the reader it resolved as DT_PS, a name the suite's own `unset "${!SG_@}"` never clears: a bare `ps` is
+# refused inside a child's sandbox (#1508). If that coupling ever breaks, say so here rather than read the table with a
+# reader the sandbox refuses and let the orphan check compare empty strings.
+[ -n "${DT_PS:-}" ] || { echo "test-watchd-supervisor: driver-tree.sh set no DT_PS reader" >&2; exit 1; }
+command -v "$DT_PS" >/dev/null 2>&1 || { echo "test-watchd-supervisor: the DT_PS reader $DT_PS does not resolve" >&2; exit 1; }
+ppid_of() { "$DT_PS" -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 
 lp=$(orphan "$S/watch.sh")
 waitfor '[ "$(ppid_of "$lp")" = 1 ]' && ok "the lane outlives its shell and is held by pid 1" || ko "the lane was not orphaned"

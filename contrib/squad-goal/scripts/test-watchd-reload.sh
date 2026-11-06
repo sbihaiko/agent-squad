@@ -17,9 +17,13 @@ registry() { printf '{"plugins":{"agent-squad@agent-squad":[{"installPath":"%s"}
 registry "$old"
 . "$d/driver-tree.sh"
 # The suite ends every process it started, on the pass path and the fail path alike, before its temp folder goes (#1514).
-# stopall is idempotent and the check at the end calls it before it asserts, so the assertion reads the cleaned state on
-# both paths, never a cleanup the trap still owes.
-stopall() { bash "$S/watchd.sh" stop >/dev/null 2>&1; driver_tree_kill "$T"; }
+# stopall is idempotent and tolerant of an install the suite never finished building (a fixture error leaves $S partial), so
+# the fail path still ends cleanly and reports its own failure; the check at the end calls it before it asserts, so the
+# assertion reads the cleaned state on both paths, never a cleanup the trap still owes.
+stopall() {
+  if [ -f "$S/watchd.sh" ]; then bash "$S/watchd.sh" stop >/dev/null 2>&1; fi
+  driver_tree_kill "$T"; return 0
+}
 trap 'stopall; kill "$(cat "$st/live.pid" 2>/dev/null)" 2>/dev/null; rm -rf "$T"' EXIT
 cp "$d/watchd.sh" "$S/watchd.sh"
 printf 'gh_aggregate() { return 1; }\n' > "$S/ghcall.sh"   # offline: the start's loop-bug read has no answer
@@ -29,9 +33,9 @@ if [ -z "\${SG_SQUAD:-}" ]; then SG_SQUAD=\$(python3 -I -c "import json,os;print
 export SG_STATE SG_PROFILE SG_SQUAD
 $reader
 EOF
-printf '#!/bin/bash\ntrap "exit 0" TERM\necho "watch $SG_SQUAD" >> "$SG_STATE/lanes.log"\n[ -e "$SG_STATE/live.pid" ] || { sleep 600 & echo $! > "$SG_STATE/live.pid"; }\nwhile :; do sleep 1; done\n' > "$S/watch.sh"
-printf '#!/bin/bash\necho "fast $SG_SQUAD" >> "$SG_STATE/lanes.log"\nsleep 600\n' > "$S/fastloop.sh"
-printf '#!/bin/bash\necho "cq $SG_SQUAD" >> "$SG_STATE/lanes.log"\nsleep 600\n' > "$S/cqflush.sh"
+printf '#!/bin/bash\necho $$ > "$SG_STATE/watch.pid"\ntrap "exit 0" TERM\necho "watch $SG_SQUAD" >> "$SG_STATE/lanes.log"\n[ -e "$SG_STATE/live.pid" ] || { sleep 600 & echo $! > "$SG_STATE/live.pid"; }\nwhile :; do sleep 1; done\n' > "$S/watch.sh"
+printf '#!/bin/bash\necho $$ > "$SG_STATE/fastloop.pid"\necho "fast $SG_SQUAD" >> "$SG_STATE/lanes.log"\nsleep 600 & echo $! > "$SG_STATE/fastloop-sleep.pid"\nwait\n' > "$S/fastloop.sh"
+printf '#!/bin/bash\necho $$ > "$SG_STATE/cqflush.pid"\necho "cq $SG_SQUAD" >> "$SG_STATE/lanes.log"\nsleep 600 & echo $! > "$SG_STATE/cqflush-sleep.pid"\nwait\n' > "$S/cqflush.sh"
 chmod +x "$S"/*.sh
 count() { n=$(/usr/bin/grep -c -F -- "$1" "$2" 2>/dev/null); echo "${n:-0}"; }
 lanes() { count "$1" "$st/lanes.log"; }
@@ -63,12 +67,15 @@ lp=$(cat "$st/live.pid" 2>/dev/null)
 
 # Nothing the suite started outlives it, on the pass path and the fail path alike (#1514): the cleanup runs first, so the
 # assertion below reads the state after it, and the trap's repeat of the same cleanup changes nothing. The supervisor tree
-# is found by the temp root its commands name; the live run is one of its lanes' children and names no root, so its
-# recorded pid is read too.
+# is found by the temp root its commands name. A lane, or a lane's child, that reparents to pid 1 names no root, so the
+# recorded pids are read too, and they are read before the cleanup stops anything: every pid here names a process the suite
+# started, and the criterion is that all of them are gone, not only the ones the temp root happens to name.
+recorded=$(cat "$st"/*.pid 2>/dev/null)
 stopall
 left() { driver_tree_pids "$T" | tr '\n' ' ' | sed 's/ $//'; }
-clean() { for _ in $(seq 1 20); do [ -z "$(left)" ] && return 0; sleep 0.25; done; return 1; }
-clean && ok "no process of this suite outlives it" || ko "processes of this suite outlived it: $(left)"
+alive() { for p in $recorded; do kill -0 "$p" 2>/dev/null && printf '%s ' "$p"; done; }
+clean() { for _ in $(seq 1 20); do [ -z "$(left)" ] && [ -z "$(alive)" ] && return 0; sleep 0.25; done; return 1; }
+clean && ok "no process of this suite outlives it" || ko "processes of this suite outlived it: tree $(left) recorded $(alive)"
 if [ -z "$lp" ] || ! kill -0 "$lp" 2>/dev/null; then ok "the live run ends with the suite"
 else ko "the live run outlived the suite (pid $lp)"; kill -9 "$lp" 2>/dev/null; fi
 

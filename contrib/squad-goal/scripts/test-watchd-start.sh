@@ -76,11 +76,25 @@ case "$out" in *"claude plugin uninstall agent-squad@agent-squad && claude plugi
 # 7. The fake install the watchd suites start from carries the free_runs the real package carries (#1514): the start check
 # reads squad.caps.free_runs of the plugin, so a stub with another signature is a guess that drifts from what it mirrors.
 fake_squad "$T/fakesq"
-# The import runs from / with PYTHONPATH naming the tree, as the start check's own probe does: from the repository root the
-# cwd would shadow the fake and the check would compare the real package with itself.
-real_sig=$(cd / && PYTHONPATH="$d/../../.." python3 -c 'import inspect,squad.caps as C;print(inspect.signature(C.free_runs))')
-fake_sig=$(cd / && PYTHONPATH="$T/fakesq" python3 -c 'import inspect,squad.caps as C;print(inspect.signature(C.free_runs))')
+# Each probe reads the module it claims to read: it runs from / and refuses the user site, so the cwd cannot shadow the
+# tree, and it prints the module's own path, so a real squad that site-packages hold cannot stand in for the fake.
+sigprobe() { ( cd / && PYTHONPATH="$1" python3 -s -c 'import inspect,os,squad.caps as C;print(os.path.realpath(C.__file__));print(inspect.signature(C.free_runs))' ); }
+realroot=$(cd "$d/../../.." && pwd -P); fakeroot=$(cd "$T/fakesq" && pwd -P)
+real=$(sigprobe "$realroot"); fake=$(sigprobe "$fakeroot")
+real_file=$(printf '%s\n' "$real" | sed -n 1p); fake_file=$(printf '%s\n' "$fake" | sed -n 1p)
+real_sig=$(printf '%s\n' "$real" | sed -n 2p); fake_sig=$(printf '%s\n' "$fake" | sed -n 2p)
+case "$real_file" in "$realroot"/squad/caps.py) ok "the real probe reads the repository's squad.caps";; *) ko "the real probe read $real_file";; esac
+case "$fake_file" in "$fakeroot"/squad/caps.py) ok "the fake probe reads the fake install's squad.caps";; *) ko "the fake probe read $fake_file";; esac
 [ "$real_sig" = "$fake_sig" ] && ok "the fake install carries the real free_runs signature" || ko "the fake install carries $fake_sig, the real one is $real_sig"
+
+# 8. The fake is derived from the package it mirrors, never a hand-kept guess (#1514): a shim package whose free_runs has a
+# signature of its own yields a fake that carries that signature, so a change to squad/caps.py reaches every suite that
+# stands a fake install without an edit here.
+shim=$T/shimrepo; mkdir -p "$shim/squad"; : > "$shim/squad/__init__.py"
+printf 'def free_runs(c, active_runs, root=".", tag=None): return 0\n' > "$shim/squad/caps.py"
+fake_squad "$T/derived" "$shim"
+derived_sig=$(sigprobe "$T/derived" | sed -n 2p); shim_sig=$(sigprobe "$shim" | sed -n 2p)
+[ "$derived_sig" = "$shim_sig" ] && ok "the fake derives free_runs from the package it mirrors" || ko "the fake carries $derived_sig, the shim carries $shim_sig"
 
 [ "$fail" = 0 ] && echo "all cases passed" || echo "FAILURES"
 exit "$fail"
