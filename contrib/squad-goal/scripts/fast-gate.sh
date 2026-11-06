@@ -136,15 +136,21 @@ stop_tree() {  # <pid>: the tree as it stands now, TERM then KILL, so a child th
   while read -r x; do [ -n "$x" ] && kill -KILL "$x" 2>/dev/null; done < "$list"
   rm -f "$list"
 }
+# reap_wd <pid>: the watchdog's own group when it leads one, its children and its pid when it does not, so the sleep it
+# forked is never reparented and left to run out its bound (#1441).
+reap_wd() { local p; [ "$(${SG_PS:-/bin/ps} -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
+  for p in $(pgrep -P "$1" 2>/dev/null); do kill "$p" 2>/dev/null; done; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
 bounded() {  # <seconds> <command...>: 124 says the deadline stopped it and its whole tree; 0 or less runs with no bound
   local b=$1 p w mark s rc; shift; s=$(date +%s)
   if [ "$b" -le 0 ] 2>/dev/null; then "$@"; return $?; fi
   mark=$(mktemp "${TMPDIR:-/tmp}/fg-bound.XXXXXX" 2>/dev/null) || { "$@"; return $?; }; rm -f "$mark"
   "$@" & p=$!
+  set -m   # the watchdog leads its own process group, so reap_wd reaches the sleep it forks
   ( sleep "$b"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - s )) -ge "$b" ] || exit 0; : > "$mark"
     stop_tree "$p" ) >/dev/null 2>&1 & w=$!
+  set +m
   wait "$p" 2>/dev/null; rc=$?
-  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+  reap_wd "$w"
   if [ -e "$mark" ]; then rm -f "$mark"; return 124; fi
   rm -f "$mark"; return $rc
 }

@@ -40,6 +40,10 @@ ppid_of() { $ps_ -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 runs_as() { $ps_ -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
 # A pid that is alive and not a zombie: a watchdog that exited but is not yet reaped by its parent is gone (#805).
 alive() { kill -0 "$1" 2>/dev/null && [ "$($ps_ -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
+# reap_wd <pid>: the watchdog's own group when it leads one, its children and its pid when it does not, so the sleep it
+# forked is never reparented and left to run out its hold (#1441).
+reap_wd() { local p; [ "$($ps_ -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
+  for p in $(pgrep -P "$1" 2>/dev/null); do kill "$p" 2>/dev/null; done; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
 # A stale lock is reaped with one line naming the lock, its dead holder and the lock's age (#1057): a reap is never silent.
 reap() { echo "serial: reaping stale lock $n: holder pid $1 is dead, lock age $(( $(date +%s) - $(mtime "$L/pid") ))s" >&2; rm -rf "$L"; }
 # The incarnation of a pid: its start time, which GNU ps and BSD ps both print. The token is only ever read back against the pid
@@ -85,9 +89,9 @@ echo "$wd" > "$L/wd"   # the watchdog's pid: a waiter that finds it gone past th
 # The command leads a process group of its own, so a signal to this holder's group does not reach it: a holder that is stopped
 # (a pass past its deadline, #130) stops its command's whole tree and its watchdog before it releases the lock (#393).
 stop() {   # stderr goes first: the shell's job notices would land in the stopped pass's log, over the line that names its deadline
-  exec 2>/dev/null; kill -TERM -- -"$c"; kill -- -"$wd"; kill "$wd"; rm -rf "$L"; exit "$1"; }
+  exec 2>/dev/null; kill -TERM -- -"$c"; reap_wd "$wd"; rm -rf "$L"; exit "$1"; }
 trap 'stop 143' TERM; trap 'stop 130' INT
 wait "$c"; rc=$?
-kill -- -"$wd" 2>/dev/null; kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+reap_wd "$wd"
 [ "$(cat "$L/timed-out" 2>/dev/null)" = "$hpid" ] && exit 75
 exit "$rc"
