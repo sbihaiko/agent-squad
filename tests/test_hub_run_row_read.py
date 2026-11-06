@@ -112,3 +112,4 @@ def test_an_ended_row_names_its_start_and_its_end(hub, tmp_path):
     write_record(folder, run_events(t0) + [{"ts": t0 + 120, "event": "verdict", "verdict": "completed", "pos": 3}])
     row, _ = hub.run_row(str(folder), "", [])
     assert row["started"] == t0 and row["ended"] == t0 + 120
+    assert row["verdict"] == "completed", "an ended row carries the verdict its record wrote"
