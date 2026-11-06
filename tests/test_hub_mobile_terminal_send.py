@@ -55,7 +55,7 @@ def test_the_draft_and_the_send_feedback_stay_with_their_session(hub):
       text.value = "draft B";
       openConversation("{A}", "a");
       const a = {{ text: text.value, sent: out.textContent }};
-      closeConversation();
+      closeLayer("term");
       openConversation("{B}", "b");
       return {{ aSent, a, b, b2: {{ text: text.value, sent: out.textContent }} }};
     """, routes=routes(reply("uncertain")))
