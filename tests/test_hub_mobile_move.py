@@ -54,6 +54,7 @@ class El {
   get textContent() { return this._text + this.children.map(c => c.textContent).join(""); }
   set textContent(v) { this.children = []; this._text = String(v); }
   append(...kids) { for (const k of kids) { if (k && k.tagName) { k.parentElement = this; this.children.push(k); } } }
+  appendChild(k) { this.append(...(k.tagName === "#ROOT" ? k.children : [k])); return k; }
   prepend(...kids) { const ok = kids.filter(k => k && k.tagName); for (const k of ok) k.parentElement = this; this.children.unshift(...ok); }
   replaceChildren(...kids) { this.children = []; this._text = ""; this.append(...kids); }
   setAttribute(name, v) {
@@ -132,6 +133,8 @@ function parseHtml(html) {
   return root;
 }
 const root = parseHtml(PAGE);
+const body = new El("body");
+root.append(body);
 const docListeners = {};
 const reply = (body, status, ct) => ({
   ok: status >= 200 && status < 300, status,
@@ -186,6 +189,11 @@ const box = {
   fetch: boot.fetch, EventSource: FakeEventSource,
   scrollY: 0,
   innerHeight: 800,   // one phone screen: the thumb zone is its bottom 40% (#1142)
+  innerWidth: 800,
+  matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
+  requestAnimationFrame: fn => box.setTimeout(fn, 0),
+  getComputedStyle: () => ({ getPropertyValue: () => "" }),
+  MutationObserver: class { observe() {} disconnect() {} },
   scrollTo: (_x, y) => { box.scrollY = y; },
   __skip: ms => { boot.__skew += ms; return boot.__skew; },
   __state: boot.__state,
@@ -212,13 +220,15 @@ box.document = {
   getElementById: id => { const hit = root.descendants().find(e => e.id === id); return hit || null; },
   createElement: tag => new El(tag),
   createElementNS: (_ns, tag) => new El(tag),
+  body,
+  documentElement: Object.assign(new El("html"), { style: { setProperty() {}, removeProperty() {} } }),
+  createRange: () => ({ createContextualFragment: html => parseHtml(html) }),
   querySelector: sel => qsa(root, sel)[0] || null,
   querySelectorAll: sel => qsa(root, sel),
   addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },
 };
 const ctx = vm.createContext(box);
-const script = PAGE.slice(PAGE.lastIndexOf("<script>") + 8, PAGE.lastIndexOf("</script>"));
-vm.runInContext(script, ctx);
+for (const m of PAGE.matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(m[1], ctx);
 const DRIVER = __DRIVER__;
 (async () => {
   await box.__tick(10);                       // the page's own status and profile reads settle
@@ -435,3 +445,11 @@ def test_the_mobile_page_holds_no_column_list(hub):
     table = _module("board_columns_page", COLUMNS_PY)
     for name in [c["name"] for c in table.shipped_columns()] + list(table.ROLE.values()):
         assert name not in hub.MOBILE_PAGE, f"the mobile page names the column {name!r}: the rows name them"
+
+
+@pytest.mark.node_bound
+def test_the_harness_runs_the_overlay_script_the_page_loads(hub):
+    """The served page carries the session overlay's script tag before its own. The harness runs every tag in order, so
+    the overlay's symbols are reachable from the page context."""
+    out = run_page(hub.MOBILE_PAGE, "return { overlay: window.__sqOverlay === true, context: typeof window.squadPageContext === 'function' };")
+    assert out == {"overlay": True, "context": True}
