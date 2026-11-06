@@ -84,11 +84,11 @@ def test_a_short_or_vertical_move_is_no_column_swipe():
 def test_a_sheet_swipe_left_moves_to_the_next_card_and_a_pull_down_closes_it_at_the_top():
     src = GESTURE_JS.read_text()
     assert run_js(src, 'gestureAct({owner:"sheet",dx:-80,dy:0,atTop:true,thumb:true})') == {"act": "card", "step": 1}
-    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,thumb:true})') == {"act": "close"}
-    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:false,thumb:true})') is None, \
+    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,handle:true})') == {"act": "close"}
+    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:false,handle:true})') is None, \
         "a pull down that is still scrolling the sheet must not close it"
-    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,thumb:false})') is None, \
-        "a pull down outside the thumb zone is no dismissal (#1142)"
+    assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,handle:false,thumb:true})') is None, \
+        "a pull down from the sheet body is no dismissal, even in the thumb zone (#1454)"
 
 
 @pytest.mark.node_bound
@@ -254,8 +254,8 @@ def test_escape_or_a_swipe_down_closes_the_phone_sheet_and_clears_the_selection(
     assert 'e.key === "Escape"' in body, "Escape closes the phone sheet"
     assert '$("sh-set").innerHTML = ""' in body, "a closed sheet clears the selection it drew"
     assert 'gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop' in body, "a swipe down goes through the gesture rules"
-    assert 'thumb: t.thumb' in body, "a swipe down carries the thumb zone it started in (#1142)"
-    assert run_js(GESTURE_JS.read_text(), 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,thumb:true})') == {"act": "close"}
+    assert 'handle: t.handle' in body, "a swipe down carries the grab handle it started on (#1454)"
+    assert run_js(GESTURE_JS.read_text(), 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,handle:true})') == {"act": "close"}
 
 
 def test_every_phone_sheet_target_is_at_least_44px(hub):

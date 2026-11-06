@@ -64,6 +64,14 @@ def test_no_column_at_all_says_no_column_holds_a_card():
     assert run_js(src, "emptyColumnNote({ groups: 3, shown: 0, filtered: false })") == "No column holds a card."
 
 
+def test_the_grab_handle_is_a_44_px_square_target():
+    decls = _decls(".grab")
+    for prop in ("width", "height"):
+        m = re.search(rf"(?<![\w-]){prop}\s*:\s*(\d+)px", decls)
+        assert m, f".grab sets no {prop}"
+        assert int(m.group(1)) >= TOUCH_PX
+
+
 @pytest.mark.parametrize("selector", ["#bfilter button", "#bfilter summary", "#hide-empty", "#lf summary"])
 def test_each_board_filter_control_is_a_44_px_target(selector):
     m = re.search(r"min-height\s*:\s*(\d+)px", _decls(selector))
