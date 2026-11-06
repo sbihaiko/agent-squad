@@ -228,6 +228,7 @@ def test_a_landed_wave_is_in_dev_by_one_push_and_logged(wave):
     assert wave.closed() == ["7"]
 
 
+@pytest.mark.heavy
 def test_a_landing_that_conflicts_exits_1_and_lands_nothing(wave):
     """A conflicting rebase is terminal for the wave (#844, `wave_conflict`): the landing lands nothing and exits 1, the
     run's issues go back to the queue, and the wave marker is removed so the loop retires the wave and never retries it.
@@ -243,7 +244,9 @@ def test_a_landing_that_conflicts_exits_1_and_lands_nothing(wave):
     assert wave.remote_refs("refs/heads/wave/run-1") != [], "a refused landing deleted the wave branch"
     assert wave.ledger() == [] and wave.closed() == []
     assert not (wave.state / "auto" / "wave-run-1").exists(), "a conflicted wave kept its marker, so the loop would retry it (#844)"
-    assert "o 3 Todo 7" in (wave.root / "board.log").read_text().splitlines(), "the conflicted wave's issue was not requeued (#844)"
+    assert (wave.state / "auto" / "kept-fix_7-land-run-1").is_file(), "the conflicted wave's head was not kept for a rebase round (#1500)"
+    assert wave.remote_refs("refs/heads/fix/7-land-run-1") != [], "the kept branch is not on the remote (#1500)"
+    assert "o 3 Todo 7" not in (wave.root / "board.log").read_text().splitlines(), "a first landing conflict requeued the issue (#1500)"
 
 
 @pytest.mark.heavy
