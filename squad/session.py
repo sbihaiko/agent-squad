@@ -87,6 +87,28 @@ def hours_skipped(models, first, spent=(), hours=None, at=None):
     return [(m, f"outside_hours:{shut[m]}") for m in chain if m in shut and m not in kept]
 
 
+CHARS_PER_TOKEN = 4     # the prompt-size estimate: one token per four characters, rounded up. The code holds no tokenizer.
+
+
+def estimate_tokens(text):
+    """The prompt's size in tokens, one per four characters rounded up. An estimate, never a measure."""
+    return (len(text or "") + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
+
+
+def ctx_skipped(chain, prompt_tokens, windows):
+    """([models kept], [(model, reason)]) for a chain entry whose declared context window is under the prompt (#1470).
+
+    `windows` maps a model spelling to its `ctx` declaration as models.json writes it (`"128k"`). An entry with no
+    readable window has no ceiling and stays. A chain whose every entry is skipped stays whole, so a wrong declaration
+    never leaves no model, as the spent and hours rules do.
+    """
+    closed = [(m, w) for m in chain if (w := modelreg.ctx_tokens((windows or {}).get(m))) is not None and w < prompt_tokens]
+    kept = [m for m in chain if m not in {m for m, _ in closed}]
+    if not kept:
+        return list(chain), []
+    return kept, [(m, f"context_window:window={w},prompt={prompt_tokens}") for m, w in closed]
+
+
 def adapter_reason(err):
     """The reason a call that produced no result ends on. A message past the transport's ceiling is a fact about the
     transport, not about the work, so the reason names the ceiling and the size of the frame that hit it: an operator

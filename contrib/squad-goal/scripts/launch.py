@@ -350,6 +350,9 @@ hours = {e.raw: e.hrs for e in _chain("coding_models") if isinstance(e.hrs, str)
 # The coding chain's order goes to the run as well: the launch picks by it, so an in-run fallback follows the same order
 # rather than the graph allow-list order, and the request line and the engine agree on the next model (#617).
 order = [m for m in cm if isinstance(m, str) and m]
+# A coding entry's declared context window goes to the run too: the engine skips an entry whose window is under the
+# prompt it would send (#1470), so a model that cannot take the prompt never spends a call on it.
+ctxs = {e.raw: e.ctx for e in _chain("coding_models") if e.ctx}
 # A run that cuts a wave keeps its landed children after its verdict (#477, ADR-0106): the wave entry reads each child's
 # worktree then, so the run starts with the engine option --keep-children, which it records at its start. The hold is the
 # run's wave, never the target's shape. A squad that has no such option refuses the flag, so it goes only to one that names it.
@@ -358,7 +361,7 @@ keep = ["--keep-children"] if _issue_child_request(req_text) and _names_option("
 # branchfixpass.sh). It is recorded at run start, so a resume reads it again; the build was probed for it above.
 fix = ["--fix-run"] if fix_run else []
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + fix + [
-                        "--models", str(here / "models.json"), "--target", str(target)] + (["--runs-dir", str(runs)] if named else []) + (["--spent-models", ",".join(spent)] if spent else [])+ (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
+                        "--models", str(here / "models.json"), "--target", str(target)] + (["--runs-dir", str(runs)] if named else []) + (["--spent-models", ",".join(spent)] if spent else [])+ (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + (["--model-ctx", ",".join(f"{m}={w}" for m, w in ctxs.items())] if ctxs else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                         cwd=str(target),
                         env={**os.environ, "SQUAD_HEADLESS": "1"})

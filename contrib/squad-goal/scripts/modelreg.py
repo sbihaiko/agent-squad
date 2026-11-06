@@ -39,6 +39,7 @@ DEFAULT_RESERVE_PERCENT = 10
 CACHE_READ_RATIO = 0.1
 DEFAULT_QUOTA_STALE_SECONDS = 6 * 3600   # a quota reading older than this is unknown; SG_QUOTA_STALE_SECONDS overrides
 _CTX = re.compile(r"\[([A-Za-z0-9]{1,8})\]$")
+_CTX_WINDOW = re.compile(r"^(\d+)([kKmM]?)$")
 _EFFORT = re.compile(r"^(.*)-(low|medium|high)$")
 
 
@@ -340,6 +341,21 @@ def model(raw, reg=None):
     reg = reg or default_registry()
     ref = normalize(raw, reg)
     return reg.entries.get(ref.id) if ref.known else None
+
+
+_CTX_UNITS = {"": 1, "k": 1_000, "m": 1_000_000}
+
+
+def ctx_tokens(ctx):
+    """A chain entry's declared context window in tokens: `"128k"` -> 128000, `"1m"` -> 1000000, `"32768"` -> 32768.
+
+    The units are decimal: a chain that states `128k` means 128,000 tokens, as providers state their windows. None when
+    the value is absent or unreadable: an entry that declares no readable window has no ceiling.
+    """
+    if isinstance(ctx, bool) or not isinstance(ctx, str):
+        return None
+    match = _CTX_WINDOW.match(ctx.strip())
+    return int(match.group(1)) * _CTX_UNITS[match.group(2).lower()] if match else None
 
 
 def chain_ids(spellings, reg=None):

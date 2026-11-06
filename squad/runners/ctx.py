@@ -56,6 +56,11 @@ class RunCtx:
         return self._e.options.get("model_order") or []
 
     @property
+    def model_ctx(self):
+        """The context window each chain entry declares (`{spelling: "128k"}`): a prompt larger than it skips the entry (#1470)."""
+        return self._e.options.get("model_ctx") or {}
+
+    @property
     def model_registry(self):
         """The registry this run resolves model spellings through: a call states its chain in these ids (SPEC 1035)."""
         return self._e._registry()

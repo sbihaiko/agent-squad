@@ -4,7 +4,7 @@ An option may name nodes and may lower a run-block value. It never sets a node's
 """
 LOWER = {"spend_cap": "spend_cap", "deadline": "deadline", "max_parallel": "max_parallel"}
 NODE_OPTIONS = ("stop_after",)
-OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "model_order", "keep_children", "fix_run")
+OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "model_order", "model_ctx", "keep_children", "fix_run")
 TIERS = ("trivial", "medium", "large")
 
 
@@ -43,6 +43,8 @@ def resolve(graph, options):
         raise OptionError("model_hours must map a model id to an hours window (\"HH-HH\", or the day and UTC grammar of squad/modelreg.py)")
     if "model_order" in opts and not (isinstance(opts["model_order"], list) and all(isinstance(m, str) and m for m in opts["model_order"])):
         raise OptionError("model_order must be a list of model ids")
+    if "model_ctx" in opts and not (isinstance(opts["model_ctx"], dict) and all(isinstance(m, str) and m and isinstance(w, str) for m, w in opts["model_ctx"].items())):
+        raise OptionError("model_ctx must map a model id to its context window (\"128k\", \"1m\", or a token count)")
     if "keep_children" in opts and not isinstance(opts["keep_children"], bool):
         raise OptionError("keep_children must be true or false")
     if "fix_run" in opts and not isinstance(opts["fix_run"], bool):
