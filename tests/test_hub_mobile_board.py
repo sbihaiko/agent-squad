@@ -72,9 +72,10 @@ def test_a_horizontal_swipe_on_the_header_or_the_gap_moves_one_column():
 
 
 @pytest.mark.node_bound
-def test_a_card_or_a_short_or_vertical_move_is_no_column_swipe():
+def test_a_short_or_vertical_move_is_no_column_swipe():
     src = GESTURE_JS.read_text()
-    assert run_js(src, 'gestureAct({owner:"card",dx:-80,dy:2,atTop:false})') is None
+    assert run_js(src, 'gestureAct({owner:"card",dx:-80,dy:2,atTop:false,promotable:true})') == {"act": "column", "step": 1}
+    assert run_js(src, 'gestureAct({owner:"card",dx:80,dy:2,atTop:false,promotable:true})') is None
     assert run_js(src, 'gestureAct({owner:"header",dx:-10,dy:0,atTop:false})') is None
     assert run_js(src, 'gestureAct({owner:"gap",dx:-60,dy:90,atTop:false})') is None
 

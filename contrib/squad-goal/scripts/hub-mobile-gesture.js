@@ -6,10 +6,12 @@ const THUMB_TOP = 0.6;
 const inThumbZone = (y, h) => h > 0 && y >= h * THUMB_TOP;
 const gestureOwner = roles => roles.find(r => GESTURE_OWNERS.includes(r)) || "none";
 // A swipe that starts in a nested scroller or a control of the sheet (`nested`) is that element's, never a card step (#1007).
-const gestureAct = ({ owner, dx, dy, atTop, nested, thumb }) => {
+// A rightward drag on a promotable card is the move's (hub-mobile-move.js); every other horizontal swipe on a card is a column step.
+const gestureAct = ({ owner, dx, dy, atTop, nested, thumb, promotable }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);
   if (Math.max(ax, ay) < SWIPE_MIN) return null;
   if (ax > ay) {
+    if (owner === "card" && !(promotable && dx > 0)) return { act: "column", step: dx < 0 ? 1 : -1 };
     if (owner === "header" || owner === "gap") return { act: "column", step: dx < 0 ? 1 : -1 };
     if (owner === "sheet" && dx < 0 && !nested) return { act: "card", step: 1 };
     return null;

@@ -1108,10 +1108,10 @@ document.addEventListener("touchmove", e => {
 document.addEventListener("touchend", e => {
   if (!touch) return;
   const p = e.changedTouches[0], t = endGesture(), dx = p.clientX - t.x, dy = p.clientY - t.y;
-  if (t.card && Math.abs(dx) > 10) suppressClick = true;
-  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested, thumb: t.thumb });
-  if (g) { step(g); return; }
+  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested, thumb: t.thumb, promotable: t.pm });
   const mv = moveDrag({ promotable: t.pm, dx, dy });
+  suppressClick = !!t.card && (!!g || !!mv);
+  if (g) { step(g); return; }
   // The released card is resolved by its number against the board as it now stands: a 10 s read can reorder the column
   // during the drag, and the index taken at touchstart would then name another card (#829).
   const n = t.card ? String(t.card.dataset.n) : "";
