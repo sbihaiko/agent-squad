@@ -27,7 +27,7 @@ const runAgeLabel = (row, now) => {
   return row.ended ? "ended " + runSpan(Math.max(0, now - row.ended)) + " ago" : "no end recorded";
 };
 // The verdict an ended run shows, and the issues the overview lists, one line each with the title the row carries.
-const runVerdict = row => row.running ? "" : row.verdict || "";
+const runVerdict = row => row.running ? "" : row.verdict || (row.running === false ? "killed, no verdict" : "");
 const runIssueLines = row => (row.issues || []).map(n => "#" + n + (row.titles && row.titles[n] ? " " + row.titles[n] : "")).join("\n");
 // What the answer says. The control route takes one line and starts nothing (ADR-0118 rule 18), so a resume says so.
 const runControlReply = (act, status) => {
