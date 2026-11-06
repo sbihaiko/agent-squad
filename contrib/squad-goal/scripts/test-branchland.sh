@@ -445,4 +445,24 @@ r2=$(SG_LOCAL_GATE_CMD="$GATE_KO_SHELL" CHECKS='{"check_runs":[]}' bl)
 n=$(/usr/bin/grep -o ' | ' "$T/st/review-gui_7-x.md" 2>/dev/null | wc -l | tr -d ' ')
 [ "${n:-0}" -ge 2 ] \
   && ok "a whole-change red carries several of the gate's own lines" || ko "a whole-change red carries only its tail ($n lines): $(cat "$T/st/review-gui_7-x.md" 2>&1)"
+# DEBT (#1500): a kept landing branch fix/<n>-land-<run> closes every `issue` line of its marker, moves each card forward, deletes
+# wave/run-<run> from the remote, and removes the marker; the branch-name issue is closed only through its own line. A marker with
+# no `issue` line (the #1344 form) closes the branch's own issue alone.
+land7() { reset; $O update-ref -d refs/heads/gui/7-x; (cd "$T/w" && $G checkout -q -b "wave/run-z" origin/dev && echo wz > wz && $G add wz && $G -c user.email=a@b -c user.name=t commit -q -m "wave work (Refs #7)" && $G push -q origin wave/run-z 2>/dev/null \
+  && $G checkout -q -b fix/7-land-run-z wave/run-z && $G push -q origin fix/7-land-run-z 2>/dev/null)
+  rm -f "$T/st/review-fix_7-land-run-z".*; printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_7-land-run-z.md"; $O rev-parse fix/7-land-run-z > "$T/st/review-fix_7-land-run-z.sha"; }
+land7; printf 'origin/dev\nissue 7\nissue 9\nround 1 abc\n' > "$T/st/auto/kept-fix_7-land-run-z"
+r=$(OPEN="7 9" CHECKS="$GREEN" bl)
+case "$r" in *"BRANCHLAND LANDED fix/7-land-run-z"*) ok "a kept landing branch lands through ffland";; *) ko "the kept landing branch did not land: '$r'";; esac
+/usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && /usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && ok "every issue line of the marker is closed" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+/usr/bin/grep -qx 'o 3 Done 7' "$T/board.log" && /usr/bin/grep -qx 'o 3 Done 9' "$T/board.log" && ok "both cards move forward" || ko "board: '$(cat "$T/board.log")'"
+[ -z "$($O rev-parse -q --verify refs/heads/wave/run-z)" ] && [ ! -e "$T/st/auto/kept-fix_7-land-run-z" ] && ok "wave/run-z is deleted and the marker is removed" || ko "wave/run-z or the marker remains"
+[ "$(awk -F'\t' '$2=="fix/7-land-run-z"{print $4}' "$T/st/landed.tsv" | sort | tr '\n' ' ')" = "7 9 " ] && ok "one landed row for each closed issue" || ko "landed.tsv: '$(cat "$T/st/landed.tsv")'"
+land7; printf 'origin/dev\nissue 9\n' > "$T/st/auto/kept-fix_7-land-run-z"
+r=$(OPEN="7 9" CHECKS="$GREEN" bl)
+/usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && ! /usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && ok "with an issue line, the branch-name issue is not closed on its own" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+land7; printf 'origin/dev\n' > "$T/st/auto/kept-fix_7-land-run-z"
+r=$(OPEN="7 9" CHECKS="$GREEN" bl)
+/usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && ! /usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && [ ! -e "$T/st/auto/kept-fix_7-land-run-z" ] && ok "an old-form one-line marker closes the branch's own issue alone" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+
 rm -rf "$T"; exit $fail

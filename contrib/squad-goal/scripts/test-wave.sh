@@ -480,20 +480,18 @@ rm -rf "$T/w3"; $G clone -q "$T/origin.git" "$T/w3" 2>/dev/null
 (cd "$T/w3" && $G checkout -q dev && echo other > cf && $G add cf && $G -c user.email=a@b -c user.name=t commit -q -m "conflicting work" && $G push -q origin HEAD:dev)
 : > "$T/gh.log"; : > "$T/board.log"; before=$($O rev-parse dev)
 r1=$(land2 run-7); rc1=$?
-case "$r1" in "WAVE CONFLICT $W7: the rebase on dev conflicts at "*"; #70 requeued on the current base"*) ok "K: the conflict is logged once, naming the commit and the issue";; *) ko "K: no conflict line: '$r1'";; esac
+case "$r1" in "WAVE CONFLICT $W7: the rebase on dev conflicts at "*"; #70 kept on fix/70-land-run-7 for one rebase round"*) ok "K: the conflict is logged once, naming the commit and the issue";; *) ko "K: no conflict line: '$r1'";; esac
 [ $rc1 = 1 ] && ok "K: the conflicting landing does not land (exit 1)" || ko "K: exit $rc1"
 [ -e "$T/st/auto/wave-run-7" ] && ko "K: the wave marker is kept, so the loop retries the landing" || ok "K: the wave marker goes, so the loop stops retrying"
-/usr/bin/grep -qx "o 3 Todo 70" "$T/board.log" && ok "K: #70 is back in Todo" || ko "K: #70 not in Todo: '$(cat "$T/board.log")'"
-/usr/bin/grep -qx "no-landing o 3 Todo 70" "$T/board-reason.log" && ok "K: #70 moves back to Todo as no-landing (#1340)" || ko "K: #70 move reason: '$(cat "$T/board-reason.log")'"
+/usr/bin/grep -qx "o 3 Todo 70" "$T/board.log" && ko "K: #70 went back to Todo, so its work is rebuilt (#1500)" || ok "K: #70 stays put: its work is kept for one rebase round (#1500)"
 case "$(wfact 70 run-7)" in "refused the rebase on dev conflicts at"*) ok "K: the conflict is a fact in the issue's ledger";; *) ko "K: ledger fact of #70: '$(wfact 70 run-7)'";; esac
 $O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work" || ko "K: the wave branch is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a conflicting landing" || ko "K: dev moved"
 /usr/bin/grep -q 'labels\[\]=frozen:owner' "$T/gh.log" && ko "K: a conflict below the cap froze the issue" || ok "K: a conflict below the cap freezes nothing"
 case "$r1" in *"WAVE-ERROR"*|*"WAVE NEEDS-HUMAN"*) ko "K: the stuck path was taken: '$r1'";; *) ok "K: the stuck path is not taken";; esac
 
-# KC (#1061): two waves of one issue, cut on one base, conflict with dev on the same path. The first conflict re-dispatches the
-# child once, with the path named in its request and a rework label on its card; the second identical conflict files one loop
-# bug and does not requeue the child again.
+# KC (#1061, #1500): two waves of one issue, cut on one base, conflict with dev on the same path. Each keeps its own wave head for
+# one rebase round: neither requeues the child and neither files a bug, because a kept branch is not a rebuild.
 start2 run-k8 >/dev/null; start2 run-k10 >/dev/null
 child 71 cf2 origin/dev; en2 run-k8 71 >/dev/null
 child 71 cf2 origin/dev; en2 run-k10 71 >/dev/null
@@ -501,50 +499,9 @@ rm -rf "$T/w4"; $G clone -q "$T/origin.git" "$T/w4" 2>/dev/null
 (cd "$T/w4" && $G checkout -q dev && echo dev > cf2 && $G add cf2 && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cf2" && $G push -q origin HEAD:dev)
 : > "$T/gh.log"; rm -f "$T"/st/cq/*71-*
 rk8=$(land2 run-k8); rk10=$(land2 run-k10)
-case "$rk8" in *"WAVE REQUEUE #71"*) ok "KC: the first conflict re-dispatches its child";; *) ko "KC: no requeue of #71: '$rk8'";; esac
-cat "$T"/st/cq/*71-* 2>/dev/null | /usr/bin/grep -q cf2 && ok "KC: the child's next request names the conflicting path" || ko "KC: the request names no path: '$(cat "$T"/st/cq/*71-* 2>/dev/null)'"
-/usr/bin/grep -q 'issues/71/labels.*labels\[\]=rework' "$T/gh.log" && ok "KC: the card of #71 carries rework" || ko "KC: no rework label for #71"
-case "$rk10" in *"WAVE REQUEUE #71"*) ko "KC: the repeated conflict requeued #71 again: '$rk10'";; *) ok "KC: the repeated conflict does not requeue #71";; esac
-[ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && ok "KC: the repeated conflict files one bug" || ko "KC: $(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log") bugs filed"
-
-# KR (#1343): the base moves with every landing, so the conflict key is the conflicting paths, not the base sha. The same path
-# conflicting again at a new base is a repeat (one loop bug, no requeue); a different path is a first again (a requeue).
-start2 run-kr1 >/dev/null; start2 run-kr2 >/dev/null
-child 74 cfr origin/dev; en2 run-kr1 74 >/dev/null
-child 74 cfr origin/dev; en2 run-kr2 74 >/dev/null
-rm -rf "$T/w5"; $G clone -q "$T/origin.git" "$T/w5" 2>/dev/null
-(cd "$T/w5" && $G checkout -q dev && echo dev1 > cfr && $G add cfr && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cfr" && $G push -q origin HEAD:dev)
-: > "$T/gh.log"; rm -f "$T"/st/cq/*74-*
-kr1=$(land2 run-kr1)
-(cd "$T/w5" && echo dev2 > cfr && $G add cfr && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cfr again" && $G push -q origin HEAD:dev)
-kr2=$(land2 run-kr2)
-case "$kr1" in *"WAVE REQUEUE #74"*) ok "KR: the first conflict of #74 re-dispatches it";; *) ko "KR: no requeue of #74: '$kr1'";; esac
-case "$kr2" in *"WAVE REQUEUE #74"*) ko "KR: the second conflict on the same path at a new base requeued #74: '$kr2'";; *) ok "KR: the second conflict on the same path at a new base does not requeue #74";; esac
-case "$kr2" in *"WAVE-BUG #74"*) ok "KR: the second conflict on the same path files one loop bug";; *) ko "KR: no loop bug for #74: '$kr2'";; esac
-[ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && ok "KR: one bug issue is filed" || ko "KR: $(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log") bugs filed"
-# KR (#1343): the repeat also stops the issue, so no frozen dispatch picks it again: frozen:owner on its card and the stop marker.
-/usr/bin/grep -q 'issues/74/labels.*labels\[\]=frozen:owner' "$T/gh.log" && ok "KR: the repeated conflict freezes #74 (frozen:owner)" || ko "KR: no frozen:owner on #74 after the repeat"
-ls "$T"/st/cq/*74-wavestop* >/dev/null 2>&1 && ok "KR: the repeated conflict writes the stop marker of #74" || ko "KR: no stop marker for #74 after the repeat"
-
-start2 run-kd1 >/dev/null; start2 run-kd2 >/dev/null
-child 75 cfd origin/dev; en2 run-kd1 75 >/dev/null
-child 75 cfe origin/dev; en2 run-kd2 75 >/dev/null
-rm -rf "$T/w6"; $G clone -q "$T/origin.git" "$T/w6" 2>/dev/null
-(cd "$T/w6" && $G checkout -q dev && echo dev1 > cfd && $G add cfd && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cfd" && $G push -q origin HEAD:dev)
-: > "$T/gh.log"; rm -f "$T"/st/cq/*75-*
-kd1=$(land2 run-kd1)
-(cd "$T/w6" && echo dev1 > cfe && $G add cfe && $G -c user.email=a@b -c user.name=t commit -q -m "dev adds cfe" && $G push -q origin HEAD:dev)
-kd2=$(land2 run-kd2)
-case "$kd1" in *"WAVE REQUEUE #75"*) ok "KR: a conflict on one path requeues #75";; *) ko "KR: no requeue of #75 on cfd: '$kd1'";; esac
-case "$kd2" in *"WAVE REQUEUE #75"*) ok "KR: a conflict on a different path at a new base is a first again";; *) ko "KR: a different path did not requeue #75: '$kd2'";; esac
-
-# K3 (#844): the requeue cap bounds a conflict that keeps coming back: at SG_LOOP_REQUEUE_CAP the issue goes to the owner, as any
-# requeue does (requeue, loop_stop). A second wave of #73 conflicts with dev moved again after its entry.
-W44=wave/run-44; start2 run-44 >/dev/null; child 73 cf "origin/$W44"; en2 run-44 73 >/dev/null
-(cd "$T/w3" && $G pull -q origin dev && echo other2 > cf && $G add cf && $G -c user.email=a@b -c user.name=t commit -q -m "more conflicting work" && $G push -q origin HEAD:dev)
-r4=$(SG_LOOP_REQUEUE_CAP=1 land2 run-44); rc4=$?
-case "$r4" in *"WAVE NEEDS-HUMAN #73"*) ok "K3: at the requeue cap the conflicting issue goes to the owner";; *) ko "K3: no needs-human line: '$r4'";; esac
-[ $rc4 = 1 ] && ok "K3: the capped conflict does not land (exit 1)" || ko "K3: exit $rc4"
+case "$rk8$rk10" in *"WAVE REQUEUE #71"*) ko "KC: a landing conflict requeued #71: '$rk8$rk10'";; *) ok "KC: neither conflict requeues #71";; esac
+[ -s "$T/st/auto/kept-fix_71-land-run-k8" ] && [ -s "$T/st/auto/kept-fix_71-land-run-k10" ] && ok "KC: each wave keeps its own landing branch" || ko "KC: no kept marker for #71"
+/usr/bin/grep -q 'labels\[\]=bug' "$T/gh.log" && ko "KC: a bug was filed for a first round" || ok "KC: no bug for a first round on each wave"
 
 # K2 (#477): a landing that exits 2 -- the wave branch is gone, the base is gone, or the checkout failed -- is a landing
 # that failed, so it counts toward the same cap. Below the cap the marker stays and the next cycle tries again; at the cap
@@ -971,7 +928,7 @@ rm -rf "$T/w15"; $G clone -q "$T/origin.git" "$T/w15" 2>/dev/null
 (cd "$T/w15" && $G checkout -q dev && echo other > g150 && $G add g150 && $G -c user.email=a@b -c user.name=t commit -q -m "conflicting work" && $G push -q origin HEAD:dev)
 : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/cq/"*151* "$T/st/wave-outside.tsv"
 r=$(cd "$T/co" && SG_WAVE_LAND_TRIES=1 bash "$T/s/wave.sh" land run-15 "$RD" 2>&1); rc=$?
-[ $rc = 1 ] && /usr/bin/grep -qx "o 3 Todo 150" "$T/board.log" && /usr/bin/grep -q 'issues/150/labels.*labels\[\]=rework' "$T/gh.log" && ok "S776: the dispatched issue is requeued with rework when the conflicting landing gives up (#844, #1061)" || ko "S776: #150 not requeued: rc $rc '$r'"
+[ $rc = 1 ] && [ "$(/usr/bin/grep -c '^issue ' "$T/st/auto/kept-fix_150-land-run-15")" = 1 ] && ! /usr/bin/grep -q 'issue 151' "$T/st/auto/kept-fix_150-land-run-15" && ok "S776: the conflicting landing keeps the dispatched issue alone in its marker (#1500)" || ko "S776: #150 marker: rc $rc '$r' '$(cat "$T/st/auto/kept-fix_150-land-run-15" 2>&1)'"
 /usr/bin/grep -q 'issues/151/' "$T/gh.log" && ko "S776: #151, outside the dispatch set, was written: '$(cat "$T/gh.log")'" || ok "S776: a Refs outside the dispatch set gets no label"
 /usr/bin/grep -q ' 151$' "$T/board.log" && ko "S776: #151's card moved" || ok "S776: the card of an issue outside the dispatch set does not move"
 [ -z "$(/bin/ls "$T/st/cq" | /usr/bin/grep '#151-')" ] && ok "S776: no comment is queued for #151" || ko "S776: a comment is queued for #151"
@@ -1318,5 +1275,81 @@ REV_BASE=$WS2 rev 966
 r=$((cd "$T/c966" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-s2 966) 2>&1); rc=$?
 [ $rc = 2 ] && ok "SD: a sibling diff the entry cannot read exits 2" || ko "SD: exit $rc, not 2: '$r'"
 case "$r" in *"WAVE-ERROR"*"cannot be read"*) ok "SD: the unreadable diff is a WAVE-ERROR, never a clean pass";; *) ko "SD: the unreadable diff is silent: '$r'";; esac
+
+# L (#1500): a landing conflict keeps the wave head on fix/<n>-land-<run> for one rebase round, never a requeue and a rebuild. The
+# marker's line 1 is the bare base ref (every #1344 reader stays unchanged); `issue <n>` lines are the close set; `round <k> <sha>`
+# lines are the rounds that started. The repeat rule reads the base sha: the same sha after a round is a loop bug, a moved base
+# starts the next round, and a conflict after round two requeues exactly the issue lines with rework and removes the branches.
+lwave() { local run=$1 spec n f; shift; start2 "$run" >/dev/null; mkdir -p "$T/co/runs/$run"; : > "$T/co/runs/$run/record.jsonl"
+  for spec in "$@"; do n=${spec%%:*}; f=${spec#*:}
+    [ "$f" = - ] || { child "$n" "$f" "origin/wave/$run"; en2 "$run" "$n" >/dev/null; }
+    printf '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #%s work"}}\n' "$n" >> "$T/co/runs/$run/record.jsonl"; done; }
+ldev() { rm -rf "$T/wl"; $G clone -q "$T/origin.git" "$T/wl" 2>/dev/null
+  (cd "$T/wl" && $G checkout -q dev && echo "dev $RANDOM$RANDOM" > "$1" && $G add "$1" && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves $1" && $G push -q origin HEAD:dev); }
+lmk() { printf '%s/st/auto/kept-fix_%s-land-%s' "$T" "$1" "$2"; }
+lbr() { $O rev-parse -q --verify "refs/heads/$1" 2>/dev/null; }
+lreset() { : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T"/st/cq/*150[0-9]-* "$T"/st/cq/*151[0-9]-*; }
+
+# L1: the first landing conflict keeps the wave head; nothing is requeued and no rework label is added.
+lwave run-l1 1501:lf1; ldev lf1; lreset; wh=$($O rev-parse wave/run-l1); d1=$($O rev-parse dev)
+r=$(land2 run-l1); rc=$?
+[ "$(lbr fix/1501-land-run-l1)" = "$wh" ] && ok "L1: the wave head is kept on fix/1501-land-run-l1" || ko "L1: no kept branch at the wave head: '$r'"
+m=$(lmk 1501 run-l1)
+[ "$(sed -n 1p "$m" 2>/dev/null)" = origin/dev ] && [ "$(sed -n 2p "$m" 2>/dev/null)" = "issue 1501" ] && [ "$(sed -n 3p "$m" 2>/dev/null)" = "round 1 $d1" ] && [ "$(wc -l < "$m" 2>/dev/null | tr -d ' ')" = 3 ] && ok "L1: the marker is the bare base ref, one issue line and round 1 with the base sha" || ko "L1: marker is '$(cat "$m" 2>&1 | tr '\n' '|')'"
+head -1 "$T/st/review-fix_1501-land-run-l1.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: CHANGES' && /usr/bin/grep -q 'Rebase this branch on origin/dev' "$T/st/review-fix_1501-land-run-l1.md" && [ "$(cat "$T/st/review-fix_1501-land-run-l1.sha" 2>/dev/null)" = "$wh" ] && ok "L1: a CHANGES review at the kept head asks a rebase on origin/dev" || ko "L1: no round review"
+case "$r" in *"WAVE REQUEUE"*) ko "L1: the conflict requeued: '$r'";; *) ok "L1: no requeue";; esac
+/usr/bin/grep -q ' 1501$' "$T/board.log" && ko "L1: the card moved: '$(cat "$T/board.log")'" || ok "L1: the card does not move"
+/usr/bin/grep -q 'labels\[\]=rework' "$T/gh.log" && ko "L1: a rework label was added" || ok "L1: no rework label"
+[ $rc = 1 ] && [ ! -e "$T/st/auto/wave-run-l1" ] && ok "L1: exit 1 and the wave marker goes" || ko "L1: exit $rc, wave marker '$(ls "$T/st/auto" | /usr/bin/grep wave-run-l1)'"
+[ -n "$(lbr wave/run-l1)" ] && ok "L1: wave/run-l1 stays on the remote while the round runs" || ko "L1: wave/run-l1 is gone"
+
+# L2: a two-issue wave keeps one branch named for the lowest issue; both issues are in the marker.
+lwave run-l2 1503:lf2b 1502:lf2a; ldev lf2a; lreset; r=$(land2 run-l2)
+m=$(lmk 1502 run-l2)
+[ "$(sed -n '2,3p' "$m" 2>/dev/null | tr '\n' ,)" = "issue 1502,issue 1503," ] && [ -z "$(lbr fix/1503-land-run-l2)" ] && ok "L2: one branch, both issues in the marker" || ko "L2: '$(cat "$m" 2>&1 | tr '\n' '|')'"
+
+# L10: an issue the run dispatched that is not on the wave head is not listed.
+lwave run-l10 1512:lf10 1513:-; ldev lf10; lreset; r=$(land2 run-l10)
+[ "$(grep -c '^issue ' "$(lmk 1512 run-l10)" 2>/dev/null)" = 1 ] && ! /usr/bin/grep -q 'issue 1513' "$(lmk 1512 run-l10)" && ok "L10: a dropped issue is not in the marker" || ko "L10: '$(cat "$(lmk 1512 run-l10)" 2>&1 | tr '\n' '|')'"
+
+# L4: the same paths with a moved base start round two, and no bug is filed.
+lwave run-l4 1504:lf4; ldev lf4; r=$(land2 run-l4); ldev lf4; d2=$($O rev-parse dev); lreset; r=$(land2 run-l4)
+m=$(lmk 1504 run-l4)
+[ "$(sed -n 4p "$m" 2>/dev/null)" = "round 2 $d2" ] && ok "L4: round two starts at the moved base" || ko "L4: marker is '$(cat "$m" 2>&1 | tr '\n' '|')'"
+/usr/bin/grep -q 'labels\[\]=bug' "$T/gh.log" && ko "L4: a bug was filed" || ok "L4: no bug is filed"
+case "$r" in *"WAVE REQUEUE"*) ko "L4: requeued: '$r'";; *) ok "L4: not requeued";; esac
+/usr/bin/grep -q 'Rebase this branch on origin/dev' "$T/st/review-fix_1504-land-run-l4.md" 2>/dev/null && ok "L4: the round review is written again" || ko "L4: no round review"
+
+# L5: the same base sha after a round did not resolve the conflict: the loop bug, whatever the round count.
+lwave run-l5 1505:lf5; ldev lf5; land2 run-l5 >/dev/null; lreset; r=$(land2 run-l5)
+[ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && case "$r" in *"WAVE-BUG #1505"*) true;; *) false;; esac && ok "L5: the same base sha files the loop bug" || ko "L5: no bug: '$r'"
+case "$r" in *"WAVE REQUEUE"*) ko "L5: requeued: '$r'";; *) ok "L5: not requeued";; esac
+
+# L6: a third conflict requeues exactly the marker's issue lines with rework, removes the marker and both branches, files no bug.
+lwave run-l6 1506:lf6a 1511:lf6b; ldev lf6a; land2 run-l6 >/dev/null; ldev lf6a; land2 run-l6 >/dev/null; ldev lf6a; lreset; r=$(land2 run-l6)
+for n in 1506 1511; do
+  /usr/bin/grep -qx "o 3 Todo $n" "$T/board.log" && /usr/bin/grep -q "issues/$n/labels.*labels\[\]=rework" "$T/gh.log" && ok "L6: #$n is requeued with rework" || ko "L6: #$n not requeued: '$r'"
+done
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE REQUEUE')" = 2 ] && ok "L6: the requeued set is the marker's issue lines" || ko "L6: requeues: '$r'"
+[ ! -e "$(lmk 1506 run-l6)" ] && [ -z "$(lbr fix/1506-land-run-l6)" ] && [ -z "$(lbr wave/run-l6)" ] && ok "L6: the marker, the kept branch and wave/run-l6 are gone" || ko "L6: marker/branches remain"
+/usr/bin/grep -q 'labels\[\]=bug' "$T/gh.log" && ko "L6: a bug was filed" || ok "L6: no bug is filed"
+# a later run of the same issue starts at round one
+lwave run-l6b 1506:lf6c; ldev lf6c; lreset; r=$(land2 run-l6b)
+[ "$(sed -n '3p' "$(lmk 1506 run-l6b)" 2>/dev/null | cut -d' ' -f1,2)" = "round 1" ] && ! /usr/bin/grep -q 'labels\[\]=bug' "$T/gh.log" && ok "L6: a later run of the issue starts at round one" || ko "L6: '$(cat "$(lmk 1506 run-l6b)" 2>&1 | tr '\n' '|')' '$r'"
+
+# L11: the same sha after round two files the loop bug and does not requeue.
+lwave run-l11 1514:lf11; ldev lf11; land2 run-l11 >/dev/null; ldev lf11; land2 run-l11 >/dev/null; lreset; r=$(land2 run-l11)
+[ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && ok "L11: the same sha after round two files the loop bug" || ko "L11: no bug: '$r'"
+case "$r" in *"WAVE REQUEUE"*) ko "L11: requeued: '$r'";; *) ok "L11: not requeued";; esac
+
+# L7: a #1344 entry-kept branch of the issue does not collide: the landing conflict starts round one on its own -land- marker.
+printf 'origin/wave/run-l7\n' > "$T/st/auto/kept-fix_1507-rebase-run-l7"
+lwave run-l7 1507:lf7; ldev lf7; lreset; r=$(land2 run-l7)
+[ "$(sed -n 3p "$(lmk 1507 run-l7)" 2>/dev/null | cut -d' ' -f1,2)" = "round 1" ] && [ "$(cat "$T/st/auto/kept-fix_1507-rebase-run-l7")" = origin/wave/run-l7 ] && ok "L7: round one on the -land- marker; the entry marker is untouched" || ko "L7: '$(cat "$(lmk 1507 run-l7)" 2>&1 | tr '\n' '|')'"
+
+# L12: wave.sh landconflict is the repeat rule for a conflict the lander meets on a kept landing branch (branchland.sh calls it).
+lwave run-l12 1515:lf12; ldev lf12; land2 run-l12 >/dev/null; ldev lf12; nd=$($O rev-parse dev); lreset
+r=$(cd "$T/co" && bash "$T/s/wave.sh" landconflict fix/1515-land-run-l12 "$nd" "$($O rev-parse fix/1515-land-run-l12)" "lf12")
+[ "$(sed -n 4p "$(lmk 1515 run-l12)" 2>/dev/null)" = "round 2 $nd" ] && ok "L12: landconflict starts round two at the moved base" || ko "L12: '$(cat "$(lmk 1515 run-l12)" 2>&1 | tr '\n' '|')' '$r'"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
