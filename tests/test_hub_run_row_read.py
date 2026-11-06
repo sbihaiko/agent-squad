@@ -96,3 +96,20 @@ def test_the_age_is_the_time_since_the_last_write_and_every_card_names_it(hub, t
     assert 3 <= row["age"] <= 5 + (time.time() - t0)
     assert hub.PAGE.count("last write ${age(r.age)} ago") == 3
     assert not re.search(r"(?<!last write )\$\{age\(r\.age\)\} ago", hub.PAGE)
+
+
+def test_a_live_row_names_its_start_and_no_end(hub, tmp_path):
+    folder = tmp_path / "runs" / "run-live-span"
+    t0 = NOW - 1800
+    write_record(folder, run_events(t0))
+    row, _ = hub.run_row(str(folder), "4321", [])
+    assert row["started"] == t0 and row["ended"] is None
+
+
+def test_an_ended_row_names_its_start_and_its_end(hub, tmp_path):
+    folder = tmp_path / "runs" / "run-ended-span"
+    t0 = NOW - 3600
+    write_record(folder, run_events(t0) + [{"ts": t0 + 120, "event": "verdict", "verdict": "completed", "pos": 3}])
+    row, _ = hub.run_row(str(folder), "", [])
+    assert row["started"] == t0 and row["ended"] == t0 + 120
+    assert row["verdict"] == "completed", "an ended row carries the verdict its record wrote"

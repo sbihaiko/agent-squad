@@ -1,4 +1,4 @@
-const CACHE = "squad-hub-shell-v1";
+const CACHE = "squad-hub-shell-__BUILD__";
 const SHELL = /*SHELL*/[];
 self.addEventListener("install", e => e.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL))));
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))));

@@ -26,7 +26,7 @@ HUB_PY = SCRIPTS / "hub.py"
 GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
-ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
+ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended", "/api/version",
           "/api/sessions", "/api/sessions/card", "/api/sessions/card/answer", "/api/sessions/conversation", "/api/sessions/send", "/api/sessions/attach", "/api/promote", "/api/loop",
           "/api/load", "/api/chart/lead", "/api/leadtime"}   # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the phone's photo takes the one attach write (#1155); the lead chart and its zoom read the routes the desktop draws (#1333)
 

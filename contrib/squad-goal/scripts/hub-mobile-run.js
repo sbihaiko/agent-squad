@@ -14,12 +14,21 @@ const controlBody = (action, nodes) => JSON.stringify(nodes && nodes.length ? { 
 // (ADR-0118 rule 19), and a hold already asked is the control file's answer. The resume the phone sends releases every
 // hold, as the desktop page's whole-run resume does. An ended run and a dashboard that does not answer are offered no
 // request at all.
-const runControlView = (info, state) => {
+const runControlView = (info, state, live) => {
   if (!info) return { act: null, label: "", note: "This run's dashboard does not answer. The screen cannot say whether the run takes a pause or a resume." };
-  if (info.ended) return { act: null, label: "", note: "The run has ended. It takes no pause and no resume." };
+  if (info.ended || live === false) return { act: null, label: "", note: "The run has ended. It takes no pause and no resume." };
   if (state && (state.whole || (state.nodes || []).length)) return { act: "resume", label: "Ask to resume", note: "The run is asked to pause. A resume releases the hold; the run continues when squad resume runs." };
   return { act: "pause", label: "Pause the run", note: "The run stops before its next task. A call that is already running finishes first." };
 };
+// The age the screen shows, and the word that says what it measures: the time since start while live, since end once over.
+const runSpan = s => s < 3600 ? Math.floor(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
+const runAgeLabel = (row, now) => {
+  if (row.running) return row.started ? "running for " + runSpan(Math.max(0, now - row.started)) : "no start recorded";
+  return row.ended ? "ended " + runSpan(Math.max(0, now - row.ended)) + " ago" : "no end recorded";
+};
+// The verdict an ended run shows, and the issues the overview lists, one line each with the title the row carries.
+const runVerdict = row => row.running ? "" : row.verdict || (row.running === false ? "killed, no verdict" : "");
+const runIssueLines = row => (row.issues || []).map(n => "#" + n + (row.titles && row.titles[n] ? " " + row.titles[n] : "")).join("\n");
 // What the answer says. The control route takes one line and starts nothing (ADR-0118 rule 18), so a resume says so.
 const runControlReply = (act, status) => {
   if (status === 200) return { ok: true, text: act === "resume"
