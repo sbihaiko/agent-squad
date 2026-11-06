@@ -270,13 +270,21 @@ done
 # that marker stays from the cut to the landing, so a wave still landing keeps the line), its record has not moved for
 # SG_RUN_LINE_SECONDS (an hour by default: the janitor's per-run rules have read it) and no process is inside its folder. The
 # tree stays for a resume or for the owner: a held, unpushed, dirty or inner tree, a needs-human, paused or failed verdict with
-# remains keep the tree and never the line. This holds #693's rule: a failed run whose wave is over leaves too. The file is
-# read again just before the write, so a line appended meanwhile stays.
+# remains keep the tree and never the line. This holds #693's rule: a failed run whose wave is over leaves too. A line whose run
+# folder is gone leaves at once, whatever its verdict (#1433): the folder held its record, so no rule can read the line, and a
+# listed folder that is gone holds no slot (ADR-0167). A line whose folder stands and has no record yet stays: that is the
+# janitor's launch window (rule J), not this pass's. The file is read again just before the write, so a line appended meanwhile stays.
 verdict_last() { awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$1/record.jsonl" 2>/dev/null; }
 act="$SG_STATE/active-runs.txt"; drop="$SG_STATE/active-drop.$$"; : > "$drop"
 [ -f "$act" ] && while read -r r; do
   case "$r" in '') continue;; /*) d=$r;; *) d="$SG_CHECKOUT/runs/$r";; esac
-  d=$(cd "$d" 2>/dev/null && pwd -P) && [ -f "$d/record.jsonl" ] || continue
+  # #1433: a line whose run folder is gone names no run at all. Its record went with the folder, so no rule can read it, and
+  # ADR-0167 reads a listed folder that is gone as holding no slot: the line goes and the pass says which. The rest of this rule
+  # reads a line that has a folder: a launch whose folder stands and has no record yet keeps its line, as the janitor's launch
+  # window does (rule J), and a finished run keeps its line until SG_RUN_LINE_SECONDS have passed.
+  if ! d=$(cd "$d" 2>/dev/null && pwd -P); then
+    echo "$r" >> "$drop"; echo "RUN GONE ${r##*/}: its run folder is gone and its record with it; dropped from active-runs.txt"; continue; fi
+  [ -f "$d/record.jsonl" ] || continue
   [ $(( now - $(mtime "$d/record.jsonl") )) -ge "${SG_RUN_LINE_SECONDS:-3600}" ] || continue
   [ -n "$(verdict_last "$d")" ] || continue
   [ -e "$SG_STATE/auto/wave-${d##*/}" ] && continue

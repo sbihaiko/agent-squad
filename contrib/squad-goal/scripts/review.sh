@@ -260,15 +260,21 @@ tmo=$(jq -r '.review_timeout_seconds // 480' "$cfg")
 # signal kills the shell that set it, and the process the CLI spawned is reparented and keeps running, so a review runs
 # on past its timeout. The watchdog is outside the group, so its kill reaches the CLI and everything it spawned.
 exec 3>&1   # the heartbeat in cap() goes here: inside the chain walk, stdout is the model output file
-capraw() { local c w
+capraw() { local c w t0 r
+  t0=$(date +%s)   # #1385: the lease is a deadline on this call, taken here, never a clock read after the caller returns
   # setpgrp resets the environment, so PATH travels as an argument; <&0 keeps the prompt on stdin (a background job reads /dev/null);
   # 3>&- so neither the model nor the watchdog holds the script's stdout: a caller that captures it would wait for them.
   perl -e 'setpgrp(0,0); $ENV{PATH}=$ARGV[0]; shift; exec @ARGV or exit 127' "$PATH" "$@" <&0 3>&- 9>&- & c=$!
   ( sleep "$tmo"; kill -TERM -"$c" 2>/dev/null; sleep 2; kill -KILL -"$c" 2>/dev/null ) 2>/dev/null 3>&- 9>&- 8>&- & w=$!   # fd 8 is the grok probe lock: the watchdog outlives a killed review and must not hold it (#1417)
   # cap() kills this wait when the head moves; the model's group is a different one, so pass it on, and take the watchdog along.
   trap 'kill -TERM -"$c" 2>/dev/null; pkill -P $w 2>/dev/null; kill $w 2>/dev/null' TERM
-  wait $c 2>/dev/null; local r=$?; pkill -P $w 2>/dev/null; kill $w 2>/dev/null; wait $w 2>/dev/null
-  [ $r -gt 128 ] && return 142; return $r; }
+  wait $c 2>/dev/null; r=$?; pkill -P $w 2>/dev/null; kill $w 2>/dev/null; wait $w 2>/dev/null
+  [ $r -gt 128 ] && return 142
+  # #1385: a saturated box wakes the watchdog late, so an answer longer than tmo can land with exit 0. This call then
+  # took longer than its timeout, so it is the timeout the watchdog owed and the chain moves on. The span is this call's
+  # own: cap()'s poll sleep and a repair call after it never count, so an answer inside tmo keeps its answer.
+  [ $r = 0 ] && [ $(( $(date +%s) - t0 )) -gt "$tmo" ] && return 142
+  return $r; }
 # cap: capraw, but every 10 s checks that the branch tip is still the reviewed one; a new push kills the model at once (SUPERSEDED, no verdict).
 # The wait also says it is alive: a review that runs for minutes otherwise looks stuck, since the model writes nothing until it finishes.
 # SG_CAP_POLL is the poll interval in seconds (default 2) and SG_CAP_HEARTBEAT the gap between two "still running" lines (default 30);
@@ -435,6 +441,8 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; : > "$e"; fmt=1; lim=$i; false > "$o";;   # no stale stderr, no second MODEL_FAIL, no more tries for a model that never ran
     esac
     rc=$?; exec 8>&-   # the grok try is over: fd 8 (the probe lock) closes, so later subprocesses never hold it (#1417)
+    # #1385: capraw decides the deadline inside the call and returns 142 from there. Nothing here reclassifies a green
+    # answer: the time cap() spends polling, and both calls of a no-tools repair, are not this answer's own span.
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
     # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens. A
     # call whose answer carries no usage is not a zero, it is a FLOOR: a claude call -- a model that reports tokens -- whose
