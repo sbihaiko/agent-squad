@@ -184,6 +184,12 @@ case "$out" in model=*) ok "the repository is the first argument (the review ran
 unset CLAUDE_PROMPT; : > "$GHLOG"; rm -f "$T/st/review-fix_1-x".*
 out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
 /usr/bin/grep -q 'repos/x/y/compare' "$GHLOG" && ok "with no argument the profile's repository is the one read" || ko "default repo: $(head -3 "$GHLOG")"
+# 9b) (#1425) a branch that adds only tests is judged against the code at the base: the branch prompt says a behaviour the base
+# already has is not missing, so a reviewer cannot report a producer that sits in origin/dev as absent.
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; export CLAUDE_PROMPT="$T/prompt9b"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+/usr/bin/grep -q 'is not missing' "$CLAUDE_PROMPT" && /usr/bin/grep -q 'judged against the code at origin/' "$CLAUDE_PROMPT" && ok "9b the branch prompt judges a missing behaviour against the base" || ko "9b branch prompt lacks the base rule: '$out'"
+unset CLAUDE_PROMPT
 # 10) #1846: the normal path walks the eligible chain by the same measured latency the fast lane uses, not the config's
 # order -- a review that lands on the slow end costs the PR minutes for the same verdict. Only a SUCCESSFUL try is a
 # latency; ties and models with no record fall back to the configured order (never dropped, never given an invented
