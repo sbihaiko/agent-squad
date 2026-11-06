@@ -42,12 +42,13 @@ sg_missing_tool() {
   local t; for t in ruff mypy pytest; do "$1" -m "$t" --version >/dev/null 2>&1 || { echo "$t"; return; }; done
 }
 
-# sg_ps_default: the process read every shell caller uses (#1508). macOS refuses to exec the setuid process table binary inside the child's
+# sg_ps: the process read every shell caller uses (#1508). macOS refuses to exec the setuid process table binary inside the child's
 # sandbox-exec, so the read goes through squad.procs (libproc, KERN_PROCARGS2) and prints the ps text. The repository the script
-# lives in supplies the module; the live copy reads SG_SQUAD. The interpreter is the battery's (sg_gate_python).
-sg_ps_default() {
-  local root; root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$root/squad/procs.py" ] || root=${SG_SQUAD:-.}
-  echo "env PYTHONPATH=$root $(sg_gate_python) -m squad.procs ps"
-}
-# SG_PS: one command word for callers to word-split (`$SG_PS -o pid= -p 1`). A caller that sets it keeps its own reader.
-: "${SG_PS:=$(sg_ps_default)}"; export SG_PS
+# lives in supplies the module; the live copy reads SG_SQUAD. The interpreter is the battery's (sg_gate_python). Both paths are
+# kept as quoted words, so a checkout or an interpreter whose path holds a space still reads the table.
+SG_PS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$SG_PS_ROOT/squad/procs.py" ] || SG_PS_ROOT=${SG_SQUAD:-.}
+SG_PS_PY=$(sg_gate_python); case $SG_PS_PY in /*|"") ;; */*) SG_PS_PY=$PWD/$SG_PS_PY;; esac
+sg_ps() { PYTHONPATH="$SG_PS_ROOT" "$SG_PS_PY" -m squad.procs ps "$@"; }
+# SG_PS: the one word callers expand (`$SG_PS -o pid= -p 1`): the sg_ps function, unless the caller names its own reader.
+# It is not exported: a shell function does not reach a child, and each script sources this file for its own.
+: "${SG_PS:=sg_ps}"

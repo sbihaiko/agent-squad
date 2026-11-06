@@ -87,3 +87,23 @@ def test_1508_no_file_names_bin_ps():
             if "/bin/ps" in path.read_text(errors="ignore"):
                 hits.append(str(path.relative_to(ROOT)))
     assert hits == []
+
+
+def test_1508_shell_reader_survives_a_space_in_the_checkout_and_the_interpreter(tmp_path):
+    """A shell caller expands `$SG_PS` unquoted. A checkout or an interpreter whose path holds a space must still read the table."""
+    repo = tmp_path / "My Project"
+    scripts = repo / "contrib" / "squad-goal" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "caps.sh").write_text((ROOT / "contrib/squad-goal/scripts/caps.sh").read_text())
+    (repo / "squad").mkdir()
+    for name in ("__init__.py", "procs.py"):
+        (repo / "squad" / name).write_text((ROOT / "squad" / name).read_text())
+    pydir = tmp_path / "py dir"
+    pydir.mkdir()
+    (pydir / "python").symlink_to(sys.executable)
+    env = {**PS_ENV, "SG_GATE_PY": str(pydir / "python")}
+    env.pop("SG_PS", None)
+    out = subprocess.run(["bash", "-c", '. "$1"; $SG_PS -o pid= -p $$', "_", str(scripts / "caps.sh")],
+                         capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().isdigit(), out.stdout
