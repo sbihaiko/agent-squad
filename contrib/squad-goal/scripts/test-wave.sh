@@ -711,7 +711,7 @@ W12=wave/run-12; start2 run-12 >/dev/null
 rm -rf "$T/out"; $G clone -q "$T/origin.git" "$T/out" 2>/dev/null
 (cd "$T/out" && $G checkout -q dev && cd . \
   && echo a > o201 && $G add o201 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 201" -m "Refs #201" \
-  && echo b > o202 && $G add o202 && $G -c user.email=a@b -c user.name=t commit -q -m "TDD RED: case for 202" -m "Refs #202" \
+  && mkdir -p tests && echo b > tests/test_202.py && $G add tests/test_202.py && $G -c user.email=a@b -c user.name=t commit -q -m "TDD RED: case for 202" -m "Refs #202" \
   && $G push -q origin HEAD:dev)
 mkdir -p "$T/co/runs/run-12"
 printf '%s\n%s\n%s\n%s\n' \
@@ -1211,7 +1211,7 @@ r=$(land2 run-20 2>&1); rc=$?
 W21=wave/run-21; start2 run-21 >/dev/null
 rm -rf "$T/c895"; $G clone -q "$T/origin.git" "$T/c895" 2>/dev/null
 (cd "$T/c895" && $G checkout -q -b gui/895 "origin/$W21" && echo r895 > g895 && $G add g895 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 895" -m "TDD RED: test_x
-Refs #895" && echo r896 > g896 && $G add g896 && $G -c user.email=a@b -c user.name=t commit -q -m "TDD RED: test_y" -m "Refs #896")
+Refs #895" && mkdir -p tests && echo r896 > tests/test_896.py && $G add tests/test_896.py && $G -c user.email=a@b -c user.name=t commit -q -m "TDD RED: test_y" -m "Refs #896")
 en2 run-21 895 >/dev/null; mkdir -p "$T/co/runs/run-21"
 printf '%s\n%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #895 work"}}' \
   '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #896 work"}}' > "$T/co/runs/run-21/record.jsonl"

@@ -63,9 +63,14 @@ case "$a" in
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n'   # stale Blocked card with no current blocking cause
     printf '2070\tBacklog\thttps://api.github.com/repos/x/y\n2071\tDoing\thttps://api.github.com/repos/x/y\n2072\tBacklog\thttps://api.github.com/repos/x/y\n2073\tTodo\thttps://api.github.com/repos/x/y\n2075\tDoing\thttps://api.github.com/repos/x/y\n2076\tBacklog\thttps://api.github.com/repos/x/y\n2077\tDone\thttps://api.github.com/repos/x/y\n'   # #942: parents that are not specs, and their children
     printf '2080\tTodo\thttps://api.github.com/repos/x/y\n2081\tIn Progress\thttps://api.github.com/repos/x/y\n2082\tBacklog\thttps://api.github.com/repos/x/y\n2090\tBacklog\thttps://api.github.com/repos/x/y\n2091\tTodo\thttps://api.github.com/repos/x/y\n2092\tBacklog\thttps://api.github.com/repos/x/y\n2093\tBacklog\thttps://api.github.com/repos/x/y\n2094\tIn Progress\thttps://api.github.com/repos/x/y\n2095\tCode Complete\thttps://api.github.com/repos/x/y\n';;   # #1131: a spec reads Todo while a ticket is in flight, and never a work column
+  *projectItems*)   # the fallback read for an issue the REST items route omits (#1463): #2096's card sits on project 4
+    case "$a" in     # in Doing, read back through GraphQL; every other omitted issue carries no card at all
+      *number=2096*) printf '%s\n' '{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"databaseId":2096,"project":{"number":4},"fieldValueByName":{"name":"Code Complete"}}]}}}}}' ;;
+      *) printf '%s\n' '{"data":{"repository":{"issue":null}}}' ;;
+    esac;;
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2090 2091 2092 2093 2094 2095; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2090 2091 2092 2093 2094 2095 2096 2097; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -169,6 +174,13 @@ rec run-nostatus '{"event":"run_start","run_id":"run-nostatus","ts":"2026-10-13T
 mk run-stacked-pr 2018   # its PR names the issue, but it was merged into the parent branch, not the base
 rec run-stacked-pr '{"event":"run_start","run_id":"run-stacked-pr","ts":"2026-10-13T08:12:00Z"}
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+# #1463: the REST items route omits #2096, but its card is on the board (GraphQL projectItems carries it in
+# Code Complete), so the read falls back once and the pass moves the found card -- it is never added again,
+# never named absent. #2097 is omitted by both reads: the fallback answers no card, the omission stands,
+# and the floor adds it.
+mk run-omitted-card 2096
+rec run-omitted-card '{"event":"run_start","run_id":"run-omitted-card","ts":"2026-10-13T08:12:30Z"}
+{"event":"spawn_accepted","child":"c1","definition":"GitHub issue #2096 on fix/2096-x"}'
 # ONE run, TWO children, and only one of them landed (#271): the run's `land` event names the child that made
 # it, and the failed child committed nothing -- no branch, no PR. The run's landing is that child's, never
 # every issue the run held, so #2022 leaves Todo once its landing reached origin/dev (#691), and #2023 stays in the loop's queue.
@@ -257,7 +269,7 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 ! /usr/bin/grep -q ' 2015$' "$T/board.calls" 2>/dev/null && ok "an unclaimed open issue keeps its card's column" || ko "#2015 moved: $(bc) $o"
 /usr/bin/grep -q 'STATE-REGRESSION #2015: card is Done but the issue is still open$' "$T/st/cycle.log" 2>/dev/null && ok "Done on an open issue is reported, and the floor never moves it back" || ko "#2015 Done regression not reported as is: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
-[ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
+[ "$(/usr/bin/grep -c 'subIssuesSummary' "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c 'subIssuesSummary' "$T/gh.calls") times"
 # A spec is written, not scheduled (#117). A ticket /to-tickets cuts from it opens in Backlog, in ONE write when the card is
 # missing (#86): Todo is the owner's go signal, so only the owner moves it there (#550). The child's `## Blocked by` line
 # holds no column: the gate that holds a wave-2 ticket back until its blocker lands is the dispatch's own reading of those
@@ -312,9 +324,22 @@ done
 /usr/bin/grep -q 'BOARD-RECONCILE #2090: card -> Todo (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the lift is named in cycle.log" || ko "#2090 lift not named: $(/usr/bin/grep 2090 "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2092$' "$T/board.calls" 2>/dev/null && ok "a spec with no ticket in flight keeps the column the owner gave it" || ko "#2092 moved: $(/usr/bin/grep ' 2092$' "$T/board.calls")"
 /usr/bin/grep -q '^STATUS o 4 Todo 2094$' "$T/board.calls" 2>/dev/null && ok "a spec in a work column returns to Todo" || ko "#2094 not returned to Todo: $(bc) $o"
+# #1463: the REST items read omits #2096; the fallback GraphQL read carries its card in Code Complete, so the
+# pass sees the card, moves it to its expected column, and never reports a write failure or an absence.
+/usr/bin/grep -q '^STATUS o 4 In Progress 2096$' "$T/board.calls" 2>/dev/null && ok "a card the REST read omits but GraphQL carries is moved, not added" || ko "#2096 not moved: $(bc) $o"
+! /usr/bin/grep -q 'ADD .* 2096$' "$T/board.calls" 2>/dev/null && ok "a card the fallback found is never added again" || ko "#2096 added: $(bc)"
+! /usr/bin/grep -q 'BOARD-WRITE-FAILED #2096' "$T/st/cycle.log" 2>/dev/null && ok "a card the fallback found is never named a write failure" || ko "#2096 named a write failure: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2096: card -> In Progress (run run-omitted-card is live)' "$T/st/cycle.log" 2>/dev/null && ok "the move of the found card is named in cycle.log" || ko "#2096 move not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'number=2096' "$T/gh.calls" 2>/dev/null)" = 1 ] && ok "the fallback reads one omitted issue once per pass, never once per rule that names it" || ko "fallback reads for #2096: $(/usr/bin/grep -c 'number=2096' "$T/gh.calls" 2>/dev/null)"
+# An issue both reads omit is an absence, not a failure: the floor adds its card, and no failure is named.
+/usr/bin/grep -q '^ADD o 4 Backlog 2097$' "$T/board.calls" 2>/dev/null && ok "an issue both reads omit keeps the floor's add" || ko "#2097 not added: $(bc) $o"
+! /usr/bin/grep -q 'BOARD-WRITE-FAILED #2097' "$T/st/cycle.log" 2>/dev/null && ok "an issue both reads omit is never named a write failure" || ko "#2097 named a write failure: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# The omitted issues are 2013 2016 2017 2018 2019 2020 2021 2027 2028 2040 2045 2060 2074 2096 2097: one fallback
+# call each, and none for an issue the REST read carries.
+[ "$(/usr/bin/grep -c 'number=' "$T/gh.calls" 2>/dev/null)" = 15 ] && ok "one fallback call per omitted issue, and only for the omitted ones" || ko "fallback calls: $(/usr/bin/grep 'projectItems' "$T/gh.calls" 2>/dev/null)"
 # The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.
 ! /usr/bin/grep -q 'sub_issues' "$T/gh.calls" 2>/dev/null && ok "no sub-issues route is called" || ko "a sub-issues call: $(/usr/bin/grep sub_issues "$T/gh.calls")"
-[ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the fold rides the one open-issue read" || ko "reads: $(/usr/bin/grep -c graphql "$T/gh.calls")"
+[ "$(/usr/bin/grep -c 'subIssuesSummary' "$T/gh.calls")" = 1 ] && ok "the fold rides the one open-issue read" || ko "reads: $(/usr/bin/grep -c 'subIssuesSummary' "$T/gh.calls")"
 # A run parent (the run-parent label) is the roll-up of a run's children in GitHub, never work (#500): the pass adds no card for
 # one (#2040), removes the card one already has (#2041), and leaves the issue itself alone. Both writes are sent only when the
 # board differs: #2040 has no card to remove, and #2041 has one, so it is removed once and never written a status.
