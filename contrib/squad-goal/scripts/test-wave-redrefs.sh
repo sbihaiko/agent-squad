@@ -83,5 +83,26 @@ r=$(land rg); rc=$?
 [ $rc = 0 ] && [ -z "$(closes)" ] && ok "G: a RED commit naming two issues closes neither (#869)" || ko "G: exit $rc, closes '$(closes)': '$r'"
 case "$(wave_line "$r")" in *"no issue closed:"*"several issues"*) ok "G: the WAVE line names the several-issues reason";; *) ko "G: the WAVE line: '$(wave_line "$r")'";; esac
 
+# H: a RED commit whose test files are another language's (foo_test.go, test/x.spec.js) is test-only, as check-tdd-red.sh reads
+# them (TEST_RE): nothing closes.
+mkwave rh 11 "TDD RED: eleven in go and js (Refs #11)" "foo_test.go test/x.spec.js"; : > "$T/gh.log"
+r=$(land rh); rc=$?
+[ $rc = 0 ] && [ -z "$(closes)" ] && ok "H: a RED commit of foo_test.go and test/x.spec.js is test-only (#533)" || ko "H: exit $rc, closes '$(closes)': '$r'"
+
+# I: a RED commit of a test and a .md note is test-only: check-tdd-red.sh skips a .md, so the note is no code and nothing closes.
+mkwave ri 12 "TDD RED: twelve with a note (Refs #12)" "tests/test_i.py NOTES.md"; : > "$T/gh.log"
+r=$(land ri); rc=$?
+[ $rc = 0 ] && [ -z "$(closes)" ] && ok "I: a RED commit of a test and a .md note is test-only (#533)" || ko "I: exit $rc, closes '$(closes)': '$r'"
+
+# J: SG_TDD_TEST_RE, when the host names its tests, is the test notion: a RED commit of a spec file it names is test-only.
+mkwave rj 13 "TDD RED: thirteen in rb (Refs #13)" "spec/x_spec.rb"; : > "$T/gh.log"
+r=$(SG_TDD_TEST_RE='(^|/)spec/[^/]+_spec\.rb$' land rj); rc=$?
+[ $rc = 0 ] && [ -z "$(closes)" ] && ok "J: a RED commit of a spec file SG_TDD_TEST_RE names is test-only" || ko "J: exit $rc, closes '$(closes)': '$r'"
+
+# K: a test-only RED commit and a fix commit, both with Refs #14: #14 closes once (acceptance criterion 3).
+mkwave rk 14 "TDD RED: fourteen test (Refs #14)" "tests/test_k.py" "fix fourteen (Refs #14)" "scripts/k.sh"; : > "$T/gh.log"
+r=$(land rk); rc=$?
+[ $rc = 0 ] && [ "$(closes)" = "14 " ] && ok "K: a test-only RED and a fix, both for #14, close #14 once" || ko "K: exit $rc, closes '$(closes)': '$r'"
+
 [ $fail = 0 ] && echo "PASS test-wave-redrefs" || echo "FAIL test-wave-redrefs"
 exit $fail
