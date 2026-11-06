@@ -7,10 +7,31 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 exec 3>&2 2>>"$T.err"   # the suite's own stderr, read at the end: a "command not found" there is a fixture that lacks a file (#610)
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$T/s/"
+# The suite's own checkout (#1486): `landed_key` reads the base of $SG_CHECKOUT, so a caller that exports one -- the loop
+# does -- would give the evolution key a history the suite never wrote. Pinned here, the key is the suite's and no case
+# depends on what the caller has checked out; a case that wants another base names it inline.
+/usr/bin/git init -q "$T/sgco"; /usr/bin/git -C "$T/sgco" -c user.name=t -c user.email=t@t commit -q --allow-empty -m start
+/usr/bin/git -C "$T/sgco" update-ref refs/remotes/origin/dev HEAD
+export SG_CHECKOUT="$T/sgco"
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "${SG_MOVE_REASON:-none} $*" >> "%s/board-reason.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
-# The stub gh logs every argv; issue 42 carries the owner freeze label (the issue read is one GraphQL query), every other read answers {}.
-printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\ncase "$*" in *"issue(number: 77)"*) printf "{\\"data\\":{\\"repository\\":{\\"i77\\":{\\"number\\":77,\\"state\\":\\"CLOSED\\",\\"labels\\":{\\"nodes\\":[]}}}}}";; *"issue(number: 78)"*) printf "not json";; *"issue(number: 42)"*) printf "{\\"data\\":{\\"repository\\":{\\"i42\\":{\\"number\\":42,\\"state\\":\\"OPEN\\",\\"labels\\":{\\"nodes\\":[{\\"name\\":\\"frozen:owner\\"}]}}}}}";; *) printf "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+# The stub gh logs every argv. A single-issue read is one GraphQL query: it answers state OPEN, so every case reads the
+# live state it acts on; issue 77 answers CLOSED, issue 78 answers a body that is not JSON (the unread path, named), and
+# issue 42 carries the owner freeze label. Any other route answers {}.
+cat > "$T/bin/gh.tmp" <<'STUB'
+#!/bin/bash
+printf "%s\n" "$*" >> "@T@/gh.log"
+case "$*" in
+  *"issue(number: 77)"*) printf '{"data":{"repository":{"i77":{"number":77,"state":"CLOSED","labels":{"nodes":[]}}}}}' ;;
+  *"issue(number: 78)"*) printf 'not json' ;;
+  *"issue(number: 42)"*) printf '{"data":{"repository":{"i42":{"number":42,"state":"OPEN","labels":{"nodes":[{"name":"frozen:owner"}]}}}}}' ;;
+  *"issue(number:"*)
+    n=$(printf '%s' "$*" | sed -n 's/.*issue(number: \([0-9][0-9]*\)).*/\1/p')
+    printf '{"data":{"repository":{"i":{"number":%s,"state":"OPEN","labels":{"nodes":[]}}}}}' "${n:-0}" ;;
+  *) printf '{}' ;;
+esac
+STUB
+sed "s|@T@|$T|g" "$T/bin/gh.tmp" > "$T/bin/gh"; rm -f "$T/bin/gh.tmp"; chmod +x "$T/bin/gh"
 # cnt <n> [loop]: the count of the issue's ledger (#673), read through its one module.
 cnt() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" count "x/y#$1" ${2:-}; }
 nsc() { cat "$T"/st/cq/* 2>/dev/null | /usr/bin/grep -c '^SQUAD-NOT-STARTABLE:'; }
