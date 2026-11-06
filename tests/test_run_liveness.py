@@ -126,6 +126,7 @@ def test_a_ps_with_a_non_zero_exit_is_a_read_failure(monkeypatch):
         RL.read_processes()
 
 
+@pytest.mark.process_bound
 def test_the_live_process_reading_names_this_process_with_its_command():
     procs = RL.read_processes()
     me = procs[os.getpid()]

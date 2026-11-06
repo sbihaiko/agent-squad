@@ -24,6 +24,9 @@ TABS = ["monitor", "board", "runs", "terminals", "more"]
 TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"
 
+# The hub reads the process table through /bin/ps to find the loop, the runs and the sessions it serves.
+pytestmark = pytest.mark.process_bound
+
 BUG = {"n": 11, "i": 201, "t": "a bug", "s": "OPEN", "st": "Todo", "l": ["bug"]}
 FEATURE = {"n": 12, "i": 202, "t": "a feature", "s": "OPEN", "st": "Todo", "l": ["enhancement"]}
 

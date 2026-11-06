@@ -19,6 +19,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import pytest
+
 from tests.dashstop import dashboard_pattern
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
@@ -69,6 +71,7 @@ def _dashboard(root, tmp_path, folder):
     return p
 
 
+@pytest.mark.process_bound
 def test_a_pass_counts_the_loops_dashboards_and_spares_the_live_runs(tmp_path):
     root = _checkout()
     (root / "st" / "auto").mkdir(parents=True)

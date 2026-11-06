@@ -24,6 +24,10 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
+
+# A listed session is a live process the registry checks through /bin/ps, so every case here needs the process table.
+pytestmark = pytest.mark.process_bound
+
 TOKEN = "sk-ant-api03-SEEDEDTOKEN0123456789abcdef"
 TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"

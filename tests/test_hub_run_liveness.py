@@ -144,6 +144,7 @@ def test_the_process_reading_gives_each_pid_its_start(hub):
     assert set(procs) == {101, 102, 103}
 
 
+@pytest.mark.process_bound
 def test_the_live_reading_names_this_process_with_a_start_before_now(hub):
     procs = hub.read_procs()
     assert procs.get(os.getpid()) is not None and procs[os.getpid()] <= time.time()

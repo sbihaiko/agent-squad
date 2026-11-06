@@ -20,6 +20,9 @@ HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
 LOST_AFTER = 4 * 3600   # the hub's bound: past it, a pass that has not touched its file is not running
 
+# Whether a pass is still running is read from the process table through /bin/ps.
+pytestmark = pytest.mark.process_bound
+
 
 @pytest.fixture(scope="module")
 def hub(tmp_path_factory):

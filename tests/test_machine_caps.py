@@ -127,6 +127,7 @@ def test_a_lease_whose_holder_is_dead_is_reclaimed_and_the_ceiling_recovers(tmp_
     assert c.try_take("runs", "next-run") is not None
 
 
+@pytest.mark.process_bound
 def test_a_lease_of_a_reused_pid_is_reclaimed_and_the_ceiling_recovers(tmp_path):
     c = caps.Ceiling({"runs": 1, "children": 20}, tmp_path / "leases")
     lease = c.try_take("runs", "dead-run", pid=os.getpid())
@@ -136,6 +137,7 @@ def test_a_lease_of_a_reused_pid_is_reclaimed_and_the_ceiling_recovers(tmp_path)
     assert c.try_take("runs", "next-run") is not None
 
 
+@pytest.mark.process_bound
 def test_a_lease_naming_a_run_dashboard_holds_no_slot(tmp_path):
     """A run's dashboard page server idles and never works the run (#1389). When the engine died without a verdict and the
     dashboard outlived it, the lease still answered 'alive': the janitor could not prove the run dead, the drain never
@@ -652,6 +654,7 @@ def test_reap_leaves_a_live_run_alone(tmp_path):
     assert last_event(run)["event"] == "call_start"
 
 
+@pytest.mark.process_bound
 def test_reap_takes_a_reused_pid_as_no_proof_of_life(tmp_path):
     """A process that started after the run named its pid is another process: the run is dead, and the unrelated process is
     left running (reap kills nothing)."""
