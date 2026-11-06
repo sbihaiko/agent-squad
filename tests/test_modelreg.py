@@ -290,10 +290,10 @@ PINNED_CHAINS = {
     # vision; Luna heads the router, with Grok 4.5 behind it (3 of 3 on the router contract). Grok 4.7 covers the
     # window DeepSeek closes in coding, and in review it preempts Opus inside that window: a cost trade, not a
     # quality one, and every grok entry names its effort because unset means high and a timeout.
-    "coding": ["claude-deepseek-flash[1m]", "claude-kimi-for-coding", "claude-haiku-5-5", "grok-4.7", "gpt-6-luna", "claude-nemotron-super"],   # no model that takes no tools (ADR-0147)
+    "coding": ["claude-deepseek-flash[1m]", "claude-haiku-5-5", "grok-4.7", "gpt-6-luna"],   # no model that takes no tools (ADR-0147)
     "review": ["claude:claude-deepseek-flash", "grok-4.7", "claude:claude-opus-5-5", "gemini-3.8-flash-medium", "gpt-6.1-sol"],
     "vision": ["claude-deepseek-flash[1m]", "grok-4.7", "gpt-5.6-luna"],
-    "router": ["gpt-6-luna", "claude-grok-4.5", "claude-haiku-5-5"],
+    "router": ["claude-haiku-5-5", "gpt-6-luna", "claude-grok-4.5"],
     "editorial": ["ps5-qwen-coder", "grok-4.5", "claude-haiku-5-5"],
 }
 
