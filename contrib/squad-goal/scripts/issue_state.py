@@ -130,6 +130,13 @@ class ReadFailure(RuntimeError):
 RESULTS = ("pass", "fail")   # how a test pass ends; a failed pass is never overwritten by a green one (#300)
 TEST_CASE_TITLE = re.compile(r"^test case #(\d+) \| (pass|fail) \| (\S+) \| (\S+)$")
 
+# The one-issue read the REST items route is answered with when it omits a known issue (#1463): the route is
+# eventually consistent and sometimes never carries a card GraphQL names, so an omission is asked once of
+# the projectItems read before it is called an absence.
+FALLBACK_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){"
+                  "issue(number:$number){projectItems(first:50){nodes{id isArchived project{number} "
+                  "fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name optionId}}}}}}}")
+
 
 def _utc(stamp):
     import datetime
@@ -166,10 +173,23 @@ class State:
     def read_one(self, issue):
         """The state of one card, read by its item's node id in one call (#1300): the compare and the proof of a single move
         cost no whole-board read. The whole-board read answers only when the node read does not (no id is known for the card,
-        or the read is refused). "" when the card carries no Status."""
+        or the read is refused), and the GraphQL projectItems read answers only when both REST reads omit the card (#1463):
+        the items route sometimes never carries a card it names, and an omission is a read failure, never an absence.
+        "" when the card carries no Status."""
         node = getattr(self.binding, "node_state", None)   # a binding with no node read answers through its whole read
         got = node(issue) if node else None
-        return self.read(issue) if got is None else got
+        if got is not None: return got
+        carried = self.read(issue)
+        if carried: return carried
+        fb = self.read_fallback(issue)   # a binding with no fallback answers as it did
+        return fb["state"] if fb else carried
+
+    def read_fallback(self, issue):
+        """The card one issue carries, asked of the GraphQL projectItems read when the REST items read omits an
+        issue the issue list names (#1463): one call per issue per binding, {"id", "state"} or None when the read
+        refuses or carries no card of this project. A binding with no fallback answers None, as it did."""
+        ask = getattr(self.binding, "read_fallback", None)
+        return ask(issue) if ask else None
 
     def rows(self, jq, **kw):
         """Every card in the same one read as `read_all`, projected by the caller's jq: the hub's pane draws titles
@@ -408,6 +428,7 @@ class BoardBinding:
         self.settle_seconds = max(0.0, self._num("SG_BOARD_SETTLE_SECONDS", "60"))   # the sleep budget for a new card to reach the read (#403)
         self.server_error = re.compile(r"\bHTTP 5\d\d\b")
         self.items_map = None
+        self._fallback = {}   # issue -> the card the GraphQL fallback read (or None), once per issue per binding (#1463)
         self.item_hints = _item_hints(env.get("SG_BOARD_ITEM_HINTS"))   # the item ids the caller holds (#1300)
 
     def _num(self, name, default):   # a bad value in the environment must not kill a card move
@@ -596,6 +617,10 @@ class BoardBinding:
                 return self.items_map.get(key)
             iid = self.settle(probe, self.attempts)
             if iid: return iid
+            fb = self.read_fallback(n)   # REST never carried it: the one-issue GraphQL read names the card the route omitted (#1463)
+            if fb and fb.get("id"):
+                self.items_map[key] = fb["id"]; self._save_items()
+                return fb["id"]
             raise ReadFailure(reads[0], len(self.items_map))
         return None   # a read that never carried it, and nothing was written for it here: genuinely absent
 
@@ -621,6 +646,39 @@ class BoardBinding:
             if isinstance(name, dict): name = name.get("raw") or name.get("html")
             return self.state_name(name) if name else ""
         return ""
+
+    def read_fallback(self, issue):
+        """The card of one issue the REST items read omitted, asked of the GraphQL projectItems read (#1463): one
+        call per issue per binding -- the route is eventually consistent and sometimes never carries a card it
+        names, and an omission is a read failure, never an absence. Answers {"id", "state"} for the unarchived
+        card of this project ("state" is "" when the card carries no Status), or None when the read refuses,
+        the issue has no card here, or no repository is bound. The query names the binding's own repository,
+        so the answer needs no repository filter; a refused or malformed answer is no card, never a guess."""
+        key = str(issue)
+        if key in self._fallback: return self._fallback[key]
+        ans = None
+        if self.repo and "/" in self.repo:
+            r_owner, _, r_name = self.repo.partition("/")
+            try:
+                d = json.loads(self.api("graphql", "-f", f"query={FALLBACK_QUERY}",
+                                        "-F", f"owner={r_owner}", "-F", f"name={r_name}", "-F", f"number={int(issue)}"))
+            except (RuntimeError, ValueError):
+                d = None
+            nodes = (((d or {}).get("data") or {}).get("repository") or {}).get("issue") or {}
+            nodes = (nodes.get("projectItems") or {}).get("nodes")
+            try: project = int(self.project)
+            except ValueError: project = None
+            if isinstance(nodes, list) and project is not None:
+                for nd in nodes:
+                    if not isinstance(nd, dict) or nd.get("isArchived"): continue
+                    if (nd.get("project") or {}).get("number") != project: continue
+                    fv = nd.get("fieldValueByName")
+                    carried = ""
+                    if isinstance(fv, dict): carried = fv.get("optionId") or fv.get("name") or ""
+                    ans = {"id": nd.get("id") or "", "state": self.state_name(carried)}
+                    break
+        self._fallback[key] = ans
+        return ans
 
     def read_all(self):
         """Every card the carrier answers, in ONE read: {issue: state}, a card with no Status absent.

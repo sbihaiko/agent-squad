@@ -48,6 +48,8 @@
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
+    An issue the items read omits is not called absent on the omission alone (#1463): the REST route is eventually consistent and sometimes never carries a card GraphQL names, so the
+    pass asks once per omitted issue of the GraphQL projectItems read and the card it finds rides the pass's map; the write failure is named only when both reads fail to carry the card.
     With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
@@ -600,14 +602,37 @@ class _Done:   # the shape the seam's runner answers: the binding reads returnco
     def __init__(self, rc, out): self.returncode, self.stdout, self.stderr = rc, out, ""
 def _seam_run(a, input=None, capture_output=True, text=True, timeout=None):   # the seam's calls go through this module's one runner and its deadline; the binding never writes here, so no input is sent
     return _Done(*_run(list(a), timeout=timeout))
-def cards(p):   # every card of project p, read once per pass, asked of the seam (#236): (answered, {issue: Status}). answered is False when GitHub did not answer (a refusal, a deadline miss), and then nothing is moved on a guess; an issue missing from an answered map is a card that does not exist
-    if p not in _cards:
+_seams = {}
+_filled = set()   # (project, issue) the fallback read named this pass: a missing issue is asked once, never once per rule (#1463)
+def board_seam(p):   # the one seam instance a pass asks for project p, so its reads and caches serve every rule
+    if p not in _seams:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam sits beside this script; -I keeps the script's directory off sys.path
         from issue_state import board_state
-        seam = board_state(owner=owner, project=p, repo=repo0, state_dir=st, run=_seam_run)
+        _seams[p] = board_state(owner=owner, project=p, repo=repo0, state_dir=st, run=_seam_run)
+    return _seams[p]
+def cards(p):   # every card of project p, read once per pass, asked of the seam (#236): (answered, {issue: Status}). answered is False when GitHub did not answer (a refusal, a deadline miss), and then nothing is moved on a guess; an issue missing from an answered map is a card that does not exist, or one the route omitted -- fill_missing asks those of the GraphQL read (#1463)
+    if p not in _cards:
+        seam = board_seam(p)
         try: _cards[p] = (bool(seam.binding.status_field()["id"]), seam.read_all())
         except (RuntimeError, ValueError): _cards[p] = (False, {})
     return _cards[p]
+def fill_missing(p, known):   # an issue the pass's REST read omitted is asked once of the GraphQL projectItems read (#1463), and the card it finds rides the pass's map: a card the route never carried stops being named absent. One call per omitted issue per pass, never one per item; the id it finds also seeds the item map the writer reads, so the write path spends no second read on the omission
+    if not cards(p)[0]: return
+    m = cards(p)[1]
+    for n in sorted({str(x) for x in known} - set(m), key=int):
+        if (str(p), n) in _filled: continue
+        _filled.add((str(p), n))
+        fb = board_seam(p).read_fallback(n)
+        if not fb: continue   # both reads name no card: the omission stands, and the card is absent
+        m[n] = fb["state"]
+        if fb.get("id"):
+            b = board_seam(p).binding
+            cached = b.items_map
+            if cached is None:
+                try: cached = json.loads((st / b._items_file).read_text())
+                except (OSError, ValueError): cached = {}
+            if not cached.get(n):
+                b.items_map = {**cached, n: fb["id"]}; b._save_items()   # the writer's map carries the found id, never a second read for it
 _holders = {}
 def holders(p):   # the Run and Run started every card carries, read once per pass (never once per card), asked of the seam (#327): {issue: {"run", "started"}}; None when the read did not answer, and then every holder is written
     if p not in _holders:
@@ -946,6 +971,7 @@ def reconcile_board():
     # (ADR-0143). Only the owner moves a card there. This rank is below every rule above, so current run, marker, branch,
     # landing, closure, or owner-label evidence wins.
     oans, olabels = open_issues()
+    if oans: fill_missing(proj, set(olabels) | set(expected))   # a card the REST read omitted is asked once of the GraphQL read and rides the pass's map (#1463)
     specs = {k for k, ls in olabels.items() if "spec" in ls} if oans else set()
     if oans:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the fold sits beside this script; -I keeps the script's directory off sys.path
