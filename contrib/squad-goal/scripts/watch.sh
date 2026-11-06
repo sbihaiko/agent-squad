@@ -32,10 +32,21 @@ tm() { orphaned && exit 0; local s=$(date +%s) r; "$@"; r=$?; local e=$(( $(date
 verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
   grep -q '"event": *"verdict"' "$f" 2>/dev/null && echo "$r"; done | sort; }
 # promote_quiet: the promotion step's own debounce (ADR-0145 rule 3): the latest landing in landed.tsv is older than the
-# quiet window, so a burst of landings earns one proof window instead of one pass per landing.
-promote_quiet() { local q last; q=${SG_PROMOTE_QUIET_SECONDS:-900}; case "$q" in ''|*[!0-9]*) q=900;; esac
+# quiet window, so a burst of landings earns one proof window instead of one pass per landing. The wait is bounded: the
+# first cycle the window held leaves its stamp in promote-defer, and a pass starts once that stamp is older than
+# SG_PROMOTE_MAX_DEFER (default: twice the window), so a stream of landings that never quiets postpones the proof by that
+# bound and no longer. A bound of 0 keeps no bound.
+promote_quiet() { local q d last now started stamp
+  q=${SG_PROMOTE_QUIET_SECONDS:-900}; case "$q" in ''|*[!0-9]*) q=900;; esac
+  d=${SG_PROMOTE_MAX_DEFER:-$(( q * 2 ))}; case "$d" in ''|*[!0-9]*) d=$(( q * 2 ));; esac
+  now=$(date +%s); stamp=$SG_STATE/promote-defer
   last=$(awk -F'\t' '$1 > m { m = $1 } END { printf "%d", m }' "$SG_STATE/landed.tsv" 2>/dev/null); last=${last:-0}
-  [ $(( $(date +%s) - last )) -ge "$q" ]; }
+  [ $(( now - last )) -ge "$q" ] && { rm -f "$stamp"; return 0; }   # the burst ended: the window is open again
+  [ "$d" -gt 0 ] || return 1                                        # no bound named: a continuing stream keeps the step held
+  [ -e "$stamp" ] || : > "$stamp"                                   # the first blocked cycle starts the bound: the stamp's mtime
+  started=$(mtime "$stamp"); case "$started" in ''|*[!0-9]*|0) started=$now;; esac
+  [ $(( now - started )) -lt "$d" ] && return 1
+  rm -f "$stamp"; return 0; }
 # land_wave <run>: the completion of one finished run -- the run's finished children enter its wave, and then the wave lands
 # (#375, ADR-0145 rules 9, 10 and 12). The order is the point: a child enters the wave in childcc's pass, which this cycle
 # reaches after this loop, so a landing attempted first finds a wave without the child in it, refuses it, and -- the run
@@ -179,11 +190,12 @@ if v:
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchfix bash "$(dirname "$0")/branchfixpass.sh" 2>&1 & ) 2>/dev/null
   # The promotion step (ADR-0145 rule 3): this cycle advances the proven dev tip to stg. It runs detached under its own
   # single-flight lock, so a pass in flight costs this cycle nothing and two cycles never overlap a pass; a held lock is
-  # named, never waited for. Its own debounce is the quiet window (promote_quiet): while the latest landing is younger
-  # than it, a burst of landings earns one proof window instead of one pass per landing. The proof is the dev tip's CI
-  # (SG_PROMOTE_PROOF=ci), a job on GitHub's runner, never a local suite, so a loaded box and a nightly that owns the
-  # machine refuse nothing; the pass takes no gate slot and holds no landing. Its own lines go to promote.log, its
-  # outcome to this cycle log.
+  # named, never waited for. Its own debounce is the quiet window (promote_quiet), bounded by SG_PROMOTE_MAX_DEFER, so a
+  # burst of landings earns one proof window and a stream of landings that never quiets postpones the proof by that bound
+  # and no longer. The proof is the dev tip's CI (SG_PROMOTE_PROOF=ci), a job on GitHub's runner, never a local suite: a
+  # loaded box and a nightly that owns the machine refuse it nothing, and it takes no gate slot, so no landing waits on it.
+  # The merge itself runs through promote-stg.sh, which holds the gate lock as every promotion does, for one pull-request
+  # merge and never for a suite. Its own lines go to promote.log, its outcome to this cycle log.
   promote_quiet && ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?
     if [ "$rc" = 76 ]; then echo "$(date +%T) PROMOTE waits: a pass in flight holds the promote lock (pid $(cat "$SG_STATE/locks/single-promote/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
     else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null &

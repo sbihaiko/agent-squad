@@ -5,8 +5,8 @@
 # the machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
 # Debounce: no suite for a tip already proved or refused ($SG_STATE/promote-pass.tips, last 50), nor while the latest landing in
 # $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof. A CI
-# proof skips that window (a landing costs a job on the runner nothing); the watch cycle reads the same window before it
-# starts a pass, so a burst earns one proof there too.
+# proof of a hand run skips that window (a landing costs a job on the runner nothing); the watch cycle carries its own
+# debounce on that window for its step, bounded so a stream of landings cannot postpone the promotion for ever.
 # A full pass carries across a covered delta (ADR-0156): `delta-pass.sh` runs first, and any refusal or a held delta lock falls
 # through to the full suite, so a tip that moved by a covered path promotes in minutes and never by a weaker proof.
 # One hold of the proof's own lock, in try mode (serial.sh SERIAL_TRY, name `full-proof`): a held lock skips the tick, never

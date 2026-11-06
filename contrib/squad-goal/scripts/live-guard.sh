@@ -71,11 +71,12 @@ notes
 
 # The publish reads the main working tree, and nothing moved that tree to origin: it sat at an old commit while later PRs
 # merged, and the live loop ran old scripts. The source is stg and only stg (ADR-0145): a work branch lands in dev, and the
-# loop promotes a proven dev tip to stg by itself (promote-pass.sh, ADR-0145 rule 3), so a defect in dev and not in stg never reaches the
-# running loop. The tree is
-# fast-forwarded first (git only, no GitHub call), ff-only, from origin/stg, and only when it is clean and on stg; the publish runs only from a tree at origin/stg. A tree on
-# any other branch is not a source: it is named and nothing is published. A dirty tree (a file the publish copies; machine config
-# is not dirt), a diverged tree and a failed fetch are named, nothing is published, and the tree is never touched. The base here is stg, never $SG_BASE: that one names where work branches start.
+# loop promotes a proven dev tip to stg by itself (promote-pass.sh, ADR-0145 rule 3, #576), so a defect in dev and not in
+# stg never reaches the running loop. The tree is fast-forwarded first (git only, no GitHub call), ff-only, from origin/stg,
+# and only when it is clean and on stg; the publish runs only from a tree at origin/stg. A tree on any other branch is not a
+# source: it is named and nothing is published. A dirty tree (a file the publish copies; machine config is not dirt), a
+# diverged tree and a failed fetch are named, nothing is published, and the tree is never touched. The base here is stg,
+# never $SG_BASE: that one names where work branches start.
 if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
   base=stg; tree=$SG_CHECKOUT; cur=$(git -C "$tree" branch --show-current)
   if [ "$cur" != "$base" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is on ${cur:-a detached head}, not $base; nothing is published"; exit 0

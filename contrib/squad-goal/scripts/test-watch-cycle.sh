@@ -244,18 +244,34 @@ lane_down; rm -f "$ST/landed.tsv" "$ST/cycle.log"; rm -rf "$ST/locks/single-prom
 run_cycles 1; pwait "promote ci"
 [ "$(pcount "promote ci")" = 1 ] && ok "15 the cycle runs one promotion step with the CI proof" || ko "15 the promotion step ran $(pcount 'promote ci')×, proof '$(tr '\n' ' ' < "$PROM")'"
 /usr/bin/grep -q "PROMOTE pass rc=0" "$ST/cycle.log" 2>/dev/null && ok "15 the step writes its own line to cycle.log" || ko "15 no PROMOTE line in cycle.log: $(cat "$ST/cycle.log" 2>/dev/null)"
-# a pass in flight holds the lock: the next cycle starts no second one, waits for nothing, and names the holder
-: > "$PROM"; rm -rf "$ST/locks/single-promote"; mkdir -p "$ST/locks/single-promote"; echo $$ > "$ST/locks/single-promote/pid"
+# a pass in flight holds the lock: the next cycle starts no second one, waits for nothing, and names the holder. The holder
+# is real -- single.sh itself, around a sleeper -- so the skip is single.sh's own answer, never a fabricated pid file.
+: > "$PROM"; : > "$ST/cycle.log"; rm -f "$ST/promote-defer"; rm -rf "$ST/locks/single-promote"
+SG_STATE=$ST bash "$S/single.sh" promote /bin/sleep 5 & hp=$!
+for _ in $(seq 1 50); do [ -s "$ST/locks/single-promote/pid" ] && break; /bin/sleep 0.1; done
 run_cycles 1; /bin/sleep 0.3
 [ "$(pcount "promote ci")" = 0 ] && ok "15 a pass in flight is skipped, never doubled" || ko "15 the step ran beside a held pass ($(pcount 'promote ci'))"
 /usr/bin/grep -q "PROMOTE waits" "$ST/cycle.log" 2>/dev/null && ok "15 the skip names the pass that holds the lock" || ko "15 no PROMOTE waits line in cycle.log"
-rm -rf "$ST/locks/single-promote"
-# the debounce: a fresh landing holds the step, and the same landing past the window lets it run
-: > "$PROM"; : > "$ST/cycle.log"
-printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"; run_cycles 1; /bin/sleep 0.3
-[ "$(pcount "promote ci")" = 0 ] && ok "15 a landing inside the quiet window runs no pass" || ko "15 a burst of landings ran a pass per landing"
-printf '%s\twave\n' "$(( $(date +%s) - 1000 ))" > "$ST/landed.tsv"; run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900; pwait "promote ci"
-[ "$(pcount "promote ci")" = 1 ] && ok "15 past the quiet window the proven tip is promoted once" || ko "15 no pass after the quiet window: '$(tr '\n' ' ' < "$PROM")'"
-rm -f "$ST/landed.tsv"
+kill -TERM "$hp" 2>/dev/null; wait "$hp" 2>/dev/null; rm -rf "$ST/locks/single-promote"
+# the debounce: a burst of landings earns one proof window, and the window closes after the last landing of the burst
+: > "$PROM"; : > "$ST/cycle.log"; rm -f "$ST/promote-defer"
+now=$(date +%s); for i in 1 2 3 4; do printf '%s\twave\n' "$(( now - i ))"; done > "$ST/landed.tsv"
+run_cycles 1; /bin/sleep 0.3; run_cycles 1; /bin/sleep 0.3
+[ "$(pcount "promote ci")" = 0 ] && ok "15 a burst of landings inside the quiet window runs no pass" || ko "15 the burst ran $(pcount 'promote ci') pass(es)"
+for i in 1 2 3 4; do printf '%s\twave\n' "$(( now - 1000 - i ))"; done > "$ST/landed.tsv"
+run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900; pwait "promote ci"
+[ "$(pcount "promote ci")" = 1 ] && ok "15 past the quiet window the burst earns exactly one pass" || ko "15 the burst earned $(pcount 'promote ci') passes"
+# a stream of landings that never quiets postpones the proof by the deferral bound and no longer: the first blocked cycle
+# stamps the bound, and the step starts once the stamp is older than SG_PROMOTE_MAX_DEFER, even with a fresh landing.
+: > "$PROM"; rm -f "$ST/promote-defer"
+printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"; run_cycles 1
+for _ in $(seq 1 50); do [ -e "$ST/promote-defer" ] && break; /bin/sleep 0.1; done   # the step's own pass is detached: wait for its stamp
+[ "$(pcount "promote ci")" = 0 ] && [ -e "$ST/promote-defer" ] && ok "15 the first blocked cycle stamps the deferral bound" || ko "15 no deferral stamp: '$(ls "$ST" | tr '\n' ' ')' landed '$(cat "$ST/landed.tsv" 2>/dev/null)'"
+printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"; run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900 SG_PROMOTE_MAX_DEFER=1800; /bin/sleep 0.3
+[ "$(pcount "promote ci")" = 0 ] && ok "15 a continuing stream inside the bound still starts no pass" || ko "15 the stream ran a pass before the bound"
+touch -t 202001010000 "$ST/promote-defer"   # the stamp is older than the bound
+printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"; run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900 SG_PROMOTE_MAX_DEFER=1800; pwait "promote ci"
+[ "$(pcount "promote ci")" = 1 ] && ok "15 past the deferral bound a continuing stream still promotes once" || ko "15 the stream starved the pass ($(pcount 'promote ci'); steps '$(tr '\n' ' ' < "$PROM")'; cycle.log '$(tr '\n' '|' < "$ST/cycle.log" 2>/dev/null)'; stamp '$(cat "$ST/promote-defer" 2>/dev/null)' landed '$(tr '\n' '|' < "$ST/landed.tsv" 2>/dev/null)')"
+rm -f "$ST/landed.tsv" "$ST/promote-defer"
 
 rm -rf "$T"; exit $fail

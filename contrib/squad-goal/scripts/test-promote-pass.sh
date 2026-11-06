@@ -3,7 +3,11 @@
 # gate lock it runs the suite in a clean tree at the exact tip, writes the full line, writes a commit status on the sha, reads it
 # back, and fast-forwards stg through promote-stg.sh. A held gate lock skips the tick; a tip already proved or refused, or a
 # landing inside the quiet window, runs no suite. Offline: a bare local remote, a stub gh, a stub suite. usage: bash test-promote-pass.sh
-# SG_CHILD_SESSION is unset: the child guard refuses a PR merge, and the stub gh below merges into a local bare remote only.
+# Hermetic first: the live loop exports its own SG_* to every run it dispatches, and a leaked SG_PROMOTE_PROOF=ci turns every
+# local-suite case below into a CI proof that reads a workflow it never meant to read. Drop them all, as test-watch-cycle.sh
+# does (#1410); the fixture sets what it needs below.
+for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
+# SG_CHILD_SESSION stays unset: the child guard refuses a PR merge, and the stub gh below merges into a local bare remote only.
 unset SG_SERIAL_HELD SERIAL_TRY SG_CHILD_SESSION
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
@@ -156,13 +160,9 @@ printf '%s 1\n' "$(( $(date +%s) - 8000 ))" > "$SG_STATE/promote-reserve"
 hold >/dev/null; [ $? = 1 ] && ok "a reserve past the lock's bound holds nothing" || ko "a dead reserve held the dispatcher"
 rm -f "$SG_STATE/promote-reserve"
 
-# The promotion is the loop's, on the proof of the dev tip, and the watch cycle runs it by itself (#1462, ADR-0145 rule 3):
-# one detached step under its own single-flight lock, with the CI proof, past the quiet window -- so two cycles never overlap
-# a pass, a burst of landings earns one proof window, and a pass in flight holds no landing and takes no gate slot.
-w=$(/usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh")
-printf '%s\n' "$w" | /usr/bin/grep -q 'single\.sh" promote bash .*promote-pass\.sh' && ok "watch.sh runs the promotion under single.sh promote" || ko "watch.sh has no single-flight promotion step"
-printf '%s\n' "$w" | /usr/bin/grep -q 'SG_PROMOTE_PROOF=ci' && ok "the cycle's promotion step names the CI proof" || ko "watch.sh runs the promotion without SG_PROMOTE_PROOF=ci"
-printf '%s\n' "$w" | /usr/bin/grep -q 'promote_quiet &&' && ok "the step starts only past the quiet window" || ko "watch.sh runs the promotion without its debounce"
+# The cycle's own promotion step -- the single-flight lock, the CI proof, the debounce and the step's line in cycle.log -- is
+# proved by its behavior in test-watch-cycle.sh, never by a grep of watch.sh's source: a grep breaks on a reformatted line and
+# still passes a step that runs in the foreground. This suite proves the pass itself (ADR-0145 rule 3).
 # ADR-0156: a full pass carries across a covered delta. The proven tip is t1; dev moves by one covered path; the delta carries it
 # and the pass promotes without the full suite. A path outside the map runs the full suite again.
 before=$(runs)
@@ -325,6 +325,19 @@ SG_PROMOTE_PROOF=ci SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass;
 [ $rc = 0 ] && [ "$(tip stg)" = "$tcq" ] && ok "a recent landing holds no CI proof" \
   || ko "quiet window on a CI proof: rc $rc, stg $(tip stg), was $before, out '$(cat "$T/out")'"
 rm -f "$SG_STATE/landed.tsv"
+
+# The proof takes no gate slot: a CI proof beside a held gate lock still promotes, and runs no local suite. The holder is a
+# real one (serial.sh's `gate` lock around a sleeper), never a bare pid file; the merge waits for the lock as every
+# promotion does, for that one merge and never for a suite.
+adv dev ci-proof-gated; tcg=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tcg" success success success success
+( SERIAL_HOLD_SECONDS=30 bash "$d/serial.sh" gate /bin/sleep 3 ) & gp=$!
+for _ in $(seq 1 50); do [ -s "$SG_STATE/locks/gate/pid" ] && break; sleep 0.1; done
+SG_PROMOTE_PROOF=ci SG_GHREAD="$T/bin/ghread" pass; rc=$?
+wait "$gp" 2>/dev/null
+[ $rc = 0 ] && [ "$(tip stg)" = "$tcg" ] && [ "$(runs)" = "$n" ] \
+  && ok "a CI proof promotes beside a held gate lock, and runs no local suite" \
+  || ko "CI proof beside a held gate lock: rc $rc, stg $(tip stg), was $before, runs $(runs) was $n, out '$(cat "$T/out")'"
 
 # The check job of the same commit (ruff, mypy, the fast battery) is part of the CI proof: a red one holds the tip, and no
 # suite runs for it (ADR-0164: a red the proof measured holds delivery).
