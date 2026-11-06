@@ -21,7 +21,8 @@ ab_rate_limit() {   # <refusal text>: 0 when GitHub refused the read for its rat
 }
 ab_rate_limited() {   # the one line a pass prints for a rate-limited read: the UTC reset from gh api rate_limit, or unknown
   local e reset=""
-  e=$(gh_get rate_limit 2>/dev/null | jq -r '.resources.core.reset // empty' 2>/dev/null)
+  # The earliest reset among the resources at zero, never core's alone: a GraphQL or search limit can be the one exhausted (#1516).
+  e=$(gh_get rate_limit 2>/dev/null | jq -r '[.resources[]? | select(.remaining == 0) | .reset // empty] | min // empty' 2>/dev/null)
   [ -n "$e" ] && reset=$(python3 -c 'import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%H:%M UTC"))' "$e" 2>/dev/null)
   echo "AUTOBUG: rate limited until ${reset:-unknown}; nothing dispatched (UTC reset from gh api rate_limit, or unknown)" >&2
 }
