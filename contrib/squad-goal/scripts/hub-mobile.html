@@ -511,7 +511,10 @@ const layers = [];
 let layerBacks = 0, pendingSheet = null;
 const topLayer = () => layers[layers.length - 1];
 function openLayer(name, data) {
-  if (layers.includes(name)) { if (topLayer() === name && data) history.replaceState({ layer: name, depth: layers.length, ...data }, ""); return; }
+  if (layers.includes(name)) {
+    if (topLayer() === name && data) { const s = { layer: name, depth: layers.length, ...data }; history.replaceState(s, ""); LAYER[name].show(s); }
+    return;
+  }
   layers.push(name);
   const s = { layer: name, depth: layers.length, ...data };
   if (history.state && history.state.layer === name && !layerBacks) history.replaceState(s, "");
