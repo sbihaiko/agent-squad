@@ -50,6 +50,7 @@ def reason(cmd):
     "launchctl kill TERM gui/501/x",
     "sudo pkill -P 1",
     "env FOO=1 pkill -P 1",
+    "pkill -f \"$PWD/tmp/watchd.sh\"",   # a loop name wins over a rooted pattern: the hook cannot prove $PWD
 ])
 def test_a_signal_outside_the_session_is_denied(cmd):
     r = reason(cmd)
