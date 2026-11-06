@@ -971,39 +971,46 @@ function renderSheet() {
 // does with it. The handler asks the rule for the result and says it on the board's own line, then opens the card, so a
 // folded lane opens and a card the board does not draw is read in the same sheet. A link that arrives before the first
 // board read waits for it, so it never lands on a blank board.
-// The sheet a hash opened, by the key of its own card, so a hash that stops naming it closes that sheet, and no card of
-// the same number in another repository is closed in its place.
+// What the last card link opened, so a hash that stops naming it closes that sheet, and no card of the same number in
+// another repository is closed in its place: the sheet card's own key, or LINK_OFF for a sheet that reads the issue
+// alone. That sheet's key changes as the page redraws it, so the link keeps the fact that it opened an off-board sheet,
+// never the key the sheet happens to show.
+const LINK_OFF = "off";
 let linkWanted = null, linkSheet = null;
-// The facts come from the page's own reads: the filter keeps the card in its column or drops it, and a lane holds it or a
-// defect dropped it. A filter and a dropped card are told apart, so the line never names the owner's filter for a defect.
+// The facts come from the page's own reads: the label filter, the spec mode and a column the carousel leaves out each
+// drop a card, and a lane holds it or a defect dropped it. `dropped` names which read hid the card, so the line says the
+// neutral fact and no caller names the owner's filter for another read's doing.
 const linkFacts = n => {
   const g = ((board && board.groups) || []).find(g => g.items.some(x => x.n === n));
-  if (!g) return { onBoard: false, shown: false, placed: false, collapsed: false };
-  const shownCard = columnCards(g).some(x => x.n === n);
-  const lane = shownCard ? laneModelOf(g).lanes.find(l => l.cards.some(x => x.n === n)) : null;
-  return { onBoard: true, shown: shownCard, placed: !!lane, collapsed: !!(lane && lane.collapsed) };
+  if (!g) return { onBoard: false, shown: false, placed: false, collapsed: false, dropped: "" };
+  const x = g.items.find(c => c.n === n);
+  const dropped = !labelOk(bo.labels || [], bo.lmode, x) ? "labels" : !spOk(x) ? "spec" : g.end ? "column" : "";
+  const lane = dropped ? null : laneModelOf(g).lanes.find(l => l.cards.some(c => c.n === n));
+  return { onBoard: true, shown: !dropped, placed: !!lane, collapsed: !!(lane && lane.collapsed), dropped };
 };
 function linkTake() {
   if (linkWanted === null || !board) return;
   const n = linkWanted; linkWanted = null;
   $("bmsg").textContent = linkResult(n, linkFacts(n)).say;
   openCard(n);
-  linkSheet = sheetKey();   // the sheet the link opened, by its own card's key: a bare number would name another card
+  const x = shown[view.card];
+  linkSheet = !offBoard && x && x.n === n ? cardKey(x) : LINK_OFF;   // the card the link named, never another one
 }
 // A hash that stops naming a card undoes what the last card link did: the sheet it opened closes and its line clears, so a
 // tab or an anchor the owner asked for is never hidden behind a stale card.
 function linkDrop() {
   $("bmsg").textContent = "";
-  if (!linkSheet) return;
+  if (linkSheet === null) return;
   const was = linkSheet; linkSheet = null;
-  if (view.sheet && sheetKey() === was) { view = { ...view, sheet: false }; renderSheet(); }
+  const mine = was === LINK_OFF ? !!offBoard : view.sheet && sheetKey() === was;
+  if (mine) { view = { ...view, sheet: false }; renderSheet(); }
 }
 function linkOpen() {
   const n = linkHash(location.hash);
   if (n === null) { linkDrop(); return; }
   linkWanted = n;
   if (tabNow !== "board") show("board");   // a card link opens the board, where the card is (as the desktop does, #1274)
-  linkTake();   // a board already read opens the card now, whatever tab the hash left; a board not yet read waits for it
+  if (board) linkTake();   // a board already read opens the card now; a board still being read waits for applyBoard
 }
 addEventListener("hashchange", linkOpen);
 function renderFilters() {

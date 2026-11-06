@@ -26,6 +26,11 @@ BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
              {"n": 3, "t": "three", "l": []}]},
              {"name": "Todo", "n": 1, "items": [{"n": 4, "t": "four", "l": []}]}]}
 
+# A board whose last column is a closed status: the carousel never draws it, so its card is hidden from this view.
+CLOSED = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
+          "groups": [{"name": "Doing", "n": 1, "items": [{"n": 1, "t": "one", "l": []}]},
+                     {"name": "Done", "n": 1, "end": True, "items": [{"n": 5, "t": "five", "l": []}]}]}
+
 
 def run_js(src, expr, prelude=""):
     script = f"{src}\n{prelude}\nconsole.log(JSON.stringify({expr}));"
@@ -120,6 +125,31 @@ def test_a_card_link_opens_at_once_when_the_board_has_already_loaded(hub):
 
 
 @pytest.mark.node_bound
+def test_a_link_that_lands_before_the_board_answers_opens_one_sheet_when_it_does(hub):
+    """AC1/AC3: a hash that names a card while the first board read is still in flight opens nothing against a board
+    the page does not hold. The answer opens the drawn card once, never an off-board sheet that the read repaints."""
+    out = run_page(hub.MOBILE_PAGE, """
+        show("board"); await __tick(20);
+        board = null; shown = []; view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
+        const realCall = call; let release = null;
+        call = (path, fresh) => String(path).startsWith("/api/board")
+          ? new Promise(res => { release = () => res(__state.board[0]); }) : realCall(path, fresh);
+        loadBoard();                                      // the first board read, still in flight
+        await __tick(5);
+        location.hash = "#issue=3"; __dispatch("hashchange", {});
+        await __tick(5);
+        const early = { sheet: view.sheet, hidden: $("sheet").hidden, off: !!offBoard };
+        release(); await __tick(10);                      // the board answers
+        return { early, sheet: view.sheet, hidden: $("sheet").hidden, off: !!offBoard,
+                 n: (offBoard || shown[view.card] || {}).n, said: $("bmsg").textContent,
+                 drawn: !!$("cards").querySelector('[data-role="card"][data-n="3"]') };
+    """, board=[BOARD])
+    assert out["early"] == {"sheet": False, "hidden": True, "off": False}, out
+    assert out["sheet"] is True and out["hidden"] is False and out["off"] is False and out["n"] == 3, out
+    assert out["said"] == "" and out["drawn"] is True, out
+
+
+@pytest.mark.node_bound
 def test_an_issue_the_board_does_not_hold_names_its_result_and_opens_its_issue(hub):
     """AC2: a missing issue is a named result, never a blank board: the sheet reads the issue on its own."""
     out = run_page(hub.MOBILE_PAGE, """
@@ -151,6 +181,40 @@ def test_a_card_the_filters_hide_names_its_result_and_opens_its_issue(hub):
     assert out["open"] is True and out["off"] is True and out["n"] == 3, out
     assert out["labels"] == ["wave:1"], "the link cleared the owner's filter"
     assert out["said"] == "#3 is hidden from this view: its issue is read on its own.", out
+
+
+@pytest.mark.node_bound
+def test_a_card_a_closed_column_hides_names_its_result_and_opens_its_issue(hub):
+    """AC2: a card the view does not draw is a named result wherever the drop comes from. A closed status column is no
+    carousel column, so the card is hidden from this view like a filtered one, and the board says so."""
+    out = run_page(hub.MOBILE_PAGE, """
+        show("board"); await __tick(20);
+        const facts = linkFacts(5), drawnBefore = !!$("cards").querySelector('[data-role="card"][data-n="5"]');
+        location.hash = "#issue=5"; __dispatch("hashchange", {});
+        await __tick(10);
+        return { facts, drawnBefore, open: !$("sheet").hidden, off: !!offBoard, n: offBoard && offBoard.n,
+                 said: $("bmsg").textContent };
+    """, board=[CLOSED])
+    assert out["facts"]["shown"] is False and out["facts"]["dropped"] == "column", out
+    assert out["drawnBefore"] is False, out
+    assert out["open"] is True and out["off"] is True and out["n"] == 5, out
+    assert out["said"] == "#5 is hidden from this view: its issue is read on its own.", out
+
+
+@pytest.mark.node_bound
+def test_the_rule_names_which_read_hid_the_card(hub):
+    """AC2: a label filter, the spec mode and a column the carousel leaves out each drop a card, and the page names
+    which read did it, so no line and no caller names the owner's filter for another read's doing."""
+    out = run_page(hub.MOBILE_PAGE, """
+        show("board"); await __tick(20);
+        const clean = String(linkFacts(3).dropped);
+        bo = { labels: ["wave:1"] }; show("board"); await __tick(20);
+        const byLabel = String(linkFacts(3).dropped);
+        bo = { specs: 1 }; show("board"); await __tick(20);
+        const bySpec = String(linkFacts(3).dropped);
+        return { clean, byLabel, bySpec };
+    """, board=[BOARD])
+    assert out == {"clean": "", "byLabel": "labels", "bySpec": "spec"}, out
 
 
 @pytest.mark.node_bound
@@ -217,9 +281,9 @@ def test_a_second_card_link_wins_over_a_read_still_in_flight(hub):
         location.hash = "#issue=4"; __dispatch("hashchange", {});
         await __tick(5);
         const asked = Object.keys(held).sort(), pending = Object.values(held).map(h => h.length);
-        held[4][0](); await __tick(5);   // card 4's read answers
+        held[4].forEach(f => f()); await __tick(5);   // every read for card 4 answers
         const mid = { sheet: view.sheet, n: (offBoard || shown[view.card] || {}).n, title: $("sh-title").textContent };
-        held[2][0](); await __tick(5);   // card 2's read answers last, out of order
+        held[2].forEach(f => f()); await __tick(5);   // every read for card 2 answers last, out of order
         return { asked, pending, mid, sheet: view.sheet, n: (offBoard || shown[view.card] || {}).n,
                  title: $("sh-title").textContent, body: $("sh-body").textContent, said: $("bmsg").textContent };
     """, board=[BOARD])
@@ -232,18 +296,55 @@ def test_a_second_card_link_wins_over_a_read_still_in_flight(hub):
 
 
 @pytest.mark.node_bound
+def test_duplicate_issue_reads_for_a_card_the_sheet_left_never_repaint_it(hub):
+    """AC3, back and forward: a link to a card the owner already left leaves two issue reads in flight, and both answer
+    after the sheet moved on. Neither paints, however many reads the page fired, because the sheet's own card key is
+    what every answer is checked against."""
+    out = run_page(hub.MOBILE_PAGE, """
+        show("board"); await __tick(20);
+        const realCall = call, held = {};
+        call = (path, fresh) => {
+          const m = /[?&]n=(\\d+)/.exec(String(path));
+          if (!String(path).startsWith("/api/issue") || !m) return realCall(path, fresh);
+          const n = +m[1];
+          return new Promise(res => { (held[n] = held[n] || []).push(() => res({ n, title: "card " + n, body: "body of " + n })); });
+        };
+        location.hash = "#issue=2"; __dispatch("hashchange", {}); await __tick(5);
+        location.hash = "#issue=4"; __dispatch("hashchange", {}); await __tick(5);
+        location.hash = "#issue=2"; __dispatch("hashchange", {}); await __tick(5);
+        location.hash = "#issue=4"; __dispatch("hashchange", {}); await __tick(5);
+        const pending = Object.keys(held).sort().map(k => k + ":" + held[k].length);
+        held[4].forEach(f => f()); await __tick(5);
+        const mid = { n: (offBoard || shown[view.card] || {}).n, title: $("sh-title").textContent };
+        held[2].forEach(f => f()); await __tick(5);   // both reads for card 2 answer after the sheet left it
+        return { pending, mid, sheet: view.sheet, n: (offBoard || shown[view.card] || {}).n,
+                 title: $("sh-title").textContent, body: $("sh-body").textContent };
+    """, board=[BOARD])
+    assert out["pending"] == ["2:2", "4:2"], "the page did not fire two reads for each card: " + str(out["pending"])
+    assert out["mid"] == {"n": 4, "title": "#4 card 4"}, out
+    assert out["sheet"] is True and out["n"] == 4, out
+    assert out["title"] == "#4 card 4", "a read for card 2 painted its title over the sheet's card: " + out["title"]
+    assert out["body"] == "body of 4", "a read for card 2 painted its body over the sheet's card: " + out["body"]
+
+
+@pytest.mark.node_bound
 def test_a_card_link_that_names_a_missing_issue_still_closes_on_a_hash_that_names_no_card(hub):
-    """AC3: the rule holds for the sheet the link opened on its own (a missing issue), not only for a drawn card."""
+    """AC3: the rule holds for the sheet the link opened on its own (a missing issue), not only for a drawn card. The
+    board reads again under the open sheet, which is no drawn card and so is re-keyed by no read, and the tab hash still
+    closes the sheet the link opened."""
     out = run_page(hub.MOBILE_PAGE, """
         await __tick(20);
         location.hash = "#issue=99"; __dispatch("hashchange", {});
         await __tick(10);
         const opened = { open: !$("sheet").hidden, off: !!offBoard, said: $("bmsg").textContent };
+        await loadBoard();                        // the board reads again under the link's off-board sheet
+        const still = { open: !$("sheet").hidden, off: !!offBoard, n: offBoard && offBoard.n };
         location.hash = "#more"; __dispatch("hashchange", {});
         await __tick(10);
-        return { opened, sheet: view.sheet, hidden: $("sheet").hidden, said: $("bmsg").textContent };
+        return { opened, still, sheet: view.sheet, hidden: $("sheet").hidden, said: $("bmsg").textContent };
     """, board=[BOARD])
     assert out["opened"] == {"open": True, "off": True,
                              "said": "#99 is not on the board: its issue is read on its own."}, out
+    assert out["still"] == {"open": True, "off": True, "n": 99}, out
     assert out["sheet"] is False and out["hidden"] is True, out
     assert out["said"] == "", out
