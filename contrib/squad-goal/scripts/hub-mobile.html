@@ -1376,6 +1376,8 @@ async function loadRuns() {
     // the page ignores the query and answers the bare array: the history stays honestly empty (#1277).
     let a = Array.isArray(d) ? null : d;
     if (!a) { try { const g = await call("/api/runs?groups=1"); a = Array.isArray(g) ? null : g; } catch (e) { a = null; } }
+    for (const r of a && a.runs ? a.runs : []) runRows[r.id] = r;
+    if (runId && !$("runview").hidden) drawRunOverview(runRows[runId]);
     drawHistory(a && a.runs ? a.runs : rows, a ? a.groups || [] : [], a ? a.muted || "" : "");
   } catch (e) { $("runs-msg").textContent = e.message; }
 }
@@ -1427,7 +1429,8 @@ function drawRunOverview(row) {
 function openRun(id, url, name) {
   runId = id || null; runReply = null;
   $("runframe").src = url; $("runview-name").textContent = name; $("runview").hidden = false;
-  showDesk(false); drawRunOverview(runRows[runId]);
+  const row = runRows[runId];
+  showDesk(!row); drawRunOverview(row);
   $("runctl-btn").hidden = true; $("runctl-msg").textContent = "";
   loadRunControl();
 }
