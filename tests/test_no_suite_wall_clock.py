@@ -16,12 +16,12 @@ CHECK_FAIL = re.compile(r"(?<![\w$.\-/])(ko|fail)(?=\s)")
 FUNC_OPEN = re.compile(r"^\s*(?:function\s+)?\w+\s*\(\)\s*\{\s*$")
 FUNC_CLOSE = re.compile(r"^\}")
 DEF_LINE = re.compile(r"^\s*\w+\(\)\s*\{")   # ok() { ...; } and ko() { ...; } define a check; they are not calls
+START = re.compile(r"(?<![\w$])(\w+)=(?:\$\(date \+%s\)|\$SECONDS)(?![\w])")
+DIFF = re.compile(r"(\w+)=\$\(\(\s*(?:\$\(date \+%s\)|\$SECONDS)\s*-\s*\$?\{?(\w+)\}?\s*\)\)")
 
 
 def skipped(line):
     return line.lstrip().startswith("#") or bool(DEF_LINE.match(line)) or not line.strip()
-START = re.compile(r"(?<![\w$])(\w+)=(?:\$\(date \+%s\)|\$SECONDS)(?![\w])")
-DIFF = re.compile(r"(\w+)=\$\(\(\s*(?:\$\(date \+%s\)|\$SECONDS)\s*-\s*\$?\{?(\w+)\}?\s*\)\)")
 
 
 def wall_clock_checks(text):
@@ -29,7 +29,7 @@ def wall_clock_checks(text):
     lines = text.splitlines()
     first_check = next((i for i, ln in enumerate(lines) if CHECK_ANY.search(ln) and not skipped(ln)), len(lines))
     starts, in_func = set(), False
-    for i, ln in enumerate(lines[:first_check]):
+    for ln in lines[:first_check]:
         if FUNC_OPEN.match(ln):
             in_func = True
             continue
