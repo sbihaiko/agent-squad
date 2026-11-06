@@ -54,6 +54,7 @@ r=$(land rb); rc=$?
 [ $rc = 0 ] && [ -z "$(closes)" ] && ok "B: a test-only RED commit closes nothing (#533)" || ko "B: exit $rc, closes '$(closes)': '$r'"
 case "$(wave_line "$r")" in *"no issue closed:"*"test files only"*) ok "B: the WAVE line names the test-only reason";; *) ko "B: the WAVE line: '$(wave_line "$r")'";; esac
 case "$(wave_line "$r")" in *"no Refs"*) ko "B: the WAVE line says no Refs while a commit names #2";; *) ok "B: the WAVE line never says no Refs";; esac
+case "$r" in *"WAVE-NOTE wave/rb:"*"test files only"*) ok "B: a WAVE-NOTE names the test-only reason";; *) ko "B: no WAVE-NOTE with the reason: '$r'";; esac
 
 # C: a RED commit that changes tests/ plus a fixture, a helper, conftest.py and pytest.ini is still test-only: nothing closes.
 mkwave rc 3 "TDD RED: helpers and fixtures (Refs #3)" "tests/test_c.py tests/helpers/h.py fixtures/c.json conftest.py pytest.ini"; : > "$T/gh.log"
@@ -82,6 +83,7 @@ mkwave rg 8,9 "TDD RED: eight and nine (Refs #8 Refs #9)" "scripts/g.sh"; : > "$
 r=$(land rg); rc=$?
 [ $rc = 0 ] && [ -z "$(closes)" ] && ok "G: a RED commit naming two issues closes neither (#869)" || ko "G: exit $rc, closes '$(closes)': '$r'"
 case "$(wave_line "$r")" in *"no issue closed:"*"several issues"*) ok "G: the WAVE line names the several-issues reason";; *) ko "G: the WAVE line: '$(wave_line "$r")'";; esac
+case "$r" in *"WAVE-NOTE wave/rg:"*"several issues"*) ok "G: a WAVE-NOTE names the several-issues reason";; *) ko "G: no WAVE-NOTE with the reason: '$r'";; esac
 
 # H: a RED commit whose test files are another language's (foo_test.go, test/x.spec.js) is test-only, as check-tdd-red.sh reads
 # them (TEST_RE): nothing closes.

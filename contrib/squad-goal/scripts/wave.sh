@@ -1276,7 +1276,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   [ -n "$fb" ] && for n in $issues; do rm -f "$SG_STATE/auto/disp-$n"; done
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
   if [ -n "$named" ]; then echo "WAVE $w $sha landed in $base ($named)"
-  elif [ -n "$reason" ]; then echo "WAVE $w $sha landed in $base (no issue closed: $reason)"
+  elif [ -n "$reason" ]; then echo "WAVE-NOTE $w: the landing closes no issue, because $reason"
+    echo "WAVE $w $sha landed in $base (no issue closed: $reason)"
   else echo "WAVE $w $sha landed in $base (no issue named: the wave carries no Refs)"; fi
   return 0
 }
