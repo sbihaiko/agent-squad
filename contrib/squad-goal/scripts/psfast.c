@@ -3,7 +3,7 @@
  * `sg_ps` (caps.sh) reads the process table through `squad.procs`, which is a Python module, so every read paid for a new
  * interpreter: about 0.7 s on a loaded loop box against 10 ms for the reader it replaced. The callers that poll ask one
  * question about one pid -- is it alive, is it a zombie, which group does it lead -- and this answers that shape in a few
- * milliseconds: a `-p` list and `-o` over pid, ppid, pgid and stat.
+ * milliseconds: one `-p` pid and `-o` over pid, ppid, pgid and stat.
  *
  * Every other shape exits 3 with no output, and caps.sh falls back to `squad.procs`, which stays the one reader of the
  * command line, the start time and the whole table. The fields shared by the two are the same fields of the same kernel
@@ -143,7 +143,10 @@ int main(int argc, char **argv)
 			break;                 /* the value consumed the rest of this word */
 		}
 	}
-	if (np == 0 || !(want_pid || want_ppid || want_pgid || want_stat))
+	/* One pid, and only the fields above: a `-p` list can hold a live pid beside a dead one, and that answer is the
+	 * module's (it prints the rows it found and exits 0).  The pollers ask about one pid, so a list is not this
+	 * reader's shape and never diverges from the module. */
+	if (np != 1 || !(want_pid || want_ppid || want_pgid || want_stat))
 		return UNSUPPORTED;
 
 	qsort(pids, (size_t)np, sizeof pids[0], cmp_pid);

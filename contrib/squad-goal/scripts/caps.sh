@@ -48,10 +48,12 @@ sg_missing_tool() {
 # kept as quoted words, so a checkout or an interpreter whose path holds a space still reads the table.
 #
 # The poll shapes go to a small compiled reader first (#1511): an interpreter per read cost about 0.7 s on a loaded loop box, and
-# the reader this replaced took 10 ms. psfast.c serves a `-p` list over pid, ppid, pgid and stat -- the one question the pollers
+# the reader this replaced took 10 ms. psfast.c serves one `-p` pid over pid, ppid, pgid and stat -- the one question the pollers
 # ask -- and exits 3 on anything else, and then the module answers, still the one reader of the command line and the whole table.
 # The reader is built on the first read of a shell, from the source beside this file (or the repository this script lives in), into
-# the build folder when it is not there yet; no compiler, an unreadable build folder or a non-macOS host keeps the module alone.
+# a per-user build folder named for the source's checksum; a cached binary is run only when its recorded checksum still matches
+# it, and a build that crashes stops this shell trying it. No compiler, an unreadable build folder or a non-macOS host keeps the
+# module alone.
 # SG_PS_FAST=0 turns the compiled reader off, so an operator can read the table through the module alone.
 _sg_ps_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$_sg_ps_root/squad/procs.py" ] || _sg_ps_root=${SG_SQUAD:-.}
 # The interpreter is found on the first read, never at source time: a script that never reads the table pays no git call.
@@ -59,32 +61,44 @@ _sg_ps_py=
 # The compiled reader, or empty when this shell has none; tried once, on the first read. `3` is psfast's "not my shape".
 _sg_ps_fast=; _sg_ps_fast_tried=
 _sg_ps_build() {  # prints the compiled reader's path, or nothing
-  local dir src sum bin
+  local dir src sum bin ok tmp bsum
   if [ "${SG_PS_FAST:-1}" = 0 ]; then return 0; fi
   [ "$(uname -s 2>/dev/null)" = Darwin ] || return 0
   src=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/psfast.c
   [ -f "$src" ] || src=$_sg_ps_root/contrib/squad-goal/scripts/psfast.c
   [ -f "$src" ] || return 0
-  dir=${TMPDIR:-/tmp}; dir=${dir%/}/agent-squad-psfast
+  # A per-user folder, never a world-shared /tmp name: another account cannot plant a binary this shell would run.
+  dir=${TMPDIR:-/tmp}; dir=${dir%/}/agent-squad-psfast-$(id -u 2>/dev/null)
   sum=$(cksum < "$src" 2>/dev/null); sum=${sum%% *}
   [ -n "$sum" ] || return 0
-  bin=$dir/psfast-$sum
-  if [ -x "$bin" ]; then echo "$bin"; return 0; fi
-  mkdir -p "$dir" 2>/dev/null || return 0
-  command -v cc >/dev/null 2>&1 || return 0
-  if cc -O2 -o "$bin.$$" "$src" >/dev/null 2>&1 && mv -f "$bin.$$" "$bin" 2>/dev/null && [ -x "$bin" ]; then
-    echo "$bin"
-  else
-    rm -f "$bin.$$" 2>/dev/null
+  bin=$dir/psfast-$sum; ok=$bin.cksum
+  # A cached reader is trusted only when its recorded checksum still matches it: a partial or corrupt file from an
+  # interrupted build is never run, and the build below replaces it.
+  if [ -x "$bin" ] && [ -f "$ok" ] && [ "$(cksum < "$bin" 2>/dev/null)" = "$(cat "$ok" 2>/dev/null)" ]; then
+    echo "$bin"; return 0
   fi
+  mkdir -p -m 700 "$dir" 2>/dev/null || return 0
+  command -v cc >/dev/null 2>&1 || return 0
+  tmp=$bin.$$
+  if cc -O2 -o "$tmp" "$src" >/dev/null 2>&1 && [ -x "$tmp" ]; then
+    bsum=$(cksum < "$tmp" 2>/dev/null)
+    if [ -n "$bsum" ] && mv -f "$tmp" "$bin" 2>/dev/null \
+       && printf '%s\n' "$bsum" > "$ok.$$" 2>/dev/null && mv -f "$ok.$$" "$ok" 2>/dev/null; then
+      echo "$bin"; return 0
+    fi
+  fi
+  rm -f "$tmp" "$ok.$$" 2>/dev/null
   return 0
 }
 sg_ps() {
   [ -n "$_sg_ps_fast_tried" ] || { _sg_ps_fast_tried=1; _sg_ps_fast=$(_sg_ps_build); }
   if [ -n "$_sg_ps_fast" ]; then
     "$_sg_ps_fast" "$@"; _sg_ps_rc=$?
-    # ps's own answers: 0 read, 1 no live pid, 2 refused. 3 and a crash are not: the module answers instead.
+    # ps's own answers: 0 read, 1 no live pid, 2 refused. 3 is "not my shape": the module answers and the reader stays.
+    # Anything else is a crash or a vanished binary: the module answers and this shell stops trying the reader, so a
+    # broken build costs one read, never every poll.
     if [ "$_sg_ps_rc" -le 2 ]; then return "$_sg_ps_rc"; fi
+    [ "$_sg_ps_rc" -eq 3 ] || _sg_ps_fast=
   fi
   [ -n "$_sg_ps_py" ] || { _sg_ps_py=$(sg_gate_python); case $_sg_ps_py in /*) ;; */*) _sg_ps_py=$PWD/$_sg_ps_py;; esac; }
   PYTHONPATH="$_sg_ps_root${PYTHONPATH:+:$PYTHONPATH}" "$_sg_ps_py" -m squad.procs ps "$@"

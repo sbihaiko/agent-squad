@@ -192,8 +192,11 @@ def inside_signal_wall():
 
 
 def cc_present():
-    """True when this runner builds the compiled process reader: macOS (its kernel structs) and a C compiler (#1511)."""
-    return not ci_runner_simulated() and sys.platform == "darwin" and shutil.which("cc") is not None
+    """True when this runner builds the compiled process reader: macOS (its kernel structs), a C compiler, and a build
+    folder it can write (#1511). A read-only TMPDIR deselects the test rather than failing it at the read."""
+    if ci_runner_simulated() or sys.platform != "darwin" or shutil.which("cc") is None:
+        return False
+    return os.access(os.environ.get("TMPDIR") or "/tmp", os.W_OK)
 
 
 def process_table_present():
