@@ -202,6 +202,21 @@ for l in open(sys.argv[1]):
     if n: print(n)' "$f" "$here" 2>/dev/null | sort -un
 }
 
+# refs_in_message: the issue numbers a commit message names (#1491), read from stdin, one per line, in order, repeats kept. A
+# `Refs #N` inside an inline backtick span, or between ``` fence lines, is text and names no issue; on a line with an odd backtick
+# count, the text after the last backtick is text. This is the one parser: every reader of a message calls it.
+refs_in_message() {
+  awk '
+    /^[ \t]*```/ { fence = !fence; next }
+    fence { next }
+    {
+      line = $0; n = gsub(/`/, "`", line)
+      if (n % 2 == 1) { i = length(line); while (substr(line, i, 1) != "`") i--; line = substr(line, 1, i - 1) }
+      gsub(/`[^`]*`/, "", line)
+      while (match(line, /Refs #[0-9]+/)) { print substr(line, RSTART + 6, RLENGTH - 6); line = substr(line, RSTART + RLENGTH) }
+    }'
+}
+
 # orphan_child <run> <rd> <S> <wave> <issue>...: the first commit of the run's own work that names one of the issues, lives on a
 # branch or a child tree of the run (squad/run/<run>, a tree under the run folder) or of a fix run the run's children started (#866),
 # and is in neither the wave nor the base (#836). It prints "<sha> <issue>" and returns 0; it returns 1 when there is none. A leftover
@@ -236,7 +251,7 @@ $($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk -v d="$rda/" 
       msg=$(git_sc log -1 --format=%B "$c" 2>/dev/null)
       case "$msg" in *"TDD RED"*) continue;; esac
       if [ "$verdict" != completed ]; then case " $reviewed " in *" $c "*) ;; *) continue;; esac; fi
-      refs=" $(printf '%s\n' "$msg" | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tr '\n' ' ') "
+      refs=" $(printf '%s\n' "$msg" | refs_in_message | tr '\n' ' ') "
       for n in "$@"; do case "$refs" in *" $n "*)
           [ -z "$($G -C "$SG_CHECKOUT" branch -r --contains "$c" 2>/dev/null)" ] || continue 2   # a remote ref reaches it: salvaged
           printf '%s %s\n' "$c" "$n"; return 0;; esac; done
@@ -300,8 +315,13 @@ freeze_owner() {   # <issue>: the freeze is a marker over the column reached, ne
 # landed_key <issue>: the newest non-RED `Refs #N` commit in origin/$SG_BASE of the checkout, the evolution key of the count
 # (#609, ADR-0134): the work the base holds for the issue. A RED commit carries the same line and proves nothing.
 landed_key() {
-  $G -C "${SG_CHECKOUT:-/nonexistent}" log -n 500 --format='%H%x1f%B%x1e' -E --grep="Refs #$1([^0-9]|\$)" "origin/$base" 2>/dev/null \
-    | awk -v RS='\036' -F'\037' 'NF > 1 && $2 !~ /^\n*TDD RED/ { sub(/^\n/, "", $1); print $1; exit }'
+  local c
+  for c in $($G -C "${SG_CHECKOUT:-/nonexistent}" log -n 500 --format=%H -E --grep="Refs #$1([^0-9]|\$)" "origin/$base" 2>/dev/null); do
+    local msg; msg=$($G -C "$SG_CHECKOUT" log -1 --format=%B "$c" 2>/dev/null)
+    case "$(printf '%s\n' "$msg" | awk 'NF { print; exit }')" in "TDD RED"*) continue;; esac
+    printf '%s\n' "$msg" | refs_in_message | /usr/bin/grep -qx "$1" && { printf '%s\n' "$c"; return 0; }
+  done
+  return 0
 }
 
 # ledger <op> <issue> ...: the issue's one ledger file (#673, issue_ledger.py), keyed <owner>/<repo>#<n> (ADR-0138). It holds
@@ -704,7 +724,7 @@ py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 tipgate=${SG_WAVE_TIP_GATES-"$(sg_base_gate "origin/$base" "$py" wave-tip)"}
 
 # child_of <clone> <sha>: the issue a commit names, its last `Refs #N`, empty when it names none.
-child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tail -1; }
+child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | refs_in_message | tail -1; }
 
 # held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575); a try-mode skip of
 # the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the holders it names (#567).
@@ -801,7 +821,7 @@ wave_check() {
 }
 
 # refs_of <clone> <range>: every `Refs #N` in the whole message of each commit of the range, each named once.
-refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' '; }
+refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | refs_in_message | sort -un | tr '\n' ' '; }
 
 # TEST_RE is the test notion of check-tdd-red.sh, with the same default and the same SG_TDD_TEST_RE override, so a RED commit
 # is test-only by the paths the TDD guard reads as tests (#1474). Keep it in step with check-tdd-red.sh.
@@ -846,7 +866,7 @@ commit_refs() {
     msg=$($G -C "$1" log -1 --format=%B "$c" 2>/dev/null)
     first=$(printf '%s\n' "$msg" | awk 'NF { print; exit }')
     case "$first" in "TDD RED"*) red_test_only "$1" "$c" && continue;; esac
-    list=$(printf '%s\n' "$msg" | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | awk '!seen[$0]++' | tr '\n' ' ')
+    list=$(printf '%s\n' "$msg" | refs_in_message | awk '!seen[$0]++' | tr '\n' ' ')
     count=$(printf '%s' "$list" | wc -w | tr -d ' ')
     if [ "$count" = 1 ]; then echo "D $c ${list% }"
     elif [ "$count" -gt 1 ]; then echo "A $c ${list% }"; fi
@@ -1170,7 +1190,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # (#869) A commit that names exactly one issue delivers it (commit_refs). A commit that names several delivers none of them:
     # the cluster child did not say which it fixed, so those issues are named and requeued below, never closed.
     rows=$(commit_refs "$S" "origin/$base..HEAD")
-    anyref=$(sc log --format=%B "origin/$base..HEAD" 2>/dev/null | /usr/bin/grep -cE 'Refs #[0-9]+')   # a RED commit's Refs counts here (#1003)
+    anyref=$(sc log --format=%B "origin/$base..HEAD" 2>/dev/null | refs_in_message | wc -l | tr -d ' ')   # a RED commit's Refs counts here (#1003)
     issues=$(printf '%s\n' "$rows" | awk '$1 == "D" { print $3 }' | sort -un | tr '\n' ' ')
     amb=$(printf '%s\n' "$rows" | awk '$1 == "A" { for (i = 3; i <= NF; i++) print $i }' | sort -un | tr '\n' ' ')
     # (#1474) The one issue a wave names closes when its only Refs sit on a test-only RED commit and a fix commit names none: the
