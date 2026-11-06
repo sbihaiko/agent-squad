@@ -803,21 +803,34 @@ wave_check() {
 # refs_of <clone> <range>: every `Refs #N` in the whole message of each commit of the range, each named once.
 refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' '; }
 
-# is_test_path <path>: 0 when the path is test-only. It mirrors the TDD-red test notion in check-tdd-red.sh (TEST_RE): a path
-# under tests/, a fixtures/ path, conftest.py, pytest.ini, test-*.sh and test_*.py (#1474).
+# TEST_RE is the test notion of check-tdd-red.sh, with the same default and the same SG_TDD_TEST_RE override, so a RED commit
+# is test-only by the paths the TDD guard reads as tests (#1474). Keep it in step with check-tdd-red.sh.
+TEST_RE=${SG_TDD_TEST_RE:-'(^|/)tests?/[^/]+\.(py|sh|js|mjs|ts|tsx|cs|rs|go|rb|java|kt|php|c|cc|cpp)$|(^|/)test[_.-][^/]+\.(py|sh|js|mjs|ts|tsx|cs|rs|go|rb|java|kt|php|c|cc|cpp)$|(^|/)[^/]+[_.-]tests?\.(py|sh|js|mjs|ts|tsx|cs|rs|go|rb|java|kt|php|c|cc|cpp)$'}
+
+# is_test_path <path>: 0 when the path is test-only: a path under tests/ at any depth, a path TEST_RE reads as a test, and the
+# fixtures/ paths, conftest.py and pytest.ini that the suites carry beside their tests (#1474).
 is_test_path() {
   case "$1" in tests/*|*/tests/*|fixtures/*|*/fixtures/*|conftest.py|*/conftest.py|pytest.ini|*/pytest.ini) return 0;; esac
-  case "${1##*/}" in test-*.sh|test_*.py) return 0;; esac
+  printf '%s' "$1" | /usr/bin/grep -qE "$TEST_RE" && return 0
   return 1
 }
 
-# red_test_only <clone> <sha> (#1474): 0 when every path the commit changes is test-only. A `TDD RED` commit of that kind is a red
-# test alone, a test and no fix (#533), and delivers nothing. A `TDD RED` commit that also changes code is a squashed red and fix.
+# is_code_path <path>: 0 when the path is code, neither a test (is_test_path) nor a `.md` note, which check-tdd-red.sh skips as
+# no code of a squash (#1474).
+is_code_path() {
+  case "$1" in *.md) return 1;; esac
+  is_test_path "$1" && return 1
+  return 0
+}
+
+# red_test_only <clone> <sha> (#1474): 0 when every path the commit changes is a test or a `.md` note. A `TDD RED` commit of that
+# kind is a red test alone, a test and no fix (#533), and delivers nothing. A `TDD RED` commit that also changes code is a squashed
+# red and fix.
 red_test_only() {
   local f
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    is_test_path "$f" || return 1
+    is_code_path "$f" && return 1
   done <<< "$($G -C "$1" diff-tree --no-commit-id --name-only -r --root "$2" 2>/dev/null)"
   return 0
 }
@@ -1164,7 +1177,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # wave changes code, and its single `Refs #N` is N. A wave that changes test files only delivers nothing (#533), and so does a
     # wave that names two issues (#869).
     rfs=$(refs_of "$S" "origin/$base..HEAD")
-    nontest=$(sc diff --name-only "origin/$base" HEAD 2>/dev/null | while IFS= read -r f; do is_test_path "$f" || { echo "$f"; break; }; done)
+    nontest=$(sc diff --name-only "origin/$base" HEAD 2>/dev/null | while IFS= read -r f; do is_code_path "$f" && { echo "$f"; break; }; done)
     if [ -z "$issues" ] && [ -z "$amb" ] && [ -n "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
       issues=$(printf '%s' "$rfs" | tr -d ' ')
       echo "WAVE-NOTE $w: the only Refs of the wave name #$issues, on a test-only RED commit, and its fix commit names none; the landing closes #$issues"
