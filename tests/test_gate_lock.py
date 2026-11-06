@@ -7,8 +7,10 @@ Host-free: a throwaway SG_STATE and a throwaway scripts folder; the runners are 
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,8 @@ TAKES_LOCK = re.compile(r"(?<![\w-])gate\.sh\"?\s")
 RUNNERS = ("branchland.sh", "wave.sh", "promote-stg.sh")
 
 # A held gate lock is proven held by its holder's live pid, which the test reads from the process table through /bin/ps.
-pytestmark = pytest.mark.process_bound
+# The mark is per test: a case that records the pids it starts reads no process table, so a session that denies /bin/ps runs it.
+PROCESS_BOUND = pytest.mark.process_bound
 
 
 GIT = "/usr/bin/git"
@@ -32,6 +35,54 @@ def _env(state):
     e["SG_SQUAD"] = str(SCRIPTS.parent.parent.parent)   # a gate takes gate slots through this repository's squad.caps (#567)
     e["SQUAD_CAPS_DIR"] = str(Path(state) / "caps")     # a throwaway budget: no case draws on the machine's live slots
     return e
+
+
+def _alive(pid):
+    """True while a process with this pid lives. A case that reads the pids it started needs no process table."""
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@contextmanager
+def _grouped(cmd, **kw):
+    """Start a process in its own session and end its whole group when the case leaves this block, on every exit path.
+
+    A case leaves the block when it passes, when an assertion fails and when a wait runs out. A runner's own serial.sh
+    gate waiter polls the lock for ever, so ending the runner alone leaves a process nobody owns.
+    """
+    proc = subprocess.Popen(cmd, start_new_session=True, **kw)
+    try:
+        yield proc
+    finally:
+        _end(proc)
+
+
+def _end(proc):
+    """End the process a case started and every process in its group: a waiter the process forked outlives it."""
+    if proc.poll() is None:
+        _signal_group(proc, signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    # The leader can end and leave a child behind, so the group is signalled whether or not its leader still runs.
+    _signal_group(proc, signal.SIGKILL)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def _signal_group(proc, sig):
+    """Signal a group started by `_grouped`; a group that is already empty is nothing to end."""
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        pass
 
 
 def _tree(tmp_path):
@@ -47,6 +98,7 @@ def _code(path):
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
+@PROCESS_BOUND
 def test_each_gate_runner_takes_the_machine_wide_gate_lock(runner):
     """A runner that starts a gate calls it under `serial.sh gate`, or a second gate would run beside the first."""
     assert TAKES_LOCK.search(_code(SCRIPTS / runner)), f"{runner} runs its gate without the machine-wide gate lock"
@@ -174,6 +226,7 @@ def promote_runner(tmp_path):
 @pytest.mark.slow(reason="each case builds a git remote and runs a whole runner script")
 @pytest.mark.heavy
 @pytest.mark.parametrize("fixture", ["branchland_runner", "promote_runner"])   # the wave entry holds, never waits (#575): below
+@PROCESS_BOUND
 def test_each_gate_runner_waits_for_a_held_gate_lock_and_then_runs(fixture, request, tmp_path):
     """A runner that names gate.sh but bypasses it would run beside a holder. Each runner is started while the `gate` lock is
     held: it says it waits, its gate has not run when the holder lets go, and it runs after that."""
@@ -181,66 +234,99 @@ def test_each_gate_runner_waits_for_a_held_gate_lock_and_then_runs(fixture, requ
     log, release, err = tmp_path / "holder.log", tmp_path / "release", tmp_path / "runner.err"
     # The holder lets go when told to, never on a timer: a runner that is slow to start must still find the lock held.
     holder_cmd = f'while [ ! -e {release} ]; do sleep 0.02; done; if {ran}; then echo early >> {log}; else echo clean >> {log}; fi'
-    holder = subprocess.Popen(["bash", str(SCRIPTS / "serial.sh"), "gate", "bash", "-c", holder_cmd], env=_env(st),
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    pid = st / "locks" / "gate" / "pid"
-    deadline = time.time() + 10
-    while not (pid.exists() and pid.read_text().strip()) and time.time() < deadline:
-        time.sleep(0.02)
-    assert pid.exists(), "the holder never took the gate lock"
-    with err.open("w") as ef:
-        runner = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=ef, stderr=subprocess.STDOUT)
-        # The waiter is the runner's own serial.sh (the copy beside the runner): the holder runs the repository's copy. A runner
-        # that bypassed gate.sh never starts one, and its gate then runs beside the holder, which the log below shows.
-        mine = f"{tmp_path / 's' / 'serial.sh'} gate"
-        deadline = time.time() + 20
-        while time.time() < deadline and runner.poll() is None:
-            ps = subprocess.run(["/bin/ps", "-ww", "-o", "command=", "-ax"], capture_output=True, text=True).stdout
-            if mine in ps:
-                time.sleep(0.2)   # past its first look at the lock
-                break
+    with _grouped(["bash", str(SCRIPTS / "serial.sh"), "gate", "bash", "-c", holder_cmd], env=_env(st),
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as holder:
+        pid = st / "locks" / "gate" / "pid"
+        deadline = time.time() + 10
+        while not (pid.exists() and pid.read_text().strip()) and time.time() < deadline:
             time.sleep(0.02)
-        release.touch()
-        runner.wait(timeout=60)
-    holder.wait(timeout=60)
+        assert pid.exists(), "the holder never took the gate lock"
+        with err.open("w") as ef, _grouped(cmd, cwd=cwd, env=env, stdout=ef, stderr=subprocess.STDOUT) as runner:
+            # The waiter is the runner's own serial.sh (the copy beside the runner): the holder runs the repository's copy. A
+            # runner that bypassed gate.sh never starts one, and its gate then runs beside the holder, which the log below shows.
+            mine = f"{tmp_path / 's' / 'serial.sh'} gate"
+            deadline = time.time() + 20
+            while time.time() < deadline and runner.poll() is None:
+                ps = subprocess.run(["/bin/ps", "-ww", "-o", "command=", "-ax"], capture_output=True, text=True).stdout
+                if mine in ps:
+                    time.sleep(0.2)   # past its first look at the lock
+                    break
+                time.sleep(0.02)
+            release.touch()
+            runner.wait(timeout=60)
+        holder.wait(timeout=60)
     out = err.read_text()
     assert WAIT_LINE.search(out), f"the runner never said it waits for the held lock: {out}"
     assert log.read_text().split() == ["clean"], f"the runner's gate ran beside the holder: {log.read_text()!r}"
     assert subprocess.run(["bash", "-c", ran]).returncode == 0, f"the runner never ran its gate after the holder: {out}"
 
 
+@pytest.mark.slow(reason="starts a runner that never ends and waits for its process group to end")
+@pytest.mark.heavy
+def test_a_case_ends_a_runner_that_never_ends_with_its_process_group(tmp_path):
+    """A case that starts a runner and leaves before it ends leaks the runner and its gate waiter, which polls for ever.
+    The block ends every process it started: the never-ending runner and its waiter are gone, and no process from the
+    case's folder is alive after the case."""
+    d = tmp_path / "s"
+    d.mkdir()
+    pids = tmp_path / "pids"
+    waiter = d / "waiter.sh"
+    # Stands in for a runner's own serial.sh gate waiter: a process the runner forked, which polls for ever. It names both
+    # pids, so the case reads them without the process table a sandbox may deny (ADR-0139).
+    waiter.write_text(f'#!/bin/bash\necho $$ >> {pids}\n( exec sleep 300 ) &\necho $! >> {pids}\nwait\n')
+    waiter.chmod(0o755)
+    with _grouped(["bash", str(waiter)], cwd=d, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as runner:
+        deadline = time.time() + 10
+        while time.time() < deadline and (not pids.exists() or len(pids.read_text().split()) < 2):
+            time.sleep(0.02)
+        started = pids.read_text().split() if pids.exists() else []
+        assert len(started) == 2, f"the runner never started its waiter: {started}"
+        assert all(_alive(p) for p in started), f"the runner ended on its own, so the cleanup was never proven: {started}"
+        assert runner.poll() is None, "the runner ended on its own, so the cleanup was never proven"
+    deadline = time.time() + 10
+    while time.time() < deadline and any(_alive(p) for p in started):
+        time.sleep(0.05)
+    left = [p for p in started if _alive(p)]
+    assert not left, f"a process the case started is alive after the case: {left}"
+
+
 @pytest.mark.slow(reason="builds a git remote and runs wave.sh twice")
 @pytest.mark.heavy
+@PROCESS_BOUND
 def test_a_wave_entry_under_a_held_gate_lock_holds_the_child_and_enters_on_a_later_pass(wave_runner, tmp_path):
     """The wave entry runs its gate in try mode (#575): a held `gate` lock holds the child out with one `WAVE HOLD` line, and its
     gate never runs beside the holder. The next pass, with the lock free, runs the gate."""
     cmd, cwd, env, st, ran, _marker = wave_runner
     release = tmp_path / "release"
-    holder = subprocess.Popen(["bash", str(SCRIPTS / "serial.sh"), "gate", "bash", "-c", f"while [ ! -e {release} ]; do sleep 0.02; done"],
-                              env=_env(st), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        pid = st / "locks" / "gate" / "pid"
-        deadline = time.time() + 10
-        while not (pid.exists() and pid.read_text().strip()) and time.time() < deadline:
-            time.sleep(0.02)
-        assert pid.exists(), "the holder never took the gate lock"
-        held = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
-        out = held.stdout + held.stderr
-        assert held.returncode != 0 and re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d WAVE HOLD #1: the gate lock is held by pid [0-9]+", out, re.M), out
-        assert subprocess.run(["bash", "-c", ran]).returncode != 0, f"the entry ran its gate beside the holder: {out}"
-    finally:
-        release.touch()
-        holder.wait(timeout=60)
-    later = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
-    assert subprocess.run(["bash", "-c", ran]).returncode == 0, f"the later pass never ran its gate: {later.stdout}{later.stderr}"
+    with _grouped(["bash", str(SCRIPTS / "serial.sh"), "gate", "bash", "-c", f"while [ ! -e {release} ]; do sleep 0.02; done"],
+                  env=_env(st), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as holder:
+        try:
+            pid = st / "locks" / "gate" / "pid"
+            deadline = time.time() + 10
+            while not (pid.exists() and pid.read_text().strip()) and time.time() < deadline:
+                time.sleep(0.02)
+            assert pid.exists(), "the holder never took the gate lock"
+            with _grouped(cmd, cwd=cwd, env=env, capture_output=True, text=True) as held:
+                stdout, stderr = held.communicate(timeout=60)
+            out = stdout + stderr
+            assert held.returncode != 0 and re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d WAVE HOLD #1: the gate lock is held by pid [0-9]+", out, re.M), out
+            assert subprocess.run(["bash", "-c", ran]).returncode != 0, f"the entry ran its gate beside the holder: {out}"
+        finally:
+            release.touch()
+            holder.wait(timeout=60)
+    with _grouped(cmd, cwd=cwd, env=env, capture_output=True, text=True) as later:
+        later_out, later_err = later.communicate(timeout=60)
+    assert subprocess.run(["bash", "-c", ran]).returncode == 0, f"the later pass never ran its gate: {later_out}{later_err}"
 
 
 @pytest.mark.parametrize("name", ["test-gate-lock.sh", "test-serial.sh"])
+@PROCESS_BOUND
 def test_a_gate_lock_shell_suite_is_executable(name):
     """A suite committed without its executable bit is dropped by any runner that starts suites by path."""
     assert os.access(SCRIPTS / name, os.X_OK), f"{name} is not executable"
 
 
+@PROCESS_BOUND
 def test_two_hand_gates_started_at_once_run_one_after_the_other_in_short(tmp_path):
     """The short form of the soak below. The first gate holds the lock until the second prints its wait line, so the proof
     never races the second gate's start-up (a python start, seconds under load). The lock comes first and the slots
@@ -273,6 +359,7 @@ def test_two_hand_gates_started_at_once_run_one_after_the_other_in_short(tmp_pat
 
 
 @pytest.mark.heavy
+@PROCESS_BOUND
 def test_two_hand_gates_started_at_once_run_one_after_the_other(tmp_path):
     d = _tree(tmp_path)
     log = tmp_path / "log"
@@ -285,6 +372,7 @@ def test_two_hand_gates_started_at_once_run_one_after_the_other(tmp_path):
     assert len(WAIT_LINE.findall(err)) == 1, err
 
 
+@PROCESS_BOUND
 def test_a_hand_gate_whose_holder_died_takes_the_lock(tmp_path):
     d = _tree(tmp_path)
     lock = tmp_path / "st" / "locks" / "gate"
@@ -296,6 +384,7 @@ def test_a_hand_gate_whose_holder_died_takes_the_lock(tmp_path):
     assert not lock.exists(), "the lock is left behind"
 
 
+@PROCESS_BOUND
 def test_a_cut_short_watchdog_sleep_is_not_a_deadline_in_short(tmp_path):
     """The short form of the test below: the watchdog sleep is found by its place in the holder's tree (holder, watchdog
     subshell, sleep) and cut at once, and the holder keeps its command's exit code."""
@@ -320,6 +409,7 @@ def test_a_cut_short_watchdog_sleep_is_not_a_deadline_in_short(tmp_path):
 
 
 @pytest.mark.heavy
+@PROCESS_BOUND
 def test_a_cut_short_watchdog_sleep_is_not_a_deadline(tmp_path):
     """The holder's cleanup TERMs its watchdog's process group when its command ends, and the sleep of that watchdog can be
     the process that dies. A sleep cut short is not a deadline: the holder keeps its command's exit code, never 75.
