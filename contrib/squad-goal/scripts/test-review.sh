@@ -769,9 +769,9 @@ awk -F'\t' '$3=="grok-4.7" && $4==1200 && $5==90 && $6==400 && NF==6 {f=1} END{e
   || ko "29 grok json: rc=$rc line1='$l1' ledger='$(tail -1 "$T/st/token-usage.tsv" 2>/dev/null)' args='$(cat "$GROK_ARGS")'"
 unset GROK_ARGS
 suite_s=$(( $(date +%s) - suite_t0 ))
-# #1413: the acceptance command of a run is capped (SG_AC_TIMEOUT, 300 s), so the suite times itself. #1385: the bound is
-# the cap the runner enforces, never a margin below it -- a saturated box stretched this suite to 294 s with the code
-# green, and that reading was the same false red the leash cases gave. A run past the cap is red either way.
+# #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
+# the code, so a green suite must not turn red for it. The runtime guards are the measured line in
+# tests/shell_suites_seconds.txt, the slow cap, and the acceptance cap the runner enforces (SG_AC_TIMEOUT).
 cap=${SG_AC_TIMEOUT:-300}
-[ "$suite_s" -lt "$cap" ] && ok "#1413 the suite finishes inside the acceptance cap (${suite_s}s of ${cap}s)" || ko "#1413 the suite took ${suite_s}s, over the ${cap}s acceptance cap: a run whose code is green still fails"
+echo "info: the suite took ${suite_s}s of the ${cap}s acceptance cap"
 rm -rf "$T"; exit $fail
