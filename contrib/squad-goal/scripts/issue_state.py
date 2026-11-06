@@ -134,7 +134,7 @@ TEST_CASE_TITLE = re.compile(r"^test case #(\d+) \| (pass|fail) \| (\S+) \| (\S+
 # eventually consistent and sometimes never carries a card GraphQL names, so an omission is asked once of
 # the projectItems read before it is called an absence.
 FALLBACK_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){"
-                  "issue(number:$number){projectItems(first:50){nodes{id isArchived project{number} "
+                  "issue(number:$number){projectItems(first:50){nodes{databaseId isArchived project{number} "
                   "fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name optionId}}}}}}}")
 
 
@@ -160,8 +160,12 @@ class State:
         return self.binding.name
 
     def read(self, issue):
-        """The state of one issue, "" when the carrier carries none (or carries no card for it)."""
-        return self.binding.read(issue)
+        """The state of one issue, "" when the carrier carries none. A card the whole-board read omits is asked of the
+        GraphQL projectItems read once (#1463), so the dispatch path sees a card the items route never carried."""
+        carried = self.binding.read(issue)
+        if carried: return carried
+        fb = self.read_fallback(issue)
+        return fb["state"] if fb else ""
 
     def read_all(self):
         """Every state the carrier answers, in one read: {issue: state}.
@@ -179,10 +183,7 @@ class State:
         node = getattr(self.binding, "node_state", None)   # a binding with no node read answers through its whole read
         got = node(issue) if node else None
         if got is not None: return got
-        carried = self.read(issue)
-        if carried: return carried
-        fb = self.read_fallback(issue)   # a binding with no fallback answers as it did
-        return fb["state"] if fb else carried
+        return self.read(issue)
 
     def read_fallback(self, issue):
         """The card one issue carries, asked of the GraphQL projectItems read when the REST items read omits an
@@ -610,18 +611,18 @@ class BoardBinding:
             if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
             self.items_map = self.items(); self._save_items()
             if key in self.items_map: return self.items_map[key]
+        reads = [self.attempts]
         if wrote:   # the card is on the board and the read lags: a new card, read within the settle bound before the failure (#403)
-            reads = [self.attempts]
             def probe():
                 reads[0] += 1; self.items_map = self.items(); self._save_items()
                 return self.items_map.get(key)
             iid = self.settle(probe, self.attempts)
             if iid: return iid
-            fb = self.read_fallback(n)   # REST never carried it: the one-issue GraphQL read names the card the route omitted (#1463)
-            if fb and fb.get("id"):
-                self.items_map[key] = fb["id"]; self._save_items()
-                return fb["id"]
-            raise ReadFailure(reads[0], len(self.items_map))
+        fb = self.read_fallback(n)   # REST never carried it: the one-issue GraphQL read names the card the route omitted (#1463)
+        if fb and fb.get("id"):
+            self.items_map[key] = fb["id"]; self._save_items()
+            return fb["id"]
+        if wrote: raise ReadFailure(reads[0], len(self.items_map))
         return None   # a read that never carried it, and nothing was written for it here: genuinely absent
 
     def node_state(self, issue):
@@ -675,7 +676,8 @@ class BoardBinding:
                     fv = nd.get("fieldValueByName")
                     carried = ""
                     if isinstance(fv, dict): carried = fv.get("optionId") or fv.get("name") or ""
-                    ans = {"id": nd.get("id") or "", "state": self.state_name(carried)}
+                    rid = nd.get("databaseId")   # the REST items route's id: the integer the status route takes, never the node id
+                    ans = {"id": rid if isinstance(rid, int) else "", "state": self.state_name(carried)}
                     break
         self._fallback[key] = ans
         return ans

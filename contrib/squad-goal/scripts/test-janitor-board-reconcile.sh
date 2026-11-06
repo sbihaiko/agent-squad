@@ -65,7 +65,7 @@ case "$a" in
     printf '2080\tTodo\thttps://api.github.com/repos/x/y\n2081\tIn Progress\thttps://api.github.com/repos/x/y\n2082\tBacklog\thttps://api.github.com/repos/x/y\n2090\tBacklog\thttps://api.github.com/repos/x/y\n2091\tTodo\thttps://api.github.com/repos/x/y\n2092\tBacklog\thttps://api.github.com/repos/x/y\n2093\tBacklog\thttps://api.github.com/repos/x/y\n2094\tIn Progress\thttps://api.github.com/repos/x/y\n2095\tCode Complete\thttps://api.github.com/repos/x/y\n';;   # #1131: a spec reads Todo while a ticket is in flight, and never a work column
   *projectItems*)   # the fallback read for an issue the REST items route omits (#1463): #2096's card sits on project 4
     case "$a" in     # in Doing, read back through GraphQL; every other omitted issue carries no card at all
-      *number=2096*) printf '%s\n' '{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"PVTI_2096","project":{"number":4},"fieldValueByName":{"name":"Code Complete"}}]}}}}}' ;;
+      *number=2096*) printf '%s\n' '{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"databaseId":2096,"project":{"number":4},"fieldValueByName":{"name":"Code Complete"}}]}}}}}' ;;
       *) printf '%s\n' '{"data":{"repository":{"issue":null}}}' ;;
     esac;;
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
