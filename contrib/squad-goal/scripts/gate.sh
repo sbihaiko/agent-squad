@@ -202,7 +202,8 @@ case "${1:-}" in
             # slots exits 73 at once with none, and serial.sh releases the lock on that exit, so it holds neither resource while
             # it waits for the other. Every later exit path runs the EXIT trap and gives the slots back.
     shift
-    . "$here/caps.sh"
+    # caps.sh is sourced once, at the top, and this branch and its `--run` child read that one source (#1510): a second
+    # source here ran the interpreter lookup again for a reader this shell already has.
     # The lease names the lock holder, this process's parent: a waiter that reaps the lock holder past its deadline then also
     # frees the lease, so a stopped run never leaves a child's gate holding slots (ADR-0051).
     SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try) || exit $?
