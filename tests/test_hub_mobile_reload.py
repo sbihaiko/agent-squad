@@ -12,6 +12,10 @@ import pytest
 from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (the fixture and the node harness)
 
 
+# The build is a nanosecond count, past the 2**53 a JavaScript number keeps exactly: a one-second gap is a real new build.
+NEW_BUILD_GAP = 10**9
+
+
 def version_route(hub, build):
     return {"/api/version": [{"status": 200, "ct": "application/json", "body": json.dumps({"v": build})}]}
 
@@ -26,7 +30,7 @@ def test_a_new_build_reloads_the_phone_exactly_once(hub):
       let reloads = 0; location.reload = () => { reloads++; };
       await checkVersion(); await checkVersion(); await checkVersion();
       return { reloads };
-    """, hub.BOOT + 1)
+    """, hub.BOOT + NEW_BUILD_GAP)
     assert out["reloads"] == 1, out
 
 
@@ -90,7 +94,7 @@ def test_the_reload_waits_for_the_hold_and_follows_when_it_clears(hub, hold):
       {clear}
       await checkVersion();
       return {{ held, after: reloads }};
-    """, hub.BOOT + 1)
+    """, hub.BOOT + NEW_BUILD_GAP)
     assert out["held"] == 0, f"the phone reloaded while {hold}: {out}"
     assert out["after"] == 1, f"the reload did not follow once {hold} cleared: {out}"
 
