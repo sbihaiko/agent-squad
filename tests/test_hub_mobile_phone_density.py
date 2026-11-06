@@ -138,9 +138,9 @@ def test_the_close_gesture_starts_in_the_thumb_zone():
     assert run_js(src, 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true,thumb:false})') is None
 
 
-def test_the_back_gesture_starts_in_the_thumb_zone():
+def test_the_left_edge_swipe_is_the_browser_back_and_no_page_handler():
     src = GESTURE_JS.read_text()
-    assert run_js(src, 'runsGesture({x0:10,dx:80,dy:4,atTop:false,thumb:true})') == {"act": "back"}
+    assert run_js(src, 'runsGesture({x0:10,dx:80,dy:4,atTop:false,thumb:true})') is None
     assert run_js(src, 'runsGesture({x0:10,dx:80,dy:4,atTop:false,thumb:false})') is None
 
 

@@ -45,9 +45,9 @@ def runs_panel():
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the gesture rules")
 @pytest.mark.parametrize("g, act", [
-    ({"x0": 10, "dx": 80, "dy": 4, "atTop": False, "thumb": True}, "back"),
-    ({"x0": 24, "dx": 60, "dy": -10, "atTop": True, "thumb": True}, "back"),
-    ({"x0": 10, "dx": 80, "dy": 4, "atTop": False, "thumb": False}, None),   # a back starts where the thumb is (#1142)
+    ({"x0": 10, "dx": 80, "dy": 4, "atTop": False, "thumb": True}, None),   # the left-edge swipe is the browser's Back
+    ({"x0": 24, "dx": 60, "dy": -10, "atTop": True, "thumb": True}, None),
+    ({"x0": 10, "dx": 80, "dy": 4, "atTop": False, "thumb": False}, None),
     ({"x0": 100, "dx": 80, "dy": 4, "atTop": False, "thumb": True}, None),
     ({"x0": 10, "dx": 30, "dy": 2, "atTop": False}, None),
     ({"x0": 10, "dx": 40, "dy": 90, "atTop": False}, None),
@@ -84,8 +84,10 @@ def test_a_tap_opens_the_run_full_screen_in_one_frame():
     assert re.search(r"#runview\{[^}]*position:fixed[^}]*inset:0", html)
 
 
-def test_the_run_view_holds_an_edge_strip_that_takes_the_back_swipe():
-    assert 'data-role="edge"' in page()
+def test_the_run_view_has_no_edge_strip_and_no_back_swipe_handler():
+    html = page()
+    assert 'id="edge"' not in html and 'data-role="edge"' not in html, "the run view keeps an edge strip"
+    assert "#edge{" not in html, "the run view keeps the edge strip's style"
 
 
 def test_the_runs_code_holds_no_run_state_rule():

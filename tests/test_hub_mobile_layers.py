@@ -57,7 +57,7 @@ def test_opening_the_card_sheet_pushes_one_entry(hub):
         openCard(7);
         return { pushed: history.index - base, state: history.state, layers: layers.slice() };
     """, board=[BOARD_ONE])
-    assert out == {"pushed": 1, "state": {"layer": "sheet", "n": 7}, "layers": ["sheet"]}, out
+    assert out == {"pushed": 1, "state": {"layer": "sheet", "depth": 1, "n": 7}, "layers": ["sheet"]}, out
 
 
 @pytest.mark.node_bound
@@ -91,10 +91,11 @@ def test_every_project_sheet_close_path_pops_its_one_entry(hub, close):
 
 
 @pytest.mark.node_bound
-def test_a_synthetic_popstate_closes_the_top_layer_and_pops_nothing_extra(hub):
+def test_a_popstate_onto_the_page_entry_closes_every_layer_and_pops_nothing_extra(hub):
     out = run_page(hub.MOBILE_PAGE, """
         await loadBoard();
         openCard(7);
+        history.replaceState({}, "");
         const before = history.index;
         __dispatch("popstate", {});
         return { hidden: $("sheet").hidden, layers: layers.slice(), moved: history.index - before, pending: __pending() };
@@ -138,7 +139,7 @@ def test_back_from_a_project_sheet_restored_open_on_load_closes_it_before_naviga
         history.back();
         __popAll();
         return { restored, after: { hidden: $("psheet").hidden, layers: layers.slice(), index: history.index }, pending: __pending() };
-    """, history_state={"layer": "psheet"}, board=[BOARD_ONE])
+    """, history_state={"layer": "psheet", "depth": 1}, history_below=True, board=[BOARD_ONE])
     assert out["restored"] == {"hidden": False, "layers": ["psheet"], "index": 1}, out
     assert out["after"] == {"hidden": True, "layers": [], "index": 0} and out["pending"] == 0, out
 
@@ -151,9 +152,121 @@ def test_back_from_a_card_sheet_restored_open_on_load_closes_it_before_navigatin
         history.back();
         __popAll();
         return { restored, after: { hidden: $("sheet").hidden, layers: layers.slice(), index: history.index }, pending: __pending() };
-    """, history_state={"layer": "sheet", "n": 7}, board=[BOARD_ONE])
+    """, history_state={"layer": "sheet", "depth": 1, "n": 7}, history_below=True, board=[BOARD_ONE])
     assert out["restored"] == {"hidden": False, "layers": ["sheet"], "n": 7, "index": 1}, out
     assert out["after"] == {"hidden": True, "layers": [], "index": 0} and out["pending"] == 0, out
+
+
+MORE_TAP = 'const moreTap = d => document.querySelector(\'[data-panel="more"]\').onclick({ target: { closest: () => ({ dataset: d }) } });'
+
+LAYER_OPEN = {
+    "term": 'openConversation("s1", "Session one");',
+    "run": 'openRun("r1", "/run/r1", "Run one");',
+    "cost": 'moreTap({ more: "cost" });',
+    "lead": 'moreTap({ more: "lead" });',
+}
+
+LAYER_BACK = {
+    "term": '$("termview-back").onclick();',
+    "run": '$("runview-back").onclick();',
+    "cost": 'moreTap({ back: "" });',
+    "lead": 'moreTap({ back: "" });',
+}
+
+LAYER_HIDDEN = {
+    "term": '$("termview").hidden',
+    "run": '$("runview").hidden',
+    "cost": 'document.querySelector(\'[data-screen="cost"]\').hidden',
+    "lead": 'document.querySelector(\'[data-screen="lead"]\').hidden',
+}
+
+RESTORE_STATE = {
+    "term": {"layer": "term", "depth": 1, "sid": "s1", "name": "Session one"},
+    "run": {"layer": "run", "depth": 1, "id": "r1", "url": "/run/r1", "name": "Run one"},
+    "cost": {"layer": "cost", "depth": 1},
+    "lead": {"layer": "lead", "depth": 1},
+}
+
+
+@pytest.mark.node_bound
+@pytest.mark.parametrize("layer", list(LAYER_OPEN))
+def test_each_layer_pushes_one_entry_on_open_and_pops_it_on_close(hub, layer):
+    out = run_page(hub.MOBILE_PAGE, f"""
+        {MORE_TAP}
+        await loadBoard();
+        const base = history.index;
+        {LAYER_OPEN[layer]}
+        const opened = [history.index - base, layers.slice(), {LAYER_HIDDEN[layer]}];
+        {LAYER_BACK[layer]}
+        __popAll();
+        return {{ opened, after: [history.index - base, layers.slice(), {LAYER_HIDDEN[layer]}], pending: __pending() }};
+    """, board=[BOARD_ONE])
+    assert out == {"opened": [1, [layer], False], "after": [0, [], True], "pending": 0}, out
+
+
+@pytest.mark.node_bound
+@pytest.mark.parametrize("layer", list(LAYER_OPEN))
+def test_forward_reopens_the_layer_its_entry_names(hub, layer):
+    out = run_page(hub.MOBILE_PAGE, f"""
+        {MORE_TAP}
+        await loadBoard();
+        const base = history.index;
+        {LAYER_OPEN[layer]}
+        {LAYER_BACK[layer]}
+        __popAll();
+        const closed = [history.index - base, layers.slice(), {LAYER_HIDDEN[layer]}];
+        history.forward();
+        __popAll();
+        return {{ closed, after: [history.index - base, layers.slice(), {LAYER_HIDDEN[layer]}], pending: __pending() }};
+    """, board=[BOARD_ONE])
+    assert out == {"closed": [0, [], True], "after": [1, [layer], False], "pending": 0}, out
+
+
+@pytest.mark.node_bound
+@pytest.mark.parametrize("layer", list(RESTORE_STATE))
+def test_a_reload_with_a_layer_open_restores_it_without_a_second_push(hub, layer):
+    out = run_page(hub.MOBILE_PAGE, f"""
+        {MORE_TAP}
+        await loadBoard();
+        const restored = [history.index, history.entries.length, layers.slice(), {LAYER_HIDDEN[layer]}, __pending()];
+        {LAYER_BACK[layer]}
+        __popAll();
+        return {{ restored, after: [history.index, layers.slice(), {LAYER_HIDDEN[layer]}] }};
+    """, history_state=RESTORE_STATE[layer], history_below=True, board=[BOARD_ONE])
+    assert out == {"restored": [1, 2, [layer], False, 0], "after": [0, [], True]}, out
+
+
+@pytest.mark.node_bound
+@pytest.mark.parametrize("layer", list(LAYER_OPEN))
+def test_a_tab_change_closes_the_layer_and_pops_its_entry(hub, layer):
+    out = run_page(hub.MOBILE_PAGE, f"""
+        {MORE_TAP}
+        await loadBoard();
+        const base = history.index;
+        {LAYER_OPEN[layer]}
+        show("runs");
+        __popAll();
+        return {{ after: history.index - base, layers: layers.slice(), hidden: {LAYER_HIDDEN[layer]}, pending: __pending() }};
+    """, board=[BOARD_ONE])
+    assert out == {"after": 0, "layers": [], "hidden": True, "pending": 0}, out
+
+
+@pytest.mark.node_bound
+def test_nested_layers_close_top_first(hub):
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard();
+        const closed = [];
+        for (const name of ["sheet", "psheet"]) {
+          const hide = LAYER[name].hide;
+          LAYER[name].hide = () => { closed.push(name); hide(); };
+        }
+        openCard(7);
+        $("profile").onclick();
+        $("sh-close").onclick();
+        __popAll();
+        return { closed, layers: layers.slice(), pending: __pending() };
+    """, board=[BOARD_ONE])
+    assert out == {"closed": ["psheet", "sheet"], "layers": [], "pending": 0}, out
 
 
 def test_the_layers_open_and_close_by_call_never_by_a_watch_on_hidden(hub):
