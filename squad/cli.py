@@ -35,12 +35,18 @@ def model_hours_arg(text):
     return {m.strip(): w.strip() for m, w in pairs}
 
 
+def model_ctx_arg(text):
+    """{model: window} from `--model-ctx`: MODEL=WINDOW pairs joined by "," (for example `kimi=128k,opus=1m`)."""
+    return {m.strip(): w.strip() for m, w in (p.split("=", 1) for p in text.split(",") if "=" in p)}
+
+
 def _opts(a):
     m = {"stop_after": a.stop_after, "spend_cap": a.spend_cap, "deadline": a.deadline, "max_parallel": a.max_parallel, "tier_pin": a.tier_pin,
          "expect_graph_hash": a.expect_graph_hash, "keep_children": a.keep_children or None, "fix_run": a.fix_run or None,
          "spent_models": a.spent_models.split(",") if a.spent_models is not None else None,
          "model_hours": model_hours_arg(a.model_hours) if a.model_hours is not None else None,
-         "model_order": a.model_order.split(",") if a.model_order is not None else None}
+         "model_order": a.model_order.split(",") if a.model_order is not None else None,
+         "model_ctx": model_ctx_arg(a.model_ctx) if a.model_ctx is not None else None}
     return {k: v for k, v in m.items() if v is not None}
 
 
@@ -159,6 +165,8 @@ def parser():
                                                     "A window is \"HH-HH\" local, or clauses joined by \";\", each with optional days and a UTC suffix: "
                                                     "\"mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC\"")
         s.add_argument("--model-order", help="comma-separated model ids in the order the launcher read them (models.json coding_models): an in-run fallback follows it after its pick")
+        s.add_argument("--model-ctx", help="comma-separated MODEL=WINDOW pairs: a chain entry whose declared context window is under the prompt it would "
+                                           "send is skipped, unless no entry remains. A window is \"128k\", \"1m\" or a token count")
         s.add_argument("--keep-children", action="store_true",
                        help="keep every landed child's worktree and branch after the verdict: a later pass reads them (the loop's wave entry)")
         s.add_argument("--fix-run", action="store_true",

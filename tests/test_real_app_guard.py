@@ -15,6 +15,7 @@ def _leftover_app(tmp_path):
     return subprocess.Popen([sys.executable, "-c", _SLEEPER, f"--test-hook={tmp_path}/hook.sock"], start_new_session=True)
 
 
+@pytest.mark.process_bound
 def test_a_leftover_app_is_seen_and_reaped_before_the_next_case(tmp_path):
     p = _leftover_app(tmp_path)
     try:
@@ -28,11 +29,13 @@ def test_a_leftover_app_is_seen_and_reaped_before_the_next_case(tmp_path):
         p.wait()
 
 
+@pytest.mark.process_bound
 def test_a_leftover_app_does_not_fail_the_next_real_app_case(tmp_path, clean_app_start):
     """The fixture the real-app cases take: a case that left an app running costs the next one nothing."""
     assert guard.reapable(guard.live_apps()) == []
 
 
+@pytest.mark.process_bound
 def test_the_fixture_reaps_an_app_the_case_itself_left_running(tmp_path):
     from tests.real_app_guard_plugin import clean_app_start
     fixture = clean_app_start.__wrapped__
@@ -47,6 +50,7 @@ def test_the_fixture_reaps_an_app_the_case_itself_left_running(tmp_path):
     assert next(second, None) is None
 
 
+@pytest.mark.process_bound
 def test_a_narrow_terminal_width_does_not_hide_the_hook_flag(tmp_path, monkeypatch):
     """procps `ps` cuts the command column at $COLUMNS; importing readline (pytest does) exports COLUMNS=80 to every child."""
     monkeypatch.setenv("COLUMNS", "80")

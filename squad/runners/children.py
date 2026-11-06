@@ -260,6 +260,7 @@ class Children:
         chain = session.model_chain(models, first, spent, hours, at, km or e.options.get("model_order") or [])
         for m, why in session.hours_skipped(models, first, spent, hours, at):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
+        chain = ctx_skip(e, name, entry, chain, request_prompt(d, review, repeated))   # an entry under the prompt is on the record, with its size (#1470)
         log = session.ChainLog(e.record, name, entry, limits.write)
         out, tried, model = await session.run_chain(
             chain, lambda m, first: self.attempt(name, d, ws, ends, m, slot, first and entry == 1, entry, review, repeated, chain=chain),
@@ -295,7 +296,7 @@ class Children:
                 return ["child_workspace_failed", *made.reasons]
 
     def request(self, name, d, res, ws, dl, model=None, entry=1, review=None, repeated=False):
-        prompt = f"/{d['skill']['name']} {d['prompt']}" + (fix_input(review, repeated) if review else "")
+        prompt = request_prompt(d, review, repeated)
         return CallRequest(name, entry, None, prompt, model or d["model"], d["effort"], d["tools"], min(d["stalls"], self.e.limits.get("max_stalls", d["stalls"])),
                            res.amount, ws, dl, new_session_id(self.e.run_id), d["skill"]["name"], None,
                            self.e.limits.get("max_output_tokens"), self.e.limits.get("context_tokens"))
@@ -348,6 +349,19 @@ class Children:
         if evidence:      # the record keeps it; the ledger reads `checks` only, so no router prompt carries it
             extra["evidence"] = evidence
         return outcome, reasons
+
+
+def ctx_skip(e, name, entry, chain, prompt):
+    """The chain without the entries whose declared context window is under `prompt`, each skip on the record (#1470)."""
+    kept, skipped = session.ctx_skipped(chain, session.estimate_tokens(prompt), e.options.get("model_ctx") or {})
+    for m, why in skipped:
+        e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
+    return kept
+
+
+def request_prompt(d, review=None, repeated=False):
+    """The prompt one child entry sends: its skill and task, and the review it answers when it is a fix entry."""
+    return f"/{d['skill']['name']} {d['prompt']}" + (fix_input(review, repeated) if review else "")
 
 
 def fix_input(review, repeated=False):

@@ -9,9 +9,14 @@ import pytest
 
 from tests import shell_suites
 
+# The fast lane's own beat reads the process table with ps to prove the lane it pid-files is alive (#513).
+PROCESS_BOUND_SUITES = {"test-fastloop-pid.sh"}
+
 
 def _param(suite):
     marks = [pytest.mark.heavy] if shell_suites.is_heavy(suite) else []
+    if suite.name in PROCESS_BOUND_SUITES:
+        marks.append(pytest.mark.process_bound)
     if shell_suites.is_slow(suite):
         marks.append(pytest.mark.slow(reason=f"runs a real script suite that takes over {shell_suites.SLOW_SECONDS:g} s"))
     return pytest.param(suite, id=suite.name, marks=marks)

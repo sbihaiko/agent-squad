@@ -16,6 +16,10 @@ from squad import supervisor as sv
 from squad.redact import MARK
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# A hosted session is a live process the supervisor starts, reads and reaps through the process table.
+pytestmark = pytest.mark.process_bound
+
 TRANSCRIPT_KEY = "key sk-ant-api03-abcdefghijklmnopqrstu\n"
 
 # A stand-in for claude_agent_sdk: the adapter builds its real options and hooks, and a prompt "TOOL <name> <json>"

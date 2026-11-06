@@ -64,7 +64,7 @@ class AgentRunner:
         eff, deadline, slot = ctx.eff.agent(node), ctx.call_deadline(node, sc), {}
         ends = ctx.clock() + deadline      # the node's deadline bounds the whole chain, not each entry of it (#1289)
         fin = lambda *a, **kw: ctx.finish(node, entry, sc, *a, **kw)    # noqa: E731
-        eff, chain = self.chain(ctx, node, entry, eff)
+        eff, chain = self.chain(ctx, node, entry, sc, eff)
         log = session.ChainLog(ctx.record, node["name"], entry, limits.write)    # the chain's record: a retry, a silent end, the refusals
         out, tried, who = await session.run_chain(
             chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, ends, m, slot, fin, chain=chain),
@@ -84,7 +84,7 @@ class AgentRunner:
                        diagnostic=session.adapter_diagnostic(out.error), **session.error_fields(out.error), **who)
         return self.settle(ctx, node, entry, sc, out, eff, who)
 
-    def chain(self, ctx, node, entry, eff):
+    def chain(self, ctx, node, entry, sc, eff):
         """The models this entry may answer on, and the effort to name with them. A dispatch entry answers on the envelope's
         `allow.models`, led by the model the node names; SPEC 750 makes it the router's own chain when the envelope holds
         kinds. A provider that refuses to serve one entry never ends the node while the chain still holds an entry nobody
@@ -98,6 +98,9 @@ class AgentRunner:
             eff = {**eff, "model": rchain[0], **({"effort": e} if (e := ctx.router_effort()) else {})}
         chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, at, rchain or ctx.model_order)
         for m, why in session.hours_skipped(models, eff["model"], ctx.spent_models, ctx.model_hours, at):
+            ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
+        chain, skipped = session.ctx_skipped(chain, session.estimate_tokens(prompt(ctx, node, entry, sc)), ctx.model_ctx)
+        for m, why in skipped:      # an entry whose declared window is under the prompt is on the record, with its size (#1470)
             ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
         return eff, chain
 

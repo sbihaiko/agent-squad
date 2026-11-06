@@ -18,6 +18,9 @@ WAIT_LINE = re.compile(r"^serial: waiting for lock gate held by pid [0-9]+$", re
 TAKES_LOCK = re.compile(r"(?<![\w-])gate\.sh\"?\s")
 RUNNERS = ("branchland.sh", "wave.sh", "promote-stg.sh")
 
+# A held gate lock is proven held by its holder's live pid, which the test reads from the process table through /bin/ps.
+pytestmark = pytest.mark.process_bound
+
 
 GIT = "/usr/bin/git"
 POLL = {"SERIAL_POLL_SECONDS": "0.05"}   # a waiter looks at the lock every 50 ms, so a short hold is enough to prove a wait

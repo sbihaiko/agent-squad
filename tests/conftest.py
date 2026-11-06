@@ -1,6 +1,7 @@
 import atexit
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -152,6 +153,8 @@ NODE_ABSENT_REASON = "no node on this runner: the test runs the page's JavaScrip
 SANDBOX_BOUND_MARKER = "sandbox_bound"
 SANDBOX_ABSENT_REASON = "no macOS sandbox-exec on this runner: the OS signal wall (#1469) is not enforceable here (ADR-0139)"
 SANDBOX_WALL_REASON = "this run is inside the signal wall: a process outside the session cannot be started from here (#1469)"
+PROCESS_BOUND_MARKER = "process_bound"
+PROCESS_ABSENT_REASON = "this runner denies the setuid process table binary: /bin/ps cannot be started from a session (ADR-0139)"
 CI_RUNNER_SWITCH = "SQUAD_CI_RUNNER"
 
 
@@ -186,6 +189,16 @@ def inside_signal_wall():
     return bool(os.environ.get("SQUAD_SIGNAL_PROFILE"))
 
 
+def process_table_present():
+    """True when a session on this runner may read the process table. A nested sandbox that denies the setuid-root binary
+    fails every test that starts or observes a live process with `operation not permitted: /bin/ps`, by construction and
+    not by a defect, so those tests are deselected there (ADR-0139)."""
+    try:
+        return subprocess.run(["/bin/ps", "-A"], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -196,6 +209,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "sandbox_bound: needs macOS sandbox-exec; deselected, never skipped, when it is absent (ADR-0139)")
+    config.addinivalue_line(
+        "markers",
+        "process_bound: needs to start or observe a live process through /bin/ps; deselected, never skipped, on a runner that denies it (ADR-0139)")
     config._absent_deselected = []
 
 
@@ -228,6 +244,10 @@ def pytest_collection_modifyitems(config, items):
         _deselect_absent(config, items, SANDBOX_BOUND_MARKER, SANDBOX_ABSENT_REASON)
     elif inside_signal_wall():
         _deselect_absent(config, items, SANDBOX_BOUND_MARKER, SANDBOX_WALL_REASON)
+    # A nested sandbox may deny the setuid process table binary; a test that starts or observes a live process then fails by
+    # construction, so it is deselected by name, never skipped (ADR-0139).
+    if not process_table_present():
+        _deselect_absent(config, items, PROCESS_BOUND_MARKER, PROCESS_ABSENT_REASON)
 
 
 def _deselect_absent(config, items, marker_name, absent_reason):

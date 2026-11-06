@@ -27,6 +27,9 @@ SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
 sys.path.insert(0, str(SCRIPTS))
 
+# The hub reads the process table to find a session's pid and its argv, so every case here needs /bin/ps.
+pytestmark = pytest.mark.process_bound
+
 KEY = "cd" * 16
 TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"
