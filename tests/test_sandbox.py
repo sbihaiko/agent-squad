@@ -5,6 +5,7 @@ session drives the real hook through the adapter's own options: no stub of the h
 """
 import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -230,3 +231,73 @@ def test_bang_command_outside_the_working_directory_is_refused(tmp_path, command
 @pytest.mark.parametrize("command", ["cat ./notes.txt", "echo hi >/dev/null", "ls -la", "echo done-42"])
 def test_bang_command_inside_the_working_directory_is_allowed(tmp_path, command):
     assert sandbox.bang_reason(command, str(tmp_path)) is None
+
+
+SIGNAL_WRAPPER = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts" / "claude-sandboxed.sh"
+
+
+def _wrapped_env(executable):
+    """The env the adapter sets, with the CLI swapped for a probe executable (#1469)."""
+    return {**os.environ, **sandbox.sdk_cli_env(), "SQUAD_CLAUDE_CLI": executable}
+
+
+def _wrapped(executable, *args):
+    return subprocess.run([str(SIGNAL_WRAPPER), *args], capture_output=True, text=True, env=_wrapped_env(executable), timeout=30)
+
+
+@pytest.fixture
+def supervisor():
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)     # a loop lane: its own process group, not the child's
+    yield proc
+    proc.kill()
+    proc.wait()
+
+
+@pytest.mark.sandbox_bound
+def test_a_child_python_cannot_signal_the_loop_supervisor(supervisor):
+    code = f"import os,signal; os.kill({supervisor.pid}, signal.SIGTERM)"
+    out = _wrapped(sys.executable, "-c", code)
+    assert out.returncode != 0 and "Operation not permitted" in out.stderr, out.stderr
+    assert supervisor.poll() is None
+
+
+@pytest.mark.sandbox_bound
+@pytest.mark.parametrize("spelling", ["kill -TERM {pid}", "kill -TERM -- -{pid}", "eval 'kill -TERM {pid}'", "$(echo kill) -TERM {pid}"])
+def test_a_shell_spelling_cannot_signal_a_process_the_session_did_not_start(supervisor, spelling):
+    out = _wrapped("/bin/sh", "-c", spelling.format(pid=supervisor.pid))
+    assert out.returncode != 0, out
+    assert supervisor.poll() is None
+
+
+@pytest.mark.sandbox_bound
+def test_a_child_cannot_signal_a_sibling_child_it_did_not_start():
+    code = "import time; print('ready', flush=True); time.sleep(30)"
+    sibling = subprocess.Popen([str(SIGNAL_WRAPPER), "-c", code], env=_wrapped_env(sys.executable), stdout=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        assert sibling.stdout.readline().strip() == "ready"       # sandboxed from here on: the exec has run
+        out = _wrapped(sys.executable, "-c", f"import os,signal; os.kill({sibling.pid}, signal.SIGTERM)")
+        assert out.returncode != 0 and "Operation not permitted" in out.stderr, out.stderr
+        assert sibling.poll() is None
+    finally:
+        sibling.kill()
+        sibling.wait()
+
+
+@pytest.mark.sandbox_bound
+def test_a_child_can_still_signal_its_own_process():
+    code = ("import os,signal,subprocess,time\n"
+            "p = subprocess.Popen(['sleep', '30'])\n"
+            "os.kill(p.pid, signal.SIGTERM)\n"
+            "p.wait()\n"
+            "print('own child signalled')\n")
+    out = _wrapped(sys.executable, "-c", code)
+    assert out.returncode == 0 and "own child signalled" in out.stdout, out.stderr
+
+
+def test_the_sdk_child_is_started_through_the_signal_wall(tmp_path):
+    a = SdkAdapter(query=object(), options_cls=Options, hook_cls=Matcher)
+    kw = a.options(request(tmp_path)).kw
+    assert kw["cli_path"] == str(SIGNAL_WRAPPER)
+    assert kw["env"]["SQUAD_SIGNAL_PROFILE"] == sandbox.SIGNAL_PROFILE
+    assert Path(kw["env"]["SQUAD_CLAUDE_CLI"]).name == "claude"
