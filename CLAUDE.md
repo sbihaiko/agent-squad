@@ -96,6 +96,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A run never holds conflicting siblings: no two children of one spec, no two issues that name the same file; checked before dispatch** ([ADR-0150](docs/adr/0150-a-run-never-holds-conflicting-siblings.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`.
 - **A review streak escalates: three CHANGES go to needs-human, identical findings twice change the coder, a repeat's fix round attacks the last fix's premise, an approval binds to its commit**
   ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `tests/test_review_streak.py`, `test-childcc.sh`, `tests/test_issue_ledger.py`; rest a draft.
+- **A Blocking finding names its repro: a repro that exits 0 or cannot run moves it to Debt, and a finding with no repro is Debt** ([ADR-0172](docs/adr/0172-a-blocking-finding-names-its-repro.md)). Guard: `contrib/squad-goal/scripts/test-revformat.sh`, `contrib/squad-goal/scripts/test-review.sh`.
 
 ### Dashboard, editor and repository
 

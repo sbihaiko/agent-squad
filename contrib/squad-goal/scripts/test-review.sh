@@ -24,7 +24,7 @@ case "$*" in
   *Accept*compare*) [ -n "${GH_DIFF_EMPTY:-}" ] || printf 'diff --git a/f b/f\n+x\n';;
   # one answer for both compare reads: `.status` (is the tip ahead of the reviewed one) and `.files[].filename` (the fast lane)
   *compare*) printf '{"status":"ahead","files":['; sep=""; for f in ${GH_FILES:-UI/a.cs}; do printf '%s{"filename":"%s"}' "$sep" "$f"; sep=,; done; printf ']}\n';;
-  *commits/*) if [ -n "$GH_MOVE" ] && [ -e "$GH_MOVE" ]; then echo '{"sha":"bbb222"}'; else echo '{"sha":"aaa111"}'; fi;;
+  *commits/*) if [ -n "$GH_MOVE" ] && [ -e "$GH_MOVE" ]; then echo '{"sha":"bbb222"}'; else echo "{\"sha\":\"${GH_SHA:-aaa111}\"}"; fi;;
   *issues/*) if [ -n "${GH_ISSUE_REFUSE:-}" ]; then printf '%s\n' '{"message":"API rate limit exceeded for 203.0.113.7.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api","status":"403"}'; exit 1; fi
     echo '{"number":8,"title":"the issue","body":"the acceptance criteria"}';;
   *) echo "stub";;
@@ -461,7 +461,7 @@ rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/ccalls" "$T/prompt".*; : > "$T/c
 # is the envelope's structured_output; codex carries --output-schema <file>; the prompt (agy, grok, the direct path)
 # carries the schema. The saved review-<key>.md is the rendered checklist, and the raw JSON is kept as
 # review-<key>.answer.json, never as review-<key>.json (a failed claude envelope).
-J='{"verdict":"CHANGES","blocking":[{"location":"a.cs:1","defect":"diverges from ADR-0001","failure":"wrong","fix":"fix"}],"debt":[],"resolved":[]}'
+J='{"verdict":"CHANGES","blocking":[{"location":"a.cs:1","defect":"diverges from ADR-0001","failure":"wrong","fix":"fix","repro":"false"}],"debt":[],"resolved":[]}'
 cat > "$T/bin/claude" <<C
 #!/bin/bash
 cat > "$T/prompt21"; echo "\$*" > "$T/args21"
@@ -479,14 +479,14 @@ printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_sec
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "21 claude -p asks for JSON with --json-schema" || ko "21 claude args: $(cat "$T/args21")"
 /usr/bin/grep -q '"verdict"' "$T/prompt21" && ok "21 the full prompt carries the schema" || ko "21 the full prompt has no schema"
-[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" \
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix — repro: false$' "$T/st/review-fix_1-x.md" \
   && ok "21 claude: the JSON answer is rendered into review-<key>.md" || ko "21 claude render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
 jq -e '.verdict=="CHANGES"' "$T/st/review-fix_1-x.answer.json" >/dev/null 2>&1 && [ ! -e "$T/st/review-fix_1-x.json" ] \
   && ok "21 the raw JSON is kept as review-<key>.answer.json" || ko "21 raw JSON: $(/bin/ls "$T/st" | /usr/bin/grep fix_1-x)"
 printf '{"review_models":["gpt-x"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/null 2>&1 && ok "21 codex asks for JSON with --output-schema" || ko "21 codex args: $(cat "$T/args21c")"
-[ $rc = 0 ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" && ok "21 codex: the JSON answer is rendered" || ko "21 codex render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
+[ $rc = 0 ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix — repro: false$' "$T/st/review-fix_1-x.md" && ok "21 codex: the JSON answer is rendered" || ko "21 codex render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
 # #764: codex read an unrelated global skill (graphify SKILL.md) during a review, so the prompt forbids every skill file.
 /usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21c" && ok "21 the codex prompt forbids skill files (#764)" || ko "21 the codex prompt has no skill line (#764)"
 # #765: codex prints 'tokens used' and the count, with a locale thousands separator; the ledger keeps it as the input count
@@ -498,8 +498,8 @@ jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/nul
 printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$T/st/review-fix_1-x.md"; echo ccc333 > "$T/st/review-fix_1-x.sha"
 printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 cat > "$T/j21" <<'R'
-{"verdict":"CHANGES","blocking":[],"debt":[{"location":"b.cs:2","defect":"naming","failure":"nobody can tell what it names","fix":"rename it"}],
- "resolved":[{"location":"a.cs:1","defect":"x","failure":"fixed: the ADR is followed now","fix":"UI.Tests/a.cs"}]}
+{"verdict":"CHANGES","blocking":[],"debt":[{"location":"b.cs:2","defect":"naming","failure":"nobody can tell what it names","fix":"rename it","repro":""}],
+ "resolved":[{"location":"a.cs:1","defect":"x","failure":"fixed: the ADR is followed now","fix":"UI.Tests/a.cs","repro":""}]}
 R
 rm -f "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 /usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "22 a fix round asks for JSON with --json-schema" || ko "22 fix round args: $(cat "$T/args21")"
@@ -800,6 +800,67 @@ out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
   && ok "24e a grok verdict with no Blocking finding is not shadow-reviewed" \
   || ko "24e debt-only shadow: rc=$rc calls=$(wc -l < "$SHADOW_CALLS" 2>/dev/null) ledger=$(cat "$T/st/review-ledger.jsonl" 2>/dev/null)"
 unset SHADOW_CALLS
+# 31) #1521: a Blocking finding whose repro exits 0 moves to Debt with "repro passed"; one whose repro fails stays Blocking.
+# With every repro passing, the debt-only CHANGES is an approval by the #653 path. The repro runs in the checkout (SG_CHECKOUT).
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > /dev/null; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"
+case "${REPRO_CASE:-mixed}" in
+  mixed) rp1=true; rp2=false;;
+  passing) rp1=true; rp2=true;;
+esac
+printf '{"result":"","structured_output":{"verdict":"CHANGES","blocking":[{"location":"a.cs:1","defect":"d one","failure":"f one","fix":"fix one","repro":"%s"},{"location":"b.cs:2","defect":"d two","failure":"f two","fix":"fix two","repro":"%s"}],"debt":[],"resolved":[]},"usage":{"input_tokens":10,"output_tokens":5},"is_error":false,"subtype":"success"}' "$rp1" "$rp2"
+J
+chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/review-ledger.jsonl"
+# #1521: the repro runs at the head, so the head is a real commit of the checkout (SG_CHECKOUT, $T/co).
+H31=$(git -C "$T/co" rev-parse HEAD)
+out=$(GH_SHA=$H31 REPRO_CASE=mixed bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+rv=$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && [ "$rv" = "blocking=1 debt=1" ] \
+  && /usr/bin/grep -q "repro passed at $H31" "$T/st/review-fix_1-x.md" && /usr/bin/grep -q "repro: false" "$T/st/review-fix_1-x.md" \
+  && ok "31 a Blocking finding whose repro passes is Debt, and the one whose repro fails stays Blocking" \
+  || ko "31 mixed repro: rc=$rc verdict='$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)' summary='$rv' review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null)"
+rm -f "$T/st/review-fix_1-x".*
+out=$(GH_SHA=$H31 REPRO_CASE=passing bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] && /usr/bin/grep -q "repro passed at $H31" "$T/st/review-fix_1-x.md" \
+  && ok "31 with every repro passing, the debt-only review is an approval (#653)" \
+  || ko "31 passing repro: rc=$rc verdict='$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)' review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null)"
+# The repro tree (#1521). REPRO_CMD is the repro the stub's one Blocking finding names; the defect is "the file holds BUG".
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > /dev/null; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"
+printf '{"result":"","structured_output":{"verdict":"CHANGES","blocking":[{"location":"f.txt:1","defect":"the file holds BUG","failure":"the defect ships","fix":"remove BUG","repro":"%s"}],"debt":[],"resolved":[]},"usage":{"input_tokens":10,"output_tokens":5},"is_error":false,"subtype":"success"}\n' "$REPRO_CMD"
+J
+chmod +x "$T/bin/claude"
+# 32) #1521, --worktree: the review reads the child worktree's head, so the repro runs in that worktree. SG_CHECKOUT ($T/co)
+# is another tree, where f.txt holds no BUG: a repro run there reads the defect as absent and demotes it.
+W=$T/wt; mkdir -p "$W"; git -C "$W" init -q -b fix/9-x && git -C "$W" config user.email t@t && git -C "$W" config user.name t
+printf 'base\n' > "$W/f.txt"; git -C "$W" add f.txt && git -C "$W" commit -q -m base
+printf 'BUG\n' > "$W/f.txt"; git -C "$W" commit -q -am defect
+printf 'clean\n' > "$T/co/f.txt"; rm -f "$T/st/review-fix_9-x".* "$T/st/cq/"*
+out=$(cd "$W" && REPRO_CMD='! grep -q BUG f.txt' bash "$T/s/review.sh" --worktree HEAD~1 9 2>/dev/null); rc=$?
+[ "$(head -1 "$T/st/review-fix_9-x.md" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_9-x.md" 2>/dev/null)" = "blocking=1 debt=0" ] \
+  && ok "32 --worktree runs the repro in the worktree at the head: a defect there stays Blocking" \
+  || ko "32 --worktree repro tree: rc=$rc review=$(cat "$T/st/review-fix_9-x.md" 2>/dev/null)"
+# 33) #1521, --branch: a head that is no commit of SG_CHECKOUT has no tree to run the repro in, so the finding stays Blocking
+# (fail closed). $T/co holds the file that would let the repro pass.
+touch "$T/co/fixed-1521"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+out=$(GH_SHA=0000000000000000000000000000000000001521 REPRO_CMD='test -f fixed-1521' bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ "$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)" = "blocking=1 debt=0" ] \
+  && ok "33 a branch head with no tree to run in keeps its Blocking finding (fail closed)" \
+  || ko "33 fail closed: rc=$rc review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null)"
+# 34) #1521, --branch: the head is a commit of SG_CHECKOUT that is not checked out. The repro runs in a throwaway worktree at
+# that head, where the defect is present, so the finding stays Blocking. The checkout ($T/co, at a fix commit) reads it as passed.
+C="git -C $T/co -c user.email=a@b -c user.name=t"; printf 'BUG\n' > "$T/co/f.txt"; $C add f.txt; $C commit -q -m defect1521; Y=$(git -C "$T/co" rev-parse HEAD)
+printf 'clean\n' > "$T/co/f.txt"; $C commit -q -am fix1521
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+out=$(GH_SHA=$Y REPRO_CMD='! grep -q BUG f.txt' bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ "$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)" = "blocking=1 debt=0" ] \
+  && [ "$(git -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] \
+  && ok "34 a repro at a head that is not checked out runs in a throwaway worktree, and the finding stays Blocking" \
+  || ko "34 throwaway repro: rc=$rc review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null) worktrees=$(git -C "$T/co" worktree list | wc -l)"
 suite_s=$(( $(date +%s) - suite_t0 ))
 # #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
 # the code, so a green suite must not turn red for it. The runtime guards are the measured line in

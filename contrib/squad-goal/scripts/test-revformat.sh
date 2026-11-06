@@ -304,10 +304,10 @@ done
 python3 "$src" --schema | jq -e '.properties.verdict.enum == ["APPROVE","CHANGES"] and (.required|index("blocking")) != null' >/dev/null 2>&1 \
   && ok "26 --schema prints the JSON schema of an answer" || ko "26 --schema: $(python3 "$src" --schema 2>&1 | head -2)"
 cat > "$T/a.json" <<'J'
-{"verdict":"CHANGES","blocking":[{"location":"src/a.py:12","defect":"null deref","failure":"an empty list raises TypeError","fix":"return [] when the list is empty"}],
- "debt":[{"location":"src/b.py:42","defect":"no backoff","failure":"it hammers the API after a 500","fix":"add exponential backoff"}],"resolved":[]}
+{"verdict":"CHANGES","blocking":[{"location":"src/a.py:12","defect":"null deref","failure":"an empty list raises TypeError","fix":"return [] when the list is empty","repro":"false"}],
+ "debt":[{"location":"src/b.py:42","defect":"no backoff","failure":"it hammers the API after a 500","fix":"add exponential backoff","repro":""}],"resolved":[]}
 J
-printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — an empty list raises TypeError — return [] when the list is empty\n## Debt\n- src/b.py:42 — no backoff — it hammers the API after a 500 — add exponential backoff\n' > "$T/eq.md"
+printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — an empty list raises TypeError — return [] when the list is empty — repro: false\n## Debt\n- src/b.py:42 — no backoff — it hammers the API after a 500 — add exponential backoff\n' > "$T/eq.md"
 python3 "$src" --answer --keep "$T/kept.json" "$T/a.json" > "$T/r.md" 2>"$T/err"; rc=$?
 [ $rc = 0 ] && [ "$(head -1 "$T/r.md")" = "VERDICT: CHANGES" ] && python3 "$src" --max-lines 60 "$T/r.md" >/dev/null \
   && ok "26 a JSON answer renders to a review that passes the shape check" || ko "26 render: rc=$rc $(cat "$T/err") $(cat "$T/r.md")"
@@ -321,8 +321,8 @@ printf '{"verdict":"APPROVE","blocking":[],"debt":[],"resolved":[]}' > "$T/ap.js
 python3 "$src" --answer "$T/ap.json" > "$T/r.md" 2>/dev/null && [ "$(cat "$T/r.md")" = "VERDICT: APPROVE" ] && python3 "$src" "$T/r.md" >/dev/null \
   && ok "26 #618: an empty section is an empty list, and passes" || ko "26 #618 empty: $(cat "$T/r.md")"
 cat > "$T/625.json" <<'J'
-{"verdict":"CHANGES","blocking":[{"location":"squad/modelreg.py:_route_for","defect":"the sdk use picks the cli route","failure":"the gateway gets the wrong id","fix":"resolve through the gateway"},
- {"location":"AC1","defect":"the diff adds no RED commit","failure":"the history cannot show the test failed first","fix":"add the RED commit"}],"debt":[],"resolved":[]}
+{"verdict":"CHANGES","blocking":[{"location":"squad/modelreg.py:_route_for","defect":"the sdk use picks the cli route","failure":"the gateway gets the wrong id","fix":"resolve through the gateway","repro":"false"},
+ {"location":"AC1","defect":"the diff adds no RED commit","failure":"the history cannot show the test failed first","fix":"add the RED commit","repro":"false"}],"debt":[],"resolved":[]}
 J
 python3 "$src" --answer "$T/625.json" > "$T/r.md" 2>/dev/null && python3 "$src" --max-lines 60 "$T/r.md" >/dev/null && [ "$(python3 "$src" --summary "$T/r.md")" = "blocking=2 debt=0" ] \
   && ok "26 #625: path:symbol and AC locations in JSON pass" || ko "26 #625: $(python3 "$src" "$T/r.md") $(cat "$T/r.md")"
@@ -339,10 +339,10 @@ printf '**VERDICT: approve**\n' > "$T/md.md"
 # failure field, and renders the '## Resolved' section the fix-round check reads; a not-fixed one stays in its section.
 # The fingerprint of the rendered fix round is the one of the equivalent markdown fix round (ADR-0134).
 cat > "$T/fx.json" <<'J'
-{"verdict":"CHANGES","blocking":[{"location":"src/a.py:12","defect":"null deref","failure":"not fixed: the guard is still missing","fix":"an empty list still raises TypeError"}],
- "debt":[],"resolved":[{"location":"src/b.py:42","defect":"no backoff","failure":"fixed: backoff added","fix":"test_backoff passes"}]}
+{"verdict":"CHANGES","blocking":[{"location":"src/a.py:12","defect":"null deref","failure":"not fixed: the guard is still missing","fix":"an empty list still raises TypeError","repro":"false"}],
+ "debt":[],"resolved":[{"location":"src/b.py:42","defect":"no backoff","failure":"fixed: backoff added","fix":"test_backoff passes","repro":""}]}
 J
-printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — not fixed: the guard is still missing — an empty list still raises TypeError\n## Resolved\n- src/b.py:42 — no backoff — fixed: backoff added — test_backoff passes\n' > "$T/fxeq.md"
+printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — not fixed: the guard is still missing — an empty list still raises TypeError — repro: false\n## Resolved\n- src/b.py:42 — no backoff — fixed: backoff added — test_backoff passes\n' > "$T/fxeq.md"
 python3 "$src" --answer "$T/fx.json" > "$T/fx.md" 2>"$T/err"; rc=$?
 [ $rc = 0 ] && /usr/bin/grep -q '^## Resolved$' "$T/fx.md" && python3 "$src" --max-lines 60 --fix-round "$T/fx.md" >/dev/null \
   && ok "27 a fix-round JSON answer renders the Resolved section the fix-round check reads" || ko "27 fix render: rc=$rc $(cat "$T/err") $(cat "$T/fx.md")"
@@ -371,4 +371,29 @@ cl malformed "$T/c6.md" "" "" "a full review that answers findings is malformed"
 cl approves "$T/c6.md" "" --fix-round "the same file answers its findings as a fix round"
 # The hold a malformed review puts on its branch is never permanent: a corrected file at the same tip approves.
 printf 'VERDICT: APPROVE\n## Blocking\n(none)\n' > "$T/c7.md"; cl approves "$T/c7.md" "" "" "a corrected file at the same tip clears the hold"
+# 29) #1521: a Blocking finding carries a repro command, one shell line that exits non-zero while the defect is present.
+# A blank repro demotes the finding to Debt in the parser, the one reader every caller shares; a set repro stays Blocking
+# and renders as a fifth field. A finding with no repro key is off the schema.
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":""},{"location":"b.py:2","defect":"x","failure":"y","fix":"z","repro":"false"}],"debt":[],"resolved":[]}' > "$T/rp.json"
+python3 "$src" --answer "$T/rp.json" > "$T/rp.md" 2>/dev/null
+[ "$(python3 "$src" --summary "$T/rp.md")" = "blocking=1 debt=1" ] && ok "29 a blank repro demotes its Blocking finding to Debt" || ko "29 blank repro: '$(python3 "$src" --summary "$T/rp.md")'"
+/usr/bin/grep -q ' — repro: false$' "$T/rp.md" && ok "29 a set repro renders as a fifth field" || ko "29 repro field: $(cat "$T/rp.md")"
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z"}],"debt":[],"resolved":[]}' > "$T/rp2.json"
+python3 "$src" --answer "$T/rp2.json" >/dev/null 2>&1 && ko "29 a finding with no repro key passed" || ok "29 a finding with no repro key is refused"
+# 30) #1521: --repro runs each Blocking repro at the sha, in the checkout, under the signal wall, and rewrites the answer. A
+# repro that exits 0 moves its finding to Debt with "repro passed at <sha>"; one that exits 1 stays Blocking; one that
+# cannot run (127 here) moves to Debt with "repro did not run at <sha>".
+mkdir -p "$T/co"
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"true"},{"location":"b.py:2","defect":"x","failure":"y","fix":"z","repro":"false"},{"location":"c.py:3","defect":"x","failure":"y","fix":"z","repro":"no-such-command-1521"}],"debt":[],"resolved":[]}' > "$T/rr.json"
+SQUAD_SIGNAL_PROFILE="(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))" python3 "$src" --repro "$T/rr.json" "$T/co" abc1234 2>"$T/rr.err"; rc=$?
+python3 "$src" --answer "$T/rr.json" > "$T/rr.md" 2>/dev/null
+[ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/rr.md")" = "blocking=1 debt=2" ] && /usr/bin/grep -q 'repro passed at abc1234' "$T/rr.md" \
+  && /usr/bin/grep -q 'repro did not run at abc1234' "$T/rr.md" && ok "30 --repro moves a passing and an unrunnable repro to Debt, and keeps a failing one Blocking" \
+  || ko "30 --repro: rc=$rc summary='$(python3 "$src" --summary "$T/rr.md" 2>&1)' $(cat "$T/rr.md" "$T/rr.err")"
+# 31) #1521: a plan review (ADR-0171) reads no code, so it names no repro. --answer --plan keeps a Blocking finding with a
+# blank repro Blocking; without --plan the same answer is demoted (29).
+printf '{"verdict":"CHANGES","blocking":[{"location":"AC1","defect":"x","failure":"y","fix":"z","repro":""}],"debt":[],"resolved":[]}' > "$T/pl.json"
+python3 "$src" --answer --plan "$T/pl.json" > "$T/pl.md" 2>"$T/pl.err"; rc=$?
+[ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/pl.md")" = "blocking=1 debt=0" ] && ok "31 a plan answer with a blank repro keeps its Blocking finding" \
+  || ko "31 plan answer: rc=$rc summary='$(python3 "$src" --summary "$T/pl.md" 2>&1)' $(cat "$T/pl.err")"
 rm -rf "$T"; exit $fail

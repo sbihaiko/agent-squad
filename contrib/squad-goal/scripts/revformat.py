@@ -63,6 +63,8 @@ import hashlib
 import json
 import os
 import re
+import signal
+import subprocess
 import sys
 
 VERDICT = re.compile(r"^VERDICT: (APPROVE|CHANGES)$")
@@ -414,8 +416,15 @@ def normalize(review):
 # reader of review-<key>.md works unchanged. The schema is strict (codex --output-schema asks for every key required and
 # no other key); `parse_answer` reads it the same way, with no library.
 FIELDS = ("location", "defect", "failure", "fix")
-_FINDING = {"type": "object", "additionalProperties": False, "required": list(FIELDS),
-            "properties": {f: {"type": "string"} for f in FIELDS}}
+# #1521: a Blocking finding names a repro, one shell line that exits non-zero while the defect is present. A finding with
+# no repro is Debt (parse_answer); codex wants every key required, so repro is always present and may be empty.
+REPRO = "repro"
+REPRO_TIMEOUT = 60          # seconds a repro may run; a longer one did not run (#1521)
+# The signal wall a child session runs under (squad/sandbox.py SIGNAL_PROFILE, #1469). review.sh is not launched with
+# SQUAD_SIGNAL_PROFILE set, so the same profile is the default here; a set variable wins.
+SIGNAL_PROFILE = "(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))"
+_FINDING = {"type": "object", "additionalProperties": False, "required": list(FIELDS) + [REPRO],
+            "properties": {f: {"type": "string"} for f in FIELDS + (REPRO,)}}
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verdict", "blocking", "debt", "resolved"],
           "properties": {"verdict": {"type": "string", "enum": ["APPROVE", "CHANGES"]},
                          "blocking": {"type": "array", "items": _FINDING},
@@ -439,11 +448,13 @@ def json_candidate(text):
     return text[start:text.rindex("}") + 1] if "}" in text[start:] else text[start:]
 
 
-def parse_answer(text):
+def parse_answer(text, repro=True):
     """The answer as a dict that matches SCHEMA. Raises ValueError with the parser's reason when it does not.
 
     A missing list is an empty list, and a verdict in another case is read in upper case. Every finding has the four
-    fields as non-empty strings. Nothing else is checked here: the semantic rules stay with `survey`.
+    fields as non-empty strings and a repro string that may be empty. A Blocking finding with a blank repro is Debt
+    (#1521), unless `repro` is False: a plan review reads no code, so it names no repro and none is demoted for it
+    (ADR-0171). Nothing else is checked here: the semantic rules stay with `survey`.
     """
     try:
         obj = json.loads(text)
@@ -465,8 +476,69 @@ def parse_answer(text):
             for f in FIELDS:
                 if not isinstance(item.get(f), str) or not item[f].strip():
                     raise ValueError(f"{key}[{n}].{f} is missing or empty")
+            if not isinstance(item.get(REPRO), str):
+                raise ValueError(f"{key}[{n}].{REPRO} is missing or not a string")
         out[key] = items
+    if repro:
+        out["debt"] = out["debt"] + [item for item in out["blocking"] if not item[REPRO].strip()]
+        out["blocking"] = [item for item in out["blocking"] if item[REPRO].strip()]
     return out
+
+
+def run_repro(cmd, checkout):
+    """The exit status of a repro command, run by sh under the signal wall in `checkout` (#1521): 124 when it timed out
+    (its process group is killed with it), 127 when it could not start. The wall is the profile in SQUAD_SIGNAL_PROFILE,
+    else SIGNAL_PROFILE: the one a child session runs under (claude-sandboxed.sh).
+    """
+    profile = os.environ.get("SQUAD_SIGNAL_PROFILE") or SIGNAL_PROFILE
+    try:
+        proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", profile, "sh", "-c", cmd],
+                                cwd=checkout, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return 127
+    try:
+        return proc.wait(timeout=REPRO_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        return 124
+
+
+def repro_check(path, checkout, sha):
+    """Run each Blocking finding's repro at `sha` in `checkout`, and rewrite the answer at `path` (#1521).
+
+    A repro that exits 0 shows the defect is not present, so the finding moves to Debt with "repro passed at <sha>". A
+    repro that cannot run (124, 126, 127) moves it to Debt with "repro did not run at <sha>". Any other non-zero status
+    is a reproduction, and the finding stays Blocking. The rewrite is atomic; a failed read or write leaves the answer
+    as it was, and the caller keeps its verdict.
+    """
+    with open(path, encoding="utf-8") as f:
+        answer = parse_answer(f.read())
+    blocking = []
+    for item in answer["blocking"]:
+        rc = run_repro(item[REPRO], checkout)
+        note = {0: "repro passed at", 124: "repro did not run at", 126: "repro did not run at",
+                127: "repro did not run at"}.get(rc)
+        if note is None:
+            blocking.append(item)
+            continue
+        print(f"revformat: {note} {sha}: {' '.join(item['defect'].split())}", file=sys.stderr)
+        answer["debt"].append(dict(item, failure=f"{note} {sha}; {item['failure']}"))
+    answer["blocking"] = blocking
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(answer, f, ensure_ascii=False, indent=1)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def _bullet(item):
+    """One finding as a bullet: the four fields, then `repro: <command>` when the finding names one (#1521)."""
+    fields = [" ".join(item[f].split()) for f in FIELDS]
+    if item[REPRO].strip():
+        fields.append("repro: " + " ".join(item[REPRO].split()))
+    return "- " + " — ".join(fields)
 
 
 def render(answer):
@@ -479,17 +551,18 @@ def render(answer):
     for key, name in (("blocking", SECTIONS[0]), ("debt", SECTIONS[1]), ("resolved", ANSWER)):
         if answer.get(key):
             lines.append(f"## {name}")
-            lines += ["- " + " — ".join(" ".join(item[f].split()) for f in FIELDS) for item in answer[key]]
+            lines += [_bullet(item) for item in answer[key]]
     return "\n".join(lines) + "\n"
 
 
-def answer_review(text, keep=None):
+def answer_review(text, keep=None, plan=False):
     """The review of a model answer. A JSON answer is parsed and rendered, and its raw JSON is written to `keep`; a
-    markdown answer is normalized as before. Raises ValueError for a JSON answer off the schema."""
+    markdown answer is normalized as before. Raises ValueError for a JSON answer off the schema. `plan` is a plan
+    review (ADR-0171): its findings name no repro, so a blank one is not a reason to demote."""
     raw = json_candidate(text)
     if raw is None:
         return normalize(text)
-    answer = parse_answer(raw)
+    answer = parse_answer(raw, repro=not plan)
     if keep:
         with open(keep, "w", encoding="utf-8") as f:
             json.dump(json.loads(raw), f, ensure_ascii=False, indent=1)
@@ -518,6 +591,11 @@ def main(argv=None):
     p.add_argument("--answer", action="store_true", help="print the review of a model answer: JSON rendered, markdown"
                    " normalized; exit 1 with the parser's reason on stderr for JSON off the schema (#632)")
     p.add_argument("--keep", metavar="FILE", help="with --answer, write the raw JSON answer there")
+    p.add_argument("--plan", action="store_true", help="with --answer, the answer is a plan review (ADR-0171): a Blocking"
+                   " finding with a blank repro stays Blocking, since a plan has no code to run one on (#1521)")
+    p.add_argument("--repro", nargs=3, metavar=("ANSWER", "CHECKOUT", "SHA"),
+                   help="run each Blocking finding's repro at SHA in CHECKOUT and rewrite the JSON ANSWER: a finding whose"
+                   " repro passes or cannot run moves to Debt (#1521)")
     p.add_argument("--fingerprint", action="store_true",
                    help="print the fingerprint of the review's findings, the reading the fix pass keeps (ADR-0134)")
     p.add_argument("--stall", nargs=4, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT"),
@@ -534,6 +612,9 @@ def main(argv=None):
     if a.classify:
         print(classify(*a.classify, fix_round=a.fix_round))
         return 0
+    if a.repro:
+        repro_check(*a.repro)
+        return 0
     if a.shape:
         print(shape(a.fix_round))
         return 0
@@ -548,7 +629,7 @@ def main(argv=None):
     text = sys.stdin.read() if a.review == "-" else open(a.review, encoding="utf-8", errors="replace").read()
     if a.answer:
         try:
-            review = answer_review(text, a.keep)
+            review = answer_review(text, a.keep, plan=a.plan)
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 1
