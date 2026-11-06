@@ -6337,10 +6337,10 @@ const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=
 pickFilter("fwl","fw");pickFilter("fsl","fs");pickFilter("fkl","fk");
 // The owner's one move (#560): the arrow a Backlog card carries delegates to the hub, and the card shows the reason a
 // refusal gives. Which cards carry the arrow is the row's own fact (`x.pm`), never the page's rule.
-document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it");b.disabled=true;
+document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b||b.disabled)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it"),label=b.textContent;b.disabled=true;b.textContent="sending…";
 try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
- if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.disabled=false}
- else{b.textContent="sent to Todo";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
+ if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.textContent=label;b.disabled=false}
+ else{b.textContent="sent to Todo";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.textContent=label;b.disabled=false}});
 // The batch move (#1098): the hub names how many cards it would move, the owner confirms that count, and one write moves them.
 const batchPost=body=>fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({batch:true,...body})}).then(r=>r.json());
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .bmv");if(!b)return;e.preventDefault();e.stopPropagation();
