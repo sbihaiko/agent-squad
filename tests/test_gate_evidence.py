@@ -27,6 +27,7 @@ def test_a_passing_command_keeps_no_evidence():
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # runs one real command in a final gate: 3.1 s on a CI runner
 async def test_the_final_gate_outcome_records_the_evidence_and_the_artifact_stays_small(tmp_path):
     bad = {"output": {"ac_commands": ["echo 'assert 1 == 2' >&2; exit 3"]}, "spend": 0.1}
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": bad})
