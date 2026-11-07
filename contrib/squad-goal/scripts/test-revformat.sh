@@ -440,4 +440,34 @@ python3 "$src" --answer "$T/r38.json" > "$T/r38.md" 2>/dev/null; arc=$?
 [ $arc = 0 ] && [ "$(python3 "$src" --summary "$T/r38.md")" = "blocking=1 debt=0" ] && /usr/bin/grep -q 'repro sandbox refused at abc1234' "$T/r38.err" && ! /usr/bin/grep -q 'repro passed' "$T/r38.md" \
   && ok "38 a sandbox that cannot apply keeps the finding Blocking and names the refusal, never 'repro passed'" \
   || ko "38 nested refusal: repro rc=$rc answer rc=$arc summary='$(python3 "$src" --summary "$T/r38.md" 2>&1)' err=$(cat "$T/r38.err")"
+# 39) #1548: a Blocking finding that names an ADR rule and only greps for the text it asks to restore contradicts the
+# ADR, it does not show a defect the change caused. ADR-0156 rule 3 says the promotion code is never covered, so a grep
+# for the restored delta-guards.txt lines proves absence, not a defect; the parser demotes it to Debt (ADR-0172).
+cat > "$T/adr.json" <<'J'
+{"verdict":"CHANGES","blocking":[{"location":"contrib/squad-goal/scripts/delta-guards.txt","defect":"the map no longer names the promotion scripts, against ADR-0156 rule 3","failure":"a change to promote-pass.sh is carried by a delta it should not cover","fix":"restore the promote-pass.sh, delta-pass.sh and promote-stg.sh lines","repro":"grep -q 'promote-pass.sh' contrib/squad-goal/scripts/delta-guards.txt"}],"debt":[],"resolved":[]}
+J
+python3 "$src" --answer "$T/adr.json" > "$T/adr.md" 2>/dev/null
+[ "$(python3 "$src" --summary "$T/adr.md")" = "blocking=0 debt=1" ] \
+  && /usr/bin/grep -q 'not a repro of a defect' "$T/adr.md" \
+  && ok "39 a Blocking finding naming an ADR rule and grepping for the restored lines is Debt (#1548)" \
+  || ko "39 ADR demotion: summary='$(python3 "$src" --summary "$T/adr.md" 2>&1)' $(cat "$T/adr.md" 2>/dev/null)"
+# the demotion is the shape's, not the ADR word alone: a finding that names an ADR rule and repros a real command stays Blocking.
+cat > "$T/adr2.json" <<'J'
+{"verdict":"CHANGES","blocking":[{"location":"contrib/squad-goal/scripts/delta-guards.txt","defect":"the delta covers the promotion code, against ADR-0156 rule 3","failure":"a promote-pass.sh change is carried","fix":"restore the promote-pass.sh line","repro":"bash tests/test_delta_guards.sh"}],"debt":[],"resolved":[]}
+J
+python3 "$src" --answer "$T/adr2.json" > "$T/adr2.md" 2>/dev/null
+[ "$(python3 "$src" --summary "$T/adr2.md")" = "blocking=1 debt=0" ] \
+  && ok "39 an ADR-naming finding whose repro is a real command stays Blocking (#1548)" \
+  || ko "39 ADR non-grep repro: summary='$(python3 "$src" --summary "$T/adr2.md" 2>&1)'"
+# 40) #1548: the demotion is the rule's exemption, not the ADR word's. A rule in the coverage-exemption map exempts a class
+# of paths from coverage, so only a finding about that class is a proposal to change it. A finding located elsewhere may
+# cite an ADR rule the change does violate; with a grep repro it is still a real defect and stays Blocking.
+cat > "$T/adr3.json" <<'J'
+{"verdict":"CHANGES","blocking":[{"location":"x","defect":"the change violates ADR-0156 rule 3","failure":"the wire protocol is broken","fix":"restore promote-pass.sh","repro":"grep -q promote-pass.sh f"}],"debt":[],"resolved":[]}
+J
+python3 "$src" --answer "$T/adr3.json" > "$T/adr3.md" 2>/dev/null
+[ "$(python3 "$src" --summary "$T/adr3.md")" = "blocking=1 debt=0" ] \
+  && ! /usr/bin/grep -q 'not a repro of a defect' "$T/adr3.md" \
+  && ok "40 a Blocking finding citing an ADR rule the change violates stays Blocking, even with a grep repro (#1548)" \
+  || ko "40 ADR violation: summary='$(python3 "$src" --summary "$T/adr3.md" 2>&1)' $(cat "$T/adr3.md" 2>/dev/null)"
 rm -rf "$T"; exit $fail

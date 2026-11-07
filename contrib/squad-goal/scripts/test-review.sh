@@ -883,6 +883,30 @@ out=$(GH_SHA=$H2 REPRO_CMD='! grep -q BUG f.txt' bash "$T/s/review.sh" --branch 
   && [ "$(git -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] \
   && ok "35 a --branch repro at the checkout's own head runs in a throwaway worktree, never the checkout" \
   || ko "35 checkout repro: rc=$rc review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null) summary=$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)"
+# 36) #1548: a review that raises the exact finding that ended a run review_fix_failed -- a Blocking finding naming
+# ADR-0156 rule 3 against the delta map, whose repro only greps for the promote-pass.sh line it asks to restore -- is saved
+# with the finding in Debt, marked as not a repro of a defect. The coder never reads it as Blocking, so no fix round can
+# fail on it. The same finding with a non-grep repro stays Blocking: the demotion is the shape's, not the ADR word's.
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > /dev/null; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"
+printf '{"result":"","structured_output":{"verdict":"CHANGES","blocking":[{"location":"contrib/squad-goal/scripts/delta-guards.txt","defect":"the map no longer names the promotion scripts, against ADR-0156 rule 3","failure":"a change to promote-pass.sh is carried by a delta it should not cover","fix":"restore the promote-pass.sh, delta-pass.sh and promote-stg.sh lines","repro":"%s"}],"debt":[],"resolved":[]},"usage":{"input_tokens":10,"output_tokens":5},"is_error":false,"subtype":"success"}' "$REPRO_CMD"
+J
+chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/review-ledger.jsonl" "$T/st/cq/"*
+out=$(REPRO_CMD="grep -q 'promote-pass.sh' contrib/squad-goal/scripts/delta-guards.txt" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+rv=$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] && [ "$rv" = "blocking=0 debt=1" ] \
+  && /usr/bin/grep -q 'not a repro of a defect' "$T/st/review-fix_1-x.md" \
+  && ok "36 the #1548 finding (ADR-0156 rule 3, grep for the restored lines) reaches the coder as Debt, never Blocking" \
+  || ko "36 #1548 demotion: rc=$rc verdict='$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)' summary='$rv' review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null)"
+rm -f "$T/st/review-fix_1-x".* "$T/st/review-ledger.jsonl" "$T/st/cq/"*
+out=$(REPRO_CMD='false' bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+rv=$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)
+[ $rc = 0 ] && [ "$rv" = "blocking=1 debt=0" ] && ! /usr/bin/grep -q 'not a repro of a defect' "$T/st/review-fix_1-x.md" \
+  && ok "36 the same finding with a non-grep repro stays Blocking" \
+  || ko "36 non-grep repro: rc=$rc summary='$rv' review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null)"
 suite_s=$(( $(date +%s) - suite_t0 ))
 # #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
 # the code, so a green suite must not turn red for it. The runtime guards are the measured line in

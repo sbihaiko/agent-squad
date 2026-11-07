@@ -215,6 +215,7 @@ def test_the_kind_field_never_names_the_charts_kind(hub, board):
     assert sorted(r["n"] for r in hub.lead_rows() if r["kind"] == "bug") == [3, 4]
 
 
+@pytest.mark.heavy   # one node start on the page's script: 3.2 s on a CI runner
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_server_and_the_page_give_each_card_the_same_kind(hub, board):
     items = _kind_items(hub)
