@@ -102,7 +102,7 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     st=$(ci_state "$1" 2>/dev/null)
     [ "$st" = running ] && { echo "promote-stg: pending $1: CI is running"; exit 75; }   # the checks have not reported: a wait, never a refusal (#1495)
     # A cancelled or timed-out check never reports again, so unproven is a refusal, never a wait: the ci proof promotes only a
-    # green tip, and promote-pass takes the bounded route for an unproven one (ADR-0164, #1532).
+    # green tip (#1532).
     [ "$st" = green ] || refuse "$1" "not promoted: CI is ${st:-unknown} (green needed)"
   fi; }
 g init -q . 2>/dev/null; g remote add origin "$remote"
