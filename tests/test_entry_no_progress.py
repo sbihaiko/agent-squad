@@ -48,8 +48,13 @@ async def test_the_second_entry_gets_what_is_left_of_the_node_deadline(tmp_path)
     eng = make(tmp_path, {"router": [HUNG, routed(req())], "route.router.1": CHILD}, tweak=tweak, **window())
     await eng.run()
     first, second = [c for c in eng.adapter.calls if c.node == "router"]
+    started = [e for e in ev(tmp_path, "call_start") if e["node"] == "router"][0]["ts"]
+    refused = [e for e in ev(tmp_path, "model_refused") if e["node"] == "router"][0]["ts"]
+    spent = refused - started   # the silent entry's real cost: its window, plus whatever the detecting tick cost under load
     assert first.deadline == pytest.approx(1.0, abs=0.05)
-    assert second.deadline == pytest.approx(1.0 - WINDOW, abs=0.2), "the node deadline bounds the whole chain, not each entry"
+    assert second.deadline == pytest.approx(1.0 - spent, abs=0.1), \
+        "the node deadline bounds the whole chain, not each entry"
+    assert spent >= WINDOW - 0.05, "a silent entry ends at its window, never before it"
 
 
 async def test_a_hung_coding_child_falls_back_to_its_next_entry(tmp_path):
