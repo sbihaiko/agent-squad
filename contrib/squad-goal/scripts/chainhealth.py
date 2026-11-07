@@ -19,8 +19,24 @@ import argparse, json, pathlib, sys, time
 
 _HERE = pathlib.Path(__file__).resolve().parent
 if str(_HERE) not in sys.path: sys.path.insert(0, str(_HERE))
-import grokmark   # the grok-limited marker rule, shared with review.sh (#1417)
-import provkey   # a model whose provider needs an absent key (#482)
+
+
+def _sibling(name):
+    """A module that must ship beside this reader. A copy without it is a named line, never a traceback (#1544)."""
+    try:
+        return __import__(name)
+    except ImportError as exc:
+        raise RuntimeError(f"chainhealth: {name}.py is missing or unreadable beside chainhealth.py ({exc})") from exc
+
+
+# Loaded at import so a missing copy is said at once, and held so the module stays usable when both are present.
+try:
+    grokmark = _sibling("grokmark")   # the grok-limited marker rule, shared with review.sh (#1417)
+    provkey = _sibling("provkey")     # a model whose provider needs an absent key (#482)
+except RuntimeError as _exc:
+    _load_error = _exc
+else:
+    _load_error = None
 
 _modelreg = None
 
@@ -194,6 +210,7 @@ def _registry_state(doc, name, shared, now, hour):
 
 def chain_state(cfg, key="review_models", shared=".", now=None, hour=None):
     """One chain, keyed as the caller names it (`review_models` or `review`). A v1 file keeps the v1 rules."""
+    if _load_error is not None: raise _load_error
     doc = cfg if isinstance(cfg, dict) else json.loads(pathlib.Path(cfg).read_text())
     name = key.removesuffix("_models")
     now = time.time() if now is None else now
@@ -233,6 +250,7 @@ if __name__ == "__main__":
     ap.add_argument("--all", action="store_true")
     a = ap.parse_args()
     try:
+        if _load_error is not None: raise _load_error
         doc = json.loads(pathlib.Path(a.models).read_text())
         states = chains_state(doc, a.shared, a.now).values() if a.all else [chain_state(doc, a.chain + "_models", a.shared, a.now)]
         for s in states:
