@@ -62,6 +62,17 @@ def _no_live_env(monkeypatch):
             monkeypatch.delenv(k, raising=False)
 
 
+def test_the_gating_fact_finds_its_journal_module_from_the_scripts_own_tree(tmp_path, monkeypatch):
+    """The janitor runs under `python3 -I`, so its own directory is off sys.path and every sibling import puts it
+    there itself (#1545). The gating fact must find gate_attempts without leaning on an earlier import's side effect."""
+    mod, _ = _janitor(tmp_path, monkeypatch)
+    monkeypatch.delenv("SG_BOARD_CACHE", raising=False)
+    for name in ("gate_attempts", "board_flow_history"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p != str(SCRIPTS)])
+    assert mod._gate_gating(CHILD, RUN) is False
+
+
 @pytest.mark.heavy
 def test_a_landing_red_reads_gating_for_every_card_of_the_wave_across_a_restart(tmp_path, monkeypatch):
     mod, _ = _janitor(tmp_path, monkeypatch)
