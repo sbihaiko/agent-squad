@@ -254,6 +254,19 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         terminalreporter.write_line(f"{len(rows)} test(s) deselected for a fixture this runner lacks (ADR-0139)")
 
 
+FAIL_TAIL_LINES = 15
+
+
+def pytest_runtest_logreport(report):
+    """On GitHub Actions, print each failure by id and its last lines the moment it ends, so a shard cut at its job timeout
+    still names its failures; the end-of-run summary never prints for a cancelled job."""
+    if os.environ.get("GITHUB_ACTIONS") != "true" or not report.failed:
+        return
+    tail = "\n".join(report.longreprtext.splitlines()[-FAIL_TAIL_LINES:])
+    sys.stdout.write(f"\nFAILED-NOW {report.nodeid} ({report.when})\n{tail}\n")
+    sys.stdout.flush()
+
+
 def pytest_collection_modifyitems(config, items):
     # With the switch off, serial.sh deliberately does not run a command under the `gui-suite` lock -- so a test asserting
     # "the GUI suite command ran" fails by construction, and a run goes red on it. Skipped, never weakened: with the switch
