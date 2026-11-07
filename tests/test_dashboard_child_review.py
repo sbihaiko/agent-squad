@@ -1,6 +1,8 @@
 """The run dashboard shows each dispatch child's review: verdict, elapsed time, the findings of a held child, and a review that runs now (#599)."""
 import re
 
+import pytest
+
 from tests.dashboard_helpers import ROOT, page_template, run_node
 
 
@@ -33,6 +35,7 @@ def _kids(events):
     return {c["name"]: c for c in run_node([{"op": "children", "events": events}])[0]}
 
 
+@pytest.mark.heavy   # one page read plus a node render of the child events: 2.0 s on a CI runner
 def test_an_approved_child_shows_its_verdict_and_review_time():
     r = _review("approve")
     k = _kids([_spawn(1), _out(1), _round(1, 1, r), _land(1, review=r)])["route.router.1"]["review"]

@@ -36,6 +36,7 @@ def test_a_leftover_app_does_not_fail_the_next_real_app_case(tmp_path, clean_app
 
 
 @pytest.mark.process_bound
+@pytest.mark.heavy   # starts a real process and reaps it: 1.5 s here, 2 s on a CI runner
 def test_the_fixture_reaps_an_app_the_case_itself_left_running(tmp_path):
     from tests.real_app_guard_plugin import clean_app_start
     fixture = clean_app_start.__wrapped__

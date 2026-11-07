@@ -436,6 +436,7 @@ def test_the_page_loads_the_workflow_its_fragment_names_on_open():
     assert "core.openedWorkflow(location.hash)" in page and "loadGraph(OPENED.text, OPENED.name)" in page
 
 
+@pytest.mark.heavy   # renders the three structured fields: 1.5 s here, 2 s on a CI runner
 def test_budget_next_adapt_and_when_are_structured_fields_not_raw_json():
     seen = {}
     for n in five()["nodes"]:

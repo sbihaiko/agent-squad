@@ -197,6 +197,7 @@ def test_a_save_that_changes_nothing_writes_no_ledger_line(ctx):
 
 # --- the route
 
+@pytest.mark.heavy   # serves the theme and saves it: 1.4 s here, 2 s on a CI runner
 def test_the_route_serves_the_theme_and_takes_a_confirmed_save(ctx):
     mod = ctx["hub"]
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
