@@ -702,19 +702,23 @@ def wave_facts(n, runs):   # the board facts of issue n whose child entered the 
     approved = bool(run) and review_of("wave/" + run, tip) == "approved"
     return board_facts.issue_facts(entered=bool(run), standing=standing, approved=approved, dev_running=bool(run) and standing in board_facts.IN_DEV and dev_ci_running(), review_waits=False,
                                    gating=bool(run) and standing in board_facts.AHEAD and _gate_gating(n, run))
+def _gate_attempts():   # the attempt journal module beside this script (#1255); -I keeps the script's directory off sys.path, so the import names it itself rather than lean on an earlier one
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import gate_attempts
+    return gate_attempts
 _ga_journal = None
 def _gate_journal():   # the attempt journal one pass reads (#1255), None when the board cache is unnamed: the gating fact stays False, never an error
     global _ga_journal
     if _ga_journal is None:
-        import gate_attempts
+        ga = _gate_attempts()
         cache = os.environ.get("SG_BOARD_CACHE")
-        _ga_journal = gate_attempts.journal_path(cache, repo0) if cache else False
+        _ga_journal = ga.journal_path(cache, repo0) if cache else False
     return _ga_journal or None
 def _gate_gating(n, run):   # the gating fact (#1257): a gate live for the wave right now, or the wave's last attempt red or unproven with none since; read from the journal, so a restart answers the same
-    import gate_attempts
-    live = gate_attempts.gate_live(st, run)
+    ga = _gate_attempts()
+    live = ga.gate_live(st, run)
     journal = _gate_journal()
-    return gate_attempts.gating(journal, n, run, live=live) if journal else live
+    return ga.gating(journal, n, run, live=live) if journal else live
 def wave_entry(n, f, i):   # the wave's say over issue n of a run (#467): None when the run cut no wave, "entered" when its child entered it (the entered fact of its ledger, ADR-0149), "open" when the wave can still take it, "out" when the wave landed without it. A child's own land is in its tree, never in the wave, so for a run that cut a wave only the entry is Code Complete (ADR-0145 rule 12)
     names = {f.name, i["run_id"]}; a = st / "auto"
     if not any((a / f"waved-{r}").exists() or (a / f"wave-{r}").exists() for r in names): return None
