@@ -82,7 +82,10 @@ def test_run_list_fallback_poll_refreshes_only_when_due(hub, monkeypatch):
     calls = []
     monkeypatch.setattr(hub, "runs", lambda: calls.append(1) or [{"id": "r"}])
     monkeypatch.setattr(hub, "RUN_POLL_SECS", 100.0)
-    monkeypatch.setattr(hub, "RUN_LIST_AT", 0.0)
+    # "Never refreshed" is an epoch behind monotonic()'s own clock, never a literal 0.0: monotonic() counts from the boot,
+    # and a CI container can boot less than RUN_POLL_SECS before the call, so 0.0 read as a fresh list and kept whatever
+    # another test of the worker had left in it (ADR-0018).
+    monkeypatch.setattr(hub, "RUN_LIST_AT", time.monotonic() - 1000.0)
     assert hub.run_list() == [{"id": "r"}]
     assert len(calls) == 1
     assert hub.run_list() == [{"id": "r"}]
