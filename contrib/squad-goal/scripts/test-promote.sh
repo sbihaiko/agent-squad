@@ -91,6 +91,12 @@ adv dev real-green; printf '%s' "$GREEN_P" > "$T/checks.json"; rm -f "$T/pr"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "real CI: a green tip is promoted" || ko "real CI green: rc $rc out '$out'"
 
+# (#1532) A cancelled check beside a green one is unproven, never green: the ci proof promotes nothing and names it, and it is no
+# wait (a cancelled check never reports again).
+adv dev real-canc; before=$(tip stg); printf '%s' '{"check_runs":[{"id":1,"name":"full-serial","status":"completed","conclusion":"cancelled"},{"id":2,"name":"ruff","status":"completed","conclusion":"success"}]}' > "$T/checks.json"; rm -f "$T/pr"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ $rc -ne 75 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI is unproven"*) ok "real CI: a cancelled check is unproven and promotes nothing under the ci proof";; *) ko "real CI cancelled: out '$out'";; esac || ko "real CI cancelled: rc $rc, stg $(tip stg), out '$out'"
+
 # (#1196) The bound-ended proof answers for a suite the bound cut short; it never answers for a check that already reported a
 # defect, which is the hole that merged pull request #1194 while its own CI check was red.
 adv dev bound-red; tb=$(tip dev); before=$(tip stg); printf '%s' "$RED_P" > "$T/checks.json"

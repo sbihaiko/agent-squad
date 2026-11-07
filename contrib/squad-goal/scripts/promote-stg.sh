@@ -26,7 +26,7 @@
 # the pass opens or reuses the open `dev` -> `stg` pull request and merges it with a merge commit, so a later tip is measured by
 # ancestry, never by identity. The proof is read before the merge, so a red tip leaves the pull request open and promotes nothing.
 # The loop never writes main: the owner does, with promote-main.sh. The work happens in a throwaway clone.
-# $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red or running (the CI seam); SG_PROMOTE_PROOF
+# $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red, running or unproven (the CI seam); SG_PROMOTE_PROOF
 # selects the proof (ci, the default).
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
@@ -53,7 +53,7 @@ say() {  # sha, reason: one line per tip and reason
   echo "$(date -u +%FT%TZ) promote-stg: $1 $2" >> "$log"; }
 refuse() { say "$1" "$2"; echo "promote-stg: $2" >&2; exit 1; }   # the one reason, on the log line and stderr
 proof=${SG_PROMOTE_PROOF:-ci}
-ci_state() {  # sha -> green | red | running, from the check runs of the commit
+ci_state() {  # sha -> green | red | running | unproven, from the check runs of the commit
   if [ -n "$SG_CI_STATE_CMD" ]; then "$SG_CI_STATE_CMD" "$1"; return; fi
   . "$d/ghcall.sh"; . "$d/basecheck.sh"   # the classifier is the base check's own (#786): the two readers cannot disagree
   local cr c; cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || return 1
@@ -101,6 +101,8 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
   else
     st=$(ci_state "$1" 2>/dev/null)
     [ "$st" = running ] && { echo "promote-stg: pending $1: CI is running"; exit 75; }   # the checks have not reported: a wait, never a refusal (#1495)
+    # A cancelled or timed-out check never reports again, so unproven is a refusal, never a wait: the ci proof promotes only a
+    # green tip (#1532).
     [ "$st" = green ] || refuse "$1" "not promoted: CI is ${st:-unknown} (green needed)"
   fi; }
 g init -q . 2>/dev/null; g remote add origin "$remote"
