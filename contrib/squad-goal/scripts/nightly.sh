@@ -43,12 +43,29 @@
 # own lock and with its own record. It starts the check detached: this body exits at once, serial.sh frees the `nightly`
 # lock, and the check samples alone. The check never changes this run's result or its record, and it holds no dispatch
 # (ADR-0163, ADR-0164): an hour of `locks/nightly` would refuse every promotion tick, so the check never keeps that lock.
+# It holds while a run is live or the gate lock is held (#1527, ADR-0153): a full suite beside the run cap bounded every child's
+# gate at 900 s. A held start writes no day marker, so the next idle cycle runs the suite.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
 [ -n "${SG_NIGHTLY_OFF:-}" ] && exit 0   # a profile that sets it keeps no nightly: a project may carry its own suite instead (ADR-0153)
 [ -e "$st/promote-reserve" ] && exit 0   # a proof is measuring in its own tree: two full suites saturate the box before either shows in the load average, and no day marker is written, so the nightly runs once the proof is over
 [ -e "$day" ] && exit 0   # it already ran today: no second suite, whatever started this one
+# (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly yields to them.
+# It holds while a listed run is live, read as promote-pass.sh reads it, or while the gate lock is held. No day marker is written,
+# so the next idle cycle runs it.
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+nlive=0; nnow=$(date +%s); nidle=${SG_NIGHTLY_LIVE_IDLE:-1200}
+while IFS= read -r r; do
+  [ -n "$r" ] || continue
+  [ -d "$r" ] || { nlive=$((nlive + 1)); continue; }
+  f=$r/record.jsonl
+  [ -f "$f" ] || { nlive=$((nlive + 1)); continue; }
+  /usr/bin/grep -q '"verdict"' "$f" 2>/dev/null || { nlive=$((nlive + 1)); continue; }
+  [ $((nnow - $(mtime "$f"))) -lt "$nidle" ] && nlive=$((nlive + 1))
+done 2>/dev/null < "$st/active-runs.txt"
+[ "$nlive" = 0 ] || { echo "nightly: held: $nlive live run(s) in active-runs.txt; the suite runs once the loop is idle (#1527)"; exit 0; }
+[ -d "$st/locks/gate" ] && { echo "nightly: held: the gate lock is held; the suite runs once the gate is free (#1527)"; exit 0; }
 if [ "${1:-}" != --run ]; then   # the lock is taken once, around the suite, and never around the day check
   SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-10800} \
     exec bash "$here/serial.sh" nightly bash "$0" --run

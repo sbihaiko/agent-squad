@@ -160,12 +160,15 @@ o=$(hold); rc=$?
   || ko "a red killed leg held dispatch or said nothing: rc $rc, '$o'"
 rm -f "$T/ran.log"
 
-# 5) the landing lock is never taken: a held gate lock is no obstacle, and it is left as it was
+# 5) (#1527, ADR-0153) a held gate lock holds the nightly, which never takes the landing lock: it runs no mode and writes no day
+#    marker, and it is left as it was. Once the gate is free the nightly runs both modes, as before.
 mkdir -p "$ST/locks/gate"; echo $$ > "$ST/locks/gate/pid"; rm -f "$T/ran.log"; mark
 out=$(ng); rc=$?
-[ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "a held landing lock does not stop the nightly" || ko "gate lock rc $rc: $out"
+[ $rc = 0 ] && [ ! -s "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && ok "a held landing lock holds the nightly: no mode runs and no day marker is written" || ko "gate lock rc $rc: $out"
 [ -e "$ST/locks/gate/pid" ] && ok "the nightly never took the landing lock" || ko "the nightly removed the landing lock"
-rm -rf "$ST/locks/gate"
+rm -rf "$ST/locks/gate"; rm -f "$T/ran.log"
+out=$(ng); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "a released gate lock lets the nightly run both modes" || ko "released gate lock rc $rc: $out"
 
 # 6) once a day: a second start the same day runs nothing, and a later day runs again
 rm -f "$T/ran.log"
