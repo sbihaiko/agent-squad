@@ -52,20 +52,19 @@ day=$st/auto/nightly-$(date +%F)
 [ -e "$st/promote-reserve" ] && exit 0   # a proof is measuring in its own tree: two full suites saturate the box before either shows in the load average, and no day marker is written, so the nightly runs once the proof is over
 [ -e "$day" ] && exit 0   # it already ran today: no second suite, whatever started this one
 # (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly yields to them.
-# It holds while a listed run is live, read as promote-pass.sh reads it, or while the gate lock is held. No day marker is written,
-# so the next idle cycle runs it.
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
-nlive=0; nnow=$(date +%s); nidle=${SG_NIGHTLY_LIVE_IDLE:-1200}
-while IFS= read -r r; do
-  [ -n "$r" ] || continue
-  [ -d "$r" ] || { nlive=$((nlive + 1)); continue; }
-  f=$r/record.jsonl
-  [ -f "$f" ] || { nlive=$((nlive + 1)); continue; }
-  /usr/bin/grep -q '"verdict"' "$f" 2>/dev/null || { nlive=$((nlive + 1)); continue; }
-  [ $((nnow - $(mtime "$f"))) -lt "$nidle" ] && nlive=$((nlive + 1))
-done 2>/dev/null < "$st/active-runs.txt"
-[ "$nlive" = 0 ] || { echo "nightly: held: $nlive live run(s) in active-runs.txt; the suite runs once the loop is idle (#1527)"; exit 0; }
-[ -d "$st/locks/gate" ] && { echo "nightly: held: the gate lock is held; the suite runs once the gate is free (#1527)"; exit 0; }
+# A live run is the one reader's rule (squad/run_liveness.py, the drain's and the hub's reader): a run that ended, or died with no
+# verdict, never holds it. The reader runs from the first root that holds it: this script's repository, SG_SQUAD, then
+# SG_CHECKOUT; a bare run name resolves under SG_CHECKOUT/runs. Only `idle` on exit 0 lets the suite start: any other answer holds
+# it, since a held nightly costs one night and a suite beside a live run costs the run. A gate lock whose pid lives holds it too.
+# A hold writes no day marker, so the next idle cycle runs the suite.
+if [ -s "$st/active-runs.txt" ]; then
+  lroot=; for r in "$(cd "$here/../../.." 2>/dev/null && pwd)" "${SG_SQUAD:-}" "${SG_CHECKOUT:-}"; do
+    [ -n "$r" ] && [ -f "$r/squad/run_liveness.py" ] && { lroot=$r; break; }; done
+  lv=; [ -z "$lroot" ] || lv=$(cd "$lroot" && perl -e 'alarm shift; exec @ARGV' "${SG_DRAIN_READ_S:-30}" python3 -m squad.run_liveness drain "$st/active-runs.txt" "${SG_CHECKOUT:-}" 2>/dev/null)
+  [ "$lv" = idle ] || { echo "nightly: held: the run reader answers '${lv:-no answer}' for active-runs.txt; the suite runs once the loop is idle (#1527)"; exit 0; }
+fi
+gp=$(cat "$st/locks/gate/pid" 2>/dev/null)
+[ -n "$gp" ] && kill -0 "$gp" 2>/dev/null && { echo "nightly: held: the gate lock is held by pid $gp; the suite runs once the gate is free (#1527)"; exit 0; }
 if [ "${1:-}" != --run ]; then   # the lock is taken once, around the suite, and never around the day check
   SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-10800} \
     exec bash "$here/serial.sh" nightly bash "$0" --run

@@ -563,24 +563,34 @@ i=0; while [ $i -lt 200 ] && [ ! -d "$ST/locks/live-check" ]; do sleep 0.05; i=$
 lc_wait   # let the detached check finish before the suite ends
 
 # 27) (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly holds
-#     while a run is live or the gate lock is held. A hold writes no day marker, so the next idle cycle runs the suite.
-mark; rm -f "$T/ran.log"
-mkdir -p "$T/live-run"; echo "$T/live-run" > "$ST/active-runs.txt"
-rs0=$(cat "$ST/nightly-result" 2>/dev/null | cksum)
-out=$(ng); rc=$?
-[ $rc = 0 ] && case "$out" in "nightly: held"*"1 live run"*) true;; *) false;; esac && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
+#     while a run is live or the gate lock is held. Liveness is the one reader's rule (squad/run_liveness.py): a fresh launch is
+#     live; a run that ended, a run that died with no verdict and a bare name whose record ended are not. A hold writes no day
+#     marker, so the next idle cycle runs the suite.
+mkdir -p "$T/src/runs/done-run" "$T/live-run"
+printf '{"event":"run_start"}\n' > "$T/live-run/record.jsonl"; echo "$T/live-run" > "$ST/active-runs.txt"
+mark; rm -f "$T/ran.log"; rs0=$(cat "$ST/nightly-result" 2>/dev/null | cksum)
+out=$(ng SG_CHECKOUT="$T/src"); rc=$?
+[ $rc = 0 ] && case "$out" in "nightly: held"*"live"*) true;; *) false;; esac && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
   && [ "$(cat "$ST/nightly-result" 2>/dev/null | cksum)" = "$rs0" ] \
-  && ok "the nightly holds while active-runs.txt lists a run with no verdict (#1527)" || ko "a live run did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
-mark; rm -f "$T/ran.log"
+  && ok "the nightly holds while a listed run is launching (#1527)" || ko "a live run did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+nrun() {  # <label>: the nightly runs both modes
+  mark; rm -f "$T/ran.log"; out=$(ng SG_CHECKOUT="$T/src"); rc=$?
+  [ $rc = 0 ] && /usr/bin/grep -qx 'parallel '"$T"'/tree' "$T/ran.log" && /usr/bin/grep -qx 'serial '"$T"'/tree' "$T/ran.log" \
+    && ok "$1: the nightly runs both modes" || ko "$1 held the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+}
+touch -t 202001010000 "$T/live-run/record.jsonl"
+nrun "a listed run that died with no verdict and a stale record is not live"
 printf '{"event":"run_start"}\n{"event":"verdict","verdict":"passed"}\n' > "$T/live-run/record.jsonl"; touch -t 202001010000 "$T/live-run/record.jsonl"
-out=$(ng); rc=$?
-[ $rc = 0 ] && /usr/bin/grep -qx 'parallel '"$T"'/tree' "$T/ran.log" && /usr/bin/grep -qx 'serial '"$T"'/tree' "$T/ran.log" \
-  && ok "a listed run with a verdict and an idle record is not live: the nightly runs both modes" || ko "a finished run held the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
-mark; rm -f "$T/ran.log"
-: > "$ST/active-runs.txt"; mkdir -p "$ST/locks/gate"
-out=$(ng); rc=$?
+nrun "a listed run with a verdict and an idle record is not live"
+printf '{"event":"run_start"}\n{"event":"verdict","verdict":"passed"}\n' > "$T/src/runs/done-run/record.jsonl"; touch -t 202001010000 "$T/src/runs/done-run/record.jsonl"
+echo done-run > "$ST/active-runs.txt"
+nrun "a bare run name whose record under SG_CHECKOUT/runs ended is not live"
+: > "$ST/active-runs.txt"; mkdir -p "$ST/locks/gate"; echo $$ > "$ST/locks/gate/pid"
+mark; rm -f "$T/ran.log"; out=$(ng SG_CHECKOUT="$T/src"); rc=$?
 [ $rc = 0 ] && case "$out" in "nightly: held"*"gate lock"*) true;; *) false;; esac && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
-  && ok "the nightly holds while the gate lock is held (#1527)" || ko "a held gate lock did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
-rmdir "$ST/locks/gate" 2>/dev/null
+  && ok "the nightly holds while a live pid holds the gate lock (#1527)" || ko "a held gate lock did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+rm -f "$ST/locks/gate/pid"
+nrun "a gate lock with no live pid is stale and never holds"
+rm -rf "$ST/locks/gate"
 
 rm -rf "$T"; exit $fail

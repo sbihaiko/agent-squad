@@ -478,6 +478,19 @@ s0=$(date +%s); out=$(bfg); rc=$?; el=$(( $(date +%s) - s0 ))
 [ $rc = 4 ] && [ "$el" -ge 2 ] && [ "$(hl)" = "$((h0 + 1))" ] \
   && ok "a new head spends a new attempt (${el}s)" || ko "a new head did not spend an attempt: rc $rc in ${el}s, history $h0 -> $(hl)"
 $G -C "$R" reset -q --hard HEAD~1
+# (#1527) The default battery names its worker count, so the key the child reads before the lock must carry the count the gate
+# stores inside it: a child's default is 2 workers. A repeat at the same head with the gate lock held exits 4 at once, never 73.
+wk=$T/wk; mkdir -p "$wk/repo" "$wk/st"; $G -C "$wk/repo" init -q -b dev
+$G -C "$wk/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+printf '#!/bin/bash\nif [ "$1 $2" = "-m ruff" ]; then echo "unclassified stub failure"; exit 1; fi\nexec python3 "$@"\n' > "$wk/py"; chmod +x "$wk/py"
+wfg() { (cd "$wk/repo" && env -u SG_GATE_CALLER -u SG_GATE_WORKERS -u SG_FAST_CMD -u SG_FAST_RETRY_CMD SG_FAST_MEMO=1 SG_STATE="$wk/st" SG_FAST_BASE=dev SG_GATE_PY="$wk/py" SG_FAST_LOG_DIR="$wk/logs" SQUAD_CAPS_DIR="$wk/caps" SG_GATE_BOUND_SECONDS=15 "$@" bash "$d/fast-gate.sh" 2>&1); }
+out=$(wfg); rc1=$?
+mkdir -p "$wk/st/locks/gate"; echo $$ > "$wk/st/locks/gate/pid"
+out=$(wfg SERIAL_TRY=1); rc=$?
+rm -rf "$wk/st/locks/gate"
+[ $rc1 = 4 ] && [ $rc = 4 ] && case "$(last "$out")" in "fast-gate: bounded already"*) true;; *) false;; esac \
+  && ok "a child's repeat on the default battery finds its bound before the lock: the key carries the child's 2 workers (#1527)" \
+  || ko "a child's repeat on the default battery missed its bound: first rc $rc1, repeat rc $rc, last '$(last "$out")'"
 
 # (#1086) The gate's interpreter is sg_gate_python's answer (caps.sh): SG_GATE_PY, else the checkout's venv, else the venv
 # beside the worktree's common git directory, else python3. The gate calls it for the code-quality reading, so a stub in the

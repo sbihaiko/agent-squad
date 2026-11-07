@@ -27,6 +27,10 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 . "$here/base-battery.sh"
 . "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
 py=$(sg_gate_python)
+# (#1436, #1527) A child's own gate takes two workers unless the caller names a count. It is set before the battery command is
+# built, so the memo key read before the lock names the same count as the key stored inside it.
+case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
+  *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2};; esac
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
 # The memo key names what the suite reads: the tree's content (HEAD's tree object, never its commit), its uncommitted state,
