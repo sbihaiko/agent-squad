@@ -46,6 +46,7 @@ def run(env, *args):
     return subprocess.run(["bash", str(REFRESH), *args], env=e, capture_output=True, text=True, timeout=120)
 
 
+@pytest.mark.macos_bound   # starts a TUI in a pty, which only the loop host has (ADR-0139)
 def test_a_stale_period_starts_the_tui_once_and_writes_a_credit_line(env):
     out = run(env, "--ttl", "3600")
     e, home, log = env
@@ -54,6 +55,7 @@ def test_a_stale_period_starts_the_tui_once_and_writes_a_credit_line(env):
     assert log.exists() and "creditUsagePercent" in log.read_text(), out.stdout + out.stderr
 
 
+@pytest.mark.macos_bound   # starts a TUI in a pty, which only the loop host has (ADR-0139)
 def test_a_second_start_within_the_ttl_writes_nothing(env):
     assert run(env, "--ttl", "3600").returncode == 0
     second = run(env, "--ttl", "3600")
@@ -62,6 +64,7 @@ def test_a_second_start_within_the_ttl_writes_nothing(env):
     assert (home / "grok-starts").read_text().count("started") == 1
 
 
+@pytest.mark.macos_bound   # starts a TUI in a pty, which only the loop host has (ADR-0139)
 def test_a_running_refresh_is_never_started_twice(env):
     """The second caller sees the lock of the live child and leaves, instead of opening a second TUI."""
     e, home, log = env

@@ -27,6 +27,10 @@ STAMP=${SG_GROK_REFRESH_STAMP:-$HOME_DIR/.grok/credit-refresh.stamp}
 LOCK=${SG_GROK_REFRESH_LOCK:-$HOME_DIR/.grok/refresh.lock}
 mkdir -p "$(dirname "$STAMP")" "$(dirname "$LOCK")" 2>/dev/null
 
+# The grok CLI and the pty it needs are the loop host's: macOS. A Linux runner has neither, and the gauge there
+# reads the log the CLI wrote elsewhere, so a start has nothing to do.
+[ "$(uname -s)" = Darwin ] || { echo "skip: the grok TUI start is macOS-only"; exit 0; }
+
 command -v grok >/dev/null 2>&1 || { echo "skip: no grok CLI on PATH"; exit 2; }
 
 now=$(date +%s)
