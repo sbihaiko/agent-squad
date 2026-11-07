@@ -313,7 +313,17 @@ fix_run = bool(named or os.environ.get("SG_FIX_RUN"))
 if fix_run and not _names_option("fix_run"):
     sys.exit(f"refused: the squad build at {squad} names no fix_run engine option, so this fix run cannot be marked "
              "and its final gate would prove in the target (#1374). Publish a build that records fix_run first.")
-target = _named_target(checkout, named) if named else _issue_worktree(issues[0], land) if len(issues) == 1 else None
+# (#1504, ADR-0150 across runs) A stacked child's request names the branch it was cut from (`CUT FROM: <branch>`, written by
+# autofrontier.sh): the issue worktree starts on THAT branch, never the base, so the file one run lands is edited by one line
+# of commits. A branch this checkout does not hold leaves the base, and the note says so: the cut is never made up here.
+cut = re.search(r"^CUT FROM: *([^\s]+) *$", req_text, re.M)
+cut_ref = None
+if cut and len(issues) == 1:
+    if subprocess.run(["git", "-C", checkout, "rev-parse", "--verify", "--quiet", f"refs/heads/{cut.group(1)}^{{commit}}"], capture_output=True).returncode == 0:
+        cut_ref = cut.group(1)
+    else:
+        print(f"note: CUT FROM {cut.group(1)} names no branch of {checkout}: the issue worktree starts from the base", file=sys.stderr)
+target = _named_target(checkout, named) if named else _issue_worktree(issues[0], cut_ref or land) if len(issues) == 1 else None
 if len(issues) > 1 and not named: print(f"note: the request names {issues}: one run has one target, so this run gets {FALLBACK}", file=sys.stderr)
 if named:
     print(f"note: the run's target is the kept worktree {target} it fixes: the engine commits it (#654, ADR-0106 rule 4)", file=sys.stderr)

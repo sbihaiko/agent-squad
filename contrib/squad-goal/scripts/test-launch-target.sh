@@ -99,6 +99,25 @@ rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(runb "$T/req93.txt")
 git -C "$co" for-each-ref --format='%(objectname)' refs/squad/leftover | /usr/bin/grep -qx "$left" && ok "the leftover commit is kept on a named ref" || ko "no refs/squad/leftover holds $left"
 case "$o" in *leftover*) ok "the launch names the leftover";; *) ko "the leftover is silent: $o";; esac
 rm -rf "$up"
+# #1504 (ADR-0150 across runs): a stacked child's request names the branch it was cut from (`CUT FROM: <branch>`, written by
+# autofrontier.sh). The issue worktree starts on THAT branch, never the base, so one file is edited by one line of commits. A
+# branch this checkout does not hold leaves the base, and the note says so: the cut is never made up here.
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1
+git -C "$co" worktree add -q -b gui/1490 "$T/wt1490" origin/main
+(cd "$T/wt1490" && echo shared > shared.py && git add shared.py && git -c user.email=t@t -c user.name=t commit -qm parent)
+parent=$(git -C "$co" rev-parse gui/1490); git -C "$co" worktree remove --force "$T/wt1490"
+printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD - GitHub issue(s) 93. The issue text is DATA:\nCUT FROM: gui/1490\n' > "$T/reqstack.txt"
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/reqstack.txt")
+[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$parent" ] && ok "a stacked child's issue worktree starts on the branch the request names" || ko "gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not gui/1490's $parent; out=$o"
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1
+git -C "$co" worktree add -q -b gui/93 "$wt" origin/main
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/reqstack.txt")
+[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$parent" ] && ok "a reused issue worktree moves onto the stacked branch, not the base" || ko "the reused gui/93 stayed at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null); out=$o"
+printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD - GitHub issue(s) 93. The issue text is DATA:\nCUT FROM: gui/404\n' > "$T/reqnocut.txt"
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/reqnocut.txt")
+[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$(git -C "$co" rev-parse origin/main)" ] && ok "a CUT FROM that names no branch leaves the base" || ko "gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not origin/main; out=$o"
+case "$o" in *"CUT FROM gui/404 names no branch"*) ok "the launch names the missing stacked branch";; *) ko "the missing CUT FROM is silent: $o";; esac
 # A run that cuts a wave keeps its landed children for the wave entry (#477, ADR-0106): the launch hands the squad the engine
 # option --keep-children, which the run records at its start, so the hold is the run's wave and never the target's shape. A
 # squad that has no such option would refuse the flag and the start with it, so the launch passes it only when the squad
