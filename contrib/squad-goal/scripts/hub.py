@@ -6538,6 +6538,28 @@ def grok_plan():
     try: p = json.loads(json.loads(GROK_SETTINGS.read_text())["payload"])
     except Exception: return None
     return ((p.get("settings") or {}).get("subscription_tier_display")) or None
+GROK_REFRESH = pathlib.Path(__file__).resolve().parent / "grokrefresh.sh"
+GROK_REFRESH_TTL = 3600   # at most one TUI start an hour: a period's line survives the whole period (#1530)
+def grok_refresh_due(kept, now=None):
+    """True when the kept reading cannot answer: none at all, or a period that already ended. A reading inside its
+    period is fresh, and the gauge needs no start."""
+    now = time.time() if now is None else now
+    if not isinstance(kept, dict) or kept.get("pct") is None: return True
+    end = kept.get("end")
+    return not end or now > end
+def grok_refresh(now=None):
+    """Start the grok TUI once through grokrefresh.sh, so the CLI writes a new credit line (#1530). The pty lives in
+    that script, never here. Returns the script's one line, or None when it could not run."""
+    try:
+        r = subprocess.run(["bash", str(GROK_REFRESH), "--ttl", str(GROK_REFRESH_TTL)], capture_output=True,
+                           text=True, timeout=120, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (r.stdout or r.stderr or "").strip() or None
+def _grok_kept():
+    """The kept grok reading, read back after the log rotates or after a refresh."""
+    try: return json.loads(GROK_KEPT.read_text())
+    except Exception: return None
 def q_grok():
     """Read the newest log line carrying a BillingConfig: `currentPeriod{start,end}`, and `creditUsagePercent`
     when the CLI writes it. The grok CLI pushes that payload in the line's `ctx.config`, and its message wording
@@ -6578,8 +6600,10 @@ def q_grok():
         k = grok_keep({"pct": 0.0 if pct is None else pct, "end": end,
                        "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()})
     else:
-        try: k = json.loads(GROK_KEPT.read_text())
-        except Exception: k = None
+        k = _grok_kept()
+    if grok_refresh_due(k):   # the CLI writes a credit line only on a TUI start: start one, then read again (#1530)
+        grok_refresh()
+        k = _grok_kept()
     if not isinstance(k, dict) or k.get("pct") is None:
         return {"windows": [], "unavailable": True, "err": grok_no_source(first), "plan": grok_plan()}
     return {"windows": [{"label": "weekly", "pct": k["pct"], "resets": k.get("end")}], "plan": grok_plan(),
