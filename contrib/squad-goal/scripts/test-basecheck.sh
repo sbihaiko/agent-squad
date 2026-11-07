@@ -2,7 +2,8 @@
 # Regression test for basecheck.sh (#786): a red completed check on the base branch head holds the landings of branchland.sh and
 # wave.sh, is reported once per head (one alerts.log line; one queued comment on each issue whose landed row names that head), a
 # red answer is read again after SG_BASE_CI_RECHECK, a green one is kept only once its checks are older than SG_BASE_CI_GRACE, a
-# cache that is not a whole answer is read again, and a pending, missing or unreadable check does not block. The callers' holds are
+# cache that is not a whole answer is read again, a pending, missing or unreadable check does not block, and a cancelled or
+# timed-out check is unproven: it does not block and is not cached (ADR-0164, #1532). The callers' holds are
 # proved by the fixture runs of test-branchland.sh and test-wave.sh. Stub gh (every argv logged), a bare local remote, a temp state
 # dir per case. One line per case.
 # usage: bash test-basecheck.sh [scripts dir]
@@ -130,5 +131,19 @@ OUT=$(env STATE="$T/st-cycle" CHECKS="$RED" bash "$T/s/cycle.sh" 2>&1); RC=$?
 [ "$RC" = 0 ] && [ "$(alerts cycle)" = 1 ] && ok "a watch cycle with no landing reads the base and reports a red head" || ko "cycle pass: rc $RC alerts $(alerts cycle) out [$OUT]"
 OUT=$(env STATE="$T/st-cycle" CHECKS="$RED" bash "$T/s/cycle.sh" 2>&1)
 [ "$(alerts cycle)" = 1 ] && [ "$(reads)" = 1 ] && ok "the next cycle keeps the red answer: no second read, no second line" || ko "cycle repeat: alerts $(alerts cycle) reads $(reads)"
+
+# (#1532) A cancelled or timed-out check measured nothing (ADR-0164): the complete tier ends cancelled at its job timeout. Such a
+# head is unproven: it does not block, is not cached, raises no alert and no comment, and is read again on the next call.
+CANC='{"check_runs":[{"id":10,"name":"full-serial","status":"completed","conclusion":"cancelled","completed_at":"2001-01-01T00:00:00Z"},{"id":11,"name":"ruff","status":"completed","conclusion":"success","completed_at":"2001-01-01T00:00:00Z"}]}'
+TOUT='{"check_runs":[{"id":10,"name":"full-xdist","status":"completed","conclusion":"timed_out","completed_at":"2001-01-01T00:00:00Z"},{"id":11,"name":"ruff","status":"completed","conclusion":"success","completed_at":"2001-01-01T00:00:00Z"}]}'
+for k in canc tout; do v=CANC; [ $k = tout ] && v=TOUT
+  landed $k; run $k CHECKS="${!v}"
+  [ "$RC" = 1 ] && [ -z "$OUT" ] && [ ! -e "$T/st-$k/auto/basecheck-$SHA" ] && [ ! -e "$T/st-$k/alerts.log" ] && [ "$(cqs $k basecheck)" = 0 ] && ok "$k: an unproven head does not block, is not cached and is not reported" || ko "$k: rc $RC out [$OUT] cache [$(cat "$T/st-$k/auto/basecheck-$SHA" 2>/dev/null)] alerts $(alerts $k)"
+  run $k CHECKS="${!v}"
+  [ "$(reads)" = 1 ] && ok "$k: an unproven head is read again" || ko "$k: reads $(reads)"
+  [ "$(c "${!v}")" = unproven ] && ok "$k: the classifier reads unproven, never green or red" || ko "$k classifier: [$(c "${!v}")]"
+done
+MIXED='{"check_runs":[{"id":10,"name":"full-serial","status":"completed","conclusion":"cancelled","completed_at":"2001-01-01T00:00:00Z"},{"id":11,"name":"ruff","status":"completed","conclusion":"failure","completed_at":"2001-01-01T00:00:00Z"}]}'
+[ "$(c "$MIXED")" = red ] && [ "$(printf '%s' "$MIXED" | bash -c '. "$1"; sg_ci_bad' _ "$T/s/basecheck.sh")" = "ruff ended failure" ] && ok "a failure beside a cancelled check is red and names the failure" || ko "mixed: [$(c "$MIXED")] [$(printf '%s' "$MIXED" | bash -c '. "$1"; sg_ci_bad' _ "$T/s/basecheck.sh")]"
 
 [ "$fail" = 0 ] && echo "PASS test-basecheck" || { echo "FAIL test-basecheck"; exit 1; }

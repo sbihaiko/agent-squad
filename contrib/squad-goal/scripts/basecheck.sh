@@ -2,9 +2,10 @@
 # basecheck.sh (#786): the base branch's own check. A red completed check on the base head holds every landing into that base
 # (branchland.sh, wave.sh) until the head is green. Sourced by those scripts after ghcall.sh, and by promote-stg.sh.
 #
-# sg_base_red <base>: while the head of origin/<base> has a completed check that did not end success, skipped or neutral, prints
-# "base <base> is red at <sha9>: <check> ended <conclusion>" and returns 0. Otherwise returns 1. A pending, missing or unreadable
-# check does not block. The answer is cached per head under $SG_STATE/auto/basecheck-<sha>, written through a temporary file:
+# sg_base_red <base>: while the head of origin/<base> has a completed check that did not end success, skipped, neutral, cancelled
+# or timed_out, prints "base <base> is red at <sha9>: <check> ended <conclusion>" and returns 0. Otherwise returns 1. A pending,
+# missing or unreadable check does not block. A cancelled or timed-out check measured nothing (the complete tier ends cancelled at
+# its job timeout): the head is unproven, does not block, and is not cached (ADR-0164, #1532). The answer is cached per head under $SG_STATE/auto/basecheck-<sha>, written through a temporary file:
 #   ok <epoch>            green; kept only once the newest completed check is at least SG_BASE_CI_GRACE seconds old (default 900),
 #                         and read again once SG_BASE_CI_OK_TTL seconds have passed since the read (default 600), so a re-run is seen (#790)
 #   red <epoch> <check>   red; read again once SG_BASE_CI_RECHECK seconds have passed (default 600)
@@ -12,12 +13,12 @@
 # queued comment on each issue whose landed.tsv row names that head. An unreadable read is one alerts.log line per head.
 # SG_BASE_CI_GATE=0 turns the check off.
 #
-# sg_ci_class: reads a check-runs answer on stdin and prints red, running, green or none (zero check runs; the caller decides what
+# sg_ci_class: reads a check-runs answer on stdin and prints red, running, unproven, green or none (zero check runs; the caller decides what
 # none means). Exits 1 when the input is not a check-run list. promote-stg.sh uses it too, so the two readers cannot disagree.
-sg_ci_class() { jq -r 'if (.check_runs | type) != "array" then error("not a check-run list") elif (.check_runs | length) == 0 then "none" elif ([.check_runs[] | select(.status == "completed") | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length) > 0 then "red" elif ([.check_runs[] | select(.status != "completed")] | length) > 0 then "running" else "green" end' 2>/dev/null; }
+sg_ci_class() { jq -r 'if (.check_runs | type) != "array" then error("not a check-run list") elif (.check_runs | length) == 0 then "none" elif ([.check_runs[] | select(.status == "completed") | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral" and .conclusion != "cancelled" and .conclusion != "timed_out")] | length) > 0 then "red" elif ([.check_runs[] | select(.status != "completed")] | length) > 0 then "running" elif ([.check_runs[] | select(.conclusion == "cancelled" or .conclusion == "timed_out")] | length) > 0 then "unproven" else "green" end' 2>/dev/null; }
 
-# sg_ci_bad: the first completed check that did not end success, skipped or neutral, as "<name> ended <conclusion>"; empty when none.
-sg_ci_bad() { jq -r '[.check_runs[] | select(.status == "completed") | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | "\(.name) ended \(.conclusion)"] | first // ""' 2>/dev/null; }
+# sg_ci_bad: the first completed check that did not end success, skipped, neutral, cancelled or timed_out, as "<name> ended <conclusion>"; empty when none.
+sg_ci_bad() { jq -r '[.check_runs[] | select(.status == "completed") | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral" and .conclusion != "cancelled" and .conclusion != "timed_out") | "\(.name) ended \(.conclusion)"] | first // ""' 2>/dev/null; }
 
 sg_base_red() { local base=${1:?sg_base_red: a base branch is required} sha sn cache now line re ep bad="" have="" cr cls newest
   [ "${SG_BASE_CI_GATE:-1}" = 0 ] && return 1
