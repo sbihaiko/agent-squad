@@ -861,6 +861,17 @@ out=$(GH_SHA=$Y REPRO_CMD='! grep -q BUG f.txt' bash "$T/s/review.sh" --branch f
   && [ "$(git -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] \
   && ok "34 a repro at a head that is not checked out runs in a throwaway worktree, and the finding stays Blocking" \
   || ko "34 throwaway repro: rc=$rc review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null) worktrees=$(git -C "$T/co" worktree list | wc -l)"
+# 35) #1521, --branch: the head is the checkout's own HEAD, and the checkout's working tree is edited so the repro would
+# pass there. The repro runs in a throwaway worktree of that head, where the committed defect is present, so the finding
+# stays Blocking. SG_CHECKOUT is never the repro's cwd.
+C="git -C $T/co -c user.email=a@b -c user.name=t"; printf 'BUG\n' > "$T/co/f.txt"; $C commit -q -am defect1521b; H2=$(git -C "$T/co" rev-parse HEAD)
+printf 'clean\n' > "$T/co/f.txt"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+out=$(GH_SHA=$H2 REPRO_CMD='! grep -q BUG f.txt' bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ "$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)" = "blocking=1 debt=0" ] \
+  && [ "$(git -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] \
+  && ok "35 a --branch repro at the checkout's own head runs in a throwaway worktree, never the checkout" \
+  || ko "35 checkout repro: rc=$rc review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null) summary=$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null)"
 suite_s=$(( $(date +%s) - suite_t0 ))
 # #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
 # the code, so a green suite must not turn red for it. The runtime guards are the measured line in

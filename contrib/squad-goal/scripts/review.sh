@@ -234,11 +234,13 @@ answer_check() { local why
   if ! why=$(python3 "$(dirname "$0")/revformat.py" --answer $rflag ${3:+--keep "$3"} "$1" 2>&1 >"$2"); then
     rm -f "$2"; echo "the JSON answer is not the schema: ${why:-revformat.py failed to read it}"; return 1; fi
   python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$2" 2>/dev/null; }
-# repro_tree <tree> <head>: prints a directory whose HEAD is <head>, where a Blocking repro runs (#1521): <tree> itself when its
-# HEAD is <head>, else a throwaway detached worktree of <head> made from <tree>'s repository (repro_drop removes it). Prints
-# nothing when <head> is no commit there, and the caller keeps every finding Blocking (fail closed).
+# repro_tree <tree> <head> [fresh]: prints a directory whose HEAD is <head>, where a Blocking repro runs (#1521): <tree> itself
+# when its HEAD is <head> and <fresh> is empty, else a throwaway detached worktree of <head> made from <tree>'s repository
+# (repro_drop removes it). A --branch review passes <fresh>: the checkout is never the repro's tree (the repro may write
+# there, and a dirty checkout would read as passed). Prints nothing when <head> is no commit there, and the caller keeps
+# every finding Blocking (fail closed).
 repro_tree() { local d
-  [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" = "$2" ] && { echo "$1"; return 0; }
+  [ -z "${3:-}" ] && [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" = "$2" ] && { echo "$1"; return 0; }
   git -C "$1" cat-file -e "$2^{commit}" 2>/dev/null || return 1
   d=$(mktemp -d "${TMPDIR:-/tmp}/review-repro.XXXXXX") || return 1
   git -C "$1" worktree add -q --detach "$d/tree" "$2" >/dev/null 2>&1 || { rm -rf "$d"; return 1; }
@@ -592,12 +594,12 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # repro under the signal wall in the checkout and moves a finding whose repro passes, or cannot run (124, 126, 127), to
     # Debt. The kept JSON and the rendered review are rewritten, so the #653 downgrade below reads the demoted answer. A
     # markdown answer has no repro and is left as it is; a repro step that fails leaves the finding Blocking.
-    # #1521: the repro runs in the tree that holds the reviewed head: the worktree in --worktree mode, the checkout in
-    # --branch mode when it is at the head, else a throwaway worktree of the head. A plan has no head to run in (its head
+    # #1521: the repro runs in the tree that holds the reviewed head: the worktree in --worktree mode, else a throwaway
+    # worktree of the head in --branch mode (the checkout is never the repro's tree). A plan has no head to run in (its head
     # is a body hash), so a plan's answer has no repro step. No tree holds the head: no repro runs and the findings stay Blocking.
     if [ $rc = 0 ] && [ -s "$o.answer" ] && [ "$(head -1 "$o")" = "VERDICT: CHANGES" ] && [ "$mode" != --plan ]; then
-      tree0=$SG_CHECKOUT; [ "$mode" = --worktree ] && tree0=$wt
-      rt=$(repro_tree "$tree0" "$head")
+      tree0=$SG_CHECKOUT; fresh=; [ "$mode" = --worktree ] && tree0=$wt; [ "$mode" = --branch ] && fresh=1
+      rt=$(repro_tree "$tree0" "$head" "$fresh")
       if [ -n "$rt" ]; then
         python3 "$(dirname "$0")/revformat.py" --repro "$o.answer" "$rt" "$head" 2>"$o.rp" \
           && python3 "$(dirname "$0")/revformat.py" --answer "$o.answer" > "$o.n" 2>/dev/null && mv -f "$o.n" "$o"

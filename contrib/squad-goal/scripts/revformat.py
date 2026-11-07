@@ -63,9 +63,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 
 VERDICT = re.compile(r"^VERDICT: (APPROVE|CHANGES)$")
 SECTION = re.compile(r"^##\s*(Blocking|Debt|Resolved)\s*$", re.IGNORECASE)
@@ -485,24 +487,42 @@ def parse_answer(text, repro=True):
     return out
 
 
+def write_wall(tree, scratch):
+    """The SBPL rules that refuse every file write except in `tree` and `scratch` (#1521), and the null devices a shell
+    redirects to. A reviewer-written repro is a shell line, so the signal wall alone leaves it the whole filesystem. The
+    paths are resolved first: SBPL matches the real path, and a temp dir is under /var, a link to /private/var.
+    """
+    def sub(p):
+        real = os.path.realpath(p).replace("\\", "\\\\").replace('"', '\\"')
+        return f'(subpath "{real}")'
+    return ("(deny file-write*)(allow file-write* " + sub(tree) + " " + sub(scratch)
+            + ' (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/") (regex #"^/dev/std(out|err)$"))')
+
+
 def run_repro(cmd, checkout):
     """The exit status of a repro command, run by sh under the signal wall in `checkout` (#1521): 124 when it timed out
     (its process group is killed with it), 127 when it could not start. The wall is the profile in SQUAD_SIGNAL_PROFILE,
-    else SIGNAL_PROFILE: the one a child session runs under (claude-sandboxed.sh).
+    else SIGNAL_PROFILE: the one a child session runs under (claude-sandboxed.sh). A write wall (write_wall) refuses a
+    write outside `checkout` and a scratch dir the repro's TMPDIR points at; the scratch dir is removed after the run.
     """
-    profile = os.environ.get("SQUAD_SIGNAL_PROFILE") or SIGNAL_PROFILE
+    scratch = tempfile.mkdtemp(prefix="repro-1521-")
     try:
-        proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", profile, "sh", "-c", cmd],
-                                cwd=checkout, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError:
-        return 127
-    try:
-        return proc.wait(timeout=REPRO_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait()
-        return 124
+        profile = (os.environ.get("SQUAD_SIGNAL_PROFILE") or SIGNAL_PROFILE) + write_wall(checkout, scratch)
+        env = dict(os.environ, TMPDIR=scratch)
+        try:
+            proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", profile, "sh", "-c", cmd],
+                                    cwd=checkout, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            return 127
+        try:
+            return proc.wait(timeout=REPRO_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            return 124
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def repro_check(path, checkout, sha):

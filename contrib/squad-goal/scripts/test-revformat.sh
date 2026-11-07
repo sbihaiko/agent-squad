@@ -396,4 +396,21 @@ printf '{"verdict":"CHANGES","blocking":[{"location":"AC1","defect":"x","failure
 python3 "$src" --answer --plan "$T/pl.json" > "$T/pl.md" 2>"$T/pl.err"; rc=$?
 [ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/pl.md")" = "blocking=1 debt=0" ] && ok "31 a plan answer with a blank repro keeps its Blocking finding" \
   || ko "31 plan answer: rc=$rc summary='$(python3 "$src" --summary "$T/pl.md" 2>&1)' $(cat "$T/pl.err")"
+# 36) #1521: a repro runs under a write wall: it writes only in the tree it reads and its own scratch directory. A repro
+# that writes outside the tree is refused (its touch fails and it exits non-zero), so its finding stays Blocking and the
+# file never appears. A write inside the tree still works.
+mkdir -p "$T/w36"; rm -f "$T/out-1521"
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"touch %s/out-1521"}],"debt":[],"resolved":[]}' "$T" > "$T/w36.json"
+python3 "$src" --repro "$T/w36.json" "$T/w36" abc1234 2>"$T/w36.err"
+python3 "$src" --answer "$T/w36.json" > "$T/w36.md" 2>/dev/null
+[ ! -e "$T/out-1521" ] && [ "$(python3 "$src" --summary "$T/w36.md")" = "blocking=1 debt=0" ] \
+  && ok "36 a repro cannot write outside its tree, and its finding stays Blocking" \
+  || ko "36 write wall: out=$(test -e "$T/out-1521" && echo present || echo absent) summary='$(python3 "$src" --summary "$T/w36.md" 2>&1)' $(cat "$T/w36.err")"
+# 37) #1521: the same wall lets a repro write inside its tree: a file it creates there is read back, so the repro exits 0.
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"touch inside-1521 && test -f inside-1521"}],"debt":[],"resolved":[]}' > "$T/w37.json"
+python3 "$src" --repro "$T/w37.json" "$T/w36" abc1234 2>"$T/w37.err"
+python3 "$src" --answer "$T/w37.json" > "$T/w37.md" 2>/dev/null
+[ -e "$T/w36/inside-1521" ] && [ "$(python3 "$src" --summary "$T/w37.md")" = "blocking=0 debt=1" ] \
+  && ok "37 a repro writes inside its tree" \
+  || ko "37 write inside the tree: summary='$(python3 "$src" --summary "$T/w37.md" 2>&1)' $(cat "$T/w37.err")"
 rm -rf "$T"; exit $fail
