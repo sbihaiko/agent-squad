@@ -86,6 +86,7 @@ test-hub-run-issue.sh 0.33
 test-hub-screenshot.sh 0.15
 test-hub-state-default.sh 0.20
 test-hub-test-panel.sh 0.09
+test-hubctl.sh 0.66
 test-hubmux-check-board.sh 0.81
 test-hubmux-live.sh 0.12
 test-hubstream.sh 8.84
