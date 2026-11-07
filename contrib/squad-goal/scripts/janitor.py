@@ -18,6 +18,7 @@
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
  F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open work branch naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
  I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
+    also stop it when every one closed after the run started and before the run's last progress and the run holds no landing for it (no land in its record or the ledger, no branch of its children naming the issue), and write the verdict that says why (#1571);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
  K  a disp-<n> marker whose request log says `Nothing ran` or `refusing to start` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
@@ -298,10 +299,10 @@ def same_process(pidc, started_at):
         return pidc in procs
     started = starts.get(pidc)
     return started is None or started <= started_at
-def mark_killed(f):
-    """C: the zombie gets the killed verdict in its own record (squad.killed, the one writer), so the hub shows it ended. A record it cannot write stays as it is."""
+def mark_killed(f, reason=None):
+    """C: the zombie gets the killed verdict in its own record (squad.killed, the one writer), so the hub shows it ended. A record it cannot write stays as it is. `reason` names why the pass ended the run, and the verdict carries it (#1571)."""
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (os.environ.get("SG_SQUAD"), os.environ.get("PYTHONPATH")) if x)}
-    _run(["python3", "-m", "squad.killed", str(f)], env=env)
+    _run(["python3", "-m", "squad.killed", str(f)] + ([str(reason)] if reason else []), env=env)
 TAKEOVER_SECONDS = float(os.environ.get("SG_TAKEOVER_SECONDS", "1800") or 1800)
 GATE = re.compile(r"gate\.sh\b")   # a gate process (`gate.sh`, `fast-gate.sh`): a run inside one is doing work or waiting its turn, never stuck (#1191)
 # A gate process older than this is itself overdue: every bound the loop gives a gate is shorter (ADR-0163, ADR-0157), so
@@ -323,10 +324,10 @@ repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null;
 GONE = re.compile(r"\bHTTP(?:/[\d.]+)? 410\b|could not resolve to an issue|this issue was deleted", re.I)   # the 410 status or GitHub's stable message, never a bare 410: an issue number, a header or a delay may carry one (#466)
 def gone_msg(s): return bool(GONE.search(s or ""))
 _is = {}
-def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title and its labels
+def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title, its labels and its close time (#1571)
     if x not in _is:
-        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title, ([.labels[].name] | join(","))] | @tsv').strip().split("\t")
-        _is[x] = (o + ["", "", "", ""])[:4]
+        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title, ([.labels[].name] | join(",")), (.closed_at // "")] | @tsv').strip().split("\t")
+        _is[x] = (o + ["", "", "", "", ""])[:5]
     return _is[x]
 def issue_is_gone(x):   # a missing issue is not a transient read failure. The pass's one cached read of the issue says it: `gh api`
     # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
@@ -602,19 +603,52 @@ def issue_closed(n):   # the pass's one open-issue list answers for the whole re
     # it is closed. A list that did not answer is no answer, so the caller keeps its line and its rule.
     answered, oans = open_issues()
     return answered and str(n) not in oans
+def stamp_epoch(v):   # an absolute epoch from a record stamp (a number) or an ISO UTC stamp; None when the pass cannot read it
+    try: return float(v)
+    except (TypeError, ValueError): pass
+    try: return float(calendar.timegm(time.strptime(v, "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError): return None
+def run_branch_names(f, x):   # #1571: a branch of this run names the issue: a child tree's branch carries the issue number
+    # (`fix/<n>-...`, `gui/<n>-...`), or its commits carry the `Refs #<n>` line the engine writes. That branch is work still
+    # to land, so its issue is not a stop signal.
+    for w in sorted((f / "ws").glob("*")) if f is not None and (f / "ws").is_dir() else []:
+        b = subprocess.run(["git", "-C", str(w), "branch", "--show-current"], capture_output=True, text=True)
+        name = b.stdout.strip() if b.returncode == 0 else ""
+        m = re.match(r"(?:fix|gui)/(\d+)(?:\D|$)", name)
+        if m and m.group(1) == str(x): return True
+        log = subprocess.run(["git", "-C", str(w), "log", "--format=%B", "-n", "200"], capture_output=True, text=True)
+        if log.returncode == 0 and re.search(rf"\bRefs #{x}\b", log.stdout): return True
+    return False
+def closed_undelivered(run_name, i, infos, f):   # #1571: a run whose work an issue's close already answered keeps
+    # burning nodes and the machine-wide gate lock, so rule I ends it. Every accepted issue closed after the run started and
+    # before the run's last progress, with no landing of this run for it and no branch of this run naming it, is delivered
+    # work: nothing of the run is left to land. An unreadable stamp or close time, a close after the last progress (the run
+    # may be finishing a land) or a landing decides nothing and keeps the run.
+    start, prog = stamp_epoch(i["run_ts"]), stamp_epoch(i["last_ts"])
+    if start is None or prog is None: return False
+    for x, v in infos.items():
+        closed = stamp_epoch(v[4])
+        if closed is None or closed < start or closed > prog: return False
+        if any(x in i["kid_issue"].get(c, set()) for c in i["kid_landed"]) or run_landed(x, {run_name, i["run_id"]}): return False
+        if run_branch_names(f, x): return False
+    return True
 for n, i in live.items():
     mk = st / "auto" / f"janitor-closedrun-{n[-6:]}"
     if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
-    infos = {x: issue_info(x) for x in sorted(i["acc"])}
+    infos = {x: issue_read(x) for x in sorted(i["acc"])}   # the close time rides the pass's one read (#1571)
     if any(v[0] != "closed" for v in infos.values()): continue
     dup = all(not_planned(v[1]) or v[2].startswith("[duplicate") for v in infos.values())
     nums = ", ".join("#" + x for x in infos)
-    if dup:
-        say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed as a duplicate / not planned; stopping the run")
+    undelivered = False if dup else closed_undelivered(n, i, infos, livef.get(n))   # a duplicate already decides the stop
+    if dup or undelivered:
+        say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed and this run holds no landing for it; stopping the run"
+            if undelivered else f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed as a duplicate / not planned; stopping the run")
         if not dry:
             mk.touch(); f = livef[n]   # the folder active-runs.txt named, a run worktree's too (#585)
+            if undelivered: mark_killed(f, "closed_without_landing:" + ",".join("#" + x for x in infos))   # the run ends with a verdict that says why
             for q in inside(f):
-                if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} works only closed duplicate issues")
+                if "dashboard_server" not in procs.get(q, (0, ""))[1]:
+                    kill(q, f"run {n} works only closed issues with no landing of its own" if undelivered else f"run {n} works only closed duplicate issues")
             if i["pid"] and same_process(i["pid"], i["started_at"]): kill(i["pid"], f"last call of run {n}")
     else:
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
