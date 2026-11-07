@@ -16,4 +16,5 @@ cap=${SG_HAND_SMALL_WORKERS:-2}; small=${SG_HAND_SMALL_FILES:-2}
 [ "$files" -gt "$small" ] || [ "$n" -le "$cap" ] || refuse "a delta of $files files takes at most $cap workers: declare $cap or fewer"
 echo "hand-gate: $n workers, $files files changed, reason: $reason"
 export SG_GATE_WORKERS=$n
-exec bash "$here/fast-gate.sh"
+# A hand gate measures like an entry gate: the one-bounded-attempt cap is a child's alone (#1527).
+SG_GATE_CALLER=${SG_GATE_CALLER:-entry} exec bash "$here/fast-gate.sh"
