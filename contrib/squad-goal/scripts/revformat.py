@@ -438,10 +438,13 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verdict
                          "debt": {"type": "array", "items": _FINDING},
                          "resolved": {"type": "array", "items": _FINDING}}}
 FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n?```", re.DOTALL)
-# #1548: a finding that names an ADR rule and only greps for the text it asks to restore contradicts the ADR; it does not
-# show a defect the change caused. ADR-0156 rule 3 says the promotion code is never covered, so a grep for the restored
-# delta-guards.txt lines proves absence, which is what the rule requires. Such a finding is Debt (ADR-0172).
+# #1548: a rule in this map exempts a class of paths from coverage, so a finding that asks to restore that coverage
+# contradicts the rule; it is a proposal to change the rule, never a defect the change caused. ADR-0156 rule 3 says the
+# delta map has no line for the promotion code, so a grep for the restored delta-guards.txt lines proves absence, which is
+# what the rule requires. No other rule is mapped: a finding may cite one the change does violate, and it stays Blocking.
+COVERAGE_EXEMPT = {("0156", "3"): ("contrib/squad-goal/scripts/delta-guards.txt",)}
 ADR_RULE = re.compile(r"\bADR[-\s]?(\d{3,4})\b", re.IGNORECASE)
+
 RESTORE = re.compile(r"\b(?:restore|re-?add|add\s+back|reinstate|put\s+back|bring\s+back|reintroduce)\b",
                      re.IGNORECASE)
 GREP_CMD = re.compile(r"(?:^|[;&|]\s*)(/usr/bin/)?(?:git\s+)?grep\b([^;&|]*)")
@@ -475,15 +478,31 @@ def _grep_literal(cmd):
     return re.sub(r"[\^$]", "", pattern.replace("\\", ""))
 
 
+def _exempt_rule_paths(text):
+    """The paths a named coverage-exemption rule governs, or () when `text` names no such rule.
+
+    Only a rule in COVERAGE_EXEMPT counts. Any other ADR rule may be one the change violates, so its finding stays
+    Blocking. The rule is named by its ADR number followed by its rule number.
+    """
+    for (adr, rule), paths in COVERAGE_EXEMPT.items():
+        if re.search(rf"\bADR[-\s]?{adr}\b[^.]{{0,20}}?\brule\s+{rule}\b", text, re.IGNORECASE):
+            return paths
+    return ()
+
+
 def adr_proposal(item):
-    """True when a Blocking finding names an ADR rule and only greps for the text it asks to restore (#1548).
+    """True when a Blocking finding names an exempt ADR rule and only greps for the text it asks to restore (#1548).
 
     The finding is a proposal to change that rule, never a defect the change caused: its repro proves the text is absent,
-    not that the change broke something. It is Debt; a review that wants the rule changed quotes the ADR line and files
-    that as its own proposal.
+    not that the change broke something. It is Debt (ADR-0172); a review that wants the rule changed quotes the ADR line
+    and files that as its own proposal. The finding must be about a path the rule governs, so a finding that merely names
+    the ADR number stays Blocking: it may report a rule the change does violate.
     """
     text = " ".join(item[f] for f in FIELDS)
-    if not ADR_RULE.search(text) or not RESTORE.search(text):
+    paths = _exempt_rule_paths(text)
+    if not paths or not RESTORE.search(text):
+        return False
+    if not any(path in item["location"] for path in paths):
         return False
     pattern = _grep_literal(item[REPRO])
     return bool(pattern) and pattern.lower() in text.lower()

@@ -459,4 +459,15 @@ python3 "$src" --answer "$T/adr2.json" > "$T/adr2.md" 2>/dev/null
 [ "$(python3 "$src" --summary "$T/adr2.md")" = "blocking=1 debt=0" ] \
   && ok "39 an ADR-naming finding whose repro is a real command stays Blocking (#1548)" \
   || ko "39 ADR non-grep repro: summary='$(python3 "$src" --summary "$T/adr2.md" 2>&1)'"
+# 40) #1548: the demotion is the rule's exemption, not the ADR word's. A rule in the coverage-exemption map exempts a class
+# of paths from coverage, so only a finding about that class is a proposal to change it. A finding located elsewhere may
+# cite an ADR rule the change does violate; with a grep repro it is still a real defect and stays Blocking.
+cat > "$T/adr3.json" <<'J'
+{"verdict":"CHANGES","blocking":[{"location":"x","defect":"the change violates ADR-0156 rule 3","failure":"the wire protocol is broken","fix":"restore promote-pass.sh","repro":"grep -q promote-pass.sh f"}],"debt":[],"resolved":[]}
+J
+python3 "$src" --answer "$T/adr3.json" > "$T/adr3.md" 2>/dev/null
+[ "$(python3 "$src" --summary "$T/adr3.md")" = "blocking=1 debt=0" ] \
+  && ! /usr/bin/grep -q 'not a repro of a defect' "$T/adr3.md" \
+  && ok "40 a Blocking finding citing an ADR rule the change violates stays Blocking, even with a grep repro (#1548)" \
+  || ko "40 ADR violation: summary='$(python3 "$src" --summary "$T/adr3.md" 2>&1)' $(cat "$T/adr3.md" 2>/dev/null)"
 rm -rf "$T"; exit $fail
