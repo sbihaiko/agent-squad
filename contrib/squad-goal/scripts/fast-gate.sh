@@ -2,7 +2,8 @@
 # usage: fast-gate.sh      the fast gate of a work-branch tip or of a child that enters a wave (ADR-0145), run in that tip's worktree.
 #
 # It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD) at the `fast` stage, so the pytest runs the delta the
-# tip reaches, then the shell suite test-<script>.sh of every .sh or .py
+# tip reaches and then once more serially at the same files and the project's 2 s line (the line the CI serial tier enforces,
+# which the parallel run only names), then the shell suite test-<script>.sh of every .sh or .py
 # script under contrib/squad-goal/scripts that the tip changes, and every fixture suite whose `# mirrors:` line names a changed
 # file; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
 # against its merge-base with SG_FAST_BASE (default origin/$SG_BASE, else origin/dev), so work that landed on the base after the
@@ -32,7 +33,8 @@ py=$(sg_gate_python)
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
   *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2};; esac
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
-retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
+# (#1557) The retry keeps the serial 2 s line: it lifts no cap, so it cannot clear the slow unmarked call the serial pass found.
+retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist"}
 # The memo key names what the suite reads: the tree's content (HEAD's tree object, never its commit), its uncommitted state,
 # the base ref, the merge-base the delta starts from, and the battery text. The base commit is no part of the key (#1408): a
 # landing moves it at every turn, and the merge-base already names what the delta reads, so a pass still answers after the base

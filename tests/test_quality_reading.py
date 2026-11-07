@@ -8,6 +8,8 @@ import ast
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text())
 QUALITY_TOOLS = {"radon", "coverage", "pylint", "mutmut"}
@@ -24,6 +26,7 @@ def test_the_quality_tools_are_dev_extras():
     assert QUALITY_TOOLS <= dev, f"missing from the dev extra: {sorted(QUALITY_TOOLS - dev)}"
 
 
+@pytest.mark.heavy   # walks every module's imports: 1.6 s here, 2 s on a CI runner
 def test_no_squad_module_imports_a_quality_tool():
     """The reading reads the package from outside; a module that imported a tool would make it a runtime dep."""
     offenders = []

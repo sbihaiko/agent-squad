@@ -149,6 +149,9 @@ out=$(cd "$R" && SG_FAST_BASE=dev SG_GATE_PY="$T/py" SG_GATE_WORKERS=3 bash "$d/
 retryline=$(/usr/bin/grep -E '^retrycmd=' "$d/fast-gate.sh")
 case "$retryline" in *'-p no:xdist'*) ok "the retry serializes pytest";; *) ko "the retry is not serial: '$retryline'";; esac
 case "$retryline" in *' -n '*) ko "the serial retry takes workers: '$retryline'";; *) ok "the serial retry stays serial";; esac
+# (#1557) The retry must keep the serial 2 s line: a retry that lifts it to the 20 s cap clears the very slow unmarked call
+# the serial pass found, and the gate reads it as saturation.
+case "$retryline" in *heavy_cap_seconds*) ko "the serial retry lifts the 2 s line: '$retryline'";; *) ok "the serial retry keeps the 2 s line";; esac
 /usr/bin/grep -qE 'SG_GATE_WORKERS:=[0-9]+' "$d/env.sh" && ok "env.sh holds the default worker count" || ko "env.sh: no numeric SG_GATE_WORKERS default"
 # (#646) The base battery's pytest runs over the selection the selector answers for the base. A stub python logs each call's argv
 # on one line and answers squad.testselect from $T/select.out, so each pytest line is compared exactly, never by one word.
@@ -160,11 +163,18 @@ printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS tests/test_a.py tests/test_b.py" "$T/argv.log" && ok "the battery passes the selection to pytest, after the unchanged options" || ko "selection argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
 /usr/bin/grep -q -- "squad.testselect --stage fast --base dev" "$T/argv.log" && ok "the fast gate asks the selector at the fast stage" || ko "fast stage: '$(cat "$T/argv.log" 2>&1)'"
+# (#1557) The delta runs once more serially over the same files, at the project's own cap: the 2 s line CI's serial shards
+# enforce, which the parallel run lifts to 20 s. A full selection is not repeated: the whole battery serially is the
+# promotion proof's run, and it outgrows the gate's budget.
+SERIAL_OPTS='-p no:deepeval -p no:xdist -m not heavy'
+/usr/bin/grep -qx -- "-m pytest $SERIAL_OPTS tests/test_a.py tests/test_b.py" "$T/argv.log" && ok "the delta runs a second, serial pass over the same files at the 2 s line" || ko "serial pass: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
+[ "$(/usr/bin/grep -c -- '-m pytest' "$T/argv.log")" = 2 ] && ok "the delta runs exactly two pytest passes, one parallel and one serial" || ko "delta pytest passes: '$(/usr/bin/grep -- '-m pytest' "$T/argv.log" 2>&1)'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass selected 2 files delta" ] && ok "the status line states the selected file count and the delta scope" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 echo "all: no test imports squad/x.py" > "$T/select.out"
 out=$(selrun); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ok "an all answer runs the whole battery" || ko "all argv: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
+[ "$(/usr/bin/grep -c -- '-m pytest' "$T/argv.log")" = 1 ] && ok "a full selection runs one pass, never a full serial battery beside the gate's budget" || ko "full selection passes: '$(/usr/bin/grep -- '-m pytest' "$T/argv.log" 2>&1)'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
 [ "$sel $scope" = "all: no test imports squad/x.py full" ] && ok "the status line states the all reason and the full scope" || ko "all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 # (#1249) A gate that runs no test never records a pass. An empty selection is unproven (exit 4), its reason is the one the
@@ -540,6 +550,25 @@ w=$(wcase); [ "$w" = 2 ] && ok "a child gate with no count named takes two gate 
 w=$(wcase SG_GATE_CALLER=entry); [ "$w" = 6 ] && ok "an entry gate keeps the full count" || ko "entry gate slots: '$w', want 6"
 w=$(wcase SG_GATE_CALLER=entry SG_GATE_WORKERS=3); [ "$w" = 3 ] && ok "a count named by the caller wins over the kind's default" || ko "named count: '$w', want 3"
 w=$(wcase SG_GATE_CALLER=child SG_GATE_WORKERS=5); [ "$w" = 5 ] && ok "a child gate named a count of its own: it wins" || ko "child named count: '$w', want 5"
+
+# (#1557) The gate proves the serial 2 s line end to end: a test whose unmarked call sits over the project's heavy line is
+# green in the parallel pass, which lifts the line to 20 s, and red in the serial pass the gate now runs. The retry keeps the
+# line, so it never clears the finding as saturation. The trial repo sets its own line at 0.05 s, so a 0.3 s call fails
+# whatever the machine load and the case stays inside the gate's budget.
+sc=$T/slowcap-repo; mkdir -p "$sc/tests"
+cp "$d/../../../tests/slowcap.py" "$sc/slowcap.py"
+printf 'pytest_plugins = ["slowcap"]\n' > "$sc/conftest.py"
+printf '[tool.pytest.ini_options]\naddopts = "-p no:cacheprovider"\nheavy_cap_seconds = "0.05"\n' > "$sc/pyproject.toml"
+printf 'import time\n\ndef test_unmarked_slow():\n    time.sleep(0.3)\n' > "$sc/tests/test_slow.py"
+pyreal=$(cd "$d/../../.." && env -u SG_GATE_PY bash -c '. contrib/squad-goal/scripts/caps.sh; sg_gate_python')
+printf '#!/bin/bash\ncase "$*" in\n  *squad.testselect*) echo tests/test_slow.py;;\n  *"-m pytest"*) exec %q "$@";;\nesac\nexit 0\n' "$pyreal" > "$sc/py"; chmod +x "$sc/py"
+git init -q -b dev "$sc"; $G -C "$sc" add -A; $G -C "$sc" commit -q -m base
+slowgate() { (cd "$sc" && env -u SG_FAST_CMD -u SG_TEST_SELECT -u SG_FAST_RETRY_CMD SG_STATE="$T/sc-st" SG_FAST_LOG_DIR="$T/sc-logs" SG_FAST_BASE=dev SG_FAST_MEMO=0 SG_GATE_PY="$sc/py" bash "$d/fast-gate.sh" 2>&1); }
+out=$(slowgate); rc=$?
+[ $rc = 1 ] && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_slow.py::test_unmarked_slow"*) true;; *) false;; esac \
+  && ok "a slow unmarked call over the serial line fails the local gate, by name" || ko "slow unmarked call: rc $rc, last '$(last "$out")'"
+if /usr/bin/grep -q "line for an unmarked call" "$T/sc-logs"/fast-gate-*.log 2>/dev/null; then ok "the log names the unmarked call over the line"
+else ko "slow log: '$(cat "$T/sc-logs"/fast-gate-*.log 2>&1 | tail -n 5)'"; fi
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started

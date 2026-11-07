@@ -68,6 +68,7 @@ async def test_a_wave_run_whose_target_fails_ownership_keeps_the_landed_childs_w
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # one run to a landed child, then its prune: 1.5 s here, 2 s on a CI runner
 async def test_a_loop_shaped_run_with_no_wave_prunes_its_landed_children(tmp_path):
     """The shape of the target is not the hold: a run in the loop's shape that cut no wave prunes as any completed run does."""
     repo, wt, eng = loop_run(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")})
@@ -113,6 +114,7 @@ async def test_the_verdict_hint_of_a_run_works_from_any_directory(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # one landing written and read back: 1.4 s here, 2 s on a CI runner
 async def test_a_landing_is_one_work_commit_and_one_merge_commit_not_two_landings(tmp_path):
     """Field run field3 showed two `squad: land` lines for one child: the worktree commit and the --no-ff merge share one message."""
     repo = sibling_repo(tmp_path)
