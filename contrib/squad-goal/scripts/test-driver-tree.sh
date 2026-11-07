@@ -29,7 +29,36 @@ for s in $SUSPECTS; do
   [ -z "$left" ] && ok "$s leaves no process alive when it is killed mid-run" || { ko "$s leaves process(es) alive after a kill mid-run: $(echo $left)"; for p in $left; do kill -KILL "$p" 2>/dev/null; done; }
 done
 
+# The trap reaches the kill through the functions it names: a suite that stops its drivers in `stopall` and calls `stopall`
+# from its EXIT trap kills the tree just the same, so the guard resolves every name the trap runs to the functions the suite
+# defines, transitively, and asks whether driver_tree_kill is among them (ADR-0018: the guard proves the reach, not the
+# spelling of one line). A suite with no EXIT trap at all still fails.
+trap_kills_tree() {
+  python3 - "$1" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+fn, cur = {}, None   # a function's body runs from its `name() {` to the closing `}` at column 0, or to its one-line end
+for line in src.splitlines():
+    if cur is None:
+        m = re.match(r"^([A-Za-z_]\w*)\(\)\s*\{", line)
+        if m:
+            cur, fn[cur] = m.group(1), set()
+            rest = line[m.end():]
+            fn[cur].update(re.findall(r"[A-Za-z_]\w*", rest))
+            if rest.rstrip().endswith("}"): cur = None
+    elif line.startswith("}"):
+        cur = None
+    else:
+        fn[cur].update(re.findall(r"[A-Za-z_]\w*", line))
+traps = [b for _, b in re.findall(r'\btrap\s+(["\'])(.*?)\1\s+EXIT', src, re.S)]
+def reaches(name, seen=()):
+    if name == "driver_tree_kill": return True
+    if name in seen or name not in fn: return False
+    return any(reaches(n, seen + (name,)) for n in fn[name])
+sys.exit(0 if any(reaches(w) for t in traps for w in set(re.findall(r"[A-Za-z_]\w*", t))) else 1)
+PY
+}
 for s in $DRIVERS; do
-  /usr/bin/grep -h 'trap .*EXIT' "$here/$s.sh" | /usr/bin/grep -q 'driver_tree_kill' && ok "$s kills its driver tree in its EXIT trap" || ko "$s has no EXIT trap that kills its driver tree"
+  trap_kills_tree "$here/$s.sh" && ok "$s kills its driver tree in its EXIT trap" || ko "$s has no EXIT trap that kills its driver tree"
 done
 exit $fail
