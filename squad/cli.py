@@ -36,7 +36,7 @@ def model_hours_arg(text):
 
 
 def model_ctx_arg(text):
-    """{model: window} from `--model-ctx`: MODEL=WINDOW pairs joined by "," (for example `kimi=128k,opus=1m`)."""
+    """{model: window} from `--model-ctx`: MODEL=WINDOW pairs joined by "," (for example `mimo=128k,opus=1m`)."""
     return {m.strip(): w.strip() for m, w in (p.split("=", 1) for p in text.split(",") if "=" in p)}
 
 

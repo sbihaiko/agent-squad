@@ -394,7 +394,7 @@ def test_the_facts_follow_the_load_cells_in_this_order(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names: the subs block carries it
     items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), NOW)
     assert [i["key"] for i in items] == ["landing", "subs"]
-    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
+    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ?"
     assert [i["bad"] for i in items] == [False] * 2
 
 
@@ -450,10 +450,10 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
     line = hub.foot_line(hub.foot_items(_src(landing=None), NOW))
-    assert line == "landed ? · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
+    assert line == "landed ? · CL ? · GK ? · GPT ? · GEM ?"
     # a source this reading does not carry at all draws no block of its own, and the landing still says `?`
     assert hub.foot_line(hub.foot_items({"quota": {"codex": "?", "agy": None}}, NOW)) \
-        == "landed ? · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
+        == "landed ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
@@ -472,7 +472,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     monkeypatch.setattr(hub, "SHARED", tmp_path / "nothing-here")              # and a shared dir with no limit marker
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), now)) \
-        == "landed ? · queue empty · CL ? · GK ? · GPT ? · GEM ? · KIMI ? · Loop:OFF"   # no watchd.pid: the loop is off (#554); the ledger has no open hold: an empty queue is a reading (#1173)
+        == "landed ? · queue empty · CL ? · GK ? · GPT ? · GEM ? · Loop:OFF"   # no watchd.pid: the loop is off (#554); the ledger has no open hold: an empty queue is a reading (#1173)
 
 
 def _iso(ts):
@@ -657,9 +657,9 @@ def test_each_subscription_token_is_painted_by_its_own_consumption_not_the_block
                      "gpt": {"probe": {"windows": [{"pct": hub.FOOT_ERR_PCT, "resets": None}]}, "quota": None},
                      "gemini": {"probe": None, "quota": None}})
     parts = _subs_parts(hub, src)
-    assert [p["text"] for p in parts] == ["CL 20% 1.0h", "GK 80% ?", "GPT 95% ?", "GEM ?", "KIMI ?"]
-    assert [p.get("tip") for p in parts] == ["resets in 1h 0m", None, None, None, None]
-    assert [p["tone"] for p in parts] == ["ok", "warn", "err", hub.FOOT_NEUTRAL, hub.FOOT_NEUTRAL]
+    assert [p["text"] for p in parts] == ["CL 20% 1.0h", "GK 80% ?", "GPT 95% ?", "GEM ?"]
+    assert [p.get("tip") for p in parts] == ["resets in 1h 0m", None, None, None]
+    assert [p["tone"] for p in parts] == ["ok", "warn", "err", hub.FOOT_NEUTRAL]
 
 
 def test_subscription_reset_span_shows_on_every_tone_in_decimal_days(hub):
@@ -721,7 +721,7 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), NOW)
-    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
+    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ?"
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
 
 
@@ -845,15 +845,30 @@ def test_each_subscription_answers_its_weekly_share_and_days_to_reset(hub, monke
 
 
 def test_a_provider_with_no_weekly_window_shows_its_monthly_share(hub, monkeypatch):
-    """Kimi Code Plus reports a 5 h window and a monthly one and no weekly. The gauge shows the monthly share (the
+    """A plan that reports a 5 h window and a monthly one and no weekly. The gauge shows the monthly share (the
     owner's choice), never the window that merely resets last."""
     now = 1_000_000.0
     monkeypatch.setattr(hub, "quota", {
-        "kimi": {"asof": now - 60, "windows": [
+        "grok": {"asof": now - 60, "windows": [
             {"label": "5 h", "pct": 62.2, "resets": now + 4 * 3600},
             {"label": "month", "pct": 7.7, "resets": now + 30 * 86400}]}})
     rows = {r["key"]: r for r in hub.subs_gauges(now)}
-    assert rows["kimi"]["pct"] == 7.7 and rows["kimi"]["window"] == "month"
+    assert rows["grok"]["pct"] == 7.7 and rows["grok"]["window"] == "month"
+
+
+def test_a_retired_subscription_in_the_stores_surfaces_nowhere(hub, monkeypatch, tmp_path):
+    """A subscription the owner cancelled can still sit in the quota cache and the plans file. The Usage panel, the
+    Subscriptions list, the plan reader, the preset catalog and the footer read SUBS only, so it never shows."""
+    now = 1_000_000.0
+    gone = "ki" + "mi"
+    plans = tmp_path / "plans.json"
+    plans.write_text(json.dumps({gone: {"plan": "code", "amount": 19, "currency": "USD"}}))
+    monkeypatch.setattr(hub, "PLANS", plans)
+    monkeypatch.setattr(hub, "quota", {gone: {"asof": now - 60, "windows": [{"label": "month", "pct": 99.0, "resets": now + 86400}]}})
+    assert gone not in hub.SUBS and gone not in hub.PRESETS and gone not in hub.plans_get()
+    assert gone not in {r["key"] for r in hub.subs_gauges(now)}
+    assert gone not in hub.subs_month()
+    assert gone not in json.dumps(hub.foot_line([])).lower()
 
 
 def test_a_subscription_with_no_reading_says_why_and_carries_no_share(hub, monkeypatch):
@@ -1487,3 +1502,13 @@ def test_the_tasks_row_reads_the_reason_and_labels_the_snapshot_already_carries(
     assert rows[0]["cr"] == "completed" and rows[2]["cr"] == "not_planned", "the snapshot drops the close reason"
     assert hub.tasks_fact([dict(r, s="closed") for r in rows], now_ts, 4 * 3600, 3) == {"n": 1, "of": 3, "share": 0.333}, \
         "the snapshot's own row is not a Tasks row input"
+
+
+def test_a_cancelled_subscription_leaves_the_usage_panel_and_the_subscriptions_list(hub):
+    """#1529: the owner cancelled Kimi. The Usage panel reads hub.SUBS and the Settings > Subscriptions list reads the
+    registry's subscriptions (subscription_states), so neither names it, and no registry model is billed to it."""
+    from squad import modelreg
+    reg = modelreg.default_registry()
+    assert "kimi" not in hub.SUBS and "KIMI" not in hub.SUB_ACR.values()
+    assert "kimi" not in reg.subscriptions and "kimi" not in hub.subscription_states()
+    assert not [m for m in reg.entries if "kimi" in str(m).lower()]

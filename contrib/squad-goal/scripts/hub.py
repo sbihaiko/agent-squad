@@ -131,7 +131,7 @@ live = {}                                          # unfinished runs: {path: (mt
 
 # Billing source of a call, from the model on its outcome: Claude (sonnet/opus/fable/haiku), Grok and GPT run on the owner's subscriptions;
 # every other model (deepseek, gemini…) and any call that names no model is pay-per-use API.
-SUBSCRIPTION = re.compile(r"^(claude-)?(sonnet|opus|fable|haiku|grok|gpt|gemini|kimi)\b")
+SUBSCRIPTION = re.compile(r"^(claude-)?(sonnet|opus|fable|haiku|grok|gpt|gemini)\b")
 
 # The SDK prices every model it does not know at Claude rates (a DeepSeek run showed ~$410 where the platform bills a few dollars), so calls to
 # gateway models are re-priced from their tokens. USD per 1M tokens: (cache hit, cache miss, output); first match wins. Short-context tier (an
@@ -2418,7 +2418,7 @@ def subs_gauges(now=None):
         if not ws:
             row.update({"pct": None, "resets": None, "why": (q or {}).get("err") or "no reading"})
         else:
-            # The plan's own weekly window leads; a plan that reports no weekly one (Kimi Code Plus) shows its monthly
+            # The plan's own weekly window leads; a plan that reports no weekly one shows its monthly
             # share (the owner's choice); anything else shows the fullest window, never the one that merely resets last.
             w = (next((x for x in ws if str(x.get("label", "")).lower().startswith("weekly")), None)
                  or next((x for x in ws if "month" in str(x.get("label", "")).lower()), None)
@@ -6399,14 +6399,13 @@ PAGE = PAGE.replace("/*LT_START*/", LEAD_START)
 
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
-SUBS = ("claude", "grok", "gpt", "gemini", "kimi")
-SUB_ACR = dict(zip(SUBS, ("CL", "GK", "GPT", "GEM", "KIMI")))   # the footer's token for each subscription (#1839): 2-3 letters, spelled here and nowhere else
+SUBS = ("claude", "grok", "gpt", "gemini")
+SUB_ACR = dict(zip(SUBS, ("CL", "GK", "GPT", "GEM")))   # the footer's token for each subscription (#1839): 2-3 letters, spelled here and nowhere else
 def provider(m):
     m = m or ""
     if re.search(r"grok", m): return "grok"
     if re.search(r"gpt", m): return "gpt"
     if re.search(r"gemini", m): return "gemini"
-    if re.search(r"kimi", m): return "kimi"
     if re.match(r"^(claude-)?(sonnet|opus|fable|haiku)\b", m): return "claude"
     return None
 # Monthly list prices in USD, as published (they differ by country: pick "Custom amount" to enter what you really pay, in any currency).
@@ -6415,7 +6414,6 @@ PRESETS = {
     "gpt": {"plus": ("Plus", 20), "pro": ("Pro", 200), "business": ("Business seat", 30)},
     "grok": {"super": ("SuperGrok", 30), "heavy": ("SuperGrok Heavy", 300)},
     "gemini": {"plus": ("AI Plus", 7.99), "pro": ("AI Pro", 19.99), "ultra": ("AI Ultra", 249.99)},
-    "kimi": {"code": ("Kimi Code", 19)},
 }
 RATES = HUBDIR / "hub-rates.json"
 def rate(cur):
@@ -6630,132 +6628,11 @@ def week_value(k, usd, days, mstart):
     for e in weeks[k].values():
         if e["end"] - 7 * 86400 >= mstart or e["end"] > time.time(): tot += e["pct"] / 100 * usd * 7 / days
     return round(tot, 2)
-KIMI_AUTH = HOME / ".config/claude-code-proxy/kimi/auth.json"   # the bridge's own token, refreshed on every kimi call
-KIMI_CLI_AUTH = HOME / ".kimi-code/credentials/kimi-code.json"  # the CLI's store, refreshed by the CLI itself
-KIMI_USAGES = "https://api.kimi.com/coding/v1/usages"
-def kimi_token(now=None):
-    """The freshest unexpired Kimi access token, read from the bridge's store and the CLI's. A probe reads a credential
-    and never writes one: the bridge refreshes its own on the next kimi call."""
-    now = time.time() if now is None else now
-    live = []
-    for path, key, exp in ((KIMI_AUTH, "access", "expires"), (KIMI_CLI_AUTH, "access_token", "expires_at")):
-        try: d = json.loads(path.read_text())
-        except Exception: continue
-        tok, until = d.get(key), d.get(exp)
-        if not isinstance(tok, str) or not tok or not isinstance(until, (int, float)): continue
-        until = until / 1000 if until > 1e12 else until   # the bridge keeps milliseconds, the CLI seconds
-        if until > now: live.append((until, tok))
-    return max(live)[1] if live else None
-def ca_context():
-    """The TLS context for an HTTPS read. A python.org build ships no CA bundle of its own, and this probe's whole job
-    is one HTTPS GET, so the system bundle is read first and the default store second."""
-    import ssl
-    for cafile in (os.environ.get("SSL_CERT_FILE"), "/etc/ssl/cert.pem", "/opt/homebrew/etc/ca-certificates/cert.pem"):
-        try:
-            if cafile and pathlib.Path(cafile).exists(): return ssl.create_default_context(cafile=cafile)
-        except (OSError, ssl.SSLError): continue
-    return ssl.create_default_context()
-def kimi_usages(tok):
-    """The one HTTP read the probe makes: the subscription's own usage document."""
-    req = urllib.request.Request(KIMI_USAGES, headers={"authorization": f"Bearer {tok}"})
-    with urllib.request.urlopen(req, timeout=15, context=ca_context()) as r: return json.loads(r.read().decode("utf8", "replace"))
-KIMI_PROXY_DEFAULT = "http://127.0.0.1:18765"   # the bridge's local server, loopback only
-KIMI_MODEL = "kimi-for-coding"                  # a one-token call is the smallest Kimi call the bridge accepts
-KIMI_REFRESH_BACKOFF = 300                      # a failed renewal is remembered, never retried on every poll
-KIMI_REFRESH_STATE = {"until": 0.0, "reason": None}
-def kimi_proxy():
-    """The bridge's address, read per call so a configured port is the port used."""
-    return os.environ.get("SG_CCP_PROXY", KIMI_PROXY_DEFAULT).rstrip("/")
-class _KimiNoRedirect(urllib.request.HTTPRedirectHandler):
-    """A refresh answer must be the bridge's own: a redirect is refused, never followed to another host."""
-    def redirect_request(self, *a, **kw): return None
-KIMI_OPENER = urllib.request.build_opener(_KimiNoRedirect)
-def kimi_refresh_open(req, timeout=30):
-    """The seam the refresh POST crosses; a test answers here so the real request is built and sent by `kimi_refresh`."""
-    return KIMI_OPENER.open(req, timeout=timeout)
-def kimi_refresh():
-    """The bridge renews its Kimi token only on a Kimi call, so the probe makes the smallest one on the bridge's own
-    inference route and lets the bridge write its own store; the probe writes no credential.
-
-    Plan decision for #1428, Option A: the probe renews when no access token is live, by making the one call the bridge
-    would make anyway. Confirmed against the installed bridge (0.1.45): it serves only GET /v1/models and POST
-    /v1/messages on loopback with no auth, a `kimi-for-coding` call is accepted, and its store's mtime moves with a
-    Kimi call. A 200 that is not a bridge message did not renew anything, so it raises rather than passing as one."""
-    body = json.dumps({"model": KIMI_MODEL, "max_tokens": 1,
-                       "messages": [{"role": "user", "content": "."}]}).encode()
-    req = urllib.request.Request(f"{kimi_proxy()}/v1/messages", data=body, method="POST",
-                                 headers={"content-type": "application/json", "anthropic-version": "2023-06-01"})
-    with kimi_refresh_open(req) as r: raw = r.read()
-    try: d = json.loads(raw.decode("utf8", "replace"))
-    except ValueError: raise RuntimeError(f"the bridge answered no message: {raw[:80]!r}")
-    if not isinstance(d, dict) or not isinstance(d.get("content"), list):
-        raise RuntimeError(f"the bridge answered no message: {str(d)[:80]}")
-def kimi_refresh_source():
-    """Where a refresh token sits. "bridge" is the only path this probe may use: the renewal runs through the bridge,
-    which renews from its own store. "cli" says only the CLI's store holds one, and the CLI renews that itself; None
-    says neither store holds one. The paths are named so a reason never sends the owner after the wrong store."""
-    try:
-        d = json.loads(KIMI_AUTH.read_text())
-        if isinstance(d.get("refresh"), str) and d["refresh"]: return "bridge"
-    except Exception: pass
-    try:
-        d = json.loads(KIMI_CLI_AUTH.read_text())
-        if isinstance(d.get("refresh_token"), str) and d["refresh_token"]: return "cli"
-    except Exception: pass
-    return None
-def kimi_why(s, cap=160):
-    """A reason the panel shows whole: cut on a word boundary with an ellipsis, never mid-word."""
-    if len(s) <= cap: return s
-    cut = s[:cap - 1].rsplit(" ", 1)[0] or s[:cap - 1]
-    return cut + "…"
-def kimi_renew(now=None):
-    """Renew an expired token once through the bridge and answer why none is live, or None when one is. A failed
-    renewal backs off for KIMI_REFRESH_BACKOFF seconds: the panel polls every couple of minutes, and a Kimi call per
-    poll would cost the account and flood the log with the same reason."""
-    now = time.time() if now is None else now
-    if now < KIMI_REFRESH_STATE["until"]: return KIMI_REFRESH_STATE["reason"]
-    try: kimi_refresh()
-    except Exception as e:
-        why = kimi_why(f"no live Kimi token and the bridge refresh failed: {type(e).__name__}: {e}")
-    else:
-        if kimi_token(now): return None
-        why = kimi_why("no live Kimi token: the bridge answered and its store still holds no live token")
-    KIMI_REFRESH_STATE.update(until=now + KIMI_REFRESH_BACKOFF, reason=why)
-    return why
-def q_kimi():
-    """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An expired token is renewed
-    once through the bridge's own path; a renewal that fails or leaves no live token reads as no reading with its
-    reason, never as a guess."""
-    tok = kimi_token(); why = None
-    if not tok:
-        src = kimi_refresh_source()
-        if src == "bridge":
-            why = kimi_renew()
-            if why is None: tok = kimi_token()
-        elif src == "cli":
-            why = ("no live Kimi token: only the CLI's store holds a refresh token, and the CLI renews that itself; "
-                   "the probe writes no credential")
-        else:
-            why = "no live Kimi token: neither the bridge's store nor the CLI's store holds a refresh token"
-    # `keep`: the token lives fifteen minutes, so this is no new reading, never one that stopped tracking the account;
-    # quota_store keeps the last good windows, and quota_row still ages them out.
-    if not tok:
-        return {"windows": [], "unavailable": True, "keep": True, "err": kimi_why(why or "no live Kimi token")}
-    d = kimi_usages(tok)
-    u = d.get("usages") or {}
-    ws = []
-    for key, label in (("limit_5h", "5 h"), ("limit_month_total", "month")):
-        x = u.get(key) or {}
-        if x.get("used_ratio") is None: continue
-        t = x.get("reset_time")
-        ws.append({"label": label, "pct": round(float(x["used_ratio"]) * 100, 1),
-                   "resets": dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp() if t else None})
-    return {"windows": ws} if ws else None
 def q_nvidia():
     """NVIDIA NIM's free tier publishes no quota endpoint: the plan is a rate limit (about 40 requests a minute), never a
     monthly share, so the row says so rather than drawing a guess."""
     return {"windows": [], "unavailable": True, "err": "free tier: a per-minute rate limit, no monthly reading"}
-QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "kimi": q_kimi, "nvidia": q_nvidia}
+QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "nvidia": q_nvidia}
 def quota_store(k, fn):
     """Run probe fn and store its answer for k. An answer with no windows replaces the row outright, so a reading that
     stopped tracking reality cannot pass as current, unless it says `keep` (no new reading, e.g. an expired token):
@@ -6779,7 +6656,7 @@ def refresh_quota_once():
     quota_write()
 QUOTA_LOCK = threading.Lock()
 def quota_write():
-    """Persist the readings. One lock, so the Kimi pass and the full pass never drop each other's entry."""
+    """Persist the readings. One lock, so concurrent passes never drop each other's entry."""
     with QUOTA_LOCK:
         try: QUOTA.write_text(json.dumps(quota))
         except OSError: pass
@@ -6787,16 +6664,6 @@ def refresh_quota():
     """Every 20 min, one refresh_quota_once pass (the age of the last good value is shown on the row)."""
     while True:
         refresh_quota_once(); time.sleep(1200)
-KIMI_REFRESH_SECONDS = 120   # the 5 h window moves by the minute while a child codes; the full pass is dear
-def refresh_kimi_quota():
-    """Every two minutes, the Kimi reading alone: the full pass spawns a model call for another provider, and this one
-    is a single HTTPS GET, so the row the owner watches while the chain codes stays current."""
-    while True:
-        kimi_pass_once(); time.sleep(KIMI_REFRESH_SECONDS)
-def kimi_pass_once():
-    """One Kimi pass: the same store rule as the full pass, then persist."""
-    quota_store("kimi", QUOTA_PROBES.get("kimi", q_kimi))
-    quota_write()
 QUOTA_MAX_AGE = 3 * 3600   # a probe repolls every 20 min; a reading older than this stopped tracking the account
 def quota_row(k, now=None):
     """What the cost panel and the footer show for provider k: the CLI's own reading, or the reason there is no reading.
@@ -6821,7 +6688,7 @@ def quota_row(k, now=None):
     if r.get("err"): return {"unavailable": True, "err": r["err"], "asof": r.get("asof"), "plan": r.get("plan")}
     return None
 
-BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google", "kimi": "Kimi"}
+BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google"}
 def sub_name(k, plan, detected):
     """The card name comes from the account: the plan the probe detected, else the plan chosen in the card, else the provider.
     A plan of None (no plan, or a plan cleared) and a dict without a `plan` key both read as the provider's name."""
@@ -8343,5 +8210,5 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
     warm()   # the sessions read costs seconds on a large profile, so it starts with the hub, never with the first page (#1217)
-    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=refresh_kimi_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
