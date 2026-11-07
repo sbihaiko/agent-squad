@@ -103,15 +103,20 @@ try {
   vm.runInContext(input.core, ctx);
   vm.runInContext(input.page, ctx);
 } catch (e) { errors.push(String(e && e.stack || e)); }
-setTimeout(() => {
-  console.log(JSON.stringify({ status: els.status ? String(els.status.textContent) : null, errors }));
+// The page settles in its own time: a fixed wait read a half-loaded status on a slow runner (3.11 CI). The harness polls until
+// the status holds `input.until`, or until the bound, and then prints what it holds.
+const bound = Date.now() + 15000;
+(function done() {
+  const status = els.status ? String(els.status.textContent) : null;
+  if ((input.until && !(status || "").includes(input.until)) && Date.now() < bound) return setTimeout(done, 25);
+  console.log(JSON.stringify({ status, errors }));
   process.exit(0);
-}, 300);
+})();
 """
 
 
-def page_status(files):
-    payload = json.dumps({"engine": engine_data(), "core": core_bundle(), "page": page_bundle(), "files": files})
+def page_status(files, until=None):
+    payload = json.dumps({"engine": engine_data(), "core": core_bundle(), "page": page_bundle(), "files": files, "until": until})
     p = subprocess.run([NODE, "-e", PAGE_HARNESS], input=payload, capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
@@ -125,7 +130,7 @@ def test_an_ended_run_still_says_it_ended_after_the_page_loads_it():
         "run/record.jsonl": (fixture / "run" / "record.jsonl").read_text(),
         "run/graph.json": (fixture / "graph.json").read_text(),
     }
-    got = page_status(files)
+    got = page_status(files, until="This run ended")
     assert got["errors"] == [], got
     assert "This run ended" in got["status"], got
 

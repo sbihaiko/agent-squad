@@ -178,6 +178,7 @@ def supervisor_sentence(info: dict) -> str:
 
 
 @pytest.mark.heavy
+@pytest.mark.sdk_bound
 @pytest.mark.slow(reason="starts hubmux, a real supervisor daemon and a hosted session")
 def test_a_hosted_session_echoes_a_line_sent_through_the_hub(hub_up):
     hub = hub_up()

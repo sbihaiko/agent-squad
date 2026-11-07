@@ -203,10 +203,13 @@ async def test_a_resume_reviews_the_same_head_against_the_same_base(tmp_path):
     eng.dispatch.prune = lambda: None
     assert (await eng.run()).verdict == "completed"
     events = read(tmp_path / "record.jsonl")
-    cut = next(i for i, e in enumerate(events) if e["event"] == "land") + 1   # keep the first landing, drop the second child's review
+    # The cut drops the second child's review and all after it. A passed child is reviewed as it passes (#1520), so that review
+    # can come before the first landing: the cut is at the review, never at a landing.
+    cut = next(i for i, e in enumerate(events) if e["event"] == "gate_result" and e.get("node") == B)
     (tmp_path / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events[:cut]))
-    git.run(["reset", "--hard", events[cut - 1]["effect"]["head"]], repo)     # the target as the cut left it: the first child merged
     first = [ln.split() for ln in (tmp_path / "review.log").read_text().splitlines() if ln.split()[0] == B]
+    lands = [e for e in events[:cut] if e["event"] == "land"]
+    git.run(["reset", "--hard", lands[-1]["effect"]["head"] if lands else first[0][2]], repo)   # the target as the cut left it
     (tmp_path / "review.log").unlink()
 
     eng2 = make(tmp_path, {}, tweak=stub, target=repo)
