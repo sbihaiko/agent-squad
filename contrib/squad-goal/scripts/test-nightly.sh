@@ -559,4 +559,25 @@ i=0; while [ $i -lt 200 ] && [ ! -d "$ST/locks/live-check" ]; do sleep 0.05; i=$
   || ko "the nightly lock is held for the live check's window, so it holds delivery"
 lc_wait   # let the detached check finish before the suite ends
 
+# 27) (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly holds
+#     while a run is live or the gate lock is held. A hold writes no day marker, so the next idle cycle runs the suite.
+mark; rm -f "$T/ran.log"
+mkdir -p "$T/live-run"; echo "$T/live-run" > "$ST/active-runs.txt"
+rs0=$(cat "$ST/nightly-result" 2>/dev/null | cksum)
+out=$(ng); rc=$?
+[ $rc = 0 ] && case "$out" in "nightly: held"*"1 live run"*) true;; *) false;; esac && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
+  && [ "$(cat "$ST/nightly-result" 2>/dev/null | cksum)" = "$rs0" ] \
+  && ok "the nightly holds while active-runs.txt lists a run with no verdict (#1527)" || ko "a live run did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+mark; rm -f "$T/ran.log"
+printf '{"event":"run_start"}\n{"event":"verdict","verdict":"passed"}\n' > "$T/live-run/record.jsonl"; touch -t 202001010000 "$T/live-run/record.jsonl"
+out=$(ng); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx 'parallel '"$T"'/tree' "$T/ran.log" && /usr/bin/grep -qx 'serial '"$T"'/tree' "$T/ran.log" \
+  && ok "a listed run with a verdict and an idle record is not live: the nightly runs both modes" || ko "a finished run held the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+mark; rm -f "$T/ran.log"
+: > "$ST/active-runs.txt"; mkdir -p "$ST/locks/gate"
+out=$(ng); rc=$?
+[ $rc = 0 ] && case "$out" in "nightly: held"*"gate lock"*) true;; *) false;; esac && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
+  && ok "the nightly holds while the gate lock is held (#1527)" || ko "a held gate lock did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+rmdir "$ST/locks/gate" 2>/dev/null
+
 rm -rf "$T"; exit $fail

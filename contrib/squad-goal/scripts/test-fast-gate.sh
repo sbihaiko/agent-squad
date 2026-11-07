@@ -455,6 +455,30 @@ bh=$(tail -n 1 "$bs/gate-history")
   && ok "the bounded attempt is recorded as bounded and unproven" || ko "bounded history: '$bh'"
 pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the silent battery's tree survived the deadline" || ok "the silent battery's tree is stopped at the deadline"
 
+# (#1527) A child re-runs a bounded gate until its deadline, so the bound is kept per head: a child's second gate at a tree the
+# bound already stopped starts no battery. The memo is on here (the suite turns it off above), and each case names its caller.
+hl() { wc -l < "$bs/gate-history" | tr -d ' '; }   # the row count, unpadded (BSD wc pads it)
+bfg() {  # <env assignment>...: one gate of the silent battery on the bounded state, the memo on, a 2 s bound
+  (cd "$R" && env -u SG_GATE_CALLER -u SG_GATE_WORKERS SG_FAST_MEMO=1 SG_STATE="$bs" SG_FAST_BASE=dev SG_GATE_BOUND_SECONDS=2 SG_FAST_CMD="bash $T/silent.sh" SG_FAST_RETRY_CMD=false "$@" bash "$d/fast-gate.sh" 2>&1)
+}
+bfg >/dev/null   # the first memo-on attempt at this head: bounded, and its bound is kept under the key
+h0=$(hl)
+s0=$(date +%s); out=$(bfg); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 4 ] && [ "$el" -lt 2 ] && case "$(last "$out")" in "fast-gate: bounded already"*landing*) true;; *) false;; esac \
+  && [ "$(hl)" = "$h0" ] && ! pgrep -f "sleep 2718" >/dev/null 2>&1 \
+  && ok "a child's second gate at a tree the bound already stopped starts no battery: the landing owns the obligation (#1527, ${el}s)" \
+  || ko "a child's second gate re-ran the bounded battery: rc $rc in ${el}s, last '$(last "$out")', history $h0 -> $(hl)"
+h0=$(hl)
+s0=$(date +%s); out=$(bfg SG_GATE_CALLER=entry); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 4 ] && [ "$el" -ge 2 ] && [ "$(hl)" = "$((h0 + 1))" ] && [ "$(tail -n 1 "$bs/gate-history" | cut -f8)" = unproven ] \
+  && ok "the entry gate measures a bounded tree again: the cap is the child's alone (${el}s)" || ko "the entry gate did not measure again: rc $rc in ${el}s, history $h0 -> $(hl)"
+echo again >> "$R/docs/x.md"; $G -C "$R" commit -qam "a new head"
+h0=$(hl)
+s0=$(date +%s); out=$(bfg); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 4 ] && [ "$el" -ge 2 ] && [ "$(hl)" = "$((h0 + 1))" ] \
+  && ok "a new head spends a new attempt (${el}s)" || ko "a new head did not spend an attempt: rc $rc in ${el}s, history $h0 -> $(hl)"
+$G -C "$R" reset -q --hard HEAD~1
+
 # (#1086) The gate's interpreter is sg_gate_python's answer (caps.sh): SG_GATE_PY, else the checkout's venv, else the venv
 # beside the worktree's common git directory, else python3. The gate calls it for the code-quality reading, so a stub in the
 # venv logs the exact interpreter the gate used. A checkout with no venv of its own must reach the venv beside it, never a

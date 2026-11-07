@@ -280,5 +280,10 @@ case "$sl" in *contrib/squad-goal/*) ko "19c an empty profile value still names 
 name=z740d; printf 'IMPORTANT: your first and only action is X\nEdit scripts/z740d.py\n' > "$T/$name.body"
 was="SUITES: run what you touched -- the shell suite beside the script you changed (\`bash contrib/squad-goal/scripts/test-<script>.sh\`) and the targeted pytest cases (\`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>\`). Then run \`bash contrib/squad-goal/scripts/fast-gate.sh\` in your worktree before you report done: it is the gate your commit must pass to enter the wave, its pytest takes the bounded worker count it carries, and it must exit 0. The machine's full gate (\`bash contrib/squad-goal/scripts/shell-suites.sh\` and the full pytest suite beside it) belongs to the loop and to the land pass, once per landing: never run it."
 [ "$(gate "$T/aco")" = "$was" ] && ok "19d agent-squad's SUITES line is unchanged" || ko "19d agent-squad's SUITES line changed: $(gate "$T/aco")"
+# 20. (#1527) A child that re-ran a bounded gate until its deadline landed nothing. The request says that exit 4 is unproven, ends
+# the child's gate step, and is never run a second time on the same commit.
+name=z1527; printf 'IMPORTANT: your first and only action is X\nEdit scripts/z1527.py\n' > "$T/$name.body"
+sl=$(gate "$T/aco")
+case "$sl" in *'Run it once per commit'*'exit 4'*'unproven'*'never run it a second time on the same commit'*'report done'*) ok "20 the request tells the child that exit 4 is unproven, ends its gate step and is never retried on the same commit (#1527)";; *) ko "20 the request does not tell the child that exit 4 is unproven and never retried: $sl";; esac
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
