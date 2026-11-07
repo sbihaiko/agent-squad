@@ -13,10 +13,12 @@
 # arithmetic from a fixed file (`clip<TAB>length_s<TAB>download_s<TAB>transcribe_s` per line, `#` for a comment), needs no
 # key and calls no network: it is the self-check the suite runs.
 #
+# The clip keeps the container Slack reports: the saved name and the inline mime_type both follow its mimetype or filetype.
+# A clip the probe cannot read prints a `skip <id> <reason>` line on stderr and is not counted.
 # Audio is written only under --dir (default runs/probe-gemini-transcribe), which the caller must leave git-ignored; the
 # probe refuses a directory git does not ignore and deletes the audio before it exits unless --keep-audio is given.
 # Exit 0 when every requested clip is timed, 2 when a key, a tool or the directory is missing, 3 when fewer clips than
-# requested could be measured.
+# requested could be measured; a short run prints no percentile.
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 count=10; ids=""; dir=""; keep=0; samples=""
@@ -27,7 +29,7 @@ while [ $# -gt 0 ]; do
     --dir) dir=${2:-}; shift 2;;
     --keep-audio) keep=1; shift;;
     --from-samples) samples=${2:-}; shift 2;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "probe-gemini-transcribe: unknown option $1" >&2; exit 2;;
   esac
 done
@@ -96,7 +98,16 @@ unset gemini_key slack
 slack_get() { curl -s --config "$tmp/slack.cfg" "https://slack.com/api/$1"; }
 
 if [ -z "$ids" ]; then
-  list=$(slack_get 'files.list?count=200' | python3 -c "
+  # Follow next_cursor until enough audio ids are collected or the list is exhausted, so a busy workspace is not
+  # answered from its first page alone.
+  tmpids="$tmp/ids.txt"; : > "$tmpids"; cursor=""; pages=0
+  while :; do
+    q='files.list?count=200'
+    if [ -n "$cursor" ]; then
+      q="$q&cursor=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$cursor")"
+    fi
+    page=$(slack_get "$q") || die "cannot list Slack files"
+    list=$(printf '%s' "$page" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 if not d.get('ok'):
@@ -105,37 +116,59 @@ for f in d.get('files', []):
     if str(f.get('mimetype', '')).startswith('audio/'):
         print(f['id'])
 ") || die "cannot list Slack files: $list"
-  ids=$(printf '%s\n' "$list" | head -n "$count" | tr '\n' ' ' | sed 's/ $//')
+    [ -z "$list" ] || printf '%s\n' "$list" >> "$tmpids"
+    [ "$(wc -l < "$tmpids")" -ge "$count" ] && break
+    cursor=$(printf '%s' "$page" | python3 -c "
+import json, sys
+print((json.load(sys.stdin).get('response_metadata') or {}).get('next_cursor') or '')
+") || cursor=""
+    [ -n "$cursor" ] || break
+    pages=$((pages + 1)); [ "$pages" -lt 20 ] || break
+  done
+  ids=$(head -n "$count" < "$tmpids" | tr '\n' ' ' | sed 's/ $//')
 fi
 [ -n "$ids" ] || die "no audio file is reachable in the Slack workspace"
 
-tsv="$tmp/samples.tsv"; : > "$tsv"; n=0
+tsv="$tmp/samples.tsv"; : > "$tsv"; : > "$tmp/audio.list"; n=0
 for id in $ids; do
   [ "$n" -lt "$count" ] || break
-  url=$(slack_get "files.info?file=$id" | python3 -c "
+  # The clip keeps the container Slack reports; a webm clip labelled audio/mp4 is a mislabelled payload to Gemini.
+  meta=$(slack_get "files.info?file=$id" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 f = d.get('file') or {}
-print(f.get('url_private_download') or f.get('url_private') or '')
-") || continue
-  [ -n "$url" ] || continue
-  audio="$dir/$id.m4a"
-  dl=$(curl -s -L --config "$tmp/slack.cfg" -o "$audio" -w '%{time_total}' "$url") || continue
-  [ -s "$audio" ] || continue
+url = f.get('url_private_download') or f.get('url_private') or ''
+mime = f.get('mimetype') or ''
+ft = str(f.get('filetype') or '').lower()
+if not mime:
+    mime = {'m4a': 'audio/mp4', 'mp4': 'audio/mp4', 'webm': 'audio/webm', 'ogg': 'audio/ogg',
+            'mp3': 'audio/mpeg', 'wav': 'audio/wav'}.get(ft, '')
+ext = {'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/webm': 'webm', 'audio/ogg': 'ogg',
+       'audio/mpeg': 'mp3', 'audio/wav': 'wav'}.get(mime) or ft or 'bin'
+print('%s\t%s\t%s' % (url, mime, ext))
+") || { echo "skip $id files.info failed" >&2; continue; }
+  url=""; mime=""; ext=""
+  IFS=$'\t' read -r url mime ext <<< "$meta"
+  if [ -z "$url" ]; then echo "skip $id no download url" >&2; continue; fi
+  audio="$dir/$id.$ext"
+  printf '%s\n' "$audio" >> "$tmp/audio.list"
+  dl=$(curl -s -L --config "$tmp/slack.cfg" -o "$audio" -w '%{time_total}' "$url") \
+    || { echo "skip $id download failed" >&2; continue; }
+  if [ ! -s "$audio" ]; then echo "skip $id empty download" >&2; continue; fi
   len=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$audio" 2>/dev/null)
-  [ -n "$len" ] || continue
-  python3 - "$audio" "$tmp/body.json" <<'PY'
+  if [ -z "$len" ]; then echo "skip $id no duration" >&2; continue; fi
+  python3 - "$audio" "$mime" "$tmp/body.json" <<'PY'
 import base64, json, sys
 data = base64.b64encode(open(sys.argv[1], 'rb').read()).decode()
 body = {"contents": [{"parts": [
     {"text": "Transcribe this audio exactly in its own language. Reply with the transcript only."},
-    {"inline_data": {"mime_type": "audio/mp4", "data": data}}]}]}
-open(sys.argv[2], 'w').write(json.dumps(body))
+    {"inline_data": {"mime_type": sys.argv[2], "data": data}}]}]}
+open(sys.argv[3], 'w').write(json.dumps(body))
 PY
   tr=$(curl -s -X POST --config "$tmp/gemini.cfg" -H 'Content-Type: application/json' \
         --data @"$tmp/body.json" -w '\n%{time_total}' \
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent")
-  [ -n "$tr" ] || continue
+  if [ -z "$tr" ]; then echo "skip $id transcription failed" >&2; continue; fi
   secs=${tr##*$'\n'}
   printf '%s' "${tr%$'\n'*}" > "$tmp/resp.json"
   have=$(python3 - "$tmp/resp.json" <<'PY'
@@ -147,12 +180,18 @@ except Exception:
     print(0)
 PY
 )
-  [ "$have" = 1 ] || continue
+  if [ "$have" != 1 ]; then echo "skip $id no transcript" >&2; continue; fi
   printf '%s\t%s\t%s\t%s\n' "$id" "$len" "$dl" "$secs" >> "$tsv"
   n=$((n + 1))
 done
 
-[ "$keep" -eq 1 ] || rm -f "$dir"/*.m4a
-stats "$tsv"; rc=$?
-[ "$n" -lt "$count" ] && { echo "measured $n of $count requested clips" >&2; exit 3; }
-exit $rc
+if [ "$keep" -ne 1 ]; then
+  while IFS= read -r f; do rm -f "$f"; done < "$tmp/audio.list"
+fi
+# A percentile over fewer clips is never the probe answer: the shortfall is reported in band and no p90 is printed.
+if [ "$n" -lt "$count" ]; then
+  echo "measured $n of $count requested clips" >&2
+  exit 3
+fi
+stats "$tsv"
+exit $?
