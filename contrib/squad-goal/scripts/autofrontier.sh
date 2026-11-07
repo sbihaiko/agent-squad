@@ -178,15 +178,25 @@ case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac
 # issues are read once below, through the door.
 . "$here/ghcall.sh"; . "$here/workbranches.sh"
 refs=" $(sg_work_issues) "
-# Issues whose bodies name a common file share one child and one branch.
-cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line
-  local n lines=() cj cl
+# Issues whose bodies name a common file share one child and one branch. An issue that already has a branch is the
+# exception: its branch is cut from another run's branch (or is that branch itself), so it can never share a child with an
+# issue cut from the base -- a cluster runs on the base, and the issue would edit its file there beside the holder, or lose
+# the branch's work whole (#1504). It is split out of its cluster and is always one child of its own, with its own
+# `CUT FROM:` line.
+cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line; an issue with a branch is a line alone
+  local n lines=() cj cl l rest x
   for n in "$@"; do lines+=("$n"); done
   [ ${#lines[@]} -gt 1 ] || { [ ${#lines[@]} -eq 1 ] && printf '%s\n' "${lines[0]}"; return; }
   cj=$(jq -c --arg ns " ${lines[*]} " '[.[]|select(.number as $x|$ns|contains(" \($x) "))|{number,title,body}]' "$F/issues.json" 2>/dev/null)   # from the list: no read per issue
   [ "$(jq length <<<"$cj" 2>/dev/null)" = ${#lines[@]} ] || cj=""   # an issue the list lacks: no clustering, as for an unreadable one
   cl=$(CL_MODE=files python3 "$here/cluster.py" <<<"${cj:-x}" 2>/dev/null) || cl=$(printf '%s\n' "${lines[@]}")   # unreadable issues: no clustering
-  printf '%s\n' "$cl" | grep .
+  printf '%s\n' "$cl" | grep . | while read -r l; do
+    rest=""
+    for x in $l; do
+      case " ${cutp[*]:-} " in *" $x "*) printf '%s\n' "$x";; *) rest="$rest $x";; esac
+    done
+    [ -n "${rest# }" ] && printf '%s\n' "${rest# }"
+  done
 }
 joins() {   # one when issue $2 joins a child the picks of its own group already ask for. The envelope bounds the CHILDREN and
             # cluster.py decides them, so an issue naming a file a taken issue already names costs no second child and is
@@ -277,7 +287,12 @@ while [ $i -lt ${#cands[@]} ]; do
   case "$sc" in
     STACK\ *) cb=$(printf '%s\n' "$sc" | awk 'NR==1{print $3}'); cutp+=("$n"); cutb+=("$cb")
       nt="$nt; your branch is cut from $cb, which is not in ${SG_BASE:-the base} yet: build on those commits, and rebase onto no base branch";;
-    HOLD\ *) rm -f "$A/disp-$n"   # nothing was cut, so the claim is no dispatch; release_pending finds no token to drop
+    KEEP\ *) # The branch already exists, from an earlier pass or a crashed run: it is that run's claim, so the issue is
+             # dispatched alone too. `BASE` names the branch it sits on when it is stacked; launch.py keeps it either way.
+      cb=$(printf '%s\n' "$sc" | awk '/^BASE /{print $2; exit}'); cutp+=("$n"); cutb+=("$cb")
+      [ -n "$cb" ] && nt="$nt; your branch already exists and is cut from $cb, which is not in ${SG_BASE:-the base} yet: build on those commits, and rebase onto no base branch";;
+    HOLD\ *) # The claim stays `pending-$$` for the rest of the pass: a concurrent pass must see the issue held, not a gap
+             # between the marker's removal and the end of this walk (release_pending drops it at EXIT, since nothing launched).
       hf=$(printf '%s\n' "$sc" | awk 'NR==1{print $3}'); hp=$(printf '%s\n' "$sc" | awk 'NR==1{print $4}'); hr=$(printf '%s\n' "$sc" | awk 'NR==1{print $5}')
       why_card "$n" held "$hf is held by $hp, which is $hr"
       echo "FRONTIER hold #$n: $hf is held by $hp, which is $hr (ADR-0150); it waits for a later run" >&2; continue;;

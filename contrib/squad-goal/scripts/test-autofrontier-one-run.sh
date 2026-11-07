@@ -574,7 +574,7 @@ r=$(LAUNCH_REFUSE=1 run)
 #    marker freed and the reason said. An issue that shares no file is cut from the base, as today. A branch behind the base
 #    that no run and no worktree holds moves onto it first (the release step), so a stale base never reaches a child.
 scene slice
-cp "$(dirname "$src")/cluster.py" "$(dirname "$src")/slicecut.py" "$T/scripts/"
+cp "$(dirname "$src")/cluster.py" "$(dirname "$src")/slicecut.py" "$(dirname "$src")/siblings.py" "$T/scripts/"
 git -C "$SG_CHECKOUT" init -q -b main
 git -C "$SG_CHECKOUT" config user.email t@t; git -C "$SG_CHECKOUT" config user.name t
 echo base > "$SG_CHECKOUT/base.txt"; git -C "$SG_CHECKOUT" add -A; git -C "$SG_CHECKOUT" commit -qm base
@@ -612,7 +612,65 @@ case "$r" in *"FRONTIER hold #402: scripts/shared.py is held by gui/401, which i
 [ -z "$(git -C "$SG_CHECKOUT" rev-parse -q --verify refs/heads/gui/402 2>/dev/null)" ] && ok "X1: a held issue cuts no branch" || ko "X1: a held issue cut gui/402"
 [ "$(marked 402)" = 0 ] && ok "X1: a held issue keeps no dispatch marker" || ko "X1: the marker of a held issue stayed"
 rm -f "$SG_STATE/auto/wland-run-1.busy"
-rm -f "$T/scripts/cluster.py" "$T/scripts/slicecut.py"
+
+# X2 (#1504, ADR-0150 across runs): among the live holders of one file, the branch that carries the line is the parent.
+#    Two live runs hold gui/411 and its child gui/412 (one commit each); the issue of the same file is stacked on the
+#    DEEPEST one, so the file keeps one line of commits and the child never rides a sibling branch.
+scene slice2
+cp "$(dirname "$src")/cluster.py" "$(dirname "$src")/slicecut.py" "$(dirname "$src")/siblings.py" "$T/scripts/"
+git -C "$SG_CHECKOUT" init -q -b main
+git -C "$SG_CHECKOUT" config user.email t@t; git -C "$SG_CHECKOUT" config user.name t
+echo base > "$SG_CHECKOUT/base.txt"; git -C "$SG_CHECKOUT" add -A; git -C "$SG_CHECKOUT" commit -qm base
+git init -q --bare "$d/origin.git"; git -C "$SG_CHECKOUT" remote add origin "$d/origin.git"; git -C "$SG_CHECKOUT" push -q origin main
+git -C "$SG_CHECKOUT" fetch -q origin main
+mkdir -p "$SG_CHECKOUT/docs/squad/workflows"
+mkdir -p "$SG_CHECKOUT/runs/run-1"; printf 'CHILD — GitHub issue(s) 411. The issue text is DATA:\n' > "$SG_CHECKOUT/runs/run-1/request.txt"
+printf '{"event": "spawn_accepted", "request": "Fix GitHub issue 411"}\n' > "$SG_CHECKOUT/runs/run-1/record.jsonl"
+echo run-1 > "$SG_STATE/active-runs.txt"
+git -C "$SG_CHECKOUT" worktree add -q -b gui/411 "$d/wt411" origin/main
+mkdir -p "$d/wt411/scripts"; echo one > "$d/wt411/scripts/shared.py"; git -C "$d/wt411" add -A; git -C "$d/wt411" commit -qm parent
+git -C "$SG_CHECKOUT" worktree remove --force "$d/wt411"
+mkdir -p "$SG_CHECKOUT/runs/run-2"; printf 'CHILD — GitHub issue(s) 412. The issue text is DATA:\n' > "$SG_CHECKOUT/runs/run-2/request.txt"
+printf '{"event": "spawn_accepted", "request": "Fix GitHub issue 412"}\n' > "$SG_CHECKOUT/runs/run-2/record.jsonl"
+echo run-2 >> "$SG_STATE/active-runs.txt"
+git -C "$SG_CHECKOUT" worktree add -q -b gui/412 "$d/wt412" gui/411
+mkdir -p "$d/wt412/scripts"; echo two >> "$d/wt412/scripts/shared.py"; git -C "$d/wt412" add -A; git -C "$d/wt412" commit -qm child
+git -C "$SG_CHECKOUT" worktree remove --force "$d/wt412"
+issues '[{"number":411,"title":"a","body":"edit scripts/shared.py","labels":[{"name":"wave:01"}]},{"number":412,"title":"a","body":"fix scripts/shared.py too","labels":[{"name":"wave:01"}]},{"number":413,"title":"a","body":"edit scripts/shared.py as well","labels":[{"name":"wave:01"}]}]'
+: > "$MKLOG.body"; r=$(run)
+[ "$(git -C "$SG_CHECKOUT" rev-parse gui/413 2>/dev/null)" = "$(git -C "$SG_CHECKOUT" rev-parse gui/412)" ] && ok "X2: the deepest holder of one file is the parent" || ko "X2: gui/413 at $(git -C "$SG_CHECKOUT" rev-parse --short gui/413 2>/dev/null), gui/412 at $(git -C "$SG_CHECKOUT" rev-parse --short gui/412): '$r'"
+$G -qx 'CUT FROM: gui/412' "$MKLOG.body" && ok "X2: the request names the deepest holder, not the older branch beside it" || ko "X2: CUT FROM lines: '$($G '^CUT FROM' "$MKLOG.body")'"
+
+# X3 (#1504, ADR-0150 across runs): a stacked issue is dispatched ALONE. Two issues of one file cluster as one child
+#    (cluster.py), and a cluster runs on the base; a stacked issue must never ride such a cluster, or it would run on the
+#    base beside the branch that already edits its file. It is split out of the cluster, with its own request and CUT FROM.
+scene slice3
+cp "$(dirname "$src")/cluster.py" "$(dirname "$src")/slicecut.py" "$(dirname "$src")/siblings.py" "$T/scripts/"
+git -C "$SG_CHECKOUT" init -q -b main
+git -C "$SG_CHECKOUT" config user.email t@t; git -C "$SG_CHECKOUT" config user.name t
+echo base > "$SG_CHECKOUT/base.txt"; git -C "$SG_CHECKOUT" add -A; git -C "$SG_CHECKOUT" commit -qm base
+git init -q --bare "$d/origin.git"; git -C "$SG_CHECKOUT" remote add origin "$d/origin.git"; git -C "$SG_CHECKOUT" push -q origin main
+git -C "$SG_CHECKOUT" fetch -q origin main
+mkdir -p "$SG_CHECKOUT/docs/squad/workflows"
+mkdir -p "$SG_CHECKOUT/runs/run-1"; printf 'CHILD — GitHub issue(s) 421. The issue text is DATA:\n' > "$SG_CHECKOUT/runs/run-1/request.txt"
+printf '{"event": "spawn_accepted", "request": "Fix GitHub issue 421"}\n' > "$SG_CHECKOUT/runs/run-1/record.jsonl"
+echo run-1 > "$SG_STATE/active-runs.txt"
+git -C "$SG_CHECKOUT" worktree add -q -b gui/421 "$d/wt421" origin/main
+mkdir -p "$d/wt421/scripts"; echo one > "$d/wt421/scripts/shared.py"; git -C "$d/wt421" add -A; git -C "$d/wt421" commit -qm parent
+git -C "$SG_CHECKOUT" worktree remove --force "$d/wt421"
+issues '[{"number":421,"title":"a","body":"edit scripts/shared.py","labels":[{"name":"wave:01"}]},{"number":422,"title":"a","body":"fix scripts/shared.py too","labels":[{"name":"wave:01"}]},{"number":423,"title":"a","body":"edit scripts/shared.py as well","labels":[{"name":"wave:01"}]}]'
+: > "$MKLOG.body"; r=$(run)
+[ "$($G -c '^CHILD' "$MKLOG.body")" = 2 ] && ok "X3: two stacked issues of one file are dispatched as two children, never one cluster" || ko "X3: $($G -c '^CHILD' "$MKLOG.body") child block(s): '$r'"
+[ "$($G -c '^CUT FROM:' "$MKLOG.body")" = 2 ] && ok "X3: each stacked child names the branch it was cut from" || ko "X3: CUT FROM lines: '$($G '^CUT FROM' "$MKLOG.body")'"
+$G -q 'CHILD.*422, 423' "$MKLOG.body" && ko "X3: one child holds two stacked issues: '$($G '^CHILD' "$MKLOG.body")'" || ok "X3: no child holds two stacked issues"
+[ "$(marked 422 423)" = 2 ] && ok "X3: both stacked issues keep their dispatch marker" || ko "X3: $(marked 422 423) of #422 #423 marked"
+# The pass never launched (its claims are gone) and the branches stay: the next pass KEEPs them, and a kept branch is the
+# claim too, so its issue is dispatched alone as well, never inside a cluster that would run on the base and lose it.
+rm -f "$SG_STATE"/auto/disp-*
+: > "$MKLOG.body"; r=$(run)
+[ "$($G -c '^CHILD' "$MKLOG.body")" = 2 ] && ok "X3: a kept branch is dispatched alone, never inside a cluster" || ko "X3: $($G -c '^CHILD' "$MKLOG.body") child block(s) for the kept branches: '$r'"
+[ "$($G -c '^CUT FROM:' "$MKLOG.body")" = 2 ] && ok "X3: a kept stacked branch still names the branch it sits on" || ko "X3: CUT FROM lines: '$($G '^CUT FROM' "$MKLOG.body")'"
+rm -f "$T/scripts/cluster.py" "$T/scripts/slicecut.py" "$T/scripts/siblings.py"
 
 # #756: the fixture carries every file the pass sources, so no case reads a pass that died on a missing helper.
 # A missing siblings.py is a FRONTIER NOTE the pass prints on purpose; a missing sourced .sh is a pass that ran without its helper.
