@@ -40,7 +40,7 @@
     committed nothing keeps the loop's queue however many of its siblings landed, and only an issue no child of the run names takes the run's landing as its own;
     a landing of a run that cut a wave, or of a branchland pass, is the `landed` fact the landing pass wrote in the issue's ledger (ADR-0149, #695), never a head the run's record names: a landing that reached no base wrote no fact, so it delivers nothing (#691);
     a completed run, whether or not it landed work, whose branch has not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
-    and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
+    and Todo would tell him the loop has it), unless the owner's rearm is newer than that run's verdict: then the freeze is not written and cycle.log names it once per run verdict (BOARD-UNFROZEN, #1562); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     An issue labelled frozen:owner keeps the column it carries, and cycle.log names the write R held back (BOARD-FROZEN). A run that stopped needs-human or failed never moves its issue's
     card forward: its Todo or Blocked stands, and a work branch it left is stale evidence. A landing is delivered work once it reached the landing branch (ADR-0143): a failed run's
     landing whose head origin/<land> holds reaches Code Complete, the child's own or the run's, and one that stayed its local land commit delivered nothing,
@@ -521,6 +521,17 @@ def ledger():   # the issue ledger module beside this script (ADR-0149); -I keep
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     import issue_ledger
     return issue_ledger
+def rearmed_after(n, i, rec=None):   # the owner's rearm is newer than the run's verdict (#1562, ADR-0029): the one fact that
+    # lifts a needs-human fold from the owner freeze. The verdict time alone decides it: `rearmed.runs` names every run the ledger
+    # listed, including a verdict runreview.sh wrote while the run was still live, so a name there never proves the run ended
+    # before the rearm. A ledger that cannot be read, or one that is held, is no floor, so every caller keeps its own hold
+    # (ADR-0149 rule 4, fail closed). `rec` is a record the caller already read, so the pass reads the ledger once.
+    try:
+        if rec is None: rec = ledger().read(f"{repo0}#{n}")
+        if rec.get("state") == "held": return False
+        rm = rec.get("rearmed") or {}
+        return i["vts"] is not None and isinstance(rm.get("ts"), (int, float)) and i["vts"] < rm["ts"]
+    except (OSError, ImportError, ValueError, KeyError): return False
 def not_planned(reason):   # the close-reason vocabulary board_columns owns (#921): one copy, so the passes never drift
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from board_columns import not_planned as verdict
@@ -854,6 +865,13 @@ def reconcile_board():
     GATING = "Gating"   # the shipped column between Code Complete and Closed; board_columns.ROLE names the same word (ADR-0170)
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     stopped = set()   # issues whose newest run stopped needs-human or failed: no stale branch or local landing moves them forward
+    def unfrozen(n, f, i):   # the owner's rearm lifted the freeze (#1562): the line is written once per (issue, run verdict), so an
+        # issue no pass can dispatch does not write one line every cycle. The marker names the run folder and its verdict key, and
+        # a resume's new verdict gets a new marker.
+        mk = st / "auto" / f"janitor-unfrozen-{n}-{f.name}-{str(i['vkey']).replace(':', '-')}"
+        if mk.exists(): return
+        say(f"BOARD-UNFROZEN #{n}: the owner rearm is newer than run {i['run_id']}'s verdict")
+        if not dry: mk.touch()
     specs = set()   # a spec is never work, and its card is a fold over its sub-issues (ADR-0142): a commit subject, a branch or a landing that names it is its children's, so no work rule writes its card and the fold alone sets it (#665)
     held_owner = {}   # issue -> (rank, status, why): the write frozen:owner held back this pass, named in cycle.log when it differs
     _owner_frozen = {}
@@ -901,10 +919,11 @@ def reconcile_board():
         else:
             set_expected(n, "Code Complete", why, i["run_id"], i["run_ts"], 60)
             wave_column(n, f, i)
-    def stopped_run(n, i, evidence):   # a run that stopped needs-human never moves its issue's card forward: its Blocked stands, whatever local landing it left (ADR-0029, #660)
-        stopped.add(n)
+    def stopped_run(n, f, i, evidence):   # a run that stopped needs-human never moves its issue's card forward: its Blocked stands, whatever local landing it left (ADR-0029, #660)
+        stopped.add(n)   # the "nothing landed" stop stands even when the owner's rearm lifts the freeze (#1562): a stale branch never reads as delivered work
         why = "; ".join(i["reasons"]) or "no reason recorded"
-        set_expected(n, "Blocked", f"run {i['run_id']} {evidence}, but the run needs a human ({why})", i["run_id"], i["run_ts"], 40)
+        if rearmed_after(n, i): unfrozen(n, f, i)
+        else: set_expected(n, "Blocked", f"run {i['run_id']} {evidence}, but the run needs a human ({why})", i["run_id"], i["run_ts"], 40)
     # Rank 20, a run that ended with nothing delivered: Doing back to Todo. It is the one backward move the loop makes, and it
     # undoes the loop's own claim, the dispatch that moved the card out of Todo (ADR-0143, #550). No other rule moves a card
     # back into Todo or Backlog: only the owner does.
@@ -941,7 +960,7 @@ def reconcile_board():
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
             elif own_landed:   # a landing is the child's own (#271), and a failed verdict does not unland work that reached the base (#666, ADR-0143, #691); needs-human makes the owner the next actor (ADR-0029, #660)
-                if i["name"] == "needs-human": stopped_run(n, i, "landed work in the base" if fact else "landed work locally")
+                if i["name"] == "needs-human": stopped_run(n, f, i, "landed work in the base" if fact else "landed work locally")
                 else: code_complete(n, f, i, f"run {i['run_id']} landed work " + ("in the base" if fact else "locally"))
             elif holding(n) and (sib_landed or not run_any): continue   # nothing landed here, but a live run works the issue or a pending wave carries it: its card is that run's, never this run's Todo or Blocked (#540)
             elif sib_landed:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
@@ -949,7 +968,8 @@ def reconcile_board():
                 why = "; ".join(ors) or "no reason recorded"
                 if oc == "needs-human" or i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor
                     stopped.add(n)
-                    set_expected(n, "Blocked", f"run {i['run_id']} child {c} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
+                    if rearmed_after(n, i): unfrozen(n, f, i)
+                    else: set_expected(n, "Blocked", f"run {i['run_id']} child {c} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
                 else:
                     if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
@@ -960,7 +980,8 @@ def reconcile_board():
             elif i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor, and the board says so
                 stopped.add(n)
                 why = "; ".join(i["reasons"]) or "no reason recorded"
-                set_expected(n, "Blocked", f"run {i['run_id']} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
+                if rearmed_after(n, i): unfrozen(n, f, i)
+                else: set_expected(n, "Blocked", f"run {i['run_id']} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
             else:   # a run that ended with nothing delivered delivered nothing: the card goes back to the queue, never to Code Complete (ADR-0145 rule 12, #464)
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} completed with nothing landed", i["run_id"], i["run_ts"], 20)
     # A run that ended without a verdict has no card to rank: the reoffer marker a run-end path wrote names it, and the card
@@ -1191,9 +1212,10 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
         rec = issue_ledger.read(f"{repo0}#{n}")
         if rec["state"] == "held": say(f"LEDGER-HELD #{n}: {rec['held']}; run {f.name} is not counted"); return False
         if any(x["run"] == f.name for k in issue_ledger.LEDGERS for x in rec[k]["runs"]): return True
-        # A rearm's floor (#692): a run the ledger listed before the rearm, or one whose verdict is older than it, is not counted again.
+        # A rearm's floor (#692): a run the floor names, or one whose verdict is older than the rearm, is not counted again. The
+        # name clause stays here alone: the floor names a run the ledger listed at the rearm, and a record may carry no time.
         rm = rec.get("rearmed") or {}
-        if f.name in rm.get("runs", []) or (i["vts"] is not None and isinstance(rm.get("ts"), (int, float)) and i["vts"] < rm["ts"]): return True
+        if f.name in rm.get("runs", []) or rearmed_after(n, i, rec): return True
     except (OSError, ImportError, ValueError, KeyError): pass
     if holding(n): return False   # a live run or a wave still has it: a later pass decides
     st_, pc = issue_info(n)[0], pr_count(n)
