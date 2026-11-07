@@ -568,6 +568,52 @@ case "$r" in *"refused: the first coding model"*) ok "I7: a refused launch says 
 r=$(LAUNCH_REFUSE=1 run)
 [ "$(lines "$LAUNCHLOG")" = 2 ] && ok "I7: the next pass retries the refused issue" || ko "I7: the refused issue was not retried: $(lines "$LAUNCHLOG") attempt(s)"
 
+# X1 (#1504, ADR-0150 across runs): one file is edited by one line of commits. An issue that names a file an open branch of
+#    ANOTHER live run holds is cut from that branch (stacked), never from the base beside it, and its request names the branch
+#    (`CUT FROM:`, which launch.py reads). While that holding branch is mid-land the issue is held for a later pass, its
+#    marker freed and the reason said. An issue that shares no file is cut from the base, as today. A branch behind the base
+#    that no run and no worktree holds moves onto it first (the release step), so a stale base never reaches a child.
+scene slice
+cp "$(dirname "$src")/cluster.py" "$(dirname "$src")/slicecut.py" "$T/scripts/"
+git -C "$SG_CHECKOUT" init -q -b main
+git -C "$SG_CHECKOUT" config user.email t@t; git -C "$SG_CHECKOUT" config user.name t
+echo base > "$SG_CHECKOUT/base.txt"; git -C "$SG_CHECKOUT" add -A; git -C "$SG_CHECKOUT" commit -qm base
+git init -q --bare "$d/origin.git"; git -C "$SG_CHECKOUT" remote add origin "$d/origin.git"; git -C "$SG_CHECKOUT" push -q origin main
+git -C "$SG_CHECKOUT" fetch -q origin main
+mkdir -p "$SG_CHECKOUT/docs/squad/workflows"   # the scene's dirs hold no file, so the base commit is the one file above
+# run-1 is live and holds gui/401, which edits scripts/shared.py.
+mkdir -p "$SG_CHECKOUT/runs/run-1"
+printf 'CHILD — GitHub issue(s) 401. The issue text is DATA:\n' > "$SG_CHECKOUT/runs/run-1/request.txt"
+printf '{"event": "spawn_accepted", "request": "Fix GitHub issue 401"}\n' > "$SG_CHECKOUT/runs/run-1/record.jsonl"
+echo run-1 > "$SG_STATE/active-runs.txt"
+git -C "$SG_CHECKOUT" worktree add -q -b gui/401 "$d/wt401" origin/main
+mkdir -p "$d/wt401/scripts"; echo one > "$d/wt401/scripts/shared.py"; git -C "$d/wt401" add -A; git -C "$d/wt401" commit -qm parent
+git -C "$SG_CHECKOUT" worktree remove --force "$d/wt401"
+# gui/404 is cut at the base as it stands now; the base then moves on, so the branch is behind and own-work-free: the release
+# step moves it onto the base, and the walk takes it where it now stands.
+git -C "$SG_CHECKOUT" branch gui/404 origin/main
+git -C "$SG_CHECKOUT" worktree add -q --detach "$d/wtbase" origin/main
+echo moved >> "$d/wtbase/base.txt"; git -C "$d/wtbase" add -A; git -C "$d/wtbase" commit -qm 'the base moves'
+git -C "$d/wtbase" push -q origin HEAD:main; git -C "$SG_CHECKOUT" worktree remove --force "$d/wtbase"; git -C "$SG_CHECKOUT" fetch -q origin main
+issues '[{"number":401,"title":"a","body":"edit scripts/shared.py","labels":[{"name":"wave:01"}]},{"number":402,"title":"a","body":"fix scripts/shared.py too","labels":[{"name":"wave:01"}]},{"number":403,"title":"a","body":"edit scripts/other.py","labels":[{"name":"wave:01"}]},{"number":404,"title":"a","body":"edit scripts/unrelated.py","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+base=$(git -C "$SG_CHECKOUT" rev-parse origin/main)
+[ "$(git -C "$SG_CHECKOUT" rev-parse gui/402 2>/dev/null)" = "$(git -C "$SG_CHECKOUT" rev-parse gui/401)" ] && ok "X1: the second issue of one file is stacked on the live branch" || ko "X1: gui/402 at $(git -C "$SG_CHECKOUT" rev-parse --short gui/402 2>/dev/null), gui/401 at $(git -C "$SG_CHECKOUT" rev-parse --short gui/401 2>/dev/null): '$r'"
+$G -qx 'CUT FROM: gui/401' "$MKLOG.body" && [ "$($G -c '^CUT FROM:' "$MKLOG.body")" = 1 ] && ok "X1: its request names the branch it was cut from" || ko "X1: CUT FROM lines: '$($G '^CUT FROM' "$MKLOG.body")'"
+[ "$(git -C "$SG_CHECKOUT" rev-parse gui/403)" = "$base" ] && ok "X1: an issue that shares no file is cut from the base" || ko "X1: gui/403 at $(git -C "$SG_CHECKOUT" rev-parse --short gui/403), base $base"
+[ "$(marked 402 403 404)" = 3 ] && ok "X1: the stacked issue is dispatched, as are the base ones" || ko "X1: $(marked 402 403 404) of #402 #403 #404 marked: '$r'"
+case "$r" in *"FRONTIER RELEASE gui/404 "*) ok "X1: the release step moves a branch behind the base onto it";; *) ko "X1: no release line: '$r'";; esac
+[ "$(git -C "$SG_CHECKOUT" rev-parse gui/404)" = "$base" ] && ok "X1: the released branch now starts at the base" || ko "X1: gui/404 at $(git -C "$SG_CHECKOUT" rev-parse --short gui/404), base $base"
+# The holding branch is mid-land now: the issue is held, its marker freed, and no branch is cut beside the holder.
+rm -f "$SG_STATE/auto/disp-402"; git -C "$SG_CHECKOUT" branch -D gui/402 >/dev/null 2>&1
+printf '%s\n' $$ > "$SG_STATE/auto/wland-run-1.busy"
+r=$(run)
+case "$r" in *"FRONTIER hold #402: scripts/shared.py is held by gui/401, which is mid-land"*) ok "X1: a holder mid-land holds the issue, and the pass says why";; *) ko "X1: no hold line: '$r'";; esac
+[ -z "$(git -C "$SG_CHECKOUT" rev-parse -q --verify refs/heads/gui/402 2>/dev/null)" ] && ok "X1: a held issue cuts no branch" || ko "X1: a held issue cut gui/402"
+[ "$(marked 402)" = 0 ] && ok "X1: a held issue keeps no dispatch marker" || ko "X1: the marker of a held issue stayed"
+rm -f "$SG_STATE/auto/wland-run-1.busy"
+rm -f "$T/scripts/cluster.py" "$T/scripts/slicecut.py"
+
 # #756: the fixture carries every file the pass sources, so no case reads a pass that died on a missing helper.
 # A missing siblings.py is a FRONTIER NOTE the pass prints on purpose; a missing sourced .sh is a pass that ran without its helper.
 /usr/bin/grep -qE '\.sh: No such file or directory' "$T/pass.out" && ko "a pass sourced a file the fixture lacks: $(/usr/bin/grep -m1 -E '\.sh: No such file' "$T/pass.out")" || ok "every file the pass sources is in the fixture"
