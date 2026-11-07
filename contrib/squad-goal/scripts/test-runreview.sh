@@ -176,4 +176,17 @@ mh=$($G -C "$T/wt" rev-parse HEAD)
 : > "$T/wave.log"; STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 >/dev/null 2>&1; rc=$?
 [ "$rc" = 1 ] && [ ! -s "$T/wave.log" ] && ok "M: a second call on the same head requeues nothing" || ko "M: exit $rc, wave.log '$(cat "$T/wave.log")'"
 
+# N) #1574: a probe child changes nothing by design. SG_CHILD_KIND=probe ends exit 7 before the requeue block: no requeue line in
+# wave.log (the card move is wave.sh's job) and no ledger `requeue` fact. A coding child keeps exit 1, the requeue and the fact.
+reset; out=$(SG_CHILD_KIND=probe STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 7 ] && ok "N: a no-change probe child exits 7 (NOCHANGE_PROBE)" || ko "N: probe exit $rc: $out"
+! /usr/bin/grep -q '^wave.sh requeue' "$T/wave.log" && ok "N: a probe is never requeued" || ko "N: wave.log '$(cat "$T/wave.log")'"
+[ -z "$(lq)" ] && ok "N: a probe leaves no ledger requeue fact" || ko "N: fact '$(lq)'"
+reset; out=$(SG_CHILD_KIND=coding STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 1 ] && ok "N: a no-change coding child still exits 1" || ko "N: coding exit $rc: $out"
+[ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && [ "$(lq)" = "$($G -C "$T/wt" rev-parse HEAD)" ] \
+  && ok "N: a coding child is requeued once, with its ledger fact" || ko "N: wave.log '$(cat "$T/wave.log")' fact '$(lq)'"
+reset; out=$(STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 1 ] && ok "N: a child of no named kind is a code child" || ko "N: unnamed kind exit $rc: $out"
+
 rm -rf "$T"; exit $fail

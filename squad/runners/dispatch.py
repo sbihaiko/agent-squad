@@ -20,6 +20,7 @@ REVIEW_TICK_S = 60.0                      # a review in flight writes one `revie
 REVIEW_NONE_EXIT = gates.REVIEW_NONE_EXIT  # the review command's "no review here": the child lands as today
 REVIEW_FIX_EXIT = gates.REVIEW_FIX_EXIT    # the review command's "fix": the run starts the child's next entry in its worktree (#570)
 REVIEW_RETRY_EXIT = gates.REVIEW_RETRY_EXIT  # the review command's "try again": no verdict; the run tries again within the gate's deadline (#635)
+REVIEW_NOCHANGE_EXIT = gates.REVIEW_NOCHANGE_PROBE_EXIT  # the review command's "no change, by design": a probe child merges as a pass (#1574)
 REVIEW_RETRY_PAUSE_S = 60.0               # the pause between two tries of one round, inside the gate's deadline
 DEFERRED = ["review_deferred"]            # a streamed reading asked a fix the run cannot fund yet: the settle pass lands the child (#1520)
 _LEDGER: dict = {}
@@ -179,7 +180,9 @@ class Dispatch:
         return self.e.has_git and self.e.runs.isolated(d) and (name, 1, None) in self.e.done and self.e.done[(name, 1, None)]["outcome"] == "pass"
 
     def landed_outcome(self, name, outcome):
-        return "fail" if name in self.landed and self.landed[name]["outcome"] != "pass" else outcome
+        if name in self.landed and self.landed[name]["outcome"] != "pass":
+            return "needs-human" if self.landed[name]["outcome"] == "needs-human" else "fail"      # the owner's hold stays a hold (ADR-0029)
+        return outcome
 
     def landed_reasons(self, name, reasons):
         return list(self.landed[name]["reasons"]) if name in self.landed and self.landed[name]["outcome"] != "pass" else reasons
@@ -275,7 +278,8 @@ class Dispatch:
         if r.ok and name in self.ac_before:      # the child's own command, run at its own landing: no earlier result, so it never undoes the merge
             r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
         self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
-                                               outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
+                                               outcome="pass" if r.ok else "needs-human" if r.reasons[:1] == ["review_needs_human"] else "fail",
+                                               reasons=list(r.reasons) + (["review_nochange"] if r.ok and review and review.get("verdict") == "no_change" else []),
                                                effect={"name": "review" if r.reasons and r.reasons[0].startswith("review_") else "merge_land",
                                                        "before": head_before, "head": r.head, **r.extra,
                                                        **({"review": review, "rounds": rounds} if review else {})})   # `before` is read here: the landing check replaces the merge's result
@@ -425,7 +429,10 @@ class Dispatch:
                 if rec["verdict"] == "deadline":
                     return review, n, ["review_deadline"]
                 if rec["verdict"] == "hold":
-                    return review, n, ["review_held", *([] if rec["offered"] else ["review_fix_unfunded"])]
+                    if self.ledger_needs_human(d):      # the streak ended the issue: the owner is asked, never a plain hold (ADR-0029, #1574)
+                        return review, n, ["review_needs_human"]
+                    why = self.first_line(review.get("stderr"))
+                    return review, n, ["review_held", *([] if rec["offered"] else ["review_fix_unfunded"]), *([f"why: {why}"] if why else [])]
                 return review, n, None
             out = e.outcomes.event(name, n + 1)
             coder = self.coder(node, name, d)
@@ -529,6 +536,22 @@ class Dispatch:
             return f"the issue ledger cannot be read: {x}"
         return rec.get("held", "") if rec.get("state") == "held" else ""
 
+    @staticmethod
+    def first_line(text):
+        """The first non-empty line of a review's stderr, cut to 200 characters; empty when it wrote none (#1574)."""
+        return next((ln.strip()[:200] for ln in (text or "").splitlines() if ln.strip()), "")
+
+    def ledger_needs_human(self, d):
+        """True when the issue's ledger ended it needs-human (ADR-0151 rule 1): the dispatch reads it, never the review's words
+        (ADR-0149). False when the run has no loop state, names no repository or issue, or the ledger cannot be read."""
+        issue, slug = self.issue(d), self.repo_slug()
+        if not issue or not slug or not os.environ.get("SG_STATE"):
+            return False
+        try:
+            return _ledger().read(f"{slug}#{issue}").get("state") == "needs-human"
+        except (OSError, ValueError, KeyError):
+            return False
+
     def ledger_moves(self, d):
         """The places identical findings twice moved this issue's coder down the chain across runs: the issue ledger's one
         fact (ADR-0151 rule 2, ADR-0149). Zero when the run has no loop state, or names no repository or issue. A held
@@ -582,7 +605,7 @@ class Dispatch:
         if hit is not None:
             e.record.append("gate_reuse", node=name, entry=n, item=None, sha=tree[0], suite=key, source=hit["source"])
             return {"command": argv, "elapsed": 0.0, "exit_code": 0, "verdict": "approve", "findings": "", "stderr": "", "reused_from": hit["source"]}
-        env = {"SQUAD_REVIEW_ROUND": str(n), "SQUAD_REVIEW_FIX": "1" if offer else "0"}
+        env = {"SQUAD_REVIEW_ROUND": str(n), "SQUAD_REVIEW_FIX": "1" if offer else "0", "SG_CHILD_KIND": str(d.get("kind") or "")}
 
         def tick(elapsed):
             anyio.from_thread.run_sync(lambda: e.record.append("review_progress", node=name, gate=gate, elapsed=elapsed))
@@ -756,11 +779,15 @@ class DispatchRunner:
         return ctx.finish(node, entry, sc, res.outcome, res.reasons, elapsed=ctx.clock() - t0)
 
     def review_gate_outcome(self, d, seen):
-        """Pass when the review held no child; fail with the review reason and the child it held. Pass with the reason
+        """Pass when the review held no child; fail with the review reason, the child it held and the first line of the review's stderr (#1574); needs-human when the issue's streak ended it. Pass with the reason
         `no_child_reviewed` when no child's work reached the command (none passed, or none wrote)."""
-        held = [(r, n) for n, _o, rs in seen for r in rs if r.startswith("review_")]
+        asks = [n for n, o, rs in seen if o == "needs-human" and rs[:1] == ["review_needs_human"]]
+        if asks:      # the issue's review streak ended it: the gate asks the owner, with no review text (ADR-0029, #1574)
+            return "needs-human", [f"review_needs_human:{n}" for n in asks]
+        held = [(r, n, next((x[5:].strip() for x in rs if x.startswith("why: ")), "")) for n, _o, rs in seen
+                for r in rs if r.startswith("review_") and r != "review_nochange"]
         if held:
-            return "fail", [f"{r}:{n}" for r, n in held]
+            return "fail", [f"{r}:{n}" + (f": {why}" if why and r == "review_held" else "") for r, n, why in held]
         reviewed = [n for n in (x[0] for x in seen) if "review" in ((d.landed.get(n) or {}).get("effect") or {})]
         return "pass", ([] if reviewed else ["no_child_reviewed"])
 

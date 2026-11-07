@@ -10,7 +10,9 @@
 # BLOCKED: the issue goes back to the queue at once (wave.sh requeue) with every blocking finding, and the issue's
 # `requeue` fact holds the reviewed head (ADR-0149), so childcc never requeues it a second time. The run holds the child.
 # 6 "no change" (#1406): the child's head equals its base, so there is nothing to review; the issue is requeued once with the
-# child's reason (no review retry, no model call), and the run exits 1.
+# child's reason (no review retry, no model call), and the run exits 1. A probe child (SG_CHILD_KIND=probe, #1574) has a report
+# or an issue comment for its deliverable and no tree change by design: it exits 7 (NOCHANGE_PROBE) first, with no requeue and no
+# ledger `requeue` fact, and the run records `review_nochange` as a pass. A code child never takes that path.
 # 4 "fix" (#570): the run offers a fix round (SQUAD_REVIEW_FIX=1: it holds the grant of the child's next entry) and the review
 # is CHANGES whose findings are new or changed. Nothing is requeued; the run fixes the child in its worktree and reviews the new
 # head again (SQUAD_REVIEW_ROUND names the round). Findings a round left as they were count toward the stall (revformat.py,
@@ -25,7 +27,7 @@
 # Stdout is the review (the run record keeps it as the gate's findings).
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/env.sh"; . "$here/caps.sh"; . "$here/ghcall.sh"
-run=$1 child=$2 iss=$3; NONE=3 FIX=4 AGAIN=5 NOCHANGE=6
+run=$1 child=$2 iss=$3; NONE=3 FIX=4 AGAIN=5 NOCHANGE=6 NOCHANGE_PROBE=7
 { [ -n "$run" ] && [ -n "$child" ]; } || { echo "usage: runreview.sh <run> <child> <issue>" >&2; exit 2; }
 [ -n "$iss" ] || { echo "RUNREVIEW $run $child: no issue, no review here" >&2; exit $NONE; }
 [ -e "$SG_STATE/auto/wave-$run" ] || { echo "RUNREVIEW $run $child: the run has no wave, no review here (#$iss)" >&2; exit $NONE; }
@@ -40,6 +42,10 @@ printf '%s\n' "$out" >&2
 md="$SG_STATE/review-$key.md"
 # #1406: exit 6 is a child with no change past its base. Its review input is empty and never changes, so it is no "try again":
 # the issue is requeued once at this head with the child's own reason, and the run exits 1 (no review slot or model spent).
+if [ "$rc" = $NOCHANGE ] && [ "${SG_CHILD_KIND:-}" = probe ]; then
+  echo "RUNREVIEW $run $child: a probe child made no change by design, nothing to review or requeue (#$iss)" >&2
+  exit $NOCHANGE_PROBE
+fi
 if [ "$rc" = $NOCHANGE ]; then
   rb9=$(printf '%s\n' "$out" | sed -n 's/.*no change past \([0-9a-f]*\),.*/\1/p' | head -1)
   why=$(head -1 "$SG_STATE/reason-$key" 2>/dev/null); [ -n "$why" ] || why="the child made no change"

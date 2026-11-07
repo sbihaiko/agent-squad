@@ -153,7 +153,7 @@ def test_the_shipped_envelope_names_no_model_so_no_coding_entry_is_blocked():
     outside a model list, and the hub's auto-append and its "blocked by envelope" badge have nothing to hold."""
     graph = json.loads((ROOT / "docs/design/router.graph.json").read_text())
     allow = next(n["allow"] for n in graph["nodes"] if n.get("kind") == "dispatch")
-    assert "models" not in allow and allow["kinds"] == ["coding", "review", "vision"]
+    assert "models" not in allow and allow["kinds"] == ["coding", "review", "vision", "probe"]
 
 
 def _shared(tmp_path, **markers):

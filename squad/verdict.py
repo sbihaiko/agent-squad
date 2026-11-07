@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30}
 WORST = ("fail", "deadline", "needs-human", "pass")  # the join order of `each` and `dispatch`
-LEDGER_HOLDS = ("ledger_held", "after_held")  # a child its issue ledger held, and a child that runs after one (ADR-0149 rule 4)
+LEDGER_HOLDS = ("ledger_held", "after_held", "review_needs_human")  # a child its issue ledger held, a child that runs after one (ADR-0149 rule 4), and a child whose review streak ended the issue (ADR-0151, #1574)
 DEFAULT_ROUTE = {"pass": "continue", "fail": "exit:fail", "deadline": "exit:deadline", "needs-human": "exit:needs-human"}
 
 

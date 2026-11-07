@@ -30,6 +30,7 @@ KIND_CHAINS = {
                "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5"],
     "review": ["claude-opus-5-5"],
     "vision": ["claude-sonnet-5-5"],
+    "probe": ["claude-grok-4.7", "claude-deepseek-flash[1m]", "claude-haiku-5-5"],
 }
 
 

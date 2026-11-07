@@ -27,6 +27,8 @@ ROUTES = ("cli", "gateway", "direct")
 AUTHS = ("subscription", "api_key", "unverified")
 V1_CHAINS = {"coding": "coding_models", "review": "review_models",
              "vision": "vision_models", "router": "router_models",
+             # A child whose deliverable is a report or an issue comment, never a tree change (#1574). It runs as a coder runs.
+             "probe": "probe_models",
              # A loop defect (ADR-0171): Fable or Astra first, then the review chain. Its one reader is the chain reader below.
              "loop_defect": "loop_defect_models",
              # Editorial text: a commit message, a pull-request body, a status summary. Short, serial, and never on a
@@ -830,7 +832,7 @@ def compatible(mid, chain_name, reg=None):
         return (False, "unknown id")
     if entry.retired:
         return (False, "retired")
-    if canon in ("coding", "router"):
+    if canon in ("coding", "router", "probe"):
         if "gateway" not in entry.routes:
             return (False, "no gateway route")
         if not entry.capabilities.get("tools"):

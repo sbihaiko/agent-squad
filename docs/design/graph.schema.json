@@ -777,7 +777,8 @@
                 "enum": [
                   "coding",
                   "review",
-                  "vision"
+                  "vision",
+                  "probe"
                 ]
               },
               "minItems": 1,

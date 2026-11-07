@@ -157,7 +157,7 @@ def router_overlay(graph, models_path, now=None):
     return overlay
 
 
-KINDS = ("router", "coding", "review", "vision")
+KINDS = ("router", "coding", "review", "vision", "probe")
 
 
 def has_kinds(graph):
@@ -180,6 +180,8 @@ def kind_chains(models_path, now=None):
             raise OptionError(f"models {models_path}: {exc}") from exc
         open_ = [e.raw for e in entries if modelreg.eligible(e, now=now).ok]
         out[kind] = open_ or [e.raw for e in entries]
+    if not out.get("probe"):      # a models file with no probe chain: a probe runs on the coding chain, so the kind is never empty (#1574)
+        out["probe"] = list(out["coding"])
     return out
 
 
@@ -196,6 +198,8 @@ def kind_efforts(models_path):
         except (OSError, ValueError):
             continue
         out[kind] = {e.raw: e.effort for e in entries if getattr(e, "effort", None)}
+    if "probe" not in out and "coding" in out:      # no probe chain: a probe runs on the coding chain (#1574)
+        out["probe"] = dict(out["coding"])
     return out
 
 

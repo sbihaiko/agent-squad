@@ -35,7 +35,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hubmux_shared_board.py", "tests/test_kind_chains.py", "tests/test_lead_survival.py", "tests/test_load_reading_stays_a_reading.py", "tests/test_machine_caps.py",
         "tests/test_mermaid.py", "tests/test_message_ceiling.py", "tests/test_model_naming.py", "tests/test_model_resolver_seam.py", "tests/test_modelreg_model_off.py",
         "tests/test_monitor.py", "tests/test_nightly_obligation.py", "tests/test_profiler_dataset.py", "tests/test_prune.py", "tests/test_qwen_key_gate.py",
-        "tests/test_repo_hygiene.py", "tests/test_resume.py", "tests/test_review_streak.py", "tests/test_run_state_vocabulary.py", "tests/test_state_binding_record.py",
+        "tests/test_repo_hygiene.py", "tests/test_resume.py", "tests/test_review_nochange.py", "tests/test_review_streak.py", "tests/test_run_state_vocabulary.py", "tests/test_state_binding_record.py",
         "tests/test_tailnet_env.py", "tests/test_tailnet_settings.py", "tests/test_terminal_comment.py", "tests/test_to_test_scenario_publish.py", "tests/test_to_test_scenario_tree_publish.py",
         "tests/test_transport_retry_record.py", "tests/test_two_flows.py", "tests/test_vendor_skills.py",
     ),
