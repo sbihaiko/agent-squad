@@ -1,5 +1,5 @@
-// Test door for the dashboard core under node. Reads one {engine, core, ops} request per stdin line, prints one JSON
-// answer per request, and keeps the built core: the engine and the bundle come once, on the first line.
+// Test door for the dashboard core under node. Reads one {id, engine, core, ops} request per stdin line, prints one
+// {id, out} answer per request, and keeps the built core: the engine and the bundle come once, on the first line.
 // `core` is the bundle text of scripts/build_dashboard.py::core_bundle, the same text the page inlines.
 let make;
 // One history run: apply each edit like the page does (graph and layout together), record the state before it, then undo all and redo all.
@@ -153,15 +153,16 @@ async function answer(req) {
   return out;
 }
 
-// One request per line: {engine, core, ops}. The engine and the bundle come on the first line, and the process keeps the
-// core built from them, so a call pays its ops and no start (#1534). An op that throws ends the process with the same
-// stderr a one-shot run printed.
+// One request per line: {id, engine, core, ops}. The engine and the bundle come on the first line, and the process keeps
+// the core built from them, so a call pays its ops and no start (#1534). Each answer carries its request's id back, so a
+// caller never takes a line left by another request for its own. An op that throws ends the process with the same stderr
+// a one-shot run printed.
 (async () => {
   const readline = require("readline");
   for await (const line of readline.createInterface({ input: process.stdin, terminal: false })) {
     if (!line.trim()) continue;
-    let answerLine;
-    try { answerLine = JSON.stringify(await answer(JSON.parse(line))); }
+    let req, answerLine;
+    try { req = JSON.parse(line); answerLine = JSON.stringify({ id: req.id, out: await answer(req) }); }
     catch (e) { process.stderr.write(String((e && e.stack) || e) + "\n"); process.exit(1); }
     process.stdout.write(answerLine + "\n");
   }

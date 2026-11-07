@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,74 +15,130 @@ from build_dashboard import CORE_DIR, OUT, core_bundle, engine_data, page_bundle
 from squad import graph  # noqa: E402
 
 RUNNER = ROOT / "tests" / "dashboard_runner.js"
-_NODE: dict = {"proc": None, "fresh": False}
+_NODE: dict = {"proc": None, "err": None, "fresh": False, "id": 0}
 
 
 def _spawn():
-    return subprocess.Popen(["node", str(RUNNER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, bufsize=1)
+    """The process and the file its stderr goes to. stderr is a file, not a pipe: this process lives for the session and
+    nobody reads a pipe between calls, so 64 KB of it would block the runner, and the words of a failure stay there to
+    be read whenever it is asked."""
+    err = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    try:
+        p = subprocess.Popen(["node", str(RUNNER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=err, text=True, bufsize=1)
+    except Exception:
+        err.close()
+        raise
+    return p, err
+
+
+def _start():
+    """A new process, fresh: the next request carries the engine and the core bundle it has never seen."""
+    _NODE["proc"], _NODE["err"] = _spawn()
+    _NODE["fresh"] = True
+    return _NODE["proc"]
+
+
+def _wait(p):
+    """End the process if it still runs, and let it go."""
+    if p.poll() is None:
+        try:
+            p.stdin.close()
+        except (BrokenPipeError, ValueError):
+            pass
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+
+
+def _ended(what):
+    """Take a process that ended out of the session and give the words it left. Its own end is a defect: the runner
+    answers every request it takes and lives until the session closes its pipe, so no call masks it with a fresh one."""
+    p, err = _NODE["proc"], _NODE["err"]
+    _NODE["proc"], _NODE["err"] = None, None
+    if p is not None:
+        _wait(p)
+    words = ""
+    if err is not None:
+        err.seek(0)
+        words = err.read().strip()
+        err.close()
+    return words or f"{what} and said nothing"
 
 
 def _node():
     """The one node process the session reuses. A call that starts its own node pays the binary's cold start -- 89 MB on a
     shared runner -- inside a measured call, and the first call of a session paid it whole (#1534)."""
     p = _NODE["proc"]
-    if p is None or p.poll() is not None:
-        p = _NODE["proc"] = _spawn()
-        _NODE["fresh"] = True
+    if p is None:
+        return _start()
+    if p.poll() is not None:
+        raise AssertionError(_ended("the dashboard runner ended between two calls"))
     return p
 
 
 def start_runner():
-    """Start the shared process before the first call, so a suite whose first call sits at its line pays the start in setup,
-    which is not a call. No node on this runner means no start; the call that needs node still says so."""
-    if shutil.which("node"):
-        _node()
+    """Start the shared process and take one answer from it, so the binary's cold start and the core's build sit in a
+    suite's setup, which no cap measures, and not inside its first measured call. A start alone is not enough: Popen
+    returns before node has loaded, so a call that finds only a spawned process still waits for the binary (#1534).
+    No node on this runner means no start; the call that needs node still says so."""
+    if not shutil.which("node"):
+        return
+    run_node([{"op": "legend"}])
 
 
 def stop_runner():
-    """End the shared process and its pipe: a session leaves no node behind."""
-    p, _NODE["proc"] = _NODE["proc"], None
-    if p is None or p.poll() is not None:
+    """End the shared process and its pipe: a session leaves no node behind, and a process that answers and then dies in
+    a failure is not silent. A clean end is the runner reading the closed pipe and returning 0 (#1534)."""
+    p, err = _NODE["proc"], _NODE["err"]
+    _NODE["proc"], _NODE["err"] = None, None
+    if p is None:
+        if err is not None:
+            err.close()
         return
+    _wait(p)
+    words = ""
+    if err is not None:
+        err.seek(0)
+        words = err.read().strip()
+        err.close()
+    if p.returncode != 0:
+        raise AssertionError(f"the dashboard runner ended with {p.returncode}: {words or 'no word'}")
+
+
+def _stop_at_exit():
+    """The interpreter's own exit: a failure there cannot fail a run that already ended."""
     try:
-        p.stdin.close()
-    except (BrokenPipeError, ValueError):
+        stop_runner()
+    except AssertionError:
         pass
-    try:
-        p.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        p.kill()
-        p.wait()
 
 
-atexit.register(stop_runner)
+atexit.register(_stop_at_exit)
 
 
 def run_node(ops):
     assert shutil.which("node"), "node is not installed: the dashboard parity guard cannot run, and it never skips"
-    req = {"ops": ops}
-    for attempt in (0, 1):
-        p = _node()
-        if _NODE["fresh"]:
-            req["engine"], req["core"] = engine_data(), core_bundle()   # the process keeps both for every later call
-            _NODE["fresh"] = False
-        try:
-            p.stdin.write(json.dumps(req) + "\n")
-            p.stdin.flush()
-            line = p.stdout.readline()
-        except (BrokenPipeError, ValueError):
-            line = ""
-        if line.strip():
-            return json.loads(line)
-        _NODE["proc"] = None    # the runner ended without an answer: read why, and start one more only once
-        if attempt:
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                p.kill()
-            raise AssertionError(p.stderr.read() or "the dashboard runner ended without an answer and said nothing")
-    raise AssertionError("the dashboard runner ended without an answer")
+    p = _node()
+    _NODE["id"] += 1
+    req = {"id": _NODE["id"], "ops": ops}
+    if _NODE["fresh"]:
+        req["engine"], req["core"] = engine_data(), core_bundle()   # the process keeps both for every later call
+        _NODE["fresh"] = False
+    try:
+        p.stdin.write(json.dumps(req) + "\n")
+        p.stdin.flush()
+    except (BrokenPipeError, ValueError):
+        raise AssertionError(_ended("the dashboard runner ended before it took the request")) from None
+    while True:
+        line = p.stdout.readline()
+        if not line.strip():
+            raise AssertionError(_ended("the dashboard runner ended without an answer"))
+        answer = json.loads(line)
+        if answer.get("id") == req["id"]:   # a line for any other request is one whose call gave up: never this one's
+            return answer["out"]
 
 
 # --- the key of one error: (node, rule). A schema error keys on its path (library text differs); any other rule keys on its message ---

@@ -76,27 +76,119 @@ def test_every_core_module_is_bundled_once_and_the_runner_and_page_share_the_bun
     assert run_node([{"op": "hash", "text": "{}"}])[0] == hashlib.sha256(b"{}").hexdigest()   # the runner evaluates this bundle
 
 
+# --- the runner the helpers keep for the session (#1534): one start, one build, and no answer taken for another ---
+# A stand-in for tests/dashboard_runner.js: it speaks the helper's wire, so what is checked is the helper, never node.
+FAKE_WARM = '''
+const fs = require("fs");
+const readline = require("readline");
+(async () => {
+  for await (const line of readline.createInterface({ input: process.stdin, terminal: false })) {
+    fs.appendFileSync(process.env.RUNNER_LOG, line + "\\n");
+    const req = JSON.parse(line);
+    process.stdout.write(JSON.stringify({ id: req.id, out: ["warm"] }) + "\\n");
+  }
+})();
+'''
+
+FAKE_STALE = '''
+const readline = require("readline");
+(async () => {
+  for await (const line of readline.createInterface({ input: process.stdin, terminal: false })) {
+    const req = JSON.parse(line);
+    process.stdout.write(JSON.stringify({ id: -1, out: ["answer to a request nobody is waiting for"] }) + "\\n");
+    process.stdout.write(JSON.stringify({ id: req.id, out: ["answer"] }) + "\\n");
+  }
+})();
+'''
+
+FAKE_DIES = '''
+const readline = require("readline");
+(async () => {
+  for await (const line of readline.createInterface({ input: process.stdin, terminal: false })) {
+    const req = JSON.parse(line);
+    process.stdout.write(JSON.stringify({ id: req.id, out: ["answer"] }) + "\\n");
+    process.stderr.write("the runner threw after its answer\\n");
+    process.exit(1);
+  }
+})();
+'''
+
+
+def _fake_runner(monkeypatch, tmp_path, source):
+    """Point the helpers at a stand-in runner, with a fresh process, and count the starts they make."""
+    import tests.dashboard_helpers as helpers
+    helpers.stop_runner()    # a process from an earlier call would make the count say nothing
+    fake = tmp_path / "runner.js"
+    fake.write_text(source)
+    monkeypatch.setattr(helpers, "RUNNER", fake)
+    starts, real_popen = [], helpers.subprocess.Popen
+
+    def counted(*a, **k):
+        starts.append(a)
+        return real_popen(*a, **k)
+
+    monkeypatch.setattr(helpers.subprocess, "Popen", counted)
+    return helpers, starts
+
+
 @pytest.mark.heavy
-def test_two_node_calls_share_one_runner_process(monkeypatch):
+def test_two_node_calls_share_one_runner_process(monkeypatch, tmp_path):
     """#1534: every run_node call started its own node. A node start is an 89 MB binary, and on a cold, shared runner the
     first call of a session paid that start inside a measured call: one gui-e2e case crossed its 2 s line for work no
     assertion does. One process serves the session, so a call costs its ops and nothing else."""
-    import tests.dashboard_helpers as helpers
-    starts = []
-    real_run, real_popen = helpers.subprocess.run, helpers.subprocess.Popen
+    helpers, starts = _fake_runner(monkeypatch, tmp_path, FAKE_WARM)
+    monkeypatch.setenv("RUNNER_LOG", str(tmp_path / "requests.log"))
+    try:
+        first = run_node([{"op": "hash", "text": "{}"}])
+        assert len(starts) == 1, f"{len(starts)} node processes started for the first call; one process serves it"
+        second = run_node([{"op": "hash", "text": "{}"}])
+        assert first == second == ["warm"]
+        assert len(starts) == 1, f"{len(starts)} node processes started for two calls; one process serves the session"
+    finally:
+        helpers.stop_runner()
 
-    def counted(call):
-        def start(*a, **k):
-            starts.append(a)
-            return call(*a, **k)
-        return start
 
-    monkeypatch.setattr(helpers.subprocess, "run", counted(real_run))
-    monkeypatch.setattr(helpers.subprocess, "Popen", counted(real_popen))
-    first = run_node([{"op": "hash", "text": "{}"}])
-    second = run_node([{"op": "hash", "text": "{}"}])
-    assert first == second
-    assert len(starts) <= 1, f"{len(starts)} node processes started for two calls; one process serves the session"
+@pytest.mark.heavy
+def test_start_runner_takes_one_answer_before_the_first_call(monkeypatch, tmp_path):
+    """#1534: Popen returns before node has loaded, so a fixture that only starts the process leaves the binary's cold
+    start inside the first measured call -- the whole 2.1 s the diagram case spent on a runner. Setup sends one request
+    and takes its answer, so the first call finds the runner built."""
+    helpers, starts = _fake_runner(monkeypatch, tmp_path, FAKE_WARM)
+    log = tmp_path / "requests.log"
+    monkeypatch.setenv("RUNNER_LOG", str(log))
+    try:
+        helpers.start_runner()
+        assert log.exists(), "setup started the process but sent it no request: the first call still pays the start"
+        assert len(starts) == 1
+        assert run_node([{"op": "legend"}]) == ["warm"]
+        assert len(starts) == 1, "the first call started its own node: setup had not answered the runner"
+    finally:
+        helpers.stop_runner()
+
+
+@pytest.mark.heavy
+def test_a_line_that_answers_an_earlier_request_is_not_this_calls_answer(monkeypatch, tmp_path):
+    """#1534: the runner answers one request per line and keeps its pipe between calls. A line left by a request whose
+    call gave up is not this call's answer: taken, it hands one test another's result, a pass that lies."""
+    helpers, _ = _fake_runner(monkeypatch, tmp_path, FAKE_STALE)
+    try:
+        assert run_node([{"op": "legend"}]) == ["answer"]
+    finally:
+        helpers.stop_runner()
+
+
+@pytest.mark.heavy
+def test_a_runner_that_answers_and_then_ends_is_not_silent(monkeypatch, tmp_path):
+    """#1534: the old helper read the exit code of the one process it started for every call. A shared process outlives
+    the calls that reuse it, so nothing waits for it after an answer: its end is read when the session lets it go, and a
+    failure then is named, never dropped."""
+    helpers, _ = _fake_runner(monkeypatch, tmp_path, FAKE_DIES)
+    try:
+        assert run_node([{"op": "legend"}]) == ["answer"]
+        with pytest.raises(AssertionError, match="the runner threw after its answer"):
+            helpers.stop_runner()
+    finally:
+        helpers.stop_runner()
 
 
 def test_every_page_source_is_built_once_and_the_page_bundle_is_the_one_script():
