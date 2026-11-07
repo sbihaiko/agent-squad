@@ -597,6 +597,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # #1521: the repro runs in the tree that holds the reviewed head: the worktree in --worktree mode, else a throwaway
     # worktree of the head in --branch mode (the checkout is never the repro's tree). A plan has no head to run in (its head
     # is a body hash), so a plan's answer has no repro step. No tree holds the head: no repro runs and the findings stay Blocking.
+    # #1525: a sandbox that cannot apply (a nested one) is a run that proved nothing: the finding stays Blocking and revformat prints the refusal.
     if [ $rc = 0 ] && [ -s "$o.answer" ] && [ "$(head -1 "$o")" = "VERDICT: CHANGES" ] && [ "$mode" != --plan ]; then
       tree0=$SG_CHECKOUT; fresh=; [ "$mode" = --worktree ] && tree0=$wt; [ "$mode" = --branch ] && fresh=1
       rt=$(repro_tree "$tree0" "$head" "$fresh")

@@ -20,7 +20,9 @@ check: a line that exits non-zero while the defect is present.
    `--worktree` review, else a throwaway worktree of the head in a `--branch` review; the checkout is never the repro's
    tree. No such tree: no repro runs, and every finding stays Blocking. A repro that exits 0 moves the finding to Debt,
    marked with the head it passed at. A repro that cannot run (timeout, not executable, not found) also moves it to
-   Debt, marked as not run. Any other non-zero status keeps the finding Blocking. A refused write is a failed command, so
+   Debt, marked as not run. A repro whose sandbox cannot apply (a session already under a sandbox refuses a nested one)
+   proved nothing: the finding stays Blocking and the loop names the refusal. Any other non-zero status keeps the finding
+   Blocking. A refused write is a failed command, so
    a repro that makes one and then exits non-zero stays Blocking; a repro that swallows the refusal and exits 0 still
    moves its finding to Debt.
 3. **A finding with no repro is Debt.** The parser moves it, so no reader sees a Blocking finding without a repro.
@@ -40,7 +42,7 @@ check: a line that exits non-zero while the defect is present.
 
 `contrib/squad-goal/scripts/test-revformat.sh`: a blank repro demotes its finding to Debt, a set repro renders as a fifth
 field, a finding with no repro key is refused, `--repro` keeps a failing repro Blocking and moves a passing or unrunnable
-one to Debt with its head, and a repro cannot write outside its tree while it can write inside. `contrib/squad-goal/scripts/test-review.sh`:
+one to Debt with its head, and a repro cannot write outside its tree while it can write inside; a sandbox that cannot apply keeps the finding Blocking and names the refusal, inside a child sandbox and outside one. `contrib/squad-goal/scripts/test-review.sh`:
 a review whose Blocking repro passes is saved with the finding in Debt, and a review whose every repro passes is an
 approval; the repro runs in the reviewed tree (a `--worktree` review), a throwaway worktree of the head, or not at all when
 no tree holds it, and never in the checkout of a `--branch` review. `test-loopbug-review.sh`:
