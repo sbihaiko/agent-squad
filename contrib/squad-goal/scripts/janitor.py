@@ -587,6 +587,10 @@ def open_issues():   # every open issue of the repository, ONE read per pass thr
                 if isinstance(i.get("sub_issues"), list): _kids[str(i["number"])] = [str(k) for k in i["sub_issues"] if isinstance(k, int)]
         _open = (isinstance(items, list), m)
     return _open
+def issue_closed(n):   # the pass's one open-issue list answers for the whole repository (#92, #1566): an issue absent from
+    # it is closed. A list that did not answer is no answer, so the caller keeps its line and its rule.
+    answered, oans = open_issues()
+    return answered and str(n) not in oans
 for n, i in live.items():
     mk = st / "auto" / f"janitor-closedrun-{n[-6:]}"
     if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
@@ -1248,7 +1252,7 @@ if owner and proj and repo0:
         why = "; ".join(i["reasons"]) or "no reason recorded"
         for n in sorted(marks, key=int):
             if holding(n):   # a live run works it, or a wave still carries it: not ours to release, not yet
-                if n in delivering and n not in byissue: say(f"HELD-BY-WAVE #{n}: run {f.name} ended {i['name']}, its wave is open; the landing pass owns the issue")   # observability only (#1423, ADR-0166)
+                if n in delivering and n not in byissue and not issue_closed(n): say(f"HELD-BY-WAVE #{n}: run {f.name} ended {i['name']}, its wave is open; the landing pass owns the issue")   # observability only (#1423, ADR-0166); a closed issue is named never (#1566)
                 again = True; continue
             ist = sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip()
             if ist != "open": again = again or ist != "closed"; continue

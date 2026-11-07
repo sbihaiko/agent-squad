@@ -112,6 +112,7 @@ test-janitor-frontier-idle.sh 2.82
 test-janitor-frozen-owner.sh 0.95
 test-janitor-gone-issue.sh 1.31
 test-janitor-h.sh 0.59
+test-janitor-held-by-wave.sh 1.73
 test-janitor-i.sh 1.13
 test-janitor-k.sh 1.57
 test-janitor-killed.sh 0.85
