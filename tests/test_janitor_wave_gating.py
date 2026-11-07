@@ -62,6 +62,7 @@ def _no_live_env(monkeypatch):
             monkeypatch.delenv(k, raising=False)
 
 
+@pytest.mark.heavy   # one janitor run under -I: 1.7 s here, 2 s on a CI runner
 def test_the_gating_fact_finds_its_journal_module_from_the_scripts_own_tree(tmp_path, monkeypatch):
     """The janitor runs under `python3 -I`, so its own directory is off sys.path and every sibling import puts it
     there itself (#1545). The gating fact must find gate_attempts without leaning on an earlier import's side effect."""

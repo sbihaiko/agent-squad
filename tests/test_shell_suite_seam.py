@@ -12,6 +12,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 TESTS = Path(__file__).resolve().parent
 SPAWNERS = {"run", "Popen", "check_output", "check_call", "call"}
 SUITE = re.compile(r"test-[A-Za-z0-9_.-]+\.sh")
@@ -37,6 +39,7 @@ def _bare_spawns(source: Path):
             break
 
 
+@pytest.mark.heavy   # parses every test module: 1.8 s here, 2 s on a CI runner
 def test_no_test_module_spawns_a_shell_suite_outside_the_one_seam() -> None:
     offenders = [f"{source.name}:{line} spawns {name}" for source in sorted(TESTS.glob("test_*.py"))
                  for line, name in _bare_spawns(source)]

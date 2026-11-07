@@ -2,6 +2,8 @@
 import json
 import re
 
+import pytest
+
 from tests.dashboard_helpers import PAGE_SRC, run_node
 from tests.test_dashboard_failures import BOX, _run
 from tests.test_dashboard_layout import _layout
@@ -29,6 +31,7 @@ def _split(kids, expanded=()):
     return run_node([{"op": "splitkids", "children": kids, "expanded": list(expanded)}])[0]
 
 
+@pytest.mark.heavy   # draws 26 child cards in one group pass: 3.6 s on a CI runner
 def test_done_children_with_one_outcome_form_one_group_each_so_21_passed_and_5_failed_make_two_cards():
     kids = _mk(21, "pass") + _mk(5, "fail", start=22)
     s = _split(kids)
