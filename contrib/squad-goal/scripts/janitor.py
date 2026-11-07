@@ -154,7 +154,7 @@ def _procs_module():
     """squad/procs.py, the one process reader, loaded by path: the repository this script sits in first, as caps.sh reads it,
     then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. That file imports nothing from squad, so it loads alone under any python3 (#1508)."""
     name = "squad_procs"
-    if name in sys.modules: return sys.modules[name]
+    if hasattr(sys.modules.get(name), "snapshot"): return sys.modules[name]   # never a foreign stub another loader left
     roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
              *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]   # a copy outside the repo: the tree it runs in
     root = next((r for r in roots if (pathlib.Path(r) / "squad" / "procs.py").is_file()), roots[-1])

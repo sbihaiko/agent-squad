@@ -10,7 +10,7 @@ def _procs():
     then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. That file imports nothing from squad, so it loads alone under any python3 (#1508)."""
     if not _PROCS:
         name = "squad_procs"
-        if name in sys.modules: _PROCS.append(sys.modules[name])
+        if hasattr(sys.modules.get(name), "snapshot"): _PROCS.append(sys.modules[name])   # never a foreign stub another loader left
         else:
             roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
              *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]   # a copy outside the repo: the tree it runs in
