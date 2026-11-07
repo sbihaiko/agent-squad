@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: watchd.sh start|stop|drain|reload|status   (run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873)
+# usage: watchd.sh start|stop|drain|restart|reload|status   (run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873; `restart` drains the live runs first, #1471)
 # Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
@@ -61,9 +61,14 @@ drain_pause() {
   case $p in ''|*[!0-9]*) echo "$p"; return;; esac
   [ "$n" -gt 6 ] && n=6; p=$((p << n)); [ "$p" -gt "$m" ] && p=$m; echo "$p"
 }
-# A start during a drain cancels it (#1316): the waiter ends, and the pause the drain set lifts with its marker.
+# A start during a drain cancels it (#1316): the waiter ends, and the pause the drain set lifts with its marker. A start
+# cancels a restart's drain the same way, because it reaches the supervisor the loop already runs and carries no new copy.
 drain_cancel() { w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && kill -TERM "$w" 2>/dev/null
-  rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-waiter"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"; }
+  rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-waiter" "$SG_STATE/auto/restart"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"; }
+# A pid file a dead drain-wait left behind names no waiter: joining it would drop the drain or the restart into a process
+# that already ended. The waiter's own state directory is part of its command line, so a waiter serving another state
+# directory is no waiter here (#1471).
+is_waiter() { $SG_PS -p "$1" -ww -o command= 2>/dev/null | grep -qF -- "watchd.sh drain-wait $SG_STATE"; }
 # loop_bug_open   The owner's rule: the loop is never restarted while a loop-bug issue is open, Backlog included (#1386,
 # ADR-0146). The three halt labels stop the passes; a bare `loop-bug` stops nothing there, and no label stops a start. So
 # the start itself reads the open issues, once, through the one seam. Returns 0 and prints the number when one is open,
@@ -92,7 +97,7 @@ case "${1:-status}" in
     rm -f "$SG_STATE/token-guard.since" "$SG_STATE/token-over" "$SG_STATE/token-pause"   # a start is a relight: the token guard measures afresh, never an old burn (#515)
     # A drain's pause is the drain's own (#923): a start lifts it, from the hub or the terminal, so the loop never reads on
     # while it dispatches nothing. A pause the owner set before the drain has no drain-pause mark, and stays.
-    rm -f "$SG_STATE/auto/drain"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"
+    rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"
     record_sha
     date +%s > "$SG_STATE/watchd.started"   # the hub drops an older failed start once a later start ran (#923)
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"supervise"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
@@ -149,17 +154,54 @@ case "${1:-status}" in
     else
       kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
     fi
-    for _ in 1 2 3 4 5 6 7 8 9 10; do alive || { rm -f "$P" "$SG_STATE/auto/drain"; echo "watchd stopped"; exit 0; }; sleep 1; done
+    for _ in 1 2 3 4 5 6 7 8 9 10; do alive || { rm -f "$P" "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"; echo "watchd stopped"; exit 0; }; sleep 1; done
     echo "watchd did not stop" >&2; exit 1;;
   drain) alive || { echo "watchd not running"; exit 0; }
     # A drain pauses dispatch and leaves the lanes running; a detached waiter stops the loop once no run or gate is live (#923).
+    # A drain that finds a live waiter joins it and drops the restart mark: a drain means stop, so the stop intent is never
+    # silently turned into a restarted loop (#1471).
     mkdir -p "$SG_STATE/auto"; [ -e "$SG_STATE/auto/off" ] || { : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; }; : > "$SG_STATE/auto/drain"
-    python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
+    rm -f "$SG_STATE/auto/restart"
+    w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && is_waiter "$w" && { echo "watchd draining pid=$pid"; exit 0; }
+    python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait",sys.argv[2]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me" "$SG_STATE"
     echo "watchd draining pid=$pid";;
+  # A restart follows a publish (#1471, ADR-0162 decision 3). A publish reaches the drivers only through a restart, and a
+  # stop under a live run kills the run and its gate; so the restart pauses dispatch at once, marks its drain, and a
+  # detached waiter stops the supervisor only once no run and no gate is live, then starts it again. The lanes keep their
+  # beat under the pause, so the takeover bound still ends a stuck run and the drain lets go of it (ADR-0166).
+  restart) alive || { echo "watchd not running: starting"; bash "$me" start; exit $?; }
+    # A plain drain is a stop the owner asked for: a restart that finds that drain running refuses to upgrade it, and
+    # names the drain (#1471).
+    w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)
+    if [ -n "$w" ] && is_waiter "$w" && [ ! -e "$SG_STATE/auto/restart" ]; then
+      echo "watchd restart refused: a drain the owner asked for is in progress, and it stops the loop" >&2; exit 1
+    fi
+    mkdir -p "$SG_STATE/auto"; [ -e "$SG_STATE/auto/off" ] || { : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; }; : > "$SG_STATE/auto/drain"; : > "$SG_STATE/auto/restart"
+    [ -n "$w" ] && is_waiter "$w" && { echo "watchd restarting: draining pid=$pid"; exit 0; }
+    python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait",sys.argv[2]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me" "$SG_STATE"
+    echo "watchd restarting: draining pid=$pid";;
   drain-wait) rm -f "$SG_STATE/drain-reader.fail"   # a failure streak is one drain's own
     echo "$$" > "$SG_STATE/auto/drain-waiter"
     while alive && [ -e "$SG_STATE/auto/drain" ] && drain_busy; do sleep "$(drain_pause)"; done
-    [ -e "$SG_STATE/auto/drain" ] && alive && bash "$me" stop >/dev/null
-    [ "$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)" = "$$" ] && rm -f "$SG_STATE/auto/drain-waiter"; rm -f "$SG_STATE/auto/drain";;
+    # The restart's decision is read before the stop, because the stop itself clears both marks (#1471).
+    r=; [ -e "$SG_STATE/auto/drain" ] && [ -e "$SG_STATE/auto/restart" ] && alive && r=1
+    if [ -e "$SG_STATE/auto/drain" ] && alive; then
+      if bash "$me" stop >/dev/null; then
+        if [ -n "$r" ]; then
+          printf '%s WATCHD RESTART the live work ended, the supervisor restarts\n' "$(date '+%F %T')" >> "$L"
+          # The lanes die with the supervisor's group, and a lane still listed under pid 1 is an orphan the start refuses:
+          # give the group the moment it needs before the start reads the table.
+          for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(orphans)" ] && break; sleep 1; done
+          out=$(bash "$me" start 2>&1); rc=$?; printf '%s\n' "$out" >> "$L"
+          # A refused start (an open loop-bug, an orphan lane, a missing squad.caps) leaves the loop off; one alerts.log
+          # line names the reason, so a publish never ends in a silently down loop.
+          [ "$rc" = 0 ] || printf '%s WATCHD RESTART the start after the drain was refused, the loop stays off: %s\n' \
+            "$(date '+%F %T')" "$(printf '%s' "$out" | tail -n 1)" >> "$SG_STATE/alerts.log"
+        fi
+      else printf '%s WATCHD RESTART the supervisor did not stop, so the restart is not made\n' "$(date '+%F %T')" >> "$L"; fi
+    fi
+    # The marks are the waiter's own while it holds the waiter file: a later drain or restart that took the file over keeps
+    # its own marks, so an old waiter's exit never cancels the restart it was too late to serve.
+    if [ "$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)" = "$$" ]; then rm -f "$SG_STATE/auto/drain-waiter" "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"; fi;;
   status) alive && echo "watchd running pid=$pid" || echo "watchd not running";;
 esac
