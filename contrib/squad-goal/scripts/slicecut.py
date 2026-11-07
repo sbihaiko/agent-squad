@@ -14,9 +14,12 @@ decide reads the open-issue list and, for each issue, prints one line:
                                   the holding branch is mid-land: cut nothing now, and a later pass decides again
 A KEEP on a branch that sits on a live holder also prints `BASE <parent>`: the work belongs on that branch.
 
-Live means the issue a dispatch marker (auto/disp-<n>, auto/bug-<n>) holds, or a run without a final verdict works it.
+Live means the issue a dispatch marker (auto/disp-<n>, auto/bug-<n>) holds, a run without a final verdict works it, or, for
+a decision, a local branch of an open issue exists: the branch is the claim, so a holder whose run ended or crashed without
+a marker still holds its file. Release reads only the markers and the runs, never the branch alone, so it can move one.
 Mid-land means the holding run's wave landing pass is alive (auto/wland-<run>.busy, watch.sh). The rule is the one the
-owner set for #1504: stack when the holder is live and not landing, hold only while it is mid-land.
+owner set for #1504: stack when the holder is live and not landing, hold only while it is mid-land. Among the live holders
+of one file the parent is the deepest branch, the one that carries the line, never an older sibling beside it.
 
 Two dispatchers that decide at once must not both cut from the base. The decision and the branch it makes run under one
 lock (locks/slice-cut), and the branch is the claim: the facts are read again inside the lock, so the second decision sees
@@ -133,7 +136,8 @@ def live_runs():
 def live_issues(by):
     """{issue: run name or ""} of every issue whose work is in flight: a dispatch marker of either dispatcher, or a live
     run's request. A marker whose branch is not cut yet is a decision in flight under the same lock, never a reason to
-    cut from the base beside it."""
+    cut from the base beside it. A branch alone is not read here: release must be able to move one, so the branch-is-the-
+    claim rule below belongs to decide, beside the issue list it reads anyway."""
     live = {}
     for n in by:
         if (AUTO / f"disp-{n}").exists() or (AUTO / f"bug-{n}").exists():
@@ -199,13 +203,23 @@ def drop_lock():
 
 
 def cut(b, sha):
-    """Make the branch at sha, and verify it: a branch another launch made first is the one the child uses, never
-    overwritten (claim-then-verify). Returns the tip, or None when the branch does not answer."""
+    """Make the branch at sha and verify it (claim-then-verify): a branch another launch made first is the one the child
+    uses, never overwritten. Returns (tip, made): made is False when the branch already sits at another commit, which
+    holds work and is accepted as the child's branch (KEEP), never moved; tip is None when no branch answers at all."""
     r = git("branch", b, sha)
     t = tip(b)
-    if r.returncode and t != sha:
-        return None   # the branch exists at another commit: it holds work, and this decision may not move it
-    return t or sha
+    if not t:
+        return None, False
+    return t, (not r.returncode or t == sha)
+
+
+def deepest(holders):
+    """The holder whose branch carries the line: the one every other holder's tip is an ancestor of. Two holders at one
+    commit (a child cut a moment ago) are one line, so the first is as good as the other."""
+    for h in holders:
+        if all(git("merge-base", "--is-ancestor", x[2], h[2]).returncode == 0 for x in holders):
+            return h
+    return holders[0]
 
 
 def decide(by, n):
@@ -213,8 +227,8 @@ def decide(by, n):
     cand_files = files(n, by)
     b = branch_of(n)
     holders = []   # (issue, branch, tip, shared file, run name or "")
-    for h in sorted(live):
-        if h == n or h not in by:
+    for h in sorted(by):
+        if h == n:
             continue
         shared = cand_files & files(h, by)
         if not shared:
@@ -222,21 +236,28 @@ def decide(by, n):
         hb, ht = branch_of(h), tip(branch_of(h))
         if not ht:
             continue   # the holder's own decision is in flight under this lock; its branch is not cut yet
-        holders.append((h, hb, ht, min(shared), live[h]))
+        # An open issue's existing branch is a holder even with no marker and no live run: the branch is the claim, so a
+        # run that crashed or ended without landing it still holds its file. Without this, the issue is cut from the base
+        # beside the branch -- the sibling conflict ADR-0150 rules out (#1504).
+        holders.append((h, hb, ht, min(shared), live.get(h, "")))
     stack = [x for x in holders if not mid_land(x[4])]
     keep = tip(b)
     if keep:
         print(f"KEEP {b} {keep}")
         if stack:
-            print(f"BASE {stack[0][1]}")
+            print(f"BASE {deepest(stack)[1]}")
         return 0
     if stack:
-        h, hb, ht, _, _ = stack[0]
-        made = cut(b, ht)
+        h, hb, ht, _, _ = deepest(stack)
+        made, fresh = cut(b, ht)
         if not made:
-            print(f"NOTE {b}: the branch answers at another commit; it was not moved", file=sys.stderr)
+            print(f"NOTE {b}: no branch answers after the cut; it was not made", file=sys.stderr)
             return 1
-        print(f"STACK {b} {hb} {made}")
+        if fresh:
+            print(f"STACK {b} {hb} {made}")
+        else:
+            print(f"KEEP {b} {made}")
+            print(f"BASE {hb}")
         return 0
     if holders:
         _, hb, _, f, _ = holders[0]
@@ -246,11 +267,11 @@ def decide(by, n):
     if not base:
         print(f"NOTE no {BASE} to cut {b} from", file=sys.stderr)
         return 1
-    made = cut(b, base)
+    made, fresh = cut(b, base)
     if not made:
-        print(f"NOTE {b}: the branch answers at another commit; it was not moved", file=sys.stderr)
+        print(f"NOTE {b}: no branch answers after the cut; it was not made", file=sys.stderr)
         return 1
-    print(f"CUT {b} {made}")
+    print(f"CUT {b} {made}" if fresh else f"KEEP {b} {made}")
     return 0
 
 
@@ -284,16 +305,36 @@ def rebase_onto(b, onto):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_of_issue(by):
+    """{issue: run name} of every issue a listed run's request names, whatever that run's last verdict says: a branch
+    whose run still lands it is mid-land, and release never rebases it under the landing pass."""
+    out = {}
+    try:
+        rows = (STATE / "active-runs.txt").read_text().split()
+    except OSError:
+        return out
+    for row in rows:
+        f = run_folder(row)
+        try:
+            names = {int(x) for m in CHILD.findall((f / "request.txt").read_text()) for x in re.split(r"[^0-9]+", m) if x}
+        except OSError:
+            continue
+        for n in names:
+            if n in by:
+                out[n] = f.name
+    return out
+
+
 def release(by):
     base = base_tip()
     if not base:
         print(f"NOTE no {BASE} to release onto", file=sys.stderr)
         return 1
-    live, wts, rc = live_issues(by), branches_with_worktree(), 0
+    live, wts, owners, rc = live_issues(by), branches_with_worktree(), run_of_issue(by), 0
     for n in sorted(by):
         b, t = branch_of(n), tip(branch_of(n))
-        if not t or n in live or b in wts:
-            continue   # a live run or a worktree owns the branch: never moved under it
+        if not t or n in live or b in wts or mid_land(owners.get(n)):
+            continue   # a live run, a mid-land pass or a worktree owns the branch: never moved under it
         ahead = git("rev-list", "--count", f"{base}..{t}").stdout.strip()
         if ahead not in ("", "0"):
             # The branch has commits the base lacks. It is all stacked base when every one of them is already in the base
