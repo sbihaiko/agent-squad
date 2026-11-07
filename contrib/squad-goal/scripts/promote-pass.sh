@@ -25,11 +25,11 @@ d=$(cd "$(dirname "$0")" && pwd)
 # ci_job_names <workflow file> [gated]: the check-run name of every job under jobs:, one per line; with `gated`, only the
 # jobs whose `if:` names base_ref. The reader stays inside the jobs: block (a line at column zero ends it), so a step's
 # `name:`, a `with: name:` or any other four-space `name:` outside a job never becomes a check run whose absence would hold
-# every tip forever (ADR-0164, #1322). Only a job that names itself is read: the shard names are read apart, from the matrix
-# the same file carries. A file that names no job answers nothing, and its caller reads that as pending, never as a vacuous
-# pass. A job gated on base_ref runs only on a pull request into that branch, so it never runs on the dev-to-stg pull
-# request the promotion reads (#1461): the caller refuses the promotion and names it, never recording a pass over the jobs
-# that did run.
+# every tip forever (ADR-0164, #1322). Only a job that names itself is read; the full suite's shard jobs name themselves, so
+# they are read like every other job (#1518). A file that names no job answers nothing, and its caller reads that as pending,
+# never as a vacuous pass. A job gated on base_ref runs only on a pull request into that branch, so it never runs on the
+# dev-to-stg pull request the promotion reads (#1461): the caller refuses the promotion and names it, never recording a pass
+# over the jobs that did run.
 ci_job_names() {
   awk -v want="${2:-}" '
     function flush() { if (cur != "" && (want != "gated" || gated)) print cur; cur = ""; gated = 0 }
@@ -105,15 +105,13 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # defected <log>: a check already reported a defect before the deadline, so the bound never turns it into a pass.
   defected() { /usr/bin/grep -qE '^(FAILED|ERROR) |errors? during collection|^[^ ]+:[0-9]+: error: |^[A-Z][A-Z]*[0-9]+ ' "$1"; }
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
-  # ADR-0164 (#1051, #1062, #1461): every job of ci.yml on the tip, and every full-proof shard that file names, is the full
-  # pass when all are green. Both tiers run on the dev-to-stg pull request, so the complete tier is one of the checks this
-  # pass reads; a job the file gates to another pull request is refused by name, never skipped. The shard job is withdrawn
-  # while #1062 is open, so the names come from the file and a restored matrix is read with no second change. Green writes
-  # the full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job
-  # that is missing, running or timed out holds nothing, and the proof below answers as before.
-  # SG_CI_WORKFLOW names the workflow file the shard names are read from: the repository's own by default, a fixture in a test.
+  # ADR-0164 (#1051, #1322, #1461, #1518): every job of ci.yml on the tip is the full pass when all are green, the full
+  # suite's twelve shard jobs included. Both tiers run on the dev-to-stg pull request, so the complete tier is one of the
+  # checks this pass reads; a job the file gates to another pull request is refused by name, never skipped. Green writes the
+  # full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job that
+  # is missing, running or timed out holds nothing, and the proof below answers as before.
+  # SG_CI_WORKFLOW names the workflow file the check names are read from: the repository's own by default, a fixture in a test.
   ci_file=${SG_CI_WORKFLOW:-$d/../../../.github/workflows/ci.yml}
-  shard_list=$(/usr/bin/grep -o 'shard: \[[0-9, ]*\]' "$ci_file" 2>/dev/null | tr -dc '0-9 ')
   full_status() {  # <tip> <description>: the squad/full-proof status on the sha, read back; the reason is printed when it does not stand
     local o st
     o=$(gh_send -X POST "repos/$SG_REPO/statuses/$1" -f state=success -f "context=$ctx" -f "description=$2") \
@@ -134,13 +132,11 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     mark "$tip" "not promoted: the workflow gates $gated_list to another pull request, so the dev tip never proves it"; exit 1
   fi
   ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
-    local cr n st c v=pass sh names=()
+    local cr n st c v=pass
     [ "${#ci_names[@]}" -gt 0 ] || { echo pending; return; }   # a workflow that names no job proves nothing
-    names=("${ci_names[@]}")
-    for sh in $shard_list; do names+=("full-proof shard $sh"); done   # none while the shard job is withdrawn (#1062)
     cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
-    for n in "${names[@]}"; do
+    for n in "${ci_names[@]}"; do
       read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" '[.check_runs[] | select(.name == $n)] | last | "\(.status) \(.conclusion)"')
       [ "$st" = completed ] && [ "$c" = failure ] && { echo "fail $n"; return; }
       { [ "$st" = completed ] && [ "$c" = success ]; } || v=pending
@@ -154,7 +150,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
       # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322).
       ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
-      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, the CI shards and the CI checks: $ci_jobs" || echo "the CI checks: $ci_jobs (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
+      why=$(full_status "$tip" "full suite, both modes, the CI shards and the CI checks: $ci_jobs") || { mark "$tip" "not promoted: $why"; exit 1; }
       # #1495: the CI proof is read on the tip promote-stg.sh promotes, which may be a later one than $tip when a landing moved
       # dev while the pass waited for the gate lock. A refusal is keyed to the tip it evaluated; a tip whose checks have not
       # reported (exit 75) is a wait with no marker, so a later pass retries.

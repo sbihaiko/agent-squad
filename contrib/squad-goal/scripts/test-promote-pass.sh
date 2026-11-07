@@ -218,12 +218,13 @@ SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out5" 2>&1; rc=$?
 [ ! -e "$SG_STATE/promote-reserve" ] && ok "the named reserve is gone after the proof" || ko "the named reserve outlived the proof"
 [ "$rc" = 0 ] && [ "$(tip stg)" = "$th" ] && ok "a named-reserve proof still promotes its tip" || ko "named reserve promote: rc $rc, stg $(tip stg)"
 
-# CI shards (ADR-0164, #1051): the four full-proof shards of the tip are the full pass. Four green shards write the full line
-# through gate.sh --status and promote with no suite; a red shard holds the tip and names it; an unfinished shard holds nothing.
+# CI shards (ADR-0164, #1051, #1518): the full suite's shard jobs of the tip are the full pass. Four green shards write the
+# full line through gate.sh --status and promote with no suite; a red shard holds the tip and names it; an unfinished shard
+# holds nothing.
 export CHECKS_DIR=$T
-# The shard names come from a workflow file; this fixture names four, so the shard cases keep proving the matrix the
-# repository's own ci.yml no longer carries while #1062 holds it withdrawn (a case below proves the withdrawn shape).
-printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n  full-proof:\n    strategy:\n      matrix:\n        shard: [0, 1, 2, 3]\n' > "$T/ci-shards.yml"
+# The shard names come from a workflow file, as every check name does: this fixture names four shard jobs, the shape the
+# repository's own ci.yml carries twelve of.
+printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n  full-proof-0:\n    name: full-proof shard 0\n  full-proof-1:\n    name: full-proof shard 1\n  full-proof-2:\n    name: full-proof shard 2\n  full-proof-3:\n    name: full-proof shard 3\n' > "$T/ci-shards.yml"
 export SG_CI_WORKFLOW="$T/ci-shards.yml"
 cat > "$T/bin/ghread" <<'EOF'
 #!/bin/bash
@@ -299,12 +300,12 @@ shards "$tu" success success running timed_out; SG_PROMOTE_CI_WAIT=0 SG_GHREAD="
 /usr/bin/grep -q "promote-pass: $tu promoted: the local full suite answered" "$SG_STATE/promote.log" && ok "the record names the local full suite as the proof" \
   || ko "local record: $(/usr/bin/grep "$tu" "$SG_STATE/promote.log")"
 
-# #1062: the shard job is withdrawn, so a workflow file that names no shard is the check job alone, and a green check
-# promotes the tip. The record says which proof carried it, so a reader never guesses.
+# A workflow file that names no shard job is its own checks alone, and a green check set promotes the tip: the pass reads
+# the names the file carries, never a shard count of its own.
 printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n' > "$T/ci-no-shards.yml"
 adv dev check-alone; ta=$(tip dev); n=$(runs)
 shards "$ta" none none none none; SG_CI_WORKFLOW="$T/ci-no-shards.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$ta" ] && ok "with no shard named, a green check job promotes the tip (#1062)" \
+[ $rc = 0 ] && [ "$(tip stg)" = "$ta" ] && ok "with no shard job named, a green check set promotes the tip" \
   || ko "check alone: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
 /usr/bin/grep -q "promote-pass: $ta promoted: the CI checks carried the full pass" "$SG_STATE/promote.log" && ok "the check-alone promotion records its proof" \
   || ko "check-alone record: $(/usr/bin/grep "$ta" "$SG_STATE/promote.log")"
@@ -331,7 +332,7 @@ adv dev complete-green; tcn=$(tip dev); n=$(runs)
 tierchecks "$tcn" success; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tcn" ] && [ "$(runs)" = "$n" ] && ok "seven green checks, the complete tier included, promote the tip" \
   || ko "green complete tier: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
-/usr/bin/grep -q -- "description=the CI checks: ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e " "$T/gh.log" \
+/usr/bin/grep -q -- "description=full suite, both modes, the CI shards and the CI checks: ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e" "$T/gh.log" \
   && ok "the record names every job of both tiers" || ko "record: $(/usr/bin/grep "statuses/$tcn" "$T/gh.log")"
 
 # ADR-0164: when the proof is the dev-to-stg check (SG_PROMOTE_PROOF=ci), no local suite runs, so the guards that protect a
@@ -421,7 +422,7 @@ CHECK_JOBS="lint types battery" shards "$tx" none none none none
 SG_CI_WORKFLOW="$T/ci-renamed.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tx" ] && ok "a renamed fast tier promotes on its own check names (#1322)" \
   || ko "renamed tier: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
-/usr/bin/grep -q -- "description=the CI checks: lint, types, battery " "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
+/usr/bin/grep -q -- "description=full suite, both modes, the CI shards and the CI checks: lint, types, battery" "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
   || ko "status description: $(/usr/bin/grep "statuses/$tx" "$T/gh.log")"
 
 # A tip inside the quiet window opens the dev-to-stg pull request, so its four shards start before the proof reads them.
