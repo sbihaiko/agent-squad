@@ -422,6 +422,10 @@ FIELDS = ("location", "defect", "failure", "fix")
 # no repro is Debt (parse_answer); codex wants every key required, so repro is always present and may be empty.
 REPRO = "repro"
 REPRO_TIMEOUT = 60          # seconds a repro may run; a longer one did not run (#1521)
+# #1525: run_repro's status when sandbox-exec could not apply its profile (rc 71, "sandbox-exec: sandbox_apply:" on stderr): a session already under a sandbox (claude-sandboxed.sh) refuses a nested one. The repro never started, so the finding stays Blocking.
+REPRO_REFUSED = -71
+# #1525: SQUAD_REPRO_EXEC names a test seam: a double that takes the same argv (`-p <profile> sh -c <cmd>`), set only by a suite that runs inside a child sandbox.
+REPRO_EXEC = "/usr/bin/sandbox-exec"
 # The signal wall a child session runs under (squad/sandbox.py SIGNAL_PROFILE, #1469). review.sh is not launched with
 # SQUAD_SIGNAL_PROFILE set, so the same profile is the default here; a set variable wins.
 SIGNAL_PROFILE = "(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))"
@@ -501,7 +505,8 @@ def write_wall(tree, scratch):
 
 def run_repro(cmd, checkout):
     """The exit status of a repro command, run by sh under the signal wall in `checkout` (#1521): 124 when it timed out
-    (its process group is killed with it), 127 when it could not start. The wall is the profile in SQUAD_SIGNAL_PROFILE,
+    (its process group is killed with it), 127 when it could not start, REPRO_REFUSED when the sandbox could not apply
+    (a nested sandbox, #1525). The wall is the profile in SQUAD_SIGNAL_PROFILE,
     else SIGNAL_PROFILE: the one a child session runs under (claude-sandboxed.sh). A write wall (write_wall) refuses a
     write outside `checkout` and a scratch dir the repro's TMPDIR points at; the scratch dir is removed after the run.
     """
@@ -509,18 +514,26 @@ def run_repro(cmd, checkout):
     try:
         profile = (os.environ.get("SQUAD_SIGNAL_PROFILE") or SIGNAL_PROFILE) + write_wall(checkout, scratch)
         env = dict(os.environ, TMPDIR=scratch)
-        try:
-            proc = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", profile, "sh", "-c", cmd],
-                                    cwd=checkout, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, start_new_session=True)
-        except OSError:
-            return 127
-        try:
-            return proc.wait(timeout=REPRO_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-            return 124
+        exe = os.environ.get("SQUAD_REPRO_EXEC") or REPRO_EXEC
+        # #1525: the repro's stderr is a file in the scratch dir, so the write wall allows it and sandbox-exec's refusal is readable.
+        with open(os.path.join(scratch, "stderr"), "w+b") as err:
+            try:
+                proc = subprocess.Popen([exe, "-p", profile, "sh", "-c", cmd],
+                                        cwd=checkout, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=err, start_new_session=True)
+            except OSError:
+                return 127
+            try:
+                rc = proc.wait(timeout=REPRO_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+                return 124
+            err.seek(0)
+            head = err.read(256)
+        if rc == 71 and head.startswith(b"sandbox-exec: sandbox_apply:"):
+            return REPRO_REFUSED
+        return rc
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -531,13 +544,19 @@ def repro_check(path, checkout, sha):
     A repro that exits 0 shows the defect is not present, so the finding moves to Debt with "repro passed at <sha>". A
     repro that cannot run (124, 126, 127) moves it to Debt with "repro did not run at <sha>". Any other non-zero status
     is a reproduction, and the finding stays Blocking. The rewrite is atomic; a failed read or write leaves the answer
-    as it was, and the caller keeps its verdict.
+    as it was, and the caller keeps its verdict. A repro whose sandbox cannot apply (REPRO_REFUSED) proved nothing: the
+    finding stays Blocking and the reason is printed.
     """
     with open(path, encoding="utf-8") as f:
         answer = parse_answer(f.read())
     blocking = []
     for item in answer["blocking"]:
         rc = run_repro(item[REPRO], checkout)
+        if rc == REPRO_REFUSED:
+            print(f"revformat: repro sandbox refused at {sha} (sandbox-exec exit 71, sandbox_apply: a nested sandbox): "
+                  f"{' '.join(item['defect'].split())}; the finding stays Blocking", file=sys.stderr)
+            blocking.append(item)
+            continue
         note = {0: "repro passed at", 124: "repro did not run at", 126: "repro did not run at",
                 127: "repro did not run at"}.get(rc)
         if note is None:
@@ -615,7 +634,7 @@ def main(argv=None):
                    " finding with a blank repro stays Blocking, since a plan has no code to run one on (#1521)")
     p.add_argument("--repro", nargs=3, metavar=("ANSWER", "CHECKOUT", "SHA"),
                    help="run each Blocking finding's repro at SHA in CHECKOUT and rewrite the JSON ANSWER: a finding whose"
-                   " repro passes or cannot run moves to Debt (#1521)")
+                   " repro passes or cannot run moves to Debt; one whose sandbox cannot apply stays Blocking (#1525)")
     p.add_argument("--fingerprint", action="store_true",
                    help="print the fingerprint of the review's findings, the reading the fix pass keeps (ADR-0134)")
     p.add_argument("--stall", nargs=4, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT"),

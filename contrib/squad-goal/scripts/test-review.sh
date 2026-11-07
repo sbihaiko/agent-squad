@@ -36,6 +36,16 @@ cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 export SG_CAP_POLL=0.2   # review.sh cap() polls every 2 s by default; a stub reviewer needs no such wait
+# #1525: review.sh's repro step runs under sandbox-exec; a suite inside a child sandbox cannot nest one, so it runs the repro through the seam double. The wall is test-revformat.sh's to prove; this suite proves which tree the repro runs in and what its exit does.
+nested=; /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true 2>/dev/null || nested=1
+mkdir -p "$T/bin"
+cat > "$T/bin/sandbox-pass" <<'J'
+#!/bin/sh
+[ "$1" = -p ] && [ "$3" = sh ] && [ "$4" = -c ] || { echo "sandbox-pass: unexpected argv: $*" >&2; exit 70; }
+shift 2; exec "$@"
+J
+chmod +x "$T/bin/sandbox-pass"
+[ -n "$nested" ] && export SQUAD_REPRO_EXEC=$T/bin/sandbox-pass
 out=$(bash "$T/s/review.sh" --branch fix/1-x 8); rc=$?
 [ $rc = 0 ] && ok "accepts a verdict (exit 0)" || ko "accepts a verdict: review.sh exited $rc"
 case "$out" in model=claude:claude-opus-5-5*) ok "reports the model";; *) ko "reports the model: '$out'";; esac
@@ -802,6 +812,7 @@ out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 unset SHADOW_CALLS
 # 31) #1521: a Blocking finding whose repro exits 0 moves to Debt with "repro passed"; one whose repro fails stays Blocking.
 # With every repro passing, the debt-only CHANGES is an approval by the #653 path. The repro runs in the checkout (SG_CHECKOUT).
+# Under a child sandbox the repro runs through the seam (#1525).
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
 cat > /dev/null; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"

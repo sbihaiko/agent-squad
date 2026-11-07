@@ -5,6 +5,15 @@
 # No network, no model. usage: bash test-revformat.sh [path/to/revformat.py]
 src=${1:-$(dirname "$0")/revformat.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 good() { cat > "$T/r.md"; python3 "$src" "$@" "$T/r.md"; }   # args go before the file
+# #1525: a suite that already runs under a child sandbox (claude-sandboxed.sh) cannot nest one. The probe is the real refusal. When nested, the demotion cases run through the seam double, which keeps sandbox-exec's argv and applies no wall; the wall itself is proven where a wall can apply.
+nested=; /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true 2>/dev/null || nested=1
+mkdir -p "$T/bin"
+cat > "$T/bin/sandbox-pass" <<'J'
+#!/bin/sh
+[ "$1" = -p ] && [ "$3" = sh ] && [ "$4" = -c ] || { echo "sandbox-pass: unexpected argv: $*" >&2; exit 70; }
+shift 2; exec "$@"
+J
+chmod +x "$T/bin/sandbox-pass"
 
 # 1) the shape of a small review: verdict, Blocking then Debt, a theme heading, two-line bullets
 out=$(good --max-lines 60 <<'M'
@@ -385,7 +394,7 @@ python3 "$src" --answer "$T/rp2.json" >/dev/null 2>&1 && ko "29 a finding with n
 # cannot run (127 here) moves to Debt with "repro did not run at <sha>".
 mkdir -p "$T/co"
 printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"true"},{"location":"b.py:2","defect":"x","failure":"y","fix":"z","repro":"false"},{"location":"c.py:3","defect":"x","failure":"y","fix":"z","repro":"no-such-command-1521"}],"debt":[],"resolved":[]}' > "$T/rr.json"
-SQUAD_SIGNAL_PROFILE="(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))" python3 "$src" --repro "$T/rr.json" "$T/co" abc1234 2>"$T/rr.err"; rc=$?
+env ${nested:+SQUAD_REPRO_EXEC=$T/bin/sandbox-pass} SQUAD_SIGNAL_PROFILE="(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))" python3 "$src" --repro "$T/rr.json" "$T/co" abc1234 2>"$T/rr.err"; rc=$?
 python3 "$src" --answer "$T/rr.json" > "$T/rr.md" 2>/dev/null
 [ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/rr.md")" = "blocking=1 debt=2" ] && /usr/bin/grep -q 'repro passed at abc1234' "$T/rr.md" \
   && /usr/bin/grep -q 'repro did not run at abc1234' "$T/rr.md" && ok "30 --repro moves a passing and an unrunnable repro to Debt, and keeps a failing one Blocking" \
@@ -400,17 +409,35 @@ python3 "$src" --answer --plan "$T/pl.json" > "$T/pl.md" 2>"$T/pl.err"; rc=$?
 # that writes outside the tree is refused (its touch fails and it exits non-zero), so its finding stays Blocking and the
 # file never appears. A write inside the tree still works.
 mkdir -p "$T/w36"; rm -f "$T/out-1521"
+if [ -z "$nested" ]; then
 printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"touch %s/out-1521"}],"debt":[],"resolved":[]}' "$T" > "$T/w36.json"
 python3 "$src" --repro "$T/w36.json" "$T/w36" abc1234 2>"$T/w36.err"
 python3 "$src" --answer "$T/w36.json" > "$T/w36.md" 2>/dev/null
 [ ! -e "$T/out-1521" ] && [ "$(python3 "$src" --summary "$T/w36.md")" = "blocking=1 debt=0" ] \
   && ok "36 a repro cannot write outside its tree, and its finding stays Blocking" \
   || ko "36 write wall: out=$(test -e "$T/out-1521" && echo present || echo absent) summary='$(python3 "$src" --summary "$T/w36.md" 2>&1)' $(cat "$T/w36.err")"
+else
+# #1525: inside a child sandbox the wall cannot apply, so the repro is refused before it runs: its finding stays Blocking.
+rm -f "$T/out-1525"
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"touch %s/out-1525"}],"debt":[],"resolved":[]}' "$T" > "$T/w36.json"
+python3 "$src" --repro "$T/w36.json" "$T/w36" abc1234 2>"$T/w36.err"
+python3 "$src" --answer "$T/w36.json" > "$T/w36.md" 2>/dev/null
+[ ! -e "$T/out-1525" ] && [ "$(python3 "$src" --summary "$T/w36.md")" = "blocking=1 debt=0" ] && /usr/bin/grep -q 'repro sandbox refused at abc1234' "$T/w36.err" \
+  && ok "36 inside a child sandbox the wall cannot apply: the repro never runs and its finding stays Blocking" \
+  || ko "36 nested refusal: out=$(test -e "$T/out-1525" && echo present || echo absent) summary='$(python3 "$src" --summary "$T/w36.md" 2>&1)' $(cat "$T/w36.err")"
+fi
 # 37) #1521: the same wall lets a repro write inside its tree: a file it creates there is read back, so the repro exits 0.
 printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"touch inside-1521 && test -f inside-1521"}],"debt":[],"resolved":[]}' > "$T/w37.json"
-python3 "$src" --repro "$T/w37.json" "$T/w36" abc1234 2>"$T/w37.err"
+env ${nested:+SQUAD_REPRO_EXEC=$T/bin/sandbox-pass} python3 "$src" --repro "$T/w37.json" "$T/w36" abc1234 2>"$T/w37.err"
 python3 "$src" --answer "$T/w37.json" > "$T/w37.md" 2>/dev/null
 [ -e "$T/w36/inside-1521" ] && [ "$(python3 "$src" --summary "$T/w37.md")" = "blocking=0 debt=1" ] \
   && ok "37 a repro writes inside its tree" \
   || ko "37 write inside the tree: summary='$(python3 "$src" --summary "$T/w37.md" 2>&1)' $(cat "$T/w37.err")"
+# 38) #1525: a sandbox that cannot apply (rc 71, sandbox_apply) is told apart from a repro that reproduces: the repro "true" would demote its finding, but it never ran, so the finding stays Blocking and the reason names the refusal. Outside a child the suite nests the sandbox itself; inside one the suite's own sandbox is the outer one.
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"true"}],"debt":[],"resolved":[]}' > "$T/r38.json"
+if [ -n "$nested" ]; then python3 "$src" --repro "$T/r38.json" "$T/co" abc1234 2>"$T/r38.err"; else /usr/bin/sandbox-exec -p '(version 1)(allow default)' python3 "$src" --repro "$T/r38.json" "$T/co" abc1234 2>"$T/r38.err"; fi; rc=$?
+python3 "$src" --answer "$T/r38.json" > "$T/r38.md" 2>/dev/null; arc=$?
+[ $arc = 0 ] && [ "$(python3 "$src" --summary "$T/r38.md")" = "blocking=1 debt=0" ] && /usr/bin/grep -q 'repro sandbox refused at abc1234' "$T/r38.err" && ! /usr/bin/grep -q 'repro passed' "$T/r38.md" \
+  && ok "38 a sandbox that cannot apply keeps the finding Blocking and names the refusal, never 'repro passed'" \
+  || ko "38 nested refusal: repro rc=$rc answer rc=$arc summary='$(python3 "$src" --summary "$T/r38.md" 2>&1)' err=$(cat "$T/r38.err")"
 rm -rf "$T"; exit $fail
