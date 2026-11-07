@@ -7,6 +7,8 @@ import json
 import re
 import sys
 
+import pytest
+
 from squad import graph, modelreg
 from tests.dashboard_helpers import ROOT, run_node
 
@@ -72,6 +74,29 @@ def test_every_core_module_is_bundled_once_and_the_runner_and_page_share_the_bun
     page = OUT.read_text()
     assert page.count(bundle) == 1 and "/*CORE*/" not in page
     assert run_node([{"op": "hash", "text": "{}"}])[0] == hashlib.sha256(b"{}").hexdigest()   # the runner evaluates this bundle
+
+
+@pytest.mark.heavy
+def test_two_node_calls_share_one_runner_process(monkeypatch):
+    """#1534: every run_node call started its own node. A node start is an 89 MB binary, and on a cold, shared runner the
+    first call of a session paid that start inside a measured call: one gui-e2e case crossed its 2 s line for work no
+    assertion does. One process serves the session, so a call costs its ops and nothing else."""
+    import tests.dashboard_helpers as helpers
+    starts = []
+    real_run, real_popen = helpers.subprocess.run, helpers.subprocess.Popen
+
+    def counted(call):
+        def start(*a, **k):
+            starts.append(a)
+            return call(*a, **k)
+        return start
+
+    monkeypatch.setattr(helpers.subprocess, "run", counted(real_run))
+    monkeypatch.setattr(helpers.subprocess, "Popen", counted(real_popen))
+    first = run_node([{"op": "hash", "text": "{}"}])
+    second = run_node([{"op": "hash", "text": "{}"}])
+    assert first == second
+    assert len(starts) <= 1, f"{len(starts)} node processes started for two calls; one process serves the session"
 
 
 def test_every_page_source_is_built_once_and_the_page_bundle_is_the_one_script():

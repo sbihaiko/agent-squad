@@ -1,4 +1,5 @@
 """Shared helpers of the dashboard tests: the node runner, the error-pair keys, the page source, and the finished-run loaders."""
+import atexit
 import json
 import re
 import shutil
@@ -12,13 +13,75 @@ from build_dashboard import CORE_DIR, OUT, core_bundle, engine_data, page_bundle
 
 from squad import graph  # noqa: E402
 
+RUNNER = ROOT / "tests" / "dashboard_runner.js"
+_NODE: dict = {"proc": None, "fresh": False}
+
+
+def _spawn():
+    return subprocess.Popen(["node", str(RUNNER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, bufsize=1)
+
+
+def _node():
+    """The one node process the session reuses. A call that starts its own node pays the binary's cold start -- 89 MB on a
+    shared runner -- inside a measured call, and the first call of a session paid it whole (#1534)."""
+    p = _NODE["proc"]
+    if p is None or p.poll() is not None:
+        p = _NODE["proc"] = _spawn()
+        _NODE["fresh"] = True
+    return p
+
+
+def start_runner():
+    """Start the shared process before the first call, so a suite whose first call sits at its line pays the start in setup,
+    which is not a call. No node on this runner means no start; the call that needs node still says so."""
+    if shutil.which("node"):
+        _node()
+
+
+def stop_runner():
+    """End the shared process and its pipe: a session leaves no node behind."""
+    p, _NODE["proc"] = _NODE["proc"], None
+    if p is None or p.poll() is not None:
+        return
+    try:
+        p.stdin.close()
+    except (BrokenPipeError, ValueError):
+        pass
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+
+
+atexit.register(stop_runner)
+
 
 def run_node(ops):
     assert shutil.which("node"), "node is not installed: the dashboard parity guard cannot run, and it never skips"
-    p = subprocess.run(["node", str(ROOT / "tests" / "dashboard_runner.js")], input=json.dumps({"engine": engine_data(), "core": core_bundle(), "ops": ops}),
-                       capture_output=True, text=True, timeout=300)
-    assert p.returncode == 0, p.stderr
-    return json.loads(p.stdout)
+    req = {"ops": ops}
+    for attempt in (0, 1):
+        p = _node()
+        if _NODE["fresh"]:
+            req["engine"], req["core"] = engine_data(), core_bundle()   # the process keeps both for every later call
+            _NODE["fresh"] = False
+        try:
+            p.stdin.write(json.dumps(req) + "\n")
+            p.stdin.flush()
+            line = p.stdout.readline()
+        except (BrokenPipeError, ValueError):
+            line = ""
+        if line.strip():
+            return json.loads(line)
+        _NODE["proc"] = None    # the runner ended without an answer: read why, and start one more only once
+        if attempt:
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            raise AssertionError(p.stderr.read() or "the dashboard runner ended without an answer and said nothing")
+    raise AssertionError("the dashboard runner ended without an answer")
 
 
 # --- the key of one error: (node, rule). A schema error keys on its path (library text differs); any other rule keys on its message ---
