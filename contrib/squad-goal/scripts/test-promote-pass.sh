@@ -267,7 +267,7 @@ IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
 [ "$kind $res $sha" = "full pass $tg" ] && ok "four green shards write the full pass line for the tip" || ko "shard full line: '$kind $res $sha'"
 /usr/bin/grep -q "promote-pass: $tg promoted: the CI checks carried the full pass" "$SG_STATE/promote.log" && ok "the promotion record names the CI checks as the proof" \
   || ko "shard record: $(/usr/bin/grep "$tg" "$SG_STATE/promote.log")"
-/usr/bin/grep -q -- "-X POST repos/x/emu/statuses/$tg .*context=squad/full-proof .*CI shards" "$T/gh.log" && ok "the CI route writes the squad/full-proof status, naming the CI shards" \
+/usr/bin/grep -q -- "-X POST repos/x/emu/statuses/$tg .*context=squad/full-proof .*every CI job" "$T/gh.log" && ok "the CI route writes the squad/full-proof status, naming the CI jobs" \
   || ko "CI route wrote no full-proof status: $(/usr/bin/grep "statuses/$tg" "$T/gh.log")"
 /usr/bin/grep -q "repos/x/emu/commits/$tg/statuses" "$T/gh.log" && ok "the CI route reads the commit status back" || ko "the CI route did not read the status back"
 
@@ -332,8 +332,25 @@ adv dev complete-green; tcn=$(tip dev); n=$(runs)
 tierchecks "$tcn" success; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tcn" ] && [ "$(runs)" = "$n" ] && ok "seven green checks, the complete tier included, promote the tip" \
   || ko "green complete tier: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
-/usr/bin/grep -q -- "description=full suite, both modes, the CI shards and the CI checks: ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e" "$T/gh.log" \
+/usr/bin/grep -q -- "description=full suite, both modes, every CI job: ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e" "$T/gh.log" \
   && ok "the record names every job of both tiers" || ko "record: $(/usr/bin/grep "statuses/$tcn" "$T/gh.log")"
+/usr/bin/grep "promote-pass: $tcn CI checks green:" "$SG_STATE/promote.log" | tail -n 1 | /usr/bin/grep -q "ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e" \
+  && ok "the log names every CI job the status reads" || ko "job log: $(/usr/bin/grep "CI checks green" "$SG_STATE/promote.log" | tail -n 1)"
+
+# The Statuses API rejects a description past 140 characters with a 422, so a green set whose names do not fit would never
+# write its status and never promote (#1518). The description is asserted on the repository's own workflow, where the shard
+# jobs live, and on a fixture of long names: the status carries the names that fit and counts the rest, and the log carries
+# the whole list.
+desc=$(bash "$d/promote-pass.sh" --ci-description "$d/../../../.github/workflows/ci.yml")
+[ -n "$desc" ] && ok "the real workflow's job list yields a status description" || ko "no description from the real workflow"
+[ "${#desc}" -le 140 ] && ok "the description of the real workflow's jobs fits the 140 characters of the Statuses API (${#desc})" \
+  || ko "the real workflow's description is ${#desc} characters, past the 140 the API takes: $desc"
+printf 'jobs:\n' > "$T/ci-long.yml"
+for k in $(seq 1 20); do printf '  long-shard-%s:\n    name: the long full-suite shard number %s of the complete tier\n' "$k" "$k" >> "$T/ci-long.yml"; done
+ldesc=$(bash "$d/promote-pass.sh" --ci-description "$T/ci-long.yml")
+[ "${#ldesc}" -le 140 ] && ok "a workflow of long job names still yields a bounded description (${#ldesc})" \
+  || ko "the long-name description is ${#ldesc} characters, past the 140 the API takes: $ldesc"
+case "$ldesc" in *"more"*) ok "the bounded description counts the names it left out";; *) ko "the description drops names silently: $ldesc";; esac
 
 # ADR-0164: when the proof is the dev-to-stg check (SG_PROMOTE_PROOF=ci), no local suite runs, so the guards that protect a
 # local suite from a loaded box refuse nothing: the load average, the free memory and a nightly that owns the machine. A green
@@ -422,7 +439,7 @@ CHECK_JOBS="lint types battery" shards "$tx" none none none none
 SG_CI_WORKFLOW="$T/ci-renamed.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tx" ] && ok "a renamed fast tier promotes on its own check names (#1322)" \
   || ko "renamed tier: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
-/usr/bin/grep -q -- "description=full suite, both modes, the CI shards and the CI checks: lint, types, battery" "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
+/usr/bin/grep -q -- "description=full suite, both modes, every CI job: lint, types, battery" "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
   || ko "status description: $(/usr/bin/grep "statuses/$tx" "$T/gh.log")"
 
 # A tip inside the quiet window opens the dev-to-stg pull request, so its four shards start before the proof reads them.

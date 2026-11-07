@@ -42,9 +42,34 @@ ci_job_names() {
     END { flush() }
   ' "$1" 2>/dev/null
 }
+# The Statuses API takes a description no longer than 140 characters and refuses a longer one with a 422; the status would
+# never stand and a green shard set would never promote (#1518). The description carries the names that fit and counts the
+# rest; the pass writes the whole list to its log.
+full_desc_max=140
+full_prefix="full suite, both modes, every CI job"
+full_status_desc() {  # <prefix> <check name...>: a status description the Statuses API takes, never longer than 140
+  local d=$1 sep=": " n i=0 rest=0 total
+  shift; total=$#
+  for n in "$@"; do
+    i=$((i + 1))
+    # 13 characters stay reserved for the " and N more" tail, so the tail itself never pushes the line past the cap.
+    if [ $(( ${#d} + ${#sep} + ${#n} + 13 )) -le "$full_desc_max" ]; then d="$d$sep$n"; sep=", "
+    else rest=$(( total - i + 1 )); break; fi
+  done
+  if [ "$rest" -gt 0 ]; then
+    if [ "$i" -gt 1 ]; then d="$d and $rest more"; else d="$d: $total jobs"; fi
+  fi
+  [ "${#d}" -le "$full_desc_max" ] || d=$(printf '%s' "$d" | cut -c1-"$full_desc_max")
+  printf '%s' "$d"
+}
 if [ "${1:-}" = --ci-job-names ]; then   # the check names a workflow's job block produces, printed one per line
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-job-names needs a workflow file" >&2; exit 2; }
   ci_job_names "$2"; exit 0
+fi
+if [ "${1:-}" = --ci-description ]; then   # the bounded status description a workflow's job list produces
+  [ -n "${2:-}" ] || { echo "promote-pass: --ci-description needs a workflow file" >&2; exit 2; }
+  ns=(); while IFS= read -r j; do [ -n "$j" ] && ns+=("$j"); done < <(ci_job_names "$2")
+  full_status_desc "$full_prefix" ${ns[@]+"${ns[@]}"}; echo; exit 0
 fi
 [ -n "${SG_STATE:-}" ] || { echo "promote-pass: SG_STATE is not set; the pass never reads the machine-wide default" >&2; exit 2; }
 state=$SG_STATE; export SG_STATE; mkdir -p "$state"; log=$state/promote.log; marks=$state/promote-pass.tips
@@ -148,9 +173,11 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     pass)
       bash "$d/gate.sh" --status full pass "$tip"
       # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
-      # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322).
+      # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322). The status line is
+      # bounded by the Statuses API, so the log carries every name and the status counts the ones it leaves out (#1518).
       ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
-      why=$(full_status "$tip" "full suite, both modes, the CI shards and the CI checks: $ci_jobs") || { mark "$tip" "not promoted: $why"; exit 1; }
+      echo "$(date -u +%FT%TZ) promote-pass: $tip CI checks green: $ci_jobs" >> "$log"
+      why=$(full_status "$tip" "$(full_status_desc "$full_prefix" "${ci_names[@]}")") || { mark "$tip" "not promoted: $why"; exit 1; }
       # #1495: the CI proof is read on the tip promote-stg.sh promotes, which may be a later one than $tip when a landing moved
       # dev while the pass waited for the gate lock. A refusal is keyed to the tip it evaluated; a tip whose checks have not
       # reported (exit 75) is a wait with no marker, so a later pass retries.
