@@ -660,6 +660,7 @@ async def test_a_child_whose_worktree_path_exists_is_refused_not_reused(tmp_path
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # one node start and a resume on the engine: 2.4 s on a CI runner
 async def test_a_child_that_crashed_after_launch_is_not_run_again_and_its_grant_stays_unmeasured(tmp_path):
     await two_children(tmp_path / "a")
     shutil.copytree(tmp_path / "a", tmp_path / "b")
@@ -679,6 +680,7 @@ async def test_a_child_that_crashed_after_launch_is_not_run_again_and_its_grant_
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # one node start on a named workspace: 2.5 s on a CI runner
 async def test_a_read_only_child_starts_in_a_directory_that_exists_when_its_named_workspace_was_never_made(tmp_path):
     """#87: the real adapter refuses a missing working directory, so the fake adapter must check it too."""
     seen = {}
