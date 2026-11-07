@@ -326,6 +326,7 @@ def test_a_gate_lock_shell_suite_is_executable(name):
     assert os.access(SCRIPTS / name, os.X_OK), f"{name} is not executable"
 
 
+@pytest.mark.heavy   # two gates take the lock in turn and wait on each other's line: 2.2 s on a CI runner
 @PROCESS_BOUND
 def test_two_hand_gates_started_at_once_run_one_after_the_other_in_short(tmp_path):
     """The short form of the soak below. The first gate holds the lock until the second prints its wait line, so the proof

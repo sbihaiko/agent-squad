@@ -133,6 +133,7 @@ async def test_a_held_child_does_not_run_its_sibling_does_and_a_child_after_it_i
     assert not any(e["node"] in ("route.router.1", "route.router.3") for e in events(tmp_path, "outcome"))
 
 
+@pytest.mark.heavy   # a resume starts the held children and records them: 2.3 s on a CI runner
 @pytest.mark.anyio
 async def test_a_resume_runs_the_held_children_and_not_the_one_that_ran(tmp_path):
     eng, _ = _dispatch_make(tmp_path)

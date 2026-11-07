@@ -187,6 +187,7 @@ def hub():
     return mod
 
 
+@pytest.mark.heavy   # the reader panel plus its POST round trip: 1.9 s here, 2 s on a CI runner
 def test_the_models_panel_gets_the_reader_result_and_posts_it_back_harmlessly(hub, tmp_path, monkeypatch):
     path = tmp_path / "models.json"
     path.write_text(json.dumps(CFG | {"coding_models": ["claude-sonnet-5-5"], "vision_models": ["grok-4.5"]}))

@@ -83,6 +83,7 @@ def test_keep_children_is_an_engine_option_of_start_and_resume(monkeypatch):
     assert seen == [{"keep_children": True}]
 
 
+@pytest.mark.heavy   # one run to a failed verdict, then the branch and worktree it keeps: 2.0 s on a CI runner
 @pytest.mark.anyio
 async def test_a_failed_run_keeps_the_landed_childs_branch_and_worktree_for_resume(tmp_path):
     repo = sibling_repo(tmp_path)
