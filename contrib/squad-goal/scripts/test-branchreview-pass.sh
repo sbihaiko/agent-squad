@@ -146,6 +146,14 @@ o=; rc=0; for _ in 1 2 3; do o+=$(OPEN="7 8 31" FAILREV=1 bash "$T/s/branchrevie
 case "$o" in *"chainhealth: modelreg.py is missing"*) ok "the missing resolver is a named line on stderr";; *) ko "the resolver failure is not named: '$o'";; esac
 case "$o" in *"BRANCHREVIEW CHAINHEALTH gui/31-r"*) ok "the pass names the failed chain summary";; *) ko "the pass drops the chainhealth failure: '$o'";; esac
 mv "$T/modelreg.py" "$T/s/modelreg.py"
+# 12b) a module the resolver reads from beside itself is missing: a named line too, never a traceback (#1544)
+rm -f "$T/st/auto/"branchreview-tries-gui_31-r-* "$T/st/auto/"branchreview-stop-gui_31-r-* "$T/st/cq/"*"#31-status~mchain"*
+mv "$T/s/provkey.py" "$T/provkey.py"
+o=; for _ in 1 2 3; do o+=$(OPEN="7 8 31" FAILREV=1 rp)$'\n'; done
+mv "$T/provkey.py" "$T/s/provkey.py"
+case "$o" in *"Traceback (most recent call last)"*) ko "a missing sibling module leaks a traceback: '$o'";;
+  *"chainhealth: provkey.py is missing"*) ok "a missing sibling module is a named line, never a traceback";;
+  *) ko "the missing sibling is not named: '$o'";; esac
 # 13) an APPROVE starts a branchland pass at once, detached under single.sh (#955): a second kick while one runs is a no-op, the review
 # pass never waits for the kick, and a CHANGES verdict starts none. The branchland stub logs one line per start.
 cp "$d/single.sh" "$T/s/single.sh"
