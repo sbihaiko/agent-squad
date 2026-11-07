@@ -223,6 +223,7 @@ def test_the_issue_panel_is_asked_for_the_repository_the_card_names(hub):
     assert 'irepo=r||"__REPO__"' in body, "and paints that repository's markdown from then on"
 
 
+@pytest.mark.heavy   # one page block read plus a repository resolve: 2.5 s on a CI runner
 def test_the_panel_read_resolves_the_number_in_the_repository_it_was_given(hub, monkeypatch):
     asked = []
 
