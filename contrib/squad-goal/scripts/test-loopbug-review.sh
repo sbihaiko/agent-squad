@@ -63,7 +63,9 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > /dev/null; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; echo "VERDICT: APPROVE"
+cat > "${PLAN_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"
+[ -n "${PLAN_CHANGES:-}" ] && { printf '{"result":"","structured_output":{"verdict":"CHANGES","blocking":[{"location":"AC1","defect":"the plan names no rollback","failure":"a failed landing leaves the tree dirty","fix":"name the rollback","repro":""}],"debt":[],"resolved":[]},"usage":{"input_tokens":10,"output_tokens":5},"is_error":false,"subtype":"success"}\n'; exit 0; }
+echo "VERDICT: APPROVE"
 J
 chmod +x "$T/bin/gh" "$T/bin/ghrest" "$T/bin/claude"
 export PATH="$T/bin:$PATH" GHLOG="$T/gh.log" CLAUDE_ARGS="$T/claude.args" SG_GHREAD="$T/bin/ghrest"
@@ -101,6 +103,14 @@ if [ -f "$d/loopbug.sh" ]; then
   printf 'VERDICT: CHANGES\n' > "$T/st/review-x_y#10.md"; printf '%s\n' "$(lb_body_hash "b")" > "$T/st/review-x_y#10.sha"
   lb_plan_verdict "$T/st" x/y 10 "$(lb_body_hash "b")" >/dev/null && ko "3f a CHANGES plan review passed" || ok "3f a CHANGES plan review does not pass"
 else ko "3c loopbug.sh is missing: the plan verdict has no helper"; fi
+# 3g) #1521: a plan reviewer reads no code and names no repro. Its Blocking finding with a blank repro stays Blocking: the
+# verdict is CHANGES, not an approval by the Debt path, and the prompt asks for no repro.
+rm -f "$T/st/review-"*.md "$T/st/review-"*.sha "$T/plan.prompt"
+PLAN_CHANGES=1 PLAN_PROMPT="$T/plan.prompt" LB_LABELS='{"name":"loop-bug"}' bash "$T/s/review.sh" --plan 8 >/dev/null 2>"$T/err"
+[ "$(head -1 "$T/st/review-$key.md" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-$key.md" 2>/dev/null)" = "blocking=1 debt=0" ] \
+  && ok "3g a plan review with a Blocking finding and no repro stays CHANGES" \
+  || ko "3g plan with blank repro: verdict='$(head -1 "$T/st/review-$key.md" 2>/dev/null)' err=$(head -1 "$T/err" 2>/dev/null)"
+[ -s "$T/plan.prompt" ] && ! /usr/bin/grep -q 'run at the branch head' "$T/plan.prompt" && ok "3h the plan prompt asks for no repro" || ko "3h the plan prompt asks for a repro at the branch head (or no prompt was read)"
 
 # --- 4) autobug.sh holds a loop-bug candidate with no approving plan review -----------------------------------------------
 /usr/bin/grep -q 'loopbug.sh' "$d/autobug.sh" && /usr/bin/grep -q 'lb_plan_verdict' "$d/autobug.sh" \

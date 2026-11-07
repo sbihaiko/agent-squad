@@ -183,9 +183,10 @@ class Children:
 
     async def review_child(self, ctx, name, d, path):
         """One passed child's reading, beside its siblings. It takes a slot of the review limiter, never a child's: a
-        review's wall time is never taken from a waiting child's call deadline (ADR-0051). A fix round the review asks
-        for runs in `Dispatch.land`, after the entry's children settled: no worktree is rewritten under a sibling that
-        reads it (ADR-0113 rule 11), and the grant is taken against a settled budget (ADR-0108).
+        review's wall time is never taken from a waiting child's call deadline (ADR-0051). Once the reading ends, the child
+        lands at once (`Dispatch.stream`, #1520), one landing at a time; a child another child runs after lands in the
+        settle pass instead (ADR-0113 rule 11). A fix round the review asks for is funded there, against the budget the
+        run holds at that moment (ADR-0108), and a fix the run cannot fund yet is deferred to the settle pass.
         `Dispatch.land` waits for this result and replays the record when the task died before writing one."""
         e = self.e
         got = e.dispatch.pending[name]
@@ -197,6 +198,8 @@ class Children:
             got["got"] = None
         finally:
             got["event"].set()
+        if e.dispatch.streams(name):
+            await e.dispatch.stream(name)
 
     async def fix(self, node, name, entry, review, dl_at, coder=None, repeated=False):
         """One fix round of a child its review asked to fix (#570): entry `entry` of the same child, in its own worktree, with

@@ -27,6 +27,7 @@ const CN = {};
 const SLOTS = new Map();
 const specColor = () => "var(--mute)";
 const cardSpec = () => null;
+const cardColor = () => "var(--mute)";
 const tint = () => "";
 const waveChip = () => "";
 const gstrip = () => "";

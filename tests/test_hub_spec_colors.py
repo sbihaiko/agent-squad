@@ -62,6 +62,14 @@ def test_a_card_with_no_spec_is_grey():
     assert out[0] == out[1] == "var(--mute)", out
 
 
+def test_a_loop_bug_card_wears_the_loop_bugs_lane_red():
+    """A loop-bug has no parent spec; it sits in the Loop bugs lane, so it wears that lane's red, never grey."""
+    out = _node('const s=specSlots([889]);console.log(JSON.stringify([cardColor(s,{n:5,l:["loop-bug"]}),'
+                'cardColor(s,{n:6,l:["loop-bug:landing"],pa:889}),cardColor(s,{pa:889}),cardColor(s,{n:7})]))')
+    assert out[0] == out[1] == "var(--err)", out
+    assert re.fullmatch(r"var\(--s[1-8]\)", out[2]) and out[3] == "var(--mute)", out
+
+
 def test_the_wave_chip_names_the_wave_and_a_card_with_no_wave_shows_none():
     out = _node('console.log(JSON.stringify([waveChip({l:["wave:2"]}),waveChip({l:["bug"]}),waveChip({})]))')
     assert ">W2<" in out[0] and "data-k=wave" in out[0], out
@@ -71,7 +79,7 @@ def test_the_wave_chip_names_the_wave_and_a_card_with_no_wave_shows_none():
 def test_the_card_wears_its_own_spec_color_and_wave_chip():
     page = HUB_PY.read_text()
     card = re.search(r"const cards=\(g,it,shown\)=>.*", page).group(0)
-    assert "--lc:${specColor(SLOTS,cardSpec(x))}" in card, "the card does not set its spec color"
+    assert "--lc:${cardColor(SLOTS,x)}" in card, "the card does not set its spec color"
     assert "${waveChip(x)}" in card, "the card does not draw the wave chip from the lane rule"
 
 
@@ -125,7 +133,7 @@ def test_the_mobile_page_carries_the_lane_rules():
 def test_a_mobile_card_wears_its_spec_color_and_wave_chip():
     page = MOBILE.read_text()
     card = re.search(r"function cardButton\(x, i\) \{.*?\n\}", page, re.S).group(0)
-    assert "specColor(mSlots(), cardSpec(x))" in card, "the mobile card does not set its spec color"
+    assert "cardColor(mSlots(), x)" in card, "the mobile card does not set its spec color"
     assert "laneWaveOf(x)" in card, "the mobile card draws no wave chip from the lane rule"
     assert re.search(r"\.card\{[^}]*border-top:3px solid var\(--lc", page), "the mobile card has no top line in its color"
     head = re.search(r"function laneHeader\(l\) \{.*?\n\}", page, re.S).group(0)

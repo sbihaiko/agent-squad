@@ -21,6 +21,7 @@ REVIEW_NONE_EXIT = gates.REVIEW_NONE_EXIT  # the review command's "no review her
 REVIEW_FIX_EXIT = gates.REVIEW_FIX_EXIT    # the review command's "fix": the run starts the child's next entry in its worktree (#570)
 REVIEW_RETRY_EXIT = gates.REVIEW_RETRY_EXIT  # the review command's "try again": no verdict; the run tries again within the gate's deadline (#635)
 REVIEW_RETRY_PAUSE_S = 60.0               # the pause between two tries of one round, inside the gate's deadline
+DEFERRED = ["review_deferred"]            # a streamed reading asked a fix the run cannot fund yet: the settle pass lands the child (#1520)
 _LEDGER: dict = {}
 
 
@@ -43,6 +44,8 @@ class Dispatch:
         self.landed = {}       # dispatch child name -> its `land` event
         self.pending = {}      # dispatch child name -> {"event", "got"}: the review its pass started, and where its result lands
         self.ac_before = None  # {child: its held-out commands all passed}, as of the last landing
+        self.land_lock = None  # one landing at a time: a streamed landing and the settle pass both take it (#1520)
+        self.current = None    # (node, entry, sc) of the dispatch entry whose children are running (#1520)
         self._slug = None      # the target's <owner>/<repo>, read once from its origin: the issue ledger's key (ADR-0138)
 
     def absorb(self, ev):
@@ -188,58 +191,104 @@ class Dispatch:
         holds = V.ledger_holds(seen)
         return ("needs-human", list(dict.fromkeys(holds + reasons))) if holds else (outcome, reasons)
 
+    def lock(self):
+        """The one lock every landing takes. Created on first use, inside the running loop."""
+        if self.land_lock is None:
+            self.land_lock = anyio.Lock()
+        return self.land_lock
+
+    def raise_streamed(self):
+        """Re-raise the exception a streamed landing stored (a pause hold, a Frontier) so the engine gets it unwrapped (#1520)."""
+        for p in self.pending.values():
+            x = p.pop("raised", None)
+            if x is not None:
+                raise x
+
+    def streams(self, name):
+        """True when a passed child lands as its reading ends. A child another child runs after is read in the settle pass
+        only: its worktree is the one that reader reads (ADR-0113 rule 11)."""
+        return not any(name in c["definition"].get("after", []) for c in self.children.values())
+
+    async def stream(self, name):
+        """Land one passed child as soon as its reading ended (#1520). The landing takes the lock, so landings run one at a
+        time. An exception it raises is stored on `pending` for `land_children`, never raised into the reading's task group."""
+        node, entry, sc = self.current
+        try:
+            async with self.lock():
+                if name in self.landed:      # the settle pass woke on the same reading first and landed it
+                    return
+                await self.land_one(node, entry, sc, name, streamed=True)
+        except Exception as x:  # noqa: BLE001 - the engine gets this exception from land_children, unwrapped
+            self.pending[name]["raised"] = x
+
     async def land(self, node, entry, sc, seen):
-        """Land every passing write child's branch into the target, in request order, once.
-        A landing that turns an earlier child's held-out command red is undone.
+        """Land every passing write child's branch into the target, in request order, once; a child a streamed reading already
+        landed is skipped. A landing that turns an earlier child's held-out command red is undone.
         Code merges: no diff, conflict text or test output reaches a model. Return True in a dry walk when a landing is still owed."""
         for name, outcome, _ in seen:
+            self.raise_streamed()
             if outcome != "pass" or name in self.landed or not self.landable(name):
                 continue
             if self.e.dry:
                 return True
-            d = self.children[name]["definition"]
-            path = self.e.runs.workspace(name, d)
-            branch = actions.branch_name(self.e.run_id, path.name, None)
-            if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
-                self.ac_before, _ = await self.ac_survey()
-            head_before = git.head(self.e.target)
-            fixes, last, why = self.regression_replay(name)      # a resume reads the fix entries the record holds, never runs them again (ADR-0107)
-            failed = next((f for f in fixes if f["outcome"] != "pass"), None)
-            if failed:
-                review, rounds, r = None, 0, actions.ActionResult(False, [*why, "review_fix_failed", *failed["reasons"]], head_before)
-            else:
-                start = self.last(name)["entry"] if fixes and self.last(name)["entry"] > self.last_round(name) else 1    # a fix entry nobody reviewed is read first
-                review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc, start)
-            while not r.ok and r.extra.get("owner") == name:
-                regressed = r.extra["regressed"]
-                if regressed == last:      # the same regression after a fix entry: failed attempts that do not change stop the loop (ADR-0134)
-                    r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", "regression_unchanged"], head_before, r.extra)
-                    break
-                last = regressed
-                fix = await self.fix_regression(node, name, d, sc, r)
-                fixes.append({**fix, "regressions": r.extra["regressions"]})
-                if fix["outcome"] != "pass":
-                    r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", *fix["reasons"]], head_before, r.extra)
-                    break
-                review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc, fix["entry"])
-            for k in ("owner", "regressed", "findings"):      # the loop's working fields: the record keeps the attribution rows
-                r.extra.pop(k, None)
-            if fixes:
-                r.extra["fixes"] = fixes
-            if r.ok and name in self.ac_before:      # the child's own command, run at its own landing: no earlier result, so it never undoes the merge
-                r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
-            self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
-                                                   outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
-                                                   effect={"name": "review" if r.reasons and r.reasons[0].startswith("review_") else "merge_land",
-                                                           "before": head_before, "head": r.head, **r.extra,
-                                                           **({"review": review, "rounds": rounds} if review else {})})   # `before` is read here: the landing check replaces the merge's result
+            async with self.lock():
+                if name not in self.landed:      # a streamed landing may have finished while this one waited for the lock
+                    await self.land_one(node, entry, sc, name)
+        self.raise_streamed()
         return False
 
-    async def land_child(self, node, name, d, path, branch, head_before, sc, start=1):
+    async def land_one(self, node, entry, sc, name, streamed=False):
+        """Review, merge and check one passed child, and write its `land` event. Return True when a streamed landing defers:
+        the reading asked a fix the run cannot fund yet, so the child writes no `land` event and the settle pass lands it, from the
+        same reading (ADR-0108, cost). The caller holds `lock()`."""
+        d = self.children[name]["definition"]
+        path = self.e.runs.workspace(name, d)
+        branch = actions.branch_name(self.e.run_id, path.name, None)
+        if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
+            self.ac_before, _ = await self.ac_survey()
+        head_before = git.head(self.e.target)
+        fixes, last, why = self.regression_replay(name)      # a resume reads the fix entries the record holds, never runs them again (ADR-0107)
+        failed = next((f for f in fixes if f["outcome"] != "pass"), None)
+        if failed:
+            review, rounds, r = None, 0, actions.ActionResult(False, [*why, "review_fix_failed", *failed["reasons"]], head_before)
+        else:
+            start = self.last(name)["entry"] if fixes and self.last(name)["entry"] > self.last_round(name) else 1    # a fix entry nobody reviewed is read first
+            review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc, start, defer=streamed)
+            if r is None:
+                return True
+        while not r.ok and r.extra.get("owner") == name:
+            regressed = r.extra["regressed"]
+            if regressed == last:      # the same regression after a fix entry: failed attempts that do not change stop the loop (ADR-0134)
+                r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", "regression_unchanged"], head_before, r.extra)
+                break
+            last = regressed
+            fix = await self.fix_regression(node, name, d, sc, r)
+            fixes.append({**fix, "regressions": r.extra["regressions"]})
+            if fix["outcome"] != "pass":
+                r = actions.ActionResult(False, [*r.reasons, "review_fix_failed", *fix["reasons"]], head_before, r.extra)
+                break
+            review, rounds, r = await self.land_child(node, name, d, path, branch, head_before, sc, fix["entry"])
+        for k in ("owner", "regressed", "findings"):      # the loop's working fields: the record keeps the attribution rows
+            r.extra.pop(k, None)
+        if fixes:
+            r.extra["fixes"] = fixes
+        if r.ok and name in self.ac_before:      # the child's own command, run at its own landing: no earlier result, so it never undoes the merge
+            r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
+        self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
+                                               outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
+                                               effect={"name": "review" if r.reasons and r.reasons[0].startswith("review_") else "merge_land",
+                                                       "before": head_before, "head": r.head, **r.extra,
+                                                       **({"review": review, "rounds": rounds} if review else {})})   # `before` is read here: the landing check replaces the merge's result
+        return False
+
+    async def land_child(self, node, name, d, path, branch, head_before, sc, start=1, defer=False):
         """Review one passed child, merge its branch and check the landing. Return (last review, rounds, landing result).
         Review round n reads the head of entry n (`rounds`), so `start` is the entry whose head is read first: 1 for a new
-        landing, the regression fix entry's number after it. A round the record holds is replayed, never read again."""
-        review, rounds, why = await self.review_of(node, name, d, path, head_before, sc, start)
+        landing, the regression fix entry's number after it. A round the record holds is replayed, never read again.
+        `defer` lets a streamed reading defer: the landing result is None, and nothing is merged or recorded (#1520)."""
+        review, rounds, why = await self.review_of(node, name, d, path, head_before, sc, start, defer)
+        if why is DEFERRED:
+            return review, rounds, None
         if not path.exists():      # a passed writer whose worktree is gone: its work cannot land, and the record says so
             r = actions.ActionResult(False, ["land_workspace_missing"], head_before)
         elif why:                  # a held child is not merged: its worktree stays, with every fix round on its branch
@@ -302,17 +351,17 @@ class Dispatch:
         """The reading of one passed child's head, run beside its siblings' work. The fix the review may ask for is funded
         later, in `land` (ADR-0108): this command is told whether the run's cap still covers the next entry's spend, read
         without reserving it, so a sibling's reservation in flight never turns a fundable fix into a hold. The grant is
-        taken in `rounds`, after the entry's children settled."""
+        taken in `rounds`, when the landing runs: a streamed one defers an unfunded fix to the settle pass (#1520)."""
         e = self.e
         if not node.get("review") or not path.exists():
             return None
         return await self.tries(node, name, d, path, base, 1, e.budget.run_spend_remaining >= d["spend"])
 
-    async def review_of(self, node, name, d, path, head_before, sc, start=1):
+    async def review_of(self, node, name, d, path, head_before, sc, start=1, defer=False):
         """The review of one passed child, or (None, 0, None) when the graph declares none or its worktree is gone.
         The reading itself starts when the child passes (`Children.review_child`), so the readings of several passing
-        children overlap; `rounds` then decides that round and every fix round it asks for, in request order, after the
-        entry's children settled. The merge still happens here, one child at a time in request order.
+        children overlap; `rounds` then decides that round and every fix round it asks for. A streamed landing (`Dispatch.stream`)
+        runs it as the reading ends; the settle pass in `land` runs it for the children that streamed no landing (#1520).
         A resumed pass has no task: `rounds` replays the rounds the record holds and reviews only a head with no
         `review_round` (ADR-0107). A task that died before writing its result leaves the same replay, so a cancelled or
         broken review never merges a child unreviewed."""
@@ -322,9 +371,9 @@ class Dispatch:
         if pending is not None:
             await pending["event"].wait()
             first = pending["got"]
-        return await self.rounds(node, name, d, path, self.review_base(path) or head_before, sc, first, start)
+        return await self.rounds(node, name, d, path, self.review_base(path) or head_before, sc, first, start, defer)
 
-    async def rounds(self, node, name, d, path, base, sc, first=None, start=1):
+    async def rounds(self, node, name, d, path, base, sc, first=None, start=1, defer=False):
         """Review one passed child, and fix it while its review asks (#570). Round n reviews the head of entry n; a `fix`
         verdict starts entry n+1 of the same child in its worktree with the full review, and its new head is round n+1.
         The command decides fix or hold (its stall rule, ADR-0134); code offers a round only when it already holds the next
@@ -337,7 +386,9 @@ class Dispatch:
         not read again (`review_round.repeated`, ADR-0151, #735). A fix round that answers a repeated finding also tells the
         coder to test the premise of its last fix before a third one (`repeated_round`, #882: a repeat of the record's
         rounds, since a requeued worktree holds no last fix).
-        Return (the last review, the rounds, the reasons that hold the child or None)."""
+        `defer` is a streamed landing (#1520): a round-1 reading that asks a fix the run cannot fund yet is not held. It returns
+        `DEFERRED`, keeps the reading for the settle pass (`pending`), and writes no `review_round`, so that pass reads nothing again.
+        Return (the last review, the rounds, the reasons that hold the child or None, or `DEFERRED`)."""
         e, n = self.e, start
         standing = None          # the review of a head a failed fix entry left in place: the same findings, not a new reading
         while True:
@@ -358,6 +409,10 @@ class Dispatch:
                         e.budget.release(fund)
                     e.record.append("diagnostic", source="review", node=name, entry=n, payload={"error": str(x)[:500]})
                     raise
+                if defer and n == 1 and review["verdict"] == "fix" and fund is None:
+                    if (pending := self.pending.get(name)) is not None:
+                        pending["got"] = review
+                    return review, n, DEFERRED
                 if review["verdict"] == "fix" and fund is None:      # a fix the run did not offer is a hold
                     review["verdict"] = "hold"
                 rec = e.record.append("review_round", node=name, round=n, head=git.head(path), verdict=review["verdict"],
@@ -711,13 +766,16 @@ class DispatchRunner:
 
     async def land_children(self, ctx, node, ent, pe, sc, d, entry):
         """Run the entry's children and land them. A child's reading starts the moment it passes, in the task group opened
-        here, so the readings of several passing children overlap; `land` still reviews and merges one at a time in
-        request order. The group sits outside `run_of`'s cancel scope: a child that passed is finished work, so a sibling's
-        `first_failure` cancels the children still running, never the review of one that already passed.
+        here, and a passed child lands as soon as its reading ends (`Dispatch.stream`), one landing at a time in completion
+        order; the settle pass in `land` lands the rest in request order. The group sits outside `run_of`'s cancel scope:
+        a child that passed is finished work, so a sibling's `first_failure` cancels the children still running, never the
+        review of one that already passed.
         An exception from the body (a pause holds the entry, a dry walk owes a landing) is stored so the group's own
         BaseExceptionGroup is never handed to the engine unwrapped, and it cancels the group first: a review in flight
-        after a hold would start a new metered session the owner has asked to stop."""
+        after a hold would start a new metered session the owner has asked to stop. A streamed landing's exception is
+        stored on `pending` and raised here the same way (#1520)."""
         raised, owed = None, False
+        d.current = (node, entry, sc)
         async with anyio.create_task_group() as reviews:
             try:
                 seen = await ctx.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, ctx.clock() + node["deadline"] * ctx.scale), reviews)
@@ -727,6 +785,7 @@ class DispatchRunner:
                 raised = x
         if raised is not None:
             raise raised
+        d.raise_streamed()
         if owed:
             raise Frontier([(node["name"], sc.item)])
         return seen

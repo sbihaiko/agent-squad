@@ -52,6 +52,8 @@ const specSlots=nums=>{const m=new Map(),used=new Set();
     if(used.size<8)while(used.has(s))s=(s+1)%8;used.add(s);m.set(n,s+1)});return m};
 const specColor=(slots,n)=>n==null||!Number.isFinite(Number(n))?SPEC_GREY:`var(--s${slots.get(Number(n))||Number(n)%8+1})`;
 const cardSpec=x=>x.sp?x.n:x.pa;   // a spec card wears its own color
+const isLoopBug=x=>(x.l||[]).some(l=>l==="loop-bug"||String(l).startsWith("loop-bug:"));
+const cardColor=(slots,x)=>isLoopBug(x)?"var(--err)":specColor(slots,cardSpec(x));   // a loop-bug has no spec: it wears the Loop bugs lane red
 // The wave chip (#917): text that names the card's wave, never a shade; a card with no wave shows none.
 const waveChip=x=>{const w=laneWaveOf(x);return w===null?"":`<span class=lchip data-k=wave title="wave ${w}">W${w}</span>`};
 // </card-rules>
@@ -114,7 +116,7 @@ function laneHead(l,v){
   const fact=k=>({...laneHeadCols.find(c=>c.k===k)});
   const counted=l.kind==="s"||l.kind==="none";
   const idText=l.kind==="s"?"SPEC "+l.num:l.kind==="bugs"?"Loop bugs":l.kind==="sw"?l.sid+" · "+l.wl:l.title;
-  const titleText=l.kind==="s"?l.title:l.kind==="bugs"?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";
+  const titleText=l.kind==="s"?l.title:l.kind==="bugs"?"defects of the loop itself: a prefixed label halts dispatch, and loop-bug:landing halts the landing too (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";
   const count=n=>l.counts[n]?String(l.counts[n]):"–";
   const cell={
     id:{...fact("id"),text:idText,full:l.kind==="sw"},
