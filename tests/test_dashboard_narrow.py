@@ -29,6 +29,7 @@ def layout(narrow):
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the layout")
+@pytest.mark.heavy     # runs the page under node and waits for its status line: over 1 s on a CI runner
 def test_a_narrow_screen_lays_every_node_in_one_column():
     pos = layout(narrow=True)
     assert len({p["x"] for p in pos.values()}) == 1

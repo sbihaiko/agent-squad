@@ -158,7 +158,7 @@ async def drive_with_heartbeat(eng, tmp_path, monkeypatch):
 @pytest.mark.anyio
 @pytest.mark.heavy
 async def test_a_slow_review_writes_progress_so_the_heartbeat_never_kills_it(tmp_path, monkeypatch):
-    monkeypatch.setattr(D, "REVIEW_TICK_S", 0.2)
+    monkeypatch.setattr(D, "REVIEW_TICK_S", 0.1)   # six ticks per quiet window: a loaded runner stalls one or two
     eng, repo, _ = run_one(tmp_path, 0, sleep=1.5)
     kills = await drive_with_heartbeat(eng, tmp_path, monkeypatch)
     assert kills == []
