@@ -1144,4 +1144,20 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"(changes)"*) ok "32 a CHANGES plan review holds the loop-bug";; *) ko "32 a CHANGES review did not hold: '$r'";; esac
 rm -f "$T/st/review-x_y#596."*
 
+# 33) (#1516) the rate-limited line names the reset of the resource that IS exhausted, never core's. The read refuses with
+# the rate-limit body, and gh api rate_limit answers a body whose core has thousands left while graphql and search sit at
+# zero: the line must name the earliest reset among the zero ones (22:13 UTC here), not core's 08:00 UTC.
+rm -rf "$T/st/auto" "$T/st/req"; mkdir -p "$T/st/auto" "$T/st/req"; rm -f "$T/st/cycle.log"
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+case "$*" in
+  *rate_limit*) echo '{"resources":{"core":{"limit":5000,"remaining":4551,"reset":1800000000},"graphql":{"limit":5000,"remaining":0,"reset":1700000000},"search":{"limit":30,"remaining":0,"reset":1850000000}}}' ;;
+  *) echo '{"message":"API rate limit exceeded for user ID 122891372.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api","status":"403"}'; exit 1 ;;
+esac
+J
+chmod +x "$T/bin/gh"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err33"); rc=$?
+[ "$rc" = 0 ] && ok "33 an exhausted resource exits 0" || ko "33 the pass exited $rc: '$(cat "$T/err33")'"
+$G -qE "^AUTOBUG: rate limited until 22:13 UTC;" "$T/err33" && ok "33 the line names the earliest reset of an exhausted resource" || ko "33 wrong reset: '$(cat "$T/err33")'"
+
 rm -rf "$T"; exit $fail

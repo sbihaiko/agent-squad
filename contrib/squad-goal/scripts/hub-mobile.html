@@ -276,7 +276,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <h2>Warnings</h2>
 <ul id=warnings></ul>
 <div id=warn-detail hidden></div>
-<p id=msg></p>
+<p id=msg role=status></p>
 </section>
 <!-- The phone has no Flow view: its tabs are Monitor, Board, Runs, Terminals and More, and the Cumulative Flow and
      Lead Time charts are desktop-only. So the desktop chart's Type and visible-state filters (#1356) have no control
@@ -308,12 +308,12 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="runs-ended" class="runlist"></div>
 <h3 class="sub" id="runs-history-h" hidden>Run history</h3>
 <div id="runs-history" class="hist" hidden></div>
-<p id="runs-msg" class="msg"></p>
+<p id="runs-msg" class="msg" role="status"></p>
 </section>
 <section data-panel="terminals" hidden>
 <h2>Terminals</h2>
-<div id="sessions" class="runlist"></div>
-<p id="sessions-msg" class="msg"></p>
+<div id="sessions" class="runlist" aria-live="polite"></div>
+<p id="sessions-msg" class="msg" role="status"></p>
 </section>
 <section data-panel="more" hidden>
 <h2>More</h2>
@@ -323,7 +323,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 
 <a class="more-link" id="more-settings" href="./#set">Settings</a>
 </div>
-<p class="msg">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
+<p class="msg" role="status">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
 <article data-screen="cost" data-src="/api/stats" hidden>
 <div id="cost-content"><h2>Cost and usage</h2>
 <div id="periods">
@@ -333,7 +333,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <div id="cchart"></div>
 <div class="list"></div>
-<p class="msg"></p></div>
+<p class="msg" role="status"></p></div>
 <div id="cost-actions"><button data-back type="button">Back</button></div>
 </article>
 <article data-screen="lead" data-src="/api/chart/lead" hidden>
@@ -352,7 +352,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-ltzoom="out" type="button">Zoom out</button>
 <button data-ltzoom="reset" type="button">Reset</button>
 </div>
-<p class="msg"></p></div>
+<p class="msg" role="status"></p></div>
 <div id="lead-actions"><button data-back type="button">Back</button></div>
 </article>
 </section>
@@ -372,19 +372,19 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="termview-head"><span id="termview-name"></span></div>
 <button id="termview-older" type="button" hidden>Older turns</button>
 <div id="termview-turns"></div>
-<p id="termview-msg" class="msg"></p>
+<p id="termview-msg" class="msg" role="status"></p>
 <div id="termview-compose">
 <button id="termview-back" type="button">Back</button>
 <p class="mut" id="termview-note">Your message arrives as a message from another session, not as your typed input or approval.</p>
 <textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
 <button id="termview-send" type="button">Send</button>
-<p id="termview-sent" class="msg"></p>
+<p id="termview-sent" class="msg" role="status"></p>
 </div>
 </section>
 <section id="runview" hidden>
 <div id="runview-head"><span id="runview-name"></span></div>
 <div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
-<div id="runview-actions"><button id="runview-back" type="button">Back</button><button id="rundesk-btn" type="button">Desktop dashboard</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg"></p></div></div>
+<div id="runview-actions"><button id="runview-back" type="button">Back</button><button id="rundesk-btn" type="button">Desktop dashboard</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div></div>
 </section>
 <nav>
 <button data-tab="monitor">Monitor</button>
@@ -628,6 +628,8 @@ async function readHub(path, ctl) {
 
 const money = v => "$" + Number(v || 0).toFixed(2);
 function detail(w) { $("warn-detail").textContent = w.tip || w.text; $("warn-detail").hidden = false; }
+// One path opens a warning row: a tap and the keyboard both call it, so the two can never drift (#1457).
+function openWarning(w) { detail(w); }
 async function status() {
   try {
     const s = await call("/api/status");
@@ -640,7 +642,10 @@ async function status() {
       const li = document.createElement("li");
       li.textContent = w.text;
       li.tabIndex = 0;
-      li.onclick = () => detail(w);
+      li.onclick = () => openWarning(w);
+      li.onkeydown = e => {
+        if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") { e.preventDefault(); openWarning(w); }
+      };
       return li;
     }));
   } catch (e) { $("msg").textContent = e.message; $("reconnect").hidden = !e.down; }

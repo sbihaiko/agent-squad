@@ -239,6 +239,32 @@ IFS=$'\t' read -r _ _ bres _ < "$DB2/gate-status" 2>/dev/null
 [ "$bres" = fail ] && ok "a bounded attempt's status line is no pass" || ko "bounded status: '$(cat "$DB2/gate-status" 2>&1)'"
 pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "a descendant process survived the second deadline" || ok "the second bounded attempt leaves no descendant"
 
+# --- the watchdog's forked sleep dies with the gate, through --inner and through --run (#1441, #1510) ---
+# A short command ends long before the watchdog's bound, so its forked sleep can go only when the gate reaps it. The pid
+# fallback in reap_wd would mask the group kill, so the gate runs with a pgrep that answers nothing: the group kill is then
+# the one reaper, and it reads the process table through $SG_PS, the seam the top-level source of caps.sh supplies to every
+# branch, the fresh `bash gate.sh --run` child included (#1508). The bound is a value no other case uses, so the forked sleep
+# is found by its own argv.
+WG=$T/watchdog; mkdir -p "$WG" "$T/nopgrep"; wb=31415; wsleep="sleep $((wb + 5))"
+printf '#!/bin/sh\nexit 1\n' > "$T/nopgrep/pgrep"; chmod +x "$T/nopgrep/pgrep"
+wrun() {  # <mode>: run a short command through the gate, print its rc; never inherited by the other gate invocations
+  local rc
+  ( cd "$T/w" && exec env PATH="$T/nopgrep:$PATH" SG_STATE="$WG" SG_GATE_KIND=fast SG_GATE_BOUND_SECONDS=$wb \
+      bash "$d/gate.sh" "$1" true ) > "$T/wgate.out" 2>&1; rc=$?
+  printf '%s\n' "$rc"
+}
+for wmode in --inner --run; do
+  wrc=$(wrun "$wmode"); wleft=
+  for _ in 1 2 3 4 5 6 7 8 9 10; do   # a short grace: the group kill is a signal, and its delivery is not instant
+    wleft=$(pgrep -f "$wsleep" 2>/dev/null); [ -z "$wleft" ] && break
+    sleep 0.1
+  done
+  [ "$wrc" = 0 ] && [ -z "$wleft" ] \
+    && ok "the watchdog's forked sleep is gone right after the gate returns ($wmode)" \
+    || ko "the watchdog sleep survives $wmode: rc $wrc, pids '${wleft:-none}', '$(tail -2 "$T/wgate.out" | tr '\n' ' ')'"
+  [ -z "$wleft" ] || pkill -f "$wsleep"
+done
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail
