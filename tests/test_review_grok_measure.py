@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -287,3 +288,23 @@ def test_a_state_dir_is_required() -> None:
 
     assert result.returncode == 2
     assert "usage" in result.stderr
+
+
+def test_a_no_tools_grok_row_reads_its_vendor_from_the_cli_row(tmp_path: Path) -> None:
+    """#1373: a no-tools grok reviewer's review row names no runner, so the vendor comes from its CLI row. Without
+    that read the debt-only exemption silently stops counting grok, and a whole measurement turns to zeros."""
+    doc = json.loads((ROOT / "config/models.registry.json").read_text())
+    for m in doc["models"]:
+        if m["id"] == "grok-4.7":
+            m["capabilities"]["review_tools"] = False
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps(doc))
+    ledger(tmp_path, [row()])
+
+    result = subprocess.run(["python3", str(SCRIPT), str(tmp_path)], capture_output=True, cwd=ROOT, text=True,
+                            env={**os.environ, "SG_MODELS_REGISTRY": str(registry)})
+
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["grok_reviews"] == 1
+    assert out["grok_debt_only"] == 1

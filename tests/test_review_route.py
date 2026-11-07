@@ -179,3 +179,91 @@ def test_an_unsupported_runner_clears_stderr_and_ends_its_tries():
     arm = next(line for line in REVIEW.read_text().splitlines() if "unsupported runner" in line)
     assert ': > "$e"' in arm and "lim=$i" in arm and "fmt=1" in arm
 
+
+def test_a_no_tools_grok_reviewer_answers_on_the_gateway(reg):
+    """#1373: a grok reviewer that names review_tools:false takes the no-tools gateway call, and its CLI row still
+    names the vendor that the quota markers and the CLI fallback follow."""
+    got = modelreg.review_route("grok-4.7", reg)
+    assert (got.route, got.runner, got.wire, got.tools) == ("direct", "", "claude-grok-4.7", False)
+    fallback = modelreg.review_route("grok-4.7", reg, route="cli")
+    assert (fallback.route, fallback.runner, fallback.wire, fallback.tools) == ("cli", "grok", "grok-4.7", True)
+
+
+def test_the_cli_prints_a_reviewers_fallback_row_on_request():
+    import subprocess
+    out = subprocess.run([sys.executable, str(ROOT / "squad/modelreg.py"), "review-route", "grok-4.7", "--route", "cli"],
+                         capture_output=True, text=True, check=True).stdout
+    assert out == "cli\tgrok\tgrok-4.7\t1\n"
+
+
+def test_a_reviewer_with_no_cli_route_names_no_fallback(tmp_path):
+    """A no-tools reviewer with no CLI row has no fallback: the request answers the gateway row, never a made-up one."""
+    doc = json.loads((ROOT / "config/models.registry.json").read_text())
+    entry = next(m for m in doc["models"] if "gateway" in m.get("routes", {}) and "cli" not in m["routes"])
+    entry["capabilities"]["review_tools"] = False
+    p = tmp_path / "registry.json"
+    p.write_text(json.dumps(doc))
+    got = modelreg.review_route(entry["id"], modelreg.load(p), route="cli")
+    assert (got.route, got.runner) == ("gateway", "")
+
+
+def test_review_sh_sends_a_no_tools_grok_as_one_streamed_gateway_call():
+    """The stream keeps the answer under the gateway's idle timeout, the effort rides in output_config, and no tools
+    cross the bridge. The CLI stays the fallback for a cut or refused stream (#1373)."""
+    text = REVIEW.read_text()
+    assert "stream: true, output_config: {effort: $e}" in text
+    assert "del(.thinking)" in text
+    assert 'python3 "$(dirname "$0")/review_stream.py"' in text
+    assert 'aroute=cli; arunner=grok; grok_cli' in text
+    assert 'case $vendor in codex)' in text and 'case $vendor in agy)' in text and 'case $vendor in grok)' in text
+
+
+def test_a_gateway_timeout_keeps_its_own_exit_and_never_falls_back():
+    """A curl -m exit on the deadline is the model's timeout, so the fallback never spends a second one (#1373)."""
+    text = REVIEW.read_text()
+    assert '[ $r = 28 ]' in text and 'r=142' in text
+    assert 'stream" = 1 ] && [ "$r" != 142 ]' in text
+
+
+def test_the_grok_cli_fallback_reshapes_its_json_envelope():
+    """The grok CLI prints `{type, text, usage}`, not the bare verdict, so the fallback's answer file would start with
+    `{`. grok_cli reshapes it into the CLI shape, and the ledger branch reads `.text` or `.result` (#1373)."""
+    text = REVIEW.read_text()
+    assert "result: .text" in text
+    assert 'if (.text|type)=="string" then .text elif (.result|type)=="string" then .result' in text
+
+
+def test_a_deliberate_gateway_error_never_falls_back_to_the_cli():
+    """Only a cut or refused stream spends the CLI. An explicit SSE error event is the gateway's own answer, so the
+    chain's retry path owns it and no grok call is spent twice (#1373)."""
+    text = REVIEW.read_text()
+    assert 'case $s in' in text
+    assert any(line.strip() == '""|error_stream|unreadable)' for line in text.splitlines())
+
+
+def test_a_converter_that_prints_no_json_is_an_explicit_failure():
+    """A raw HTML error page or an unreadable stream is no answer: the body goes to $e, the call returns non-zero, and
+    the failure carries its own marker, so the fallback and the ledger name an unreadable gateway answer instead of
+    reading an absent $o as an ordinary cut (#1373)."""
+    text = REVIEW.read_text()
+    assert 'jq -e \'type=="object"\' "$o.s"' in text
+    assert 'cat "$o.api" >> "$e"' in text and 'r=65' in text
+    assert "gwhy=unreadable" in text
+    assert '"subtype":"unreadable"' in text
+    assert any(line.strip() == '""|error_stream|unreadable)' for line in text.splitlines())
+
+
+def test_the_grok_cli_fallback_reads_the_effort_of_the_model_it_calls():
+    """The fallback calls `grok -m $gwire`, so its `--reasoning-effort` is read from that spelling, never from the
+    registry id the chain row named (#1373)."""
+    text = REVIEW.read_text()
+    assert 'effort_of "$w"' in text
+    assert 'ef=${3:-$eff}' not in text
+
+
+def test_the_route_cache_comment_names_its_real_scope():
+    """`$$` is the shell's pid and survives `$(...)`, so the cache is shared there; a separate shell asks again. The
+    comment must say that, not claim a parent's pid (#1373)."""
+    text = REVIEW.read_text()
+    assert "inside `$(...)`" in text and "per top-level shell" in text
+
