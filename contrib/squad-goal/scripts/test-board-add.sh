@@ -103,7 +103,11 @@ case $o in *"#2006"*"read failure"*) ok "it is named a read failure, not an abse
 case $o in *"-> Todo"*) ko "the unproven write is reported as written: $o";; *) ok "it never claims the card was written";; esac
 /usr/bin/grep -q '"2006"' "$T/st/rest-items-o-4-x_y.json" && ko "the cache records a card whose write is unproven: $(cat "$T/st/rest-items-o-4-x_y.json")" || ok "the cache does not record the unproven card"
 [ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" -gt 1 ] && [ "$(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls")" -gt 1 ] && ok "the unproven write is retried" || ko "no retry: $(cat "$T/gh.calls")"
-[ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" -le 4 ] && [ "$(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls")" -le 4 ] && ok "the retry is bounded" || ko "retries: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls") PATCH, $(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls") reads"
+# The bound is the one board.py enforces on this card: SG_BOARD_READ_ATTEMPTS (4) gives the write one attempt fewer than
+# the bound (3), and each attempt costs its one-card read plus the whole-board read that answers a miss (#1300), beside the
+# one compare read: 3 PATCH and 7 reads is the whole budget, never a fourth write (ADR-0018, re-anchored from the 4 the
+# suite held before the miss read existed).
+[ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" -le 3 ] && [ "$(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls")" -le 7 ] && ok "the retry is bounded" || ko "retries: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls") PATCH, $(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls") reads"
 : > "$T/gh.calls"; o=$(run --add o 4 Todo 2007 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "a write a retry lands exits 0" || ko "repaired write exit $rc: $o"
 case $o in *"#2007 -> Todo"*) ok "the card the read carries is reported as written";; *) ko "repaired write message: $o";; esac

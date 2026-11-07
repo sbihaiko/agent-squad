@@ -18,7 +18,7 @@ never delegated to the loop (ADR-0146).
 3. Stop the loop: `scripts/watchd.sh stop`, after checking for live work. Land first any finished run whose children entered its wave (`wave.sh land <run>`).
 4. Fix it yourself or with your own agents, test-first, in a worktree. Fast gate, not the full one. Land in `dev` with `Closes #n`.
 5. Promote `dev` into `stg` by one pull request, then publish the live copy from a tree on `stg` (`SKILL.md` §8 steps 4 and 5). The publish closes the issue — never close it by hand.
-6. Restart the loop, and confirm the first cycle prints no `LOOP STOP` and no `DISPATCH HOLD` for that issue.
+6. Restart the loop (`scripts/watchd.sh restart`, which drains the live runs first; with the loop already stopped by step 3 it only starts it), and confirm the first cycle prints no `LOOP STOP` and no `DISPATCH HOLD` for that issue.
 
 While an issue carrying `loop-bug:dispatch`, `loop-bug:landing` or `loop-bug:infra` is open, the loop stays stopped: no
 dispatch. A bare `loop-bug` label stops nothing; it does not stop landings either, and no label stops the live runs.

@@ -1,4 +1,5 @@
-// Test door for the dashboard core under node. Reads {engine, core, ops} on stdin, prints one result per op.
+// Test door for the dashboard core under node. Reads one {id, engine, core, ops} request per stdin line, prints one
+// {id, out} answer per request, and keeps the built core: the engine and the bundle come once, on the first line.
 // `core` is the bundle text of scripts/build_dashboard.py::core_bundle, the same text the page inlines.
 let make;
 // One history run: apply each edit like the page does (graph and layout together), record the state before it, then undo all and redo all.
@@ -36,14 +37,14 @@ function runHistory(core, o) {
   return { states, undone, redone, afterAllUndo, skipped, canUndoAfterAll, clearedRedo: cleared === null, size: h.past.length + h.future.length };
 }
 
-let input = "";
-process.stdin.on("data", (c) => (input += c));
-process.stdin.on("end", async () => {
-  const { engine, core: bundle, ops } = JSON.parse(input);
-  make = new Function(bundle + "\nreturn make;")();
-  const core = make(engine);
-  const out = [];
-  for (const o of ops) {
+let built = null;
+async function answer(req) {
+  if (req.core !== undefined) {   // the first request carries the bundle; every later one reuses the built core
+    make = new Function(req.core + "\nreturn make;")();
+    built = make(req.engine);
+  }
+  const core = built, out = [];
+  for (const o of req.ops) {
     if (o.op === "validate") out.push(core.validate(o.doc));
     else if (o.op === "canon") out.push(core.canonFromText(o.text));
     else if (o.op === "hash") out.push(await core.graphHash(o.text));
@@ -149,5 +150,20 @@ process.stdin.on("end", async () => {
     }
     else throw new Error("unknown op " + o.op);
   }
-  process.stdout.write(JSON.stringify(out));
-});
+  return out;
+}
+
+// One request per line: {id, engine, core, ops}. The engine and the bundle come on the first line, and the process keeps
+// the core built from them, so a call pays its ops and no start (#1534). Each answer carries its request's id back, so a
+// caller never takes a line left by another request for its own. An op that throws ends the process with the same stderr
+// a one-shot run printed.
+(async () => {
+  const readline = require("readline");
+  for await (const line of readline.createInterface({ input: process.stdin, terminal: false })) {
+    if (!line.trim()) continue;
+    let req, answerLine;
+    try { req = JSON.parse(line); answerLine = JSON.stringify({ id: req.id, out: await answer(req) }); }
+    catch (e) { process.stderr.write(String((e && e.stack) || e) + "\n"); process.exit(1); }
+    process.stdout.write(answerLine + "\n");
+  }
+})();

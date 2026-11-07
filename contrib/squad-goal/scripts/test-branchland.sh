@@ -124,7 +124,10 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x"*inconclusive*) ok "an inconclusive gate 
 # 2 s line off: that line is the CI speed rule, and this machine's load is not a defect of the branch; the 20 s cap stays.
 printf '#!/bin/bash\necho "SG_STATE=${SG_STATE:-unset} $*" >> %s/py.log\ncase "$*" in *squad.testselect*) echo "all: stub";; esac\n' "$T" > "$T/py"; chmod +x "$T/py"
 reset; rm -f "$T/py.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/py" CHECKS='{"check_runs":[]}' bl)
-/usr/bin/grep -q 'pytest' "$T/py.log" 2>/dev/null && ! /usr/bin/grep -q 'SG_STATE=/' "$T/py.log" && ok "the default gate runs with no SG_* variable" || ko "the gate saw the loop env: $(cat "$T/py.log" 2>&1)"
+# The gate lock's process read (serial.sh's incarnation check) runs in the loop env and needs SG_STATE (#1508); only the gate
+# command inside gate.sh is stripped, so the proof reads every line but that reader's. It is read by shape, not by caller: the
+# interpreter is the gate's own (#1086), so the stub logs the reader's call beside the tools'.
+/usr/bin/grep -q 'pytest' "$T/py.log" 2>/dev/null && ! /usr/bin/grep -v -- ' -m squad.procs ' "$T/py.log" | /usr/bin/grep -q 'SG_STATE=/' && ok "the default gate runs with no SG_* variable" || ko "the gate saw the loop env: $(cat "$T/py.log" 2>&1)"
 /usr/bin/grep 'pytest' "$T/py.log" 2>/dev/null | /usr/bin/grep -q -- '-o heavy_cap_seconds=20' && ok "the default gate lifts the 2 s line to the 20 s cap" || ko "the gate keeps the 2 s line: $(grep pytest "$T/py.log" 2>&1)"
 # The gate proves what lands: the tip rebased onto dev, never the bare tip. A red the branch inherited from an old base is fixed
 # on dev, so the branch lands once dev carries the fix, and a failed gate runs again when dev moves.

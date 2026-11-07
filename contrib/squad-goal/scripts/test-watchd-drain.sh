@@ -7,12 +7,16 @@ d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; gp=; sup=
 trap 'bash "$T/watchd.sh" stop >/dev/null 2>&1; kill -9 "$sup" "$gp" 2>/dev/null; rm -rf "$T"' EXIT
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME" "$T/runs/r1" "$SG_STATE/locks/gate"
+. "$d/caps.sh"   # SG_PS: the process table read through squad.procs, the reader the shipped script uses (#1508)
 cp "$d/watchd.sh" "$T/watchd.sh"
 python3 - "$T/watchd.sh" "$SG_STATE" "$d" <<'PY'
 import pathlib,sys
 f,st=sys.argv[1],sys.argv[2]
 p=pathlib.Path(f); t=p.read_text()
 t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
+# The copy reads the process table through caps.sh beside the real watchd.sh, never the `ps` fallback (#1508): a sandbox
+# refuses the setuid table binary, and a copy that fell back to it read its own supervisor as gone.
+t=t.replace('"$(dirname "$0")/caps.sh"','"%s/caps.sh"'%sys.argv[3])
 t=t.replace('. "$(dirname "$0")/ghcall.sh"   # the one seam the start\'s loop-bug read goes through (ADR-0146)',
             'gh_aggregate() { return 1; }')
 t=t.replace('"$(dirname "$me")/watch.sh"','"%s/watch.sh"'%f.rsplit("/",1)[0])
@@ -56,7 +60,7 @@ bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/nu
 bash "$T/watchd.sh" stop >/dev/null
 # (#1057) A gate lock whose holder died as a zombie holds no drain: the parent has not reaped it, so kill -0 still answers.
 sh -c 'sleep 0 & echo $! > "$1"; exec sleep 300' sh "$T/zombie" >/dev/null 2>&1 & zpar=$!
-for i in $(seq 1 50); do [ -s "$T/zombie" ] && [ "$(/bin/ps -o stat= -p "$(cat "$T/zombie")" 2>/dev/null | cut -c1)" = Z ] && break; sleep 0.1; done
+for i in $(seq 1 50); do [ -s "$T/zombie" ] && [ "$($SG_PS -o stat= -p "$(cat "$T/zombie")" 2>/dev/null | cut -c1)" = Z ] && break; sleep 0.1; done
 rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain"; : > "$SG_STATE/active-runs.txt"; echo "$(cat "$T/zombie")" > "$SG_STATE/locks/gate/pid"
 bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
 SG_DRAIN_POLL=1 bash "$T/watchd.sh" drain >/dev/null 2>&1

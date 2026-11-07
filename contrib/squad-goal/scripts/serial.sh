@@ -86,6 +86,8 @@ set -m   # each background job leads its own process group, so the watchdog stop
   [ "$(cat "$L/pid" 2>/dev/null)" = "$hpid" ] || exit 0   # the lock moved on: this watchdog has no command left to stop
   [ "$(date +%s)" -ge "$due" ] || exit 0                  # its sleep was cut short: the deadline has not come
   printf '%s\n' "$hpid" > "$L/timed-out"; kill -TERM -- -"$c" 2>/dev/null; sleep 5; kill -KILL -- -"$c" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
+set +m   # job control only gave the two jobs their groups: left on, bash 5 prints "[2]+ Terminated ( sleep ... )" when the
+         # watchdog is reaped, and that notice lands in the gate output a caller records as its reason (#1540)
 echo "$wd" > "$L/wd"   # the watchdog's pid: a waiter that finds it gone past the deadline knows nothing will stop the command (#805)
 # The command leads a process group of its own, so a signal to this holder's group does not reach it: a holder that is stopped
 # (a pass past its deadline, #130) stops its command's whole tree and its watchdog before it releases the lock (#393).
@@ -93,6 +95,6 @@ stop() {   # stderr goes first: the shell's job notices would land in the stoppe
   exec 2>/dev/null; kill -TERM -- -"$c"; reap_wd "$wd"; rm -rf "$L"; exit "$1"; }
 trap 'stop 143' TERM; trap 'stop 130' INT
 wait "$c"; rc=$?
-reap_wd "$wd"
+reap_wd "$wd" 2>/dev/null
 [ "$(cat "$L/timed-out" 2>/dev/null)" = "$hpid" ] && exit 75
 exit "$rc"

@@ -24,10 +24,13 @@ sha1, sha2 = "a" * 40, "b" * 40
 events = [{"t": at(0), "type": "added"}, {"t": at(0), "type": "status", "status": "Todo"},
           {"t": at(10), "type": "status", "status": "Doing"},
           {"t": at(20), "type": "status", "status": "Code Complete"}]
-if scenario != "nogating": events.append({"t": at(75), "type": "status", "status": "Gating"})
+if scenario not in ("nogating", "reopen"): events.append({"t": at(75), "type": "status", "status": "Gating"})
 done = 130 if scenario == "lateexit" else 100   # the card's last column change, and so its Gating exit
 if scenario == "open":
     events += [{"t": at(90), "type": "status", "status": "Gating"}]
+elif scenario == "reopen":   # the card landed, the issue was reopened, and its second gate wrote no Gating stretch
+    events += [{"t": at(40), "type": "status", "status": "Closed"}, {"t": at(50), "type": "status", "status": "Todo"},
+               {"t": at(60), "type": "status", "status": "Code Complete"}]
 else:
     events += [{"t": at(done), "type": "status", "status": "Closed"}, {"t": at(done), "type": "closed"}]
 rec = {"k": "issue", "n": n, "events": events, "complete": True, "issue_updated": at(100),
@@ -38,9 +41,11 @@ item = {"n": n, "r": "o/r", "st": "Closed", "s": "closed", "cr": "completed", "l
 if scenario == "open": item.update(st="Gating", s="open", c=None)
 board = {"t": ep(100), "items": [] if scenario == "absent" else [item]}
 json.dump(board, open(out + "/board.json", "w"))
-open(out + "/journal.jsonl", "w").write("\n".join(json.dumps(r) for r in [
-    {"k": "gate_attempt", "n": n, "tip": sha1, "ord": 1, "aid": "gate-1", "v": "fail", "t": ep(80), "w": "wave-9"},
-    {"k": "gate_attempt", "n": n, "tip": sha2, "ord": 1, "aid": "gate-2", "v": "pass", "t": ep(95), "w": "wave-9"}]) + "\n")
+rows = [{"k": "gate_attempt", "n": n, "tip": sha1, "ord": 1, "aid": "gate-1", "v": "fail", "t": ep(80), "w": "wave-9"},
+        {"k": "gate_attempt", "n": n, "tip": sha2, "ord": 1, "aid": "gate-2", "v": "pass", "t": ep(95), "w": "wave-9"}]
+if scenario == "wave0":   # the tip gate journals card 0 for the wave: the guard reads it on the cards the journal names
+    rows.append({"k": "gate_attempt", "n": 0, "tip": sha2, "ord": 1, "aid": "gate-0", "v": "pass", "t": ep(40), "w": "wave-9"})
+open(out + "/journal.jsonl", "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
 # The gate's own log. A `nomatch` fixture answers no attempt: the lines name another tip.
 log_sha1, log_sha2 = ("c" * 40, "d" * 40) if scenario == "nomatch" else (sha1, sha2)
 open(out + "/gate-history", "w").write(
@@ -109,6 +114,23 @@ o=$(run); rc=$?
 fixture "$T/st" good; o=$(run --json); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$o" | "$py" -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["ok"] and len(d["checks"])==6 else 1)' \
   && ok "the JSON form reports six green checks" || ko "json: $o"
+
+# --- the record guard (#1430): every attempt ahead of dev must leave a Gating stretch, read from the journal and the store ---
+guard() { "$py" "$src" --record-guard --history "$T/st/hist.jsonl" --journal "$T/st/journal.jsonl" "$@" 2>&1; }
+fixture "$T/st" good; o=$(guard); rc=$?
+[ "$rc" = 0 ] && ok "the record guard passes when every attempt's card read Gating" || ko "record guard exit $rc: $o"
+fixture "$T/st" nogating; o=$(guard); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q "^FAIL gating_recorded: #$case" \
+  && ok "the record guard names an attempt whose card never read Gating" || ko "record guard nogating exit $rc: $o"
+fixture "$T/st" nogating; o2=$(guard); [ "$o" = "$o2" ] && ok "the record guard answers the same on a re-read" || ko "record guard reread: $o vs $o2"
+# A wave-level attempt (the tip gate, card 0) is read on the cards the journal names for its wave, never waived.
+fixture "$T/st" wave0; o=$(guard); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q "^FAIL gating_recorded: #$case" \
+  && ok "the record guard reads a card-0 wave attempt on the wave's own cards" || ko "record guard wave0 exit $rc: $o"
+# A Closed interval that ended before the attempt does not say the card is in dev: a reopened card is still a defect.
+fixture "$T/st" reopen; o=$(guard); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q "^FAIL gating_recorded: #$case" \
+  && ok "the record guard names an attempt after the card left Closed" || ko "record guard reopen exit $rc: $o"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

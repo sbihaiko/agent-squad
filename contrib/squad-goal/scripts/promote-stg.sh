@@ -31,7 +31,7 @@
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
 # SG_PROMOTE_OPEN_ONLY opens or reuses the dev -> stg pull request and nothing else: no lock, no proof, no merge (ADR-0164,
-# #1051). promote-pass.sh calls it so the four CI shards start on the tip while the quiet window passes.
+# #1051). promote-pass.sh calls it so the full suite's shard jobs start on the tip while the quiet window passes.
 if [ -n "${SG_PROMOTE_OPEN_ONLY:-}" ]; then
   . "$d/ghcall.sh"
   pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) || exit 0

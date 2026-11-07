@@ -20,7 +20,11 @@ check(line == f"[Image: source: {path}] {note}", "the line ends with one data-no
 check(hub.image_payload(urllib.parse.urlencode({"sid": sid, "p": str(path)})) == (png, "image/png"), "the stored file is served for its session")
 check(hub.image_payload(urllib.parse.urlencode({"sid": other, "p": str(path)})) is None, "the stored file is refused for another session")
 js = pathlib.Path(os.environ["OVERLAY_SRC"]).read_text()
-rx = re.search(r"^const IMG_RE = /(.*)/;$", js, re.M)
+# The render path binds IMG_RE to a shared pattern when the composer owns it (#1154), so resolve that binding: one source
+# still serves the transcript, and the check follows the value the render path actually uses.
+bind = re.search(r"^const IMG_RE = (?:SQ\.(\w+)|/(.*)/);$", js, re.M)
+rx = bind and (re.search(rf"^SQ\.{bind.group(1)} = /(.*)/;$", js, re.M) if bind.group(1)
+               else re.match(r"(.*)", bind.group(2)))
 drawn = rx and re.compile(rx.group(1)).match(line)
 check(bool(drawn) and drawn.group(1) == str(path), "the overlay draws the line as a thumbnail of the stored path")
 PY

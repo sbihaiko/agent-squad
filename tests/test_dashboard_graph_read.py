@@ -6,6 +6,8 @@ The core decides the icon and the routes; the page only paints them.
 import itertools
 import re
 
+import pytest
+
 from squad import graph
 from tests.dashboard_helpers import PAGE_SRC, ROOT, run_node
 
@@ -22,6 +24,7 @@ def _routes(layout, pairs):
     return run_node([{"op": "edgeroutes", "layout": layout, "pairs": pairs, "box": BOX}])[0]
 
 
+@pytest.mark.heavy   # one node start per kind: 2.5 s on a loaded CI runner
 def test_every_node_kind_has_its_own_icon():
     marks = {k: _mark(k) for k in graph.KINDS}
     glyphs = [m["glyph"] for m in marks.values()]

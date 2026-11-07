@@ -1,6 +1,15 @@
 """A child that works a cluster shows every issue it works (#954): the label named only the first number, so a child
 holding three issues read as one and its card set looked complete when it was not."""
+import pytest
+
 from tests.dashboard_helpers import run_node
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _warm_runner():
+    """The shared node runner starts and loads the engine on its first request. A module first in its shard paid that start
+    inside its first call, 3.6 s on a CI runner, over the 2 s line (#1541); the setup pays it instead."""
+    run_node([])
 
 
 def _spawn(prompt, task="tdd"):

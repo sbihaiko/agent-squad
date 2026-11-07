@@ -306,7 +306,7 @@ def test_a_wave_entry_under_a_held_gate_lock_holds_the_child_and_enters_on_a_lat
             while not (pid.exists() and pid.read_text().strip()) and time.time() < deadline:
                 time.sleep(0.02)
             assert pid.exists(), "the holder never took the gate lock"
-            with _grouped(cmd, cwd=cwd, env=env, capture_output=True, text=True) as held:
+            with _grouped(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as held:
                 stdout, stderr = held.communicate(timeout=60)
             out = stdout + stderr
             assert held.returncode != 0 and re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d WAVE HOLD #1: the gate lock is held by pid [0-9]+", out, re.M), out
@@ -314,7 +314,7 @@ def test_a_wave_entry_under_a_held_gate_lock_holds_the_child_and_enters_on_a_lat
         finally:
             release.touch()
             holder.wait(timeout=60)
-    with _grouped(cmd, cwd=cwd, env=env, capture_output=True, text=True) as later:
+    with _grouped(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as later:
         later_out, later_err = later.communicate(timeout=60)
     assert subprocess.run(["bash", "-c", ran]).returncode == 0, f"the later pass never ran its gate: {later_out}{later_err}"
 

@@ -110,6 +110,7 @@ async def test_an_item_gets_the_lesser_of_its_deadline_and_the_remaining_each_ti
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # two parallel items wait on each other's reservation: 2.1 s on a CI runner
 async def test_two_parallel_items_reserve_atomically_against_a_small_remainder(tmp_path):
     # cap 1.5, each item reserves up to 1.0: the second item cannot be funded at the same time.
     eng = run_engine(each_doc(mode="parallel", max_parallel=2, cap=1.6),

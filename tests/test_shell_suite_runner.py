@@ -13,6 +13,7 @@ import pytest
 
 from tests import shell_suites, slowcap
 
+pytestmark = pytest.mark.macos_bound   # the suites it collects are the loop's own, macOS-only (ADR-0139)
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 

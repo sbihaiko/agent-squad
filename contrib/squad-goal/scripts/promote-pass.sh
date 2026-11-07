@@ -25,11 +25,11 @@ d=$(cd "$(dirname "$0")" && pwd)
 # ci_job_names <workflow file> [gated]: the check-run name of every job under jobs:, one per line; with `gated`, only the
 # jobs whose `if:` names base_ref. The reader stays inside the jobs: block (a line at column zero ends it), so a step's
 # `name:`, a `with: name:` or any other four-space `name:` outside a job never becomes a check run whose absence would hold
-# every tip forever (ADR-0164, #1322). Only a job that names itself is read: the shard names are read apart, from the matrix
-# the same file carries. A file that names no job answers nothing, and its caller reads that as pending, never as a vacuous
-# pass. A job gated on base_ref runs only on a pull request into that branch, so it never runs on the dev-to-stg pull
-# request the promotion reads (#1461): the caller refuses the promotion and names it, never recording a pass over the jobs
-# that did run.
+# every tip forever (ADR-0164, #1322). Only a job that names itself is read; the full suite's shard jobs name themselves, so
+# they are read like every other job (#1518). A file that names no job answers nothing, and its caller reads that as pending,
+# never as a vacuous pass. A job gated on base_ref runs only on a pull request into that branch, so it never runs on the
+# dev-to-stg pull request the promotion reads (#1461): the caller refuses the promotion and names it, never recording a pass
+# over the jobs that did run.
 ci_job_names() {
   awk -v want="${2:-}" '
     function flush() { if (cur != "" && (want != "gated" || gated)) print cur; cur = ""; gated = 0 }
@@ -42,9 +42,34 @@ ci_job_names() {
     END { flush() }
   ' "$1" 2>/dev/null
 }
+# The Statuses API takes a description no longer than 140 characters and refuses a longer one with a 422; the status would
+# never stand and a green shard set would never promote (#1518). The description carries the names that fit and counts the
+# rest; the pass writes the whole list to its log.
+full_desc_max=140
+full_prefix="full suite, both modes, every CI job"
+full_status_desc() {  # <prefix> <check name...>: a status description the Statuses API takes, never longer than 140
+  local d=$1 sep=": " n i=0 rest=0 total
+  shift; total=$#
+  for n in "$@"; do
+    i=$((i + 1))
+    # 13 characters stay reserved for the " and N more" tail, so the tail itself never pushes the line past the cap.
+    if [ $(( ${#d} + ${#sep} + ${#n} + 13 )) -le "$full_desc_max" ]; then d="$d$sep$n"; sep=", "
+    else rest=$(( total - i + 1 )); break; fi
+  done
+  if [ "$rest" -gt 0 ]; then
+    if [ "$i" -gt 1 ]; then d="$d and $rest more"; else d="$d: $total jobs"; fi
+  fi
+  [ "${#d}" -le "$full_desc_max" ] || d=$(printf '%s' "$d" | cut -c1-"$full_desc_max")
+  printf '%s' "$d"
+}
 if [ "${1:-}" = --ci-job-names ]; then   # the check names a workflow's job block produces, printed one per line
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-job-names needs a workflow file" >&2; exit 2; }
   ci_job_names "$2"; exit 0
+fi
+if [ "${1:-}" = --ci-description ]; then   # the bounded status description a workflow's job list produces
+  [ -n "${2:-}" ] || { echo "promote-pass: --ci-description needs a workflow file" >&2; exit 2; }
+  ns=(); while IFS= read -r j; do [ -n "$j" ] && ns+=("$j"); done < <(ci_job_names "$2")
+  full_status_desc "$full_prefix" ${ns[@]+"${ns[@]}"}; echo; exit 0
 fi
 [ -n "${SG_STATE:-}" ] || { echo "promote-pass: SG_STATE is not set; the pass never reads the machine-wide default" >&2; exit 2; }
 state=$SG_STATE; export SG_STATE; mkdir -p "$state"; log=$state/promote.log; marks=$state/promote-pass.tips
@@ -105,15 +130,13 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # defected <log>: a check already reported a defect before the deadline, so the bound never turns it into a pass.
   defected() { /usr/bin/grep -qE '^(FAILED|ERROR) |errors? during collection|^[^ ]+:[0-9]+: error: |^[A-Z][A-Z]*[0-9]+ ' "$1"; }
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
-  # ADR-0164 (#1051, #1062, #1461): every job of ci.yml on the tip, and every full-proof shard that file names, is the full
-  # pass when all are green. Both tiers run on the dev-to-stg pull request, so the complete tier is one of the checks this
-  # pass reads; a job the file gates to another pull request is refused by name, never skipped. The shard job is withdrawn
-  # while #1062 is open, so the names come from the file and a restored matrix is read with no second change. Green writes
-  # the full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job
-  # that is missing, running or timed out holds nothing, and the proof below answers as before.
-  # SG_CI_WORKFLOW names the workflow file the shard names are read from: the repository's own by default, a fixture in a test.
+  # ADR-0164 (#1051, #1322, #1461, #1518): every job of ci.yml on the tip is the full pass when all are green, the full
+  # suite's twelve shard jobs included. Both tiers run on the dev-to-stg pull request, so the complete tier is one of the
+  # checks this pass reads; a job the file gates to another pull request is refused by name, never skipped. Green writes the
+  # full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job that
+  # is missing, running or timed out holds nothing, and the proof below answers as before.
+  # SG_CI_WORKFLOW names the workflow file the check names are read from: the repository's own by default, a fixture in a test.
   ci_file=${SG_CI_WORKFLOW:-$d/../../../.github/workflows/ci.yml}
-  shard_list=$(/usr/bin/grep -o 'shard: \[[0-9, ]*\]' "$ci_file" 2>/dev/null | tr -dc '0-9 ')
   full_status() {  # <tip> <description>: the squad/full-proof status on the sha, read back; the reason is printed when it does not stand
     local o st
     o=$(gh_send -X POST "repos/$SG_REPO/statuses/$1" -f state=success -f "context=$ctx" -f "description=$2") \
@@ -134,13 +157,11 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     mark "$tip" "not promoted: the workflow gates $gated_list to another pull request, so the dev tip never proves it"; exit 1
   fi
   ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
-    local cr n st c v=pass sh names=()
+    local cr n st c v=pass
     [ "${#ci_names[@]}" -gt 0 ] || { echo pending; return; }   # a workflow that names no job proves nothing
-    names=("${ci_names[@]}")
-    for sh in $shard_list; do names+=("full-proof shard $sh"); done   # none while the shard job is withdrawn (#1062)
     cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
-    for n in "${names[@]}"; do
+    for n in "${ci_names[@]}"; do
       read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" '[.check_runs[] | select(.name == $n)] | last | "\(.status) \(.conclusion)"')
       [ "$st" = completed ] && [ "$c" = failure ] && { echo "fail $n"; return; }
       { [ "$st" = completed ] && [ "$c" = success ]; } || v=pending
@@ -152,9 +173,11 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     pass)
       bash "$d/gate.sh" --status full pass "$tip"
       # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
-      # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322).
+      # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322). The status line is
+      # bounded by the Statuses API, so the log carries every name and the status counts the ones it leaves out (#1518).
       ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
-      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, the CI shards and the CI checks: $ci_jobs" || echo "the CI checks: $ci_jobs (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
+      echo "$(date -u +%FT%TZ) promote-pass: $tip CI checks green: $ci_jobs" >> "$log"
+      why=$(full_status "$tip" "$(full_status_desc "$full_prefix" "${ci_names[@]}")") || { mark "$tip" "not promoted: $why"; exit 1; }
       # #1495: the CI proof is read on the tip promote-stg.sh promotes, which may be a later one than $tip when a landing moved
       # dev while the pass waited for the gate lock. A refusal is keyed to the tip it evaluated; a tip whose checks have not
       # reported (exit 75) is a wait with no marker, so a later pass retries.

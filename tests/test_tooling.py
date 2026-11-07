@@ -65,7 +65,13 @@ def test_the_wave_check_keeps_the_output_of_a_red_tip():
 
 
 FAST_TIER_JOBS = ("ruff", "mypy", "fast-battery")
-COMPLETE_TIER_JOBS = ("full-xdist", "full-serial", "fast-battery-311", "gui-e2e")
+# The full suite's two modes run in shard jobs by test path (#1518): one sibling job per shard per mode, each with its own
+# check-run name, never a matrix leg (ADR-0163). The partition is tests/ci_shards.py, and the guard below proves that every
+# test file of the tree is in exactly one shard.
+FULL_SHARDS = 6
+SHARD_JOBS = tuple(f"full-xdist-{k}" for k in range(1, FULL_SHARDS + 1)) + tuple(
+    f"full-serial-{k}" for k in range(1, FULL_SHARDS + 1))
+COMPLETE_TIER_JOBS = SHARD_JOBS + ("fast-battery-311", "gui-e2e")
 TIER_JOBS = FAST_TIER_JOBS + COMPLETE_TIER_JOBS
 DEV_TO_STG = "github.head_ref == 'dev'"
 
@@ -82,6 +88,18 @@ def _job_python(job: dict) -> str:
 
 def _ci_run_lines() -> list[str]:
     return [step["run"] for job in _ci_workflow()["jobs"].values() for step in job["steps"] if "run" in step]
+
+
+def _shard_arg(shard: int) -> str:
+    """The one way a shard job names its files: the partition module's answer for that shard, never a hand-kept list."""
+    return f"$(python3 tests/ci_shards.py {shard})"
+
+
+def _shard_files(shard: int) -> list[str]:
+    """The test files of one shard, read through the command ci.yml runs, so the guard and the job read one seam."""
+    r = subprocess.run([sys.executable, "tests/ci_shards.py", str(shard)], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r.stdout.split()
 
 
 def test_each_fast_tier_job_runs_its_own_command():
@@ -142,20 +160,23 @@ def test_every_complete_tier_job_runs_on_the_pull_request_whose_head_is_dev():
 
 
 def test_complete_tier_runs_both_full_suite_modes_the_311_battery_and_the_gui_e2e():
-    """Guard for the complete tier (#1324): the full suite in both modes on Python 3.13, the fast battery on 3.11 and the
-    GUI e2e suite. Each job runs one pytest call, so a job over fifteen minutes is split by test path into a sibling job,
-    never by a matrix (ADR-0163). Each job sets SQUAD_CI_RUNNER=1, so the fixture-bound tests are deselected by id and
-    the ids reach the job log (ADR-0139, #1323)."""
+    """Guard for the complete tier (#1324, #1518): the full suite in both modes on Python 3.13, the fast battery on 3.11
+    and the GUI e2e suite. The full suite runs in one shard job per shard per mode, so a job over fifteen minutes is split
+    by test path into a sibling job, never by a matrix (ADR-0163). Each job sets SQUAD_CI_RUNNER=1, so the fixture-bound
+    tests are deselected by id and the ids reach the job log (ADR-0139, #1323)."""
     wf = _ci_workflow()
     runs = {name: [s.get("run") for s in wf["jobs"][name]["steps"] if "run" in s] for name in COMPLETE_TIER_JOBS}
-    assert [r for r in runs["full-xdist"] if "pytest" in r] == ["python3 -m pytest -n auto"], runs["full-xdist"]
-    assert [r for r in runs["full-serial"] if "pytest" in r] == ["python3 -m pytest -p no:xdist"], runs["full-serial"]
+    for k in range(1, FULL_SHARDS + 1):
+        xdist = [r for r in runs[f"full-xdist-{k}"] if "pytest" in r]
+        serial = [r for r in runs[f"full-serial-{k}"] if "pytest" in r]
+        assert xdist == [f"python3 -m pytest -n auto {_shard_arg(k)}"], xdist
+        assert serial == [f"python3 -m pytest -p no:xdist {_shard_arg(k)}"], serial
+        assert _job_python(wf["jobs"][f"full-xdist-{k}"]) == "3.13"
+        assert _job_python(wf["jobs"][f"full-serial-{k}"]) == "3.13"
     assert [r for r in runs["fast-battery-311"] if "pytest" in r] == ['python3 -m pytest -n auto -m "not heavy"'], \
         runs["fast-battery-311"]
     assert [r for r in runs["gui-e2e"] if "pytest" in r] == ["python3 -m pytest tests/test_gui_test_e2e.py -q"], \
         runs["gui-e2e"]
-    assert _job_python(wf["jobs"]["full-xdist"]) == "3.13"
-    assert _job_python(wf["jobs"]["full-serial"]) == "3.13"
     assert _job_python(wf["jobs"]["fast-battery-311"]) == "3.11"
     for name in COMPLETE_TIER_JOBS:
         job = wf["jobs"][name]
@@ -168,6 +189,19 @@ def test_complete_tier_runs_both_full_suite_modes_the_311_battery_and_the_gui_e2
     assert "split by test path" in text, "the workflow names how a job over fifteen minutes is split"
 
 
+def test_every_full_suite_job_installs_the_sdk_extra_the_hosted_terminal_case_needs():
+    """Guard for #1538: the hosted terminal case (`tests/test_hub_terminal_e2e.py`) starts a real hosted session through
+    `squad.sdk_adapter host`, and the supervisor refuses that start when its interpreter cannot import
+    `claude_agent_sdk`. The full suite's shard jobs install `.[dev,sdk]`, so the case runs on the runner instead of
+    failing as a dependency the install left out. The runner can carry this fixture, so nothing is deselected there
+    (ADR-0139), and a missing one stays a failure, never a skip (ADR-0018 item 6)."""
+    wf = _ci_workflow()
+    for name in SHARD_JOBS:
+        installs = [s["run"] for s in wf["jobs"][name]["steps"] if "pip install" in s.get("run", "")]
+        assert installs == ["python3 -m pip install -e '.[dev,sdk]'"], (
+            f"{name} installs the sdk extra the hosted terminal case imports; found {installs}")
+
+
 def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job():
     """Guard for the CI rule in CLAUDE.md (#1322, #1324): the rule names the two tiers, its guard, and exactly the jobs of
     ci.yml. A job the rule names but the workflow lacks, or the reverse, fails here (ADR-0018). The no-push rule beside
@@ -177,8 +211,20 @@ def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job()
     rule = next(line for line in claude if line.startswith("- **CI runs"))
     assert "fast tier" in rule and "complete tier" in rule and "tests/test_tooling.py" in rule, rule
     named = {n for n in re.findall(r"`([a-z0-9-]+)`", rule) if n not in ("dev", "stg", "main")}
-    assert named == set(_ci_workflow()["jobs"]) == set(TIER_JOBS), f"rule names {sorted(named)}"
-    assert "full-proof" not in rule and "shard" not in rule, "the rule claims no job the workflow lacks"
+    jobs = set(_ci_workflow()["jobs"])
+    # A shard job is named by its family (`full-xdist`, `full-serial`): tests/test_setup.py caps a rule line at 300 characters,
+    # and the twelve shard job ids do not fit one short rule (#1518). The guard expands each family from the workflow, so a
+    # shard job the rule never covers, a gap in its numbering and a family the workflow lacks all fail here.
+    families = {n for n in named if f"{n}-1" in jobs}
+    assert {"full-xdist", "full-serial"} <= families, f"the rule names the full suite's two shard families; found {sorted(families)}"
+    covered = named - families
+    assert covered <= jobs, f"the rule names a job the workflow lacks: {sorted(covered - jobs)}"
+    for fam in families:
+        ks = {int(n[len(fam) + 1:]) for n in jobs if re.fullmatch(re.escape(fam) + r"-\d+", n)}
+        assert ks == set(range(1, FULL_SHARDS + 1)), f"the rule names {fam}, and the workflow carries shards {sorted(ks)}"
+        covered |= {f"{fam}-{k}" for k in ks}
+    assert covered == jobs == set(TIER_JOBS), f"rule names {sorted(named)}; the workflow carries {sorted(jobs)}"
+    assert "full-proof" not in rule, "the rule claims no job the workflow lacks"
     push_rule = next((line for line in claude if line.startswith("- **No branch push")), None)
     assert push_rule is not None, "CLAUDE.md carries no rule that a branch push starts no CI run"
     assert "No branch push starts CI" in push_rule and "tests/test_tooling.py" in push_rule, push_rule
@@ -256,9 +302,8 @@ LANDING_GROUP_RULE = "The group names the commit, so no queue holds a pull reque
 
 
 def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
-    """Guard for the CI rule: one commit starts one check job, it has no matrix, and a landing on dev, stg or main is
-    never cancelled (#149, #398; the full-proof shards of #1051 are withdrawn under #1062 and their own guard below keeps
-    the promise that they are read back from the file when they return).
+    """Guard for the CI rule: one commit starts its tier's jobs once each, none of them has a matrix, and a landing on
+    dev, stg or main is never cancelled (#149, #398, #1518): the full suite's shards are sibling jobs, never matrix legs.
 
     A matrix on the check job made one commit start two jobs that queued behind each other for two runners, and a check
     no runner picks up answers nothing.
@@ -273,7 +318,7 @@ def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
 
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     wf = yaml.safe_load(text)
-    assert tuple(wf["jobs"]) == TIER_JOBS, "one commit starts its tier's jobs and no other (#1062, #1322, #1324)"
+    assert tuple(wf["jobs"]) == TIER_JOBS, "one commit starts its tier's jobs and no other (#1322, #1324, #1518)"
     for job in wf["jobs"].values():
         assert "matrix" not in (job.get("strategy") or {}), "a matrix splits a job into legs that wait for runners"
     con = wf["concurrency"]
@@ -294,17 +339,48 @@ def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
     assert LANDING_GROUP_RULE in stated, f"the workflow states the rule its group carries: {LANDING_GROUP_RULE}"
 
 
-def test_the_shard_job_stays_withdrawn_until_its_heavy_tests_can_pass_on_a_runner():
-    """Guard for #1062: the four full-proof shards landed and were never green on a runner, so they held every promotion.
-    Withdrawing them is a decision with a way back, not a deletion: ci.yml names the issue that brings them back, and
-    promote-pass.sh derives the shard names from that file, so a restored matrix is read with no second change.
+def test_every_test_file_is_in_exactly_one_full_suite_shard():
+    """Guard for #1518: the full suite is split into shards by test path, and the partition is exact.
+
+    A test file the partition leaves out never runs in the complete tier, while the promotion reads green shard checks as
+    the full proof; a file in two shards runs twice, and it carries a cost the other shard was balanced against. A new test
+    file is assigned here before a green shard set can stand for it.
     """
-    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-    promote = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh").read_text()
-    assert "full-proof:" not in text, "the shard job is withdrawn while #1062 is open"
-    assert "#1062" in text, "the workflow names the issue that brings the shards back"
-    assert "ci.yml" in promote and "for k in" not in promote, "promote-pass.sh derives the shard numbers from ci.yml, not a literal"
-    assert '[ -n "$shard_list" ] || { echo pending' not in promote, "an empty shard list is the check job alone, never a stuck promotion"
+    shards = [_shard_files(k) for k in range(1, FULL_SHARDS + 1)]
+    listed = [p for shard in shards for p in shard]
+    counted = {p: listed.count(p) for p in set(listed)}
+    twice = sorted(p for p, n in counted.items() if n > 1)
+    assert twice == [], f"a test file is in more than one shard, so the full proof runs it twice: {twice}"
+    on_disk = {str(p.relative_to(ROOT)) for p in (ROOT / "tests").glob("test_*.py")}
+    missing = sorted(on_disk - set(listed))
+    assert missing == [], f"a test file is in no shard, so the full proof never runs it: {missing}"
+    strays = sorted(set(listed) - on_disk)
+    assert strays == [], f"a shard runs a path that is not a test file of this tree: {strays}"
+
+
+def test_the_full_suite_runs_in_shard_jobs_of_both_modes():
+    """Guard for #1518: the full suite is one sibling job per shard in each mode, `-n auto` and `-p no:xdist`, and every
+    job names its files through the one partition module, so the two modes prove the same files.
+
+    A shard job is a sibling by test path with its own check-run name, never a matrix leg (ADR-0163), and it carries no
+    `--ignore` or `--deselect`: a path it excludes is a test the full proof would never run (ADR-0139). Each job starts on
+    the dev-to-stg pull request, sets SQUAD_CI_RUNNER=1, and gives itself no more than the twenty minutes of every job.
+    """
+    wf = _ci_workflow()
+    assert tuple(n for n in wf["jobs"] if n in SHARD_JOBS) == SHARD_JOBS, \
+        f"the full suite's shard jobs are {SHARD_JOBS}; found {list(wf['jobs'])}"
+    for name in SHARD_JOBS:
+        job = wf["jobs"][name]
+        assert job.get("if") == DEV_TO_STG, f"{name} starts on the dev-to-stg pull request; found {job.get('if')!r}"
+        assert "matrix" not in (job.get("strategy") or {}), f"{name} splits by matrix, never by test path"
+        assert "needs" not in job, f"{name} waits behind another job instead of starting with its siblings"
+        assert (job.get("env") or {}).get("SQUAD_CI_RUNNER") == "1", f"{name} does not set SQUAD_CI_RUNNER=1 (#1323)"
+        assert job["timeout-minutes"] <= 20, f"{name} gives itself {job['timeout-minutes']} minutes, over the twenty"
+        gates = [s.get("run") for s in job["steps"] if str(s.get("run", "")).startswith("python3 -m pytest")]
+        assert len(gates) == 1, f"{name} runs one pytest call; found {gates}"
+        assert "--ignore" not in gates[0] and "--deselect" not in gates[0], f"{name} excludes a path: {gates[0]}"
+    for k in range(1, FULL_SHARDS + 1):
+        assert _shard_files(k), f"shard {k} names no test file, so its job runs no proof"
 
 
 def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
@@ -326,7 +402,14 @@ def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
     job_names = [job.get("name", name) for name, job in wf["jobs"].items()]
     assert r.stdout.split() == job_names, \
         f"the check names are every job of jobs:, not a step, a with: key or a subset: {r.stdout!r}"
+    assert set(SHARD_JOBS) <= set(job_names), (
+        f"the promotion waits on every shard job of both modes; it reads {[n for n in job_names if n not in SHARD_JOBS]}")
     assert sorted(job_names) == sorted(TIER_JOBS), f"the jobs the promotion waits on: {job_names}"
+    # #1518: one reader, the job names of ci.yml. The withdrawn matrix left a second one that read `shard: [0, 1, 2, 3]`
+    # from the same file; a matrix returns with no job of its own, so that reader could only name checks no runner starts.
+    assert "$shard_list" not in promote, "promote-pass.sh reads the shard checks from a matrix the workflow forbids"
+    stg = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-stg.sh").read_text()
+    assert "sg_ci_class" in stg, "promote-stg.sh reads every check run of the tip, so a red shard job refuses the merge"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

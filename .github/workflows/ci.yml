@@ -17,21 +17,26 @@ on:
 # leaves that file's `heavy` tests out, and they ran on every promotion before this tier existed. The complete tier's GUI
 # e2e job carries them alone. On each tier the host-bound tests are deselected by name (ADR-0139), and the complete tier
 # also simulates a runner (SQUAD_CI_RUNNER=1), so every deselected test prints its id and reason in the job log (#1323).
-# The heavy tests run inside the two full-suite jobs. No job runs a Python x mode x shard matrix: a matrix over one job
+# The full-suite shard jobs install `.[dev,sdk]`: the hosted terminal case starts a real hosted session, and the supervisor
+# refuses that start when its interpreter cannot import claude_agent_sdk. The runner can carry the sdk, so the case runs
+# there and is not deselected (#1538).
+# The heavy tests run inside the full-suite shard jobs. No job runs a Python x mode x shard matrix: a matrix over one job
 # split a commit into legs that waited behind each other for runners (#149), and a check no runner picks up answers
 # nothing. A complete-tier job that takes over fifteen minutes on a real dev-to-stg run is split by test path into sibling
-# jobs, each with its own check-run name, never into matrix legs (ADR-0163).
+# jobs, each with its own check-run name, never into matrix legs (ADR-0163). The full suite is that split: twelve sibling
+# jobs, one per shard per mode, each well inside its twenty minutes on a runner (#1518).
 # The group names the commit, so no queue holds a pull request behind another and GitHub cancels none.
 # A group shared by one branch's pushes cannot say that: GitHub queues the group's pending runs and cancels the runs
 # past the queue's cap, which is one pending run by default and 100 with `queue: max` (GitHub Actions workflow syntax,
 # `concurrency.queue`). A burst of pushes to one pull request cancels its run there. A group that names the commit holds
 # one run and nothing pending, so no cap applies and a pull request keeps its run.
 # No job outlives the twenty minutes it gives itself (#128). The fast-battery jobs run `-m "not heavy"`.
-# The full-proof shards (#1051) are withdrawn while #1062 is open: they were never green on a runner, so they held every
-# promotion and shipped nothing. When the heavy tests they run are hermetic, they return with their guard
-# (tests/test_tooling.py); promote-pass.sh reads their names from this file, so a restored matrix needs no second change.
-# promote-pass.sh reads every job name in this file as a check the dev-to-stg tip waits on, and it refuses the promotion
-# by name when a job is gated on `base_ref`: such a job never runs on that pull request, so the dev tip could never prove it.
+# The full suite's shard partition is tests/ci_shards.py, and each shard job asks that one module for its files: every test
+# file is in exactly one shard, in both modes, and tests/test_tooling.py fails when a file is in no shard or in two. A new
+# test file is assigned there before a green shard set can stand for the full proof.
+# promote-pass.sh reads every job name in this file as a check the dev-to-stg tip waits on, the twelve shard jobs included,
+# and it refuses the promotion by name when a job is gated on `base_ref`: such a job never runs on that pull request, so
+# the dev tip could never prove it. promote-stg.sh refuses the merge on a red check run of the tip, whatever its name.
 concurrency:
   group: ci-${{ github.head_ref }}-${{ github.sha }}
   cancel-in-progress: false
@@ -90,9 +95,9 @@ jobs:
         # names the file so a missing checkout is reported rather than silently collected by the tree walk.
         run: python3 -m pytest tests/test_gui_test_e2e.py -q
 
-  full-xdist:
-    name: full-xdist
-    if: github.head_ref == 'dev'   # the complete tier: the pass the promotion reads, on the tip it carries
+  full-xdist-1:
+    name: full-xdist-1
+    if: github.head_ref == 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -104,16 +109,18 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
-      - run: python3 -m pytest -n auto
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 1 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 1)
 
-  full-serial:
-    name: full-serial
+  full-xdist-2:
+    name: full-xdist-2
     if: github.head_ref == 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
       - name: Python 3.13
@@ -121,8 +128,200 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
-      - run: python3 -m pytest -p no:xdist
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 2 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 2)
+
+  full-xdist-3:
+    name: full-xdist-3
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 3 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 3)
+
+  full-xdist-4:
+    name: full-xdist-4
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 4 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 4)
+
+  full-xdist-5:
+    name: full-xdist-5
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 5 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 5)
+
+  full-xdist-6:
+    name: full-xdist-6
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 6 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 6)
+
+  full-serial-1:
+    name: full-serial-1
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 1 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 1)
+
+  full-serial-2:
+    name: full-serial-2
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 2 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 2)
+
+  full-serial-3:
+    name: full-serial-3
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 3 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 3)
+
+  full-serial-4:
+    name: full-serial-4
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 4 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 4)
+
+  full-serial-5:
+    name: full-serial-5
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 5 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 5)
+
+  full-serial-6:
+    name: full-serial-6
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      # Shard 6 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
+      # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 6)
 
   fast-battery-311:
     name: fast-battery-311

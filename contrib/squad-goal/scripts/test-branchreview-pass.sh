@@ -7,7 +7,7 @@ trap 'rm -rf "$T"' EXIT
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.2   # a review takes a review slot (caps.reviews, #567): a throwaway budget
 capsctl() { PYTHONPATH="$SG_SQUAD" python3 -m squad.caps "$@"; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"
-cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/provkey.py" "$d/modelreg.py" "$d/registry.json" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/grokmark.py" "$d/provkey.py" "$d/modelreg.py" "$d/registry.json" "$d/models.json" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git}
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
@@ -146,6 +146,14 @@ o=; rc=0; for _ in 1 2 3; do o+=$(OPEN="7 8 31" FAILREV=1 bash "$T/s/branchrevie
 case "$o" in *"chainhealth: modelreg.py is missing"*) ok "the missing resolver is a named line on stderr";; *) ko "the resolver failure is not named: '$o'";; esac
 case "$o" in *"BRANCHREVIEW CHAINHEALTH gui/31-r"*) ok "the pass names the failed chain summary";; *) ko "the pass drops the chainhealth failure: '$o'";; esac
 mv "$T/modelreg.py" "$T/s/modelreg.py"
+# 12b) a module the resolver reads from beside itself is missing: a named line too, never a traceback (#1544)
+rm -f "$T/st/auto/"branchreview-tries-gui_31-r-* "$T/st/auto/"branchreview-stop-gui_31-r-* "$T/st/cq/"*"#31-status~mchain"*
+mv "$T/s/provkey.py" "$T/provkey.py"
+o=; for _ in 1 2 3; do o+=$(OPEN="7 8 31" FAILREV=1 rp)$'\n'; done
+mv "$T/provkey.py" "$T/s/provkey.py"
+case "$o" in *"Traceback (most recent call last)"*) ko "a missing sibling module leaks a traceback: '$o'";;
+  *"chainhealth: provkey.py is missing"*) ok "a missing sibling module is a named line, never a traceback";;
+  *) ko "the missing sibling is not named: '$o'";; esac
 # 13) an APPROVE starts a branchland pass at once, detached under single.sh (#955): a second kick while one runs is a no-op, the review
 # pass never waits for the kick, and a CHANGES verdict starts none. The branchland stub logs one line per start.
 cp "$d/single.sh" "$T/s/single.sh"
