@@ -87,6 +87,12 @@ def test_manifest_declares_exactly_the_spec_scopes_and_event():
     assert list(manifest["oauth_config"]["scopes"]) == ["bot"]
     assert manifest["settings"]["event_subscriptions"]["bot_events"] == SPEC_EVENTS
     assert manifest["settings"]["socket_mode_enabled"] is True
+    # The messages tab is what lets the owner open a DM at all. A manifest carrying only bot_user is accepted by Slack,
+    # the token answers auth.test and Socket Mode opens, and the owner still meets "Sending messages to this app has
+    # been turned off" when he tries to write. The whole voice flow dies on a flag no scope names.
+    app_home = manifest["features"]["app_home"]
+    assert app_home["messages_tab_enabled"] is True, "the owner cannot open a DM without the messages tab"
+    assert app_home["messages_tab_read_only_enabled"] is False, "a read-only tab refuses the owner's message"
 
 
 def test_wizard_checks_each_entry_and_prints_no_value(fake_keychain, capsys):
