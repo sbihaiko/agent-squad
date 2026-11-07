@@ -14,7 +14,9 @@ PROCESS_BOUND_SUITES = {"test-fastloop-pid.sh"}
 
 
 def _param(suite):
-    marks = [pytest.mark.heavy] if shell_suites.is_heavy(suite) else []
+    marks = [pytest.mark.macos_bound]   # the loop runs on macOS only; a Linux runner deselects the suite (ADR-0139)
+    if shell_suites.is_heavy(suite):
+        marks.append(pytest.mark.heavy)
     if suite.name in PROCESS_BOUND_SUITES:
         marks.append(pytest.mark.process_bound)
     if shell_suites.is_slow(suite):

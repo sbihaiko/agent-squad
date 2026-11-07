@@ -160,6 +160,9 @@ SDK_ABSENT_REASON = "the hosted interpreter cannot import claude_agent_sdk on th
 CC_BOUND_MARKER = "cc_bound"
 CC_ABSENT_REASON = "no C compiler and no macOS process table on this runner: the compiled reader (#1511) is not built here (ADR-0139)"
 CI_RUNNER_SWITCH = "SQUAD_CI_RUNNER"
+MACOS_BOUND_MARKER = "macos_bound"
+MACOS_ABSENT_REASON = ("a loop script suite needs the macOS userland the loop runs on (BSD date and stat, sandbox-exec, a set "
+                       "TMPDIR); this runner is not macOS (ADR-0139)")
 
 
 def ci_runner_simulated():
@@ -199,6 +202,11 @@ def cc_present():
     if ci_runner_simulated() or sys.platform != "darwin" or shutil.which("cc") is None:
         return False
     return os.access(os.environ.get("TMPDIR") or "/tmp", os.W_OK)
+
+
+def macos_present():
+    """True on macOS, the one platform the loop's scripts run on. `SQUAD_CI_RUNNER=1` reads as a Linux runner (ADR-0139)."""
+    return sys.platform == "darwin" and not ci_runner_simulated()
 
 
 def sdk_present():
@@ -242,6 +250,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "sdk_bound: starts a hosted session; deselected, never skipped, where its interpreter cannot import the SDK (ADR-0139)")
+    config.addinivalue_line(
+        "markers",
+        "macos_bound: runs a loop script suite; deselected, never skipped, on a runner that is not macOS (ADR-0139)")
     config._absent_deselected = []
 
 
@@ -294,6 +305,9 @@ def pytest_collection_modifyitems(config, items):
     # The compiled process reader (#1511) is built on macOS only, and only with a C compiler.
     if not cc_present():
         _deselect_absent(config, items, CC_BOUND_MARKER, CC_ABSENT_REASON)
+    # A loop script suite assumes the macOS userland; a Linux runner deselects it by name.
+    if not macos_present():
+        _deselect_absent(config, items, MACOS_BOUND_MARKER, MACOS_ABSENT_REASON)
     # A hosted session needs the SDK in its interpreter; a runner installed without the `sdk` extra refuses the start.
     if any(it.get_closest_marker(SDK_BOUND_MARKER) for it in items) and not sdk_present():
         _deselect_absent(config, items, SDK_BOUND_MARKER, SDK_ABSENT_REASON)
