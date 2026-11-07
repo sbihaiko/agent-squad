@@ -17,6 +17,9 @@ on:
 # leaves that file's `heavy` tests out, and they ran on every promotion before this tier existed. The complete tier's GUI
 # e2e job carries them alone. On each tier the host-bound tests are deselected by name (ADR-0139), and the complete tier
 # also simulates a runner (SQUAD_CI_RUNNER=1), so every deselected test prints its id and reason in the job log (#1323).
+# The full-suite shard jobs install `.[dev,sdk]`: the hosted terminal case starts a real hosted session, and the supervisor
+# refuses that start when its interpreter cannot import claude_agent_sdk. The runner can carry the sdk, so the case runs
+# there and is not deselected (#1538).
 # The heavy tests run inside the full-suite shard jobs. No job runs a Python x mode x shard matrix: a matrix over one job
 # split a commit into legs that waited behind each other for runners (#149), and a check no runner picks up answers
 # nothing. A complete-tier job that takes over fifteen minutes on a real dev-to-stg run is split by test path into sibling
@@ -106,7 +109,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 1 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 1)
@@ -125,7 +128,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 2 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 2)
@@ -144,7 +147,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 3 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 3)
@@ -163,7 +166,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 4 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 4)
@@ -182,7 +185,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 5 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 5)
@@ -201,7 +204,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 6 of six, in the xdist mode (`-n auto`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 6)
@@ -220,7 +223,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 1 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 1)
@@ -239,7 +242,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 2 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 2)
@@ -258,7 +261,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 3 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 3)
@@ -277,7 +280,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 4 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 4)
@@ -296,7 +299,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 5 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 5)
@@ -315,7 +318,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python3 -m pip install -e '.[dev]'
+      - run: python3 -m pip install -e '.[dev,sdk]'
       # Shard 6 of six, in the serial mode (`-p no:xdist`): the files come from tests/ci_shards.py, the one partition, so a
       # test file is in exactly one shard of each mode and a new one fails the guard until it is assigned.
       - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 6)

@@ -189,6 +189,19 @@ def test_complete_tier_runs_both_full_suite_modes_the_311_battery_and_the_gui_e2
     assert "split by test path" in text, "the workflow names how a job over fifteen minutes is split"
 
 
+def test_every_full_suite_job_installs_the_sdk_extra_the_hosted_terminal_case_needs():
+    """Guard for #1538: the hosted terminal case (`tests/test_hub_terminal_e2e.py`) starts a real hosted session through
+    `squad.sdk_adapter host`, and the supervisor refuses that start when its interpreter cannot import
+    `claude_agent_sdk`. The full suite's shard jobs install `.[dev,sdk]`, so the case runs on the runner instead of
+    failing as a dependency the install left out. The runner can carry this fixture, so nothing is deselected there
+    (ADR-0139), and a missing one stays a failure, never a skip (ADR-0018 item 6)."""
+    wf = _ci_workflow()
+    for name in SHARD_JOBS:
+        installs = [s["run"] for s in wf["jobs"][name]["steps"] if "pip install" in s.get("run", "")]
+        assert installs == ["python3 -m pip install -e '.[dev,sdk]'"], (
+            f"{name} installs the sdk extra the hosted terminal case imports; found {installs}")
+
+
 def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job():
     """Guard for the CI rule in CLAUDE.md (#1322, #1324): the rule names the two tiers, its guard, and exactly the jobs of
     ci.yml. A job the rule names but the workflow lacks, or the reverse, fails here (ADR-0018). The no-push rule beside
