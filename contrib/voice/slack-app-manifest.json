@@ -4,6 +4,11 @@
     "description": "The agent-squad operator, in a voice conversation with its owner."
   },
   "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
     "bot_user": {
       "display_name": "Operator",
       "always_online": true
