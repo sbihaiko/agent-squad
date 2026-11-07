@@ -538,8 +538,10 @@ class Dispatch:
 
     @staticmethod
     def first_line(text):
-        """The first non-empty line of a review's stderr, cut to 200 characters; empty when it wrote none (#1574)."""
-        return next((ln.strip()[:200] for ln in (text or "").splitlines() if ln.strip()), "")
+        """The reason line of a review's stderr, cut to 200 characters: the last `RUNREVIEW` line when the script wrote one (it
+        follows the child review's own output), else the first non-empty line; empty when it wrote none (#1574)."""
+        lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        return next((ln[:200] for ln in reversed(lines) if ln.startswith("RUNREVIEW")), lines[0][:200] if lines else "")
 
     def ledger_needs_human(self, d):
         """True when the issue's ledger ended it needs-human (ADR-0151 rule 1): the dispatch reads it, never the review's words

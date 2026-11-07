@@ -129,3 +129,10 @@ def test_launch_resolves_a_probe_chain_even_from_a_file_with_none(tmp_path):
     p = tmp_path / "models.json"
     p.write_text(json.dumps({"schema_version": 2, "chains": {k: [{"id": "claude-sonnet-5-5"}] for k in ("router", "coding", "review", "vision")}}))
     assert launch.kind_chains(p)["probe"] == launch.kind_chains(p)["coding"]
+
+
+def test_the_carried_reason_is_the_last_runreview_line_else_the_first_line():
+    first_line = D.Dispatch.first_line
+    assert first_line("childreview noise\nRUNREVIEW r c: old\nRUNREVIEW r c: no verdict (#1)\n") == "RUNREVIEW r c: no verdict (#1)"
+    assert first_line("\n  plain reason\nsecond") == "plain reason"
+    assert first_line(None) == ""
