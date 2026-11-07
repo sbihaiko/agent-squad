@@ -198,7 +198,15 @@ case "${1:-status}" in
           [ "$rc" = 0 ] || printf '%s WATCHD RESTART the start after the drain was refused, the loop stays off: %s\n' \
             "$(date '+%F %T')" "$(printf '%s' "$out" | tail -n 1)" >> "$SG_STATE/alerts.log"
         fi
-      else printf '%s WATCHD RESTART the supervisor did not stop, so the restart is not made\n' "$(date '+%F %T')" >> "$L"; fi
+      else printf '%s WATCHD RESTART the supervisor did not stop, so the restart is not made\n' "$(date '+%F %T')" >> "$L"
+        # This waiter set the drain's pause, and it is the only one that lifts it: a supervisor that survives the stop would
+        # otherwise stay live with dispatch paused and no waiter left to read the work, so the publish would hold the loop
+        # up for good. The waiter's own marks go in the exit below; the pause goes here, while this waiter still holds the
+        # file. A later drain or restart that took the file over keeps its own pause (ADR-0162 decision 3, #1471).
+        if [ "$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)" = "$$" ] && [ -e "$SG_STATE/auto/drain-pause" ]; then
+          rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"
+        fi
+      fi
     fi
     # The marks are the waiter's own while it holds the waiter file: a later drain or restart that took the file over keeps
     # its own marks, so an old waiter's exit never cancels the restart it was too late to serve.

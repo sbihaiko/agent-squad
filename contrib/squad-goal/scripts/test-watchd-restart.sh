@@ -112,6 +112,30 @@ for _ in $(seq 1 40); do /usr/bin/grep -q '"verdict"' "$DT" && break; sleep 0.5;
 n=; for _ in $(seq 1 40); do n=$(sup_now "$supt"); [ -n "$n" ] && break; sleep 0.5; done
 [ -n "$n" ] && ok "the restart follows the takeover" || ko "no restart after the takeover (pid $(cat "$SG_STATE/watchd.pid" 2>/dev/null), was $supt)"
 sup=${n:-$supt}; bash "$T/watchd.sh" stop >/dev/null
+# A supervisor that survives the stop must not leave the loop paused: the waiter that set the drain's pause is the only one
+# that lifts it, so a failed restart ends the waiter and dispatch reads on. A paused-but-live loop with no waiter dispatches
+# nothing, and the publish that asked for the restart never reaches the drivers (ADR-0162 decision 3, #1471).
+rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-pause" "$SG_STATE/auto/restart" "$SG_STATE/locks/gate/pid"
+: > "$SG_STATE/active-runs.txt"
+mkdir -p "$T/nostop"
+python3 - "$T/watchd.sh" "$T/nostop/watchd.sh" <<'PY'
+import pathlib, sys
+t = pathlib.Path(sys.argv[1]).read_text()
+t = t.replace('  stop) alive ||', '  stop) echo "watchd did not stop" >&2; exit 1; alive ||', 1)
+pathlib.Path(sys.argv[2]).write_text(t)
+PY
+chmod +x "$T/nostop/watchd.sh"
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+alive_sup "$sup" || { ko "the loop did not start for the failed-stop case"; exit 1; }
+mkdir -p "$SG_STATE/auto"; : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; : > "$SG_STATE/auto/drain"; : > "$SG_STATE/auto/restart"
+bash "$T/nostop/watchd.sh" drain-wait >/dev/null 2>&1
+alive_sup "$sup" && ok "a supervisor that survives the stop stays live" || ko "the failed-stop case lost the supervisor"
+[ ! -e "$SG_STATE/auto/off" ] && [ ! -e "$SG_STATE/auto/drain-pause" ] \
+  && ok "a failed stop lifts the drain's pause, so dispatch never stays paused with no waiter" \
+  || ko "a failed stop left the loop paused with no waiter"
+[ ! -e "$SG_STATE/auto/drain" ] && [ ! -e "$SG_STATE/auto/restart" ] \
+  && ok "a failed stop leaves no drain or restart marker" || ko "a failed stop left a drain or restart marker"
+bash "$T/watchd.sh" stop >/dev/null
 # A plain drain is a stop the owner asked for. A restart that finds that drain running never upgrades it to a restart:
 # it refuses, names the drain, and the loop still stops (ADR-0162 decision 3).
 rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-pause" "$SG_STATE/auto/restart"; : > "$SG_STATE/active-runs.txt"
