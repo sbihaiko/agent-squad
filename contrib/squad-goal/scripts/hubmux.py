@@ -259,6 +259,7 @@ def admitted(apps, h, method):
         if v.allowed: seen[slug] = app
         else: reasons.append(v.reason)
     if seen: return seen, ""
+    if not reasons: return {}, "no profile loaded on this hub"   # no app to ask: the host was never the reason (#1552)
     return {}, next((r for r in reasons if r != "forbidden host"), "forbidden host")
 
 
