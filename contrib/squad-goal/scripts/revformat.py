@@ -63,6 +63,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -437,6 +438,62 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verdict
                          "debt": {"type": "array", "items": _FINDING},
                          "resolved": {"type": "array", "items": _FINDING}}}
 FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n?```", re.DOTALL)
+# #1548: a finding that names an ADR rule and only greps for the text it asks to restore contradicts the ADR; it does not
+# show a defect the change caused. ADR-0156 rule 3 says the promotion code is never covered, so a grep for the restored
+# delta-guards.txt lines proves absence, which is what the rule requires. Such a finding is Debt (ADR-0172).
+ADR_RULE = re.compile(r"\bADR[-\s]?(\d{3,4})\b", re.IGNORECASE)
+RESTORE = re.compile(r"\b(?:restore|re-?add|add\s+back|reinstate|put\s+back|bring\s+back|reintroduce)\b",
+                     re.IGNORECASE)
+GREP_CMD = re.compile(r"(?:^|[;&|]\s*)(/usr/bin/)?(?:git\s+)?grep\b([^;&|]*)")
+
+
+def _grep_literal(cmd):
+    """The literal a bare `grep` command searches for, or None when `cmd` is not one or is negated.
+
+    A negated grep (`! grep ...`) exits 0 where the text is absent, which ADR-0172 already reads as a passing repro. The
+    first non-flag argument is the pattern, or the argument after `-e`/`--regexp`; a pattern's regex escapes and anchors
+    are dropped, since the finding names the text, not its regex spelling.
+    """
+    m = GREP_CMD.search(cmd)
+    if not m or cmd[:m.start()].rstrip().endswith("!"):
+        return None
+    try:
+        args = shlex.split(m.group(2))
+    except ValueError:
+        return None
+    pattern, i = None, 0
+    while i < len(args):
+        if args[i] in ("-e", "--regexp"):
+            pattern = args[i + 1] if i + 1 < len(args) else None
+            break
+        if not args[i].startswith("-"):
+            pattern = args[i]
+            break
+        i += 1
+    if not pattern:
+        return None
+    return re.sub(r"[\^$]", "", pattern.replace("\\", ""))
+
+
+def adr_proposal(item):
+    """True when a Blocking finding names an ADR rule and only greps for the text it asks to restore (#1548).
+
+    The finding is a proposal to change that rule, never a defect the change caused: its repro proves the text is absent,
+    not that the change broke something. It is Debt; a review that wants the rule changed quotes the ADR line and files
+    that as its own proposal.
+    """
+    text = " ".join(item[f] for f in FIELDS)
+    if not ADR_RULE.search(text) or not RESTORE.search(text):
+        return False
+    pattern = _grep_literal(item[REPRO])
+    return bool(pattern) and pattern.lower() in text.lower()
+
+
+def _adr_note(item):
+    """The Debt mark of an ADR-naming restore finding: which rule, and that the grep is not a defect repro (#1548)."""
+    adr = ADR_RULE.search(" ".join(item[f] for f in FIELDS))
+    return (f"not a repro of a defect: the finding names ADR-{adr.group(1)} and only greps for the text it asks to "
+            f"restore, so it is a proposal to change that rule")
 
 
 def json_candidate(text):
@@ -486,8 +543,16 @@ def parse_answer(text, repro=True):
                 raise ValueError(f"{key}[{n}].{REPRO} is missing or not a string")
         out[key] = items
     if repro:
-        out["debt"] = out["debt"] + [item for item in out["blocking"] if not item[REPRO].strip()]
-        out["blocking"] = [item for item in out["blocking"] if item[REPRO].strip()]
+        demoted, kept = [], []
+        for item in out["blocking"]:
+            if not item[REPRO].strip():
+                demoted.append(item)                       # a finding with no repro is Debt (ADR-0172)
+            elif adr_proposal(item):
+                demoted.append(dict(item, failure=f"{_adr_note(item)}; {item['failure']}"))   # #1548
+            else:
+                kept.append(item)
+        out["debt"] = out["debt"] + demoted
+        out["blocking"] = kept
     return out
 
 
