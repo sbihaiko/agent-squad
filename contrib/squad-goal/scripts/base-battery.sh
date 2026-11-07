@@ -1,6 +1,7 @@
 #!/bin/bash
 # The base battery in one definition: the repository's own rule -- `ruff check squad tests`, `mypy squad` and the fast pytest
-# -- that a local gate runs before the shell suites of the scripts a tip changes. fast-gate.sh runs it on the tip it is handed,
+# (and, for a delta, one serial pass over the same files at the project's 2 s line) -- that a local gate runs before the shell
+# suites of the scripts a tip changes. fast-gate.sh runs it on the tip it is handed,
 # wave.sh builds the wave tip check over it, read against origin/$SG_BASE, and branchland.sh builds the landing check over it,
 # read against refs/sg-gate/<land>. One change here reaches all three, and no script keeps a copy.
 # The stage names the scope: an intermediate stage (fast, wave-entry, wave-tip, prepush) runs the delta the change reaches,
@@ -22,7 +23,7 @@
 # `full`, the scope that line names. A delta the selector cannot cover answers `all` with its reason, so the full battery
 # runs and the record says why the delta refused: a cheaper scope never narrows a gate (ADR-0018).
 sg_battery_run() {
-  local py=$1 base=$2 workers=$3 files line stage=${5:-fast} scope why="the selector named no test file"
+  local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} scope why="the selector named no test file"
   "$py" -m ruff check squad tests && "$py" -m mypy squad || return
   if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
@@ -33,8 +34,14 @@ sg_battery_run() {
   [ -z "${GATE_SCOPE_FILE:-}" ] || echo "$scope" > "$GATE_SCOPE_FILE"
   # (#1249) No pytest ran, so nothing is proven: the line names why, and fast-gate.sh reads it as an unproven verdict.
   [ "$line" != "selected 0 files" ] || { echo "no pytest ran: the selection is empty: $why"; return 0; }
-  case $line in all:*) set -- ;; *) set -f; set -- $files; set +f ;; esac
-  "$py" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@"
+  case $line in all:*) set -- ;; *) set -f; set -- $files ;; esac
+  "$py" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" || rc=$?
+  # (#1557) The serial 2 s line the CI complete tier enforces is proved here too, on the same delta: under xdist the line is
+  # only named, so a slow unmarked call stays green and reaches CI red. A full selection runs no serial pass: the whole
+  # battery serially is the promotion proof's run (ADR-0169), and it outgrows the gate's time budget.
+  case $line in all:*) ;; *) [ -n "$rc" ] || "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$? ;; esac
+  set +f
+  return "${rc:-0}"
 }
 
 # sg_base_battery <python> <base> [<stage>]: the command a gate hands to SG_FAST_CMD, sg_battery_run with its definition
