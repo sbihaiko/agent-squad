@@ -28,6 +28,7 @@ test-branchland.sh 86.83
 test-branchreview-pass.sh 27.40
 test-branchreview.sh 14.14
 test-cap-edit.sh 4.95
+test-caps.sh 1.16
 test-check-gh-interface.sh 0.22
 test-check-tdd-red.sh 5.05
 test-childcc.sh 17.10

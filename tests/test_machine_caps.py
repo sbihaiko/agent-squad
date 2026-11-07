@@ -127,6 +127,77 @@ def test_a_lease_whose_holder_is_dead_is_reclaimed_and_the_ceiling_recovers(tmp_
     assert c.try_take("runs", "next-run") is not None
 
 
+def zombie_pid():
+    """A child that has exited and that its parent has not reaped: `kill -0` still answers it, and it works nothing, so it
+    holds no lease (#1573). The caller waits it in a finally, which is what takes the zombie away."""
+    p = subprocess.Popen(["true"])
+    for _ in range(200):
+        try:
+            seen = procs.snapshot([p.pid]).get(p.pid)
+        except procs.ReadError:
+            seen = None
+        if seen is not None and seen.stat == "Z":
+            return p
+        time.sleep(0.01)
+    p.wait()
+    pytest.skip("the system reaped the child before it read as a zombie")
+
+
+def test_a_zombie_holders_lease_holds_no_slot(tmp_path):
+    """A holder that exited and that its parent has not reaped answers `kill -0`, so the count kept its slot and the cap
+    stayed full (#1573): a zombie works nothing, so its lease is stale."""
+    z = zombie_pid()
+    try:
+        c = caps.Ceiling({"runs": 10, "children": 20, "gates": 1, "reviews": 4}, tmp_path / "leases")
+        lease = c.try_take("gates", "gate-zombie", pid=z.pid)
+        assert c.occupancy()["gates"] == 0               # one count reclaims it
+        assert not lease.exists()
+        assert c.try_take("gates", "gate-next") is not None
+    finally:
+        z.wait()
+
+
+def test_a_live_holders_lease_still_holds_the_cap(tmp_path, capsys):
+    """The other half of the rule: a live holder keeps its slot, and no reap line is printed for it."""
+    live = subprocess.Popen(["sleep", "30"])
+    try:
+        c = caps.Ceiling({"runs": 10, "children": 20, "gates": 1, "reviews": 4}, tmp_path / "leases")
+        lease = c.try_take("gates", "gate-live", pid=live.pid)
+        capsys.readouterr()
+        assert c.occupancy()["gates"] == 1
+        assert c.try_take("gates", "gate-next") is None  # the slot still holds the ceiling
+        assert lease.exists()
+        assert capsys.readouterr().err == ""             # a live holder writes no reap line
+    finally:
+        live.kill()
+        live.wait()
+
+
+def test_reaping_a_dead_holders_slot_says_so_on_one_line(tmp_path, capsys):
+    """A reap is never silent (serial.sh's rule, #1057): one line names the slot, its folder and the dead pid."""
+    c = caps.Ceiling({"runs": 10, "children": 20, "gates": 1, "reviews": 4}, tmp_path / "leases")
+    dead = dead_pid()
+    lease = c.try_take("gates", "gate-dead", pid=dead)
+    capsys.readouterr()
+    assert c.occupancy()["gates"] == 0
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1, lines
+    assert "reaping stale slot" in lines[0] and lease.name in lines[0] and str(dead) in lines[0] and "dead" in lines[0]
+
+
+def test_reaping_a_zombie_holders_slot_names_the_zombie(tmp_path, capsys):
+    z = zombie_pid()
+    try:
+        c = caps.Ceiling({"runs": 10, "children": 20, "gates": 1, "reviews": 4}, tmp_path / "leases")
+        c.try_take("gates", "gate-zombie", pid=z.pid)
+        capsys.readouterr()
+        assert c.occupancy()["gates"] == 0
+        lines = capsys.readouterr().err.splitlines()
+        assert len(lines) == 1 and "zombie" in lines[0] and str(z.pid) in lines[0], lines
+    finally:
+        z.wait()
+
+
 @pytest.mark.process_bound
 def test_a_lease_of_a_reused_pid_is_reclaimed_and_the_ceiling_recovers(tmp_path):
     c = caps.Ceiling({"runs": 1, "children": 20}, tmp_path / "leases")

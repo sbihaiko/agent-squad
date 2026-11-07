@@ -88,8 +88,11 @@ t0=$(date +%s); SERIAL_WAIT_SECONDS=1 SG_CALL_DEADLINE_SECONDS=1 SG_GATE_WORKERS
 [ "$(occ gates)" = 11 ] && ok "the full budget is unchanged by the gate that could not take its slots" || ko "the backed-off gate changed the budget: $(occ gates) held, want 11"
 capsctl release gates other
 capsctl take gates ghost --count 12 --pid 99999999 >/dev/null
-out=$(SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c 'echo $SQUAD_GATE_WORKERS' 2>&1)
-[ "$out" = 6 ] && ok "the slots of a dead holder are reclaimed" || ko "a dead holder's slots blocked the gate: '$out'"
+# (#1573) Each of the 12 slots is reaped with one line on stderr, so the count is read on stdout alone: the reap lines are
+# the required report, never the gate's answer.
+out=$(SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c 'echo $SQUAD_GATE_WORKERS' 2>"$T/ghost.err")
+[ "$out" = 6 ] && ok "the slots of a dead holder are reclaimed" || ko "a dead holder's slots blocked the gate: '$out' err=$(cat "$T/ghost.err")"
+[ "$(/usr/bin/grep -c '^caps: reaping stale slot ghost.slot[0-9]*\.json in gates: holder pid 99999999 is dead$' "$T/ghost.err")" = 12 ] && ok "each slot of a dead holder is reaped with one line naming it and the pid" || ko "reap lines: $(cat "$T/ghost.err")"
 
 # (#1166) A process that dies holding the lock and its slots loses both to the next caller: the lock is reaped by serial.sh,
 # the leases are counted dead by the next count, and the next gate neither waits for the lock nor is short of slots.
