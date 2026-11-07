@@ -149,7 +149,7 @@ def test_the_no_tools_call_runs_only_when_the_registry_says_no_tools():
 def test_an_empty_route_row_makes_a_model_ineligible_and_the_cause_is_kept():
     text = REVIEW.read_text()
     assert '[ -n "$rt" ] || return 1' in text
-    assert 'review-route.$$.err' in text
+    assert '"$rd.err"' in text
 
 
 def test_an_unknown_runner_is_refused_by_name():
@@ -169,10 +169,12 @@ def test_a_gateway_only_tools_entry_keeps_its_legacy_runner_on_the_raw_spelling(
     assert (got.route, got.runner, got.wire, got.tools) == ("cli", "claude", "claude-deepseek-v4-pro", True)
 
 
-def test_the_route_error_file_is_one_per_process_and_removed_at_exit():
+def test_the_route_error_file_lives_in_the_invocation_dir_and_is_removed_at_exit():
+    """The resolver's stderr has one home per review invocation, and the trap removes it with the cache."""
     text = REVIEW.read_text()
+    assert '"$rd.err"' in text
     assert 'review-route.err"' not in text
-    assert text.count('review-route.$$.err') >= 3
+    assert 'rm -rf "$rd"' in text
 
 
 def test_an_unsupported_runner_clears_stderr_and_ends_its_tries():
@@ -219,9 +221,13 @@ def test_review_sh_sends_a_no_tools_grok_as_one_streamed_gateway_call():
 
 
 def test_a_gateway_timeout_keeps_its_own_exit_and_never_falls_back():
-    """A curl -m exit on the deadline is the model's timeout, so the fallback never spends a second one (#1373)."""
+    """A curl -m exit on the deadline is the model's timeout whenever it arrives, so the fallback never spends a second
+    one (#1373). The classification never consults the wall clock: curl's own deadline fires a moment under the budget
+    too, and a stream cut at 28 that fell through to the grok CLI would bill two budgets for one review."""
     text = REVIEW.read_text()
-    assert '[ $r = 28 ]' in text and 'r=142' in text
+    line = next(row for row in text.splitlines() if "[ $r = 28 ]" in row)
+    assert "r=142" in line
+    assert "SECONDS" not in line
     assert 'stream" = 1 ] && [ "$r" != 142 ]' in text
 
 
@@ -261,9 +267,13 @@ def test_the_grok_cli_fallback_reads_the_effort_of_the_model_it_calls():
     assert 'ef=${3:-$eff}' not in text
 
 
-def test_the_route_cache_comment_names_its_real_scope():
-    """`$$` is the shell's pid and survives `$(...)`, so the cache is shared there; a separate shell asks again. The
-    comment must say that, not claim a parent's pid (#1373)."""
+def test_the_route_cache_is_one_private_dir_per_review_invocation():
+    """`$$` survives `$(...)`, so it shared the cache across the review's subshells and also outlived a killed review:
+    a recycled pid could read a dead review's row for another registry. The cache is one `mktemp -d` per invocation,
+    and the comment names that scope (#1373)."""
     text = REVIEW.read_text()
-    assert "inside `$(...)`" in text and "per top-level shell" in text
+    assert "rd=$(mktemp -d)" in text
+    assert 'f="$rd/$k"' in text
+    assert "review-route.$$" not in text
+    assert "one private dir per review invocation" in text
 

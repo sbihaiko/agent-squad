@@ -1099,6 +1099,41 @@ out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); 
   && ok "1373 one resolver call per (model, route) for a whole review: the cache is shared across subshells" \
   || ko "1373 the resolver was asked too often: rc=$rc calls=$(tr '\n' '|' < "$ROUTE_CALLS")"
 cp "$(dirname "$src")/modelreg.py" "$T/s/"; rm -f "$T/s/modelreg_real.py" "$T/bin/curl" "$T/bin/grok"; unset ROUTE_CALLS CURL_BODY CURL_REPLY GROK_ARGS
+# 49) #1373 (review of #1373): curl's own deadline exit (28) is the model's timeout whenever it arrives, not only when
+# the wall clock happens to reach the budget. A stall that ends the stream at 28 just under the budget is still one
+# timeout: the grok CLI never runs, and the gateway's single row is the review's only spend.
+export CURL_BODY="$T/curl-body-49" CURL_REPLY="$T/curl-reply-49" GROK_ARGS="$T/grok-args-49"
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\nexit 28\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\n' "$G_START" "$G_TEXT" > "$CURL_REPLY"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ ! -s "$GROK_ARGS" ] && [ "$(wc -l < "$T/st/token-usage.tsv" | tr -d ' ')" = 1 ] \
+  && /usr/bin/grep -q 'grok-4.7' "$T/st/cq/"*mtimeout* && [ $rc != 0 ] \
+  && ok "1373 a stream cut at curl's deadline exit is no fallback: the grok CLI never runs" \
+  || ko "1373 a curl 28 under the budget fell back: rc=$rc cli=$(cat "$GROK_ARGS") rows=$(tr '\n' '|' < "$T/st/token-usage.tsv") cq=$(cat "$T/st/cq/"* 2>/dev/null | head -3)"
+rm -f "$T/bin/curl" "$T/bin/grok"; unset CURL_BODY CURL_REPLY GROK_ARGS
+# 50) #1373 (review of #1373): the grok CLI's own envelope can report an error (a quota answer carrying text, is_error
+# true). That is no verdict: the CLI lane reads it the way the claude lane reads its envelope, so the try ends in a
+# MODEL_FAIL naming the subtype, and the error text is never published as a review.
+export CURL_BODY="$T/curl-body-50" CURL_REPLY="$T/curl-reply-50" GROK_ARGS="$T/grok-args-50"
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\n' "$G_START" "$G_TEXT" > "$CURL_REPLY"
+cat > "$T/bin/grok" <<'G'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"
+printf '%s\n' '{"type":"result","text":"quota exceeded","usage":{"input_tokens":10,"output_tokens":5},"is_error":true,"subtype":"error_quota"}'
+G
+chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ -s "$GROK_ARGS" ] && /usr/bin/grep -q 'error_quota' "$T/st/cq/"*mfail* \
+  && ! head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' \
+  && ok "1373 a grok CLI envelope that reports an error is a MODEL_FAIL naming its subtype, never a verdict" \
+  || ko "1373 an errored grok CLI envelope became a verdict: rc=$rc cli=$(cat "$GROK_ARGS") cq=$(cat "$T/st/cq/"* 2>/dev/null | head -3) line1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)"
+rm -f "$T/bin/curl" "$T/bin/grok"; unset CURL_BODY CURL_REPLY GROK_ARGS
 suite_s=$(( $(date +%s) - suite_t0 ))
 # #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
 # the code, so a green suite must not turn red for it. The runtime guards are the measured line in

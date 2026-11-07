@@ -75,9 +75,9 @@ def _is_grok(model: str) -> bool:
     reg = _registry()
     try:
         return bool(reg.review_route(model, route="cli").runner == "grok")
-    except (reg.RegistryError, KeyError, IndexError):
-        return False        # the documented registry errors: a model it cannot resolve has no known vendor, so it is not
-                            # the exempt one. Any other exception is a real bug and surfaces, never a silent "no vendor".
+    except Exception:       # noqa: BLE001 -- a measurement script never aborts its whole report on one row: a malformed
+        return False        # registry can make the resolver raise anything, and a model it cannot resolve has no known
+                            # vendor, so it is not the exempt one.
 
 
 def _shadow(row: dict) -> bool:

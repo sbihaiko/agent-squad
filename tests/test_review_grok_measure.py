@@ -290,6 +290,24 @@ def test_a_state_dir_is_required() -> None:
     assert "usage" in result.stderr
 
 
+def test_a_resolver_error_the_registry_does_not_document_names_no_vendor(monkeypatch) -> None:
+    """A malformed registry can make the resolver raise anything, a ValueError off a bad route included. This
+    measurement script's contract is to keep counting, so a model it cannot resolve has no known vendor, never a
+    traceback that aborts the whole report (#1373)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("review_grok_measure", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    class Boom:
+        def review_route(self, *args, **kwargs):
+            raise ValueError("registry: bad route")
+
+    monkeypatch.setattr(mod, "_registry", lambda: Boom())
+    assert mod._is_grok("grok-4.7") is False
+
+
 def test_a_no_tools_grok_row_reads_its_vendor_from_the_cli_row(tmp_path: Path) -> None:
     """#1373: a no-tools grok reviewer's review row names no runner, so the vendor comes from its CLI row. Without
     that read the debt-only exemption silently stops counting grok, and a whole measurement turns to zeros."""

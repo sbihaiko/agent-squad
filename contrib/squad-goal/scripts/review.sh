@@ -42,7 +42,7 @@ else
   shift
 fi
 set -- "$(printf '%s' "$bm" | tr / _)" "$@"   # $pr is the branch key (the issue key, for a plan)
-pr=$1 iss=$2; p=$(mktemp); cfg="$(dirname "$0")/models.json"
+pr=$1 iss=$2; p=$(mktemp); rd=$(mktemp -d); cfg="$(dirname "$0")/models.json"
 pbase=${SG_REVIEW_BASE:-${SG_LAND_BRANCH:-dev}}
 # #816: SG_REVIEW_EXCLUDE names path prefixes, space-separated, that leave every diff and file list the review reads. A tracked
 # file a hook regenerates (graphify-out/graph.json) once made a 33 MB prompt that every review model refused the same way.
@@ -94,7 +94,7 @@ if [ -s "$last" ] && [ "$(cat "$last")" = "$head" ] && head -1 "$out" 2>/dev/nul
   echo "model=$(cat "$SG_STATE/review-$pr.verdict-model" 2>/dev/null || cat "$SG_STATE/review-$pr.model" 2>/dev/null || echo unknown) (reused: this head was reviewed) $(head -1 "$out")"; exit 0; fi
 # Each try writes private files ($o and its siblings); only a verdict, or the BLOCKED line, is published to $out, by a rename.
 o="$out.$$"; e="$o.err"
-trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".* "$SG_STATE/review-route.$$.err"; rm -rf "$SG_STATE/review-route.$$"' EXIT
+trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".* "$rd.err"; rm -rf "$rd"' EXIT
 publish() { printf '%s\n' "$1" > "$o.pub" && mv -f "$o.pub" "$out"; }
 # One row per published verdict in review-ledger.jsonl; an unreadable summary writes null counts, never zero.
 ledger() {  # <model> <effort>
@@ -267,18 +267,19 @@ format_fail() { local nx="the next model is tried"
 # A per-model setting matches its chain id with a context suffix stripped from both sides (#643). An exact key still wins.
 bare='def bare: sub("\\[[^]]*\\]$"; "");'
 # route_of <model> [<route>]: the registry's row for one reviewer -- route, runner, wire string, tools (1 or 0) -- through the one resolver
-# The resolver's stderr is kept in review-route.err, so a broken registry names its cause in the MODEL_FAIL line.
+# The resolver's stderr is kept in $rd.err, so a broken registry names its cause in the MODEL_FAIL line.
 # A non-empty row is kept for the run: the leash, the author check and the try loop ask for the same reviewer, and
 # the registry does not change inside one review. An empty row (a failed lookup) is asked again.
-# The cache directory is keyed on $$, which bash keeps as the shell's own pid inside `$(...)`, so the calls made there
-# share the rows of the shell that made them instead of re-invoking the resolver. The cache is per top-level shell: a
-# separate shell (a child process, not a substitution) has its own $$ and asks the resolver again.
+# The cache directory is one private dir per review invocation ($rd), so the calls made inside `$(...)` share the rows
+# instead of re-invoking the resolver, and no other review -- of this branch or of another -- can read them.
 route_of() { local a=() k f t; [ -n "$2" ] && a=(--route "$2")
-  k=$(printf '%s\t%s' "$1" "${2:-row}" | cksum | cut -d' ' -f1); f="$SG_STATE/review-route.$$/$k"
+  # The cache is one private dir per review invocation ($rd, a mktemp -d made above): `$$` survives `$(...)`, so every
+  # subshell reads the same rows, and a recycled pid can never hand a later review a dead one's row for another registry.
+  k=$(printf '%s\t%s' "$1" "${2:-row}" | cksum | cut -d' ' -f1); f="$rd/$k"
   if [ -s "$f" ]; then cat "$f"; return; fi
-  mkdir -p "$SG_STATE/review-route.$$" 2>/dev/null; t="$f.$$"
-  python3 "$(dirname "$0")/modelreg.py" review-route "$1" "${a[@]}" 2>"$SG_STATE/review-route.$$.err" > "$t"; cat "$t" 2>/dev/null
-  if [ -s "$t" ]; then mv -f "$t" "$f"; else rm -f "$t"; fi; }   # one dir per process: reviews of different branches run at once
+  t="$f.$$"
+  python3 "$(dirname "$0")/modelreg.py" review-route "$1" "${a[@]}" 2>"$rd.err" > "$t"; cat "$t" 2>/dev/null
+  if [ -s "$t" ]; then mv -f "$t" "$f"; else rm -f "$t"; fi; }
 vendor_of() {   # <model> [<runner>]: the vendor, so a no-tools reviewer's CLI fallback still follows its own quota (#1373)
   # The runner already read from the review row is the vendor; the CLI row costs one more resolver call, so it is read
   # only for a reviewer whose review row names no runner.
@@ -286,7 +287,6 @@ vendor_of() {   # <model> [<runner>]: the vendor, so a no-tools reviewer's CLI f
   case $rn in ""|-) IFS=$'\t' read -r _ rn _ _ <<< "$(route_of "$1" cli)";; esac
   printf '%s' "$rn"; }
 direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o; a streamed answer is read by review_stream.py (#1373)
-  local t0=$SECONDS
   gwhy=""   # set when the stream's converter or its JSON guard fails: an explicit "no answer" for the fallback and the ledger
   cap curl -sS -N -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
     -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$o.api" 2>"$e"; local r=$?
@@ -302,7 +302,7 @@ direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI
     jq '{result: ([.content[]? | select(.type=="text") | .text] | join("")), usage: (.usage // {}),
          subtype: (if .stop_reason=="end_turn" then "success" else "error_" + (.stop_reason // .type // "unknown") end)}
         | .is_error = (.subtype != "success")' "$o.api" > "$o" 2>/dev/null || cp "$o.api" "$o"
-  fi; rm -f "$o.api"; [ $r = 28 ] && [ $((SECONDS - t0)) -ge "$tmo" ] && r=142; return $r   # only curl's -m deadline is the model's timeout; a refused or cut connection exits 28 at once and falls back
+  fi; rm -f "$o.api"; [ $r = 28 ] && r=142; return $r   # curl's 28 is its own deadline (-m) whatever the wall clock says; a refused connection exits 7 and a cut stream exits 0 or 18, so both fall back as before
 }
 usage_of() { jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage | .cache_read_input_tokens // .prompt_tokens_details.cached_tokens? // .input_tokens_details.cached_tokens? // .cache_read_tokens // .cached_tokens // 0)] | @tsv' "$1" 2>/dev/null; }
 sum_usage() {   # <answer 1> <answer 2>: the two calls' tokens as one row, so the repair turn logs what it spent (#625)
@@ -531,7 +531,7 @@ shadow_run() { local gm=$1 gb=${2:-0} sm seen=0 found="" so="$out.$$.shadow" se=
 used=0
 for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
-  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$SG_STATE/review-route.$$.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
+  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$rd.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
   # #1373: a no-tools reviewer whose CLI row names grok answers on the gateway first and falls back to that CLI. The
   # vendor decides every quota marker and exemption, whatever route a try takes.
   gcli=""; [ "$tools" = 0 ] && gcli=$(route_of "$m" cli)
@@ -613,6 +613,11 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
       cli:grok) tu=$(jq -r 'select(type=="object" and (((.text|type)=="string") or ((.result|type)=="string"))) | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
         [ -n "$tu" ] || tu="0	0	0"
+        # #1373: the CLI's own envelope can report an error -- a quota answer carrying text, is_error true. grok_cli
+        # reshapes it with that subtype, and the same read the claude lane makes names it a MODEL_FAIL below, so the
+        # error text is never published as a verdict.
+        bad=$(jq -r 'select(type=="object" and ((.is_error // false) or ((.subtype // "success") != "success"))) | (.subtype // "error")' "$o" 2>/dev/null)
+        [ -n "$bad" ] && cp "$o" "$SG_STATE/review-$pr.json"
         # the raw CLI envelope carries .text; a reshaped answer, or a gateway cut already read by review_stream.py, .result
         jq -r 'if (.text|type)=="string" then .text elif (.result|type)=="string" then .result else empty end' "$o" > "$o.r" 2>/dev/null && [ -s "$o.r" ] && mv "$o.r" "$o"; rm -f "$o.r";;
       cli:codex) tu=$(awk 'f{gsub(/[^0-9]/,""); if($0!=""){print; exit}} /tokens used/{f=1; sub(/.*tokens used/,""); gsub(/[^0-9]/,""); if($0!=""){print; exit}}' "$e" 2>/dev/null)
