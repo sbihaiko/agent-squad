@@ -421,13 +421,17 @@ class Dispatch:
                     review["verdict"] = "hold"
                 rec = e.record.append("review_round", node=name, round=n, head=git.head(path), verdict=review["verdict"],
                                       offered=fund is not None, review=({**review, "elapsed": 0.0} if reading else review),
-                                      **({"repeated": True} if reading else {}))      # a repeated round ran no review: it pauses for no time
+                                      **({"repeated": True} if reading else {}),      # a repeated round ran no review: it pauses for no time
+                                      **({"exit_code": review["exit_code"], "signal": review["signal"]}
+                                         if review["verdict"] == "killed" else {}))      # a killed review names the status and signal beside its node (#1575)
             review = rec["review"]
             if rec["verdict"] != "fix":
                 if fund is not None:
                     e.budget.release(fund)
                 if rec["verdict"] == "deadline":
                     return review, n, ["review_deadline"]
+                if rec["verdict"] == "killed":      # a signal ended the review: an infrastructure stop, never a review that said no (#1575)
+                    return review, n, ["review_killed"]
                 if rec["verdict"] == "hold":
                     if self.ledger_needs_human(d):      # the streak ended the issue: the owner is asked, never a plain hold (ADR-0029, #1574)
                         return review, n, ["review_needs_human"]
