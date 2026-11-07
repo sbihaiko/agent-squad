@@ -336,12 +336,25 @@ async def test_one_request_for_three_children_records_three_accepted_children_an
 @pytest.mark.heavy
 async def test_children_run_in_parallel_up_to_max_parallel(tmp_path):
     slow = dict(CHILD, delay=0.6)
-    ro = {"tools": ["Read"]}    # read-only children get no worktree, so the timing shows the fan-out alone
+    ro = {"tools": ["Read"]}    # read-only children get no worktree, so the record shows the fan-out alone
     eng = make(tmp_path, {"router": routed(req(**ro), req("diagnosing-bugs", **ro), req("codebase-design", **ro)), "route.router.1": slow, "route.router.2": slow, "route.router.3": slow})
-    t0 = anyio.current_time()
     v = await eng.run()
-    took = anyio.current_time() - t0
-    assert v.verdict == "completed" and 1.0 < took < 1.7      # three 0.6 s children, two at a time (serial would take 1.8 s or more)
+    # The fan-out is proved by the record's order, never by the wall clock: a loaded runner stretches the same three
+    # 0.6 s children past any total-time bound while the run keeps the cap (ADR-0018). A child is in flight from its
+    # first call to its outcome; the peak of that count is the concurrency the cap allowed.
+    first = {}
+    for e in ev(tmp_path, "call_start"):
+        if e["node"].startswith("route.") and e["node"] != "route":
+            first.setdefault(e["node"], e["pos"])
+    ends = {n: e["pos"] for n, e in child_outs(tmp_path).items()}
+    assert len(first) == 3 and set(first) <= set(ends), f"three children ran: {sorted(first)}"
+    marks = sorted([(pos, 1) for n, pos in first.items() if n in ends] + [(pos, -1) for pos in ends.values()])
+    peak = inflight = 0
+    for _, delta in marks:
+        inflight += delta
+        peak = max(peak, inflight)
+    assert v.verdict == "completed"
+    assert peak == 2, f"two children run at once: the record's peak was {peak}"
 
 
 @pytest.mark.anyio

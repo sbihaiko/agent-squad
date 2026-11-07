@@ -60,6 +60,16 @@ def test_the_repository_tracks_no_virtualenv():
         ".gitignore must ignore the bare name .venv, not only the directory: a symlink named .venv is a file"
 
 
+def test_the_repository_tracks_no_scratch_output():
+    """A child's scratch output is never committed: a 21-byte `select.out` rode a wave landing into dev (#1565).
+
+    A child leaves its debug output in the shared worktree, and a landing that stages the tree carries it, so the file
+    reaches every checkout and the promotion. The guard reads the index, so it fails the branch that adds one.
+    """
+    junk = [p for p in git("ls-files").splitlines() if p.endswith(".out")]
+    assert junk == [], f"tracked scratch output: {junk}"
+
+
 def test_no_finished_worktree_is_left_behind():
     rows = parse_worktrees(git("worktree", "list", "--porcelain"))
     assert rows, "git worktree list returned nothing"
