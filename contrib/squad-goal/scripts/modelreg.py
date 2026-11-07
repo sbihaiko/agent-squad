@@ -27,6 +27,8 @@ ROUTES = ("cli", "gateway", "direct")
 AUTHS = ("subscription", "api_key", "unverified")
 V1_CHAINS = {"coding": "coding_models", "review": "review_models",
              "vision": "vision_models", "router": "router_models",
+             # A child whose deliverable is a report or an issue comment, never a tree change (#1574). It runs as a coder runs.
+             "probe": "probe_models",
              # A loop defect (ADR-0171): Fable or Astra first, then the review chain. Its one reader is the chain reader below.
              "loop_defect": "loop_defect_models",
              # Editorial text: a commit message, a pull-request body, a status summary. Short, serial, and never on a
@@ -435,7 +437,7 @@ def _legacy_route(raw):
     return ReviewRoute("cli", "codex", raw, True)
 
 
-def review_route(raw, reg=None):
+def review_route(raw, reg=None, route=None):
     """Where the review pass sends one reviewer: the route, its runner, its wire string and its tools.
 
     A registry entry decides: a `tools: false` capability picks the direct (or gateway) call, and any other entry
@@ -443,13 +445,19 @@ def review_route(raw, reg=None):
     runner the old review script gave it: `claude:`, `gemini-` and `grok-` by prefix, Codex for the rest.
 
     The review lane reads `review_tools` first: a coding capability says nothing about how a reviewer answers, and a
-    model that needs its coding tools can still review through the direct call, thinking off."""
+    model that needs its coding tools can still review through the direct call, thinking off.
+
+    `route="cli"` gives the CLI row of a reviewer that has one: the fallback a streamed no-tools call falls back to
+    (#1373). Its tools are the entry's coding capability, because the CLI runs with the repository tools."""
     reg = reg or default_registry()
     ref = normalize(raw, reg)
     entry = reg.entries.get(ref.id) if ref.known else None
     if entry is None:
         return _legacy_route(raw)
     tools = entry.capabilities.get("review_tools", entry.capabilities.get("tools", True)) is not False
+    if route == "cli" and "cli" in entry.routes:
+        return ReviewRoute("cli", entry.routes["cli"]["argv"][0], invocation(ref, "cli", reg=reg).wire,
+                           entry.capabilities.get("tools", True) is not False)
     if tools and "cli" not in entry.routes:
         # a reviewer with tools reads the repository, so it never takes the no-tools call
         if entry.subscription == "gpt":
@@ -830,7 +838,7 @@ def compatible(mid, chain_name, reg=None):
         return (False, "unknown id")
     if entry.retired:
         return (False, "retired")
-    if canon in ("coding", "router"):
+    if canon in ("coding", "router", "probe"):
         if "gateway" not in entry.routes:
             return (False, "no gateway route")
         if not entry.capabilities.get("tools"):
@@ -1110,6 +1118,7 @@ def main(argv=None):
     c.add_argument("--now", type=float, default=None)
     r = sub.add_parser("review-route", help="print one reviewer's route, runner, wire string and tools as a tab row")
     r.add_argument("id")
+    r.add_argument("--route", choices=("cli",), default=None, help="the CLI row of a reviewer, its streamed call's fallback")
     a = sub.add_parser("argv", help="print argv, NUL-separated")
     a.add_argument("id")
     a.add_argument("--use", default="gateway", choices=ROUTES)
@@ -1151,7 +1160,7 @@ def main(argv=None):
                 print(e.id)
         return 0
     if ns.cmd == "review-route":
-        rr = review_route(ns.id, reg)
+        rr = review_route(ns.id, reg, ns.route)
         print("\t".join([rr.route, rr.runner or "-", rr.wire, "1" if rr.tools else "0"]))
         return 0
     if ns.cmd == "argv":

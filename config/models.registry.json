@@ -987,6 +987,7 @@
       },
       "capabilities": {
         "tools": true,
+        "review_tools": false,
         "thinking_off": true,
         "vision": true,
         "context": 256000

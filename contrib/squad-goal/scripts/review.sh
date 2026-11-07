@@ -42,7 +42,7 @@ else
   shift
 fi
 set -- "$(printf '%s' "$bm" | tr / _)" "$@"   # $pr is the branch key (the issue key, for a plan)
-pr=$1 iss=$2; p=$(mktemp); cfg="$(dirname "$0")/models.json"
+pr=$1 iss=$2; p=$(mktemp); rd=$(mktemp -d); cfg="$(dirname "$0")/models.json"
 pbase=${SG_REVIEW_BASE:-${SG_LAND_BRANCH:-dev}}
 # #816: SG_REVIEW_EXCLUDE names path prefixes, space-separated, that leave every diff and file list the review reads. A tracked
 # file a hook regenerates (graphify-out/graph.json) once made a 33 MB prompt that every review model refused the same way.
@@ -94,7 +94,7 @@ if [ -s "$last" ] && [ "$(cat "$last")" = "$head" ] && head -1 "$out" 2>/dev/nul
   echo "model=$(cat "$SG_STATE/review-$pr.verdict-model" 2>/dev/null || cat "$SG_STATE/review-$pr.model" 2>/dev/null || echo unknown) (reused: this head was reviewed) $(head -1 "$out")"; exit 0; fi
 # Each try writes private files ($o and its siblings); only a verdict, or the BLOCKED line, is published to $out, by a rename.
 o="$out.$$"; e="$o.err"
-trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".* "$SG_STATE/review-route.$$.err"' EXIT
+trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".* "$rd.err"; rm -rf "$rd"' EXIT
 publish() { printf '%s\n' "$1" > "$o.pub" && mv -f "$o.pub" "$out"; }
 # One row per published verdict in review-ledger.jsonl; an unreadable summary writes null counts, never zero.
 ledger() {  # <model> <effort>
@@ -266,16 +266,65 @@ format_fail() { local nx="the next model is tried"
   { [ "$rep" = 1 ] || [ "$reachable" -gt 1 ]; } && return 1; return 2; }
 # A per-model setting matches its chain id with a context suffix stripped from both sides (#643). An exact key still wins.
 bare='def bare: sub("\\[[^]]*\\]$"; "");'
-# route_of <model>: the registry's row for one reviewer -- route, runner, wire string, tools (1 or 0) -- through the one resolver
-# The resolver's stderr is kept in review-route.err, so a broken registry names its cause in the MODEL_FAIL line.
-route_of() { python3 "$(dirname "$0")/modelreg.py" review-route "$1" 2>"$SG_STATE/review-route.$$.err"; }   # one file per process: reviews of different branches run at once
-direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o
-  cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
+# route_of <model> [<route>]: the registry's row for one reviewer -- route, runner, wire string, tools (1 or 0) -- through the one resolver
+# The resolver's stderr is kept in $rd.err, so a broken registry names its cause in the MODEL_FAIL line.
+# A non-empty row is kept for the run: the leash, the author check and the try loop ask for the same reviewer, and
+# the registry does not change inside one review. An empty row (a failed lookup) is asked again.
+# The cache directory is one private dir per review invocation ($rd), so the calls made inside `$(...)` share the rows
+# instead of re-invoking the resolver, and no other review -- of this branch or of another -- can read them.
+route_of() { local a=() k f t; [ -n "$2" ] && a=(--route "$2")
+  # The cache is one private dir per review invocation ($rd, a mktemp -d made above): `$$` survives `$(...)`, so every
+  # subshell reads the same rows, and a recycled pid can never hand a later review a dead one's row for another registry.
+  k=$(printf '%s\t%s' "$1" "${2:-row}" | cksum | cut -d' ' -f1); f="$rd/$k"
+  if [ -s "$f" ]; then cat "$f"; return; fi
+  t="$f.$$"
+  python3 "$(dirname "$0")/modelreg.py" review-route "$1" "${a[@]}" 2>"$rd.err" > "$t"; cat "$t" 2>/dev/null
+  if [ -s "$t" ]; then mv -f "$t" "$f"; else rm -f "$t"; fi; }
+vendor_of() {   # <model> [<runner>]: the vendor, so a no-tools reviewer's CLI fallback still follows its own quota (#1373)
+  # The runner already read from the review row is the vendor; the CLI row costs one more resolver call, so it is read
+  # only for a reviewer whose review row names no runner.
+  local rn=${2:-}
+  case $rn in ""|-) IFS=$'\t' read -r _ rn _ _ <<< "$(route_of "$1" cli)";; esac
+  printf '%s' "$rn"; }
+direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o; a streamed answer is read by review_stream.py (#1373)
+  gwhy=""   # set when the stream's converter or its JSON guard fails: an explicit "no answer" for the fallback and the ledger
+  cap curl -sS -N -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
     -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$o.api" 2>"$e"; local r=$?
-  jq '{result: ([.content[]? | select(.type=="text") | .text] | join("")), usage: (.usage // {}),
-       subtype: (if .stop_reason=="end_turn" then "success" else "error_" + (.stop_reason // .type // "unknown") end)}
-      | .is_error = (.subtype != "success")' "$o.api" > "$o" 2>/dev/null || cp "$o.api" "$o"; rm -f "$o.api"; return $r
+  if jq -e '.stream // false' "$1" >/dev/null 2>&1; then
+    # A converter that exits non-zero, or prints no JSON object, is no answer: the raw body goes to $e, the call returns
+    # non-zero, and an explicit marker (gwhy, subtype "unreadable") stands in $o, so neither the fallback nor the ledger
+    # reads an absent file as an ordinary cut (#1373). A gateway that answered an HTML error page is named as such.
+    if python3 "$(dirname "$0")/review_stream.py" < "$o.api" > "$o.s" 2>/dev/null \
+       && jq -e 'type=="object"' "$o.s" >/dev/null 2>&1; then mv -f "$o.s" "$o"
+    else rm -f "$o.s"; cat "$o.api" >> "$e" 2>/dev/null; [ "$r" = 0 ] && r=65; gwhy=unreadable
+      printf '{"result":"","usage":{},"subtype":"unreadable","is_error":true}\n' > "$o"; fi
+  else
+    jq '{result: ([.content[]? | select(.type=="text") | .text] | join("")), usage: (.usage // {}),
+         subtype: (if .stop_reason=="end_turn" then "success" else "error_" + (.stop_reason // .type // "unknown") end)}
+        | .is_error = (.subtype != "success")' "$o.api" > "$o" 2>/dev/null || cp "$o.api" "$o"
+  fi; rm -f "$o.api"; [ $r = 28 ] && r=142; return $r   # curl's 28 is its own deadline (-m) whatever the wall clock says; a refused connection exits 7 and a cut stream exits 0 or 18, so both fall back as before
 }
+usage_of() { jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage | .cache_read_input_tokens // .prompt_tokens_details.cached_tokens? // .input_tokens_details.cached_tokens? // .cache_read_tokens // .cached_tokens // 0)] | @tsv' "$1" 2>/dev/null; }
+sum_usage() {   # <answer 1> <answer 2>: the two calls' tokens as one row, so the repair turn logs what it spent (#625)
+  { usage_of "$1"; usage_of "$2"; } | awk -F'\t' 'NF==3 {a+=$1; b+=$2; c+=$3} END{printf "%s\t%s\t%s", a+0, b+0, c+0}'; }
+merge_usage() {   # <answer 1> <answer 2>: the second answer, its usage the two calls' totals, read through one helper
+  local tu; tu=$(sum_usage "$1" "$2")
+  jq -c --arg tu "$tu" '. + {usage: {input_tokens: ($tu|split("\t")[0]|tonumber), output_tokens: ($tu|split("\t")[1]|tonumber), cache_read_input_tokens: ($tu|split("\t")[2]|tonumber)}}' "$2"; }
+ledger_write() {   # <usage tsv> [<mark>]: one row for one call, named review:<branch>, then review:<branch>#n for the next
+  local tl="$SG_STATE/token-usage.tsv" tn tc="review:$pr"
+  tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
+  if [ -n "$2" ]; then printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "${1:-$(printf '0\t0\t0')}" "$2" >> "$tl"
+  else printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "${1:-$(printf '0\t0\t0')}" >> "$tl"; fi; }
+grok_cli() {   # <prompt file> <grok model>: the grok CLI's answer, its JSON envelope reshaped into the CLI shape, goes to $o (#1371, #1373)
+  # With --output-format json the CLI prints an envelope, not the bare verdict, so it is reshaped here: every reader
+  # below takes one shape, and a cut stream's fallback publishes the same answer a whole CLI try would.
+  # The effort is the called model's own, read from `$w` (the CLI wire spelling), never from the chain id that named it.
+  local p=$1 w=$2 ef r; ef=$([ -n "$lane" ] && echo low || effort_of "$w")
+  (cd "$SG_CHECKOUT" && cap grok -m "$w" --reasoning-effort "$ef" --prompt-file "$p" --output-format json --permission-mode dontAsk --disable-web-search) > "$o.raw" 2>"$e"; r=$?
+  if jq -e 'type=="object" and (.text|type)=="string"' "$o.raw" >/dev/null 2>&1; then
+    jq -c '{result: .text, usage: (.usage // {}), subtype: (if (.is_error // false) then (.subtype // "error") else "success" end), is_error: (.is_error // false)}' "$o.raw" > "$o"
+  else cp "$o.raw" "$o"; fi
+  rm -f "$o.raw"; return $r; }
 tmo=$(jq -r '.review_timeout_seconds // 480' "$cfg")
 # capraw starts the CLI in its own process group and a watchdog beside it. An alarm inside the CLI does not work: the
 # signal kills the shell that set it, and the process the CLI spawned is reparented and keeps running, so a review runs
@@ -378,6 +427,7 @@ PY
 eligible() { local m=$1 rt rn
   IFS=$'\t' read -r rt rn _ <<< "$(route_of "$m")"
   [ -n "$rt" ] || return 1   # no row: the model is not reachable, so the leash never counts it
+  rn=$(vendor_of "$m" "$rn")   # a no-tools reviewer's row names no runner; its CLI row names the vendor (#1373)
   case $rn in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && return 1;; esac
   case $rn in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && return 1;; esac
   case $rn in grok) case $(gm probe "$SG_SHARED") in limited|probing) return 1;; esac;; esac   # an expired marker leaves grok reachable unless a review holds the probe lock
@@ -404,6 +454,10 @@ dispatch_run() { local p=$1 o=$2 e=$3
       # seconds. The answer is reshaped into the CLI's JSON, so the checks and the token ledger below read one shape.
       direct:*|gateway:*|cli:claude) if [ "$tools" = 0 ]; then
           jq -Rs --arg m "$wire" '{model:$m, max_tokens:8000, thinking:{type:"disabled"}, messages:[{role:"user", content:.}]}' < "$p.nt" > "$p.body"
+          if [ "$grunner" = grok ]; then   # #1373: a grok answer streams past the gateway's 60 s idle timeout, and its effort rides in output_config
+            jq --arg e "$eff" '. + {stream: true, output_config: {effort: $e}} | del(.thinking)' "$p.body" > "$p.body.s" \
+              && mv -f "$p.body.s" "$p.body" && stream=1
+          fi
           direct "$p.body"; r=$?
           # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
           # complaint, instead of losing the whole review to MODEL_FORMAT. Both calls' tokens are counted.
@@ -412,7 +466,7 @@ dispatch_run() { local p=$1 o=$2 e=$3
             mv "$o" "$o.1"
             jq --rawfile a "$o.t" --arg f "$(repair_ask "$frem")" '.messages += [{role:"assistant", content:$a}, {role:"user", content:$f}]' "$p.body" > "$p.body2"
             direct "$p.body2"; r=$?
-            jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
+            merge_usage "$o.1" "$o" > "$o.s" 2>/dev/null && mv -f "$o.s" "$o"
           fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
         else
           cap claude -p --output-format json --strict-mcp-config --model "$wire" --effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
@@ -443,6 +497,9 @@ shadow_run() { local gm=$1 gb=${2:-0} sm seen=0 found="" so="$out.$$.shadow" se=
   sm=$found; m=$sm
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
   [ -n "$rroute" ] || return 0
+  gcli=""; [ "$tools" = 0 ] && gcli=$(route_of "$m" cli)
+  grunner=""; gwire=""; [ -n "$gcli" ] && IFS=$'\t' read -r _ grunner gwire _ <<< "$gcli"
+  stream=0
   eff=$([ -n "$lane" ] && echo low || effort_of "$m")
   tmo=$(row_of "$m" 6); [ -n "$tmo" ] || tmo=$(jq -r --arg m "$m" "$bare"' (.review_timeout_seconds_by_model // {}) as $t | $t[$m] // ([$t | to_entries[] | select((.key|bare) == ($m|bare)) | .value] | first) // .review_timeout_seconds // 480' "$cfg")
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT
@@ -474,14 +531,19 @@ shadow_run() { local gm=$1 gb=${2:-0} sm seen=0 found="" so="$out.$$.shadow" se=
 used=0
 for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
-  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$SG_STATE/review-route.$$.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
+  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$rd.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
+  # #1373: a no-tools reviewer whose CLI row names grok answers on the gateway first and falls back to that CLI. The
+  # vendor decides every quota marker and exemption, whatever route a try takes.
+  gcli=""; [ "$tools" = 0 ] && gcli=$(route_of "$m" cli)
+  grunner=""; gwire=""; [ -n "$gcli" ] && IFS=$'\t' read -r _ grunner gwire _ <<< "$gcli"
+  vendor=$runner; case $vendor in ""|-) vendor=$grunner;; esac   # a no-tools row names no runner; its CLI row names the vendor
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
-  case $runner in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && continue;; esac
+  case $vendor in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && continue;; esac
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
   # until the reset the error itself names, instead of spending one dead try per review round
-  case $runner in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && continue;; esac
+  case $vendor in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && continue;; esac
   # a grok 402 marker is fresh for SG_GROK_LIMIT_TTL (#1417): a fresh one skips grok and names the next probe
-  case $runner in grok) read -r gs gu <<< "$(gm state "$SG_SHARED")"
+  case $vendor in grok) read -r gs gu <<< "$(gm state "$SG_SHARED")"
     [ "$gs" = fresh ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; the next probe is after %s.\n" "$m" "$bm" "$(gclock "$gu")" > "$(sg_cq_status "$iss" "mquota$$-$ms")"; continue; };; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
@@ -493,7 +555,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
   # an expired marker: exactly one review tries grok. The lock is on fd 8, which the grok try and its children inherit (capraw keeps it), so it
   # outlives a killed review while grok runs; the marker is read again under the lock.
   exec 8>&-; groklock=""
-  case $runner in grok) if [ -e "$SG_SHARED/grok-limited" ]; then
+  case $vendor in grok) if [ -e "$SG_SHARED/grok-limited" ]; then
       exec 8>>"$SG_SHARED/grok-probe.lock"
       if gm lock 8; then read -r gs gu <<< "$(gm state "$SG_SHARED")"; [ "$gs" = fresh ] || groklock=1; else gs=probing; fi
       if [ -z "$groklock" ]; then exec 8>&-
@@ -509,9 +571,23 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   [ -e "$p.orig" ] && cp "$p.orig" "$p"; rep=0; lim=$tries   # rep=1: this model had its one repair try (#625); the prompt goes back to the plain one
   i=0; while [ "$i" -lt "$lim" ]; do i=$((i+1))
-    rm -f "$o"; t1=$(date +%s); bad=""
-    dispatch_run "$p" "$o" "$e"
-    rc=$?; exec 8>&-   # the grok try is over: fd 8 (the probe lock) closes, so later subprocesses never hold it (#1417)
+    rm -f "$o"; t1=$(date +%s); bad=""; aroute=$rroute; arunner=$runner; stream=0; gwhy=""   # the route this try actually runs: a grok fallback moves it (#1373)
+    dispatch_run "$p" "$o" "$e"; r=$?
+    if [ "$stream" = 1 ] && [ "$r" != 142 ] \
+       && { [ -n "$gwhy" ] || [ "$r" != 0 ] || ! jq -e 'select(.is_error|not)' "$o" >/dev/null 2>&1; }; then
+      s=$(jq -r '.subtype // empty' "$o" 2>/dev/null); [ -n "$gwhy" ] && s=$gwhy   # the marker drives it, never an empty $o
+      case $s in
+        ""|error_stream|unreadable)
+          # A cut or refused stream is no review: the grok CLI answers on the no-tools prompt, and the failed call keeps
+          # its own ledger row (#1373). A timeout is not a fallback: the MODEL_TIMEOUT path below owns it, so one review
+          # never spends two timeouts. The fallback stays inside this try, so the next try starts from the registry row.
+          ledger_write "$(usage_of "$o")" "gateway-${s:-unanswered}"
+          aroute=cli; arunner=grok; grok_cli "$p.nt" "$gwire"; r=$? ;;
+        *) : ;;   # an explicit gateway error (error_overloaded_error, error_max_tokens, ...) is the chain's own retry path:
+                  # the CLI is never re-spent on a deliberate answer, and the MODEL_FAIL below names the subtype
+      esac
+    fi
+    rc=$r; exec 8>&-   # the grok try is over: fd 8 (the probe lock) closes, so later subprocesses never hold it (#1417)
     # #1385: capraw decides the deadline inside the call and returns 142 from there. Nothing here reclassifies a green
     # answer: the time cap() spends polling, and both calls of a no-tools repair, are not this answer's own span.
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
@@ -524,9 +600,8 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # The mark is APPENDED, never substituted into a count field: the six fields keep their order and their meaning, so a reader
     # that stops at six (tokens.py reads len(p) >= 6) is untouched, and a count field holding a word would make that reader drop
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
-    tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
     tu=""; mark=""
-    case $rroute:$runner in direct:*|gateway:*|cli:claude) tu=$(jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage | .cache_read_input_tokens // .prompt_tokens_details.cached_tokens? // .input_tokens_details.cached_tokens? // .cache_read_tokens // .cached_tokens // 0)] | @tsv' "$o" 2>/dev/null)
+    case $aroute:$arunner in direct:*|gateway:*|cli:claude) tu=$(usage_of "$o")
       # A claude answer is a review only when the run itself succeeded (#501): the JSON says `is_error` and the `subtype`
       # (success, error_max_turns, error_during_execution, ...), and `.result` holds whatever the model had said when the run
       # ended -- a lone preamble included, which the check below would take for an answer of rc 0. The raw JSON is kept
@@ -536,22 +611,29 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       # with --json-schema the answer is the envelope's structured_output (#632); without it, .result
       jq -r 'if (.structured_output|type)=="object" then (.structured_output|tojson) else .result end' "$o" > "$o.r" 2>/dev/null && mv "$o.r" "$o"; rm -f "$o.r"
       case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
-      cli:grok) tu=$(jq -r 'select(type=="object" and (.text|type)=="string") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
+      cli:grok) tu=$(jq -r 'select(type=="object" and (((.text|type)=="string") or ((.result|type)=="string"))) | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
         [ -n "$tu" ] || tu="0	0	0"
-        jq -r 'select(type=="object" and (.text|type)=="string") | .text' "$o" > "$o.r" 2>/dev/null && [ -s "$o.r" ] && mv "$o.r" "$o"; rm -f "$o.r";;
+        # #1373: the CLI's own envelope can report an error -- a quota answer carrying text, is_error true. grok_cli
+        # reshapes it with that subtype, and the same read the claude lane makes names it a MODEL_FAIL below, so the
+        # error text is never published as a verdict.
+        bad=$(jq -r 'select(type=="object" and ((.is_error // false) or ((.subtype // "success") != "success"))) | (.subtype // "error")' "$o" 2>/dev/null)
+        [ -n "$bad" ] && cp "$o" "$SG_STATE/review-$pr.json"
+        # the raw CLI envelope carries .text; a reshaped answer, or a gateway cut already read by review_stream.py, .result
+        jq -r 'if (.text|type)=="string" then .text elif (.result|type)=="string" then .result else empty end' "$o" > "$o.r" 2>/dev/null && [ -s "$o.r" ] && mv "$o.r" "$o"; rm -f "$o.r";;
       cli:codex) tu=$(awk 'f{gsub(/[^0-9]/,""); if($0!=""){print; exit}} /tokens used/{f=1; sub(/.*tokens used/,""); gsub(/[^0-9]/,""); if($0!=""){print; exit}}' "$e" 2>/dev/null)
         tu="${tu:-0}	0	0";;
       *) tu="0	0	0";;
     esac
-    if [ -n "$mark" ]; then printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" "$mark" >> "$tl"
-    else printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" >> "$tl"; fi
+    ledger_write "$tu" "$mark"
     # The run ended in an error: no verdict came of it, so the chain moves on as it does for a failed call (the tokens above
     # are still counted; the answer is not saved as a review).
     # #675: a CLI run that ends error_max_structured_output_retries is a format failure, not an infrastructure one: its
     # own --json-schema check refused every answer, so the same model gets the re-ask the shape check gives.
     if [ "$bad" = error_max_structured_output_retries ]; then
       format_fail "the CLI's --json-schema check refused every answer (the run ended $bad)"; case $? in 1) break;; *) continue;; esac; fi
-    [ -n "$bad" ] && { printf "MODEL_FAIL review %s on branch %s: the run ended %s (exit %s), so its answer is no review: %s\n" "$m" "$bm" "$bad" "$rc" "$(head -c 200 "$o" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"; fmt=1; rc=1; continue; }
+    # #925/#1373: a try that reached its deadline is no model failure. A streamed call cut at the deadline carries its own
+    # error answer, so the `bad` read would name the cut and hide the MODEL_TIMEOUT below; only that cut is suppressed.
+    [ -n "$bad" ] && ! { [ "$stream" = 1 ] && [ $rc = 142 ]; } && { printf "MODEL_FAIL review %s on branch %s: the run ended %s (exit %s), so its answer is no review: %s\n" "$m" "$bm" "$bad" "$rc" "$(head -c 200 "$o" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"; fmt=1; rc=1; continue; }
     [ -e "$p.superseded" ] && { publish "VERDICT: BLOCKED ($lbl head moved during the review)"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
     printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$eff" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-attempts.tsv"
@@ -567,7 +649,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       rc=99; break; fi
     # grok 402 "usage balance exhausted" (#622): account-wide. The marker holds its write epoch and expires after SG_GROK_LIMIT_TTL (#1417);
     # a 402 renews the epoch, and a real answer from a probe removes the marker, both under the probe lock.
-    case $runner in grok) if grep -qE "402 Payment Required|balance exhausted" "$e" "$o" 2>/dev/null; then
+    case $vendor in grok) if grep -qE "402 Payment Required|balance exhausted" "$e" "$o" 2>/dev/null; then
       gm renew "$SG_SHARED"; read -r gs gu <<< "$(gm state "$SG_SHARED")"
       printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; the next probe is after %s.\n" "$m" "$bm" "$(gclock "$gu")" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
       rc=99; break; fi
@@ -615,14 +697,14 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # A grok reviewer is exempt: measured on a planted diff it files a real defect as Debt in most runs (#1848), so its
     # debt-only CHANGES keeps its verdict and the fix round runs -- the downgrade would turn that habit into an approval.
     # Stays on the vendor name until review-grok-measure.py's live numbers say otherwise (ADR-0012, ADR-0018).
-    if [ $rc = 0 ] && [ "$(head -1 "$o" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$runner" != grok ] \
+    if [ $rc = 0 ] && [ "$(head -1 "$o" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$vendor" != grok ] \
        && python3 "$(dirname "$0")/revformat.py" --summary "$o" 2>/dev/null | /usr/bin/grep -qE '^blocking=0 debt=[1-9]'; then
       { echo "VERDICT: APPROVE"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
     fi
     # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope
     grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; printf '%s\n' "$m" > "$o.vm" && mv -f "$o.vm" "$SG_STATE/review-$pr.verdict-model"; ledger "$m" "$eff"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"
       # a published grok verdict may be shadow-reviewed by the next chain entry (#1403); it never changes this outcome
-      [ "$runner" = grok ] && shadow_run "$m" "$(python3 "$(dirname "$0")/revformat.py" --summary "$out" 2>/dev/null | sed -n 's/.*blocking=\([0-9][0-9]*\).*/\1/p')"
+      [ "$vendor" = grok ] && shadow_run "$m" "$(python3 "$(dirname "$0")/revformat.py" --summary "$out" 2>/dev/null | sed -n 's/.*blocking=\([0-9][0-9]*\).*/\1/p')"
       exit 0; }
   done
   [ "$timed_out" = 1 ] || streak clear "$m"

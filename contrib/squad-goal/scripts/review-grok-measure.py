@@ -68,12 +68,16 @@ def _registry() -> Any:
 
 
 def _is_grok(model: str) -> bool:
-    """The vendor of one reviewer through the registry's own resolver, never a copy of an id list here."""
+    """The vendor of one reviewer through the registry's own resolver, never a copy of an id list here.
+
+    Read from the CLI row: a reviewer whose review lane is the no-tools gateway call (#1373) has no runner on that row,
+    and its CLI row still names the vendor's program. A stale resolver that takes no route is no vendor, never a crash."""
     reg = _registry()
     try:
-        return bool(reg.review_route(model).runner == "grok")
-    except (reg.RegistryError, KeyError, IndexError):
-        return False        # a model the registry cannot resolve has no known vendor, so it is not the exempt one
+        return bool(reg.review_route(model, route="cli").runner == "grok")
+    except Exception:       # noqa: BLE001 -- a measurement script never aborts its whole report on one row: a malformed
+        return False        # registry can make the resolver raise anything, and a model it cannot resolve has no known
+                            # vendor, so it is not the exempt one.
 
 
 def _shadow(row: dict) -> bool:

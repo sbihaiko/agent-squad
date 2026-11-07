@@ -97,7 +97,7 @@ def test_the_shipped_envelope_holds_kinds_and_no_model_list():
     graph = json.loads((ROOT / "docs" / "design" / "router.graph.json").read_text())
     got = next(n["allow"] for n in graph["nodes"] if n.get("kind") == "dispatch")
     assert "models" not in got, "the shipped envelope still names a model list"
-    assert got["kinds"] == ["coding", "review", "vision"]
+    assert got["kinds"] == ["coding", "review", "vision", "probe"]
     assert "high" not in got["efforts"], "the engine default is medium; a child is never asked for high"
 
 

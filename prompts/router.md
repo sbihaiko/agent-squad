@@ -20,7 +20,8 @@ Return these fields beside `status` and `reasons`:
 
 For a child that builds, tests and merges, leave `stalls` and `spend` out so it gets the full limit: a child stopped at its own cap loses the whole call (`node_stall_cap`), and a narrow cap saves little. Narrow them only for a read-only child.
 
-Ask for the fewest children that do the job. Name each child's `kind`: `coding` to write code, `review` to review work, `vision` to read an image. Give parallel children separate workspaces. Code checks each request against limits you cannot change. A request over any limit is rejected whole, so stay inside the limits.
+Ask for the fewest children that do the job. Name each child's `kind`: `coding` to write code, `review` to review work, `vision` to read an image, `probe` for a child whose whole deliverable is a report or an issue comment and never a tree change.
+A child that commits nothing by design is `probe`, never `coding`: a `coding` child that commits nothing fails its review and its issue goes back to the queue, and a `probe` child with no change passes. When the deliverable is a change to files, the kind is `coding`, whatever the child reads first. Give parallel children separate workspaces. Code checks each request against limits you cannot change. A request over any limit is rejected whole, so stay inside the limits.
 Three answers exist. Use the exact keys, never `children` or `tasks`:
 
 - Work to do: `{"status": "pass", "spawns": [ ... ]}`.

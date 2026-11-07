@@ -6,7 +6,7 @@
 suite_t0=$(date +%s)   # #1413: the acceptance command of a run is capped (SG_AC_TIMEOUT, 300 s), so the suite times itself
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SHARED="$T/st"   # the shared marks (quota-guard, *-limited) are the suite's own, never the machine's under ~/.cache
-mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$(dirname "$src")/grokmark.py" "$(dirname "$src")/review-shadow.py" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$(dirname "$src")/grokmark.py" "$(dirname "$src")/review-shadow.py" "$(dirname "$src")/review_stream.py" "$T/s/"; : > "$T/s/codex-reset.py"
 # the registry the review reads: the shipped one plus `nt`, a model whose capabilities say no tools (the no-tools path reads that, not a list)
 jq '.models += [{id:"nt",label:"nt",provider:"claude",subscription:"claude",aliases:["claude:nt"],capabilities:{tools:false},
   routes:{cli:{auth:"subscription",argv:["claude","-p","--model","{model}","{prompt_file}"],served:["nt"]},direct:{auth:"subscription",model:"nt",served:["nt"]}}}]' "$(dirname "$src")/registry.json" > "$T/s/registry.json"
@@ -305,6 +305,9 @@ unset CLAUDE_ARGS
 # 12) #483: a --worktree review watches the child's own HEAD, never the checkout's. The grok and gemini legs run their CLI
 # from SG_CHECKOUT, and the head watch ran there too: it read the checkout's HEAD, called the child's head moved within
 # 10 s, and every such review of a child ended "BLOCKED (head moved during the review)" with no verdict.
+# grok-4.7 is a no-tools reviewer (#1373): it reaches the gateway before its CLI, and a live gateway here would let a
+# test answer for a stub. A closed port, scoped to these grok-4.7 cases, keeps the suite's own environment untouched.
+export ANTHROPIC_BASE_URL=http://127.0.0.1:9
 W="$T/child"; /usr/bin/git init -q -b main "$W"; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m base
 /usr/bin/git -C "$W" checkout -q -b gui/9; echo child > "$W/c.txt"; /usr/bin/git -C "$W" add c.txt   # a real change: an empty diff is a refused read (#846)
 /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q -m child
@@ -337,7 +340,7 @@ out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
 /usr/bin/grep -q -- '--mode plan' "$AGY_ARGS" && ! /usr/bin/grep -q -- '--dangerously-skip-permissions' "$AGY_ARGS" \
   && ko "13 the agy review runs in plan mode with nothing to approve its tools: $(cat "$AGY_ARGS")" \
   || ok "13 the agy review can use its tools headless"
-unset AGY_ARGS
+unset AGY_ARGS ANTHROPIC_BASE_URL
 # A CLI run that ends in an error is not a review (#501): the JSON carries is_error and the subtype, and .result holds only
 # the preamble the model produced before the run ended. The call is a MODEL_FAIL naming the subtype, the chain moves on,
 # and the raw JSON stays beside the answer so the next occurrence is diagnosed without a re-run.
@@ -733,6 +736,8 @@ out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
 n=$( [ -f "$T/rcalls" ] && wc -l < "$T/rcalls" | tr -d ' ' || echo 0 )   # a zero budget calls no model, so the file is never written
 [ "$n" = 0 ] && ! /usr/bin/grep -q 'integer expression expected' "$T/e21" && ok "27c a configured budget of 0 stays 0, the fallback does not fire" || ko "26c zero budget: calls='$n' rc=$rc"
 
+# The grok-4.7 cases below reach the gateway before their CLI (#1373): the same closed port, scoped to this block.
+export ANTHROPIC_BASE_URL=http://127.0.0.1:9
 # 24b) grok files a real defect as Debt in most runs (measured on a planted diff). Its debt-only CHANGES must keep its
 # verdict: the downgrade of #653 would turn that habit into an approval and the fix round would never run.
 printf '#!/bin/bash\nprintf %s\n' "'VERDICT: CHANGES\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'" > "$T/bin/grok"
@@ -783,6 +788,22 @@ l1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)
 awk -F'\t' '$3=="grok-4.7" && $4==1200 && $5==90 && $6==400 && NF==6 {f=1} END{exit !f}' "$T/st/token-usage.tsv" 2>/dev/null && [ "$l1" = "VERDICT: APPROVE" ] && [ $rc = 0 ] \
   && ok "29 a grok review asks for json, logs its reported tokens, and the verdict parses from the text field" \
   || ko "29 grok json: rc=$rc line1='$l1' ledger='$(tail -1 "$T/st/token-usage.tsv" 2>/dev/null)' args='$(cat "$GROK_ARGS")'"
+unset GROK_ARGS
+# 13d) #1373 (review of #1373): the CLI fallback calls `grok -m $gwire`, so its effort is the wire spelling's own.
+# The chain entry here is spelled `claude:grok-4.7`: the CLI model is `grok-4.7`, whose own default is medium, while
+# the chain id's row says low. The fallback must read the model it calls, never the id the chain row named.
+cat > "$T/bin/grok" <<'G'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"
+printf '%s\n' '{"type":"result","text":"VERDICT: APPROVE\n","usage":{"input_tokens":1200,"output_tokens":90,"cache_read_input_tokens":400}}'
+G
+chmod +x "$T/bin/grok"
+printf '{"review_models":["claude:grok-4.7"],"efforts":{"review_models":{"claude:grok-4.7":"low"}},"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+export GROK_ARGS="$T/grok-args"; : > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+/usr/bin/grep -q -- '-m grok-4.7 --reasoning-effort medium' "$GROK_ARGS" \
+  && ok "1373 an id that differs from the wire spelling gets the called model's own effort" \
+  || ko "1373 the CLI fallback took the chain id's effort: $(cat "$GROK_ARGS")"
 unset GROK_ARGS
 # 24e) #1403: a sampled shadow review of a published grok verdict. The next chain entry reads the same head; its answer
 # is never published and never moves the verdict -- one ledger line (shadow: true) carries it, so the measure can count
@@ -907,6 +928,212 @@ rv=$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md" 2>/dev/null
 [ $rc = 0 ] && [ "$rv" = "blocking=1 debt=0" ] && ! /usr/bin/grep -q 'not a repro of a defect' "$T/st/review-fix_1-x.md" \
   && ok "36 the same finding with a non-grep repro stays Blocking" \
   || ko "36 non-grep repro: rc=$rc summary='$rv' review=$(cat "$T/st/review-fix_1-x.md" 2>/dev/null)"
+unset SHADOW_CALLS ANTHROPIC_BASE_URL
+# 40) #1373: a grok reviewer answers through one streamed no-tools gateway call, with its effort in output_config, its
+# usage in the ledger, and no CLI. The request carries no thinking and no tools, and the model is the registry's gateway wire name.
+rm -rf "$T/st/cq"; mkdir -p "$T/st/cq"; rm -f "$T/st/grok-limited" "$T/bin/grok" "$T/bin/curl"
+G_START='{"type":"message_start","message":{"usage":{"input_tokens":900,"output_tokens":1,"cache_read_input_tokens":300}}}'
+G_TEXT='{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"VERDICT: APPROVE"}}'
+G_END='{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}'
+G_STOP='{"type":"message_stop"}'
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+export CURL_BODY="$T/curl-body-30" CURL_REPLY="$T/curl-reply-30"
+cat > "$T/bin/grok" <<'G'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"; pf=""; while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && pf="$2"; shift; done
+cp "$pf" "$GROK_PROMPT"; echo "VERDICT: APPROVE"
+G
+chmod +x "$T/bin/grok"
+export GROK_ARGS="$T/grok-args" GROK_PROMPT="$T/grok-prompt"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\nevent: message_delta\ndata: %s\n\nevent: message_stop\ndata: %s\n\n' "$G_START" "$G_TEXT" "$G_END" "$G_STOP" > "$CURL_REPLY"
+rm -f "$T/st/review-fix_1-x".* "$T/st/token-usage.tsv" "$CURL_BODY" "$GROK_PROMPT"; : > "$GROK_ARGS"; : > "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+want=$(python3 "$T/s/modelreg.py" review-route grok-4.7 | cut -f3)
+jq -e --arg w "$want" '.stream==true and .output_config.effort=="medium" and (has("thinking")|not) and (has("tools")|not) and .model==$w' "$CURL_BODY" >/dev/null 2>&1 \
+  && [ ! -s "$GROK_ARGS" ] \
+  && awk -F'\t' 'NF==6 && $2=="review:fix_1-x" && $3=="grok-4.7" && $4==900 && $5==42 && $6==300 {f=1} END{exit !f}' "$T/st/token-usage.tsv" \
+  && [ "$(wc -l < "$T/st/token-usage.tsv" | tr -d ' ')" = 1 ] \
+  && head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' \
+  && ok "1373 a grok review streams through the gateway with no tools, counts its usage, and runs no CLI" \
+  || ko "1373 streamed grok review: rc=$rc body=$(head -c 300 "$CURL_BODY" 2>/dev/null) cli=$(cat "$GROK_ARGS") ledger=$(cat "$T/st/token-usage.tsv")"
+# 41) a stream cut before its stop falls back to the grok CLI on the no-tools prompt; the failed call is a ledger row of
+# its own with the usage the stream reported, and the CLI's answer is the next row with the CLI's own usage.
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\n' "$G_START" "$G_TEXT" > "$CURL_REPLY"
+cat > "$T/bin/grok" <<'G'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"; pf=""; while [ $# -gt 0 ]; do [ "$1" = --prompt-file ] && pf="$2"; shift; done
+cp "$pf" "$GROK_PROMPT"
+printf '%s\n' '{"type":"result","text":"VERDICT: APPROVE\n","usage":{"input_tokens":1200,"output_tokens":90,"cache_read_input_tokens":400}}'
+G
+chmod +x "$T/bin/grok"
+rm -f "$T/st/review-fix_1-x".* "$T/st/token-usage.tsv" "$CURL_BODY" "$GROK_PROMPT"; : > "$GROK_ARGS"; : > "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ -s "$GROK_ARGS" ] \
+  && [ "$(wc -l < "$T/st/token-usage.tsv" | tr -d ' ')" = 2 ] \
+  && awk -F'\t' 'NF==7 && $2=="review:fix_1-x" && $3=="grok-4.7" && $4==900 && $5==1 && $6==300 && $7=="gateway-error_stream" {f=1} END{exit !f}' "$T/st/token-usage.tsv" \
+  && awk -F'\t' 'NF==6 && $2=="review:fix_1-x#2" && $3=="grok-4.7" && $4==1200 && $5==90 && $6==400 {f=1} END{exit !f}' "$T/st/token-usage.tsv" \
+  && /usr/bin/grep -q 'You have no tools' "$GROK_PROMPT" && ! /usr/bin/grep -q 'git show' "$GROK_PROMPT" \
+  && head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' \
+  && ok "1373 a cut grok stream falls back to the CLI on the no-tools prompt, and each call keeps its own usage row" \
+  || ko "1373 cut grok stream: rc=$rc rows=$(wc -l < "$T/st/token-usage.tsv" | tr -d ' ') cli=$(cat "$GROK_ARGS") prompt=$(grep -c 'You have no tools' "$GROK_PROMPT" 2>/dev/null)/$(grep -c 'git show' "$GROK_PROMPT" 2>/dev/null) line1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) ledger=$(tr '\n' '|' < "$T/st/token-usage.tsv")"
+rm -f "$T/bin/curl" "$CURL_BODY".* "$CURL_REPLY".*; unset CURL_BODY CURL_REPLY
+# 42) #1373: a gateway call that reaches its deadline is no fallback. The MODEL_TIMEOUT path owns it, so one review never
+# spends two timeouts, and the grok CLI does not run at all. The stub reads the deadline curl is given instead of pinning
+# a 30 s wall clock, so the suite does not race a loaded machine. The timed-out try keeps exactly one ledger row, the
+# gateway's, with zero usage, never a second row from a CLI call.
+cat > "$T/bin/curl" <<'C'
+#!/bin/bash
+m=600; while [ $# -gt 0 ]; do [ "$1" = -m ] && m=$2; shift; done
+sleep $((m + 1))
+C
+chmod +x "$T/bin/curl"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":2,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+export GROK_ARGS="$T/grok-args"; : > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ ! -s "$GROK_ARGS" ] && [ "$(wc -l < "$T/st/token-usage.tsv" | tr -d ' ')" = 1 ] \
+  && awk -F'\t' 'NF==7 && $2=="review:fix_1-x" && $3=="grok-4.7" && $4==0 && $5==0 && $6==0 && $7=="no-usage" {f=1} END{exit !f}' "$T/st/token-usage.tsv" \
+  && /usr/bin/grep -q 'grok-4.7' "$T/st/cq/"*mtimeout* && [ $rc != 0 ] \
+  && ok "1373 a grok gateway timeout reaches MODEL_TIMEOUT, never the CLI, and keeps only the gateway's zero-usage row" \
+  || ko "1373 grok timeout fell back: rc=$rc cli=$(cat "$GROK_ARGS") rows=$(tr '\n' '|' < "$T/st/token-usage.tsv") cq=$(cat "$T/st/cq/"* 2>/dev/null | head -3)"
+# 43) #1373: a gateway that refuses the connection answers curl's own error at once, well inside the deadline. That is a
+# cut, not a timeout, so the grok CLI answers the review.
+printf '#!/bin/bash\nexit 7\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+# the real CLI prints its JSON envelope, not the bare verdict: the fallback must reshape it before the check chain reads it
+cat > "$T/bin/grok" <<'G'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"
+printf '%s\n' '{"type":"result","text":"VERDICT: APPROVE\n","usage":{"input_tokens":1200,"output_tokens":90,"cache_read_input_tokens":400}}'
+G
+chmod +x "$T/bin/grok"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ -s "$GROK_ARGS" ] && head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' \
+  && awk -F'\t' 'NF==6 && $2=="review:fix_1-x#2" && $3=="grok-4.7" && $4==1200 && $5==90 && $6==400 {f=1} END{exit !f}' "$T/st/token-usage.tsv" \
+  && ok "1373 a refused gateway connection falls back to the grok CLI, whose JSON envelope is reshaped with its usage" \
+  || ko "1373 refused connection did not fall back: rc=$rc cli=$(cat "$GROK_ARGS") cq=$(/bin/ls "$T/st/cq") line1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) ledger=$(tr '\n' '|' < "$T/st/token-usage.tsv")"
+# 44) #1373: a stream cut before its stop falls back to the grok CLI, and that CLI's 402 balance answer marks grok spent:
+# the marker is written and the CLI's failed call is counted in the ledger, so the quota follows the vendor.
+export CURL_BODY="$T/curl-body-34" CURL_REPLY="$T/curl-reply-34" GROK_ARGS="$T/grok-args-34"
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\n' "$G_START" "$G_TEXT" > "$CURL_REPLY"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; echo "402 Payment Required: balance exhausted" >&2; exit 1\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/grok-limited"; : > "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ -s "$GROK_ARGS" ] && [ -e "$T/st/grok-limited" ] && [ "$(wc -l < "$T/st/token-usage.tsv" | tr -d ' ')" = 2 ] \
+  && ok "1373 a 402 on the CLI fallback marks grok spent, and the failed gateway call keeps its own row" \
+  || ko "1373 402 on the CLI fallback: rc=$rc cli=$(cat "$GROK_ARGS") marker=$(ls "$T/st/grok-limited" 2>/dev/null) rows=$(tr '\n' '|' < "$T/st/token-usage.tsv")"
+rm -f "$T/bin/curl" "$T/st/grok-limited"; unset GROK_ARGS CURL_BODY CURL_REPLY
+# 45) #1373: a converter that fails after it printed an answer is no answer. Its exit status decides whether its output is
+# the answer or the raw gateway body, which is no JSON, so the grok CLI answers the review.
+cat > "$T/s/review_stream.py" <<'P'
+import sys
+sys.stdin.read()
+print('{"result": "VERDICT: APPROVE", "usage": {}, "subtype": "success", "is_error": false}')
+sys.exit(1)
+P
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+export CURL_BODY="$T/curl-body-35" CURL_REPLY="$T/curl-reply-35" GROK_ARGS="$T/grok-args-35"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\nevent: message_delta\ndata: %s\n\nevent: message_stop\ndata: %s\n\n' "$G_START" "$G_TEXT" "$G_END" "$G_STOP" > "$CURL_REPLY"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/grok-limited"; : > "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ -s "$GROK_ARGS" ] && head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' \
+  && awk -F'\t' 'NF==7 && $2=="review:fix_1-x" && $3=="grok-4.7" && $4==0 && $5==0 && $6==0 && $7=="gateway-unreadable" {f=1} END{exit !f}' "$T/st/token-usage.tsv" \
+  && ok "1373 a converter that fails after its answer is no answer: the grok CLI answers, and the ledger names the unreadable gateway answer" \
+  || ko "1373 a failed converter kept its partial answer: rc=$rc cli=$(cat "$GROK_ARGS") line1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) ledger=$(tr '\n' '|' < "$T/st/token-usage.tsv")"
+cp "$(dirname "$src")/review_stream.py" "$T/s/"; rm -f "$T/bin/curl" "$T/bin/grok"; unset CURL_BODY CURL_REPLY GROK_ARGS
+# 46) #1373 (review of #1373): a registry lookup that fails once is asked again. Its empty row is no route, so the model is
+# not held out of the whole review.
+cp "$(dirname "$src")/modelreg.py" "$T/s/modelreg_real.py"
+cat > "$T/s/modelreg.py" <<'P'
+import os, sys
+if "review-route" in sys.argv and os.path.exists(os.environ["ROUTE_FLAG"]):
+    os.remove(os.environ["ROUTE_FLAG"]); sys.exit(1)
+here = os.path.dirname(os.path.abspath(__file__))
+os.execv(sys.executable, [sys.executable, os.path.join(here, "modelreg_real.py")] + sys.argv[1:])
+P
+export ROUTE_FLAG="$T/route-fail-once"; : > "$ROUTE_FLAG"
+printf '#!/bin/bash\ncat >/dev/null; echo "VERDICT: APPROVE"\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"   # case 27 leaves a stub that always fails
+printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+case "$out" in model=claude:claude-opus-5-5*) ok "1373 a registry lookup that fails once is asked again: the review still runs";; *) ko "1373 a failed registry lookup held the model out: rc=$rc '$out' cq=$(cat "$T/st/cq/"* 2>/dev/null | head -2)";; esac
+cp "$(dirname "$src")/modelreg.py" "$T/s/"; rm -f "$T/s/modelreg_real.py" "$ROUTE_FLAG"; unset ROUTE_FLAG
+# 47) #1373 (review of #1373): an explicit gateway error event is no cut. The gateway's own overload answer follows the
+# chain's retry path, so no grok CLI call is spent on a deliberate error, and MODEL_FAIL names the subtype.
+export CURL_BODY="$T/curl-body-37" CURL_REPLY="$T/curl-reply-37" GROK_ARGS="$T/grok-args-37"
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+cat > "$T/bin/grok" <<'G'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"; printf '%s\n' '{"type":"result","text":"VERDICT: APPROVE","usage":{}}'
+G
+chmod +x "$T/bin/grok"
+printf 'event: message_start\ndata: %s\n\nevent: error\ndata: %s\n\n' "$G_START" '{"type":"error","error":{"type":"overloaded_error","message":"busy"}}' > "$CURL_REPLY"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ ! -s "$GROK_ARGS" ] && cat "$T/st/cq/"*mfail* 2>/dev/null | /usr/bin/grep -q 'error_overloaded_error' \
+  && awk -F'\t' 'NF==6 && $2=="review:fix_1-x" && $3=="grok-4.7" && $4==900 {f=1} END{exit !f}' "$T/st/token-usage.tsv" && [ $rc != 0 ] \
+  && ok "1373 an explicit gateway error event is no CLI fallback: MODEL_FAIL names the subtype, and the gateway's own row keeps its usage" \
+  || ko "1373 overloaded gateway spent the CLI: rc=$rc cli=$(cat "$GROK_ARGS") ledger=$(tr '\n' '|' < "$T/st/token-usage.tsv") cq=$(cat "$T/st/cq/"*mfail* 2>/dev/null | head -2)"
+# 48) #1373 (review of #1373): one resolver call per (model, route) for the whole review. route_of memoizes on $$, which
+# bash keeps as the parent's pid inside a subshell, so eligible(), vendor_of() and the try loop share the top shell's rows.
+cp "$(dirname "$src")/modelreg.py" "$T/s/modelreg_real.py"
+cat > "$T/s/modelreg.py" <<'P'
+import os, sys
+if sys.argv[1:2] == ["review-route"]:
+    with open(os.environ["ROUTE_CALLS"], "a") as f: f.write(" ".join(sys.argv[1:3]) + "\n")
+here = os.path.dirname(os.path.abspath(__file__))
+os.execv(sys.executable, [sys.executable, os.path.join(here, "modelreg_real.py")] + sys.argv[1:])
+P
+export ROUTE_CALLS="$T/route-calls"; : > "$ROUTE_CALLS"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\nevent: message_delta\ndata: %s\n\nevent: message_stop\ndata: %s\n\n' "$G_START" "$G_TEXT" "$G_END" "$G_STOP" > "$CURL_REPLY"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ "$(wc -l < "$ROUTE_CALLS" | tr -d ' ')" = 2 ] \
+  && ok "1373 one resolver call per (model, route) for a whole review: the cache is shared across subshells" \
+  || ko "1373 the resolver was asked too often: rc=$rc calls=$(tr '\n' '|' < "$ROUTE_CALLS")"
+cp "$(dirname "$src")/modelreg.py" "$T/s/"; rm -f "$T/s/modelreg_real.py" "$T/bin/curl" "$T/bin/grok"; unset ROUTE_CALLS CURL_BODY CURL_REPLY GROK_ARGS
+# 49) #1373 (review of #1373): curl's own deadline exit (28) is the model's timeout whenever it arrives, not only when
+# the wall clock happens to reach the budget. A stall that ends the stream at 28 just under the budget is still one
+# timeout: the grok CLI never runs, and the gateway's single row is the review's only spend.
+export CURL_BODY="$T/curl-body-49" CURL_REPLY="$T/curl-reply-49" GROK_ARGS="$T/grok-args-49"
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\nexit 28\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\n' "$G_START" "$G_TEXT" > "$CURL_REPLY"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ ! -s "$GROK_ARGS" ] && [ "$(wc -l < "$T/st/token-usage.tsv" | tr -d ' ')" = 1 ] \
+  && /usr/bin/grep -q 'grok-4.7' "$T/st/cq/"*mtimeout* && [ $rc != 0 ] \
+  && ok "1373 a stream cut at curl's deadline exit is no fallback: the grok CLI never runs" \
+  || ko "1373 a curl 28 under the budget fell back: rc=$rc cli=$(cat "$GROK_ARGS") rows=$(tr '\n' '|' < "$T/st/token-usage.tsv") cq=$(cat "$T/st/cq/"* 2>/dev/null | head -3)"
+rm -f "$T/bin/curl" "$T/bin/grok"; unset CURL_BODY CURL_REPLY GROK_ARGS
+# 50) #1373 (review of #1373): the grok CLI's own envelope can report an error (a quota answer carrying text, is_error
+# true). That is no verdict: the CLI lane reads it the way the claude lane reads its envelope, so the try ends in a
+# MODEL_FAIL naming the subtype, and the error text is never published as a review.
+export CURL_BODY="$T/curl-body-50" CURL_REPLY="$T/curl-reply-50" GROK_ARGS="$T/grok-args-50"
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf 'event: message_start\ndata: %s\n\nevent: content_block_delta\ndata: %s\n\n' "$G_START" "$G_TEXT" > "$CURL_REPLY"
+cat > "$T/bin/grok" <<'G'
+#!/bin/bash
+echo "$*" >> "$GROK_ARGS"
+printf '%s\n' '{"type":"result","text":"quota exceeded","usage":{"input_tokens":10,"output_tokens":5},"is_error":true,"subtype":"error_quota"}'
+G
+chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/token-usage.tsv"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ -s "$GROK_ARGS" ] && /usr/bin/grep -q 'error_quota' "$T/st/cq/"*mfail* \
+  && ! head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' \
+  && ok "1373 a grok CLI envelope that reports an error is a MODEL_FAIL naming its subtype, never a verdict" \
+  || ko "1373 an errored grok CLI envelope became a verdict: rc=$rc cli=$(cat "$GROK_ARGS") cq=$(cat "$T/st/cq/"* 2>/dev/null | head -3) line1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)"
+rm -f "$T/bin/curl" "$T/bin/grok"; unset CURL_BODY CURL_REPLY GROK_ARGS
 suite_s=$(( $(date +%s) - suite_t0 ))
 # #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
 # the code, so a green suite must not turn red for it. The runtime guards are the measured line in

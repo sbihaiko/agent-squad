@@ -39,7 +39,7 @@ def hub():
 def test_the_repository_models_json_is_v2():
     doc = json.loads(MODELS.read_text())
     assert doc["schema_version"] == 2
-    assert set(doc["chains"]) == {"coding", "review", "vision", "router", "editorial", "loop_defect"}
+    assert set(doc["chains"]) == {"coding", "review", "vision", "router", "editorial", "loop_defect", "probe"}
     assert not [k for k in V1_KEYS if k in doc]
 
 

@@ -71,7 +71,7 @@ def test_the_launcher_resolves_the_four_chains_and_leaves_a_closed_entry_out(tmp
     chains = {**CHAINS, "coding": [{"id": "claude-sonnet-5-5"}, {"id": "claude-sonnet-4-6", "on": False}]}
     got = launch.kind_chains(models_file(tmp_path, chains))
     assert got["coding"] == ["claude-sonnet-5-5"] and got["router"] == ["claude-opus-5-5"]
-    assert set(got) == {"router", "coding", "review", "vision"}
+    assert set(got) == {"router", "coding", "review", "vision", "probe"}
 
 
 def test_a_chain_whose_entries_are_all_closed_stays_as_written(tmp_path):
