@@ -160,12 +160,15 @@ o=$(hold); rc=$?
   || ko "a red killed leg held dispatch or said nothing: rc $rc, '$o'"
 rm -f "$T/ran.log"
 
-# 5) the landing lock is never taken: a held gate lock is no obstacle, and it is left as it was
+# 5) (#1527, ADR-0153) a held gate lock holds the nightly, which never takes the landing lock: it runs no mode and writes no day
+#    marker, and it is left as it was. Once the gate is free the nightly runs both modes, as before.
 mkdir -p "$ST/locks/gate"; echo $$ > "$ST/locks/gate/pid"; rm -f "$T/ran.log"; mark
 out=$(ng); rc=$?
-[ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "a held landing lock does not stop the nightly" || ko "gate lock rc $rc: $out"
+[ $rc = 0 ] && [ ! -s "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && ok "a held landing lock holds the nightly: no mode runs and no day marker is written" || ko "gate lock rc $rc: $out"
 [ -e "$ST/locks/gate/pid" ] && ok "the nightly never took the landing lock" || ko "the nightly removed the landing lock"
-rm -rf "$ST/locks/gate"
+rm -rf "$ST/locks/gate"; rm -f "$T/ran.log"
+out=$(ng); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "a released gate lock lets the nightly run both modes" || ko "released gate lock rc $rc: $out"
 
 # 6) once a day: a second start the same day runs nothing, and a later day runs again
 rm -f "$T/ran.log"
@@ -558,5 +561,36 @@ i=0; while [ $i -lt 200 ] && [ ! -d "$ST/locks/live-check" ]; do sleep 0.05; i=$
 [ ! -d "$ST/locks/nightly" ] && ok "the nightly lock is released while the live check still samples" \
   || ko "the nightly lock is held for the live check's window, so it holds delivery"
 lc_wait   # let the detached check finish before the suite ends
+
+# 27) (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly holds
+#     while a run is live or the gate lock is held. Liveness is the one reader's rule (squad/run_liveness.py): a fresh launch is
+#     live; a run that ended, a run that died with no verdict and a bare name whose record ended are not. A hold writes no day
+#     marker, so the next idle cycle runs the suite.
+mkdir -p "$T/src/runs/done-run" "$T/live-run"
+printf '{"event":"run_start"}\n' > "$T/live-run/record.jsonl"; echo "$T/live-run" > "$ST/active-runs.txt"
+mark; rm -f "$T/ran.log"; rs0=$(cat "$ST/nightly-result" 2>/dev/null | cksum)
+out=$(ng SG_CHECKOUT="$T/src"); rc=$?
+[ $rc = 0 ] && case "$out" in "nightly: held"*"live"*) true;; *) false;; esac && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
+  && [ "$(cat "$ST/nightly-result" 2>/dev/null | cksum)" = "$rs0" ] \
+  && ok "the nightly holds while a listed run is launching (#1527)" || ko "a live run did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+nrun() {  # <label>: the nightly runs both modes
+  mark; rm -f "$T/ran.log"; out=$(ng SG_CHECKOUT="$T/src"); rc=$?
+  [ $rc = 0 ] && /usr/bin/grep -qx 'parallel '"$T"'/tree' "$T/ran.log" && /usr/bin/grep -qx 'serial '"$T"'/tree' "$T/ran.log" \
+    && ok "$1: the nightly runs both modes" || ko "$1 held the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+}
+touch -t 202001010000 "$T/live-run/record.jsonl"
+nrun "a listed run that died with no verdict and a stale record is not live"
+printf '{"event":"run_start"}\n{"event":"verdict","verdict":"passed"}\n' > "$T/live-run/record.jsonl"; touch -t 202001010000 "$T/live-run/record.jsonl"
+nrun "a listed run with a verdict and an idle record is not live"
+printf '{"event":"run_start"}\n{"event":"verdict","verdict":"passed"}\n' > "$T/src/runs/done-run/record.jsonl"; touch -t 202001010000 "$T/src/runs/done-run/record.jsonl"
+echo done-run > "$ST/active-runs.txt"
+nrun "a bare run name whose record under SG_CHECKOUT/runs ended is not live"
+: > "$ST/active-runs.txt"; mkdir -p "$ST/locks/gate"; echo $$ > "$ST/locks/gate/pid"
+mark; rm -f "$T/ran.log"; out=$(ng SG_CHECKOUT="$T/src"); rc=$?
+[ $rc = 0 ] && case "$out" in "nightly: held"*"gate lock"*) true;; *) false;; esac && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
+  && ok "the nightly holds while a live pid holds the gate lock (#1527)" || ko "a held gate lock did not hold the nightly: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+rm -f "$ST/locks/gate/pid"
+nrun "a gate lock with no live pid is stale and never holds"
+rm -rf "$ST/locks/gate"
 
 rm -rf "$T"; exit $fail

@@ -22,8 +22,12 @@ SUITES_LINE = (
     "(`bash contrib/squad-goal/scripts/test-<script>.sh`) and the targeted pytest cases "
     "(`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>`). "
     "Then run `bash contrib/squad-goal/scripts/fast-gate.sh` in your worktree before you report done: "
-    "it is the gate your commit must pass to enter the wave, its pytest takes the bounded worker count it carries, "
-    "and it must exit 0. "
+    "it is the gate your commit must pass to enter the wave, its pytest takes the bounded worker count it carries. "
+    "Run it once per commit: exit 0 is a pass; exit 4 with a `bounded` or `inconclusive` line is unproven, not a defect "
+    "in your work, and it ends your gate step: the entry gate and the landing measure your commit again under their own "
+    "clock, so never run it a second time on the same commit, never wait for the machine, the nightly or another gate, "
+    "and report done with the gate's last line in your result. Exit 1 names a defect: fix it and run the gate once on "
+    "the new commit. "
     "The machine's full gate (`bash contrib/squad-goal/scripts/shell-suites.sh` and the full pytest suite beside it) "
     "belongs to the loop and to the land pass, once per landing: never run it."
 )
@@ -86,7 +90,8 @@ def test_the_line_names_the_targeted_commands_and_not_only_the_full_gate(tmp_pat
 def test_the_line_makes_the_entry_gate_the_childs_own_check(tmp_path):
     # #670: an approved child kept dying at the entry gate on a check it was never told to run. The line now names that gate.
     line = [ln for ln in _mkreq(tmp_path, "pr4", PR_BODY).splitlines() if ln.startswith("SUITES:")][0]
-    assert "fast-gate.sh" in line and "must exit 0" in line, line
+    assert "fast-gate.sh" in line and "exit 0 is a pass" in line, line
+    assert "never run it a second time on the same commit" in line, line   # #1527: a bounded gate ends the child's gate step
     assert "shell-suites.sh" in line and "never run it" in line, line   # the machine-wide gate stays the loop's
 
 

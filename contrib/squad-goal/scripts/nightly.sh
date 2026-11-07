@@ -43,12 +43,28 @@
 # own lock and with its own record. It starts the check detached: this body exits at once, serial.sh frees the `nightly`
 # lock, and the check samples alone. The check never changes this run's result or its record, and it holds no dispatch
 # (ADR-0163, ADR-0164): an hour of `locks/nightly` would refuse every promotion tick, so the check never keeps that lock.
+# It holds while a run is live or the gate lock is held (#1527, ADR-0153): a full suite beside the run cap bounded every child's
+# gate at 900 s. A held start writes no day marker, so the next idle cycle runs the suite.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
 [ -n "${SG_NIGHTLY_OFF:-}" ] && exit 0   # a profile that sets it keeps no nightly: a project may carry its own suite instead (ADR-0153)
 [ -e "$st/promote-reserve" ] && exit 0   # a proof is measuring in its own tree: two full suites saturate the box before either shows in the load average, and no day marker is written, so the nightly runs once the proof is over
 [ -e "$day" ] && exit 0   # it already ran today: no second suite, whatever started this one
+# (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly yields to them.
+# A live run is the one reader's rule (squad/run_liveness.py, the drain's and the hub's reader): a run that ended, or died with no
+# verdict, never holds it. The reader runs from the first root that holds it: this script's repository, SG_SQUAD, then
+# SG_CHECKOUT; a bare run name resolves under SG_CHECKOUT/runs. Only `idle` on exit 0 lets the suite start: any other answer holds
+# it, since a held nightly costs one night and a suite beside a live run costs the run. A gate lock whose pid lives holds it too.
+# A hold writes no day marker, so the next idle cycle runs the suite.
+if [ -s "$st/active-runs.txt" ]; then
+  lroot=; for r in "$(cd "$here/../../.." 2>/dev/null && pwd)" "${SG_SQUAD:-}" "${SG_CHECKOUT:-}"; do
+    [ -n "$r" ] && [ -f "$r/squad/run_liveness.py" ] && { lroot=$r; break; }; done
+  lv=; [ -z "$lroot" ] || lv=$(cd "$lroot" && perl -e 'alarm shift; exec @ARGV' "${SG_DRAIN_READ_S:-30}" python3 -m squad.run_liveness drain "$st/active-runs.txt" "${SG_CHECKOUT:-}" 2>/dev/null)
+  [ "$lv" = idle ] || { echo "nightly: held: the run reader answers '${lv:-no answer}' for active-runs.txt; the suite runs once the loop is idle (#1527)"; exit 0; }
+fi
+gp=$(cat "$st/locks/gate/pid" 2>/dev/null)
+[ -n "$gp" ] && kill -0 "$gp" 2>/dev/null && { echo "nightly: held: the gate lock is held by pid $gp; the suite runs once the gate is free (#1527)"; exit 0; }
 if [ "${1:-}" != --run ]; then   # the lock is taken once, around the suite, and never around the day check
   SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-10800} \
     exec bash "$here/serial.sh" nightly bash "$0" --run

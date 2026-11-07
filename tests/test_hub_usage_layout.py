@@ -1,6 +1,5 @@
 """The Usage card (.isub, shared by the sidebar and the Subscriptions theme): one row per subscription in a sidebar about 255 px wide. A row with no reading carries its
-reason in the reset slot, and a reason is a sentence ("no live Kimi token: the bridge refreshes it on the next kimi
-call", "free tier: ..."). Kept on one line in the `auto` column, it widened every row past the card: the shares and
+reason in the reset slot, and a reason is a sentence ("no live token: the bridge refreshes it on the next call", "free tier: ..."). Kept on one line in the `auto` column, it widened every row past the card: the shares and
 resets of all rows were cut off, and the plan's own name shrank to nothing. These pin the rules that stop it."""
 import re
 from pathlib import Path

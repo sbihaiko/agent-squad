@@ -62,30 +62,30 @@ def test_the_prompt_estimate_is_one_token_per_four_characters():
 # --- the chain skips an entry whose window is under the prompt ---------------------------------------------------
 
 def test_an_entry_under_the_prompt_is_skipped_and_the_skip_names_its_window_and_the_prompt_size():
-    kept, skipped = session.ctx_skipped(["kimi", "opus"], 200_000, {"kimi": "128k"})
+    kept, skipped = session.ctx_skipped(["mimo", "opus"], 200_000, {"mimo": "128k"})
     assert kept == ["opus"]
-    assert skipped == [("kimi", "context_window:window=128000,prompt=200000")]
+    assert skipped == [("mimo", "context_window:window=128000,prompt=200000")]
 
 
 def test_an_entry_with_no_ctx_is_kept():
-    assert session.ctx_skipped(["kimi", "opus"], 200_000, {}) == (["kimi", "opus"], [])
-    assert session.ctx_skipped(["kimi", "opus"], 200_000, {"opus": "200k"}) == (["kimi", "opus"], [])
+    assert session.ctx_skipped(["mimo", "opus"], 200_000, {}) == (["mimo", "opus"], [])
+    assert session.ctx_skipped(["mimo", "opus"], 200_000, {"opus": "200k"}) == (["mimo", "opus"], [])
 
 
 def test_every_entry_skipped_keeps_the_chain_with_no_skip():
-    assert session.ctx_skipped(["kimi"], 200_000, {"kimi": "128k"}) == (["kimi"], [])
+    assert session.ctx_skipped(["mimo"], 200_000, {"mimo": "128k"}) == (["mimo"], [])
 
 
 # --- the option and its CLI spelling ----------------------------------------------------------------------------
 
 def test_the_engine_option_takes_a_window_map_and_refuses_a_non_string():
-    assert resolve(GRAPH, {"model_ctx": {"kimi": "128k"}})[0]["model_ctx"] == {"kimi": "128k"}
+    assert resolve(GRAPH, {"model_ctx": {"mimo": "128k"}})[0]["model_ctx"] == {"mimo": "128k"}
     with pytest.raises(OptionError, match="model_ctx"):
-        resolve(GRAPH, {"model_ctx": {"kimi": 128}})
+        resolve(GRAPH, {"model_ctx": {"mimo": 128}})
 
 
 def test_the_cli_reads_the_window_pairs():
-    assert cli.model_ctx_arg("kimi=128k,opus=200k") == {"kimi": "128k", "opus": "200k"}
+    assert cli.model_ctx_arg("mimo=128k,opus=200k") == {"mimo": "128k", "opus": "200k"}
     assert cli.model_ctx_arg("") == {}
 
 

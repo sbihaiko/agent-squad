@@ -10,7 +10,10 @@
 # shell-suites.sh runs it: no SG_* variable, its own HOME. The promotion gate is the full suite (promote-stg.sh), not this.
 # The gate runs under the machine-wide gate lock (gate.sh) and leaves the fast status line the hub reads. Exit 0 when all pass,
 # 1 on a defect, 2 when the base does not resolve, 4 when the verdict is unproven: the battery is inconclusive twice (#699), a
-# tool is absent (spec 1163), or the delta selected no test, so no pytest ran (#1249). Exit 0 is pass and 1 is fail; 2 and 4 are unproven and hold landing. The verdict, one of pass, fail
+# tool is absent (spec 1163), or the delta selected no test, so no pytest ran (#1249). Exit 0 is pass and 1 is fail; 2 and 4 are
+# unproven: the entry gate and the landing measure the tree again and carry its obligation (ADR-0164), so a child caller gets one
+# bounded or inconclusive attempt per key (#1527): a second run at the same key exits 4 at once, before the lock, and runs no
+# battery; an entry or tip caller always measures. SG_FAST_MEMO=0 turns both memos off. The verdict, one of pass, fail
 # or unproven with its reason and the checks that ran, goes to the history line through GATE_OUTCOME_FILE.
 # A pass is kept under its key (#955), so a second gate at the same key runs no battery; a red is never kept. SG_FAST_MEMO=0 turns it off.
 # One deadline covers the battery and its retry (#1171): gate.sh hands the clock down, and a direct run starts its own. Past it the
@@ -24,6 +27,10 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 . "$here/base-battery.sh"
 . "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
 py=$(sg_gate_python)
+# (#1436, #1527) A child's own gate takes two workers unless the caller names a count. It is set before the battery command is
+# built, so the memo key read before the lock names the same count as the key stored inside it.
+case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
+  *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2};; esac
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
 # The memo key names what the suite reads: the tree's content (HEAD's tree object, never its commit), its uncommitted state,
@@ -67,6 +74,18 @@ if [ -n "$memokey" ] && [ -r "$(memo_file "$memokey")" ]; then
     fi
     echo "fast-gate: pass ${hsha:0:9} (log $ml) memo: the same tree, merge-base and battery passed, so no battery ran"; exit 0
   fi
+fi
+# (#1527) A bounded or inconclusive attempt is kept under its key, apart from the pass memo. A child caller that gates the same tree
+# again runs no battery: its one attempt at this head already ran, and the entry gate and the landing measure the tree again.
+bmemo_file() { echo "$st/gate-memo-bounded/$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
+bmemo_store() {  # <key> <log>: the same temp file and mv as memo_store
+  local f; mkdir -p "$st/gate-memo-bounded" 2>/dev/null || return 0
+  f=$(bmemo_file "$1"); printf '%s\t%s\n' "$1" "$2" > "$f.$$" && mv -f "$f.$$" "$f"
+}
+if [ -n "$memokey" ] && [ "${SG_GATE_CALLER:-child}" = child ] && [ -r "$(bmemo_file "$memokey")" ] \
+  && [ "$(cut -f1 "$(bmemo_file "$memokey")")" = "$memokey" ]; then
+  echo "fast-gate: bounded already at ${hsha:0:9}: a child spends one bounded attempt per head (#1527); the entry gate and the landing own the obligation (ADR-0164), so commit and report done (log $(cut -f2 "$(bmemo_file "$memokey")"))"
+  exit 4
 fi
 # (#1436) A child's own gate asks for two slots and an entry or tip gate for the full count: three children fit a six-slot
 # budget, and a landing is never starved by the children that feed it. A count the caller names always wins.
@@ -170,6 +189,7 @@ for try in 1 2; do
         echo "fast-gate: $cls: $detail; the battery passed its ${bound}s deadline with the defect already reported ($lg)"; exit 1;;
       *)
         verdict unproven "bounded: the battery passed its ${bound}s deadline and named no defect" unknown unknown
+        [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
         echo "fast-gate: bounded: the battery passed its ${bound}s deadline and named no defect, so the gate does not pass ($lg)"; exit 4;;
     esac
   fi
@@ -180,6 +200,7 @@ for try in 1 2; do
     saturation|unknown)
       [ $try = 1 ] && { echo "fast-gate: $cls: $detail; inconclusive, so the battery runs once more ($lg)"; continue; }
       verdict unproven "$detail" unknown unknown
+      [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
       echo "fast-gate: $cls: $detail; inconclusive twice, so the gate does not pass and the landing holds ($lg)"; exit 4;;
     pytest)
       # The retry spends the same clock: a retry that outlives it never clears the red the battery named.

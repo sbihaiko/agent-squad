@@ -44,7 +44,7 @@ def test_the_repository_models_json_is_v2():
 
 
 def test_the_resolver_reads_every_repository_chain(doc):
-    assert [e.raw for e in modelreg.chain(doc, "coding").entries][0] == "claude-kimi-for-coding"
+    assert [e.raw for e in modelreg.chain(doc, "coding").entries][0] == "claude-deepseek-v4-pro"
     assert [e.raw for e in modelreg.chain(doc, "review").entries][0] == "gpt-5.6-terra"
     assert modelreg.chain(doc, "vision").entries
     assert [e.raw for e in modelreg.chain(doc, "router").entries] == ["gpt-6-luna", "claude-gpt-5.6-terra",
@@ -53,7 +53,7 @@ def test_the_resolver_reads_every_repository_chain(doc):
 
 def test_the_panel_reads_the_repository_chains_under_the_v1_keys(hub, doc):
     view = hub.v1_view(doc)
-    assert view["coding_models"][0] == "claude-kimi-for-coding"
+    assert view["coding_models"][0] == "claude-deepseek-v4-pro"
     assert view["review_models"] == ["gpt-5.6-terra", "claude:claude-opus-5-5"]
     assert view["hours"]["review_models"] == {"claude:claude-opus-5-5": "19-07"}
     assert view["efforts"]["vision_models"] == {"gemini-3.8-flash-low": "low"}
@@ -115,7 +115,7 @@ def test_a_section_the_save_omits_keeps_the_settings_the_file_holds(hub, monkeyp
     assert "err" not in out, out
     saved = json.loads(tmp.read_text())
     assert [(e["id"], e.get("hrs"), e.get("effort"), e.get("on")) for e in saved["chains"]["coding"]] == [
-        ("kimi-for-coding", None, "low", None), ("gpt-5.6-terra", None, None, None),
+        ("deepseek-v4-pro", None, "low", None), ("gpt-5.6-terra", None, None, None),
         ("claude-sonnet-5-5", "19-07", None, None), ("grok-4.7", None, None, None)]
     assert [(e["id"], e.get("effort")) for e in saved["chains"]["vision"] if e.get("effort")] == [("gemini-3.8-flash", "low")]
 
@@ -167,7 +167,7 @@ def test_a_save_over_a_v1_file_keeps_the_settings_of_a_model_no_chain_holds(hub,
     stay as `.v1.bak`; dropping it leaves no record and no way back when the model returns."""
     tmp = Path(tempfile.mkdtemp()) / "models.json"
     tmp.write_text(json.dumps({"coding_models": ["claude-sonnet-5-5"], "review_models": ["gpt-6.1-sol"],
-                               "vision_models": ["grok-4.6"],
+                               "vision_models": ["deepseek-v4-pro"],
                                "review_timeout_seconds_by_model": {"gpt-6.1-sol": 420, "parked-9": 99}}) + "\n")
     monkeypatch.setattr(hub, "MODELS", tmp)
     out = hub.models_set({"version": hub.models_get()["version"], "coding_models": ["claude-sonnet-5-5"]})

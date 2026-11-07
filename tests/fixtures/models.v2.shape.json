@@ -3,8 +3,8 @@
   "chains": {
     "coding": [
       {
-        "id": "kimi-for-coding",
-        "raw": "claude-kimi-for-coding",
+        "id": "deepseek-v4-pro",
+        "raw": "claude-deepseek-v4-pro",
         "route": "gateway",
         "effort": "low"
       },
