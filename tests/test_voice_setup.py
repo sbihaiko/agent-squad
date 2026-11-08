@@ -3,6 +3,8 @@ import importlib.util
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
 MANIFEST = VOICE / "slack-app-manifest.json"
+OPERATOR_NOTE = VOICE / "OPERATOR.md"
 sys.path.insert(0, str(VOICE))
 
 import keychain  # noqa: E402
@@ -287,3 +290,49 @@ def test_each_pipeline_script_takes_the_slack_token_from_the_project_env(name, a
 
     assert mod.main(argv) == 1                   # the stubbed Slack refuses, after the token resolved
     assert calls and calls[0][0] == "env-bot-token", f"{name} reached Slack with {calls[0][0] if calls else None!r}"
+
+
+def test_the_operator_note_names_the_monitor_and_the_outbox_format():
+    """#1483: the session wakes on a Monitor over the inbox, and answers as one outbox JSON line.
+
+    The note is the whole contract between the session and `voiced`: a field the daemon reads and the note omits is an
+    answer the owner never hears, so the example must parse and carry the fields the daemon delivers from.
+    """
+    note = OPERATOR_NOTE.read_text()
+
+    assert "Monitor" in note
+    assert "tail -n 0 -F" in note, "the Monitor follows the inbox; a tail that stops leaves the owner unanswered"
+    assert "inbox.jsonl" in note, "the note names the DM inbox"
+    assert "inboxes/<channel>.jsonl" in note, "a project session watches only its own inbox"
+
+    blocks = re.findall(r"```json\n(.*?)```", note, re.S)
+    assert blocks, "the note gives the outbox line as a JSON example"
+    answer = json.loads(blocks[0])
+    assert {"thread_ts", "text", "speech"} <= set(answer), f"the example carries {sorted(answer)}"
+    for field in ("thread_ts", "text", "speech", "channel"):
+        assert f"`{field}`" in note, f"the note explains `{field}`"
+    assert "outboxes/<channel>.jsonl" in note, "a project answers in its own channel's outbox"
+    assert "outbox.jsonl" in note, "the note names the DM outbox"
+
+
+def test_the_one_minute_poll_is_no_longer_scheduled():
+    """#1483: the Monitor alone wakes the session; no tracked file schedules a poll of Slack."""
+    note = OPERATOR_NOTE.read_text().lower()
+    assert "no poll" in note or "poll is retired" in note, "the note says the poll is gone"
+    assert "monitor alone" in note, "the note names the Monitor as the only wake path"
+
+    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True, check=True).stdout.split()
+    schedule = re.compile(r"StartInterval|crontab|\*/?\s*\d+\s+\* \* \* \*|every minute|every 60 s|sleep 60")
+    for name in tracked:
+        if name in {"tests/test_voice_setup.py", "contrib/voice/OPERATOR.md"}:
+            continue
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for line in text.splitlines():
+            if "watch.py" in line and schedule.search(line):
+                raise AssertionError(f"{name} still schedules the Slack poll: {line.strip()}")
