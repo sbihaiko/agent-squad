@@ -66,6 +66,8 @@ class El {
   removeAttribute(name) { delete this.attrs[name]; }
   scrollIntoView() {}
   getAttribute(name) { return name in this.attrs ? this.attrs[name] : null; }
+  remove() { const p = this.parentElement; if (!p) return; p.children = p.children.filter(c => c !== this); this.parentElement = null; }
+  click() { if (typeof this.onclick === "function") this.onclick({ target: this }); for (const fn of this.listeners.click || []) fn({ target: this }); }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
   descendants() { const out = []; const walk = e => { for (const c of e.children) { out.push(c); walk(c); } }; walk(this); return out; }
   querySelectorAll(sel) { return qsa(this, sel); }

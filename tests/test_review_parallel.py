@@ -10,6 +10,7 @@ settled budget, a pause stops it, and its `{base}` never moves between a run and
 import json
 import time
 
+import anyio
 import pytest
 
 from squad import git
@@ -23,6 +24,16 @@ from tests.test_waves import writer
 
 A, B = "route.router.1", "route.router.2"
 REVIEW_S = 1.0
+PAUSE_SLACK_S = 0.5     # the moment a cancel needs to reach a waiting review on a loaded runner, never a second pause
+
+
+def pause_window(tries, pause):
+    """(first, last) for one round's `review_try` events: the start of the first try the engine recorded, and the last
+    moment a pause may end the run -- one retry pause plus a fixed slack after that try. The runner's own pace before the
+    try is outside both, so a loaded runner gets no room to wait (#1612)."""
+    first = tries[0]["ts"] - (tries[0]["review"].get("elapsed") or 0.0)
+    window = pause + PAUSE_SLACK_S           # one retry pause, plus the moment a cancel needs to arrive
+    return first, first + window
 
 
 def timed_stub(tmp_path, sleep=REVIEW_S):
@@ -169,24 +180,43 @@ async def test_a_review_never_holds_a_slot_a_waiting_child_needs(tmp_path):
         f"{B} {started[B]:.3f} vs review {A} {log[A]['start']:.3f}-{log[A]['end']:.3f}")
 
 
+def test_the_pause_window_is_one_pause_from_the_first_recorded_try():
+    """#1612: a pause is judged from the first try the engine recorded, never from the run's start. A runner that takes
+    3 s to reach that try is not handed those 3 s back as room to wait: the window one pause plus a fixed slack wide is
+    the same for an idle, a loaded and a heavily loaded runner, so a pause that waited out the retry loop stays red."""
+    pause = 2.0
+    for reached in (0.1, 1.6, 3.1):                              # the first try, as this runner reached it after the start
+        first, last = pause_window([{"ts": 1000.0 + reached, "review": {"elapsed": 0.1}}], pause)
+        assert first == pytest.approx(1000.0 + reached - 0.1)    # the try's own start, read from the engine's record
+        assert last - first == pytest.approx(pause + PAUSE_SLACK_S)
+    assert PAUSE_SLACK_S < pause, "the slack is a moment a cancel needs, never a second retry pause"
+
+
 @pytest.mark.anyio
 @pytest.mark.heavy
-async def test_a_pause_cancels_a_review_still_retrying(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start_delay", [0.0, 1.5], ids=["idle", "loaded"])
+async def test_a_pause_cancels_a_review_still_retrying(tmp_path, monkeypatch, start_delay):
     """A pause ends the entry's reviews with it: a review that got no verdict retries no more, so the stop is not held up
-    by the gate's deadline and no round is recorded after the pause."""
+    by the gate's deadline and no round is recorded after the pause. The claim is measured from the first try the engine
+    recorded, one pause plus a fixed slack after it, so the runner's pace before that try is no part of the budget
+    (#1612): a shared runner took 3.06 s to reach its first try and the pause was read as the cause."""
     from squad.runners import dispatch as D
     monkeypatch.setattr(D, "REVIEW_RETRY_PAUSE_S", 2.0)
     p = tmp_path / "review.sh"
-    p.write_text(f'#!/bin/sh\necho "retry" >> "{tmp_path}/review.log"\nsleep 0.05\nexit 5\n')
+    p.write_text(f'#!/bin/sh\necho retry >> "{tmp_path}/review.log"\nsleep 0.05\nexit 5\n')
     p.chmod(0o755)
     repo = sibling_repo(tmp_path / "t")
     eng = make(tmp_path, two_children(), tweak=gated(str(p), deadline=12), target=repo)
     Control(tmp_path).append("pause", nodes=[B])
-    t0 = time.monotonic()
+    await anyio.sleep(start_delay)   # the runner's own pace, injected: the window below starts after it
     v = await eng.run()
-    took = time.monotonic() - t0
+    end = time.time()
     assert (v.verdict, v.exit_code) == ("stopped", 30)
-    assert took < 1.5, f"the pause waited {took:.2f}s for the review's retry loop"
+    tries = [e for e in ev(tmp_path, "review_try") if e["node"] == A]
+    assert tries, "the review was never tried: the pause had nothing to cancel"
+    first, last = pause_window(tries, D.REVIEW_RETRY_PAUSE_S)
+    assert end < last, (
+        f"the pause ended the run {end - first:.2f}s after the first try, past one {D.REVIEW_RETRY_PAUSE_S:g}s retry pause")
     assert [e for e in ev(tmp_path, "review_round") if e["node"] == A] == []
     assert ev(tmp_path, "land") == []
     assert (tmp_path / "review.log").read_text().count("retry") <= 2   # a cancelled reading is not tried again

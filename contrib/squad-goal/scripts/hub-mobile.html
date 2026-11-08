@@ -287,6 +287,22 @@ nav [data-tab=chat]:not([data-badge])::after,nav [data-tab=chat][data-badge=""]:
 .turn{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;font:var(--fs-body) system-ui,sans-serif}
 .turn b{display:block;color:var(--mute);font-size:var(--fs-caption);margin-bottom:2px}
 .turn div{white-space:pre-wrap;overflow-wrap:anywhere}
+/* Rule 9 (#1602): a send the hub never answered stays in the thread with its mark, and one tap retries it. */
+.turn.failed{width:100%;text-align:left;color:var(--fg);border-color:var(--err);display:grid;gap:2px;cursor:pointer}
+.turn.failed .notsent{color:var(--err);font-size:var(--fs-caption)}
+/* Frame 17 (#1602): the attach route writes the image's path into the message, and the bubble draws the hub's file. */
+.turn a.sq-img,.turn a.img{display:block;margin:4px 0}
+.turn img.thumb{display:block;max-width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-md);background:var(--input);border:1px solid var(--line)}
+/* The composer names the kept draft (rule 9), and the banner names the outage and how many messages wait (#1602). */
+#termview-draft{font-size:var(--fs-caption);color:var(--mute);margin:0}
+#termview-draft[hidden]{display:none}
+#termview-outage{font-size:var(--fs-caption);color:var(--err);margin:0}
+#termview-outage[hidden]{display:none}
+/* Frames 20 and 21 (#1602): the attach sheet rises from the bottom edge, in the thumb's reach. */
+#attach-sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;display:grid;gap:8px;padding:8px 12px calc(12px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-top:1px solid var(--line)}
+#attach-sheet[hidden]{display:none}
+#attach-sheet button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font:inherit;font-size:var(--fs-field)}
+#attach-sheet #attach-cancel{border-color:var(--acc)}
 .qcard{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;font:var(--fs-body) system-ui,sans-serif;display:grid;gap:8px;align-content:start}
 .qcard button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font:var(--fs-body) system-ui,sans-serif;text-align:left}
 .qcard .qtabs,.qcard .qctl{display:flex;flex-wrap:wrap;gap:6px}
@@ -521,12 +537,18 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="termview-compose">
 <button id="termview-back" type="button">Back</button>
 <p class="mut" id="termview-note">Your message arrives as a message from another session, not as your typed input or approval.</p>
+<!-- Rule 9 (#1602): the banner names the outage and the waiting count, and the line names the kept draft's start. -->
+<p id="termview-outage" role="alert" hidden></p>
+<p id="termview-draft" role="status" hidden></p>
 <textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
 <button id="termview-send" type="button">Send</button>
 <p id="termview-sent" class="msg" role="status"></p>
 <button id="termview-acted" type="button" hidden></button>
 </div>
 </section>
+<!-- Frames 20 and 21 (#1602): the attach sheet rises from the bottom edge with three doors and Cancel; the page draws
+     them from the chat module's list, so the view holds no option of its own. -->
+<div id="attach-sheet" role="dialog" aria-label="Attach" hidden></div>
 <section id="runview" hidden>
 <div id="runview-head"><button id="run-backtop" data-topback="run" type="button">&#8249; Runs</button><span id="runview-name"></span></div>
 <div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p><p id="runov-session-row" class="runov-row" hidden><b>Session</b> <button id="runov-open" type="button">Open the session</button></p><pre id="runov-tail" class="runov-tail"></pre></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
@@ -2318,9 +2340,25 @@ let termSid = null, termCursor = null, termBusy = false;
 const termDrawn = new Set();
 // One composer per session (#1006): its draft, its send feedback, its pending request, and the request id a retry reuses.
 const termDrafts = new Map();
-const termDraft = sid => { if (!termDrafts.has(sid)) termDrafts.set(sid, { text: "", sent: "", pending: false, cid: null, cidText: null }); return termDrafts.get(sid); };
-function keepDraft() { if (termSid) { const d = termDraft(termSid); d.text = $("termview-text").value; d.sent = $("termview-sent").textContent; } }
-function showDraft() { const d = termDraft(termSid); $("termview-text").value = d.text; $("termview-sent").textContent = d.sent; $("termview-send").disabled = d.pending; }
+// A tab change keeps the draft, the thread's scroll and the receipts of each session (rule 9; #1602): they live in the
+// session's own draft state, and a send the hub never answered waits there with the words and the request id.
+const termDraft = sid => { if (!termDrafts.has(sid)) termDrafts.set(sid, { text: "", sent: "", pending: false, cid: null, cidText: null,
+  scroll: null, failed: [], why: "" }); return termDrafts.get(sid); };
+function keepDraft() {
+  if (!termSid) return;
+  const d = termDraft(termSid);
+  d.text = $("termview-text").value; d.sent = $("termview-sent").textContent;
+  d.scroll = $("termview-turns").scrollTop;
+}
+function paintDraftLine() {
+  const d = termDraft(termSid), line = chatDraftLine(d.text);
+  $("termview-draft").textContent = line; $("termview-draft").hidden = !line;
+}
+function showDraft() {
+  const d = termDraft(termSid);
+  $("termview-text").value = d.text; $("termview-sent").textContent = d.sent; $("termview-send").disabled = d.pending;
+  paintDraftLine(); paintFailed(); paintOutage();
+}
 // One project's row on the Chat root (SPEC 1596, rule 10; #1601): the loop dot, the name, the last message and the time,
 // and the waiting mark. The rules are hub-mobile-chat.js's; the row only draws them (ADR-0137).
 function chatRowNode(r) {
@@ -2339,9 +2377,38 @@ function chatRowNode(r) {
 }
 function turnRow(t) {
   const d = document.createElement("div"), who = document.createElement("b"), text = document.createElement("div");
-  d.className = "turn"; who.textContent = t.role; text.textContent = t.text;
-  d.append(who, text);
+  d.className = "turn"; who.textContent = t.role;
+  const img = chatImage(t.text);
+  if (!img) { text.textContent = t.text; d.append(who, text); return d; }
+  // Frame 17 (#1602): the marker line names the file the attach route wrote, so the bubble draws the hub's image route.
+  const a = document.createElement("a"), pic = document.createElement("img");
+  a.className = "img"; a.href = chatImageSrc(termSid, img); a.target = "_blank"; a.rel = "noopener";
+  pic.className = "thumb"; pic.loading = "lazy"; pic.alt = "image"; pic.src = a.href;
+  a.append(pic);
+  text.textContent = chatImageWords(t.text);
+  d.append(who, a);
+  if (text.textContent) d.append(text);
   return d;
+}
+// A send the hub never answered stays in the thread under a mark that retries on one tap (rule 9; #1602).
+function failedRow(f) {
+  const b = document.createElement("button"), text = document.createElement("div"), mark = document.createElement("span");
+  b.type = "button"; b.className = "turn failed"; b.dataset.cid = f.cid || "";
+  text.textContent = f.text; mark.className = "notsent"; mark.textContent = chatNotSent();
+  b.append(text, mark);
+  b.onclick = () => retrySend(f);
+  return b;
+}
+function paintFailed() {
+  const d = termDraft(termSid), el = $("termview-turns");
+  if (!d || !el) return;
+  for (const n of d.failedNodes || []) n.remove();
+  d.failedNodes = (d.failed || []).map(failedRow);
+  el.append(...d.failedNodes);
+}
+function paintOutage() {
+  const d = termDraft(termSid), line = chatOutage(d.failed, d.why);
+  $("termview-outage").textContent = line; $("termview-outage").hidden = !line;
 }
 // The chat list keeps what it last drew (#1445): the one helper draws the line, the error and then the rows it holds.
 const sessState = { ever: false, n: 0, error: "", groups: [],
@@ -2423,6 +2490,7 @@ function drawTurns(turns) {
   if (!fresh.length) return;
   $("termview-turns").append(...fresh.map(turnRow));
   for (const t of fresh) termDrawn.add(t.k);
+  paintFailed();   // a message the hub never answered stays at the thread's end (#1602)
 }
 async function loadConversation(force) {
   if (termBusy || !termOpen() || !termSid) return;
@@ -2433,9 +2501,11 @@ async function loadConversation(force) {
     const page = await readConversation(null);
     if (sid !== termSid) return;
     const atEnd = termDrawn.size === 0 || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const kept = termDrawn.size === 0 ? chatScroll(termDraft(sid)) : null;   // the tab change's own scroll (#1602)
     if (termDrawn.size === 0) termCursor = page.next;
     drawTurns(page.turns);
-    if (atEnd) el.scrollTop = el.scrollHeight;
+    if (kept !== null) el.scrollTop = kept;
+    else if (atEnd) el.scrollTop = el.scrollHeight;
     if (force) squadStream.watch(sid, page.epoch, page.end);
     $("termview-older").hidden = termCursor === null;
     $("termview-msg").textContent = "";
@@ -2580,15 +2650,13 @@ $("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) l
 every("terminals", loadConversation, 3000);
 every("terminals", pollCard, 3000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") loadConversation(); });
-$("termview-send").onclick = async () => {
-  const text = $("termview-text").value.trim(), sid = termSid;
-  if (!text || !sid) return;
-  const d = termDraft(sid);
+// One text send, for the composer and for a waiting message's one-tap retry (rule 9; #1602): the request carries the
+// draft's own client id, so a retry is the same request and the hub answers it once. A send the hub never answered stays
+// in the thread under the not-sent mark, and the banner names the outage and how many messages wait.
+async function sendText(sid, text, d, waiting, clearField) {
   if (d.pending) return;
-  // A retry of the same text reuses its request id, so the hub answers it once; a new text is a new request.
-  if (d.cidText !== text) { d.cid = crypto.randomUUID(); d.cidText = text; }
   const say = msg => { d.sent = msg; if (sid === termSid) $("termview-sent").textContent = msg; };
-  d.pending = true; $("termview-send").disabled = true;
+  d.pending = true; if (sid === termSid) $("termview-send").disabled = true;
   say("Sending");
   try {
     const r = await writing(fetch("/api/sessions/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, text, client_id: d.cid }) }));
@@ -2597,10 +2665,42 @@ $("termview-send").onclick = async () => {
     const word = { sent: "Sent: the session's inbox accepted the message", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
     say(word + (res.reason ? " (" + res.reason + ")" : ""));
     if (res.status === "sent" || res.status === "refused") { d.cid = null; d.cidText = null; }
-    if (res.status === "sent") { d.text = ""; if (sid === termSid) $("termview-text").value = ""; }
-  } catch (err) { say(err.message); }
-  finally { d.pending = false; if (sid === termSid) $("termview-send").disabled = false; }
+    if (res.status === "sent") {
+      d.failed = (d.failed || []).filter(f => f !== waiting); d.why = "";   // a later success clears the row and the banner
+      if (clearField) { d.text = ""; if (sid === termSid) $("termview-text").value = ""; }
+    }
+  } catch (err) {
+    d.why = err.message;
+    if (waiting) waiting.why = err.message;
+    else (d.failed = d.failed || []).push({ cid: d.cid, text, why: err.message });
+    say(err.message);
+  } finally {
+    d.pending = false;
+    if (sid === termSid) { $("termview-send").disabled = false; paintFailed(); paintOutage(); paintDraftLine(); }
+  }
+}
+function retrySend(f) {
+  const sid = termSid, d = sid ? termDraft(sid) : null;
+  if (!d || d.pending || !f) return;
+  d.cid = f.cid; d.cidText = f.text;
+  sendText(sid, f.text, d, f, false);
+}
+$("termview-send").onclick = async () => {
+  const text = $("termview-text").value.trim(), sid = termSid;
+  if (!text || !sid) return;
+  const d = termDraft(sid);
+  if (d.pending) return;
+  // A retry of the same text reuses its request id, so the hub answers it once; a new text is a new request.
+  if (d.cidText !== text || !d.cid) { d.cid = crypto.randomUUID(); d.cidText = text; }
+  await sendText(sid, text, d, null, true);
 };
+// The composer's own line follows the draft as it is typed, so the kept draft is named before the owner leaves the tab.
+$("termview-text").addEventListener("input", () => {
+  if (!termSid) return;
+  const d = termDraft(termSid);
+  d.text = $("termview-text").value;
+  paintDraftLine();
+});
 // The one badge and Now › Needs you read the session list on every tab, so this poll is not gated by a panel (rule 10).
 setInterval(() => { if (!document.hidden && !termOpen() && !squadStream.live()) loadSessions(); }, 10000);
 // terminals:end
