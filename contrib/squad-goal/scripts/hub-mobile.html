@@ -31,10 +31,34 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 /* An imported PR link is a 44 px target. A failed load read marks the card stale: a note says why, the readings dim. */
 #inst .at a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}
 #inst-stale{margin:0 0 8px;color:var(--warn);font-size:var(--fs-caption)}#inst.stale .igs,#inst.stale .ian{opacity:.5}
-#loop{padding:12px;border-radius:var(--radius-lg);background:var(--panel);border:1px solid var(--line)}
-#loop.on #loop-text{color:var(--ok)}#loop.off #loop-text{color:var(--err)}#loop.draining #loop-text,#loop.starting #loop-text{color:var(--warn,var(--warn))}
-#loop-ctl{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}#loop-ctl button,#loop-confirm button{min-height:44px;padding:0 14px}#loop-ctl button:disabled{opacity:.45}#loop-reason:not(:empty){color:var(--mute)}
+/* The loop strip (SPEC 1596, rule 8; #1599): the aggregate over every project, then one row per project. A row is a 44 px
+   target and names its project, so no switch is ever unnamed. */
+#loops-strip{display:grid;gap:8px;padding:12px;border-radius:var(--radius-lg);background:var(--panel);border:1px solid var(--line)}
+#loops-open{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;min-height:44px;text-align:left;background:none;color:var(--fg);border:0;font:var(--fs-body) system-ui,sans-serif;padding:0}
+#loops-open b{font-size:var(--fs-body)}#loops-sub{color:var(--mute);font-size:var(--fs-caption)}
+#loops-rows{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+#loops-rows:empty{display:none}
+.looprow{display:block;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
+.looprow b{display:block;font-weight:600}.looprow .mut{color:var(--mute);font-size:var(--fs-caption)}
+.looprow.on b{color:var(--ok)}.looprow.off b{color:var(--err)}.looprow.draining b,.looprow.starting b{color:var(--warn,var(--warn))}
+#loops-msg:not(:empty){color:var(--err);font-size:var(--fs-caption)}
+#loops-content,#loop-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#loops-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+#loops-log{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:var(--mute);font-size:var(--fs-caption)}
+#loops-actions,#loop-actions{flex:none;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#loop-actions button,#loops-actions button{min-height:44px}
+#loop-actions #loop-primary{flex:1;text-align:center}
+#loop-primary:disabled,#loop-secondary:disabled{opacity:.45}
+#loop-primary.requested{box-shadow:inset 0 -2px 0 var(--warn,var(--warn))}#loop-primary.refused{box-shadow:inset 0 -2px 0 var(--err)}
+#loop-state{font:600 var(--fs-body) system-ui,sans-serif;margin:0 0 10px}
+#loop-state.on{color:var(--ok)}#loop-state.off{color:var(--err)}#loop-state.draining,#loop-state.starting{color:var(--warn,var(--warn))}
+#loop-facts{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0 0 10px;font-size:var(--fs-body)}
+#loop-facts dt{color:var(--mute)}#loop-facts dd{margin:0;overflow-wrap:anywhere}
+#loop-reason:not(:empty){color:var(--mute);font-size:var(--fs-caption)}
 #loop-confirm{border:1px solid var(--err);border-radius:var(--radius-lg);padding:10px;margin:8px 0}
+#loop-confirm button{min-height:44px;padding:0 14px;margin-right:8px}
+#loop-menu{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone);padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#loop-menu[hidden]{display:none}#loop-menu button{min-height:44px;width:100%}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 6px;text-align:center}
 .tile b{display:block;font-size:var(--fs-display)}
@@ -221,6 +245,15 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #runoverview .runov-row{margin:0 0 10px}
 #runov-issues{white-space:pre-line}
 #runov-verdict-row[hidden]{display:none}
+/* The run's one primary takes the row's free width; the secondary keeps its own size beside it (#1604). */
+#run-primary{flex:1 1 100%;min-height:44px;background:var(--acc);color:var(--bg);border:1px solid var(--acc);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#run-primary[hidden]{display:none}
+#run-menu{position:absolute;right:14px;bottom:calc(62px + 8px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);z-index:25}
+#run-menu[hidden]{display:none}
+#run-menu button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#runov-tail{margin:0;white-space:pre-line;font:var(--fs-caption) var(--font-mono);color:var(--mute);overflow-wrap:anywhere}
+#runov-session-row[hidden],#runov-open[hidden]{display:none}
+#runov-open{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
 #termview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
 #termview[hidden]{display:none}
 #termview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
@@ -286,20 +319,48 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
 <section data-panel="monitor">
+<button id="now-today" type="button" hidden></button>
 <div id="now-head" data-role="header"><h2>Now</h2><button id="now-more" type="button">More</button></div>
 <!--INST_CARD-->
-<div id=iloop></div>
-<div id=loop-box>
-<div id=loop><span id=loop-text>Loading the loop status.</span></div>
-<div id=loop-ctl>
-<button id=loop-start type=button>Start</button>
-<button id=loop-drain type=button>Drain and stop</button>
-<button id=loop-now type=button>Stop now</button>
+<!-- The loop strip (SPEC 1596, rule 8; #1599): one loop belongs to one project, so the strip aggregates every project
+     the hub serves and a row opens that project's loop. It never shows one unnamed switch. -->
+<div id=iloop>
+<div id=loops-strip data-role=loops>
+<button id=loops-open type=button aria-haspopup="dialog"><b id=loops-agg>Loops</b> <span id=loops-sub></span></button>
+<ul id=loops-rows></ul>
+<p id=loops-msg role=status></p>
 </div>
-<p id=loop-reason></p>
+</div>
+<article id=loops data-screen=loops hidden>
+<div id=loops-content><div class=scr-head><button id=loops-backtop data-topback=loops type=button>&#8249; Now</button><h2>Loops</h2></div>
+<p id=loops-agg-line></p>
+<ul id=loops-list></ul>
+<h3 class=sub>Change log</h3>
+<ol id=loops-log></ol>
+<p id=loops-state class=msg role=status></p></div>
+<div id=loops-actions><button id=loops-backact data-actback type=button>Back</button></div>
+</article>
+<article id=looppage data-screen=loop hidden>
+<div id=loop-content><div class=scr-head><button id=loop-backtop data-topback=loop type=button>&#8249; Loops</button><h2 id=loop-title>Loop</h2></div>
+<div id=loop-state></div>
+<dl id=loop-facts></dl>
+<p id=loop-reason role=status></p>
 <div id=loop-confirm hidden><p id=loop-confirm-text></p><button id=loop-confirm-go type=button>Stop now</button><button id=loop-confirm-no type=button>Cancel</button></div>
-<details id=loop-log-box><summary>Change log</summary><ol id=loop-log></ol></details>
 </div>
+<div id=loop-actions>
+<button id=loop-backact data-actback type=button>Back</button>
+<button id=loop-dots type=button aria-label="More actions" aria-haspopup="true">&#8226;&#8226;&#8226;</button>
+<button id=loop-secondary type=button hidden></button>
+<button id=loop-primary type=button></button>
+</div>
+<div id=loop-menu hidden><button id=loop-menu-stop type=button>Stop now</button></div>
+</article>
+<article id=loopbugs data-screen=bugs hidden>
+<div id=bugs-content><div class=scr-head><button id=bugs-backtop data-topback=bugs type=button>&#8249; Loop</button><h2 id=bugs-title>Loop-bugs</h2></div>
+<ul id=bugs-list></ul>
+<p id=bugs-msg class=msg role=status></p></div>
+<div id=bugs-actions><button id=bugs-backact data-actback type=button>Back</button></div>
+</article>
 <div class=tiles>
 <div class=tile><b id=t-live>-</b><span>live runs</span></div>
 <div class=tile><b id=t-spend>-</b><span>spend today</span></div>
@@ -334,6 +395,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section data-panel="runs" hidden>
 <h2>Runs</h2>
+<button id="runs-usage" type="button">Usage</button>
 <h3 class="sub">Live</h3>
 <div id="runs-live" class="runlist"></div>
 <h3 class="sub">Ended today</h3>
@@ -396,9 +458,21 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section data-panel="specs" hidden>
 <div id="specs-head" data-role="header"><h2>Specs</h2></div>
-<p class="msg" role="status">The specs list is not drawn on this build.</p>
+<p id="specs-state" class="msg" role="status"></p>
+<div id="specs-list" class="runlist"></div>
 </section>
 </main>
+<section id="usage-screen" hidden>
+<div class="scr-head"><button id="usage-back" data-topback="usage" type="button">&#8249; Runs</button><h2>Usage</h2></div>
+<div id="usage-periods" role="group" aria-label="Period"><button data-usage-period="hour" type="button" aria-pressed="false">Hour</button><button data-usage-period="day" type="button" aria-pressed="true">Day</button><button data-usage-period="month" type="button" aria-pressed="false">Month</button></div>
+<p id="usage-state" class="msg" role="status"></p>
+<h3 class="sub">Tokens</h3>
+<div id="usage-bars"></div>
+<p id="usage-peak" class="mut"></p>
+<h3 class="sub">Models · this month</h3>
+<div id="usage-pie"></div>
+<div id="usage-legend"></div>
+</section>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
 <div id="sheet-content"><div class="grab"></div>
 <div id="sh-head"><button id="sh-backtop" data-topback="sheet" type="button">&#8249; Work</button><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
@@ -429,8 +503,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section id="runview" hidden>
 <div id="runview-head"><button id="run-backtop" data-topback="run" type="button">&#8249; Runs</button><span id="runview-name"></span></div>
-<div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
-<div id="runview-actions"><button id="runview-back" type="button">Back</button><button id="rundesk-btn" type="button">Desktop dashboard</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div></div>
+<div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p><p id="runov-session-row" class="runov-row" hidden><b>Session</b> <button id="runov-open" type="button">Open the session</button></p><pre id="runov-tail" class="runov-tail"></pre></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
+<div id="runview-actions"><button id="runview-back" data-actback type="button">Back</button><button id="run-dots" type="button" aria-label="More actions" aria-haspopup="true">•••</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
+<div id="run-menu" hidden><button id="rundesk-btn" type="button">Desktop dashboard</button></div>
 </section>
 <!-- The control row of SPEC 1596 (#1598, rule 4): one row on every root, above the tab bar, never on a detail. -->
 <div id="control-row" data-role="control-row"><div id="cr-seg" role="group" aria-label="Filter"></div><button id="cr-scope" type="button">All projects</button></div>
@@ -454,8 +529,11 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*CARD_DETAIL*/
 /*LINK*/
 /*RUN*/
+/*USAGE*/
+/*SPECS*/
 /*BOARD_FILTER*/
 /*CARD_RULES*/
+/*LOOP_RULES*/
 /*QUESTION*/
 const $ = id => document.getElementById(id);
 // <question-card-view>
@@ -569,14 +647,22 @@ const LAYER = {
   term: { show(s) { showConversation(s.sid, s.name); }, hide() { hideConversation(); } },
   run: { show(s) { showRun(s); }, hide() { hideRun(); } },
   cost: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
+  usage: { show() { showUsage(); }, hide() { hideUsage(); } },
   lead: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
   more: { show() { moreScreen = null; paintPanel(); }, hide() { moreScreen = null; paintPanel(); } },
+  // The Loops list names every project and the change log across them; a row opens one project's loop; the loop page
+  // writes to that one project (SPEC 1596, rule 8; #1599).
+  loops: { show() { $("loops").hidden = false; loopDraw(); }, hide() { $("loops").hidden = true; } },
+  loop: { show(s) { loopSlug = (s && s.slug) || ""; $("looppage").hidden = false; drawLoop(); },
+          hide() { $("looppage").hidden = true; $("loop-confirm").hidden = true; } },
+  bugs: { show() { $("loopbugs").hidden = false; }, hide() { $("loopbugs").hidden = true; } },
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
 // screen a nested one stands on.
-const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", cost: "now", lead: "now", more: "now" };
-const LAYER_TITLE = { sheet: "Card", psheet: "Projects", term: "Session", run: "Run", cost: "Cost and usage", lead: "Lead time", more: "More" };
-const LAYER_PARENT = { cost: "more", lead: "more" };
+const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", usage: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now" };
+const LAYER_TITLE = { sheet: "Card", psheet: "Projects", term: "Session", run: "Run", usage: "Usage", cost: "Cost and usage", lead: "Lead time", more: "More",
+                      loops: "Loops", loop: "Loop", bugs: "Loop-bugs" };
+const LAYER_PARENT = { cost: "more", lead: "more", loop: "loops", bugs: "loop" };
 const screenChain = name => { const out = []; for (let p = LAYER_PARENT[name]; p; p = LAYER_PARENT[p]) out.unshift(p); return out; };
 const tabStacks = { now: [], work: [], specs: [], chat: [], runs: [] };
 const layerState = { now: {}, work: {}, specs: {}, chat: {}, runs: {} };
@@ -614,9 +700,13 @@ const SEG = {
   psheet: () => "profile",
   term: s => withQuery("session=" + encodeURIComponent(s.sid), [["name", s.name]]),
   run: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
-  cost: () => "usage",
+  cost: () => "usage",   // the address `/usage` has always named, so an old link opens the same screen
+  usage: () => "tokens",
   lead: () => "lead",
   more: () => "more",
+  loops: () => "loops",
+  loop: s => "loop=" + encodeURIComponent(s.slug || ""),
+  bugs: () => "bugs",
 };
 const routeHash = s => "#/" + ((s && s.tab) || tabActive) + (s && s.layer && SEG[s.layer] ? "/" + SEG[s.layer](s) : "");
 function routeFromHash(hash) {
@@ -626,8 +716,12 @@ function routeFromHash(hash) {
   const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
   if (head === "profile") out.layer = "psheet";
   else if (head === "more") out.layer = "more";
-  else if (head === "usage") out.layer = "cost";
+  else if (head === "usage") out.layer = "cost";   // `/usage` names the cost screen alone, whatever tab the address carries
+  else if (head === "tokens") out.layer = "usage";
   else if (head === "lead") out.layer = "lead";
+  else if (head === "loops") out.layer = "loops";
+  else if (head === "bugs") out.layer = "bugs";
+  else if (head.startsWith("loop=")) { out.layer = "loop"; out.data = { slug: decodeURIComponent(head.slice(5)) }; }
   else if (head.startsWith("card=")) { out.layer = "sheet"; out.data = { n: +head.slice(5) }; }
   else if (head.startsWith("session=")) { out.layer = "term"; out.data = { sid: decodeURIComponent(head.slice(8)), name: q.name || "" }; }
   else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
@@ -915,7 +1009,6 @@ const $ = s => document.querySelector(s), esc = s => escHTML(s);
 return { instDraw };
 })();
 // The card is the whole tab here: a tap on its title never folds it (the desktop's card still folds).
-$("iloop").append($("loop-box"));   // this page keeps the switch in its own card (owner, 2026-11-01)
 const instHead = $("inst").querySelector("summary");
 instHead.addEventListener("click", e => e.preventDefault());
 instHead.tabIndex = -1;
@@ -944,46 +1037,106 @@ status();
 // The status read drives #reconnect, which covers every tab, so it polls on every tab while the app is in view.
 setInterval(() => { if (!document.hidden) status(); }, 5000);
 
-let loopNow = { runs: [], gates: [] };
-const loopWhen = s => { const m = String(s || "").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/); return m ? m[1] + " " + m[2] : String(s || ""); };
+// Loops per project (SPEC 1596, rule 8; #1599): one loop belongs to one project. The hub's loop fact lists every project,
+// so the Now strip aggregates it and one row per project opens that project's loop. The Loops list names every project
+// and the change log across them; the loop page writes to one project only, through that project's own route. The state
+// rules live in the rule module (loopAggregate, loopPrimary), never here (ADR-0137).
+let loopV = null, loopSlug = "";
+const loopProjects = () => (loopV && loopV.projects) || [];
+const loopOf = slug => loopProjects().find(p => p.slug === slug) || null;
+const loopHere = () => loopOf(loopSlug);
 // a read-only view and a failed start: both reasons show (#923)
 const loopReason = v => [v.reason, v.failed ? "The last start failed: " + v.failed : ""].filter(Boolean).join(". ");
-const loopLive = l => (l.runs || []).map(r => "run " + r.split("/").pop()).concat(l.gates || []);
+function loopRow(p) {
+  const b = document.createElement("button"), name = document.createElement("b"), line = document.createElement("span");
+  b.type = "button"; b.className = "looprow " + String(p.state || "");
+  b.setAttribute("data-loop-project", p.slug || "");
+  name.textContent = p.slug || p.repo || "this project";
+  line.className = "mut"; line.textContent = loopRowLine(p);
+  b.append(name, line);
+  b.onclick = () => openLayer("loop", { slug: p.slug || "" });
+  return b;
+}
+const loopItems = ps => ps.map(p => { const li = document.createElement("li"); li.append(loopRow(p)); return li; });
+function loopDraw() {
+  const ps = loopProjects(), agg = loopAggregate(ps), n = ps.length === 1 ? "1 project" : ps.length + " projects";
+  $("loops-agg").textContent = agg;
+  $("loops-sub").textContent = ps.length ? n : "";
+  $("loops-agg-line").textContent = ps.length ? agg + " · " + n : agg;
+  $("loops-rows").replaceChildren(...loopItems(ps));
+  $("loops-list").replaceChildren(...loopItems(ps));
+  $("loops-log").replaceChildren(...((loopV && loopV.changes) || []).map(e => {
+    const li = document.createElement("li");
+    li.textContent = (e.project || "this project") + " · " + loopChangeLine(e) + (e.failed ? " · failed: " + e.failed : "")
+      + (e.killed ? " · killed " + (loopLiveNames(e.killed).join(", ") || "nothing") : "");
+    return li;
+  }));
+  if (loopSlug || topLayer() === "loop") drawLoop();
+}
+function drawLoop() {
+  const p = loopHere(), name = p ? (p.slug || p.repo || "this project") : "this project";
+  $("loop-title").textContent = "Loop · " + name;
+  const v = loopPrimary(p, !!(p && p.write), p && p.reason);
+  const live = loopLiveNames(p && p.live);
+  $("loop-state").className = (p && p.state) || "off";
+  $("loop-state").textContent = "Loop " + loopStateWord(p && p.state);
+  $("loop-facts").replaceChildren(...[
+    ["Live now", live.length ? live.join(", ") : "no live run or gate"],
+    ["Last landing", p && p.landing ? "issue #" + p.landing.issue : "none read"],
+    ["Last change", loopChangeLine(p && p.change)],
+    ["Loop-bugs", p && p.bugs ? p.bugs + " open" : "none open"],
+  ].flatMap(([k, val]) => { const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = k; dd.textContent = val; return [dt, dd]; }));
+  const prim = $("loop-primary");
+  prim.textContent = v.label; prim.disabled = !!v.disabled; prim.className = v.state;
+  prim.setAttribute("data-state", v.state);
+  prim.title = v.sub || "";
+  prim.onclick = v.disabled ? null : () => loopAct(v.act);
+  const sec = $("loop-secondary");
+  sec.hidden = !v.secondary;
+  sec.textContent = v.secondary || "";
+  sec.onclick = v.secondary ? () => openBugs() : null;
+  $("loop-dots").hidden = !loopStopNowOffered(p, !!(p && p.write));
+  $("loop-menu").hidden = true;
+  $("loop-reason").textContent = v.state === "refused" ? v.sub : "";
+}
+function openBugs() {
+  const p = loopHere(), bugs = (p && p.bugs_open) || [];
+  $("bugs-title").textContent = "Loop-bugs · " + ((p && (p.slug || p.repo)) || "this project");
+  $("bugs-list").replaceChildren(...bugs.map(x => {
+    const li = document.createElement("li"), b = document.createElement("button");
+    b.type = "button"; b.className = "looprow";
+    b.textContent = "#" + x.n + " " + (x.t || "");
+    b.onclick = () => openLayer("sheet", { n: x.n });
+    li.append(b); return li;
+  }));
+  $("bugs-msg").textContent = bugs.length ? "" : "No open loop-bug is read now: the refusal may have just cleared.";
+  openLayer("bugs");
+}
 async function loopView(fresh) {
-  try {
-    const v = await call("/api/loop", fresh);
-    $("loop").className = v.state;
-    $("loop-text").textContent = v.state + (v.who ? " - changed by " + v.who + " at " + loopWhen(v.when) : "");
-    const can = v.actions || [];   // the hub names the allowed actions; this page holds no state rule
-    $("loop-start").disabled = !can.includes("start");
-    $("loop-drain").disabled = !can.includes("drain");
-    $("loop-now").disabled = !can.includes("stop-now");
-    $("loop-reason").textContent = loopReason(v);
-    loopNow = v.live;
-    $("loop-log").replaceChildren(...v.log.map(e => {
-      const li = document.createElement("li");
-      li.textContent = loopWhen(e.at) + " " + e.who + " (" + e.from + "): " + e.action + (e.failed ? " failed: " + e.failed : "") + (e.killed ? ", killed " + (loopLive(e.killed).join(", ") || "nothing") : "") + (e.survived ? ", not ended " + loopLive(e.survived).join(", ") : "");
-      return li;
-    }));
-  } catch (e) { $("loop-reason").textContent = e.message; }
+  if (!loopV) $("loops-msg").textContent = "Loading the loop status.";
+  try { loopV = await call("/api/loop", fresh); $("loops-msg").textContent = ""; loopDraw(); }
+  catch (e) { $("loops-msg").textContent = e.message; }
 }
 async function loopAct(action, extra) {
   $("loop-reason").textContent = "";
+  const p = loopHere(), path = p && p.own ? "/api/loop" : "/" + loopSlug + "/api/loop";   // one project's own route
   try {
-    const r = await writing(fetch("/api/loop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra }), cache: "no-store" }));
+    const r = await writing(fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, client: "phone", ...extra }), cache: "no-store" }));
     const out = await r.json();
     if (!r.ok) throw new Error(out.reason || out.err || "The hub answered " + r.status + ".");
-    if (action === "stop-now") $("loop-reason").textContent = "Stopped. Killed: " + (loopLive(out.killed).join(", ") || "nothing") + "." + (out.survived ? " Not ended: " + loopLive(out.survived).join(", ") + "." : "");
+    if (action === "stop-now") $("loop-reason").textContent = "Stopped. Killed: " + (loopLiveNames(out.killed).join(", ") || "nothing") + "." + (out.survived ? " Not ended: " + loopLiveNames(out.survived).join(", ") + "." : "");
   } catch (e) { $("loop-reason").textContent = e.message; }
   $("loop-confirm").hidden = true;
-  loopView(true);
+  await loopView(true);
 }
-$("loop-start").onclick = () => loopAct("start");
-$("loop-drain").onclick = () => loopAct("drain");
-$("loop-now").onclick = () => {
-  const names = loopLive(loopNow);
+$("loops-open").onclick = () => openLayer("loops");
+$("loop-dots").onclick = () => { $("loop-menu").hidden = !$("loop-menu").hidden; };
+// Stop now asks once more, and its confirm names the runs and gates it kills (rule 8; ADR-0162 rule 4).
+$("loop-menu-stop").onclick = () => {
+  const names = loopLiveNames(loopHere() && loopHere().live);
   $("loop-confirm-text").textContent = names.length ? "Stop now kills: " + names.join(", ") + "." : "Stop now kills no live run or gate.";
   $("loop-confirm").hidden = false;
+  $("loop-menu").hidden = true;
 };
 $("loop-confirm-go").onclick = () => loopAct("stop-now", { confirm: true });
 $("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
@@ -1331,7 +1484,36 @@ function renderFilters() {
   lfl.querySelectorAll("input").forEach(c => c.checked = sel.includes(c.value));
   $("lf").querySelector("summary").textContent = sel.length ? sel.join(", ") : "labels";
 }
-const refresh = () => { renderBoard(); renderSheet(); renderFilters(); };
+const refresh = () => { renderBoard(); renderSheet(); renderFilters(); drawSpecs(); };
+// Specs (#1604): each open spec with its tickets by column, from the board this page reads. hub-mobile-specs.js shapes it.
+function drawSpecs() {
+  const rows = specProgress(board);
+  $("specs-state").textContent = !board ? "The board is loading." : rows.length ? "" : "No open spec.";
+  $("specs-list").replaceChildren(...rows.map(specRowEl));
+}
+function specRowEl(s) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const head = document.createElement("b");
+  head.textContent = (s.repo ? s.repo + " · " : "") + "SPEC " + s.n + " " + s.title;
+  const bar = document.createElementNS(NS_SVG, "svg"), at = { x: 0 };
+  bar.setAttribute("viewBox", "0 0 100 8");
+  for (const seg of s.bar) {
+    const r = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title");
+    r.setAttribute("x", at.x); r.setAttribute("y", 0); r.setAttribute("width", seg.w); r.setAttribute("height", 8); r.setAttribute("fill", seg.color || "var(--acc)");   // the column's own fill, served on the group
+    t.textContent = `${seg.col}: ${s.cols.find(c => c.col === seg.col).n}`;
+    r.append(t);
+    bar.append(r);
+    at.x += seg.w;
+  }
+  const count = document.createElement("div"), legend = document.createElement("div");
+  count.className = "mut";
+  count.textContent = s.count;
+  legend.className = "mut";
+  legend.textContent = s.legend;
+  row.append(head, bar, count, legend);
+  return row;
+}
 const step = g => { offBoard = null; view = sheetStep(view, shown, g); refresh(); };
 async function loadBoard(fresh) {
   if (!board) renderBoard();   // before the first read answers, the board says it is loading (#1008)
@@ -1727,6 +1909,83 @@ document.querySelector('[data-screen="lead"] #ltplot').addEventListener("click",
 });
 // The cost list keeps what it last drew (#1445): the one helper draws the line, the error and then the held rows. The
 // lead-time screen keeps its single line, which this change leaves alone.
+// Runs › Usage (#1604): the desktop's /api/stats payload for the period the owner picks. hub-mobile-usage.js shapes it; the
+// screen fetches, draws and computes no number of its own (ADR-0137).
+const usageState = { period: "day", data: null, seq: 0 };
+const NS_SVG = "http://www.w3.org/2000/svg";
+function usageBarsEl(bars) {
+  const svg = document.createElementNS(NS_SVG, "svg"), bw = CH_W / bars.length;
+  svg.setAttribute("viewBox", `0 0 ${CH_W} ${CH_H}`);
+  bars.forEach((b, i) => {
+    const r = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title"), h = b.h / 100 * (CH_H - 4);
+    r.setAttribute("x", i * bw + 1);
+    r.setAttribute("y", CH_H - h);
+    r.setAttribute("width", Math.max(1, bw - 2));
+    r.setAttribute("height", h);
+    r.setAttribute("fill", "var(--acc)");
+    t.textContent = `${b.label}: ${usageCount(b.tokens)}`;
+    r.append(t);
+    svg.append(r);
+  });
+  return svg;
+}
+function usageRingEl(slices) {
+  const svg = document.createElementNS(NS_SVG, "svg");
+  svg.setAttribute("viewBox", "0 0 120 120");
+  usageRing(slices, 50).forEach((s, i) => {
+    const c = document.createElementNS(NS_SVG, "circle");
+    c.setAttribute("cx", 60);
+    c.setAttribute("cy", 60);
+    c.setAttribute("r", 50);
+    c.setAttribute("fill", "none");
+    c.setAttribute("stroke-width", 20);
+    c.setAttribute("stroke", `hsl(${i * 60} 60% 55%)`);
+    c.setAttribute("stroke-dasharray", `${s.len} ${2 * Math.PI * 50}`);
+    c.setAttribute("stroke-dashoffset", s.off);
+    c.setAttribute("transform", "rotate(-90 60 60)");
+    svg.append(c);
+  });
+  return svg;
+}
+function paintUsage() {
+  const d = usageState.data;
+  const bars = usageBars(d.buckets || [], usageState.period), slices = usageSlices(d.models || []);
+  $("usage-bars").replaceChildren(...(bars.length ? [usageBarsEl(bars)] : []));
+  $("usage-peak").textContent = bars.length ? "Peak " + usagePeak(d.buckets, usageState.period) : "";
+  $("usage-pie").replaceChildren(...(slices.length ? [usageRingEl(slices)] : []));
+  $("usage-legend").replaceChildren(...slices.map(s => { const p = document.createElement("p"); p.className = "mut"; p.textContent = s.legend; return p; }));
+}
+function drawUsagePeriod() {
+  for (const b of document.querySelectorAll("[data-usage-period]")) b.setAttribute("aria-pressed", String(b.dataset.usagePeriod === usageState.period));
+}
+async function loadUsage() {
+  const seq = ++usageState.seq, period = usageState.period;
+  try {
+    const d = await call("/api/stats?period=" + period);
+    if (seq !== usageState.seq) return;
+    usageState.data = d;
+    paintUsage();
+    $("usage-state").textContent = "";
+  } catch (e) {
+    if (seq === usageState.seq) $("usage-state").textContent = e.message;
+  }
+}
+function selectUsagePeriod(period) { usageState.period = period; drawUsagePeriod(); return loadUsage(); }
+function showUsage() { $("usage-screen").hidden = false; drawUsagePeriod(); loadUsage(); }
+function hideUsage() { $("usage-screen").hidden = true; }
+async function loadNowToday() {
+  try {
+    const t = (await call("/api/stats?period=day")).totals || {};
+    $("now-today").textContent = "Today · " + usageTodayLine(t);
+    $("now-today").hidden = false;
+  } catch (e) {
+    $("now-today").hidden = true;
+  }
+}
+$("runs-usage").onclick = () => openLayer("usage");
+$("now-today").onclick = () => { tabTap("runs"); openLayer("usage"); };
+for (const b of document.querySelectorAll("[data-usage-period]")) b.onclick = () => selectUsagePeriod(b.dataset.usagePeriod);
+every("monitor", loadNowToday, 60000);
 const costState = { ever: false, n: 0, error: "", data: null,
   loading: "Cost and usage are loading.", empty: "No model spend is drawn for this period." };
 function drawCost(el) {
@@ -1901,6 +2160,9 @@ async function loadRuns() {
 // Pause and resume: the one write the run screen makes. It posts through the hub's forward route to the run's own control
 // route, as the desktop page does, and it never starts a process (ADR-0118 rule 18). The decision is runControlView's.
 let runId = null, runReply = null, runBusy = false;
+// The run body's session (#1604): the record names the session the run last worked in, and the session route is the
+// conversation the chat screen reads. Nothing here invents a session, and a read that fails draws no row.
+const runBody = { sid: "", card: null, tail: [] };
 async function loadRunControl() {
   const id = runId;
   if (!id) return;
@@ -1913,6 +2175,45 @@ async function loadRunControl() {
   $("runctl-limits").textContent = RUN_LIMITS;
   msg.textContent = runReply ? runReply.text : v.note;
   msg.className = "msg" + (runReply && !runReply.ok ? " err" : "");
+  drawRunActions();
+}
+async function loadRunBody() {
+  const id = runId;
+  if (!id) return;
+  const u = runURLs(id);
+  let record = "";
+  try { record = await (await fetch(u.record, { cache: "no-store" })).text(); } catch (e) { record = ""; }
+  if (id !== runId) return;
+  runBody.sid = runSessionId(record);
+  runBody.card = null; runBody.tail = [];
+  if (runBody.sid) {
+    const q = "?sid=" + encodeURIComponent(runBody.sid);
+    const [card, page] = await Promise.all([
+      call("/api/sessions/card" + q).catch(() => ({ card: null })),
+      call("/api/sessions/conversation" + q).catch(() => ({ turns: [] })),
+    ]);
+    if (id !== runId) return;
+    runBody.card = (card && card.card) || null;
+    runBody.tail = runTailLines((page && page.turns) || []);
+  }
+  drawRunSession();
+  drawRunActions();
+}
+function drawRunSession() {
+  $("runov-tail").textContent = runBody.tail.join("\n");
+  $("runov-open").textContent = runBody.card ? "Answer the coder" : "Open the session";
+  $("runov-open").hidden = !runBody.sid;
+  $("runov-session-row").hidden = !runBody.sid;
+}
+function drawRunActions() {
+  const v = runPrimary(runRows[runId], runBody.card, runBody.sid);
+  $("run-primary-label").textContent = v.label;
+  $("run-primary").dataset.act = v.act;
+  $("run-primary").hidden = !v.act;
+}
+function openRunSession() {
+  if (!runBody.sid) return;
+  openConversation(runBody.sid, ($("runview-name").textContent || "") || "Run session");
 }
 async function sendRunControl() {
   const b = $("runctl-btn"), act = b.dataset.act, id = runId;
@@ -1949,14 +2250,23 @@ function openRun(id, url, name) {
 }
 function showRun(s) {
   runId = s.id; runReply = null;
+  runBody.sid = ""; runBody.card = null; runBody.tail = [];
   $("runframe").src = s.url; $("runview-name").textContent = s.name; $("runview").hidden = false;
   const row = runRows[runId];
-  showDesk(!row); drawRunOverview(row);
+  showDesk(!row); drawRunOverview(row); drawRunSession(); drawRunActions();
   $("runctl-btn").hidden = true; $("runctl-msg").textContent = "";
+  $("run-menu").hidden = true;
   loadRunControl();
+  loadRunBody();
 }
-function hideRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); runId = null; }
-$("rundesk-btn").onclick = () => showDesk($("runoverview").hidden === false);
+function hideRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); $("run-menu").hidden = true; runId = null; }
+$("rundesk-btn").onclick = () => { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); };
+$("run-dots").onclick = () => { $("run-menu").hidden = !$("run-menu").hidden; };
+$("runov-open").onclick = openRunSession;
+$("run-primary").onclick = () => {
+  if ($("run-primary").dataset.act === "session") openRunSession();
+  else { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); }
+};
 for (const id of ["runs-live", "runs-ended", "runs-history"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b && b.dataset.id) openRun(b.dataset.id, b.dataset.url, b.dataset.name); };
 $("runview-back").onclick = () => closeLayer("run");
 $("runctl-btn").onclick = sendRunControl;
@@ -1970,7 +2280,7 @@ document.addEventListener("touchend", e => {
   if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();
 }, { passive: true });
 every("runs", () => { if ($("runview").hidden) loadRuns(); }, 10000);
-every("runs", () => { if (runId && !$("runview").hidden) { loadRuns(); loadRunControl(); } }, 10000);   // the run may pause, resume or end while the screen is open
+every("runs", () => { if (runId && !$("runview").hidden) { loadRuns(); loadRunControl(); loadRunBody(); } }, 10000);   // the run may pause, resume, ask a question or end while the screen is open
 // terminals:begin
 const termOpen = () => !$("termview").hidden;
 let termSid = null, termCursor = null, termBusy = false;
@@ -2154,7 +2464,7 @@ every("terminals", () => { if (!termOpen() && !squadStream.live()) loadSessions(
 // its later states.
 const route = routeFromHash(location.hash);
 const was = history.state || {};
-drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"]'));
+drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"]')); loadNowToday();
 // The address names the screen first, then the entry's own state, then the tab the owner left: a reload lands on it.
 show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getItem("squad-mobile-tab"))));
 // A card link in the address opens its card once the board's read answers (#1459).

@@ -1,51 +1,65 @@
 #!/bin/bash
-# Guard for #923: the phone's Status panel holds the loop switch. It shows the state with who changed it and when; start,
-# drain-stop and stop-now post to /api/loop; a stop-now asks first and its confirm names the live runs and gates it kills;
-# the reason a tailnet request is read-only is shown; the change log is the hub's audit lines. The switch has no Save.
-# Static: the markup and the script's contract with the hub route. No browser, no server.
-# usage: bash test-hub-mobile-loop.sh [path/to/hub-mobile.html]
-d=$(cd "$(dirname "$0")" && pwd); f=${1:-$d/hub-mobile.html}
-python3 - "$f" <<'PY'
+# Guard for #923 and #1599: the phone holds the loop control, and one loop belongs to one project. The Now strip
+# aggregates the hub's loop fact and one row per project opens that project's loop; the Loops list names every project and
+# the change log across them; the loop page writes to one project only, through that project's own route. The primary
+# carries the state: Cancel drain while draining (Stop now under •••), and Start refused with the count while a loop-bug is
+# open. The change log names who, from which page and when; the switch has no Save and no all-loops switch.
+# Static: the markup, the page's contract with the hub route, and the rule module. No browser, no server.
+# usage: bash test-hub-mobile-loop.sh [path/to/hub-mobile.html] [path/to/hub-mobile-loop.js]
+d=$(cd "$(dirname "$0")" && pwd); f=${1:-$d/hub-mobile.html}; js=${2:-$d/hub-mobile-loop.js}
+python3 - "$f" "$js" <<'PY'
 import re, sys
 t = open(sys.argv[1], encoding="utf-8").read()
+r = open(sys.argv[2], encoding="utf-8").read()
 fail = 0
 def check(label, ok):
     global fail
     print(("ok   " if ok else "FAIL ") + label)
     fail |= not ok
-ids = ("loop-text", "loop-start", "loop-drain", "loop-now", "loop-reason", "loop-confirm", "loop-confirm-text", "loop-confirm-go", "loop-confirm-no", "loop-log", "loop-log-box")
-check("the switch has its state, its three controls, its reason, its confirm and its change log", all(f'id={i}' in t or f'id="{i}"' in t for i in ids))
-check("the state pill takes its class from the loop view", '$("loop").className = v.state' in t)
-check("status() no longer draws the state from the read-only status line", "s.loop.on" not in t)
-check("the switch reads the hub's loop route", re.search(r'call\("/api/loop"(, *fresh)?\)', t) is not None)   # the read carries one flag: drop an older answer still in flight
-check("the switch writes to the hub's loop route with POST and a JSON body", re.search(r'fetch\("/api/loop", \{ method: "POST"', t) is not None and 'Content-Type": "application/json"' in t)
-check("start, drain and stop-now post their own action", all(s in t for s in ('loopAct("start")', 'loopAct("drain")', 'loopAct("stop-now", { confirm: true })')))
-check("stop-now opens a confirm before any write", re.search(r'\$\("loop-now"\)\.onclick = \(\) => \{[^}]*loop-confirm"\)\.hidden = false', t, re.S) is not None)
-check("the confirm names the live runs and gates it kills", 'Stop now kills: ' in t and 'loopLive(loopNow)' in t)
-check("the state line names who changed it and when, in the desktop's time format", 'changed by " + v.who + " at " + loopWhen(v.when)' in t)
-check("the change log shows the time in the desktop's format, never the raw ISO stamp", 'li.textContent = loopWhen(e.at) + " "' in t and "e.at + \" \"" not in t)
-check("a failed start is shown", "v.failed" in t and "e.failed" in t)
-import shutil, subprocess
-m = re.search(r"^const loopWhen = .*;$", t, re.M)
-check("the phone has the desktop's loopWhen", m is not None)
-if m and shutil.which("node"):
-    r = subprocess.run(["node", "-e", m.group(0) + '\nprocess.stdout.write(loopWhen("2026-10-31T16:02:09-03:00")+"|"+loopWhen(""))'], capture_output=True, text=True, timeout=10)
-    check("loopWhen reads 2026-10-31 16:02 from an ISO stamp", r.stdout == "2026-10-31 16:02|")
-check("the reason line is drawn by loopReason", '$("loop-reason").textContent = loopReason(v)' in t)
-m = re.search(r"^const loopReason = .*;$", t, re.M)
-check("the phone has loopReason", m is not None)
-if m and shutil.which("node"):
-    js = m.group(0) + '\nprocess.stdout.write(loopReason({reason:"read-only from the tailnet",failed:"watchd did not start"})+"|"+loopReason({reason:"read-only from the tailnet",failed:""})+"|"+loopReason({reason:"",failed:"watchd did not start"}))'
-    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
-    a, b, c = (r.stdout.split("|") + ["", "", ""])[:3]
-    check("a read-only view still shows the failure reason (#923 review 2)", "read-only from the tailnet" in a and "watchd did not start" in a)
-    check("the read-only reason alone is shown alone", b == "read-only from the tailnet")
-    check("the failure alone is shown on a writable view", "watchd did not start" in c and "read-only" not in c)
-check("the change log lists the hub's audit lines", '$("loop-log").replaceChildren(...v.log.map' in t and 'e.from + "): " + e.action' in t)
-check("the draining and starting states have their own colour", "#loop.draining #loop-text" in t and "#loop.starting #loop-text" in t)
-block = t.split('<div id=loop>', 1)[1].split('</details>', 1)[0] if '<div id=loop>' in t else ""
-check("the switch has no Save control", block and not re.search(r"\bsave\b", block, re.I))
-check("the switch script has no Save control", not re.search(r'loop[^\n]*save|save[^\n]*loop', t, re.I))
+def has(txt, i): return f'id={i}' in txt or f'id="{i}"' in txt
+# The strip (rule 8): the aggregate over every project and one row per project. No single unnamed switch.
+strip = ("loops-strip", "loops-open", "loops-agg", "loops-rows", "loops-msg")
+check("the Now strip has its aggregate, its rows and its status line", all(has(t, i) for i in strip))
+check("the strip is a button that opens the Loops list", 'openLayer("loops")' in t)
+check("a project row opens that project's loop", re.search(r'openLayer\("loop", \{ slug:', t) is not None)
+check("a row names its project, so no switch is unnamed", re.search(r'b\.setAttribute\("data-loop-project", p\.slug \|\| ""\)', t) is not None)
+# The Loops list: every project and the change log across them; no switch for all loops at once.
+loops = ("loops", "loops-list", "loops-log", "loops-backtop", "loops-backact", "loops-state")
+check("the Loops list has its projects, its change log and its Back", all(has(t, i) for i in loops))
+check("the Loops list draws every project from the one fact", '$("loops-list").replaceChildren(...loopItems(ps))' in t)
+check("the change log spans projects and names each one", re.search(r'e\.project \|\| "this project"', t) is not None)
+# The loop page: one action row with one primary, Stop now under •••, the confirm that names what it kills.
+page = ("looppage", "loop-title", "loop-state", "loop-facts", "loop-primary", "loop-secondary", "loop-dots", "loop-menu",
+        "loop-menu-stop", "loop-confirm", "loop-confirm-text", "loop-confirm-go", "loop-confirm-no", "loop-reason",
+        "loop-backtop", "loop-backact")
+check("the loop page has its state, its facts, its action row, its menu and its confirm", all(has(t, i) for i in page))
+check("the loop page reads the hub's one loop route", re.search(r'call\("/api/loop"(, *fresh)?\)', t) is not None)
+check("a loop page writes to one project's own route", re.search(r'"http|"/api/loop" : "/" \+ loopSlug \+ "/api/loop"', t) is not None
+      or '"/" + loopSlug + "/api/loop"' in t)
+check("the write names the phone as its source", 'client: "phone"' in t)
+check("the write is a POST with a JSON body", re.search(r'fetch\(path, \{ method: "POST", headers: \{ "Content-Type": "application/json" \}', t) is not None)
+check("the primary carries one of the six states", 'prim.setAttribute("data-state", v.state)' in t)
+check("Stop now sits under the dots menu", re.search(r'\$\("loop-dots"\)\.onclick = \(\) => \{ \$\("loop-menu"\)\.hidden', t) is not None)
+check("Stop now opens a confirm before any write", re.search(r'\$\("loop-menu-stop"\)\.onclick = \(\) => \{[^}]*loop-confirm"\)\.hidden = false', t, re.S) is not None)
+check("the confirm names the live runs and gates it kills", 'Stop now kills: ' in t and 'loopLiveNames(loopHere() && loopHere().live)' in t)
+check("the confirm is the second ask: its own button writes the stop", 'loopAct("stop-now", { confirm: true })' in t)
+check("the change log shows who, which page and when", '$("loops-log")' in t and 'loopChangeLine(e)' in t)
+check("a failed start is still shown", "v.failed" in t and "The last start failed" in t)
+check("the reason line is drawn by loopReason", '$("loop-reason").textContent = v.state === "refused" ? v.sub : ""' in t)
+check("the phone has loopReason", re.search(r"^const loopReason = .*;$", t, re.M) is not None)
+# The rule module: the aggregate and the one primary, pure and free of any write.
+check("the aggregate counts on, off and draining", 'const loopAggregate = projects =>' in r and 'parts.push(c.on + " on")' in r)
+check("the primary offers Cancel drain while draining", re.search(r'state === "draining"\) return \{[^}]*label: "Cancel drain"', r) is not None)
+code = "\n".join(l for l in r.splitlines() if not l.lstrip().startswith("//"))
+check("the primary offers Drain while on, never Stop now", re.search(r'state === "on"\) return \{[^}]*label: "Drain"', code) is not None and "Stop now" not in code)
+check("an off loop with loop-bugs refuses the start and names the count", re.search(r'if \(bugs\) return \{ state: "refused"', r) is not None and '" loop-bug"' in r)
+check("the refusal offers the loop-bugs as its secondary", 'secondary: "Loop-bugs"' in r)
+check("Stop now is offered only while the loop runs", re.search(r'const loopStopNowOffered = .*state === "on" \|\| p\.state === "draining"', r) is not None)
+check("the rule module reads no route and writes nothing", "fetch(" not in r and "POST" not in r)
+block = t.split('<article id=looppage', 1)[1].split('</article>', 1)[0] if '<article id=looppage' in t else ""
+check("the loop page has no Save control", block and not re.search(r"\bsave\b", block, re.I))
+check("the loop page offers no all-loops switch", "data-loop-all" not in t and not re.search(r'loop-all', t))
+check("the rule module has no Save control", not re.search(r"\bsave\b", r, re.I))
 sys.exit(fail)
 PY
 rc=$?

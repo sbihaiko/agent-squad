@@ -45,17 +45,19 @@ def hub(monkeypatch, tmp_path):
     (state / "auto").mkdir(parents=True, exist_ok=True)
     calls = []
 
-    def watchd(*a):   # a start brings the supervisor up: this process stands for it
+    own_state = state
+
+    def watchd(*a, state=None, checkout=None, profile=None):   # a start brings the supervisor up: this process stands for it
         calls.append(list(a))
         if a == ("start",):
-            (state / "watchd.pid").write_text(f"{os.getpid()}\n")
+            ((pathlib.Path(state) if state else own_state) / "watchd.pid").write_text(f"{os.getpid()}\n")
         return 0
     mod.loop_watchd = watchd
     tn = {"host": TN_HOST, "allow": ["alice@example.com"]}
-    mod.tailnet_block = lambda: dict(tn)
+    mod.tailnet_block = lambda checkout=None: dict(tn)
     real_source = mod.tailnet_source
 
-    def stub():   # a test of the production seam calls `stub.real`, never the stub
+    def stub(checkout=None):   # a test of the production seam calls `stub.real`, never the stub
         return dict(tn), str(tmp_path / ".env")
     stub.real = real_source
     mod.tailnet_source = stub
@@ -66,11 +68,11 @@ def hub(monkeypatch, tmp_path):
     srv.server_close()
 
 
-def ask(port, method, body=None, *, origin=None, host=None):
+def ask(port, method, body=None, *, origin=None, host=None, path="/api/loop"):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Host": host or f"127.0.0.1:{port}", "Content-Type": "application/json",
                "Origin": origin if origin is not None else f"http://127.0.0.1:{port}"}
-    c.request(method, "/api/loop", body=None if body is None else json.dumps(body), headers=headers)
+    c.request(method, path, body=None if body is None else json.dumps(body), headers=headers)
     r = c.getresponse()
     data = json.loads(r.read() or b"{}")
     c.close()
@@ -178,7 +180,7 @@ def test_a_tailnet_read_states_the_reach_and_the_rules(hub, monkeypatch):
 def test_the_view_names_the_actions_each_state_allows(hub, monkeypatch, state, actions):
     """The rule that picks the live buttons is the hub's, so the phone page holds no state rule (ADR-0137)."""
     mod, port, _, _, _ = hub
-    monkeypatch.setattr(mod, "loop_state", lambda last, now=None: state)
+    monkeypatch.setattr(mod, "loop_state", lambda last, now=None, **kw: state)
     assert ask(port, "GET")[1]["actions"] == actions
 
 
@@ -293,7 +295,7 @@ def test_the_loop_answer_carries_the_four_health_keys(hub, monkeypatch):
     counts the same answer reports, never four empty keys (#1280)."""
     mod, port, _, _, state = hub
     (state / "cycle.log").write_text(time.strftime("%H:%M:%S") + " CYCLE 30s\n")
-    monkeypatch.setattr(mod, "loop_live", lambda: {"runs": ["run-1"], "gates": ["gate pid 1"]})
+    monkeypatch.setattr(mod, "loop_live", lambda *a, **kw: {"runs": ["run-1"], "gates": ["gate pid 1"]})
     _, v = ask(port, "GET")
     health = v["health"]
     assert {"cycle_age", "starting_left", "live_runs", "live_gates"} <= set(health), health
@@ -589,3 +591,147 @@ def test_the_settings_panel_keeps_its_own_row_box():
     src = page()
     assert re.search(r"#lopb \.lnow\{[^}]*border:1px solid", src), "the Settings row keeps its box"
     assert re.search(r"#inst \.lnow\{[^}]*border:0", src), "the Monitor row carries no box"
+
+
+# ---- loops per project (SPEC 1596, rule 8; #1599) ----
+# A project is one profile the seam lists, and each project keeps its own state directory: its supervisor pid, its drain
+# mark, its live-run list, its change log, its board cache and its loop-bugs. The loop fact lists every one of them, so no
+# page reads one project's state as every project's.
+
+def _profile(dirpath, slug, repo, project):
+    dirpath.mkdir(parents=True, exist_ok=True)
+    (dirpath / f"{slug}.sh").write_text(
+        f': "${{SG_REPO:={repo}}}"\n: "${{SG_OWNER:={repo.split("/")[0]}}}"\n'
+        f': "${{SG_PROJECT:={project}}}"\n: "${{SG_CHECKOUT:=$HOME/src/{slug}}}"\n')
+
+
+@pytest.fixture
+def farm(monkeypatch, tmp_path):
+    """A machine with two projects, `a` and `b`: `a` is the profile in force and is off; `b` runs, drained last from the
+    phone, landed a branch, and holds one open loop-bug."""
+    base, prof = tmp_path / "base", tmp_path / "profiles"
+    _profile(prof, "a", "x/a", 1)
+    _profile(prof, "b", "x/b", 2)
+    for k, v in (("SG_REPO", "x/a"), ("SG_OWNER", "x"), ("SG_PROJECT", "1"), ("SG_PROFILE", "a"),
+                 ("SG_CHECKOUT", str(tmp_path / "a")), ("SG_STATE", str(base / "a")),
+                 ("SG_HUB_DIR", str(tmp_path / "hub")), ("HOME", str(tmp_path)),
+                 ("SG_PROFILES_DIR", str(prof)), ("SG_STATE_BASE", str(base))):
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("SG_SHARED", raising=False)
+    gspec = importlib.util.spec_from_file_location("ghread", GHREAD_PY)
+    gh = importlib.util.module_from_spec(gspec)
+    monkeypatch.setitem(sys.modules, "ghread", gh)
+    gspec.loader.exec_module(gh)
+    spec = importlib.util.spec_from_file_location("hub_loop_projects", HUB_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for slug in ("a", "b"):
+        (base / slug / "auto").mkdir(parents=True, exist_ok=True)
+    (base / "b" / "watchd.pid").write_text(f"{os.getpid()}\n")
+    (base / "b" / "loop-audit.jsonl").write_text(json.dumps(
+        {"at": "2026-11-02T09:00:00-03:00", "who": "owner", "from": "loopback", "client": "phone", "action": "drain"}) + "\n")
+    cache = base / "_boards" / "x_2" / "hub-board.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({
+        "landed": [{"n": 12, "m": True, "c": "2026-11-01T10:00:00Z"}],
+        "items": [{"n": 40, "t": "[loop-bug] the queue stalls", "l": ["loop-bug:dispatch"], "s": "OPEN"},
+                  {"n": 41, "t": "a plain bug", "l": ["bug"], "s": "OPEN"}]}))
+    def watchd(*a, state=None, checkout=None, profile=None):   # a start brings the named project's supervisor up: this process stands for it
+        if a == ("start",):
+            (pathlib.Path(state or base / "a") / "watchd.pid").write_text(f"{os.getpid()}\n")
+        return 0
+    mod.loop_watchd = watchd
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield mod, srv.server_port, base
+    srv.shutdown()
+    srv.server_close()
+
+
+def _by_slug(v):
+    return {p["slug"]: p for p in v.get("projects") or []}
+
+
+def test_the_loop_fact_lists_every_project_with_its_own_state(farm):
+    _, port, _ = farm
+    code, v = get_json(port, "/api/loop")
+    assert code == 200
+    ps = _by_slug(v)
+    assert set(ps) == {"a", "b"}
+    assert ps["a"]["state"] == "off" and ps["b"]["state"] == "on"
+    assert ps["a"]["repo"] == "x/a" and ps["b"]["repo"] == "x/b"
+
+
+def test_a_project_drains_by_its_own_drain_mark(farm):
+    _, port, base = farm
+    (base / "b" / "auto" / "drain").write_text("")
+    ps = _by_slug(get_json(port, "/api/loop")[1])
+    assert ps["b"]["state"] == "draining" and ps["a"]["state"] == "off"
+
+
+def test_a_project_names_its_live_runs_its_landing_its_last_change_and_its_loop_bugs(farm):
+    _, port, _ = farm
+    ps = _by_slug(get_json(port, "/api/loop")[1])
+    b = ps["b"]
+    assert b["live"]["runs"] == [] and b["live"]["gates"] == []
+    assert b["landing"]["issue"] == 12 and b["landing"]["ts"] > 0
+    assert b["change"]["action"] == "drain" and b["change"]["who"] == "owner"
+    assert b["change"]["client"] == "phone" and b["change"]["at"].startswith("2026-11-02")
+    assert b["bugs"] == 1 and [x["n"] for x in b["bugs_open"]] == [40]
+    assert ps["a"]["landing"] is None and ps["a"]["change"] is None and ps["a"]["bugs"] == 0
+
+
+def test_the_change_log_spans_projects_and_names_each_one(farm):
+    _, port, _ = farm
+    v = get_json(port, "/api/loop")[1]
+    top = v["changes"][0]
+    assert top["project"] == "b" and top["action"] == "drain" and top["client"] == "phone"
+
+
+def test_a_projects_write_follows_that_projects_own_tailnet_grant(farm, monkeypatch):
+    mod, port, _ = farm
+    as_tailnet(mod, monkeypatch)
+    monkeypatch.setattr(mod, "tailnet_source",
+                        lambda checkout=None: ({"loop_write": str(checkout).endswith("/b")}, ""))
+    ps = _by_slug(get_json(port, "/api/loop", origin=f"https://{TN_HOST}", host=TN_HOST)[1])
+    assert ps["b"]["write"] is True and ps["a"]["write"] is False
+    assert "SQUAD_TAILNET_LOOP_WRITE" in ps["a"]["reason"] and ps["b"]["reason"] == ""
+
+
+def test_the_loop_switch_records_which_page_changed_it(farm):
+    _, port, base = farm
+    code, _ = ask(port, "POST", {"action": "start", "client": "phone"})
+    assert code == 200
+    last = [json.loads(x) for x in (base / "a" / "loop-audit.jsonl").read_text().splitlines()][-1]
+    assert last["client"] == "phone" and last["action"] == "start"
+
+
+def test_the_profile_list_is_the_seams_own_list(farm):
+    """The per-project rows are discovered from the one seam. This runs the real `address.sh --list` over the farm's real
+    profiles directory, so a change in what the seam prints is caught here and not only on a live hub (#1599)."""
+    mod, _, _ = farm
+    out = subprocess.run(["bash", str(mod.SCRIPTS / "address.sh"), "--list"], capture_output=True, text=True, timeout=20)
+    seam = [ln.split("\t")[0] for ln in out.stdout.splitlines() if ln.strip()]
+    assert seam == ["a", "b"], f"the seam prints the two slugs: {out.stdout!r}"
+    assert mod.profile_list() == seam
+    assert [r["slug"] for r in mod.project_contexts()] == ["a", "b"], "every profile the seam lists is a project the hub serves"
+
+
+def test_a_write_to_one_project_lands_in_that_projects_own_state(farm):
+    """A loop page writes to one project only: `/<slug>/api/loop` applies the start to that project's state directory and
+    audits it there, and the hub's own project is untouched (AC4; ADR-0162)."""
+    _, port, base = farm
+    (base / "b" / "watchd.pid").unlink()   # project b is off, so a start applies to it
+    code, out = ask(port, "POST", {"action": "start", "client": "phone"}, path="/b/api/loop")
+    assert code == 200, out
+    assert (base / "b" / "watchd.pid").is_file(), "the start ran that project's own supervisor, not the hub's"
+    assert [x["action"] for x in audit(base / "b")] == ["drain", "start"], "the change is audited in that project's log"
+    assert audit(base / "a") == [], "the hub's own project is never written by another project's page"
+
+
+def test_a_write_to_a_project_the_hub_does_not_serve_is_refused(farm):
+    """A slug the hub serves no profile for is refused, and no state directory is read or written from it."""
+    _, port, base = farm
+    code, out = ask(port, "POST", {"action": "start", "client": "phone"}, path="/nope/api/loop")
+    assert code == 404 and "nope" in (out.get("reason") or ""), out
+    assert not (base / "nope").exists()

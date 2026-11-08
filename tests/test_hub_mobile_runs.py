@@ -90,8 +90,17 @@ def test_the_run_view_has_no_edge_strip_and_no_back_swipe_handler():
     assert "#edge{" not in html, "the run view keeps the edge strip's style"
 
 
+LOOP_LINE = re.compile(r"\bloop[A-Z]\w*|loops?-|loopOf\b|\bloopV\b")   # the loop page's own names (#1599)
+
+
 def test_the_runs_code_holds_no_run_state_rule():
-    assert not re.search(r"\.state\s*[!=]==?", page())
+    """A run's state is the server's: the runs code never compares one (ADR-0137). The loop page reads its own project's
+    loop state from the hub's fact (`loopPrimary` picks its label), so only the lines that name a loop rule are cut — every
+    other line of the page, the loop block included, is still searched (#1599)."""
+    html = page()
+    rest = "\n".join(ln for ln in html.splitlines() if not LOOP_LINE.search(ln))
+    assert not re.search(r"\.state\s*[!=]==?", rest)
+    assert LOOP_LINE.search('const v = loopPrimary(p, true, "")'), "the exclusion really covers the loop rule lines"
 
 
 # --- the run history at the bottom of the tab (#1337): the phone draws the groups the opted-in answer carries ---
