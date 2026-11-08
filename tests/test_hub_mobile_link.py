@@ -112,7 +112,7 @@ def test_a_card_link_opens_at_once_when_the_board_has_already_loaded(hub):
     link names is on the board already."""
     out = run_page(hub.MOBILE_PAGE, """
         show("board"); await __tick(20);         // the board is read, drawn and held
-        show("more");                            // the owner is on another tab
+        show("runs");                            // the owner is on another tab
         const realCall = call;
         call = (path, fresh) => String(path).startsWith("/api/board") ? new Promise(() => {}) : realCall(path, fresh);
         location.hash = "#issue=3"; __dispatch("hashchange", {});

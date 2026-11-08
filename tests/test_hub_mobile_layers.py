@@ -24,8 +24,7 @@ CARD_CLOSES = {
     "escape": '__dispatch("keydown", { key: "Escape" });',
     "swipe down": ('__dispatch("touchstart", { target: $("sheet-content").querySelector(".grab"), touches: [{ clientX: 200, clientY: 600 }] });'
                    '__dispatch("touchend", { changedTouches: [{ clientX: 200, clientY: 720 }] });'),
-    "tab change": 'show("runs");',
-    "board update": f'__state.board = [{EMPTY_BOARD}]; await loadBoard();',
+    "board update": f'__state.board = [{EMPTY_BOARD}]; await loadBoard(true);',
 }
 
 PROJECT_CLOSES = {
@@ -57,7 +56,8 @@ def test_opening_the_card_sheet_pushes_one_entry(hub):
         openCard(7);
         return { pushed: history.index - base, state: history.state, layers: layers.slice() };
     """, board=[BOARD_ONE])
-    assert out == {"pushed": 1, "state": {"layer": "sheet", "depth": 1, "n": 7}, "layers": ["sheet"]}, out
+    assert out == {"pushed": 1, "state": {"tab": "work", "layer": "sheet", "depth": 1, "n": 7},
+                   "layers": ["sheet"]}, out
 
 
 @pytest.mark.node_bound
@@ -173,6 +173,9 @@ LAYER_BACK = {
     "lead": 'moreTap({ back: "" });',
 }
 
+# A screen opens inside the tab whose list it came from (SPEC 1596): the owner stands on that tab before the open.
+LAYER_TAB_OPEN = {"term": 'show("chat");', "run": 'show("runs");', "cost": "", "lead": ""}
+
 LAYER_HIDDEN = {
     "term": '$("termview").hidden',
     "run": '$("runview").hidden',
@@ -181,10 +184,10 @@ LAYER_HIDDEN = {
 }
 
 RESTORE_STATE = {
-    "term": {"layer": "term", "depth": 1, "sid": "s1", "name": "Session one"},
-    "run": {"layer": "run", "depth": 1, "id": "r1", "url": "/run/r1", "name": "Run one"},
-    "cost": {"layer": "cost", "depth": 1},
-    "lead": {"layer": "lead", "depth": 1},
+    "term": {"tab": "chat", "layer": "term", "depth": 1, "sid": "s1", "name": "Session one"},
+    "run": {"tab": "runs", "layer": "run", "depth": 1, "id": "r1", "url": "/run/r1", "name": "Run one"},
+    "cost": {"tab": "now", "layer": "cost", "depth": 1},
+    "lead": {"tab": "now", "layer": "lead", "depth": 1},
 }
 
 
@@ -194,6 +197,7 @@ def test_each_layer_pushes_one_entry_on_open_and_pops_it_on_close(hub, layer):
     out = run_page(hub.MOBILE_PAGE, f"""
         {MORE_TAP}
         await loadBoard();
+        {LAYER_TAB_OPEN[layer]}
         const base = history.index;
         {LAYER_OPEN[layer]}
         const opened = [history.index - base, layers.slice(), {LAYER_HIDDEN[layer]}];
@@ -210,6 +214,7 @@ def test_forward_reopens_the_layer_its_entry_names(hub, layer):
     out = run_page(hub.MOBILE_PAGE, f"""
         {MORE_TAP}
         await loadBoard();
+        {LAYER_TAB_OPEN[layer]}
         const base = history.index;
         {LAYER_OPEN[layer]}
         {LAYER_BACK[layer]}
@@ -233,22 +238,36 @@ def test_a_reload_with_a_layer_open_restores_it_without_a_second_push(hub, layer
         __popAll();
         return {{ restored, after: [history.index, layers.slice(), {LAYER_HIDDEN[layer]}] }};
     """, history_state=RESTORE_STATE[layer], history_below=True, board=[BOARD_ONE])
-    assert out == {"restored": [1, 2, [layer], False, 0], "after": [0, [], True]}, out
+    # Usage and lead time stand on More (SPEC 1596): the chain above them is restored with them.
+    stack = ["more", layer] if layer in ("cost", "lead") else [layer]
+    assert out == {"restored": [1, 2, stack, False, 0], "after": [0, stack[:-1], True]}, out
+
+
+OWNER_TAB = {"term": "chat", "run": "runs", "cost": "now", "lead": "now"}
 
 
 @pytest.mark.node_bound
 @pytest.mark.parametrize("layer", list(LAYER_OPEN))
-def test_a_tab_change_closes_the_layer_and_pops_its_entry(hub, layer):
+def test_a_tab_change_keeps_the_layer_and_its_entry(hub, layer):
+    """A tab left keeps its screens (SPEC 1596, rule 2): the tab that owns the screen returns to it, and one pop closes it."""
+    owner = OWNER_TAB[layer]
     out = run_page(hub.MOBILE_PAGE, f"""
         {MORE_TAP}
         await loadBoard();
+        {LAYER_TAB_OPEN[layer]}
         const base = history.index;
         {LAYER_OPEN[layer]}
-        show("runs");
+        show("specs");
+        const away = [tabActive, layers.slice(), {LAYER_HIDDEN[layer]}];
+        show("{owner}"); await __tick(20);
+        const back = [tabActive, layers.slice(), {LAYER_HIDDEN[layer]}, history.index - base];
+        {LAYER_BACK[layer]}
         __popAll();
-        return {{ after: history.index - base, layers: layers.slice(), hidden: {LAYER_HIDDEN[layer]}, pending: __pending() }};
+        return {{ away, back, after: [history.index - base, layers.slice()], pending: __pending() }};
     """, board=[BOARD_ONE])
-    assert out == {"after": 0, "layers": [], "hidden": True, "pending": 0}, out
+    assert out["away"] == ["specs", [], True], out
+    assert out["back"] == [owner, [layer], False, 1], out
+    assert out["after"] == [0, []] and out["pending"] == 0, out
 
 
 @pytest.mark.node_bound
@@ -278,5 +297,7 @@ def test_the_layers_open_and_close_by_call_never_by_a_watch_on_hidden(hub):
 
 def test_each_full_screen_layer_keeps_a_bottom_close_on_the_one_close_function(hub):
     page = hub.MOBILE_PAGE
-    assert '<div id="sheet-actions"><button id="sh-close" type="button">Close</button>' in page, "the card sheet keeps its bottom Close"
-    assert '<div id="psw-footer"><button id="pswx" type="button">Close</button></div>' in page, "the project sheet keeps its bottom Close"
+    assert '<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button>' \
+           '<button id="sh-close" type="button">Close</button>' in page, "the card sheet keeps its bottom Back and Close"
+    assert '<div id="psw-footer"><button id="ps-backact" data-actback type="button">Back</button>' \
+           '<button id="pswx" type="button">Close</button></div>' in page, "the project sheet keeps its bottom Back and Close"
