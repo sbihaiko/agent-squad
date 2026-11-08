@@ -4,13 +4,25 @@
 const ACTION_STATES = ["available", "requested", "confirmed", "failed", "unknown", "refused"];
 const twoDigit = n => String(n).padStart(2, "0");
 const hhmm = at => { const d = new Date(at); return twoDigit(d.getHours()) + ":" + twoDigit(d.getMinutes()); };
-// One primary, one of six true states. `f` is the row's move facts plus the page's request record; `now` is the instant
-// the view draws at, so an unknown state names how long it has checked. Requested, unknown and refused never send again.
+// One primary, one of six true states. `f` is the row's move facts, the loop-switch fact and the page's request record;
+// `now` is the instant the view draws at, so an unknown state names how long it has checked. Requested, unknown and
+// refused never send again. A confirmed move stays disabled after its two seconds while the board still names the move
+// it already took, so the primary never invites a second send of it; a row that drops the move or names another one is
+// the next action.
 const primaryView = (f, now) => {
   const to = (f && f.to) || "";
   const base = "Move to " + to;
   const r = (f && f.request) || {};
-  if (r.phase === "confirmed") return { state: "confirmed", label: "Moved to " + to, sub: "", disabled: true };
+  const loop = (f && f.loop) || null;
+  // The loop-switch fact the hub's status read already serves: a card already moved waits while its loop is off.
+  const waitLoop = loop && loop.on === false ? "the loop is off: the card waits for a start" : "";
+  if (r.phase === "confirmed") {
+    const at = now == null ? r.at : now;
+    if (at - r.at < 2000) return { state: "confirmed", label: "Moved to " + (r.to || to), sub: waitLoop, disabled: true };
+    if (!to) return { state: "available", label: "Move", sub: "", disabled: true, hidden: true };
+    if (to !== r.to) return { state: "available", label: base, sub: "", disabled: false };
+    return { state: "available", label: base, sub: "", disabled: true };   // the board still names the move it took
+  }
   if (r.phase === "unknown") {
     const secs = Math.max(0, Math.round(((now == null ? r.at : now) - r.at) / 1000));
     return { state: "unknown", label: "Board unreachable", sub: "checking · " + secs + " s", disabled: true };
@@ -22,10 +34,11 @@ const primaryView = (f, now) => {
   if (r.phase === "requested" || (f && f.pending)) {
     return { state: "requested", label: base, sub: "requested" + (r.at ? " " + hhmm(r.at) : "") + " · board pending", disabled: true };
   }
-  if (r.phase === "failed" || (f && f.refused)) {
-    return { state: "failed", label: "Move failed · Retry", sub: r.cause || (f && f.refused) || "", disabled: false };
-  }
-  return { state: "available", label: base, sub: "", disabled: false };
+  // The row's own refusal (`mr`) is the board's answer, not a failed write: it names the rule, stays disabled and offers
+  // the rule as the secondary. Only a page write error is `failed`, and only that retries.
+  if (f && f.refused) return { state: "refused", label: base, sub: "refused · " + f.refused, disabled: true, secondary: f.refused };
+  if (r.phase === "failed") return { state: "failed", label: "Move failed · Retry", sub: r.cause || "", disabled: false };
+  return { state: "available", label: base, sub: "", disabled: false, hidden: !to };
 };
 // The card's next step from the facts its row and issue read already carry: a blocker first, then the pull request's CI,
 // then the freeze, then the column the board draws it in. No column rule and no wording of its own.

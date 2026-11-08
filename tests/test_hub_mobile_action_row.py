@@ -88,6 +88,45 @@ def test_the_control_row_sits_above_the_tab_bar(hub):
         f"the control row does not sit on the tab bar: {row.group(1)}"
 
 
+def _two_cards():
+    return {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
+            "groups": [{"name": "Backlog", "n": 2, "items": [
+                            {"n": 7, "t": "a live card", "l": [], "pm": True, "pmt": "Todo", "ho": True},
+                            {"n": 8, "t": "a quiet card", "l": [], "pm": True, "pmt": "Todo"}]},
+                       {"name": "Todo", "n": 0, "items": []}]}
+
+
+@pytest.mark.node_bound
+def test_the_work_segment_filters_the_card_list(hub):
+    """The active segment is applied when the root paints: "Live" keeps only a card with a live run, and "Any card"
+    brings the rest back (rule 6)."""
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard();
+        show("work");
+        const drawn = () => [...$("cards").querySelectorAll('[data-role="card"]')].map(c => +c.dataset.n);
+        const all = drawn();
+        [...document.querySelectorAll("#cr-seg button")].find(b => b.textContent === "Live").onclick();
+        const live = drawn();
+        [...document.querySelectorAll("#cr-seg button")].find(b => b.textContent === "Any card").onclick();
+        return { all, live, back: drawn() };
+    """, board=[_two_cards()])
+    assert out["all"] == [7, 8], out
+    assert out["live"] == [7], f"the Live segment changes nothing the list shows: {out}"
+    assert out["back"] == [7, 8], out
+
+
+@pytest.mark.node_bound
+def test_a_root_with_one_view_offers_one_filter_option(hub):
+    """A root the page cannot filter presents no second segment: no button promises a filter that does not exist."""
+    out = run_page(hub.MOBILE_PAGE, """
+        show("now");
+        const now = [...document.querySelectorAll("#cr-seg button")].map(b => b.textContent);
+        show("specs");
+        return { now, specs: [...document.querySelectorAll("#cr-seg button")].map(b => b.textContent) };
+    """)
+    assert out == {"now": ["Any item"], "specs": ["Every spec"]}, out
+
+
 @pytest.mark.node_bound
 def test_a_detail_hides_the_control_row(hub):
     out = run_page(hub.MOBILE_PAGE, OPEN + 'return $("control-row").hidden;', board=[board(CARD)])
@@ -123,14 +162,35 @@ def test_the_primary_reads_available_from_the_rows_move_facts(hub):
 
 @pytest.mark.node_bound
 def test_a_requested_move_is_disabled_and_names_the_request_time(hub):
-    """A tap sends once: the primary is disabled from the tap until the board answers, and it names the time."""
+    """A tap stages the move under the Undo; when the undo window ends the write is the one request, the primary is
+    disabled until the board answers, and it names the time."""
     out = run_page(hub.MOBILE_PAGE, OPEN + """
         $("sh-todo").onclick();
-        return { label: $("sh-todo-label").textContent, sub: $("sh-todo-sub").textContent, disabled: $("sh-todo").disabled };
+        const staged = { posts: __state.posts.length, undo: $("undo").hidden === false };
+        __skip(5000); __fire();                        // the undo window ends; only the confirmed write calls sendMove
+        const requested = { label: $("sh-todo-label").textContent, sub: $("sh-todo-sub").textContent, disabled: $("sh-todo").disabled };
+        return { staged, requested };
+    """, board=[board(CARD)], promote={"status": 200, "ct": "application/json", "body": "{}"})
+    assert out["staged"] == {"posts": 0, "undo": True}, f"a tap wrote before the undo window ended: {out}"
+    req = out["requested"]
+    assert req["label"] == "Move to Todo", out
+    assert re.search(r"requested \d\d:\d\d · board pending", req["sub"]), f"the request time is not named: {out}"
+    assert req["disabled"] is True, f"a requested move invites a second send: {out}"
+
+
+@pytest.mark.node_bound
+def test_the_primary_stages_the_move_so_the_undo_cancels_the_write(hub):
+    """The Undo window main always had on this button stays: a tap stages, the Undo cancels, and no write is ever sent."""
+    out = run_page(hub.MOBILE_PAGE, OPEN + """
+        $("sh-todo").onclick();
+        $("undo-btn").onclick();
+        __skip(6000); __fire();
+        await __tick(30);
+        return { posts: __state.posts.filter(p => p.path === "/api/promote").length,
+                 card: $("cards").querySelector('[data-role="card"][data-n="7"]') !== null };
     """, board=[board(CARD)])
-    assert out["label"] == "Move to Todo", out
-    assert re.search(r"requested \d\d:\d\d · board pending", out["sub"]), f"the request time is not named: {out}"
-    assert out["disabled"] is True, f"a requested move invites a second send: {out}"
+    assert out["posts"] == 0, f"an undone move was written: {out}"
+    assert out["card"] is True, out
 
 
 @pytest.mark.node_bound
@@ -144,31 +204,91 @@ def test_a_pending_board_row_reads_requested_after_a_reload(hub):
 
 @pytest.mark.node_bound
 def test_a_failed_move_names_the_cause_and_retries_on_one_tap(hub):
-    row = {**CARD, "mr": "the writer did not answer"}
-    out = run_page(hub.MOBILE_PAGE, OPEN + _primary(""), board=[board(row)])
-    assert out["label"] == "Move failed · Retry", out
-    assert "the writer did not answer" in out["sub"], f"the cause is not named: {out}"
-    assert out["disabled"] is False, f"a failed move cannot retry: {out}"
+    """Only a write error is failed: the hub's unreadable answer names its status and one tap retries it."""
+    out = run_page(hub.MOBILE_PAGE, OPEN + """
+        $("sh-todo").onclick(); __skip(5000); __fire(); await __tick(30);
+        const failed = { label: $("sh-todo-label").textContent, sub: $("sh-todo-sub").textContent, disabled: $("sh-todo").disabled };
+        $("sh-todo").onclick(); await __tick(30);       // a failed move retries on one tap
+        return { failed, posts: __state.posts.filter(p => p.path === "/api/promote").length };
+    """, board=[board(CARD)], promote={"status": 500, "ct": "application/json", "body": "{}"})
+    assert out["failed"]["label"] == "Move failed · Retry", out
+    assert "500" in out["failed"]["sub"], f"the cause is not named: {out}"
+    assert out["failed"]["disabled"] is False, f"a failed move cannot retry: {out}"
+    assert out["posts"] == 2, f"one tap did not retry the failed move: {out}"
 
 
 @pytest.mark.node_bound
-def test_a_confirmed_move_reads_moved_for_two_seconds_then_the_next_action(hub):
+def test_a_board_refusal_reads_refused_and_stays_disabled(hub):
+    """The row's own refusal (`mr`) is the board's answer: it names the rule, stays disabled and offers it as the
+    secondary. It is never drawn as a failed write that invites Retry."""
+    rule = "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"
+    row = {**CARD, "mr": rule}
     out = run_page(hub.MOBILE_PAGE, OPEN + """
-        $("sh-todo").onclick();
-        await __tick(20);
+        return { label: $("sh-todo-label").textContent, sub: $("sh-todo-sub").textContent,
+                 disabled: $("sh-todo").disabled, second: $("sh-close").textContent };
+    """, board=[board(row)])
+    assert out["label"] == "Move to Todo", out
+    assert "refused" in out["sub"] and rule in out["sub"], f"the rule is not named: {out}"
+    assert out["disabled"] is True, f"a refused move invites a retry: {out}"
+    assert out["second"] == rule, f"the rule is not offered as the secondary: {out}"
+
+
+@pytest.mark.node_bound
+def test_a_confirmed_move_reads_moved_for_two_seconds_then_never_re_invites_it(hub):
+    """Two seconds of "Moved to", then the next action. While the board still names the move the page just took, the
+    primary stays disabled on it: it never invites a second send of the same move."""
+    out = run_page(hub.MOBILE_PAGE, OPEN + """
+        $("sh-todo").onclick(); __skip(5000); __fire(); await __tick(30);
         const confirmed = { label: $("sh-todo-label").textContent, disabled: $("sh-todo").disabled };
         __skip(2000); __fire();
-        return { confirmed, next: $("sh-todo-label").textContent };
+        const after = { label: $("sh-todo-label").textContent, disabled: $("sh-todo").disabled };
+        $("sh-todo").onclick(); await __tick(30);       // a tap on the board's same move sends nothing
+        return { confirmed, after, posts: __state.posts.filter(p => p.path === "/api/promote").length };
     """, board=[board(CARD)], promote={"status": 200, "ct": "application/json",
                                        "body": json.dumps({"ok": True, "issue": 7, "to": "Todo", "pending": [7]})})
     assert out["confirmed"] == {"label": "Moved to Todo", "disabled": True}, out
-    assert out["next"] == "Move to Todo", f"the confirmed primary does not turn into the next action: {out}"
+    assert out["after"] == {"label": "Move to Todo", "disabled": True}, \
+        f"the confirmed primary re-offers the move it just took: {out}"
+    assert out["posts"] == 1, f"the confirmed move sent twice: {out}"
+
+
+@pytest.mark.node_bound
+def test_a_confirmed_move_that_the_board_no_longer_offers_ends_the_request(hub):
+    """The next action is real only when the board drops the move or names another one; a dropped move hides the primary."""
+    gone = {"n": 7, "t": "a ticket", "l": [], "pm": False}
+    out = run_page(hub.MOBILE_PAGE, OPEN + """
+        $("sh-todo").onclick(); __skip(5000); __fire(); await __tick(30);
+        __skip(2000); __fire();
+        return { hidden: $("sh-todo").hidden, disabled: $("sh-todo").disabled };
+    """, board=[board(CARD), board(gone)], promote={"status": 200, "ct": "application/json",
+                                                    "body": json.dumps({"ok": True, "issue": 7, "to": "Todo"})})
+    assert out["hidden"] is True, f"a move the board no longer offers still draws a primary: {out}"
+
+
+@pytest.mark.node_bound
+def test_the_confirmed_primary_names_an_off_loop_switch_fact(hub):
+    """The loop-switch fact the status read serves is threaded into the primary: a card moved into Todo says it waits
+    while its loop is off, and says nothing of the loop when it is on."""
+    off = run_page(hub.MOBILE_PAGE, OPEN + """
+        $("sh-todo").onclick(); __skip(5000); __fire(); await __tick(30);
+        return { on: loopFact && loopFact.on, sub: $("sh-todo-sub").textContent };
+    """, board=[board(CARD)], promote={"status": 200, "ct": "application/json", "body": "{}"},
+        routes={"/api/status": [{"status": 200, "ct": "application/json", "body": json.dumps({"loop": {"on": False, "since": "1h"}, "live": 0, "spend_today": 0, "open_bugs": 0, "warnings": [], "load": {"line": ""}})}]})
+    assert off["on"] is False, off
+    assert "the loop is off" in off["sub"], f"the primary does not name the loop-switch fact: {off}"
+    on = run_page(hub.MOBILE_PAGE, OPEN + """
+        $("sh-todo").onclick(); __skip(5000); __fire(); await __tick(30);
+        return { on: loopFact && loopFact.on, sub: $("sh-todo-sub").textContent };
+    """, board=[board(CARD)], promote={"status": 200, "ct": "application/json", "body": "{}"},
+        routes={"/api/status": [{"status": 200, "ct": "application/json", "body": json.dumps({"loop": {"on": True, "since": None}, "live": 0, "spend_today": 0, "open_bugs": 0, "warnings": [], "load": {"line": ""}})}]})
+    assert on["on"] is True, on
+    assert "the loop is off" not in on["sub"], f"an on loop is drawn as off: {on}"
 
 
 @pytest.mark.node_bound
 def test_an_unanswered_move_reads_unknown_and_never_re_sends(hub):
     out = run_page(hub.MOBILE_PAGE, OPEN + """
-        $("sh-todo").onclick();
+        $("sh-todo").onclick(); __skip(5000); __fire();
         await __tick(30);
         const first = { label: $("sh-todo-label").textContent, sub: $("sh-todo-sub").textContent, disabled: $("sh-todo").disabled };
         $("sh-todo").onclick();   // a lost reply never sends the request again
@@ -185,8 +305,8 @@ def test_an_unanswered_move_reads_unknown_and_never_re_sends(hub):
 def test_a_refused_move_names_the_rule_and_offers_it_as_the_secondary(hub):
     rule = "the card is already moving to Todo: the writer has not answered yet"
     out = run_page(hub.MOBILE_PAGE, OPEN + """
-        $("sh-todo").onclick();
-        await __tick(20);
+        $("sh-todo").onclick(); __skip(5000); __fire();
+        await __tick(30);
         return { label: $("sh-todo-label").textContent, sub: $("sh-todo-sub").textContent,
                  disabled: $("sh-todo").disabled, second: $("sh-close").textContent, secondHidden: $("sh-close").hidden };
     """, board=[board(CARD)], promote={"status": 400, "ct": "application/json",

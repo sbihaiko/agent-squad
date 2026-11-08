@@ -635,14 +635,26 @@ function routeFromHash(hash) {
 }
 // One control row on every root (SPEC 1596, rule 4): the active tab's segmented filter, whose last option says what it
 // includes, and the scope pill, which reads "All projects" or the one project the page serves. A detail hides the row.
+// The segmented filter of each root, whose last option says what it includes (rule 4). A root with one view offers one
+// option, so no button presents a filter the page cannot apply (rule 6).
 const ROOT_FILTERS = {
-  now: ["Needs you", "Any item"],
+  now: ["Any item"],
   work: ["Live", "Any card"],
-  specs: ["Open", "Every spec"],
+  specs: ["Every spec"],
   chat: ["Waiting", "Every chat"],
   runs: ["Live", "Ended", "Any run"],
 };
-const rootFilter = { now: 1, work: 1, specs: 0, chat: 1, runs: 2 };
+// Each root's own predicate per segment, over the facts the hub serves: a card with a live run, a session waiting for the
+// owner, a live or an ended run. The last segment keeps every row.
+const ROOT_KEEP = {
+  work: [x => !!x.ho, () => true],
+  chat: [s => !!s.waiting, () => true],
+  runs: [r => !!r.running, r => !r.running, () => true],
+};
+const rootFilter = { now: 0, work: 1, specs: 0, chat: 1, runs: 2 };
+const rootKeep = (tab, x) => { const f = ROOT_KEEP[tab]; const keep = f && f[rootFilter[tab]]; return keep ? keep(x) : true; };
+// A segment change repaints the root it filters, never another one (rule 6).
+const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); else if (tab === "chat") drawSessions(); };
 const scopeName = () => { const me = location.pathname.split("/")[1]; return me && me !== "mobile" ? me : "All projects"; };
 function paintControlRow() {
   const row = $("control-row");
@@ -654,7 +666,7 @@ function paintControlRow() {
     seg.replaceChildren(...(ROOT_FILTERS[tabActive] || []).map((text, i) => {
       const b = document.createElement("button");
       b.type = "button"; b.textContent = text;
-      b.onclick = () => { rootFilter[tabActive] = i; paintControlRow(); };
+      b.onclick = () => { rootFilter[tabActive] = i; paintControlRow(); repaintRoot(tabActive); };
       return b;
     }));
   }
@@ -871,9 +883,12 @@ function drawList(st, lineEl, msgEl, draw) {
 function detail(w) { $("warn-detail").textContent = w.tip || w.text; $("warn-detail").hidden = false; }
 // One path opens a warning row: a tap and the keyboard both call it, so the two can never drift (#1457).
 function openWarning(w) { detail(w); }
+// The loop-switch fact the status read already serves ({on, since}): the primary names it, the page writes nothing for it.
+let loopFact = null;
 async function status() {
   try {
     const s = await call("/api/status");
+    loopFact = s.loop || loopFact;
     $("msg").textContent = "";
     $("reconnect").hidden = true;
     $("t-live").textContent = s.live;
@@ -983,6 +998,10 @@ const reasons = {};   // issue number -> {why, col}: a refusal the card reads on
 // failed, unknown or refused primary apart from the row's own pending (`pd`) and refusal (`mr`) facts (SPEC 1596, #1598).
 const moveReqs = {};
 const rowColumn = n => { for (const g of (board && board.groups) || []) if (g.items.some(i => i.n === n)) return g.name; return ""; };
+const rowOf = n => ((board && board.groups) || []).flatMap(g => g.items).find(i => i.n === n);
+// Whether the board still names the move this page already took. A confirmed primary stays disabled on it until the row
+// drops the card's move or names another one (rule 7), so the same move is never sent twice.
+const offersSameMove = n => { const row = rowOf(n), r = moveReqs[n]; return !!(row && row.pm && r && row.pmt === r.to); };
 let view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
 let bo = JSON.parse(localStorage.getItem("squad-mobile-board") || "{}");
 const saveB = () => localStorage.setItem("squad-mobile-board", JSON.stringify(bo));
@@ -994,7 +1013,7 @@ const mSlots = () => {
   if (slotsOf !== board || !slots) { slotsOf = board; slots = specSlots(((board && board.groups) || []).flatMap(g => g.items.map(cardSpec)).filter(n => n != null)); }
   return slots;
 };
-const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
+const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x) && rootKeep("work", x));
 function cardButton(x, i) {
   // The card's age at one short rung (#1444): minutes under an hour, hours under a day, days
   // after it, so the chip is one token the eye reads at phone width.
@@ -1388,8 +1407,9 @@ $("sh-todo").onclick = () => {
   const x = offBoard ? null : shown[view.card];
   if (!x || !x.pm) return;
   const phase = moveReqs[x.n] && moveReqs[x.n].phase;
-  if (phase && phase !== "failed") return;
-  sendMove(x.n);
+  if (phase === "failed") { sendMove(x.n, x.pmt); return; }   // a failed write retries on one tap
+  if (phase) return;                                          // requested, confirmed, unknown or refused never sends again
+  stageMove(x, null);   // the Undo window holds the write; only writePending sends it, and only it calls sendMove
 };
 // The ••• menu holds what the action row leaves out (rule 7): the close stays available when the primary owns the row.
 $("sh-dots").onclick = () => { $("sh-menu").hidden = !$("sh-menu").hidden; };
@@ -1446,7 +1466,7 @@ async function writePending() {
   const p = moveAct(pending, "write", Date.now());
   if (!p || p.why !== "written") return;
   pending = null; undoText(""); $("undo-btn").hidden = true;
-  await sendMove(p.n);
+  await sendMove(p.n, p.to);
 }
 // The one write of a move (#829, #1598), answered as the state the primary reads: `ok`, `refused` (a rule forbids it, the
 // reason comes from the hub), `failed` (an answer the page cannot read) or `unknown` (no answer at all). The request is
@@ -1471,15 +1491,17 @@ async function writePromote(n) {
 }
 // One move request, one state: a request that waits, a confirmed move that stands two seconds, a failure that retries, an
 // unknown that keeps polling and never re-sends, and a refusal whose rule the secondary offers (SPEC 1596, rule 7).
-async function sendMove(n) {
-  moveReqs[n] = { phase: "requested", at: Date.now() };
+async function sendMove(n, to) {
+  moveReqs[n] = { phase: "requested", at: Date.now(), to: to || "" };
   if (view.sheet) renderSheet();
   const out = await writePromote(n);
   if (out.kind === "ok") {
-    moveReqs[n] = { phase: "confirmed", at: Date.now() };
+    moveReqs[n] = { phase: "confirmed", at: Date.now(), to: to || "" };
     setTimeout(() => {
       if (!moveReqs[n] || moveReqs[n].phase !== "confirmed") return;
-      delete moveReqs[n];   // two seconds, then the primary reads the row again and offers the next action
+      // Two seconds of "Moved to", then the next action. The record stays until the board drops the move or names
+      // another one, so the primary never invites a second send of the move it just took (rule 7).
+      if (!offersSameMove(n)) delete moveReqs[n];
       if (view.sheet) renderSheet();
     }, 2000);
   } else if (out.kind === "unknown") {
@@ -1497,9 +1519,10 @@ async function sendMove(n) {
 // The one primary renders the state the rule module names from the row's move facts and the page's request record. The
 // view binds the state to the element and delegates the decision to `primaryView` (ADR-0137).
 function paintActionRow(x) {
-  const v = primaryView({ to: x.pmt || "", pending: !!x.pd, refused: x.mr || "", request: moveReqs[x.n] }, Date.now());
+  // The move facts, the loop-switch fact the status poll already holds, and this page's own request record (rule 7).
+  const v = primaryView({ to: x.pmt || "", pending: !!x.pd, refused: x.mr || "", loop: loopFact, request: moveReqs[x.n] }, Date.now());
   const btn = $("sh-todo");
-  btn.hidden = !x.pm && !moveReqs[x.n] && !x.mr;
+  btn.hidden = !!v.hidden;
   btn.disabled = !!v.disabled;
   btn.className = v.state;
   $("sh-todo-label").textContent = v.label;
@@ -1842,8 +1865,8 @@ const histState = { ever: false, n: 0, error: "", rows: [], groups: [], muted: "
   loading: "The run history is loading.", empty: "No run history is drawn." };
 function drawRuns() {
   drawList(runsState, $("runs-state"), $("runs-msg"), () => {
-    $("runs-live").replaceChildren(...runsState.rows.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
-    $("runs-ended").replaceChildren(...runsState.ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
+    $("runs-live").replaceChildren(...runsState.rows.filter(r => r.running && rootKeep("runs", r)).map(r => runRow(r, r.url || runURLs(r.id).page)));
+    $("runs-ended").replaceChildren(...runsState.ended.filter(r => rootKeep("runs", r)).map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
   });
   const v = drawList(histState, $("runs-history-state"), $("runs-history-msg"),
     () => drawHistory(histState.rows, histState.groups, histState.muted));
@@ -1977,7 +2000,7 @@ const sessState = { ever: false, n: 0, error: "", groups: [],
   loading: "The terminal sessions are loading.", empty: "No terminal sessions are drawn." };
 function drawSessions() {
   drawList(sessState, $("sessions-state"), $("sessions-msg"), () => {
-    $("sessions").replaceChildren(...sessState.groups.flatMap(g => (g.sessions || []).map(s => sessionRow(g.project, s))));
+    $("sessions").replaceChildren(...sessState.groups.flatMap(g => (g.sessions || []).filter(s => rootKeep("chat", s)).map(s => sessionRow(g.project, s))));
   });
 }
 function applySessions(d) {
