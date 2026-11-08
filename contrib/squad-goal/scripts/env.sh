@@ -23,10 +23,10 @@ SG_PROFILES_DIR="$(sg_profiles_dir)"; export SG_PROFILES_DIR   # a session a run
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
 _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 . "$(sg_profiles_dir)/$SG_PROFILE.sh"
-# These three defaults are read after the profile, so a profile's := default wins (#757).
-# The labels no dispatch pass takes as work are one set (skiplabels.sh, #1593): the frontier, the bug and the health passes
-# read it from there, so the health pass never reports a card startable that the dispatchers skip.
-. "$here/skiplabels.sh"
+# The defaults below are read after the profile, so a profile's := default wins (#757).
+# The labels no dispatch pass takes as work are one set (skiplabels.sh, #1593), sourced here so the frontier, the bug and the
+# health passes read the same file; its two lane defaults live in skiplabels.sh, not here.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/skiplabels.sh"
 # The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types, the fast
 # battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
 # enters a wave ungated (ADR-0145 rule 9).

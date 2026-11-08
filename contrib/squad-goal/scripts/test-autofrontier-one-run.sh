@@ -287,6 +287,13 @@ issues '[{"number":43,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"nu
 r=$(run)
 [ "$(marked 43 44)" = 2 ] && ok "removing either freeze makes the item startable" || ko "removing a freeze did not start both items: '$r'"
 
+# 9) #1593: the bug lane's own labels (no-auto, question) are a hold for autobug.sh alone. The frontier still starts a card
+#    that carries one beside its go label, and health.sh reads the same lane, so that card is never hidden as startable work.
+scene bugskip 24
+issues '[{"number":53,"title":"a","body":"b","labels":[{"name":"no-auto"},{"name":"wave:01"}]},{"number":54,"title":"a","body":"b","labels":[{"name":"question"},{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 53 54)" = 2 ] && ok "a bug-lane label never holds a frontier card" || ko "the frontier skipped a bug-lane label: $(marked 53 54) marker(s): '$r'"
+
 # 10) #340: a run parent issue is a roll-up of a run's children, never work. It carries the run-parent label, and the pass
 #     skips it whatever SG_FRONTIER_SKIP_LABELS says.
 scene parent

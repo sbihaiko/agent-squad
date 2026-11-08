@@ -222,7 +222,7 @@ fi
 # The pass owns one line in cycle.log (#1582). A dry pass dispatches nothing and is no loop pass, so it writes none.
 AB_REASON=""; AB_PENDING=""; AB_DISPATCHED=""; AB_PASS_ENDED=""
 if [ -n "${AB_DRY:-}" ]; then AB_PASS_ENDED=1; else AB_PASS_NO=$(ab_pass_count); trap ab_pass_end EXIT; fi
-lab=${SG_BUG_LABEL:-bug}; skip=$(sg_skip_labels)   # the one skip set every pass reads (#1593); the freeze markers are its floor (#537)
+lab=${SG_BUG_LABEL:-bug}; skip=$(sg_skip_labels bug)   # the bug lane's own skip set (#1593); the freeze markers are its floor (#537)
 read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, sys
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered

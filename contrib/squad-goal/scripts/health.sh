@@ -82,9 +82,10 @@ undef=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_req
 [ -n "${undef// /}" ] && add defect-without-bug "open defect(s) that carry no bug label:$(for n in $undef; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
 # A ready issue with no run or work branch for one pass must remain visible even when it has only a wave label.
-# A label the dispatch passes skip is no work at all (#1593): the set is theirs (skiplabels.sh), so a card autofrontier.sh
-# will never start is never named startable here.
-skiplist=$(sg_skip_labels bug,debt,run-parent)
+# A label the frontier skips is no work for it (#1593): the set is the frontier's own (skiplabels.sh), with its structural
+# labels, so a card autofrontier.sh will never start is never named startable here. A label only the bug lane skips
+# (no-auto, question) is no hold for the frontier, so that card stays visible: the alert names it when it is starved.
+skiplist=$(sg_skip_labels frontier bug,debt,run-parent)
 ra=""
 while IFS=$'\t' read -r n l; do
   [ -n "$n" ] || continue

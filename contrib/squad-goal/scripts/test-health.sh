@@ -131,12 +131,19 @@ fr; printf '41\tTodo\n' > "$T/board.tsv"; page 1 "$(iss 41 'Spec of a thing' 'sp
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a spec was named startable: $o" || ok "a spec issue is never named startable (ADR-0142)"
 fr; printf '41\tTodo\n' > "$T/board.tsv"; page 1 "$(iss 41 'Has a live run' '')"; liverun run-old 41
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a live run older than 30 min did not suppress frontier-idle: $o" || ok "a live run older than 30 min suppresses frontier-idle"
-# #1593: every label the dispatch passes skip is no work at all, so a card that carries one is never reported startable.
-# The set is the passes' own (skiplabels.sh): a card autofrontier.sh will never start must never be named here.
-i=0; for l in frozen:owner needs-owner no-auto wontfix question frozen:dependency needs-info needs-ratification; do
+# #1593: every label the frontier skips is no work at all, so a card that carries one is never reported startable.
+# The set is the frontier's own (skiplabels.sh): a card autofrontier.sh will never start must never be named here.
+i=0; for l in frozen:owner needs-owner wontfix frozen:dependency needs-info needs-ratification; do
   i=$((i+1)); n=$((500+i))   # one number per label: the board cache keeps a repeated number's card
   fr; printf '%s\tTodo\n' "$n" > "$T/board.tsv"; page 1 "$(iss "$n" "Waits on $l" "$l")"
   o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a $l issue was named startable: $o" || ok "a $l issue is never named startable (#1593)"
+done
+# A label only the bug lane skips (no-auto, question) never holds a frontier card: the frontier starts it, so a starved one
+# is a real frontier-idle and health names it. The two lanes keep their own sets; only the union hid this work (#1593).
+i=0; for l in no-auto question; do
+  i=$((i+1)); n=$((520+i))   # a number per label
+  fr; printf '%s\tTodo\n' "$n" > "$T/board.tsv"; page 1 "$(iss "$n" "Carries $l" "$l")"
+  o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF "HEALTH frontier-idle: startable $n" && ok "a $l issue is named startable: the frontier starts it (#1593)" || ko "a $l issue was hidden from frontier-idle: $o"
 done
 fr; printf '41\tCode Complete\n' > "$T/board.tsv"; page 1 "$(iss 41 'Already in code' '')"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a card not in Todo was named startable: $o" || ok "a card not in Todo is not named"

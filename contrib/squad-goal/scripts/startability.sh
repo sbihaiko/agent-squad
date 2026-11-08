@@ -9,8 +9,8 @@ export SG_GH_PASS=landing   # the pass that spends the GitHub calls below, named
 # the worktree is made on cannot come from two sources.
 sg_fork_branch() { local br=${SG_FORK_BRANCH:-gui/%n}; echo "${br//%n/$1}"; }
 sg_fork_branch_pattern() { echo "${SG_FORK_BRANCH:-gui/%n}"; }
-# The labels no dispatch pass takes as work: ONE set, read by every dispatcher and by the health pass (#1593), so a card the
-# frontier will never start is never reported startable (skiplabels.sh carries the set and its defaults).
+# The labels a dispatch lane takes no work from: ONE file, read by both dispatchers and by the health pass (#1593), so a card
+# the frontier will never start is never reported startable (skiplabels.sh carries each lane's set and its default).
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/skiplabels.sh"
 # An issue claimed by either dispatcher is unavailable to both passes. The marker is the dispatch lock,
 # so its namespace is intentionally shared even though each pass writes its own name.
