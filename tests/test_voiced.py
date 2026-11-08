@@ -1,6 +1,7 @@
-"""Guard: issues #1481 and #1484. The voiced daemon turns one owner clip into one transcribed inbox line, records a
-stranger's message as data and never as an instruction, writes no duplicate line after a crash and restart, and gives
-every project the hub lists one channel with its own inbox.
+"""Guard: issues #1481, #1482 and #1484. The voiced daemon turns one owner clip into one transcribed inbox line, records
+a stranger's message as data and never as an instruction, writes no duplicate line after a crash and restart, gives
+every project the hub lists one channel with its own inbox, and answers an outbox line with the text at once and the
+spoken answer after it.
 
 The seams under test are the daemon's own Socket Mode loop (`serve`), the state files it writes, the launchd plist it
 generates and the Slack client it calls. A fake websocket and a fake Slack client stand in for Slack, and a fake
@@ -152,13 +153,18 @@ def drive_daemon(tmp_path, envelopes, transcriber=None, downloader=None, owner=O
 class FakeClient:
     """The fake Slack client the whole suite runs on: it records every call and creates one id per channel name."""
 
-    def __init__(self, existing=()):
+    def __init__(self, existing=(), post_delay=0.0):
         self.calls = []
         self.channels = {c["name"]: dict(c) for c in existing}
         self._n = 0
+        self.post_delay = post_delay
+        self.stamped = []      # (method, monotonic moment) in call order, so a target is measured and not assumed
 
     def api(self, method, params=None, post=False):
         self.calls.append((method, dict(params or {}), post))
+        self.stamped.append((method, time.monotonic()))
+        if method == "chat.postMessage" and self.post_delay:
+            time.sleep(self.post_delay)
         if method == "conversations.create":
             name = params.get("name")
             if name in self.channels:
@@ -580,3 +586,260 @@ def test_the_hub_seam_reads_the_context_as_lines_with_export_and_quotes(tmp_path
     script.chmod(0o755)
 
     assert mod.hub_repos(script=str(script)) == ["Acme/My App", "acme/other", "acme/my app"]
+
+
+# --- the outbox: the text first, then the spoken answer (#1482)
+
+TEXT_TARGET = 3.0          # the spec's item 5: outbox line to text posted by the bot
+FIRST_CLIP_TARGET = 15.0   # outbox line to the first spoken sentence posted
+FULL_CLIP_TARGET = 45.0    # outbox line to the full spoken answer posted
+
+
+class FakeVoice:
+    """The two seams of a spoken answer: a synthesizer that writes a fake clip and records its script, and an uploader
+    that records each clip with the moment it was posted. Both can be made slow, so the targets are measured against a
+    pipeline that takes time, never against a fake that answers at once."""
+
+    def __init__(self, tmp_path, delay=0.0, on_clip=None):
+        self.delay = delay
+        self.on_clip = on_clip
+        self.scripts = []
+        self.clips = []
+        self.dir = Path(tmp_path) / "clips"
+        self.dir.mkdir(exist_ok=True)
+
+    def synth(self, script):
+        self.scripts.append((script, time.monotonic()))
+        if self.delay:
+            time.sleep(self.delay)
+        path = self.dir / f"clip-{len(self.scripts)}.wav"
+        path.write_bytes(b"RIFF")
+        return str(path)
+
+    def upload(self, path, channel, thread_ts, title):
+        self.clips.append({"channel": channel, "thread_ts": thread_ts, "at": time.monotonic()})
+        if self.on_clip:
+            self.on_clip(len(self.clips))
+        return f"F{len(self.clips):04d}", None
+
+
+def append_outbox(path, *records):
+    """The session's own write: one JSON line appended to the outbox, exactly as the operator session appends it."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+        f.flush()
+
+
+def outbox_daemon(tmp_path, mod, client, channels, voice):
+    """One daemon whose two spoken-answer seams are the fake voice, over a state that already holds the channels."""
+    state = mod.State(str(tmp_path))
+    if channels:
+        state.save_channels(channels)
+    return mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                      downloader=lambda url: b"", log=lambda line: None, client=client,
+                      synthesizer=voice.synth, uploader=voice.upload)
+
+
+def one_channel(tmp_path, mod, client):
+    """The registry one project channel leaves behind, keyed by its id the way the daemon's sync writes it."""
+    configure(tmp_path, mod, client, ["acme/app"])
+    return dict(mod.State(str(tmp_path)).channels())
+
+
+def test_the_outbox_line_is_posted_as_text_by_the_bot_within_three_seconds(tmp_path):
+    """Criterion (1): the readable answer leaves at once, before any speech is synthesized or posted."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path, delay=0.2)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    written = time.monotonic()
+    append_outbox(daemon.state.outbox_for(app["name"]),
+                  {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert client.posts() == [{"channel": app["id"], "text": "The paint is green. It dries in an hour.",
+                               "thread_ts": "1762500000.000100"}]
+    posted_at = [at for method, at in client.stamped if method == "chat.postMessage"][0]
+    assert posted_at - written <= TEXT_TARGET, "the text was not posted inside 3 s of the outbox line"
+
+
+def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_text_post(tmp_path):
+    """Criterion (2), the split and the parallelism: the first sentence is one clip, the rest another, and the first
+    synthesis starts together with the text post, so a slow Slack write cannot hold the voice."""
+    mod = voiced()
+    client = FakeClient(post_delay=0.2)
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    written = time.monotonic()
+    append_outbox(daemon.state.outbox_for(app["name"]),
+                  {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [script for script, _ in voice.scripts] == ["The paint is green.", "It dries in an hour."]
+    assert voice.scripts[0][1] - written < client.post_delay, \
+        "the first synthesis waited for the text post instead of running with it"
+    assert voice.clips[0]["at"] <= voice.scripts[1][1], "the rest was synthesized before the first clip went out"
+    assert [c["thread_ts"] for c in voice.clips] == ["1762500000.000100"] * 2
+    assert [c["channel"] for c in voice.clips] == [app["id"]] * 2
+
+
+def test_the_first_clip_and_the_full_answer_arrive_inside_their_targets(tmp_path):
+    """Criterion (2), the targets: the first spoken sentence inside 15 s and the full answer inside 45 s."""
+    mod = voiced()
+    client = FakeClient(post_delay=0.1)
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path, delay=0.2)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    written = time.monotonic()
+    append_outbox(daemon.state.outbox_for(app["name"]),
+                  {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert len(voice.clips) == 2
+    assert voice.clips[0]["at"] - written <= FIRST_CLIP_TARGET, "the first spoken sentence missed 15 s"
+    assert voice.clips[-1]["at"] - written <= FULL_CLIP_TARGET, "the full spoken answer missed 45 s"
+
+
+def test_a_line_with_no_speech_speaks_its_own_text(tmp_path):
+    """The spoken script is optional: without one the answer's own first sentence is what the owner hears first."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.outbox_for(app["name"]), {"text": "Green. Then blue."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [script for script, _ in voice.scripts] == ["Green.", "Then blue."]
+
+
+def test_the_spoken_script_wins_over_the_text(tmp_path):
+    """The spec's outbox carries a short spoken script beside the long text: the clip says the script, never the text."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.outbox_for(app["name"]),
+                  {"text": "A long answer with the detail. " * 20, "speech": "Short version. Done."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [script for script, _ in voice.scripts] == ["Short version.", "Done."]
+
+
+def test_a_clip_is_threaded_under_its_own_text_when_the_line_names_no_thread(tmp_path):
+    """Without a thread ts the clips answer the text just posted, so the voice can never land under another question."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.outbox_for(app["name"]), {"text": "One. Two."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [c["thread_ts"] for c in voice.clips] == ["1762500009.000900"] * 2
+
+
+def test_a_restart_does_not_post_the_same_outbox_line_again(tmp_path):
+    """A line on disk is delivered once: a restarted daemon over the same state posts no second text and no second clip."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.outbox_for(app["name"]), {"text": "One. Two."})
+    asyncio.run(daemon.drain_outboxes())
+    assert len(client.posts()) == 1 and len(voice.clips) == 2
+
+    # The restart: a fresh daemon and a fresh state over the same folder read the same outbox again.
+    restarted_voice = FakeVoice(tmp_path)
+    again = outbox_daemon(tmp_path, mod, client, None, restarted_voice)
+    asyncio.run(again.drain_outboxes())
+
+    assert len(client.posts()) == 1, "the restart posted the same answer twice"
+    assert restarted_voice.clips == [], "the restart spoke the same answer twice"
+
+
+def test_the_daemon_answers_a_line_the_session_appends_while_it_runs(tmp_path):
+    """The session appends to the outbox and the daemon posts without any call from the session: the watcher is the seam."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    stop = asyncio.Event()
+    voice = FakeVoice(tmp_path, on_clip=lambda n: stop.set() if n >= 2 else None)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+    path = daemon.state.outbox_for(app["name"])
+
+    def later():
+        time.sleep(0.1)
+        append_outbox(path, {"text": "Posted while the daemon runs. Done."})
+
+    writer = threading.Thread(target=later)
+    writer.start()
+    asyncio.run(mod.watch_outboxes(daemon, stop, interval=0.02))
+    writer.join()
+
+    assert len(client.posts()) == 1
+    assert [script for script, _ in voice.scripts] == ["Posted while the daemon runs.", "Done."]
+
+
+def test_no_token_reaches_a_log_the_inbox_or_the_outbox(tmp_path):
+    """Criterion (3): the token the client holds never appears in a log line, the inbox, the outbox or any state file."""
+    mod = voiced()
+    token = "xoxb-0-SECRET-TOKEN-VALUE"
+    client = FakeClient()
+    client.token = token
+    slack = mod.SlackClient(token)
+    slack.api = client.api
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    log = []
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+    voice = FakeVoice(tmp_path)
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=slack, synthesizer=voice.synth, uploader=voice.upload)
+
+    append_outbox(state.outbox_for(app["name"]), {"text": "One. Two."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert client.posts(), "the delivery made no post, so the token path was never exercised"
+    for path in Path(tmp_path).rglob("*"):
+        if path.is_file():
+            assert token not in path.read_text(errors="replace"), f"{path.name} holds the token"
+    assert all(token not in line for line in log), "a log line holds the token"
+
+
+def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):
+    """The DM has no registry entry, so its line names the channel; a line that names none is skipped, never posted."""
+    mod = voiced()
+    client = FakeClient()
+    voice = FakeVoice(tmp_path)
+    state = mod.State(str(tmp_path))
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client, synthesizer=voice.synth, uploader=voice.upload)
+
+    append_outbox(state.outbox_path, {"channel": "D0OWNER", "text": "One. Two."}, {"text": "no channel at all"})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert client.posts() == [{"channel": "D0OWNER", "text": "One. Two."}]
+    assert [c["channel"] for c in voice.clips] == ["D0OWNER"] * 2
