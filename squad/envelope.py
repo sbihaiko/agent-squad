@@ -45,14 +45,22 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None, 
     if not isinstance(raw.get("prompt"), str) or not raw.get("prompt"):
         errs.append("missing_prompt")
     skill = raw.get("skill")
-    pinned = {s["name"]: s.get("version") for s in dispatch["allow"]["skills"]}
+    allow_skills = dispatch["allow"]["skills"]
+    pinned = {s["name"]: s.get("version") for s in allow_skills}
     if isinstance(skill, str):
         skill = {"name": skill}
+    if not isinstance(skill, dict) or not skill.get("name"):
+        # An omitted skill is a guess, never a lost run: the envelope's first allowed skill answers, as workspace does (#1607).
+        if allow_skills:
+            skill = {"name": allow_skills[0]["name"]}
+        else:
+            errs.append("missing_skill")
+            skill = {"name": "", "version": ""}
+    elif skill["name"] not in pinned and len(allow_skills) == 1:
+        # A lone allowed skill proves the single intent: a name the list does not carry narrows to it (#1607).
+        skill = {"name": allow_skills[0]["name"]}
     if isinstance(skill, dict) and "version" not in skill:   # no pin in the request: use the allow pin, else the current hash
         skill = {**skill, "version": pinned.get(skill.get("name")) or skills.hash_of(skill.get("name"), vendor)}
-    if not isinstance(skill, dict) or not skill.get("name"):
-        errs.append("missing_skill")
-        skill = {"name": "", "version": ""}
     after = raw.get("after", [])
     if not isinstance(after, list) or any(not isinstance(i, int) or isinstance(i, bool) or i < 0 for i in after):
         errs.append("after_malformed")

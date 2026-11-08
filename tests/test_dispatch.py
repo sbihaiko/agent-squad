@@ -775,9 +775,23 @@ async def test_a_dispatch_with_no_accepted_child_names_why_each_request_was_refu
     v = await eng.run()
     d = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
     assert d["reasons"][0] == "no_dispatch" and v.verdict == "failed"
-    assert {"spawn_rejected:model_supplied_identity:name", "spawn_rejected:missing_skill"} <= set(d["reasons"])
+    assert "spawn_rejected:model_supplied_identity:name" in d["reasons"]
+    assert "spawn_rejected:missing_skill" not in d["reasons"]   # an omitted skill falls back to the envelope (#1607)
     assert not [r for r in d["reasons"] if "unknown_field" in r]
-    assert v.reasons[0] == "no_dispatch" and "spawn_rejected:missing_skill" in v.reasons       # the verdict line carries them too
+    assert v.reasons[0] == "no_dispatch" and "spawn_rejected:model_supplied_identity:name" in v.reasons       # the verdict line carries them too
+
+
+@pytest.mark.anyio
+async def test_a_request_with_no_skill_dispatches_and_the_record_names_the_envelope_skill(tmp_path):
+    """#1607: a router that left `skill` out cost the run its whole dispatch and delivered nothing. The envelope answers
+    with its first allowed skill, the child runs, and the record names the skill the envelope supplied."""
+    no_skill = req()
+    del no_skill["skill"]
+    eng = make(tmp_path, {"router": routed(no_skill), "route.router.1": CHILD})
+    v = await eng.run()
+    acc = ev(tmp_path, "spawn_accepted")
+    assert v.verdict == "completed" and acc and acc[0]["definition"]["skill"]["name"] == "tdd", acc
+    assert not ev(tmp_path, "spawn_rejected")
 
 
 def test_the_router_prompt_documents_every_request_field_and_one_example():

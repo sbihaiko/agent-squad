@@ -20,7 +20,7 @@ header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1p
 #pswx{display:block;width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 header a{color:var(--acc);font-size:var(--fs-caption);white-space:nowrap}
 #to-desktop{display:inline-flex;align-items:center;min-height:44px;padding:0 4px}
-main{padding:12px var(--page-gutter-phone) 84px}
+main{padding:12px var(--page-gutter-phone) 148px}
 section[hidden]{display:none}
 h2{font-size:var(--fs-heading);margin:6px 0 10px}
 /*INST_CSS*/
@@ -113,12 +113,34 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #sh-last .mut{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
 #sh-todo{flex:1;width:100%;min-height:44px;margin:0;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 #sh-todo[hidden]{display:none}
+/* The one primary of the card detail (SPEC 1596, rule 7): each of the six states reads as itself, and a state that waits
+   on the board is disabled, so a second send is never offered. */
+#sh-todo .sub{display:block;font-size:var(--fs-caption);opacity:.85;white-space:normal}
+#sh-todo.requested,#sh-todo.unknown{color:var(--mute)}
+#sh-todo.confirmed{color:var(--ok);border-color:var(--ok)}
+#sh-todo.failed{color:var(--err);border-color:var(--err)}
+#sh-todo.refused{color:var(--warn);border-color:var(--warn)}
+#sh-todo:disabled{opacity:.85;cursor:default}
+#sh-menu{position:absolute;right:14px;bottom:calc(56px + 8px);display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);z-index:25}
+#sh-menu[hidden]{display:none}
+#sh-menu button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#sh-next,#sh-update,#sh-related{margin:10px 0}
+#sh-next h3,#sh-update h3,#sh-related h3{font-size:var(--fs-body);margin:0 0 4px}
+#sh-related .rel{display:flex;align-items:center;justify-content:space-between;min-height:44px;border-bottom:1px solid var(--line)}
+#sh-related .rel[role=button]{cursor:pointer}
 /* The tab bar is on every screen, a detail included: it paints over every sheet and every full-screen screen, and each
    screen's bottom row keeps a 56 px clearance for it (#1597). */
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);z-index:40}
 nav[hidden]{display:none}
 nav button{flex:1;min-height:56px;white-space:nowrap;background:none;border:0;color:var(--mute);font:var(--fs-caption) system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc)}
+/* One control row on every root (SPEC 1596, rule 4): the segmented filter and the scope pill, above the tab bar. */
+#control-row{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;padding:6px 14px;background:var(--panel);border-top:1px solid var(--line);z-index:39}
+#control-row[hidden]{display:none}
+#cr-seg{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto}
+#cr-seg button{min-height:44px;flex:none;background:var(--bg);color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#cr-seg button[aria-pressed=true]{color:var(--fg);border-color:var(--acc)}
+#cr-scope{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-caption);white-space:nowrap}
 #now-head,#more-head,#specs-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 8px}
 #now-head h2,#more-head h2,#specs-head h2{margin:0}
 [data-topback],#now-more{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
@@ -384,9 +406,13 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <h2 id="sh-title"></h2>
 <div id="sh-chips"></div>
 <div id="sh-meta"></div>
+<div id="sh-next"><h3>Next step</h3><p id="sh-next-text"></p></div>
+<div id="sh-update"><h3>Latest update</h3><p id="sh-update-text"></p></div>
+<div id="sh-related"><h3>Related</h3><div id="sh-related-list"></div></div>
 <div id="sh-body"></div>
 <div id="sh-last"></div></div>
-<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden></button></div>
+<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true">•••</button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden><span id="sh-todo-label"></span><span id="sh-todo-sub" class="sub" hidden></span></button></div>
+<div id="sh-menu" hidden><button type="button" data-menu="close">Close</button><button type="button" data-menu="github">Open on GitHub</button></div>
 </div>
 <section id="termview" hidden>
 <div id="termview-head"><button id="term-backtop" data-topback="term" type="button">&#8249; Chat</button><span id="termview-name"></span></div>
@@ -406,6 +432,8 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
 <div id="runview-actions"><button id="runview-back" type="button">Back</button><button id="rundesk-btn" type="button">Desktop dashboard</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div></div>
 </section>
+<!-- The control row of SPEC 1596 (#1598, rule 4): one row on every root, above the tab bar, never on a detail. -->
+<div id="control-row" data-role="control-row"><div id="cr-seg" role="group" aria-label="Filter"></div><button id="cr-scope" type="button">All projects</button></div>
 <!-- The tab bar of SPEC 1596 (#1597): five tabs, drawn on every screen, a detail included, and over every sheet. -->
 <nav>
 <button data-tab="now">Now</button>
@@ -423,6 +451,7 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*GESTURE*/
 /*CHART*/
 /*MOVE*/
+/*CARD_DETAIL*/
 /*LINK*/
 /*RUN*/
 /*BOARD_FILTER*/
@@ -566,6 +595,7 @@ function paintBack() {
     b.hidden = !mine;
     if (mine) b.textContent = backLabel();
   }
+  paintControlRow();
 }
 // The address mirrors the top of the stack, so a reload lands on the same screen: "#/work/card=7", "#/now/more".
 // A screen that draws from its own fields carries them in the segment's query, so a cold load fills them like the open does.
@@ -603,6 +633,49 @@ function routeFromHash(hash) {
   else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
   return out;
 }
+// One control row on every root (SPEC 1596, rule 4): the active tab's segmented filter, whose last option says what it
+// includes, and the scope pill, which reads "All projects" or the one project the page serves. A detail hides the row.
+// The segmented filter of each root, whose last option says what it includes (rule 4). A root with one view offers one
+// option, so no button presents a filter the page cannot apply (rule 6).
+const ROOT_FILTERS = {
+  now: ["Any item"],
+  work: ["Live", "Any card"],
+  specs: ["Every spec"],
+  chat: ["Waiting", "Every chat"],
+  runs: ["Live", "Ended", "Any run"],
+};
+// Each root's own predicate per segment, over the facts the hub serves: a card with a live run, a session waiting for the
+// owner, a live or an ended run. The last segment keeps every row.
+const ROOT_KEEP = {
+  work: [x => !!x.ho, () => true],
+  chat: [s => !!s.waiting, () => true],
+  runs: [r => !!r.running, r => !r.running, () => true],
+};
+const rootFilter = { now: 0, work: 1, specs: 0, chat: 1, runs: 2 };
+const rootKeep = (tab, x) => { const f = ROOT_KEEP[tab]; const keep = f && f[rootFilter[tab]]; return keep ? keep(x) : true; };
+// A segment change repaints the root it filters, never another one (rule 6).
+const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); else if (tab === "chat") drawSessions(); };
+const scopeName = () => { const me = location.pathname.split("/")[1]; return me && me !== "mobile" ? me : "All projects"; };
+function paintControlRow() {
+  const row = $("control-row");
+  if (!row) return;
+  row.hidden = layers.length > 0;   // a detail draws its action row instead
+  const seg = $("cr-seg");
+  if (seg.dataset.tab !== tabActive) {
+    seg.dataset.tab = tabActive;
+    seg.replaceChildren(...(ROOT_FILTERS[tabActive] || []).map((text, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = text;
+      b.onclick = () => { rootFilter[tabActive] = i; paintControlRow(); repaintRoot(tabActive); };
+      return b;
+    }));
+  }
+  [...seg.children].forEach((b, i) => {
+    if (i === rootFilter[tabActive]) b.setAttribute("aria-pressed", "true"); else b.removeAttribute("aria-pressed");
+  });
+  $("cr-scope").textContent = scopeName();
+}
+$("cr-scope").onclick = () => openLayer("psheet");
 // The panel in view: the tab's root, or the More screen where it stands over Now.
 function paintPanel() {
   const panel = layers.includes("more") ? "more" : TAB_PANEL[tabActive];
@@ -610,6 +683,7 @@ function paintPanel() {
   for (const b of document.querySelectorAll("nav [data-tab]")) {
     b.dataset.tab === tabActive ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
   }
+  paintControlRow();
 }
 function entryOf(tab) {
   const st = tabStacks[tab], top = st[st.length - 1];
@@ -809,9 +883,12 @@ function drawList(st, lineEl, msgEl, draw) {
 function detail(w) { $("warn-detail").textContent = w.tip || w.text; $("warn-detail").hidden = false; }
 // One path opens a warning row: a tap and the keyboard both call it, so the two can never drift (#1457).
 function openWarning(w) { detail(w); }
+// The loop-switch fact the status read already serves ({on, since}): the primary names it, the page writes nothing for it.
+let loopFact = null;
 async function status() {
   try {
     const s = await call("/api/status");
+    loopFact = s.loop || loopFact;
     $("msg").textContent = "";
     $("reconnect").hidden = true;
     $("t-live").textContent = s.live;
@@ -917,7 +994,14 @@ let board = null, shown = [], issueKey = "", touch = null, seenCards = null, fre
 const cardKey = x => (x.r || "") + "#" + x.n;
 const motionOk = () => typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
 const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again
+// issue number -> this page's own move request: `{phase, at, cause, rule}`. It is what tells a requested, confirmed,
+// failed, unknown or refused primary apart from the row's own pending (`pd`) and refusal (`mr`) facts (SPEC 1596, #1598).
+const moveReqs = {};
 const rowColumn = n => { for (const g of (board && board.groups) || []) if (g.items.some(i => i.n === n)) return g.name; return ""; };
+const rowOf = n => ((board && board.groups) || []).flatMap(g => g.items).find(i => i.n === n);
+// Whether the board still names the move this page already took. A confirmed primary stays disabled on it until the row
+// drops the card's move or names another one (rule 7), so the same move is never sent twice.
+const offersSameMove = n => { const row = rowOf(n), r = moveReqs[n]; return !!(row && row.pm && r && row.pmt === r.to); };
 let view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
 let bo = JSON.parse(localStorage.getItem("squad-mobile-board") || "{}");
 const saveB = () => localStorage.setItem("squad-mobile-board", JSON.stringify(bo));
@@ -929,7 +1013,7 @@ const mSlots = () => {
   if (slotsOf !== board || !slots) { slotsOf = board; slots = specSlots(((board && board.groups) || []).flatMap(g => g.items.map(cardSpec)).filter(n => n != null)); }
   return slots;
 };
-const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
+const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x) && rootKeep("work", x));
 function cardButton(x, i) {
   // The card's age at one short rung (#1444): minutes under an hour, hours under a day, days
   // after it, so the chip is one token the eye reads at phone width.
@@ -1063,6 +1147,30 @@ function sheetMeta(x, d) {
   };
   return ROWS.map(l => rowHTML(l, v[l])).join("");
 }
+// The card body of rule 7 (SPEC 1596): the next step, the latest update, the related objects, and Description and
+// Activity as two rows that open on their own. Every string comes from a fact the row or the issue read carries.
+function paintCardBody(x, d) {
+  $("sh-next-text").textContent = nextStepOf(x, rowColumn(x.n));
+  $("sh-update-text").textContent = d ? latestUpdateOf(d) : "Loading the latest update.";
+  $("sh-related-list").replaceChildren(...relatedOf(x, d || {}).map(r => {
+    const row = document.createElement("div");
+    row.className = "rel"; row.dataset.kind = r.kind;
+    if (r.kind === "description") row.id = "sh-desc-row";
+    if (r.kind === "activity") row.id = "sh-act-row";
+    if (r.kind === "description" || r.kind === "activity") row.setAttribute("role", "button");
+    const t = document.createElement("span"); t.textContent = r.text;
+    const ch = document.createElement("span"); ch.className = "chev"; ch.textContent = "›";
+    row.append(t, ch);
+    return row;
+  }));
+}
+// Description and Activity are two rows of the Related list: a tap opens one without the other (rule 7, user story 25).
+$("sh-related-list").onclick = e => {
+  const row = e.target.closest && e.target.closest(".rel");
+  if (!row) return;
+  const box = row.dataset.kind === "description" ? $("sh-body") : row.dataset.kind === "activity" ? $("sh-last") : null;
+  if (box) box.hidden = !box.hidden;
+};
 function setLink(url) {
   const ok = /^https:\/\/github\.com\//.test(url || "");
   $("sh-link").hidden = !ok;
@@ -1079,7 +1187,7 @@ async function loadIssue(x, key) {
     const d = await call("/api/issue?n=" + x.n + (x.r ? "&r=" + encodeURIComponent(x.r) : ""));
     if (key !== sheetKey()) return;
     issueD = d.err ? null : d;
-    if (d.err) { $("sh-meta").innerHTML = sheetMeta(x, null); $("sh-body").textContent = d.err; return; }
+    if (d.err) { $("sh-meta").innerHTML = sheetMeta(x, null); $("sh-body").textContent = d.err; paintCardBody(x, null); return; }
     setLink(d.url);
     $("sh-title").textContent = "#" + d.n + " " + d.title;
     $("sh-chips").innerHTML = sheetChips(x);
@@ -1090,7 +1198,8 @@ async function loadIssue(x, key) {
     $("sh-last").innerHTML = d.last
       ? `<h3>Last comment</h3><p class="mut">${escHTML(d.last.by || "")} · ${escHTML(String(d.last.at || "").slice(0, 16).replace("T", " "))}</p>${d.last.html}`
       : "";
-  } catch (e) { if (key === sheetKey()) $("sh-body").textContent = e.message; }
+    paintCardBody(x, d);
+  } catch (e) { if (key === sheetKey()) { $("sh-body").textContent = e.message; paintCardBody(x, null); } }
 }
 // A card of the selection is scrolled above the sheet (#919): the sheet covers 60% of the screen, so the card it names
 // stays in sight above it.
@@ -1136,11 +1245,16 @@ function renderSheet() {
     const i = shown.indexOf(c);
     return `<button type="button" data-i="${i}" class="${i === view.card ? "on" : ""}" title="card ${k + 1} of ${set.length}">#${escHTML(c.n)}</button>`;
   }).join("");
-  // The button names the column the hub serves on the row (`x.pmt`), so this page holds no column name of its own.
-  $("sh-todo").hidden = !x.pm;
-  if (x.pmt) $("sh-todo").textContent = "→ " + x.pmt;
+  // The action row's one primary reads the state the card rules name from the row's move facts and this page's request
+  // record (SPEC 1596, rule 7). The button's column comes from the row (`x.pmt`), never from a column this page names.
+  $("sh-todo").hidden = !x.pm && !moveReqs[x.n] && !x.mr;
+  paintActionRow(x);
   // Board-derived metadata is redrawn on every pass, with the issue detail the last read gave (#1005).
-  if (key === issueKey) { $("sh-chips").innerHTML = sheetChips(x); $("sh-meta").innerHTML = sheetMeta(x, issueD); return; }
+  if (key === issueKey) {
+    $("sh-chips").innerHTML = sheetChips(x); $("sh-meta").innerHTML = sheetMeta(x, issueD);
+    $("sh-next-text").textContent = nextStepOf(x, rowColumn(x.n));   // the row's own facts, redrawn on every pass
+    return;
+  }
   issueKey = key; issueD = null;
   $("sheet-content").scrollTop = 0;
   $("sh-title").textContent = "#" + x.n + " " + x.t;
@@ -1148,6 +1262,7 @@ function renderSheet() {
   $("sh-meta").innerHTML = sheetMeta(x, null);
   $("sh-body").textContent = "Loading the issue.";
   $("sh-last").innerHTML = "";
+  paintCardBody(x, null);
   setLink(x.r ? "https://github.com/" + x.r + "/issues/" + x.n : "");
   scrollCardIntoView(x);
   loadIssue(x, key);
@@ -1237,6 +1352,12 @@ function applyBoard(b) {
   const open = view.sheet && !offBoard && shown[view.card];
   const id = open ? { name: (carouselColumns(((board && board.groups) || []), ((board && board.groups) || []).map(g => columnCards(g).length), bo.hideEmpty !== false).shown[view.col] || {}).name, key: cardKey(open) } : null;
   board = b;
+  // A lost reply the read now answers as moved resolves itself: the row no longer offers the move, so the unknown state
+  // ends without a second send (SPEC 1596, rule 7).
+  for (const n of Object.keys(moveReqs)) {
+    const row = b.groups.flatMap(g => g.items).find(i => i.n === +n);
+    if (moveReqs[n].phase === "unknown" && row && !row.pm) delete moveReqs[n];
+  }
   if (id) {
     const gs = b.groups, sh = carouselColumns(gs, gs.map(g => columnCards(g).length), bo.hideEmpty !== false).shown;
     view = anchorView(view, sh.map(g => ({ name: g.name, flat: laneModelOf(g).flat })), id);
@@ -1279,12 +1400,32 @@ $("sh-meta").onclick = e => {
   const a = e.target.closest("a.shb[data-n]");
   if (a) { e.preventDefault(); openCard(+a.dataset.n); }
 };
-// The move button starts the card's own move, the one write the page already makes (#829); it is drawn only for a card
-// the hub marks promotable, and its column comes from the row (#919, ADR-0142).
+// The one primary of the action row sends the card's own move, the one write the page already makes (#829). It is drawn
+// only for a card the hub marks promotable, and a requested, confirmed, unknown or refused move never sends a second
+// time (SPEC 1596, rule 7); only a failed move retries on one tap.
 $("sh-todo").onclick = () => {
   const x = offBoard ? null : shown[view.card];
-  const el = x && $("cards").querySelector('[data-role="card"][data-n="' + x.n + '"]');
-  if (x && x.pm && el) stageMove(x, el);
+  if (!x || !x.pm) return;
+  const phase = moveReqs[x.n] && moveReqs[x.n].phase;
+  if (phase === "failed") { sendMove(x.n, x.pmt); return; }   // a failed write retries on one tap
+  if (phase) return;                                          // requested, confirmed, unknown or refused never sends again
+  stageMove(x, null);   // the Undo window holds the write; only writePending sends it, and only it calls sendMove
+};
+// The ••• menu holds what the action row leaves out (rule 7): the close stays available when the primary owns the row.
+$("sh-dots").onclick = () => { $("sh-menu").hidden = !$("sh-menu").hidden; };
+$("sh-menu").onclick = e => {
+  const b = e.target.closest("[data-menu]");
+  if (!b) return;
+  $("sh-menu").hidden = true;
+  if (b.dataset.menu === "close") step({ act: "close" });
+  else if ($("sh-link").href) $("sh-link").click();
+};
+// The secondary is Close, unless a rule refused the move: then the rule is what the secondary offers, and a tap names it.
+$("sh-close").onclick = () => {
+  const x = offBoard ? null : shown[view.card];
+  const r = x && moveReqs[x.n];
+  if (r && r.phase === "refused") { $("bmsg").textContent = r.rule || "a rule forbids this move"; $("sheet-content").scrollTop = 0; return; }
+  step({ act: "close" });
 };
 addEventListener("keydown", e => {
   if (e.key === "Escape") { popScreen(); return; }
@@ -1325,21 +1466,70 @@ async function writePending() {
   const p = moveAct(pending, "write", Date.now());
   if (!p || p.why !== "written") return;
   pending = null; undoText(""); $("undo-btn").hidden = true;
+  await sendMove(p.n, p.to);
+}
+// The one write of a move (#829, #1598), answered as the state the primary reads: `ok`, `refused` (a rule forbids it, the
+// reason comes from the hub), `failed` (an answer the page cannot read) or `unknown` (no answer at all). The request is
+// the existing `/api/promote` route; this page adds no write route of its own.
+async function writePromote(n) {
   let r;
-  try { r = await writing(fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: p.n }) })); }
-  catch (e) { showCardReason(p.n, "the hub did not answer"); return; }   // a failed request is the only "did not answer"
+  try { r = await writing(fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: n }) })); }
+  catch (e) { return { kind: "unknown" }; }   // a failed request is the only "did not answer"
   let d = {};
   try {
     // A refusal the hub answers as plain text (the seam's own 403) carries the reason in its body: it is never read as a
     // failed request (#829).
     if (((r.headers.get("Content-Type") || "").indexOf("json")) < 0) {
       const text = (await r.text()).trim();
-      if (!r.ok) { showCardReason(p.n, text || "the hub answered " + r.status); loadBoard(true); return; }
+      if (!r.ok) return { kind: "refused", rule: text || "the hub answered " + r.status };
+      return { kind: "ok" };
     } else d = await r.json();
-  } catch (e) { d = { err: "the hub answered " + r.status + " with a body this page cannot read" }; }
-  if (!r.ok && !d.err) d.err = "the hub answered " + r.status;
-  if (d.err) showCardReason(p.n, d.err); else delete reasons[p.n];
+  } catch (e) { return { kind: "failed", cause: "the hub answered " + r.status + " with a body this page cannot read" }; }
+  if (d.err) return { kind: "refused", rule: d.err };
+  if (!r.ok) return { kind: "failed", cause: "the hub answered " + r.status };
+  return { kind: "ok" };
+}
+// One move request, one state: a request that waits, a confirmed move that stands two seconds, a failure that retries, an
+// unknown that keeps polling and never re-sends, and a refusal whose rule the secondary offers (SPEC 1596, rule 7).
+async function sendMove(n, to) {
+  moveReqs[n] = { phase: "requested", at: Date.now(), to: to || "" };
+  if (view.sheet) renderSheet();
+  const out = await writePromote(n);
+  if (out.kind === "ok") {
+    moveReqs[n] = { phase: "confirmed", at: Date.now(), to: to || "" };
+    setTimeout(() => {
+      if (!moveReqs[n] || moveReqs[n].phase !== "confirmed") return;
+      // Two seconds of "Moved to", then the next action. The record stays until the board drops the move or names
+      // another one, so the primary never invites a second send of the move it just took (rule 7).
+      if (!offersSameMove(n)) delete moveReqs[n];
+      if (view.sheet) renderSheet();
+    }, 2000);
+  } else if (out.kind === "unknown") {
+    moveReqs[n] = { phase: "unknown", at: Date.now() };
+  } else if (out.kind === "refused") {
+    moveReqs[n] = { phase: "refused", rule: out.rule };
+    showCardReason(n, out.rule);
+  } else {
+    moveReqs[n] = { phase: "failed", cause: out.cause };
+    showCardReason(n, out.cause);
+  }
+  if (view.sheet) renderSheet();
   loadBoard(true);
+}
+// The one primary renders the state the rule module names from the row's move facts and the page's request record. The
+// view binds the state to the element and delegates the decision to `primaryView` (ADR-0137).
+function paintActionRow(x) {
+  // The move facts, the loop-switch fact the status poll already holds, and this page's own request record (rule 7).
+  const v = primaryView({ to: x.pmt || "", pending: !!x.pd, refused: x.mr || "", loop: loopFact, request: moveReqs[x.n] }, Date.now());
+  const btn = $("sh-todo");
+  btn.hidden = !!v.hidden;
+  btn.disabled = !!v.disabled;
+  btn.className = v.state;
+  $("sh-todo-label").textContent = v.label;
+  $("sh-todo-sub").textContent = v.sub || "";
+  $("sh-todo-sub").hidden = !v.sub;
+  // The secondary is Close, but a refused move offers its rule there instead (rule 7).
+  $("sh-close").textContent = v.secondary ? v.secondary : "Close";
 }
 function showCardReason(n, why) {
   // The refusal is page state keyed by issue number, and the card draws it on every render (#829): the read that follows
@@ -1675,8 +1865,8 @@ const histState = { ever: false, n: 0, error: "", rows: [], groups: [], muted: "
   loading: "The run history is loading.", empty: "No run history is drawn." };
 function drawRuns() {
   drawList(runsState, $("runs-state"), $("runs-msg"), () => {
-    $("runs-live").replaceChildren(...runsState.rows.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
-    $("runs-ended").replaceChildren(...runsState.ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
+    $("runs-live").replaceChildren(...runsState.rows.filter(r => r.running && rootKeep("runs", r)).map(r => runRow(r, r.url || runURLs(r.id).page)));
+    $("runs-ended").replaceChildren(...runsState.ended.filter(r => rootKeep("runs", r)).map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
   });
   const v = drawList(histState, $("runs-history-state"), $("runs-history-msg"),
     () => drawHistory(histState.rows, histState.groups, histState.muted));
@@ -1810,7 +2000,7 @@ const sessState = { ever: false, n: 0, error: "", groups: [],
   loading: "The terminal sessions are loading.", empty: "No terminal sessions are drawn." };
 function drawSessions() {
   drawList(sessState, $("sessions-state"), $("sessions-msg"), () => {
-    $("sessions").replaceChildren(...sessState.groups.flatMap(g => (g.sessions || []).map(s => sessionRow(g.project, s))));
+    $("sessions").replaceChildren(...sessState.groups.flatMap(g => (g.sessions || []).filter(s => rootKeep("chat", s)).map(s => sessionRow(g.project, s))));
   });
 }
 function applySessions(d) {

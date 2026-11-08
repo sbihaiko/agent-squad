@@ -89,6 +89,26 @@ def test_a_missing_pin_floats_to_the_current_hash(monkeypatch):
         assert errs == [] and req["skill"]["version"] == HASH
 
 
+# --- #1607: an omitted or unknown skill is a guess, never a lost run ---
+
+
+def test_a_request_with_no_skill_takes_the_envelopes_first_allowed_skill():
+    """A router that left `skill` out died the whole run `no_dispatch` with nothing delivered (#1607). Every other
+    optional field falls back to the envelope, and `workspace` takes `allow.workspaces[0]`; skill takes the first
+    allowed skill the same way."""
+    req, errs = validate_request(disp(), {"prompt": "go"}, 1, None, 10.0)
+    assert errs == [] and req["skill"]["name"] == "tdd"
+
+
+def test_a_named_skill_outside_a_one_entry_allow_narrows_to_that_entry():
+    """A named skill the allow list does not carry narrows to the envelope's first allowed skill when the list holds
+    exactly one entry: the list proves the single intent. Today it fails `skill_outside_allow`."""
+    d = disp()
+    d["allow"]["skills"] = [{"name": "tdd"}]
+    req, errs = validate_request(d, {"prompt": "go", "skill": "evil"}, 1, None, 10.0)
+    assert errs == [] and req["skill"]["name"] == "tdd"
+
+
 def test_the_pin_check_follows_the_given_vendor_not_the_default(tmp_path):
     import json
 
