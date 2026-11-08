@@ -7,7 +7,8 @@ each `message.im` event instead of the operator polling for it. For every event 
 
 - a message from the owner that carries a clip is downloaded, transcribed with Gemini, and appended to
   `$VOICE_STATE/inbox.jsonl` as one JSON line (`id`, `ts`, `user`, `channel`, `text`, `clip`), where `text` is the
-  transcription. A text message from the owner is appended the same way with `clip` false.
+  transcription. A text message from the owner is appended the same way with `clip` false; an owner message with no
+  text at all is recorded in `other.jsonl` with an `error`, never dropped and never left unacknowledged.
 - a message from any other user is appended to `$VOICE_STATE/other.jsonl` as data and never to the inbox.
 - a message whose id was already recorded is acknowledged and writes nothing: the ids of every appended line live in
   `$VOICE_STATE/seen.jsonl`, so a daemon that crashes and restarts resumes with no duplicate line.
@@ -46,6 +47,16 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generat
 BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
 AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
 TIMEOUT = 60
+MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larger clip is a record, never a guess
+CHUNK = 1 << 16
+
+
+class ClipTooLarge(Exception):
+    """A clip past what one inline Gemini request can carry. The size travels with the error, never the bytes."""
+
+    def __init__(self, size):
+        super().__init__(f"clip too large: {size} bytes over the {MAX_CLIP_BYTES} byte cap")
+        self.size = size
 
 
 class State:
@@ -83,9 +94,19 @@ class State:
         return self._seen
 
     def _append(self, path, record):
-        """One durable line: written, flushed and fsync'd before the caller returns."""
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, sort_keys=True) + "\n")
+        """One durable line: written, flushed and fsync'd before the caller returns.
+
+        A crash can leave a half line with no newline; it gets one first, so the new record is its own line and the
+        half line stays the skipped record `read_lines` already ignores.
+        """
+        line = json.dumps(record, sort_keys=True) + "\n"
+        with open(path, "a+b") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell():
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b"\n":
+                    line = "\n" + line
+            f.write(line.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
 
@@ -140,11 +161,21 @@ def audio_file(event):
     return None
 
 
-def download(url, token):
-    """The clip's bytes with the bot token, never the URL's own public form."""
+def download(url, token, limit=MAX_CLIP_BYTES):
+    """The clip's bytes with the bot token, never the URL's own public form; a clip past the cap is never read whole."""
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    size = 0
+    chunks = []
     with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        return response.read()
+        while True:
+            chunk = response.read(CHUNK)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > limit:
+                raise ClipTooLarge(size)
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def transcribe(audio, mime, key):
@@ -171,7 +202,7 @@ def transcribe(audio, mime, key):
 
 
 class Daemon:
-    """One handler for one event, and the loop that acknowledges each envelope after its line is durable."""
+    """One handler for one event; the acknowledging loop is `serve` and `handle_envelope` beside it."""
 
     def __init__(self, state, owner, transcriber, downloader, log=None):
         self.state = state
@@ -213,29 +244,47 @@ class Daemon:
             url = clip.get("url_private_download") or clip.get("url_private") or ""
             try:
                 audio = self.downloader(url)
+                if len(audio) > MAX_CLIP_BYTES:
+                    raise ClipTooLarge(len(audio))
                 text = (self.transcriber(audio, clip.get("mimetype") or "audio/mp4") or "").strip()
+            except ClipTooLarge as x:   # a clip past the inline cap is a record with its size
+                record["error"] = str(x)
+                record["bytes"] = x.size
+                self.state.append_other(record)
+                self.log(f"voiced: {record['error']} for {mid}")
+                return "failed"
             except Exception as x:      # noqa: BLE001 - a clip no model could read is data, never an inbox line
                 record["error"] = f"transcription failed: {type(x).__name__}"
                 self.state.append_other(record)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
         if not text:
-            return "ignored"
+            # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
+            record["text"] = text
+            record["error"] = "empty transcript" if clip else "empty message: no clip and no text"
+            self.state.append_other(record)
+            return "other"
         record["text"] = text
         record["clip"] = bool(clip)
         self.state.append_inbox(record)
         return "inbox"
 
-    def run(self, socket):
-        """Drain a client's envelopes, acknowledging each one only after its outcome is recorded durably."""
-        for envelope in socket.events():
-            try:
-                self.handle(envelope)
-            except Exception as x:      # noqa: BLE001 - an unexpected failure keeps the envelope unacknowledged, so Slack delivers it again
-                self.log(f"voiced: {type(x).__name__}: {str(x)[:120]}")
-                continue
-            if envelope.get("envelope_id"):
-                socket.ack(envelope["envelope_id"])
+
+async def handle_envelope(daemon, envelope, ack):
+    """Record one envelope off the event loop, then acknowledge it only after its outcome is durable.
+
+    The whole per-envelope path lives here, so production and the tests drive one copy of it. `daemon.handle` runs in a
+    worker thread: the Gemini call takes up to `TIMEOUT` seconds, and the loop must keep answering websocket pings.
+    An unexpected failure leaves the envelope unacknowledged, which is how Slack is told to deliver it again.
+    """
+    try:
+        outcome = await asyncio.to_thread(daemon.handle, envelope)
+    except Exception as x:      # noqa: BLE001 - no ack: Slack delivers it again, and the id keeps any later line single
+        daemon.log(f"voiced: {type(x).__name__}: {str(x)[:120]}")
+        return None
+    if envelope.get("envelope_id"):
+        await ack(envelope["envelope_id"])
+    return outcome
 
 
 def plist_text(label, python, script, state_dir, owner, checkout):
@@ -260,26 +309,51 @@ def plist_text(label, python, script, state_dir, owner, checkout):
 """
 
 
-def ssl_context():
-    """The one CA bundle the vendored listener already resolves; the macOS interpreter often carries none."""
-    for ca in (os.environ.get("SSL_CERT_FILE"), "/etc/ssl/cert.pem"):
-        if ca and os.path.exists(ca):
-            return ssl.create_default_context(cafile=ca)
+def certifi_bundle():
+    """certifi's bundle, or None where it is not installed."""
     try:
         import certifi
-        return ssl.create_default_context(cafile=certifi.where())
     except ImportError:
-        return ssl.create_default_context()
+        return None
+    return certifi.where()
 
 
-async def serve(daemon, app_token):
-    """Keep the Socket Mode connection open, reconnecting with a growing wait; each envelope is handled, then acked."""
-    import websockets
+def ca_bundle():
+    """The CA bundle path the daemon trusts, or None for the default system store.
 
-    context = ssl_context()
+    certifi comes before `/etc/ssl/cert.pem`: the launchd environment is minimal, and a Python without Homebrew's
+    bundle directory must still find a complete store.
+    """
+    for ca in (os.environ.get("SSL_CERT_FILE"), certifi_bundle(), "/etc/ssl/cert.pem"):
+        if ca and os.path.exists(ca):
+            return ca
+    return None
+
+
+def ssl_context(log=None):
+    """The one CA bundle the daemon trusts, and the line that names it: under launchd a silent guess is a TLS loop."""
+    ca = ca_bundle()
+    if log:
+        log(f"voiced: trusting CA bundle {ca}" if ca else "voiced: trusting the default system CA store")
+    return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+
+
+async def serve(daemon, app_token, connect=None, open_connection=None, stop=None):
+    """Keep the Socket Mode connection open, reconnecting with a growing wait; each envelope is handled, then acked.
+
+    `connect` and `open_connection` are the two seams a test injects; `stop` ends the loop when it is set. Production
+    passes none of the three, so the loop it runs is the loop the tests exercise.
+    """
+    if connect is None:
+        import websockets
+        connect = websockets.connect
+    if open_connection is None:
+        open_connection = lambda: channels.api(app_token, "apps.connections.open", {}, post=True)  # noqa: E731
+
+    context = ssl_context(log=daemon.log)
     wait = 1
-    while True:
-        answer = channels.api(app_token, "apps.connections.open", {}, post=True)
+    while not (stop is not None and stop.is_set()):
+        answer = await asyncio.to_thread(open_connection)
         url = answer.get("url")
         if not url:
             daemon.log(f"voiced: socket mode refused: {answer.get('error')}")
@@ -287,8 +361,12 @@ async def serve(daemon, app_token):
             wait = min(wait * 2, 60)
             continue
         try:
-            async with websockets.connect(url, ping_interval=20, ssl=context) as ws:
+            async with connect(url, ping_interval=20, ssl=context) as ws:
                 wait = 1
+
+                async def ack(envelope_id):
+                    await ws.send(json.dumps({"envelope_id": envelope_id}))
+
                 async for raw in ws:
                     envelope = json.loads(raw)
                     kind = envelope.get("type")
@@ -296,15 +374,11 @@ async def serve(daemon, app_token):
                         break
                     if kind != "events_api":
                         continue
-                    try:
-                        daemon.handle(envelope)
-                    except Exception as x:      # noqa: BLE001 - no ack: Slack delivers it again, and the id keeps any later line single
-                        daemon.log(f"voiced: {type(x).__name__}: {str(x)[:120]}")
-                        continue
-                    if envelope.get("envelope_id"):
-                        await ws.send(json.dumps({"envelope_id": envelope["envelope_id"]}))
+                    await handle_envelope(daemon, envelope, ack)
         except Exception as x:      # noqa: BLE001 - a dropped socket is retried, never fatal: launchd also restarts the process
             daemon.log(f"voiced: {type(x).__name__}: {str(x)[:120]}")
+        if stop is not None and stop.is_set():
+            return
         await asyncio.sleep(wait)
         wait = min(wait * 2, 60)
 
