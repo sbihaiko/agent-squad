@@ -7714,7 +7714,7 @@ MOBILE_PHOTO_MARKUP = (f"<style>{MOBILE_PHOTO_CSS}</style>\n"
                        '<div id="termview-attach" role="group" aria-label="Photo" hidden><img id="termview-attach-img" alt="">'
                        '<span id="termview-attach-name"></span><button id="termview-attach-x" type="button" '
                        'aria-label="Remove the photo" title="Remove the photo">×</button></div>\n')
-MOBILE_PHOTO_ROW = ('<div id="termview-row"><label id="termview-photo" for="termview-file">Photo</label>'
+MOBILE_PHOTO_ROW = ('<div id="termview-row"><label id="termview-photo" for="termview-file">Attach</label>'
                     '<input id="termview-file" type="file" accept="image/*" aria-label="Take or choose a photo">'
                     '<button id="termview-send" type="button">Send</button></div>')
 MOBILE_TEXTAREA = '<textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>'
@@ -7791,6 +7791,29 @@ $("termview-send").onclick = async () => {
   } catch (err) { photoSay(sid, err.message); }
   finally { d.pending = false; if (sid === termSid) photoSync(sid); }
 };
+// The attach sheet (frames 20 and 21; #1602): the thumb opens it from the bottom edge, and each door points the one image
+// input at its own picker. Cancel closes it and leaves the composer as it was. The three options are the chat module's
+// (ADR-0137): the page draws them and holds no list of its own.
+function attachOpen() { $("attach-sheet").hidden = false; }
+function attachClose() { $("attach-sheet").hidden = true; }
+function attachPick(o) {
+  const input = $("termview-file");
+  if (o.accept) input.setAttribute("accept", o.accept); else input.removeAttribute("accept");
+  if (o.capture) input.setAttribute("capture", o.capture); else input.removeAttribute("capture");
+  attachClose();
+  input.click();
+}
+function attachDraw() {
+  const cancel = document.createElement("button");
+  cancel.type = "button"; cancel.id = "attach-cancel"; cancel.textContent = "Cancel"; cancel.onclick = attachClose;
+  $("attach-sheet").replaceChildren(...chatAttach().map(o => {
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "attach-" + o.id; b.textContent = o.label; b.onclick = () => attachPick(o);
+    return b;
+  }), cancel);
+}
+attachDraw();
+$("termview-photo").onclick = e => { if (e) e.preventDefault(); attachOpen(); };
 """
 
 def mobile_photo(page):
