@@ -4,8 +4,6 @@ picked, and the screen the Today line opens. The served numbers are the fixture'
 """
 import json
 
-import pytest
-
 import tests.test_hub_mobile_move as move
 from tests.test_hub_mobile_move import hub  # noqa: F401  (hub is a fixture)
 
