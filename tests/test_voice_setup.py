@@ -26,8 +26,9 @@ SPEC_BOT_SCOPES = sorted([
     "im:read",
     "im:write",
     "users:read",
+    "app_mentions:read",
 ])
-SPEC_EVENTS = ["message.im"]
+SPEC_EVENTS = ["message.im", "app_mention", "message.channels"]
 VALUE = "xoxb-FAKE-0123456789-NOT-A-REAL-TOKEN"
 
 FAKE_SECURITY = """#!/bin/sh
