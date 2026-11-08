@@ -8,7 +8,8 @@
 # that waits on the owner or on an answer is no work yet.
 : "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
 : "${SG_BUG_SKIP_LABELS:=needs-owner,no-auto,wontfix,question}"
-export SG_FRONTIER_SKIP_LABELS SG_BUG_SKIP_LABELS
+# No export here: env.sh exports both after the profile (#757), and a sourced library that exports them defeats a
+# profile's := default in any suite that sources this file before it runs env.sh in a child.
 # sg_skip_labels <frontier|bug> [<extra>,...]: the comma list of labels one lane takes no work from. The freeze markers are a
 # floor: frozen:owner and frozen:dependency hold a card whatever a profile's lists say. The frontier's optional argument adds
 # its structural labels -- it leaves the bug, debt and run-parent units to their own lanes. The bug lane adds needs-info, a
