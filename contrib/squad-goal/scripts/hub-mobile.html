@@ -449,7 +449,8 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section data-panel="specs" hidden>
 <div id="specs-head" data-role="header"><h2>Specs</h2></div>
-<p class="msg" role="status">The specs list is not drawn on this build.</p>
+<p id="specs-state" class="msg" role="status"></p>
+<div id="specs-list" class="runlist"></div>
 </section>
 </main>
 <section id="usage-screen" hidden>
@@ -519,6 +520,7 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*LINK*/
 /*RUN*/
 /*USAGE*/
+/*SPECS*/
 /*BOARD_FILTER*/
 /*CARD_RULES*/
 /*LOOP_RULES*/
@@ -1471,7 +1473,36 @@ function renderFilters() {
   lfl.querySelectorAll("input").forEach(c => c.checked = sel.includes(c.value));
   $("lf").querySelector("summary").textContent = sel.length ? sel.join(", ") : "labels";
 }
-const refresh = () => { renderBoard(); renderSheet(); renderFilters(); };
+const refresh = () => { renderBoard(); renderSheet(); renderFilters(); drawSpecs(); };
+// Specs (#1604): each open spec with its tickets by column, from the board this page reads. hub-mobile-specs.js shapes it.
+function drawSpecs() {
+  const rows = specProgress(board);
+  $("specs-state").textContent = !board ? "The board is loading." : rows.length ? "" : "No open spec.";
+  $("specs-list").replaceChildren(...rows.map(specRowEl));
+}
+function specRowEl(s) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const head = document.createElement("b");
+  head.textContent = (s.repo ? s.repo + " · " : "") + "SPEC " + s.n + " " + s.title;
+  const bar = document.createElementNS(NS_SVG, "svg"), at = { x: 0 };
+  bar.setAttribute("viewBox", "0 0 100 8");
+  for (const seg of s.bar) {
+    const r = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title");
+    r.setAttribute("x", at.x); r.setAttribute("y", 0); r.setAttribute("width", seg.w); r.setAttribute("height", 8); r.setAttribute("fill", "var(--acc)");
+    t.textContent = `${seg.col}: ${s.cols.find(c => c.col === seg.col).n}`;
+    r.append(t);
+    bar.append(r);
+    at.x += seg.w;
+  }
+  const count = document.createElement("div"), legend = document.createElement("div");
+  count.className = "mut";
+  count.textContent = s.count;
+  legend.className = "mut";
+  legend.textContent = s.legend;
+  row.append(head, bar, count, legend);
+  return row;
+}
 const step = g => { offBoard = null; view = sheetStep(view, shown, g); refresh(); };
 async function loadBoard(fresh) {
   if (!board) renderBoard();   // before the first read answers, the board says it is loading (#1008)
