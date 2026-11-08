@@ -858,6 +858,7 @@ def test_a_child_with_no_artifact_records_how_its_session_ended():
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # a loaded serial runner pushes the scripted run over the 2 s line (3.4 s in CI, 0.65 s here)
 async def test_a_request_naming_a_field_outside_the_envelope_still_dispatches(tmp_path):
     eng = make(tmp_path, {"router": routed(req(turns=3)), "route.router.1": CHILD})
     await eng.run()
