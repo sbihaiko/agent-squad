@@ -171,7 +171,9 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     found = set(re.findall(r'"(/api/[^"?]*)', hub.MOBILE_PAGE))
     assert found <= ROUTES, f"the mobile page reads routes the hub does not serve: {sorted(found - ROUTES)}"
     writes = set(re.findall(r'fetch\("(/api/[^"?]*)"[^)]*method:', hub.MOBILE_PAGE))
-    assert writes == {"/api/loop", "/api/promote", "/api/sessions/send", "/api/sessions/card/answer"}, f"the mobile page writes other routes: {sorted(writes)}"
+    assert writes == {"/api/promote", "/api/sessions/send", "/api/sessions/card/answer"}, f"the mobile page writes other routes: {sorted(writes)}"
+    assert 'fetch(path, { method: "POST"' in hub.MOBILE_PAGE and 'p && p.own ? "/api/loop" : "/" + loopSlug + "/api/loop"' in hub.MOBILE_PAGE, \
+        "the loop page's write is the one project's own loop route (#1599)"
     # Six writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
     # the hub's forward route (#831), the session composer's send (#834), the loop switch (#923, ADR-0162), the answer
     # to a session's question card (#1093), and the composer's one photo (#1155). Each carries the word once: a route

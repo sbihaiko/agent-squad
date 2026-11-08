@@ -85,17 +85,25 @@ def test_a_stored_tab_keeps_its_meaning(hub, stored, tab):
     assert run_page(hub.MOBILE_PAGE, f"return tabOf({json.dumps(stored)});", routes=_routes(hub)) == tab
 
 
-def test_the_loop_control_sits_in_the_card_and_obeys_the_hub(hub):
-    """The tailnet loop-write rule stays on the hub: a read-only view disables every button and says why."""
+LOOP_FACT = {"projects": [{"slug": "x", "repo": "x/y", "own": True, "state": "off", "live": {"runs": [], "gates": []},
+                           "landing": None, "change": None, "bugs": 0, "bugs_open": [], "write": False,
+                           "reason": "read-only from the tailnet"}],
+             "changes": []}
+
+
+def test_the_loop_control_obeys_the_hub(hub):
+    """The tailnet loop-write rule stays on the hub: a read-only view refuses the primary and says why. The control sits on
+    the project's own loop page, opened from the Now strip (SPEC 1596, rule 8)."""
     out = run_page(hub.MOBILE_PAGE, """
-      await loopView();
+      await __tick(10);
+      openLayer("loop", { slug: "x" });
       const b = id => document.getElementById(id);
-      return { inCard: !!b("loop-start").closest("#iloop"),
-               disabled: ["loop-start", "loop-drain", "loop-now"].map(i => b(i).disabled),
-               reason: b("loop-reason").textContent };
-    """, routes=_routes(hub))
-    assert out["inCard"]
-    assert out["disabled"] == [True, True, True]
+      return { rows: b("loops-rows").querySelectorAll(".looprow").length,
+               label: b("loop-primary").textContent, disabled: b("loop-primary").disabled,
+               state: b("loop-primary").dataset.state, reason: b("loop-reason").textContent };
+    """, routes=_routes(hub, loop=LOOP_FACT))
+    assert out["rows"] == 1, "the Now strip names the project"
+    assert (out["label"], out["disabled"], out["state"]) == ("Refused", True, "refused")
     assert "read-only from the tailnet" in out["reason"]
 
 
@@ -106,7 +114,7 @@ def test_the_status_facts_the_monitor_lacks_stay_in_its_panel(hub):
         assert f"id={k}" in panel, k
     assert "id=load>" not in panel, "the gauges say the load: the text line is dropped"
     assert "The hub does not answer" in page
-    assert re.search(r"#loop-ctl button[^{]*\{[^}]*min-height:44px", page)
+    assert re.search(r"#loop-actions button[^{]*\{[^}]*min-height:44px", page), "the loop action row is a thumb target"
 
 
 def test_the_phone_card_never_folds(hub):

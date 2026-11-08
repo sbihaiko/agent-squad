@@ -24,7 +24,7 @@ def watchd(*args):   # the marks watchd.sh leaves: a drain pauses dispatch and m
     return 0
 hub.loop_watchd = watchd
 tn = {"host": "box.tail1.ts.net", "allow": ["alice@example.com"]}
-hub.tailnet_block = lambda: dict(tn)
+hub.tailnet_block = lambda checkout=None: dict(tn)
 LOOP = {"loopback": hub.Access(True, "", "", False), "tail": hub.Access(True, "", "alice@example.com", True)}
 def dead_pid():
     p = subprocess.Popen(["true"]); p.wait(); return p.pid

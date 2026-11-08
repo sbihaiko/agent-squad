@@ -91,7 +91,12 @@ def test_the_run_view_has_no_edge_strip_and_no_back_swipe_handler():
 
 
 def test_the_runs_code_holds_no_run_state_rule():
-    assert not re.search(r"\.state\s*[!=]==?", page())
+    """A run's state is the server's: the runs code never compares one. The loop page reads its own project's loop state
+    from the hub's fact (`loopPrimary` picks its label), so that block is cut before the search (#1599)."""
+    html = page()
+    start, end = html.index("// Loops per project"), html.index("let board = null, shown")
+    rest = html[:start] + html[end:]
+    assert not re.search(r"\.state\s*[!=]==?", rest)
 
 
 # --- the run history at the bottom of the tab (#1337): the phone draws the groups the opted-in answer carries ---

@@ -81,7 +81,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_engine_skeleton.py", "tests/test_facts.py", "tests/test_five_phases.py", "tests/test_gate_start.py", "tests/test_gh_read.py",
         "tests/test_gui_test_scenario.py", "tests/test_heartbeat.py", "tests/test_hub_board_flow_history.py", "tests/test_hub_board_no_kinds.py", "tests/test_hub_box_routes_page.py",
         "tests/test_hub_chart_stream.py", "tests/test_hub_empty_column_strip.py", "tests/test_hub_gate_queue.py", "tests/test_hub_github_mark_size.py", "tests/test_hub_issue_sheet.py",
-        "tests/test_hub_lead_dots_e2e.py", "tests/test_hub_mobile_gesture_cleanup.py", "tests/test_hub_mobile_monitor.py", "tests/test_hub_mobile_polls.py", "tests/test_hub_mobile_runs.py",
+        "tests/test_hub_lead_dots_e2e.py", "tests/test_hub_mobile_gesture_cleanup.py", "tests/test_hub_mobile_loops.py", "tests/test_hub_mobile_monitor.py", "tests/test_hub_mobile_polls.py", "tests/test_hub_mobile_runs.py",
         "tests/test_hub_model_labels.py", "tests/test_hub_model_rows_routes.py", "tests/test_hub_models_save.py", "tests/test_hub_plans_save.py", "tests/test_hub_pr_gate_reason.py",
         "tests/test_hub_runs_ended.py", "tests/test_hub_runs_tab.py", "tests/test_hub_settings_clutter.py", "tests/test_hub_settings_shape.py", "tests/test_hub_stream.py",
         "tests/test_hub_swimlane_specs_closed.py", "tests/test_hub_tab_hashes.py", "tests/test_hub_terminal_e2e.py", "tests/test_issue_state_binding.py", "tests/test_issue_state_graphql_fallback.py",
