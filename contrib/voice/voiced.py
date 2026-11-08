@@ -37,6 +37,7 @@ loading it into the owner's launchd is the owner's step, and the daemon never ru
 import asyncio
 import base64
 import glob
+import hashlib
 import json
 import os
 import re
@@ -74,9 +75,41 @@ class ClipTooLarge(Exception):
 
 def channel_name(repo):
     """The channel for one repository: its name, lowercased, each dot a hyphen; every other character Slack refuses
-    becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484)."""
+    becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484).
+
+    Slack refuses a name that starts or ends with a hyphen and a run of hyphens; both are collapsed and trimmed. A name
+    past the cap keeps a short digest of the whole name, so two long repositories that agree up to the cut never share
+    one channel.
+    """
     name = (repo or "").rstrip("/").rsplit("/", 1)[-1]
-    return re.sub(r"[^a-z0-9_-]", "-", name.lower().replace(".", "-"))[:CHANNEL_MAX]
+    name = re.sub(r"[^a-z0-9_-]", "-", name.lower().replace(".", "-"))
+    name = re.sub(r"-{2,}", "-", name).strip("-")
+    if len(name) > CHANNEL_MAX:
+        digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+        name = name[:CHANNEL_MAX - len(digest) - 1].strip("-") + "-" + digest
+    return name
+
+
+def context_of(text):
+    """The KEY=value context `address.sh` prints, one key per line.
+
+    Each line is read as its own shell words, so an optional leading `export`, a quoted value and a value holding a
+    space all resolve to the value the seam meant, never to the last word of it.
+    """
+    ctx = {}
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        key, sep, rest = line.partition("=")
+        key = key.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        try:
+            ctx[key] = " ".join(shlex.split(rest.strip()))
+        except ValueError:
+            ctx[key] = rest.strip()
+    return ctx
 
 
 def hub_repos(script=None):
@@ -97,8 +130,7 @@ def hub_repos(script=None):
             p = subprocess.run(["bash", script, slug], capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             continue
-        ctx = {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout or ""))}
-        repo = (ctx.get("SG_REPO") or "").strip()
+        repo = (context_of(p.stdout).get("SG_REPO") or "").strip()
         if repo and repo not in repos:
             repos.append(repo)
     return repos
@@ -308,13 +340,23 @@ def project_channels(state, client, repos, log=None):
     log = log or (lambda line: None)
     channels = {repo: dict(entry) for repo, entry in state.channels().items()}
     refused, order, by_name = [], [], {}
+    # A channel already on disk keeps its repository: a newcomer that converts to that name is refused, never handed
+    # the first project's channel and inbox.
+    for repo in sorted(channels):
+        name = (channels[repo].get("name") or "").strip()
+        if not name:
+            continue
+        if name in by_name:
+            refused.append(_collision_line(repo, by_name[name], name))
+            continue
+        by_name[name] = repo
     for repo in repos:
         name = channel_name(repo)
         if not name:
             continue
-        if name in by_name:
-            refused.append(f"voiced: {repo} and {by_name[name]} share the channel name {name}; "
-                           f"no channel is created for {repo}")
+        holder = by_name.get(name)
+        if holder is not None and holder != repo:
+            refused.append(_collision_line(repo, holder, name))
             continue
         by_name[name] = repo
         order.append((repo, name))
@@ -333,6 +375,11 @@ def project_channels(state, client, repos, log=None):
     for line in refused:
         log(line)
     return {"channels": channels, "refused": refused}
+
+
+def _collision_line(repo, holder, name):
+    """The one line that refuses a repository whose converted name another repository already holds."""
+    return f"voiced: {repo} and {holder} share the channel name {name}; no channel is created for {repo}"
 
 
 def _ensure_channel(client, name, channels, log):

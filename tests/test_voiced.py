@@ -480,7 +480,70 @@ def test_a_channel_no_project_owns_never_reaches_the_dm_inbox(tmp_path):
     assert lines(daemon.state.inbox_path) == []
     other = lines(daemon.state.other_path)
     assert len(other) == 1 and "unknown" in other[0]["error"]
+    assert other[0]["channel"] == "C0UNKNOWN", "the unknown-channel record lost the channel it came from"
     assert socket.sent == ["env-1"]
+    for inbox in (tmp_path / "inboxes").glob("*.jsonl"):
+        assert "C0UNKNOWN" not in Path(inbox).read_text(), f"{inbox.name} holds the unknown channel"
+
+
+def test_a_channel_slack_already_holds_is_adopted_by_name_and_joined(tmp_path):
+    """Criterion (a), adoption: a channel Slack already holds is joined by its id, never replaced by a second one."""
+    mod = voiced()
+    client = FakeClient(existing=[{"id": "C0PREEXISTING", "name": "my-app", "is_member": False}])
+
+    state, got = configure(tmp_path, mod, client, ["Acme/My.App"])
+
+    assert got["channels"]["Acme/My.App"] == {"name": "my-app", "id": "C0PREEXISTING"}
+    assert client.channels["my-app"]["id"] == "C0PREEXISTING", "the daemon replaced Slack's own channel"
+    assert ("conversations.join", {"channel": "C0PREEXISTING"}, True) in client.calls
+
+
+def test_a_restart_over_the_registry_creates_and_joins_nothing(tmp_path):
+    """Criterion (a), restart: a second daemon over the same state creates no channel and joins none again."""
+    mod = voiced()
+    first = FakeClient()
+    _, got = configure(tmp_path, mod, first, ["Acme/My.App"])
+    cid = got["channels"]["Acme/My.App"]["id"]
+
+    # The restart: a fresh daemon, a fresh client whose Slack holds the channel the registry names.
+    second = FakeClient(existing=[{"id": cid, "name": "my-app", "is_member": True}])
+    _, again = configure(tmp_path, mod, second, ["Acme/My.App"])
+
+    assert second.created() == [], "the restart created the channel again"
+    assert ("conversations.join", {"channel": cid}, True) not in second.calls, "the restart joined again"
+    assert again["channels"]["Acme/My.App"]["id"] == cid
+
+
+def test_two_repository_names_that_agree_up_to_the_cut_do_not_share_one_channel(tmp_path):
+    """Criterion (d), the cut: two long names that differ only past the cap get two channels, never one inbox."""
+    mod = voiced()
+    client = FakeClient()
+    first = "acme/" + "x" * 90
+    second = "acme/" + "x" * 89 + "y"
+    state, got = configure(tmp_path, mod, client, [first, second])
+
+    assert got["refused"] == []
+    one, two = got["channels"][first], got["channels"][second]
+    assert one["name"] != two["name"], "two repositories share one channel name"
+    assert one["id"] != two["id"], "two repositories share one channel and one inbox"
+    assert client.created() == [one["name"], two["name"]]
+
+
+def test_a_repository_that_collides_with_a_channel_already_on_disk_is_refused(tmp_path):
+    """Criterion (d), across a restart: the channel on disk still belongs to its repository, and the newcomer is refused."""
+    mod = voiced()
+    client = FakeClient()
+    mod.State(str(tmp_path)).save_channels({"acme/old": {"name": "my-app", "id": "C0OLD"}})
+    client.channels["my-app"] = {"id": "C0OLD", "name": "my-app", "is_member": True}
+
+    got = mod.project_channels(mod.State(str(tmp_path)), client=client,
+                               repos=["acme/My.App"], log=lambda line: None)
+
+    assert client.created() == [], "a colliding repository created or adopted a channel"
+    assert len(got["refused"]) == 1
+    line = got["refused"][0]
+    assert "acme/old" in line and "acme/My.App" in line, line
+    assert got["channels"].get("acme/My.App") is None
 
 
 def test_the_projects_come_from_the_hub_seam(tmp_path):
@@ -500,3 +563,20 @@ def test_the_projects_come_from_the_hub_seam(tmp_path):
 
     assert mod.hub_repos(script=str(script)) == ["Acme/My.App", "acme/other"]
     assert ["--list", "alpha", "beta"] == log.read_text().split("\n")[:3]
+
+
+def test_the_hub_seam_reads_the_context_as_lines_with_export_and_quotes(tmp_path):
+    """Criterion (a), the context form: address.sh prints `KEY=%q` lines, optionally behind `export`; one token per key."""
+    mod = voiced()
+    script = tmp_path / "address.sh"
+    script.write_text(
+        "#!/bin/bash\n"
+        'case "$1" in\n'
+        '  --list) printf "alpha\\talpha\\nbeta\\tbeta\\ngamma\\tgamma\\n" ;;\n'
+        '  alpha) echo "export SG_REPO=Acme/My App" ;;\n'
+        "  beta) echo \"SG_REPO='acme/other'\" ;;\n"
+        '  gamma) printf "SG_OWNER=acme\\nSG_REPO=%q\\n" "acme/my app" ;;\n'
+        'esac\n')
+    script.chmod(0o755)
+
+    assert mod.hub_repos(script=str(script)) == ["Acme/My App", "acme/other", "acme/my app"]
