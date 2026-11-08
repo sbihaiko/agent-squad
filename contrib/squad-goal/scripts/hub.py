@@ -1826,8 +1826,12 @@ def _last_landing():
     every configured repository with its landing time. A row the ledger does not mark as landed is not a landing, and a
     row whose time the hub cannot read is skipped rather than counted as now.
     """
+    return _last_landing_of(board_cache)
+
+def _last_landing_of(cache):
+    """`_last_landing` over any project's board cache: one project never reports another's landing (#1599)."""
     best = None
-    for p in board_cache.get("landed") or []:
+    for p in (cache or {}).get("landed") or []:
         if not p.get("m"): continue
         try: ts = dt.datetime.fromisoformat(str(p.get("c") or "").replace("Z", "+00:00")).timestamp()
         except ValueError: continue
@@ -1902,10 +1906,12 @@ def _newest_mtime(*paths):
         except OSError: pass
     return max(ts) if ts else None
 
-def _loop_on(pid_file=None):
+def _loop_on(pid_file=None, state=None):
     """True while the supervisor's pid file (watchd.sh writes $SG_STATE/watchd.pid) names a live process: a signal 0, never a `ps`.
-    `auto/off` pauses dispatch, so it reads off even while that pid is live (#788)."""
-    pf = pathlib.Path(pid_file) if pid_file else STATE / "watchd.pid"
+    `auto/off` pauses dispatch, so it reads off even while that pid is live (#788). `state` names another project's state
+    directory, so one project's loop is read from its own files and never from the hub's (#1599)."""
+    base = pathlib.Path(state) if state else STATE
+    pf = pathlib.Path(pid_file) if pid_file else base / "watchd.pid"
     if (pf.parent / "auto" / "off").exists(): return False
     if next((pf.parent / "auto").glob("loop-stop-*"), None) is not None: return False   # #956: an open loop-bug holds dispatch
     try: pid = int(_read(pf).split()[0])
@@ -1939,6 +1945,7 @@ def loop_status():
 LOOP_AUDIT = STATE / "loop-audit.jsonl"   # one line per loop switch change: who, when, from where, and what a stop-now killed (#923)
 LOOP_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on (tailnet.loop_write)"
 LOOP_ACTIONS = ("start", "drain", "stop-now")
+LOOP_CLIENTS = ("phone", "desktop")   # the two pages that write a switch; the audit names the one that asked
 WATCHD = pathlib.Path(__file__).resolve().parent / "watchd.sh"
 
 def loop_watchd(*args):
@@ -1952,8 +1959,9 @@ def _pid_alive(pid):
     except OSError: return False
     return True
 
-def loop_alive():
-    try: pid = int(_read(STATE / "watchd.pid").split()[0])
+def loop_alive(state=None):
+    base = pathlib.Path(state) if state else STATE
+    try: pid = int(_read(base / "watchd.pid").split()[0])
     except (ValueError, IndexError): return False
     return _pid_alive(pid)
 
@@ -1989,30 +1997,33 @@ def loop_run_live(run, rows=None, now=None):
     RL = liveness()
     return RL.run_live_at(run, CHECKOUT, _loop_procs(RL, rows), time.time() if now is None else now, LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
 
-def loop_live():
+def loop_live(state=None, checkout=None, procs=None):
     """The live runs (an active-runs line whose run still runs, `loop_run_live`) and the held gate (the gate lock's pid file
     naming a live pid): what a stop kills, and what a drain waits for. A read that fails is named in `unknown`, never read as
-    no run."""
-    gate = _read(STATE / "locks" / "gate" / "pid").strip()
+    no run. `state` and `checkout` name another project's, so each project counts only the work it holds (#1599)."""
+    base = pathlib.Path(state) if state else STATE
+    checkout = checkout or CHECKOUT
+    gate = _read(base / "locks" / "gate" / "pid").strip()
     gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
     try:
         RL = liveness()
-        runs = RL.live_runs(STATE / "active-runs.txt", CHECKOUT, RL.read_processes, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
+        runs = RL.live_runs(base / "active-runs.txt", checkout, procs or RL.read_processes, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
     except Exception as e:
         why = f"{type(e).__name__}: {' '.join(str(e).split())}"
         log_once(f"hub: the live runs are unknown: {why}")
         return {"runs": [], "gates": gates, "unknown": why}
     return {"runs": runs, "gates": gates}
 
-def loop_audit_add(who, frm, action, killed=None, **extra):
+def loop_audit_add(who, frm, action, killed=None, client=None, **extra):
     line = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "from": frm, "action": action}
+    if client: line["client"] = client   # which page made the change: the phone or the desktop, never guessed from the transport
     if killed is not None: line["killed"] = killed
     line.update(extra)   # a failed start's reason, or a stop-now's survivors
     with LOOP_AUDIT.open("a") as f: f.write(json.dumps(line) + "\n")
 
-def loop_audit_last(n):
+def loop_audit_last(n, path=None):
     out = []
-    for raw in _read(LOOP_AUDIT).splitlines()[-n:]:
+    for raw in _read(path or LOOP_AUDIT).splitlines()[-n:]:
         try: out.append(json.loads(raw))
         except ValueError: pass
     return out
@@ -2020,17 +2031,130 @@ def loop_audit_last(n):
 LOOP_STARTING = STATE / "auto" / "starting"   # the hub's pending mark: written before watchd start runs, removed when it returns
 LOOP_START_WINDOW = 90   # a mark older than this outlived its hub (the call times out at 60 s): it reads off
 
-def loop_state(last, now=None):
+def loop_state(last, now=None, state=None):
     """on or draining while the supervisor is alive; starting only while a hub start is in progress; off otherwise. A start
-    that failed reads off, and the view carries the failure, so no disabled button hides it."""
-    if loop_alive(): return "draining" if (STATE / "auto" / "drain").exists() else "on"
+    that failed reads off, and the view carries the failure, so no disabled button hides it. `state` is another project's
+    state directory, read on its own files (#1599)."""
+    base = pathlib.Path(state) if state else STATE
+    if loop_alive(base): return "draining" if (base / "auto" / "drain").exists() else "on"
     now = time.time() if now is None else now
     try:
-        if now - LOOP_STARTING.stat().st_mtime < LOOP_START_WINDOW: return "starting"
+        if now - (base / "auto" / "starting").stat().st_mtime < LOOP_START_WINDOW: return "starting"
     except OSError: pass
     return "off"
 
 LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["start", "stop-now"], "starting": []}   # the hub's rule, so no page holds one
+
+# One project is one profile (SPEC 1596, rule 8; #1599). The loop fact lists every project with its own state, live work,
+# last landing, last change and open loop-bugs, read from that project's own state directory and board cache. The list is
+# cached against the profiles directory's change time, so a steady machine spawns no shell per poll.
+_PROFILES = {"key": None, "rows": []}
+_CONTEXTS = {"key": None, "rows": []}
+
+def _profiles_key():
+    d = profiles_dir()
+    try: return (str(d), tuple(sorted((f.name, f.stat().st_mtime_ns) for f in d.glob("*.sh"))))
+    except (OSError, AttributeError, TypeError): return (str(d), None)
+
+def profile_list():
+    """Every profile the seam lists, in byte order: `address.sh --list`, read again for a profile added, removed or edited."""
+    key = _profiles_key()
+    if key == _PROFILES["key"]: return _PROFILES["rows"]
+    rows = []
+    try:
+        p = subprocess.run(["bash", str(SCRIPTS / "address.sh"), "--list"], capture_output=True, text=True, timeout=20)
+        rows = [ln.split("\t")[0] for ln in (p.stdout or "").splitlines() if ln.strip()]
+    except Exception as e:
+        log_once(f"hub: the profile list is unavailable: {type(e).__name__}: {' '.join(str(e).split())}")
+    _PROFILES.update(key=key, rows=rows)
+    return rows
+
+def _profile_context(slug):
+    """One project's context from the seam, `address.sh <slug>`: its repository, state directory, checkout and board cache.
+    Empty when the seam refuses it, so a broken profile is left out rather than read as another project's files."""
+    try:
+        p = subprocess.run(["bash", str(SCRIPTS / "address.sh"), slug], capture_output=True, text=True, timeout=20)
+        if p.returncode != 0: return {}
+        return {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))}
+    except Exception:
+        return {}
+
+def project_contexts():
+    """Every project this hub serves, each with its own state directory, checkout and board cache. The profile in force is
+    read from the environment the mux pinned for it, never from a shell; every other one from the seam. The profile in
+    force is always in the list, so a hub with no profile list still answers for its own project."""
+    key = _profiles_key()
+    if key == _CONTEXTS["key"]: return _CONTEXTS["rows"]
+    rows, seen = [], set()
+    for slug in profile_list():
+        if slug == PROFILE_NAME and PROFILE_NAME:
+            row = {"slug": slug, "repo": REPO, "state": str(STATE), "checkout": CHECKOUT, "board": str(BOARD), "own": True}
+        else:
+            c = _profile_context(slug)
+            if not c.get("SG_STATE"): continue
+            row = {"slug": slug, "repo": c.get("SG_REPO", ""), "state": c.get("SG_STATE", ""),
+                   "checkout": c.get("SG_CHECKOUT", ""), "board": c.get("SG_BOARD_CACHE", ""), "own": False}
+        rows.append(row); seen.add(slug)
+    if not PROFILE_NAME or PROFILE_NAME not in seen:
+        rows.append({"slug": PROFILE_NAME, "repo": REPO, "state": str(STATE), "checkout": CHECKOUT,
+                     "board": str(BOARD), "own": True})
+    _CONTEXTS.update(key=key, rows=rows)
+    return rows
+
+def _cache_of(row):
+    """A project's board rows: the live cache for the profile in force, the file it keeps for every other project."""
+    if row.get("own"): return board_cache
+    return _json(row["board"]) if row.get("board") else None
+
+def _loop_bugs_open(cache, n=20):
+    """The open loop-bug cards of one project: a card a label beginning with `loop-bug` marks and the board still draws
+    open, so the refused start names exactly the bugs whose presence holds it (ADR-0146)."""
+    out = []
+    for i in (cache or {}).get("items") or []:
+        if str(i.get("s")).upper() != "OPEN": continue
+        if not any(str(x).startswith("loop-bug") for x in (i.get("l") or [])): continue
+        out.append({"n": i.get("n"), "t": i.get("t") or ""})
+        if len(out) >= n: break
+    return out
+
+def loop_project(row, a, procs=None, now=None):
+    """One project's loop row: its state, live runs and gates, last landing, last change and open loop-bugs, plus whether
+    this request may write it. Every fact comes from that project's own files, never the hub's."""
+    st = pathlib.Path(row["state"])
+    cache = _cache_of(row)
+    change = (loop_audit_last(1, st / "loop-audit.jsonl") or [None])[-1]
+    bugs = _loop_bugs_open(cache)
+    tn = tailnet_block(row.get("checkout") or None)
+    write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
+    live = loop_live(state=st, checkout=row.get("checkout"), procs=procs)
+    return {"slug": row["slug"], "repo": row.get("repo", ""), "own": bool(row.get("own")),
+            "state": loop_state(change or {}, state=st), "live": live,
+            "landing": _last_landing_of(cache), "change": change,
+            "bugs": len(bugs), "bugs_open": bugs, "write": write,
+            "reason": "" if write else (a.reason if not a.allowed else LOOP_READ_ONLY)}
+
+def loop_projects(a, procs=None, now=None):
+    """Every project's loop row, in slug order, from one process snapshot: one read of the machine answers every project,
+    so the list costs one `ps` and one small read per project."""
+    rows = project_contexts()
+    if procs is None:
+        try: procs = _loop_procs(liveness(), _ps_rows())
+        except Exception: procs = None
+    return sorted((loop_project(r, a, procs=procs, now=now) for r in rows), key=lambda p: str(p["slug"]))
+
+def _change_key(e):
+    try: return dt.datetime.fromisoformat(str(e.get("at"))).timestamp()
+    except (TypeError, ValueError): return 0.0
+
+def loop_changes(rows, n=20):
+    """The change log across projects, newest first: one project's audit lines tagged with the project they belong to, so
+    the Loops list audits a switch without asking which loop it was."""
+    out = []
+    for r in rows:
+        for e in loop_audit_last(n, pathlib.Path(r["state"]) / "loop-audit.jsonl"):
+            out.append({"project": r["slug"], **e})
+    out.sort(key=_change_key, reverse=True)
+    return out[:n]
 
 LOOP_STARTED = STATE / "watchd.started"   # every watchd start stamps it with its epoch second, from the hub or the terminal
 
@@ -2062,11 +2186,16 @@ def loop_view(a):
     tn = tailnet_block()
     write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
     state = loop_state(last)
-    live = loop_live()
+    try: procs = _loop_procs(liveness(), _ps_rows())
+    except Exception: procs = None
+    live = loop_live(procs=procs)
+    rows = project_contexts()
     return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": live,
             "health": loop_health(live),   # the Loop theme's Now tiles (#1280)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
+            "projects": loop_projects(a, procs=procs),   # every project this hub serves, each on its own files (#1599)
+            "changes": loop_changes(rows),
             "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # kept for every client that already reads the loop answer
 
 
@@ -2142,6 +2271,7 @@ def loop_switch(a, body, origin_ok):
     if action not in LOOP_STATE_ACTIONS.get(state, []):   # the route applies the rule the view publishes
         return 409, {"err": "the loop is not running" if state == "off" else f"the loop is {state}: {action} does not apply"}
     who, frm = a.login or "owner", "tailnet" if a.tailnet else "loopback"
+    client = body.get("client") if body.get("client") in LOOP_CLIENTS else None   # the page that asked, stated, never guessed
     if action == "start":
         for f in ("off", "drain", "drain-pause"): (STATE / "auto" / f).unlink(missing_ok=True)
         LOOP_STARTING.parent.mkdir(parents=True, exist_ok=True); LOOP_STARTING.write_text(f"{time.time()}\n")
@@ -2151,20 +2281,20 @@ def loop_switch(a, body, origin_ok):
             failed = "watchd did not start" if rc else "" if loop_alive() else "the supervisor was not running after its start"
         finally: LOOP_STARTING.unlink(missing_ok=True)
         if failed:
-            loop_audit_add(who, frm, action, failed=failed)
+            loop_audit_add(who, frm, action, client=client, failed=failed)
             return 500, {"err": failed}
-        loop_audit_add(who, frm, action)
+        loop_audit_add(who, frm, action, client=client)
         return 200, {"ok": True, "action": action}
     if action == "drain":
         if loop_watchd("drain"): return 500, {"err": "watchd did not drain"}
-        loop_audit_add(who, frm, action)
+        loop_audit_add(who, frm, action, client=client)
         return 200, {"ok": True, "action": action}
     if body.get("confirm") is not True: return 400, {"err": "confirm the stop: it kills the live runs and gates listed"}
     live = loop_live()
     if loop_watchd("stop"): return 500, {"err": "watchd did not stop"}
     killed, survived = loop_stop_now(live)
     extra = {"survived": survived} if survived["runs"] or survived["gates"] else {}
-    loop_audit_add(who, frm, action, killed, **extra)
+    loop_audit_add(who, frm, action, killed, client=client, **extra)
     return 200, {"ok": True, "action": action, "killed": killed, **extra}
 
 def foot_sources(now=None):
@@ -6303,7 +6433,7 @@ function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
-async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
+async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
 document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop]");if(!b||b.disabled||!loopV)return;e.preventDefault();
  if(loopV.state==="off"){loopPost({action:"start"});return}
@@ -7485,6 +7615,9 @@ MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_
 # The card detail's one primary and its six states, the next step, the latest update and the related rows (SPEC 1596,
 # #1598): a pure rule module, so the view binds and delegates and holds no rule of its own (ADR-0137).
 CARD_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-card.js").read_text()
+# The loop rules of the phone page (SPEC 1596, rule 8; #1599): the aggregate, one row per project and the one primary of a
+# loop page. A pure rule module, so the view binds and delegates and holds no rule of its own (ADR-0137).
+LOOP_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-loop.js").read_text()
 # The phone's card link (#1459): `#issue=N` names one card, and one module names the result the board answers. The page
 # binds the hash and opens the card, and holds no rule of its own (ADR-0137).
 LINK_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-link.js").read_text()
@@ -7606,7 +7739,7 @@ def mobile_photo(page):
                 .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
 
 BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -7713,38 +7846,40 @@ def _file_sig(path):
     except OSError:
         return None
 
-def tailnet_source():
+def tailnet_source(checkout=None):
     """The `tailnet` block and the file it is read from, from one cached load of `squad/project_settings.py`. The project
     route and the loop seam share the cache, so both read the same block within a request. Empty, with no named file, when
     the file or the squad package does not load or no file holds the block: the seam then refuses every tailnet request.
     The tracked project file wins the name; a block that lives only in `.env` names `.env`. A changed project file or
-    `.env` signature re-reads; an unchanged one answers from the cache, keyed on both files and the checkout."""
-    checkout = CHECKOUT or "."
+    `.env` signature re-reads; an unchanged one answers from the cache, keyed on both files and the checkout. `checkout`
+    names another project's tree, so the per-project loop list states each project's own grant (#1599)."""
+    checkout = checkout or CHECKOUT or "."
     proj = pathlib.Path(checkout) / "docs" / "squad" / "defaults.yaml"
     env = pathlib.Path(checkout) / ".env"
     sig = (str(pathlib.Path(checkout).resolve()), _file_sig(proj), _file_sig(env))
-    hit = _PROJECT.get("source")
-    if hit and hit[0] == sig: return dict(hit[1]), hit[2]
+    sources = _PROJECT.setdefault("sources", {})
+    hit = sources.get(sig)
+    if hit is not None: return dict(hit[0]), hit[1]
     try:
         if "ps" not in _PROJECT:
             (_PROJECT["ps"],) = load_squad(tailnet_roots(), ("project_settings",))
         data, info = _PROJECT["ps"].load(checkout)
     except Exception as e:
         log_once(f"hub: tailnet settings unavailable, every tailnet request is refused: {type(e).__name__}: {' '.join(str(e).split())}")
-        _PROJECT["source"] = (sig, {}, "")
+        sources[sig] = ({}, "")
         return {}, ""
     block = (data or {}).get("tailnet") or {}
     path = (info or {}).get("path")
     if path and _project_holds_tailnet(_PROJECT["ps"], path): home = path          # the tracked file holds the block
     elif block and env.is_file(): home = str(env)                                 # only `.env` holds it
     else: home = ""                                                               # no file holds a block: name none
-    _PROJECT["source"] = (sig, block, home)
+    sources[sig] = (block, home)
     return dict(block), home
 
-def tailnet_block():
+def tailnet_block(checkout=None):
     """The `tailnet` block of the project file under the profile's checkout. Empty when the file or the squad package does
     not load, so the seam refuses every tailnet request."""
-    return tailnet_source()[0]
+    return tailnet_source(checkout)[0]
 
 class Access(NamedTuple):
     allowed: bool
