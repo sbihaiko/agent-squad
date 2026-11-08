@@ -8,13 +8,14 @@ states instead: `loop off`, `loop idle`, `new head, not seen yet`.
 import importlib.util
 import os
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+
+NOW = 1_900_000_000.0            # the clock every case in this file runs on: a fixed read makes an age a fact of the stamps, not of how long the suite took
 
 SHA = "1e38e5a7b41c0d2e9f"       # the head the PR has right now
 SHA9 = SHA[:9]
@@ -33,6 +34,13 @@ def hub():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+@pytest.fixture(autouse=True)
+def clock(hub, monkeypatch):
+    """hub's own time source, held still: the age a card shows is the stamps' fact, so a stall between the write and the
+    read cannot turn `20 s ago` into `21 s ago` (#1572)."""
+    monkeypatch.setattr(hub.time, "time", lambda: NOW)
 
 
 @pytest.fixture
@@ -67,7 +75,7 @@ def _pr(n=1801, head=SHA, **kw):
 
 
 def test_a_hold_the_loop_reported_is_the_chip_not_ready_to_merge(hub, state):
-    now = time.time()
+    now = NOW
     _pass(state, now - 30)
     _gate(state, 1801, SHA9, now - 20, *HOLD)
     _approve(state, 1801, SHA9)
@@ -80,7 +88,7 @@ def test_a_hold_the_loop_reported_is_the_chip_not_ready_to_merge(hub, state):
 
 def test_an_approve_the_loop_never_judged_is_not_ready_to_merge(hub, state):
     """The reported symptom: a green review line with no gate line of its own is not the loop's word."""
-    now = time.time()
+    now = NOW
     _pass(state, now - 30)
     _approve(state, 1801, SHA9)
     ps = hub.pr_state(_pr())
@@ -89,7 +97,7 @@ def test_an_approve_the_loop_never_judged_is_not_ready_to_merge(hub, state):
 
 
 def test_a_gate_line_for_the_head_the_pr_no_longer_has_does_not_stand(hub, state):
-    now = time.time()
+    now = NOW
     _pass(state, now - 30)
     _gate(state, 1801, OLD[:9], now - 20, *HOLD)   # written about the head before this one
     _approve(state, 1801, SHA9)
@@ -99,7 +107,7 @@ def test_a_gate_line_for_the_head_the_pr_no_longer_has_does_not_stand(hub, state
 
 
 def test_a_gate_line_from_an_earlier_pass_than_the_one_on_disk_does_not_stand(hub, state):
-    now = time.time()
+    now = NOW
     _pass(state, now - 60)
     _gate(state, 1801, SHA9, now - 300, *HOLD)   # same head, but the pass that wrote it has ended
     _approve(state, 1801, SHA9)
@@ -107,7 +115,7 @@ def test_a_gate_line_from_an_earlier_pass_than_the_one_on_disk_does_not_stand(hu
 
 
 def test_a_loop_that_stopped_passing_says_so_instead_of_its_last_reason(hub, state):
-    now = time.time()
+    now = NOW
     _pass(state, now - 600)                      # idle past three watch cycles
     _gate(state, 1801, SHA9, now - 600, *HOLD)
     _approve(state, 1801, SHA9)
@@ -118,7 +126,7 @@ def test_a_loop_that_stopped_passing_says_so_instead_of_its_last_reason(hub, sta
 
 
 def test_the_gate_saying_the_merge_goes_ahead_is_what_ready_to_merge_is_for(hub, state):
-    now = time.time()
+    now = NOW
     _pass(state, now - 30)
     _gate(state, 1801, SHA9, now - 20, "merged", "merged as abc1234: APPROVE + CI green + clean + no open threads")
     _approve(state, 1801, SHA9)
@@ -128,7 +136,7 @@ def test_the_gate_saying_the_merge_goes_ahead_is_what_ready_to_merge_is_for(hub,
 
 
 def test_the_kill_switch_takes_every_open_card_not_only_the_green_one(hub, state):
-    now = time.time()
+    now = NOW
     (state / "auto/off").write_text("")
     _pass(state, now - 30)
     _gate(state, 1801, SHA9, now - 20, "merged", "merged as abc1234: APPROVE + CI green + clean + no open threads")
@@ -142,7 +150,7 @@ def test_the_kill_switch_takes_every_open_card_not_only_the_green_one(hub, state
 
 def test_the_hub_writes_nothing_under_auto(hub, state):
     """The loop owns auto/; the hub only reads it, so a card can never be the thing the loop reads back."""
-    now = time.time()
+    now = NOW
     _pass(state, now - 30)
     _gate(state, 1801, SHA9, now - 20, *HOLD)
     _approve(state, 1801, SHA9)

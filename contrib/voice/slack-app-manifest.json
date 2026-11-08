@@ -1,6 +1,6 @@
 {
   "display_information": {
-    "name": "Operator",
+    "name": "HAL9K",
     "description": "The agent-squad operator, in a voice conversation with its owner."
   },
   "features": {
@@ -10,7 +10,7 @@
       "messages_tab_read_only_enabled": false
     },
     "bot_user": {
-      "display_name": "Operator",
+      "display_name": "HAL9K",
       "always_online": true
     }
   },
@@ -26,14 +26,17 @@
         "im:history",
         "im:read",
         "im:write",
-        "users:read"
+        "users:read",
+        "app_mentions:read"
       ]
     }
   },
   "settings": {
     "event_subscriptions": {
       "bot_events": [
-        "message.im"
+        "message.im",
+        "app_mention",
+        "message.channels"
       ]
     },
     "interactivity": {

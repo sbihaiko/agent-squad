@@ -31,6 +31,7 @@ import fcntl
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -102,7 +103,9 @@ def folder():
 
 
 def _procs(pids):
-    """{pid: (the wall time it started, its command line)} for every pid the system answers for, in ONE call for all of them.
+    """{pid: (the wall time it started, its command line, its state)} for every pid the system answers for, in ONE call for
+    all of them. The state is the first letter `ps stat=` prints: `Z` names a zombie, a holder that exited and that its
+    parent has not reaped (#1573).
 
     The slots are counted on every poll of every wait, and a wait polls until a slot frees, so one `ps` per lease is a fork
     storm: a worker spins in a subprocess loop and holds what the rest of the suite needs, and on a two-core runner the
@@ -117,12 +120,12 @@ def _procs(pids):
         table = procs.snapshot(want)
     except procs.ReadError:
         return {}
-    return {pid: (p.start, p.command) for pid, p in table.items() if p.start is not None}
+    return {pid: (p.start, p.command, p.stat) for pid, p in table.items()}
 
 
 def started_at(pids):
     """{pid: the wall time it started} for every pid the system answers for, in ONE call for all of them (`_procs`)."""
-    return {pid: started for pid, (started, _) in _procs(pids).items()}
+    return {pid: started for pid, (started, _cmd, _stat) in _procs(pids).items()}
 
 
 # The page server the loop starts beside a run. It idles and never works the run, so a lease that names one is no live
@@ -131,11 +134,14 @@ def started_at(pids):
 DASHBOARD = re.compile(r"(?:^|\s|/)squad\.dashboard_server\b")
 
 
-def alive(pid, since=None, started=None):
+def alive(pid, since=None, started=None, zombie=False):
     """True while the process `pid` lives; `since` adds the pid-reuse rule, the one rule every liveness reader uses
     (`run_liveness.same_process`): a process that started after the lease was written is a different process than the one
     it names, so the lease is dead. `started` is the answer to `started_at` when the caller already holds it, one call for
-    many pids; None asks the system for this one pid."""
+    many pids; None asks the system for this one pid. `zombie` is the process read's answer (`_procs`) for a holder that
+    exited and that its parent has not reaped: a zombie answers a signal and works nothing, so it holds no lease (#1573)."""
+    if zombie:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -167,8 +173,20 @@ class Ceiling:
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
+    def _reap(self, p, pid, why):
+        """Remove a stale lease and say so on one line naming the slot, its kind and its holder: a reap is never silent,
+        the rule `serial.sh` applies to its lock (#1057, #1573). A reap whose own write fails still says which."""
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            return                              # another count reaped it first: one line, never two
+        except OSError as e:
+            print(f"caps: cannot reap stale slot {p.name} in {p.parent.name}: {e}", file=sys.stderr)
+            return
+        print(f"caps: reaping stale slot {p.name} in {p.parent.name}: holder pid {pid} is {why}", file=sys.stderr)
+
     def _live(self, sub):
-        """The leases of one subfolder whose holder lives. A lease of a dead holder is removed here.
+        """The leases of one subfolder whose holder lives. A lease of a dead or zombie holder is removed here, with one line.
 
         The leases are read first and their holders asked about in one call, so a count costs one process however many
         leases stand (`started_at`): the per-lease `ps` was the fork storm that parked the runner.
@@ -180,17 +198,17 @@ class Ceiling:
             except (OSError, ValueError):
                 continue
         found = _procs([lease.get("pid", -1) for _, lease in leases])
-        started = {pid: at for pid, (at, _) in found.items()}
+        started = {pid: at for pid, (at, _cmd, _stat) in found.items()}
         out = []
         for p, lease in leases:
             pid = lease.get("pid", -1)
             if pid in found and DASHBOARD.search(found[pid][1] or ""):
-                p.unlink(missing_ok=True)       # a page server idles: a lease that names one holds no slot (#1389)
+                self._reap(p, pid, "a run's page server")   # a page server idles: a lease that names one holds no slot (#1389)
                 continue
-            if alive(pid, lease.get("since"), started):
+            if alive(pid, lease.get("since"), started, zombie=pid in found and found[pid][2] == "Z"):
                 out.append(lease)
-            else:
-                p.unlink(missing_ok=True)
+                continue
+            self._reap(p, pid, "a zombie" if pid in found and found[pid][2] == "Z" else "dead")
         return out
 
     def occupancy(self):
