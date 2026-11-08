@@ -9,12 +9,16 @@ const restLine = (total, shown, label) => {
   return hidden > 0 ? `${hidden} hidden by ${label}` : "";
 };
 
-// A row's searchable text: its number, its title and its labels, compared with no case. A row that carries no labels
-// searches on its number and title alone, and an empty query keeps every row in the list's own order.
+// A row's searchable text: its title and its labels, compared with no case. A number is its own fact and compares exactly,
+// so the query 42 is card 42 and never card 142; "#42" names the same card. A row that carries no labels searches on its
+// title alone, and an empty query keeps every row in the list's own order.
 const searchHit = (row, query) => {
   const q = String(query == null ? "" : query).trim().toLowerCase();
   if (!q) return true;
-  const text = [row && row.n, row && row.title, ...((row && row.labels) || [])].join(" ").toLowerCase();
+  if (!row) return false;
+  const num = q.replace(/^#/, "");
+  if (/^\d+$/.test(num) && String(row.n == null ? "" : row.n) === num) return true;
+  const text = [row.title, ...(row.labels || [])].join(" ").toLowerCase();
   return text.includes(q);
 };
 const searchRows = (rows, query) => (rows || []).filter(r => searchHit(r, String(query == null ? "" : query).trim()));

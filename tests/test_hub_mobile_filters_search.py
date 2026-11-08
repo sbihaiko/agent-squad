@@ -80,19 +80,26 @@ LIVE_ROW = {"id": "run-20261104-101010-aaaa", "label": "a live process", "state"
             "rank": 0, "live": True, "age": 12, "spend": 1.25, "agents": 2, "kind": "code", "running": True}
 STALE_ROW = {"id": "run-20261104-090000-bbbb", "label": "a stale run", "state": "running", "badge": "running",
              "rank": 1, "live": False, "age": 20, "spend": 0.5, "agents": 0, "kind": "code", "running": True}
+# An ended run is what the Ended section reads: the Runs segment never hides it, so the Live remainder never counts it.
+ENDED_ROW = {"id": "run-20261103-080000-cccc", "label": "an ended run", "state": "done", "badge": "done",
+             "rank": 2, "live": False, "age": 300, "spend": 3.0, "agents": 0, "kind": "code", "running": False}
 
 
 @pytest.mark.node_bound
 def test_live_lists_only_runs_with_a_live_process(hub):  # noqa: F811
-    """The stale row's `running` fact still says yes, its `live` fact says no: Live keeps the live process alone."""
+    """The stale row's `running` fact still says yes, its `live` fact says no: Live keeps the live process alone. The
+    ended run stays under Ended today, so the remainder counts the live candidate pool alone: one, the stale row."""
     out = run_page(hub.MOBILE_PAGE, f"""
         show("runs"); await loadRuns();
         {CLICK}
         tap("Live");
         return {{ rows: [...$("runs-live").children].map(b => b.dataset.name),
+                 ended: [...$("runs-ended").children].map(b => b.dataset.name),
                  rest: $("runs-rest").textContent, restHidden: $("runs-rest").hidden }};
-    """, routes={"/api/runs": [{"body": json.dumps([LIVE_ROW, STALE_ROW])}], "/api/ended": [{"body": "[]"}]})
+    """, routes={"/api/runs": [{"body": json.dumps([LIVE_ROW, STALE_ROW])}],
+                "/api/ended": [{"body": json.dumps([ENDED_ROW])}]})
     assert out["rows"] == ["a live process"], f"Live lists a run with no live process: {out}"
+    assert out["ended"] == ["an ended run"], f"Live hides a run the Ended section still shows: {out}"
     assert out["rest"] == "1 hidden by Live" and out["restHidden"] is False, out
 
 
@@ -177,6 +184,40 @@ def test_work_search_clears_on_back(hub):  # noqa: F811
     assert out == {"before": True, "bar": True, "cards": False, "value": ""}, out
 
 
+# A card with a live process carries `ho`: the Work segment's own fact. Search reads the same pool the segment reads.
+SEGMENTED_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
+                   "groups": [{"name": "Todo", "n": 2, "items": [
+                                   {"n": 7, "t": "Fix the phone", "l": ["area:phone"], "ho": True},
+                                   {"n": 9, "t": "Rewrite the phone", "l": ["area:phone"]}]}]}
+
+
+@pytest.mark.node_bound
+def test_work_search_stays_inside_the_active_segment(hub):  # noqa: F811
+    """With Work on Live, a search names only the cards the segment keeps, and the remainder line steps aside."""
+    out = run_page(hub.MOBILE_PAGE, f"""
+        await loadBoard(); show("work");
+        {CLICK}
+        tap("Live");
+        $("work-search").onclick();
+        $("search-input").value = "phone"; $("search-input").oninput();
+        return {{ rows: [...$("work-results").children].map(b => b.dataset.n), rest: $("work-rest").hidden }};
+    """, board=[SEGMENTED_BOARD])
+    assert out["rows"] == ["7"], f"the search names a card the segment hides: {out}"
+    assert out["rest"] is True, f"the remainder line still describes the list the search replaced: {out}"
+
+
+@pytest.mark.node_bound
+def test_leaving_work_with_search_open_brings_the_control_row_back(hub):  # noqa: F811
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard(); show("work");
+        $("work-search").onclick();
+        const open = $("control-row").hidden;
+        show("chat");
+        return { open, after: $("control-row").hidden, bar: $("searchbar").hidden };
+    """)
+    assert out == {"open": True, "after": False, "bar": True}, out
+
+
 SPEC_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None, "done": "Closed",
               "groups": [{"name": "Todo", "n": 2, "items": [
                               {"n": 1540, "t": "Phone hub redesign", "sp": True, "l": ["area:phone"], "r": "agent-squad"},
@@ -224,6 +265,31 @@ def test_the_search_rule_matches_title_number_and_label():
     assert run_js(src, f"""searchRows({json.dumps(rows)}, "42").map(r => r.n)""") == [42]
     assert run_js(src, f"""searchRows({json.dumps(rows)}, "chart").map(r => r.n)""") == [8]
     assert run_js(src, f"""searchRows({json.dumps(rows)}, "").map(r => r.n)""") == [7, 8, 42]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_search_rule_never_matches_a_number_inside_another_number():
+    """A number is compared exactly: the query 42 is card 42, never card 142, and #42 is the same card."""
+    src = SEARCH_JS.read_text()
+    rows = [{"n": 142, "title": "An older shell", "labels": []},
+            {"n": 42, "title": "Land the shell", "labels": []}]
+    assert run_js(src, f"""searchRows({json.dumps(rows)}, "42").map(r => r.n)""") == [42]
+    assert run_js(src, f"""searchRows({json.dumps(rows)}, "#42").map(r => r.n)""") == [42]
+    assert run_js(src, f"""searchRows({json.dumps(rows)}, "#142").map(r => r.n)""") == [142]
+
+
+SPECS_JS = ROOT / "contrib" / "squad-goal" / "scripts" / "hub-mobile-specs.js"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_spec_progress_keeps_each_spec_labels():
+    """The spec row carries its labels for the search rule, and a spec with none carries an empty list."""
+    board = {"done": "Closed", "groups": [
+        {"name": "Todo", "items": [{"n": 1540, "t": "Phone hub redesign", "sp": True, "l": ["area:phone"]},
+                                   {"n": 1500, "t": "Old spec", "sp": True}]},
+        {"name": "Closed", "end": True, "items": []}]}
+    got = run_js(SPECS_JS.read_text(), f"specProgress({json.dumps(board)}).map(s => [s.n, s.labels])")
+    assert got == [[1540, ["area:phone"]], [1500, []]], got
 
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")

@@ -849,6 +849,16 @@ const ROOT_KEEP = {
 };
 const rootFilter = { now: 0, work: 1, specs: 0, chat: 1, runs: 2 };
 const rootKeep = (tab, x) => { const f = ROOT_KEEP[tab]; const keep = f && f[rootFilter[tab]]; return keep ? keep(x) : true; };
+// The last option of every filter names what it includes and hides no row, so only an earlier option draws the remainder
+// line, and the line always names the option the owner pressed (rule 4; #1600).
+const filterRest = (tab, total, shown) => {
+  const opts = ROOT_FILTERS[tab] || [];
+  return rootFilter[tab] < opts.length - 1 ? restLine(total, shown, opts[rootFilter[tab]]) : "";
+};
+// Search belongs to Work and Specs (rule 5; #1600): one field in the control row's slot, a title/number/label match from
+// the pure rule module, the results in place of the root's list, and Esc or Back to clear it. Declared here because the
+// control row reads its open flag on every paint.
+const searchState = { open: false, tab: "", query: "" };
 // A segment change repaints the root it filters, never another one (rule 6).
 const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); else if (tab === "chat") drawSessions(); else if (tab === "now") drawNeedsYou(); };
 const scopeName = () => { const me = location.pathname.split("/")[1]; return me && me !== "mobile" ? me : "All projects"; };
@@ -872,13 +882,10 @@ function paintControlRow() {
   $("cr-scope").textContent = scopeName();
 }
 $("cr-scope").onclick = () => openLayer("psheet");
-// Search on Work and Specs (SPEC 1596, rule 5; #1600): one field in the control row's slot, a title/number/label match from
-// the pure rule module, the results in place of the root's list, and Esc or Back to clear it. The page binds the field and
-// its buttons; the match and the remainder line stay in hub-mobile-search.js (ADR-0137).
-const searchState = { open: false, tab: "", query: "" };
 const searchOn = () => searchState.open && (searchState.tab === "work" || searchState.tab === "specs");
+// A search stays inside the scope the owner sees: the cards the Work segment keeps, shaped for the rule module.
 const workSearchPool = () => ((board && board.groups) || []).flatMap(g => (g.items || [])
-  .map(x => ({ ...x, title: x.t, labels: x.l || [] })));
+  .filter(x => rootKeep("work", x)).map(x => ({ ...x, title: x.t, labels: x.l || [] })));
 function searchResultEl(x) {
   const b = document.createElement("button");
   b.type = "button"; b.className = "runrow"; b.dataset.n = String(x.n);
@@ -889,13 +896,15 @@ function searchResultEl(x) {
   b.onclick = () => { const n = x.n; clearSearch(); openCard(n); };
   return b;
 }
-// The results replace the columns while the query names a row (rule 5); an empty field leaves the board where it was.
+// The results replace the columns while the query names a row (rule 5); an empty field leaves the board where it was. The
+// remainder line describes the list the search replaced, so it steps aside while the query stands.
 function paintWorkSearch(q) {
   const rows = q ? searchRows(workSearchPool(), q) : [];
   $("work-results").replaceChildren(...rows.map(searchResultEl));
   $("work-results").hidden = !q;
   $("cards").hidden = !!q;
   $("dots").hidden = !!q;
+  $("work-rest").hidden = !!q || !$("work-rest").textContent;
 }
 function paintSearch() {
   const on = searchOn();
@@ -1020,6 +1029,7 @@ function show(name) {
     searchState.open = false; searchState.tab = ""; searchState.query = "";
     $("searchbar").hidden = true; $("work-results").hidden = true;
     $("cards").hidden = false; $("dots").hidden = false;
+    paintControlRow();   // the control row gives its slot back as soon as the search closes (#1600)
   }
   layers = tabStacks[tab];
   tabNow = TAB_PANEL[tab];
@@ -1396,10 +1406,11 @@ function renderBoard() {
   // With the filter on (the default), a column with no visible card is left out and named in one list (#877).
   const { shown: cols, hidden, closed } = carouselColumns(groups, groups.map(g => columnCards(g).length), bo.hideEmpty !== false);
   $("hide-empty").textContent = bo.hideEmpty !== false ? "Empty columns: hidden" : "Empty columns: shown";
-  // The segment hides a card the filter cannot keep: one quiet line counts the remainder (#1600).
+  // The segment hides a card the filter cannot keep: one quiet line counts the remainder (#1600). An open search
+  // replaces the list, so the line waits until the search clears.
   const allCards = groups.reduce((m, g) => m + (g.items || []).length, 0);
   const keptCards = groups.reduce((m, g) => m + (g.items || []).filter(x => rootKeep("work", x)).length, 0);
-  const restText = restLine(allCards, keptCards, ROOT_FILTERS.work[rootFilter.work]);
+  const restText = searchOn() && searchState.query.trim() ? "" : filterRest("work", allCards, keptCards);
   $("work-rest").textContent = restText; $("work-rest").hidden = !restText;
   const notes = [];
   if (hidden.length) notes.push("Empty: " + hidden.map(h => h.name + " " + h.count).join(" · "));
@@ -2296,11 +2307,13 @@ const histState = { ever: false, n: 0, error: "", rows: [], groups: [], muted: "
   loading: "The run history is loading.", empty: "No run history is drawn." };
 function drawRuns() {
   drawList(runsState, $("runs-state"), $("runs-msg"), () => {
-    $("runs-live").replaceChildren(...runsState.rows.filter(r => r.running && rootKeep("runs", r)).map(r => runRow(r, r.url || runURLs(r.id).page)));
-    $("runs-ended").replaceChildren(...runsState.ended.filter(r => rootKeep("runs", r)).map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
-    // One quiet line counts the runs the segment hid (#1600).
-    const pool = [...runsState.rows, ...runsState.ended];
-    const restText = restLine(pool.length, pool.filter(r => rootKeep("runs", r)).length, ROOT_FILTERS.runs[rootFilter.runs]);
+    // The segment filters the Live section's own candidate pool: the runs that carry a running process. The Ended
+    // section is its own list and the segment never hides it, so the remainder counts the Live pool alone (#1600).
+    const livePool = runsState.rows.filter(r => r.running);
+    const liveShown = livePool.filter(r => rootKeep("runs", r));
+    $("runs-live").replaceChildren(...liveShown.map(r => runRow(r, r.url || runURLs(r.id).page)));
+    $("runs-ended").replaceChildren(...runsState.ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
+    const restText = filterRest("runs", livePool.length, liveShown.length);
     $("runs-rest").textContent = restText; $("runs-rest").hidden = !restText;
   });
   const v = drawList(histState, $("runs-history-state"), $("runs-history-msg"),
@@ -2554,7 +2567,7 @@ function drawChat() {
   sessRows = chatRows({ groups: sessState.groups }, loopProjects());
   $("sessions").replaceChildren(...sessRows.filter(r => rootKeep("chat", r)).map(chatRowNode));
   // One quiet line counts the conversations the segment hid (#1600).
-  const restText = restLine(sessRows.length, sessRows.filter(r => rootKeep("chat", r)).length, ROOT_FILTERS.chat[rootFilter.chat]);
+  const restText = filterRest("chat", sessRows.length, sessRows.filter(r => rootKeep("chat", r)).length);
   $("chat-rest").textContent = restText; $("chat-rest").hidden = !restText;
   drawBadge();
   drawNeedsYou();
@@ -2584,7 +2597,7 @@ function drawNeedsYou() {
   const list = sessState.ever ? sessRows : (badgeRows || []);
   const rows = list.filter(r => rootKeep("now", r));
   el.replaceChildren(...rows.map(chatRowNode));
-  const restText = restLine(list.length, rows.length, ROOT_FILTERS.now[rootFilter.now]);
+  const restText = filterRest("now", list.length, rows.length);
   $("now-rest").textContent = restText; $("now-rest").hidden = !restText;
   $("needs-you-msg").textContent = rows.length ? "" : "Nothing waits for you in this scope.";
 }
