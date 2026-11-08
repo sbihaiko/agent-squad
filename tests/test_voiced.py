@@ -1,9 +1,11 @@
-"""Guard: issue #1481. The voiced daemon turns one owner clip into one transcribed inbox line, records a stranger's
-message as data and never as an instruction, and writes no duplicate line after a crash and restart.
+"""Guard: issues #1481 and #1484. The voiced daemon turns one owner clip into one transcribed inbox line, records a
+stranger's message as data and never as an instruction, writes no duplicate line after a crash and restart, and gives
+every project the hub lists one channel with its own inbox.
 
-The seams under test are the daemon's own Socket Mode loop (`serve`), the state files it writes, and the launchd plist
-it generates. A fake websocket stands in for Slack and a fake transcriber stands in for Gemini, so no network, no key
-and no launchd job is touched. Every case drives the same `serve` loop production runs, never a second copy of it.
+The seams under test are the daemon's own Socket Mode loop (`serve`), the state files it writes, the launchd plist it
+generates and the Slack client it calls. A fake websocket and a fake Slack client stand in for Slack, and a fake
+transcriber stands in for Gemini, so no network, no key and no launchd job is touched. Every case drives the same
+`serve` loop production runs, never a second copy of it.
 """
 import asyncio
 import importlib.util
@@ -73,15 +75,16 @@ class FakeTranscriber:
         return self.text
 
 
-def clip_event(ts="1762500000.000100", user=OWNER, text="", envelope_id="env-1"):
+def clip_event(ts="1762500000.000100", user=OWNER, text="", envelope_id="env-1",
+               channel="D0OWNER", channel_type="im"):
     return {
         "type": "events_api",
         "envelope_id": envelope_id,
         "payload": {
             "event": {
                 "type": "message",
-                "channel_type": "im",
-                "channel": "D0OWNER",
+                "channel_type": channel_type,
+                "channel": channel,
                 "user": user,
                 "ts": ts,
                 "client_msg_id": f"cid-{ts}",
@@ -98,15 +101,16 @@ def clip_event(ts="1762500000.000100", user=OWNER, text="", envelope_id="env-1")
     }
 
 
-def message_event(text="hello operator", user=OWNER, ts="1762500001.000200", envelope_id="env-2"):
+def message_event(text="hello operator", user=OWNER, ts="1762500001.000200", envelope_id="env-2",
+                  channel="D0OWNER", channel_type="im"):
     return {
         "type": "events_api",
         "envelope_id": envelope_id,
         "payload": {
             "event": {
                 "type": "message",
-                "channel_type": "im",
-                "channel": "D0OWNER",
+                "channel_type": channel_type,
+                "channel": channel,
                 "user": user,
                 "ts": ts,
                 "client_msg_id": f"cid-{ts}",
@@ -124,6 +128,14 @@ def lines(path):
 
 def drive(tmp_path, envelopes, transcriber=None, downloader=None, owner=OWNER, on_ack=None, mod=None):
     """Run the production serve loop once over a fake socket: one connection, then the loop ends."""
+    mod, daemon, socket = drive_daemon(tmp_path, envelopes, transcriber=transcriber, downloader=downloader,
+                                       owner=owner, on_ack=on_ack, mod=mod)
+    return mod, daemon.state, socket
+
+
+def drive_daemon(tmp_path, envelopes, transcriber=None, downloader=None, owner=OWNER, on_ack=None, mod=None,
+                 client=None, projects=None):
+    """The same one connection, returning the daemon too, for a case that reads its answers back."""
     mod = mod or voiced()
     stop = asyncio.Event()
     socket = FakeWebSocket(envelopes, stop)
@@ -131,10 +143,46 @@ def drive(tmp_path, envelopes, transcriber=None, downloader=None, owner=OWNER, o
     daemon = mod.Daemon(state=mod.State(str(tmp_path)), owner=owner,
                         transcriber=transcriber or FakeTranscriber(),
                         downloader=downloader or (lambda url: b"audio-bytes"),
-                        log=lambda line: None)
+                        log=lambda line: None, client=client, projects=projects)
     asyncio.run(mod.serve(daemon, "xapp-fake", connect=lambda url, **kw: socket,
                           open_connection=lambda: {"url": "wss://fake"}, stop=stop))
-    return mod, daemon.state, socket
+    return mod, daemon, socket
+
+
+class FakeClient:
+    """The fake Slack client the whole suite runs on: it records every call and creates one id per channel name."""
+
+    def __init__(self, existing=()):
+        self.calls = []
+        self.channels = {c["name"]: dict(c) for c in existing}
+        self._n = 0
+
+    def api(self, method, params=None, post=False):
+        self.calls.append((method, dict(params or {}), post))
+        if method == "conversations.create":
+            name = params.get("name")
+            if name in self.channels:
+                return {"ok": False, "error": "name_taken"}
+            self._n += 1
+            channel = {"id": f"C0{self._n:07d}", "name": name, "is_member": True}
+            self.channels[name] = channel
+            return {"ok": True, "channel": channel}
+        if method == "conversations.join":
+            return {"ok": True, "channel": {"id": params.get("channel"), "is_member": True}}
+        if method.startswith("conversations.list"):
+            return {"ok": True, "channels": list(self.channels.values())}
+        if method == "chat.postMessage":
+            return {"ok": True, "channel": params.get("channel"), "ts": "1762500009.000900"}
+        return {"ok": True}
+
+    def methods(self):
+        return [method for method, _, _ in self.calls]
+
+    def created(self):
+        return [p["name"] for m, p, _ in self.calls if m == "conversations.create"]
+
+    def posts(self):
+        return [p for m, p, _ in self.calls if m == "chat.postMessage"]
 
 
 def test_an_owner_clip_becomes_one_inbox_line_with_its_transcription(tmp_path):
@@ -334,3 +382,121 @@ def test_the_plist_keeps_the_daemon_alive_and_is_never_loaded(tmp_path):
     after = set((Path.home() / "Library" / "LaunchAgents").glob("*")) \
         if (Path.home() / "Library" / "LaunchAgents").exists() else set()
     assert after == before
+
+
+# --- one channel per hub project (#1484)
+
+def configure(tmp_path, mod, client, repos):
+    """One state over the test's folder, with a channel per repository as the daemon's sync would leave it."""
+    state = mod.State(str(tmp_path))
+    return state, mod.project_channels(state, client=client, repos=repos, log=lambda line: None)
+
+
+def test_a_repository_name_with_uppercase_letters_or_a_dot_becomes_a_channel_name():
+    """Criterion (c): the channel name is the repository's name, lowercased, each dot a hyphen."""
+    mod = voiced()
+    assert mod.channel_name("Acme/My.App") == "my-app"
+    assert mod.channel_name("acme/agent-squad") == "agent-squad"
+    assert mod.channel_name("Acme/Agent.Squad_2") == "agent-squad_2"
+
+
+def test_a_project_that_enters_the_hub_gets_its_channel_created_once(tmp_path):
+    """Criterion (a): the first sync creates and joins the channel; a second sync and a restart create nothing."""
+    mod = voiced()
+    client = FakeClient()
+    state, got = configure(tmp_path, mod, client, ["Acme/My.App"])
+    assert client.created() == ["my-app"]
+    assert ("conversations.join", {"channel": got["channels"]["Acme/My.App"]["id"]}, True) in client.calls
+    assert got["refused"] == []
+    assert got["channels"]["Acme/My.App"]["name"] == "my-app"
+
+    configure(tmp_path, mod, client, ["Acme/My.App"])      # a second sync over the same state
+    assert client.created() == ["my-app"], "a second sync created the channel again"
+
+    mod.project_channels(mod.State(str(tmp_path)), client=client, repos=["Acme/My.App"], log=lambda line: None)
+    assert client.created() == ["my-app"], "a restart created the channel again"
+
+
+def test_a_clip_in_a_project_channel_reaches_only_that_projects_inbox_and_its_answer_goes_back_there(tmp_path):
+    """Criterion (b): the line lands in that project's inbox alone, and the answer is posted in the same channel."""
+    mod = voiced()
+    client = FakeClient()
+    _, got = configure(tmp_path, mod, client, ["acme/app", "acme/other"])
+    app, other = got["channels"]["acme/app"], got["channels"]["acme/other"]
+
+    _, daemon, socket = drive_daemon(
+        tmp_path, [clip_event(channel=app["id"], channel_type="channel")],
+        transcriber=FakeTranscriber(text="buy the green paint"), client=client)
+
+    box = lines(daemon.state.inbox_for(app["name"]))
+    assert len(box) == 1 and box[0]["text"] == "buy the green paint"
+    assert box[0]["channel"] == app["id"]
+    assert lines(daemon.state.inbox_for(other["name"])) == [], "the clip reached another project's inbox"
+    assert lines(daemon.state.inbox_path) == [], "the clip reached the DM inbox"
+    assert socket.sent == ["env-1"]
+
+    assert daemon.answer(box[0], "the answer") is True
+    assert client.posts() == [{"channel": app["id"], "text": "the answer", "thread_ts": box[0]["ts"]}]
+    assert lines(daemon.state.inbox_for(other["name"])) == []
+
+
+def test_two_repositories_that_collide_after_conversion_are_refused_with_one_line_naming_both(tmp_path):
+    """Criterion (d): the second repository is refused, one line names both, and no channel is created for it."""
+    mod = voiced()
+    client = FakeClient()
+    _, got = configure(tmp_path, mod, client, ["acme/My.App", "acme/my-app"])
+
+    assert client.created() == ["my-app"], "the colliding second repository created a channel"
+    assert len(got["refused"]) == 1
+    line = got["refused"][0]
+    assert "acme/My.App" in line and "acme/my-app" in line, line
+    assert got["channels"].get("acme/my-app") is None
+    assert ("conversations.create", {"name": "my-app", "is_private": False}, True) in client.calls
+
+
+def test_the_dm_keeps_working_for_a_question_that_belongs_to_no_project(tmp_path):
+    """Criterion (e): with project channels in place, a DM message still lands in the DM inbox alone."""
+    mod = voiced()
+    client = FakeClient()
+    _, got = configure(tmp_path, mod, client, ["acme/app"])
+    app = got["channels"]["acme/app"]
+
+    _, daemon, _ = drive_daemon(tmp_path, [message_event(text="a question with no project")], client=client)
+
+    box = lines(daemon.state.inbox_path)
+    assert len(box) == 1 and box[0]["text"] == "a question with no project"
+    assert lines(daemon.state.inbox_for(app["name"])) == []
+
+
+def test_a_channel_no_project_owns_never_reaches_the_dm_inbox(tmp_path):
+    """A clip in an unknown channel is data, never a DM question the operator might answer as if it were one."""
+    mod = voiced()
+    client = FakeClient()
+    configure(tmp_path, mod, client, ["acme/app"])
+
+    _, daemon, socket = drive_daemon(
+        tmp_path, [clip_event(channel="C0UNKNOWN", channel_type="channel")], client=client)
+
+    assert lines(daemon.state.inbox_path) == []
+    other = lines(daemon.state.other_path)
+    assert len(other) == 1 and "unknown" in other[0]["error"]
+    assert socket.sent == ["env-1"]
+
+
+def test_the_projects_come_from_the_hub_seam(tmp_path):
+    """Criterion (a), the list: the projects are the hub's profiles, each resolved to its SG_REPO by address.sh."""
+    mod = voiced()
+    script = tmp_path / "address.sh"
+    log = tmp_path / "argv.log"
+    script.write_text(
+        "#!/bin/bash\n"
+        f'echo "$@" >> {log}\n'
+        'case "$1" in\n'
+        '  --list) printf "alpha\\talpha\\nbeta\\tbeta\\n" ;;\n'
+        '  alpha) echo "SG_REPO=Acme/My.App" ;;\n'
+        '  beta) echo "SG_REPO=acme/other" ;;\n'
+        'esac\n')
+    script.chmod(0o755)
+
+    assert mod.hub_repos(script=str(script)) == ["Acme/My.App", "acme/other"]
+    assert ["--list", "alpha", "beta"] == log.read_text().split("\n")[:3]

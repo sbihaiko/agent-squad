@@ -18,6 +18,13 @@ its id are fsync'd before the envelope is acknowledged, so a crash after the ack
 cannot read lands in `other.jsonl` with an `error`, never in the inbox as a half line the operator might read as an
 instruction.
 
+Every project the hub lists gets one channel in the dedicated workspace, named after its GitHub repository (lowercased,
+each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
+`$VOICE_STATE/channels.json`, writes one inbox per channel (`$VOICE_STATE/inboxes/<channel>.jsonl`) and posts an answer
+in the channel its question came from. Two repositories whose names collide after the conversion are refused with one
+line that names both, and no channel is created for the second. A message in a channel no project owns is data in
+`other.jsonl`, never a DM question.
+
 Secrets come from the one reader the voice pipeline already uses (`keychain.py`): the bot token, the app token and the
 Gemini key live in the macOS Keychain. No value is ever printed, logged, or written to a state file. `VOICE_OWNER` (or
 the file `$VOICE_STATE/owner`) names the only user the daemon accepts; `VOICE_STATE` names the state directory
@@ -29,9 +36,13 @@ loading it into the owner's launchd is the owner's step, and the daemon never ru
 """
 import asyncio
 import base64
+import glob
 import json
 import os
+import re
+import shlex
 import ssl
+import subprocess
 import sys
 import urllib.request
 import xml.sax.saxutils
@@ -42,6 +53,8 @@ import channels  # noqa: E402  the one Slack call path, so this daemon keeps no 
 import keychain  # noqa: E402  the one reader for the three voice secrets
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
+ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
+CHANNEL_MAX = 80     # Slack's channel-name cap
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
@@ -59,6 +72,48 @@ class ClipTooLarge(Exception):
         self.size = size
 
 
+def channel_name(repo):
+    """The channel for one repository: its name, lowercased, each dot a hyphen; every other character Slack refuses
+    becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484)."""
+    name = (repo or "").rstrip("/").rsplit("/", 1)[-1]
+    return re.sub(r"[^a-z0-9_-]", "-", name.lower().replace(".", "-"))[:CHANNEL_MAX]
+
+
+def hub_repos(script=None):
+    """Every repository the hub lists: the profile names `address.sh --list` prints, each resolved to its SG_REPO.
+
+    The seam is the hub's own (ADR-0138), so a project added to the hub needs no second list beside it. A seam that
+    refuses or a profile that names no repository contributes nothing, and the daemon keeps the channels it already has.
+    """
+    script = script or ADDRESS
+    try:
+        out = subprocess.run(["bash", script, "--list"], capture_output=True, text=True, timeout=30)
+        slugs = [ln.split("\t")[0].strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return []
+    repos = []
+    for slug in slugs:
+        try:
+            p = subprocess.run(["bash", script, slug], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        ctx = {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout or ""))}
+        repo = (ctx.get("SG_REPO") or "").strip()
+        if repo and repo not in repos:
+            repos.append(repo)
+    return repos
+
+
+class SlackClient:
+    """The daemon's one Slack call path with the bot token, injected so a test passes a fake and no token is printed."""
+
+    def __init__(self, token):
+        self.token = token
+
+    def api(self, method, params=None, post=False):
+        return channels.api(self.token, method, params, post)
+
+
 class State:
     """The daemon's state in one directory: the inbox, the record of other users, the seen ids and the owner id."""
 
@@ -69,7 +124,44 @@ class State:
         self.other_path = os.path.join(directory, "other.jsonl")
         self.seen_path = os.path.join(directory, "seen.jsonl")
         self.owner_path = os.path.join(directory, "owner")
+        self.channels_path = os.path.join(directory, "channels.json")
+        self.inboxes_dir = os.path.join(directory, "inboxes")
         self._seen = None
+        self._channels = None
+
+    def channels(self):
+        """repository -> {name, id}: the project channels this daemon created or joined, read from disk or stale-safe."""
+        if self._channels is None:
+            self._channels = {}
+            try:
+                with open(self.channels_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._channels = {k: v for k, v in data.items() if isinstance(v, dict)}
+            except (OSError, ValueError):
+                pass
+        return self._channels
+
+    def save_channels(self, mapping):
+        """The registry as one atomic write (ADR-0030): a crash leaves the old file, never half of a new one."""
+        tmp = self.channels_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.channels_path)
+        self._channels = {k: dict(v) for k, v in mapping.items()}
+
+    def channel_for(self, channel_id):
+        """The repository one project channel belongs to, or None for the DM and any channel no project owns."""
+        for repo, entry in self.channels().items():
+            if entry.get("id") == channel_id:
+                return repo
+        return None
+
+    def inbox_for(self, name):
+        """One project channel's inbox: one file per channel, so a project's session watches only its own."""
+        return os.path.join(self.inboxes_dir, f"{name}.jsonl")
 
     def owner(self):
         """The one accepted user: VOICE_OWNER wins, else the owner file written once beside the inbox."""
@@ -83,10 +175,15 @@ class State:
             return None
 
     def seen(self):
-        """Every message id already recorded. The inbox is read too, so a crash between the line and the ledger loses none."""
+        """Every message id already recorded. Every inbox is read too, so a crash between the line and the ledger loses none."""
         if self._seen is None:
             ids = set()
-            for path in (self.seen_path, self.inbox_path, self.other_path):
+            paths = [self.seen_path, self.inbox_path, self.other_path]
+            try:
+                paths += sorted(glob.glob(os.path.join(self.inboxes_dir, "*.jsonl")))
+            except OSError:
+                pass
+            for path in paths:
                 for record in read_lines(path):
                     if record.get("id"):
                         ids.add(record["id"])
@@ -100,6 +197,7 @@ class State:
         half line stays the skipped record `read_lines` already ignores.
         """
         line = json.dumps(record, sort_keys=True) + "\n"
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "a+b") as f:
             f.seek(0, os.SEEK_END)
             if f.tell():
@@ -114,8 +212,8 @@ class State:
         self.seen().add(message_id)
         self._append(self.seen_path, {"id": message_id})
 
-    def append_inbox(self, record):
-        self._append(self.inbox_path, record)
+    def append_inbox(self, record, path=None):
+        self._append(path or self.inbox_path, record)
         self._remember(record["id"])
 
     def append_other(self, record):
@@ -201,15 +299,108 @@ def transcribe(audio, mime, key):
     return text
 
 
+def project_channels(state, client, repos, log=None):
+    """Give every repository one channel, created and joined once. Returns {"channels": {repo: {name, id}}, "refused": [...]}.
+
+    A repository whose converted name collides with an earlier one is refused with one line that names both, and no
+    channel is created for it. The registry on disk makes a restart create nothing a second time.
+    """
+    log = log or (lambda line: None)
+    channels = {repo: dict(entry) for repo, entry in state.channels().items()}
+    refused, order, by_name = [], [], {}
+    for repo in repos:
+        name = channel_name(repo)
+        if not name:
+            continue
+        if name in by_name:
+            refused.append(f"voiced: {repo} and {by_name[name]} share the channel name {name}; "
+                           f"no channel is created for {repo}")
+            continue
+        by_name[name] = repo
+        order.append((repo, name))
+    changed = False
+    for repo, name in order:
+        entry = channels.get(repo)
+        if entry and entry.get("name") == name and entry.get("id"):
+            continue
+        got = _ensure_channel(client, name, channels, log)
+        if got is None:
+            continue
+        channels[repo] = got
+        changed = True
+    if changed:
+        state.save_channels(channels)
+    for line in refused:
+        log(line)
+    return {"channels": channels, "refused": refused}
+
+
+def _ensure_channel(client, name, channels, log):
+    """The channel called `name`: created and joined, else found when Slack already holds the name."""
+    for entry in channels.values():
+        if entry.get("name") == name and entry.get("id"):
+            return dict(entry)
+    got = client.api("conversations.create", {"name": name, "is_private": False}, post=True)
+    if got.get("ok"):
+        channel = got.get("channel") or {}
+    elif got.get("error") == "name_taken":
+        listing = client.api("conversations.list?types=public_channel,private_channel&limit=1000")
+        channel = next((c for c in listing.get("channels") or [] if c.get("name") == name), None)
+        if not channel:
+            log(f"voiced: Slack holds the name {name} and lists no channel for it")
+            return None
+    else:
+        log(f"voiced: cannot create the channel {name}: {got.get('error')}")
+        return None
+    cid = channel.get("id")
+    if not cid:
+        log(f"voiced: the channel {name} has no id")
+        return None
+    joined = client.api("conversations.join", {"channel": cid}, post=True)
+    if not joined.get("ok") and joined.get("error") not in ("already_in_channel", "is_archived"):
+        log(f"voiced: cannot join the channel {name}: {joined.get('error')}")
+    return {"name": name, "id": cid}
+
+
 class Daemon:
     """One handler for one event; the acknowledging loop is `serve` and `handle_envelope` beside it."""
 
-    def __init__(self, state, owner, transcriber, downloader, log=None):
+    def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None):
         self.state = state
         self.owner = owner
         self.transcriber = transcriber
         self.downloader = downloader
         self.log = log or (lambda line: print(line, file=sys.stderr))
+        self.client = client
+        self.projects = projects
+
+    def sync_projects(self):
+        """Give every project the hub lists its channel, once; no client or no list leaves the channels as they are."""
+        if self.client is None or self.projects is None:
+            return {"channels": self.state.channels(), "refused": []}
+        return project_channels(self.state, self.client, self.projects(), self.log)
+
+    def inbox_path_of(self, event):
+        """The inbox one message belongs to: its project's when the channel names one, the DM's for an im, else None."""
+        repo = self.state.channel_for(event.get("channel"))
+        if repo:
+            return self.state.inbox_for(self.state.channels()[repo]["name"])
+        if (event.get("channel_type") or "im") == "im":
+            return self.state.inbox_path
+        return None
+
+    def answer(self, question, text):
+        """Post one answer in the channel its question came from, threaded under it. True when Slack accepts it."""
+        if self.client is None or not question.get("channel"):
+            return False
+        payload = {"channel": question["channel"], "text": text}
+        if question.get("ts"):
+            payload["thread_ts"] = question["ts"]
+        got = self.client.api("chat.postMessage", payload, post=True)
+        if not got.get("ok"):
+            self.log(f"voiced: answer refused: {got.get('error')}")
+            return False
+        return True
 
     def handle(self, envelope):
         """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here."""
@@ -234,6 +425,13 @@ class Daemon:
                 {"id": f.get("id"), "name": f.get("name"), "mimetype": f.get("mimetype")}
                 for f in event.get("files") or []
             ]
+        target = self.inbox_path_of(event)
+        if target is None:
+            # A channel no project owns is data, never a DM question the operator might answer as if it were one.
+            record["text"] = (event.get("text") or "").strip()
+            record["error"] = "unknown channel: no project owns it"
+            self.state.append_other(record)
+            return "other"
         text = (event.get("text") or "").strip()
         if event.get("user") != self.owner:
             record["text"] = text
@@ -266,7 +464,7 @@ class Daemon:
             return "other"
         record["text"] = text
         record["clip"] = bool(clip)
-        self.state.append_inbox(record)
+        self.state.append_inbox(record, target)
         return "inbox"
 
 
@@ -353,6 +551,12 @@ async def serve(daemon, app_token, connect=None, open_connection=None, stop=None
     context = ssl_context(log=daemon.log)
     wait = 1
     while not (stop is not None and stop.is_set()):
+        try:
+            # A project that entered the hub gets its channel before the connection is renewed; a failure to create
+            # one is a log line, never a daemon that stops hearing the DM.
+            await asyncio.to_thread(daemon.sync_projects)
+        except Exception as x:      # noqa: BLE001 - the DM keeps working even when the channel sync cannot
+            daemon.log(f"voiced: project sync failed: {type(x).__name__}: {str(x)[:120]}")
         answer = await asyncio.to_thread(open_connection)
         url = answer.get("url")
         if not url:
@@ -428,7 +632,8 @@ def main(argv):
         return 1
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
-                    downloader=lambda url: download(url, bot))
+                    downloader=lambda url: download(url, bot),
+                    client=SlackClient(bot), projects=hub_repos)
     try:
         asyncio.run(serve(daemon, app))
     except KeyboardInterrupt:
