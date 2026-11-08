@@ -191,6 +191,7 @@ const box = {
   console, JSON, Math, Date: FakeDate, Object, Array, String, Number, Promise, Set, Map, Error, RegExp, parseInt, parseFloat,
   isNaN, encodeURIComponent, decodeURIComponent, Boolean, Symbol, TypeError,
   fetch: boot.fetch, EventSource: FakeEventSource,
+  performance: { now: () => RealDate.now() + boot.__skew },   // a browser has one; the overlay's lens reads it on a move
   scrollY: 0,
   innerHeight: 800,   // one phone screen: the thumb zone is its bottom 40% (#1142)
   innerWidth: 800,

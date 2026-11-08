@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, hub_voice, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -7525,6 +7525,33 @@ def conversation_payload(query):
     if not before.isdigit() and hubstream.enabled(): return TRANSCRIPTS.refresh(sid, hubstream.tick())
     return sessions.conversation(PROFILE_NAME, sid, int(before) if before.isdigit() else None, profiles_of=profiles_of_cwd)
 
+def voice_project():
+    """The project the phone's voice pipeline asks for its Gemini key: this hub's own repository name, so a hub that serves
+    another project reads that project's keychain entry and never agent-squad's."""
+    return (REPO or "").rsplit("/", 1)[-1] or hub_voice.DEFAULT_PROJECT
+
+def clip_payload(query, a=None):
+    """One answer's Kore clip (#1603), as (bytes, content type), or None. The answer is the session's own turn, named by
+    the key the conversation route served, so the route speaks only what the session said and never a text a caller
+    sent. The clip is the answer's whole text, keyed on the session and the turn: an answer already spoken is served from
+    the cache whatever the page read this time, and only `refresh=1` synthesizes again. A tailnet reader with no loop
+    write may have the cached clip but never spends a synthesis or writes this hub's state."""
+    q = urllib.parse.parse_qs(query or "")
+    sid, key = (q.get("sid") or [""])[0], (q.get("k") or [""])[0]
+    if sessions.SID.fullmatch(sid) is None or not key: return None
+    page = conversation_payload("sid=" + urllib.parse.quote(sid))
+    turn = next((t for t in ((page or {}).get("turns") or [])
+                 if t.get("k") == key and t.get("role") == "answer" and str(t.get("text") or "").strip()), None)
+    if turn is None: return None
+    refresh = (q.get("refresh") or [""])[0] == "1"
+    synth = a is None or not a.tailnet or tailnet_block().get("loop_write") is True
+    try:
+        path = hub_voice.clip_for(STATE, sid, key, str(turn["text"]), refresh=refresh, synth=synth,
+                                  project=voice_project(), checkout=CHECKOUT)
+    except Exception: return None   # no pipeline, no key, or a refused synthesis: the phone draws no clip, never a half one
+    try: return path.read_bytes(), "audio/wav"
+    except OSError: return None
+
 def card_payload(query):
     """What /api/sessions/card serves: the question card a live session of this profile is waiting on, or None (#1093)."""
     sid = (urllib.parse.parse_qs(query).get("sid") or [""])[0]
@@ -7676,6 +7703,10 @@ LOOP_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-loop.js").read_
 # The chat rules of the phone page (SPEC 1596, rules 9 and 10; #1601): one row per project, the chips, the receipts and
 # the one badge. A pure rule module, so the view binds and delegates and holds no rule of its own (ADR-0137).
 CHAT_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-chat.js").read_text()
+# The voice rules of the phone page (SPEC 1596, frames 17 and 19, rule 10; #1603): the hold's recording states with their
+# timer, waveform, cancel zone, hints and cap, and the one Kore clip per answer. A pure rule module, so the view binds and
+# delegates and holds no rule of its own (ADR-0137).
+VOICE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-voice.js").read_text()
 # The phone's card link (#1459): `#issue=N` names one card, and one module names the result the board answers. The page
 # binds the hash and opens the card, and holds no rule of its own (ADR-0137).
 LINK_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-link.js").read_text()
@@ -7824,7 +7855,7 @@ def mobile_photo(page):
                 .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
 
 BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*CHAT*/", CHAT_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*CHAT*/", CHAT_JS).replace("/*VOICE*/", VOICE_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -7975,7 +8006,7 @@ class Access(NamedTuple):
 LOGIN_HEADER = "Tailscale-User-Login"   # the seam's name, for a hub with no seam: a request that carries it is never loopback
 TERMINAL_GRANTS = ("terminals_read", "terminals_attach", "terminals_send")
 TERMINAL_SENDS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/sessions/attach",
-                  "/api/terminals/write", "/api/terminals/start")
+                  "/api/sessions/voice", "/api/terminals/write", "/api/terminals/start")
 TERMINAL_ATTACH = ("/api/terminals/attach", "/api/terminals/detach")
 TERMINAL_OPS = {"/api/terminals/attach": ("attach", {"sid", "client_id"}), "/api/terminals/detach": ("detach", {"sid", "client_id"}),
                 "/api/terminals/write": ("write", {"sid", "text", "client_id"})}
@@ -8252,6 +8283,12 @@ class H(BaseHTTPRequestHandler):
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/clip"):   # the answer's one Kore clip (#1603)
+            if not stream_origin_ok(self, a.tailnet): return self.refuse("forbidden origin")   # a cross-site page earns no clip, and no synthesis
+            got = clip_payload(self.path.partition("?")[2], a)
+            if got is None: return self.not_found()
+            self.send_response(200); self.send_header("Content-Type", got[1]); self.send_header("Cache-Control", "max-age=3600")
+            self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
         elif self.path.startswith("/api/sessions/conversation"):
             page = conversation_payload(self.path.partition("?")[2])
             if page is None: return self.not_found()
@@ -8296,6 +8333,37 @@ class H(BaseHTTPRequestHandler):
         length = self.headers.get("Content-Length") or "0"
         raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
         session_write(self, a, raw, {"sid", "card_id", "answers"}, card_answer_payload)
+
+    def send_voice(self, a):
+        """The phone's one recording (#1603): raw audio under the send's write gate. The hub transcribes the clip with the
+        one voice pipeline and sends the transcript as a message from another session, so the send keeps one path. A body
+        the cap cannot carry is refused before a byte of it is read and the connection ends there, so a stated
+        Content-Length of gigabytes never blocks the handler; under the cap the body is drained before any refusal. The
+        type is the phone's stated audio type and nowhere else, and the cap is VOICE_MAX_BYTES. A pipeline with no key,
+        or a refused transcription, sends nothing and says so."""
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        sid, cid, mime = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], (q.get("mime") or [""])[0]
+        length = self.headers.get("Content-Length") or "0"
+        n = int(length) if length.isdigit() else 0
+        if n > hub_voice.VOICE_MAX_BYTES:
+            self.close_connection = True   # the rest of this body is never read, so this connection ends with the answer
+            return self.answer(413, {"err": "too large"})
+        raw = self.rfile.read(min(n, hub_voice.VOICE_MAX_BYTES + 1))
+        left = n - len(raw)
+        while left > 0 and (chunk := self.rfile.read(min(left, 1 << 16))): left -= len(chunk)
+        if not a.allowed: return self.refuse(a.reason)
+        tn = tailnet_block()
+        origin_ok = (self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self)
+        if not (send_rule(a)[0] and origin_ok): return self.refuse("forbidden")
+        if sessions.SID.fullmatch(sid) is None or not session_send.CLIENT_ID.fullmatch(cid):
+            return self.answer(400, {"err": "malformed id"})
+        if hub_voice.voice_type(mime) is None: return self.answer(415, {"err": "type not allowed"})
+        try:
+            text = hub_voice.heard(raw, mime, project=voice_project(), checkout=CHECKOUT)
+        except Exception:   # no pipeline, no key or a refused call: the phone is told, and the key's story never leaves
+            return self.answer(502, {"err": "no transcript"})
+        if not str(text or "").strip(): return self.answer(502, {"err": "no transcript"})
+        self.answer(200, session_send.send(PROFILE_NAME, sid, text.strip(), cid, profiles_of=profiles_of_cwd, root=STATE))
 
     def send_attach(self, a, kind=None):
         """The one attach route (#1151): one file beside one message, under the send's write gate. The body is read and
@@ -8416,6 +8484,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
         if self.path.split("?", 1)[0] == "/api/sessions/card/answer": return self.answer_card(a)
         if self.path.split("?", 1)[0] == "/api/sessions/attach": return self.send_attach(a)
+        if self.path.split("?", 1)[0] == "/api/sessions/voice": return self.send_voice(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_attach(a, "screenshot")
         if route_path(self.path) == "/api/terminals/start": return self.terminal_start(a)
         if route_path(self.path) in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[route_path(self.path)])

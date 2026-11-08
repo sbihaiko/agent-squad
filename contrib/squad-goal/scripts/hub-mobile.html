@@ -271,6 +271,25 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #termview-chips .qchip{min-height:44px;flex:1 1 auto;background:var(--bg);color:var(--fg);border:1px solid var(--acc);border-radius:var(--radius-md);padding:0 12px;font:var(--fs-body) system-ui,sans-serif;text-align:center}
 #termview-acted{min-height:44px;justify-self:start;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #termview-acted[hidden]{display:none}
+/* The mic and the recording row (SPEC 1596, frames 17 and 19; #1603): a hold draws the timer, the waveform, the cancel
+   zone and the three hints, and the release is the send. The row replaces the composer while it is up. */
+#termview-mic{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
+#termview-rec{display:grid;grid-template-columns:auto auto 1fr auto auto;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--panel)}
+#termview-rec[hidden]{display:none}
+#termview-rec .voicedot{width:10px;height:10px;border-radius:var(--radius-full);background:var(--err)}
+#termview-rec #voice-time{font:var(--fs-body) var(--font-mono);color:var(--fg)}
+#termview-rec .voicewave{display:flex;align-items:center;gap:2px;min-height:24px}
+#termview-rec .voicewave span{width:3px;background:var(--err);border-radius:var(--radius-sm)}
+#termview-rec .voicecancel{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption)}
+#termview-rec .voicecancel.into{color:var(--fg);border-color:var(--err);background:var(--tint-err)}
+#termview-rec .voicemic{align-self:end;color:var(--mute);font-size:var(--fs-caption)}
+#termview-rec .voicehints{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;margin:0;color:var(--mute);font-size:var(--fs-caption)}
+#termview-rec .voicehint b{color:var(--fg)}
+/* One Kore clip per answer (frame 17; #1603): one play or pause control, the waveform, the voice and elapsed over total. */
+.turn .clip{display:flex;align-items:center;gap:8px;margin-top:6px;padding:6px 8px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md)}
+.turn .clip-play{min-width:44px;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption)}
+.turn .clip-voice{color:var(--mute);font-size:var(--fs-caption)}
+.turn .clip-time{color:var(--mute);font:var(--fs-caption) var(--font-mono);margin-left:auto}
 /* The Chat root (SPEC 1596, rule 10; #1601): one row per project with its loop dot, last message, time and waiting mark. */
 .chatrow{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
 .chatrow .loopdot{width:10px;height:10px;border-radius:var(--radius-full);background:var(--mute);align-self:center}
@@ -536,11 +555,22 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id="termview-msg" class="msg" role="status"></p>
 <div id="termview-compose">
 <button id="termview-back" type="button">Back</button>
+<!-- The recording row (SPEC 1596, frames 17 and 19, rule 10; #1603): while the mic is held it names the timer, the
+     waveform, the cancel zone and the three hints. The row draws the rules of hub-mobile-voice.js (ADR-0137). -->
+<div id="termview-rec" hidden>
+<span class="voicedot" aria-hidden="true"></span>
+<span id="voice-time">0:00</span>
+<span id="voice-wave" class="voicewave" aria-hidden="true"></span>
+<span id="voice-cancel" class="voicecancel">cancel</span>
+<span class="voicemic" aria-hidden="true">Mic</span>
+<p id="voice-hints" class="voicehints"><span class="voicehint">Release to send</span><span class="voicehint">Slide left to cancel</span><span class="voicehint">max 2:00</span></p>
+</div>
 <p class="mut" id="termview-note">Your message arrives as a message from another session, not as your typed input or approval.</p>
 <!-- Rule 9 (#1602): the banner names the outage and the waiting count, and the line names the kept draft's start. -->
 <p id="termview-outage" role="alert" hidden></p>
 <p id="termview-draft" role="status" hidden></p>
 <textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
+<button id="termview-mic" type="button" aria-label="Hold to record a spoken message">Mic</button>
 <button id="termview-send" type="button">Send</button>
 <p id="termview-sent" class="msg" role="status"></p>
 <button id="termview-acted" type="button" hidden></button>
@@ -583,6 +613,7 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*CARD_RULES*/
 /*LOOP_RULES*/
 /*CHAT*/
+/*VOICE*/
 /*QUESTION*/
 const $ = id => document.getElementById(id);
 // <question-card-view>
@@ -2377,17 +2408,23 @@ function chatRowNode(r) {
 }
 function turnRow(t) {
   const d = document.createElement("div"), who = document.createElement("b"), text = document.createElement("div");
-  d.className = "turn"; who.textContent = t.role;
+  d.className = "turn"; d.dataset.k = t.k || ""; who.textContent = t.role;
   const img = chatImage(t.text);
-  if (!img) { text.textContent = t.text; d.append(who, text); return d; }
-  // Frame 17 (#1602): the marker line names the file the attach route wrote, so the bubble draws the hub's image route.
-  const a = document.createElement("a"), pic = document.createElement("img");
-  a.className = "img"; a.href = chatImageSrc(termSid, img); a.target = "_blank"; a.rel = "noopener";
-  pic.className = "thumb"; pic.loading = "lazy"; pic.alt = "image"; pic.src = a.href;
-  a.append(pic);
-  text.textContent = chatImageWords(t.text);
-  d.append(who, a);
-  if (text.textContent) d.append(text);
+  if (!img) {
+    text.textContent = t.text;
+    d.append(who, text);
+  } else {
+    // Frame 17 (#1602): the marker line names the file the attach route wrote, so the bubble draws the hub's image route.
+    const a = document.createElement("a"), pic = document.createElement("img");
+    a.className = "img"; a.href = chatImageSrc(termSid, img); a.target = "_blank"; a.rel = "noopener";
+    pic.className = "thumb"; pic.loading = "lazy"; pic.alt = "image"; pic.src = a.href;
+    a.append(pic);
+    text.textContent = chatImageWords(t.text);
+    d.append(who, a);
+    if (text.textContent) d.append(text);
+  }
+  // A spoken answer carries one Kore clip, drawn under its words: the answer's whole text, never its first sentence.
+  if (t.role === "answer" && String(t.text || "").trim()) d.append(clipRow(t));
   return d;
 }
 // A send the hub never answered stays in the thread under a mark that retries on one tap (rule 9; #1602).
@@ -2485,12 +2522,16 @@ function readConversation(before) {
   return call("/api/sessions/conversation?sid=" + encodeURIComponent(termSid) + (before ? "&before=" + before : ""));
 }
 // Each turn is drawn once: the drawn keys are the record, so a poll, a push and an older page never repeat one.
-function drawTurns(turns) {
+function drawTurns(turns, live) {
   const fresh = turns.filter(t => !termDrawn.has(t.k));
   if (!fresh.length) return;
-  $("termview-turns").append(...fresh.map(turnRow));
+  const nodes = fresh.map(turnRow);
+  $("termview-turns").append(...nodes);
   for (const t of fresh) termDrawn.add(t.k);
   paintFailed();   // a message the hub never answered stays at the thread's end (#1602)
+  // An answer that arrives while the conversation is open plays its one clip at once, as the answer streams (#1603). A
+  // turn read on opening the conversation waits for the owner's tap, so a page load never speaks a whole history.
+  if (live) for (const n of nodes) { const clip = n.querySelector(".clip"); if (clip) clipToggle(clip); }
 }
 async function loadConversation(force) {
   if (termBusy || !termOpen() || !termSid) return;
@@ -2515,7 +2556,7 @@ async function loadConversation(force) {
 squadStream.on("conversation", d => {
   if (d.sid !== termSid || !termOpen()) return;
   const el = $("termview-turns"), atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  drawTurns(d.lines.split("\n").filter(Boolean).map(line => JSON.parse(line)));
+  drawTurns(d.lines.split("\n").filter(Boolean).map(line => JSON.parse(line)), true);
   if (atEnd) el.scrollTop = el.scrollHeight;
 });
 squadStream.on("gap", d => {
@@ -2703,6 +2744,208 @@ $("termview-text").addEventListener("input", () => {
 });
 // The one badge and Now › Needs you read the session list on every tab, so this poll is not gated by a panel (rule 10).
 setInterval(() => { if (!document.hidden && !termOpen() && !squadStream.live()) loadSessions(); }, 10000);
+// The mic (SPEC 1596, frames 17 and 19, rule 10; #1603): holding it records one clip with the timer, the waveform, the
+// cancel zone and the three hints; the release outside the zone sends it, a slide into the zone cancels it, and the
+// two-minute cap stops and sends it. The rules are hub-mobile-voice.js's, the row only draws them (ADR-0137).
+let voiceRec = null;   // the hold in flight: its clock, its thumb, its recorder and its audio stream
+// The one word each hint carries in bold, as frames 17 and 19 draw them.
+const VOICE_HINT_BOLD = { "Release to send": "Release", "Slide left to cancel": "cancel", "max 2:00": "2:00" };
+const voiceSaid = msg => { if (termSid) $("termview-sent").textContent = msg; };
+// One client id for the send: the stub DOM has no Web Crypto, so the fallback keeps the same id shape on every page.
+const voiceId = () => (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID()
+  : "voice-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+function drawVoiceWave(level, tick) {
+  const w = $("voice-wave");
+  if (!w) return;
+  w.replaceChildren(...voiceWave(level, tick).map(h => { const b = document.createElement("span"); b.style.height = h + "px"; return b; }));
+}
+// The one reading of the microphone's level: the analyser's RMS, scaled so ordinary speech fills the row. A browser with
+// no Web Audio, or an analyser that refuses, reads as silence rather than inventing a shape.
+function voiceLevel(r) {
+  const an = r && r.analyser;
+  if (!an || !an.getByteTimeDomainData) return 0;
+  const buf = r.waveBuf || (r.waveBuf = new Uint8Array(an.fftSize || 256));
+  an.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.min(1, Math.sqrt(sum / (buf.length || 1)) * 4);
+}
+function paintVoice() {
+  const el = $("termview-rec");
+  if (!el) return;
+  if (!voiceRec || voiceRec.phase !== "recording") { el.hidden = true; return; }
+  const v = voiceRow(voiceRec, Date.now());
+  $("voice-time").textContent = v.time;
+  $("voice-cancel").dataset.into = v.into ? "1" : "";
+  $("voice-cancel").className = "voicecancel" + (v.into ? " into" : "");
+  $("voice-hints").replaceChildren(...v.hints.map(h => {
+    const s = document.createElement("span"), b = document.createElement("b"), rest = document.createElement("span");
+    const key = VOICE_HINT_BOLD[h] || "", i = key ? h.indexOf(key) : -1;
+    s.className = "voicehint";
+    if (i < 0) { s.textContent = h; return s; }
+    s.textContent = h.slice(0, i);
+    b.textContent = key; rest.textContent = h.slice(i + key.length);
+    s.append(b, rest);
+    return s;
+  }));
+  drawVoiceWave(voiceRec.level || 0, voiceRec.tick || 0);
+  el.hidden = false;
+}
+function voiceStep() {
+  if (!voiceRec || voiceRec.phase !== "recording") return;
+  const act = voiceTick(voiceRec, Date.now()).phase;
+  voiceRec.tick = (voiceRec.tick || 0) + 1;
+  voiceRec.level = voiceLevel(voiceRec);
+  paintVoice();
+  if (act === "send") voiceFinish("send");   // the two-minute cap stops the recording and sends it
+}
+// One close of the recorder: its last chunk, then its bytes. The handlers are set before stop(), so a recorder that
+// answers in the same turn and one that answers later both close the same way.
+function voiceClose(r) {
+  return new Promise(done => {
+    const parts = [];
+    const empty = () => done({ bytes: null, type: "audio/webm" });
+    r.rec.ondataavailable = e => { if (e && e.data) parts.push(e.data); };
+    r.rec.onstop = () => Promise.all(parts.map(p => p.arrayBuffer())).then(bufs => {
+      const total = bufs.reduce((n, b) => n + b.byteLength, 0);
+      if (!total) return empty();
+      const out = new Uint8Array(total);
+      let at = 0;
+      for (const b of bufs) { out.set(new Uint8Array(b), at); at += b.byteLength; }
+      done({ bytes: out, type: (parts[0] && parts[0].type) || "audio/webm" });
+    }, empty);
+    try { r.rec.stop(); } catch (e) { empty(); }
+  });
+}
+async function voiceSend(sid, clip) {
+  if (!clip || !clip.bytes) { voiceSaid("Nothing recorded: the microphone gave no sound."); return; }
+  const q = "sid=" + encodeURIComponent(sid) + "&client_id=" + encodeURIComponent(voiceId())
+    + "&mime=" + encodeURIComponent(clip.type);
+  voiceSaid("Sending");
+  try {
+    const r = await writing(fetch("/api/sessions/voice?" + q, { method: "POST", headers: { "Content-Type": clip.type }, body: clip.bytes }));
+    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
+    const res = await r.json();
+    const word = { sent: "Sent: the session heard your recording", uncertain: "Uncertain: the send was interrupted",
+                   refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
+    voiceSaid(word + (res.reason ? " (" + res.reason + ")" : ""));
+  } catch (err) { voiceSaid(err.message); }
+}
+// One close is bounded: a recorder whose stop() never answers onstop would otherwise hold the microphone, the timer and
+// the hold forever, and every later hold would be refused. Past the bound the hold clears anyway.
+const VOICE_CLOSE_MS = 1500;
+function voiceStop(r) {
+  try { (r.stream && r.stream.getTracks ? r.stream.getTracks() : []).forEach(t => t.stop()); } catch (e) { /* a dead stream */ }
+  try { if (r.ctx && r.ctx.close) r.ctx.close(); } catch (e) { /* an audio context that is already gone */ }
+}
+async function voiceFinish(act) {
+  if (!voiceRec || voiceRec.phase !== "recording") return;
+  const r = voiceRec, sid = termSid;
+  voiceRec.phase = act === "cancel" ? "cancelled" : "sending";
+  clearInterval(r.timer);
+  let clip = null;
+  try {
+    clip = await Promise.race([voiceClose(r), new Promise(done => setTimeout(() => done({ bytes: null, type: "audio/webm" }), VOICE_CLOSE_MS))]);
+  } finally {
+    voiceStop(r);   // the stream's tracks stop whatever the recorder answered
+    voiceRec = null;
+    paintVoice();
+  }
+  if (act === "send" && sid) await voiceSend(sid, clip);
+}
+async function voiceHold(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  if (voiceRec) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+    voiceSaid("No recording: this browser has no microphone here.");
+    return;
+  }
+  const r = voiceStart(Date.now());
+  r.x0 = Number(ev && ev.clientX) || 0; r.tick = 0;
+  try {
+    r.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    r.rec = new MediaRecorder(r.stream);
+    r.rec.start();
+    // The row's waveform is the level this stream measures, never a shape the tick invents (rule 10; #1603).
+    const AC = typeof AudioContext !== "undefined" ? AudioContext : (typeof webkitAudioContext !== "undefined" ? webkitAudioContext : null);
+    if (AC) {
+      try {
+        r.ctx = new AC();
+        r.analyser = r.ctx.createAnalyser();
+        r.ctx.createMediaStreamSource(r.stream).connect(r.analyser);
+      } catch (e) { r.analyser = null; voiceStop({ ctx: r.ctx }); r.ctx = null; }
+    }
+  } catch (e) { voiceSaid("No recording: the microphone was refused."); return; }
+  voiceRec = r;
+  r.timer = setInterval(voiceStep, 250);
+  paintVoice();
+}
+$("termview-mic").addEventListener("pointerdown", voiceHold);
+document.addEventListener("pointermove", ev => {
+  if (!voiceRec || voiceRec.phase !== "recording") return;
+  voiceRec = voiceSlide(voiceRec, (Number(ev.clientX) || 0) - voiceRec.x0);
+  paintVoice();
+});
+document.addEventListener("pointerup", () => { if (voiceRec && voiceRec.phase === "recording") voiceFinish(voiceRelease(voiceRec).phase); });
+document.addEventListener("pointercancel", () => { if (voiceRec && voiceRec.phase === "recording") voiceFinish("cancel"); });
+// One Kore clip per answer (frame 17; #1603): one play or pause control, and elapsed over total once the audio knows its
+// length. The clip is the whole answer, so a sentence boundary never draws a second control.
+function clipSource(t) { return "/api/sessions/clip?sid=" + encodeURIComponent(termSid) + "&k=" + encodeURIComponent(t.k); }
+function paintClip(box) {
+  const a = box.__audio, playing = box.dataset.playing === "1";
+  box.querySelector(".clip-play").textContent = clipLabel(playing);
+  box.querySelector(".clip-play").dataset.playing = playing ? "1" : "";
+  box.querySelector(".clip-play").setAttribute("aria-label", (playing ? "Pause" : "Play") + " the spoken answer");
+  const total = a && isFinite(a.duration) && a.duration > 0 ? a.duration : 0;
+  box.querySelector(".clip-time").textContent = clipTime(a && a.currentTime ? a.currentTime : 0, total);
+}
+// A clip the hub cannot serve (no pipeline, no key, a refused synthesis, or a turn that is not an answer) comes back as a
+// 404, and the audio element reports it as an error. The control then returns to Play and the row says why, so a refused
+// clip never leaves a Pause over 0:00 / 0:00 on the answer for the life of the page.
+function clipFailed(box) {
+  box.dataset.playing = ""; box.dataset.waiting = ""; box.dataset.unavailable = "1";
+  paintClip(box);
+  voiceSaid("The spoken answer is unavailable: the hub could not speak it.");
+}
+async function clipToggle(box) {
+  const a = box.__audio;
+  if (box.dataset.playing === "1") {
+    if (a.pause) a.pause();
+    box.dataset.playing = ""; box.dataset.waiting = "";
+    paintClip(box);
+    return;
+  }
+  if (!a.src) a.src = clipSource(box.__turn);
+  box.dataset.waiting = "1";   // the tap is answered at once; play starts only when the media says it did
+  paintClip(box);
+  if (typeof a.play === "function") {
+    try { await a.play(); } catch (e) { return clipFailed(box); }
+  }
+  box.dataset.waiting = ""; box.dataset.playing = "1";
+  paintClip(box);
+}
+function clipRow(t) {
+  const box = document.createElement("div"), play = document.createElement("button");
+  const wave = document.createElement("span"), voice = document.createElement("span"), time = document.createElement("span");
+  const a = document.createElement("audio");
+  box.className = "clip"; box.dataset.k = t.k;
+  play.type = "button"; play.className = "clip-play"; play.dataset.playing = ""; play.textContent = clipLabel(false);
+  wave.className = "clipwave"; voice.className = "clip-voice"; voice.textContent = (voiceClip(t).voice);
+  time.className = "clip-time"; time.textContent = clipTime(0, 0);
+  a.preload = "none";
+  a.hidden = true; a.setAttribute("aria-hidden", "true");   // the control is the button: the audio stays out of the reading order
+  box.__audio = a; box.__turn = t;
+  play.addEventListener("click", () => clipToggle(box));
+  a.addEventListener("timeupdate", () => paintClip(box));
+  a.addEventListener("loadedmetadata", () => paintClip(box));
+  a.addEventListener("waiting", () => { box.dataset.waiting = "1"; box.dataset.playing = ""; paintClip(box); });
+  a.addEventListener("playing", () => { box.dataset.waiting = ""; box.dataset.playing = "1"; paintClip(box); });
+  a.addEventListener("error", () => clipFailed(box));
+  a.addEventListener("ended", () => { box.dataset.playing = ""; box.dataset.waiting = ""; paintClip(box); });
+  box.append(play, wave, voice, time, a);
+  paintClip(box);
+  return box;
+}
 // terminals:end
 // The first frame (#1445): every list says it is loading before its first reply, drawn through the same helper that draws
 // its later states.
