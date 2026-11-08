@@ -33,7 +33,8 @@ BOARD_NAMES_JSON = json.dumps(COLUMN, separators=(",", ":"))
 BOARD_DOING_JSON = json.dumps(_columns_module.DOING)
 BOARD_REVIEW_JSON = json.dumps(_columns_module.CODE_REVIEW)
 BOARD_CHART_ROLES = {**{f"var(--s{i})": f"--chart-series-{i}" for i in range(1, 9)}, "var(--wait)": "--chart-wait", "var(--acc)": "--chart-bar", "var(--ok)": "--chart-ok", "var(--warn)": "--chart-warn", "var(--err)": "--chart-err", "var(--none)": "--chart-none", "var(--run)": "--chart-run", "var(--drop)": "--chart-drop", "var(--mute)": "--chart-series-other"}
-BOARD_COLORS_JSON = json.dumps({c["name"]: f"var({BOARD_CHART_ROLES.get(c['color'], '--chart-series-fallback')})" for c in [*BOARD_COLUMNS, *BOARD_LANES]}, separators=(",", ":"))
+COLUMN_COLORS = {c["name"]: f"var({BOARD_CHART_ROLES.get(c['color'], '--chart-series-fallback')})" for c in BOARD_COLUMNS}   # one fill per column (#1604)
+BOARD_COLORS_JSON = json.dumps({**COLUMN_COLORS, **{lane["name"]: f"var({BOARD_CHART_ROLES.get(lane['color'], '--chart-series-fallback')})" for lane in BOARD_LANES}}, separators=(",", ":"))
 BOARD_FLOW_JSON = json.dumps([column["name"] for column in BOARD_COLUMNS], separators=(",", ":"))
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
@@ -4477,7 +4478,7 @@ def board(moves=None):
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
         w = label_wave(x["l"])
         return (10**9 if w is None else w, x["n"])
-    groups = [{"name": n, "end": n in ends, "n": tally.get(n, 0) if n in ends else len(by.get(n, [])), "items": sorted(by.get(n, []), key=wave)} for n in names]
+    groups = [{"name": n, "end": n in ends, "color": COLUMN_COLORS.get(n) or "", "n": tally.get(n, 0) if n in ends else len(by.get(n, [])), "items": sorted(by.get(n, []), key=wave)} for n in names]   # `color` is the column's own fill, so a viewer draws it without a palette (#1604)
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
     for x in prs:
         if x.get("br"): x.setdefault("gs", None); x.setdefault("pb", None); x["kind"] = _columns_module.BRANCH_KIND; continue   # a work branch has no review strip and no badge: its chip is its standing against dev
@@ -4519,7 +4520,7 @@ def board(moves=None):
                 for item in dropped: PROVED.pop(item, None)   # the entry is gone: its proof goes with it (#1300)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # the No spec lane's bar (owner)
+    return {"t": board_cache["t"], "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its

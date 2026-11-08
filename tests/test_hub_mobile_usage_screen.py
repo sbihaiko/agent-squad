@@ -59,6 +59,23 @@ def test_the_period_buttons_select_hour_day_or_month_and_mark_the_one_picked(hub
     assert out == {"hour": "true", "day": "false", "month": "false", "period": "hour"}, out
 
 
+def test_the_runs_usage_screen_has_its_own_hash_and_cost_and_usage_keeps_usage(hub):  # noqa: F811
+    # `/usage` stays the More › Cost and usage screen it has always named, so an old address opens the same screen; the
+    # runs screen takes a token of its own, and its round trip through the address lands back on itself (ADR-0137 debt).
+    out = boot(hub, """
+      return {
+        runs: routeHash({ tab: "runs", layer: "usage" }),
+        back: routeFromHash(routeHash({ tab: "runs", layer: "usage" })),
+        cost: routeFromHash("#/now/usage"),
+        legacy: routeFromHash("#/runs/usage"),
+      };
+    """)
+    assert out["runs"] == "#/runs/tokens", out
+    assert out["back"] == {"tab": "runs", "layer": "usage", "data": {}}, out
+    assert out["cost"] == {"tab": "now", "layer": "cost", "data": {}}, out
+    assert out["legacy"] == {"tab": "runs", "layer": "cost", "data": {}}, out
+
+
 def test_the_today_line_on_now_opens_runs_usage(hub):  # noqa: F811
     out = boot(hub, """
       await loadNowToday();

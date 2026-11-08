@@ -700,8 +700,8 @@ const SEG = {
   psheet: () => "profile",
   term: s => withQuery("session=" + encodeURIComponent(s.sid), [["name", s.name]]),
   run: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
-  cost: () => "usage",
-  usage: () => "usage",
+  cost: () => "usage",   // the address `/usage` has always named, so an old link opens the same screen
+  usage: () => "tokens",
   lead: () => "lead",
   more: () => "more",
   loops: () => "loops",
@@ -716,7 +716,8 @@ function routeFromHash(hash) {
   const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
   if (head === "profile") out.layer = "psheet";
   else if (head === "more") out.layer = "more";
-  else if (head === "usage") out.layer = tab === "runs" ? "usage" : "cost";
+  else if (head === "usage") out.layer = "cost";   // `/usage` names the cost screen alone, whatever tab the address carries
+  else if (head === "tokens") out.layer = "usage";
   else if (head === "lead") out.layer = "lead";
   else if (head === "loops") out.layer = "loops";
   else if (head === "bugs") out.layer = "bugs";
@@ -1499,7 +1500,7 @@ function specRowEl(s) {
   bar.setAttribute("viewBox", "0 0 100 8");
   for (const seg of s.bar) {
     const r = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title");
-    r.setAttribute("x", at.x); r.setAttribute("y", 0); r.setAttribute("width", seg.w); r.setAttribute("height", 8); r.setAttribute("fill", "var(--acc)");
+    r.setAttribute("x", at.x); r.setAttribute("y", 0); r.setAttribute("width", seg.w); r.setAttribute("height", 8); r.setAttribute("fill", seg.color || "var(--acc)");   // the column's own fill, served on the group
     t.textContent = `${seg.col}: ${s.cols.find(c => c.col === seg.col).n}`;
     r.append(t);
     bar.append(r);
