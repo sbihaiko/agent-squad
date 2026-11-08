@@ -306,13 +306,17 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="runs-live" class="runlist"></div>
 <h3 class="sub">Ended today</h3>
 <div id="runs-ended" class="runlist"></div>
-<h3 class="sub" id="runs-history-h" hidden>Run history</h3>
-<div id="runs-history" class="hist" hidden></div>
+<p id="runs-state" class="msg" role="status">The runs are loading.</p>
 <p id="runs-msg" class="msg" role="status"></p>
+<h3 class="sub" id="runs-history-h">Run history</h3>
+<p id="runs-history-state" class="msg" role="status">The run history is loading.</p>
+<div id="runs-history" class="hist" hidden></div>
+<p id="runs-history-msg" class="msg" role="status"></p>
 </section>
 <section data-panel="terminals" hidden>
 <h2>Terminals</h2>
 <div id="sessions" class="runlist" aria-live="polite"></div>
+<p id="sessions-state" class="msg" role="status">The terminal sessions are loading.</p>
 <p id="sessions-msg" class="msg" role="status"></p>
 </section>
 <section data-panel="more" hidden>
@@ -333,7 +337,8 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <div id="cchart"></div>
 <div class="list"></div>
-<p class="msg" role="status"></p></div>
+<p id="cost-state" class="msg" role="status">Cost and usage are loading.</p>
+<p id="cost-msg" class="msg" role="status"></p></div>
 <div id="cost-actions"><button data-back type="button">Back</button></div>
 </article>
 <article data-screen="lead" data-src="/api/chart/lead" hidden>
@@ -627,6 +632,16 @@ async function readHub(path, ctl) {
 }
 
 const money = v => "$" + Number(v || 0).toFixed(2);
+// One path draws every list's states (#1445): the rule answers the line and the error, the helper writes both, and then
+// the draw of what the list holds always runs. No branch returns early, so a failed read never blanks a drawn list,
+// never brings the loading line back and never skips the redraw.
+function drawList(st, lineEl, msgEl, draw) {
+  const v = listState(st);
+  lineEl.textContent = v.line; lineEl.hidden = !v.line;
+  msgEl.textContent = v.error; msgEl.hidden = !v.error;
+  draw();
+  return v;
+}
 function detail(w) { $("warn-detail").textContent = w.tip || w.text; $("warn-detail").hidden = false; }
 // One path opens a warning row: a tap and the keyboard both call it, so the two can never drift (#1457).
 function openWarning(w) { detail(w); }
@@ -1298,11 +1313,11 @@ function chartEl(buckets) {
 }
 const MORE = {
   cost(el, d) {
-    el.querySelector("#cchart").replaceChildren(...(d.buckets.length ? [chartEl(d.buckets)] : []));
-    const t = d.totals;
+    const buckets = d.buckets || [], t = d.totals || {};
+    el.querySelector("#cchart").replaceChildren(...(buckets.length ? [chartEl(buckets)] : []));
     const rows = [rowEl("Today", [money(t.today)]), rowEl("This month", [money(t.month)]), rowEl("All time", [money(t.all)])];
     if (t.unpriced || t.uncounted) rows.push(rowEl("Note", [`${t.unpriced} review calls unpriced, ${t.uncounted} with no usage count: the total is a floor.`]));
-    rows.push(...d.models.map(m => rowEl(m.model, [`${money(m.spend)} · ${m.calls} calls`])));
+    rows.push(...(d.models || []).map(m => rowEl(m.model, [`${money(m.spend)} · ${m.calls} calls`])));
     el.querySelector(".list").replaceChildren(...rows);
   },
   lead(el, d) {
@@ -1355,16 +1370,31 @@ document.querySelector('[data-screen="lead"] #ltplot').addEventListener("click",
   if (!m || !c) return;
   leadPin((c.clusters || [])[Number(m.dataset.ltK)]);
 });
-async function loadMore() {
-  if (!moreScreen) return;
-  const name = moreScreen, seq = ++moreSeq, el = document.querySelector(`[data-screen="${name}"]`);
+// The cost list keeps what it last drew (#1445): the one helper draws the line, the error and then the held rows. The
+// lead-time screen keeps its single line, which this change leaves alone.
+const costState = { ever: false, n: 0, error: "", data: null,
+  loading: "Cost and usage are loading.", empty: "No model spend is drawn for this period." };
+function drawCost(el) {
+  drawList(costState, $("cost-state"), $("cost-msg"), () => { if (costState.data) MORE.cost(el, costState.data); });
+}
+async function readMore(name, el, seq) {
   try {
     const query = name === "cost" ? "?period=" + period : "";
     const d = await call(el.dataset.src + query);
-    if (seq !== moreSeq) return;
+    if (seq !== moreSeq) return "";
+    if (name === "cost") { costState.ever = true; costState.data = d; costState.n = (d.models || []).length; return ""; }
     MORE[name](el, d);
-    el.querySelector(".msg").textContent = "";
-  } catch (e) { if (seq === moreSeq) el.querySelector(".msg").textContent = e.message; }
+    return "";
+  } catch (e) { return seq === moreSeq ? e.message : ""; }
+}
+async function loadMore() {
+  if (!moreScreen) return;
+  const name = moreScreen, seq = ++moreSeq, el = document.querySelector(`[data-screen="${name}"]`);
+  const fail = await readMore(name, el, seq);
+  if (seq !== moreSeq) return;
+  if (name !== "cost") { el.querySelector(".msg").textContent = fail; return; }
+  costState.error = fail;
+  drawCost(el);
 }
 function showMore() {
   for (const a of document.querySelectorAll("[data-screen]")) a.hidden = a.dataset.screen !== moreScreen;
@@ -1472,25 +1502,46 @@ function drawHistory(rows, groups, mutedText) {
   }
   box.hidden = head.hidden = !drawn.length;
 }
+// The Runs screen's two reads (#1445): the list and the history each keep what they last drew, so a failed read adds one
+// error line under its own heading and never blanks the other. Both draw through the one helper.
+const runsState = { ever: false, n: 0, error: "", rows: [], ended: [],
+  loading: "The runs are loading.", empty: "No runs are drawn." };
+const histState = { ever: false, n: 0, error: "", rows: [], groups: [], muted: "",
+  loading: "The run history is loading.", empty: "No run history is drawn." };
+function drawRuns() {
+  drawList(runsState, $("runs-state"), $("runs-msg"), () => {
+    $("runs-live").replaceChildren(...runsState.rows.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
+    $("runs-ended").replaceChildren(...runsState.ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
+  });
+  const v = drawList(histState, $("runs-history-state"), $("runs-history-msg"),
+    () => drawHistory(histState.rows, histState.groups, histState.muted));
+  $("runs-history-h").hidden = !v.line && !v.error && $("runs-history").hidden;
+}
+async function readRuns() {
+  // The list first, on the bare route the page always read (#1337): a hub or an intermediary that rejects the groups query
+  // still shows the live and ended runs, as main did.
+  const [d, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
+  const rows = Array.isArray(d) ? d : (d && d.runs) || [], endedRows = Array.isArray(ended) ? ended : [];
+  runsState.ever = true; runsState.rows = rows; runsState.ended = endedRows; runsState.n = rows.length + endedRows.length;
+  for (const r of [...rows, ...endedRows]) runRows[r.id] = r;
+  // Then the history's groups in their own read, so a rejected or failed query costs the history alone. A hub older than
+  // the page ignores the query and answers the bare array: the history stays honestly empty (#1277).
+  let a = Array.isArray(d) ? null : d, fail = "";
+  if (!a) { try { const g = await call("/api/runs?groups=1"); a = Array.isArray(g) ? null : g; } catch (e) { fail = e.message; } }
+  if (!fail) {
+    histState.ever = true;
+    histState.rows = a && a.runs ? a.runs : rows;
+    histState.groups = a ? a.groups || [] : [];
+    histState.muted = a ? a.muted || "" : "";
+    histState.n = runHistory(histState.groups, histState.muted).drawn.length;
+    for (const r of histState.rows) runRows[r.id] = r;
+  }
+  histState.error = fail;
+}
 async function loadRuns() {
-  try {
-    // The list first, on the bare route the page always read (#1337): a hub or an intermediary that rejects the groups query
-    // still shows the live and ended runs, as main did.
-    const [d, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
-    const rows = Array.isArray(d) ? d : d.runs || [];
-    $("runs-live").replaceChildren(...rows.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
-    $("runs-ended").replaceChildren(...ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
-    $("runs-msg").textContent = "";
-    for (const r of [...rows, ...ended]) runRows[r.id] = r;
-    if (runId && !$("runview").hidden) drawRunOverview(runRows[runId]);
-    // Then the history's groups in their own read, so a rejected or failed query costs the history alone. A hub older than
-    // the page ignores the query and answers the bare array: the history stays honestly empty (#1277).
-    let a = Array.isArray(d) ? null : d;
-    if (!a) { try { const g = await call("/api/runs?groups=1"); a = Array.isArray(g) ? null : g; } catch (e) { a = null; } }
-    for (const r of a && a.runs ? a.runs : []) runRows[r.id] = r;
-    if (runId && !$("runview").hidden) drawRunOverview(runRows[runId]);
-    drawHistory(a && a.runs ? a.runs : rows, a ? a.groups || [] : [], a ? a.muted || "" : "");
-  } catch (e) { $("runs-msg").textContent = e.message; }
+  runsState.error = await readRuns().then(() => "", e => e.message);
+  if (runId && !$("runview").hidden) drawRunOverview(runRows[runId]);
+  drawRuns();
 }
 // Pause and resume: the one write the run screen makes. It posts through the hub's forward route to the run's own control
 // route, as the desktop page does, and it never starts a process (ADR-0118 rule 18). The decision is runControlView's.
@@ -1586,13 +1637,24 @@ function turnRow(t) {
   d.append(who, text);
   return d;
 }
+// The session list keeps what it last drew (#1445): the one helper draws the line, the error and then the rows it holds.
+const sessState = { ever: false, n: 0, error: "", groups: [],
+  loading: "The terminal sessions are loading.", empty: "No terminal sessions are drawn." };
+function drawSessions() {
+  drawList(sessState, $("sessions-state"), $("sessions-msg"), () => {
+    $("sessions").replaceChildren(...sessState.groups.flatMap(g => (g.sessions || []).map(s => sessionRow(g.project, s))));
+  });
+}
 function applySessions(d) {
-  $("sessions").replaceChildren(...d.groups.flatMap(g => g.sessions.map(s => sessionRow(g.project, s))));
-  $("sessions-msg").textContent = "";
+  const groups = d && Array.isArray(d.groups) ? d.groups : [];
+  sessState.ever = true; sessState.error = "";
+  sessState.groups = groups;
+  sessState.n = groups.reduce((k, g) => k + (g.sessions || []).length, 0);
+  drawSessions();
 }
 async function loadSessions() {
-  try { applySessions(await call("/api/sessions")); }
-  catch (e) { $("sessions-msg").textContent = e.message; }
+  sessState.error = await call("/api/sessions").then(d => { applySessions(d); return ""; }, e => e.message);
+  drawSessions();
 }
 squadStream.on("sessions", applySessions);
 function readConversation(before) {
@@ -1730,6 +1792,9 @@ every("terminals", () => { if (!termOpen() && !squadStream.live()) loadSessions(
 // The first tab was "Status" before it became the Monitor: a stored "status" opens the Monitor.
 function tabOf(s) { const t = s === "status" ? "monitor" : s; return tabs.some(b => b.dataset.tab === t) ? t : tabs[0].dataset.tab; }
 const last = localStorage.getItem("squad-mobile-tab");
+// The first frame (#1445): every list says it is loading before its first reply, drawn through the same helper that draws
+// its later states.
+drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"]'));
 show(tabOf(last));
 // A card link in the address opens its card once the board's read answers (#1459).
 if (linkHash(location.hash) !== null) linkOpen();

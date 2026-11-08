@@ -73,6 +73,14 @@ const carouselColumns = (groups, counts, hide) => {
 // The empty-column note (#915): a column with no card names the filters only when a filter is set.
 const emptyColumnNote = ({ groups, shown, filtered }) =>
   !groups ? "Loading the board." : !shown ? "No column holds a card." : filtered ? "No card in this column with these filters." : "No card in this column.";
+// The three list states (#1445): one rule answers the line every list draws above its content. `ever` says a reply
+// arrived, `n` counts the rows the list holds, and `error` names the last read's failure. A list says 'loading' until
+// its first reply; a successful empty reply draws one sentence naming the missing data; a failed read draws one error
+// line and never drops what the list holds. An empty sentence stays beside the error line when there was nothing to keep.
+const listState = ({ ever, n, error, loading, empty }) => ({
+  line: !ever && !error ? loading : ever && !n ? empty : "",
+  error: error || "",
+});
 // The swimlanes of one carousel column (#893): its visible cards grouped by spec, each lane headed by its number and
 // progress. A lane holds the visible cards whose `pa` names its spec, and the spec's own card first when it is visible
 // here. Progress counts the spec's children on the whole board, never the column alone. "No spec" is the last lane.

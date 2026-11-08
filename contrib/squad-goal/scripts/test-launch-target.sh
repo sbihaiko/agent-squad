@@ -98,6 +98,23 @@ rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(runb "$T/req93.txt")
 [ "$(git -C "$wt" rev-parse HEAD)" = "$devtip" ] && ok "a leftover commit does not ride into the next run" || ko "gui/93 kept the leftover: $(git -C "$wt" log --oneline -1); out=$o"
 git -C "$co" for-each-ref --format='%(objectname)' refs/squad/leftover | /usr/bin/grep -qx "$left" && ok "the leftover commit is kept on a named ref" || ko "no refs/squad/leftover holds $left"
 case "$o" in *leftover*) ok "the launch names the leftover";; *) ko "the leftover is silent: $o";; esac
+# #1591: a cleanup can take the issue worktree away and leave its branch behind at an earlier tip. A dispatch that finds that
+# branch makes the worktree on it and moves it up to the landing branch, as a reused worktree does: a redispatched child never
+# starts on the stale tip and then finds the base's files missing. A branch that carries a commit the landing branch lacks is
+# not touched at all, its tip is named, and the run starts elsewhere: nothing is deleted, and no unknown work rides along.
+(cd "$up/c" && echo g > g.txt && git add g.txt && git -c user.email=t@t -c user.name=t commit -qm dev-ahead-3 && git push -q origin HEAD:dev); devtip=$(git -C "$T/origin.git" rev-parse dev)
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt"
+old=$(git -C "$co" rev-parse gui/93)
+[ "$old" != "$devtip" ] && ok "the fixture leaves gui/93 behind origin/dev, with no worktree" || ko "the fixture did not leave gui/93 behind"
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(runb "$T/req93.txt")
+[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$devtip" ] && ok "a worktree made on a left-behind branch starts from origin/dev, not the branch's tip" || ko "gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not origin/dev; out=$o"
+(cd "$wt" && echo keep > keep.txt && git add keep.txt && git -c user.email=t@t -c user.name=t commit -qm 'left behind'); held=$(git -C "$wt" rev-parse HEAD)
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt"
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(runb "$T/req93.txt")
+[ ! -d "$wt" ] && ok "a left-behind branch with its own commits is not checked out" || ko "the run started in $wt, on the stale tip"
+[ "$(git -C "$co" rev-parse gui/93)" = "$held" ] && ok "the left-behind branch is left as it is" || ko "gui/93 moved to $(git -C "$co" rev-parse --short gui/93)"
+case "$o" in *"${held:0:9}"*) ok "the launch names the stale tip";; *) ko "the stale tip is not named: $o";; esac
+own "$(tgt)" && ok "the run gets its own worktree instead" || ko "target $(tgt) is no run worktree; out=$o"
 rm -rf "$up"
 # #1504 (ADR-0150 across runs): a stacked child's request names the branch it was cut from (`CUT FROM: <branch>`, written by
 # autofrontier.sh). The issue worktree starts on THAT branch, never the base, so one file is edited by one line of commits. A

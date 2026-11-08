@@ -18,6 +18,28 @@ its id are fsync'd before the envelope is acknowledged, so a crash after the ack
 cannot read lands in `other.jsonl` with an `error`, never in the inbox as a half line the operator might read as an
 instruction.
 
+Every project the hub lists gets one channel in the dedicated workspace, named after its GitHub repository (lowercased,
+each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
+`$VOICE_STATE/channels.json`, writes one inbox per channel (`$VOICE_STATE/inboxes/<channel>.jsonl`) and posts an answer
+in the channel its question came from. Two repositories whose names collide after the conversion are refused with one
+line that names both, and no channel is created for the second. A message in a channel no project owns is data in
+`other.jsonl`, never a DM question.
+
+The reverse direction is the outbox. An operator session appends one JSON line (`thread_ts`, `text`, an optional
+`speech`, and for the DM an optional `channel`) to its own outbox (`$VOICE_STATE/outboxes/<channel>.jsonl`, or
+`$VOICE_STATE/outbox.jsonl` for the DM), and the daemon answers it with no call from the session:
+
+- the text is posted as the bot at once, threaded under `thread_ts` (else under nothing);
+- the spoken script (the `speech` field, else the text) is split into sentences, and the first sentence is synthesized
+  in parallel with the text post and posted as one clip, so a slow Slack write never holds the voice;
+- the rest is synthesized only once the first clip is out, and posted as one clip.
+
+A line whose text and clips all went out is in `$VOICE_STATE/outbox-seen.jsonl` by a digest of its content, so a restart
+posts no second text and speaks no second clip. A line whose text went out and whose clip Slack refused is in
+`$VOICE_STATE/outbox-posted.jsonl` with the ts its clips answer, so the next drain speaks the voice again and never posts
+the text again. A refused post or a refused voice is a log line, never a daemon that stops answering, and a line refused
+three times in one daemon waits for the next daemon instead of spinning at the poll interval.
+
 Secrets come from the one reader the voice pipeline already uses (`keychain.py`): the bot token, the app token and the
 Gemini key live in the macOS Keychain. No value is ever printed, logged, or written to a state file. `VOICE_OWNER` (or
 the file `$VOICE_STATE/owner`) names the only user the daemon accepts; `VOICE_STATE` names the state directory
@@ -29,10 +51,16 @@ loading it into the owner's launchd is the owner's step, and the daemon never ru
 """
 import asyncio
 import base64
+import glob
+import hashlib
 import json
 import os
+import re
+import shlex
 import ssl
+import subprocess
 import sys
+import tempfile
 import urllib.request
 import xml.sax.saxutils
 
@@ -42,6 +70,8 @@ import channels  # noqa: E402  the one Slack call path, so this daemon keeps no 
 import keychain  # noqa: E402  the one reader for the three voice secrets
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
+ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
+CHANNEL_MAX = 80     # Slack's channel-name cap
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
@@ -49,6 +79,10 @@ AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
 TIMEOUT = 60
 MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larger clip is a record, never a guess
 CHUNK = 1 << 16
+VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
+OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
+MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
+SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 
 
 class ClipTooLarge(Exception):
@@ -57,6 +91,79 @@ class ClipTooLarge(Exception):
     def __init__(self, size):
         super().__init__(f"clip too large: {size} bytes over the {MAX_CLIP_BYTES} byte cap")
         self.size = size
+
+
+def channel_name(repo):
+    """The channel for one repository: its name, lowercased, each dot a hyphen; every other character Slack refuses
+    becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484).
+
+    Slack refuses a name that starts or ends with a hyphen and a run of hyphens; both are collapsed and trimmed. A name
+    past the cap keeps a short digest of the whole name, so two long repositories that agree up to the cut never share
+    one channel.
+    """
+    name = (repo or "").rstrip("/").rsplit("/", 1)[-1]
+    name = re.sub(r"[^a-z0-9_-]", "-", name.lower().replace(".", "-"))
+    name = re.sub(r"-{2,}", "-", name).strip("-")
+    if len(name) > CHANNEL_MAX:
+        digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+        name = name[:CHANNEL_MAX - len(digest) - 1].strip("-") + "-" + digest
+    return name
+
+
+def context_of(text):
+    """The KEY=value context `address.sh` prints, one key per line.
+
+    Each line is read as its own shell words, so an optional leading `export`, a quoted value and a value holding a
+    space all resolve to the value the seam meant, never to the last word of it.
+    """
+    ctx = {}
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        key, sep, rest = line.partition("=")
+        key = key.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        try:
+            ctx[key] = " ".join(shlex.split(rest.strip()))
+        except ValueError:
+            ctx[key] = rest.strip()
+    return ctx
+
+
+def hub_repos(script=None):
+    """Every repository the hub lists: the profile names `address.sh --list` prints, each resolved to its SG_REPO.
+
+    The seam is the hub's own (ADR-0138), so a project added to the hub needs no second list beside it. A seam that
+    refuses or a profile that names no repository contributes nothing, and the daemon keeps the channels it already has.
+    """
+    script = script or ADDRESS
+    try:
+        out = subprocess.run(["bash", script, "--list"], capture_output=True, text=True, timeout=30)
+        slugs = [ln.split("\t")[0].strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return []
+    repos = []
+    for slug in slugs:
+        try:
+            p = subprocess.run(["bash", script, slug], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        repo = (context_of(p.stdout).get("SG_REPO") or "").strip()
+        if repo and repo not in repos:
+            repos.append(repo)
+    return repos
+
+
+class SlackClient:
+    """The daemon's one Slack call path with the bot token, injected so a test passes a fake and no token is printed."""
+
+    def __init__(self, token):
+        self.token = token
+
+    def api(self, method, params=None, post=False):
+        return channels.api(self.token, method, params, post)
 
 
 class State:
@@ -69,7 +176,93 @@ class State:
         self.other_path = os.path.join(directory, "other.jsonl")
         self.seen_path = os.path.join(directory, "seen.jsonl")
         self.owner_path = os.path.join(directory, "owner")
+        self.channels_path = os.path.join(directory, "channels.json")
+        self.inboxes_dir = os.path.join(directory, "inboxes")
+        self.outbox_path = os.path.join(directory, "outbox.jsonl")
+        self.outboxes_dir = os.path.join(directory, "outboxes")
+        self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
+        self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
         self._seen = None
+        self._channels = None
+        self._delivered = None
+        self._posted = None
+
+    def channels(self):
+        """repository -> {name, id}: the project channels this daemon created or joined, read from disk or stale-safe."""
+        if self._channels is None:
+            self._channels = {}
+            try:
+                with open(self.channels_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._channels = {k: v for k, v in data.items() if isinstance(v, dict)}
+            except (OSError, ValueError):
+                pass
+        return self._channels
+
+    def save_channels(self, mapping):
+        """The registry as one atomic write (ADR-0030): a crash leaves the old file, never half of a new one."""
+        tmp = self.channels_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.channels_path)
+        self._channels = {k: dict(v) for k, v in mapping.items()}
+
+    def channel_for(self, channel_id):
+        """The repository one project channel belongs to, or None for the DM and any channel no project owns."""
+        for repo, entry in self.channels().items():
+            if entry.get("id") == channel_id:
+                return repo
+        return None
+
+    def inbox_for(self, name):
+        """One project channel's inbox: one file per channel, so a project's session watches only its own."""
+        return os.path.join(self.inboxes_dir, f"{name}.jsonl")
+
+    def outbox_for(self, name):
+        """One project channel's outbox: the file its operator session appends its answers to."""
+        return os.path.join(self.outboxes_dir, f"{name}.jsonl")
+
+    def delivered(self):
+        """Every outbox line already posted, by digest of its content: a restart posts no line a second time."""
+        if self._delivered is None:
+            self._delivered = {r["digest"] for r in read_lines(self.delivered_path) if r.get("digest")}
+        return self._delivered
+
+    def posted(self):
+        """Every outbox line whose text is already out, by digest, with the ts its clips answer: a restart speaks the
+        voice again without ever posting the text a second time."""
+        if self._posted is None:
+            self._posted = {r["digest"]: r for r in read_lines(self.posted_path) if r.get("digest")}
+        return self._posted
+
+    def remember_posted(self, digest, ts=None):
+        """One durable mark of a text already posted, written at once: a refused clip repeats the voice, never the text."""
+        record = {"digest": digest, "ts": ts}
+        self._append(self.posted_path, record)
+        self.posted()[digest] = record
+
+    def remember_clip(self, digest, stage):
+        """One durable mark of a clip already out, written at once: a later stage's refusal repeats that stage alone,
+        never a clip the owner already heard."""
+        record = self.posted().get(digest)
+        if record is None:
+            return
+        done = list(record.get("clips_done") or [])
+        if stage in done:
+            return
+        done.append(stage)
+        record = {"digest": digest, "ts": record.get("ts"), "clips_done": done}
+        self._append(self.posted_path, record)
+        self.posted()[digest] = record      # the last line for a digest wins, so a restart reads the newest stage set
+
+    def remember_delivered(self, digest):
+        """One durable mark of an answer fully posted, text and every clip: the ledger is written before the memory that
+        trusts it, so an append that fails makes the next drain try again instead of swallowing the answer."""
+        self._append(self.delivered_path, {"digest": digest})
+        self.delivered().add(digest)
 
     def owner(self):
         """The one accepted user: VOICE_OWNER wins, else the owner file written once beside the inbox."""
@@ -83,10 +276,15 @@ class State:
             return None
 
     def seen(self):
-        """Every message id already recorded. The inbox is read too, so a crash between the line and the ledger loses none."""
+        """Every message id already recorded. Every inbox is read too, so a crash between the line and the ledger loses none."""
         if self._seen is None:
             ids = set()
-            for path in (self.seen_path, self.inbox_path, self.other_path):
+            paths = [self.seen_path, self.inbox_path, self.other_path]
+            try:
+                paths += sorted(glob.glob(os.path.join(self.inboxes_dir, "*.jsonl")))
+            except OSError:
+                pass
+            for path in paths:
                 for record in read_lines(path):
                     if record.get("id"):
                         ids.add(record["id"])
@@ -100,6 +298,7 @@ class State:
         half line stays the skipped record `read_lines` already ignores.
         """
         line = json.dumps(record, sort_keys=True) + "\n"
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "a+b") as f:
             f.seek(0, os.SEEK_END)
             if f.tell():
@@ -114,8 +313,8 @@ class State:
         self.seen().add(message_id)
         self._append(self.seen_path, {"id": message_id})
 
-    def append_inbox(self, record):
-        self._append(self.inbox_path, record)
+    def append_inbox(self, record, path=None):
+        self._append(path or self.inbox_path, record)
         self._remember(record["id"])
 
     def append_other(self, record):
@@ -149,6 +348,44 @@ def message_id(event):
     if client_msg_id:
         return client_msg_id
     return f"{event.get('channel') or 'dm'}:{event.get('ts') or ''}"
+
+
+def split_sentences(text):
+    """One spoken script as its first sentence and the rest, so the owner hears the answer start without its end.
+
+    A script with no sentence mark is one sentence, and the rest is empty. The first sentence keeps its own punctuation,
+    because the voice reads it, and the rest is joined back into one clip.
+    """
+    parts = [part.strip() for part in SENTENCE.findall(text or "") if part.strip()]
+    if not parts:
+        return "", ""
+    return parts[0], " ".join(parts[1:]).strip()
+
+
+def outbox_digest(record):
+    """One outbox line's identity: its whole content, so two answers that differ by a word are two answers."""
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def spoken_clip(key, script, voice=VOICE):
+    """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it."""
+    import tts  # the vendored TTS beside this file, so the daemon keeps no second copy of it
+    fd, path = tempfile.mkstemp(prefix="voiced-", suffix=".wav")
+    os.close(fd)
+    got, err = tts.synth(key, script, voice, path)
+    if not got:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise RuntimeError(err or "no audio")
+    return got
+
+
+def upload_clip(token, path, channel, thread_ts=None, title=None):
+    """One clip into one channel through the repository's one upload path (reply.upload); the token never leaves it."""
+    import reply  # the vendored reply path beside this file, so the daemon keeps no second copy of the upload
+    return reply.upload(token, path, channel, thread_ts=thread_ts, title=title)
 
 
 def audio_file(event):
@@ -201,15 +438,258 @@ def transcribe(audio, mime, key):
     return text
 
 
+def project_channels(state, client, repos, log=None):
+    """Give every repository one channel, created and joined once. Returns {"channels": {repo: {name, id}}, "refused": [...]}.
+
+    A repository whose converted name collides with an earlier one is refused with one line that names both, and no
+    channel is created for it. The registry on disk makes a restart create nothing a second time.
+    """
+    log = log or (lambda line: None)
+    channels = {repo: dict(entry) for repo, entry in state.channels().items()}
+    refused, order, by_name = [], [], {}
+    # A channel already on disk keeps its repository: a newcomer that converts to that name is refused, never handed
+    # the first project's channel and inbox.
+    for repo in sorted(channels):
+        name = (channels[repo].get("name") or "").strip()
+        if not name:
+            continue
+        if name in by_name:
+            refused.append(_collision_line(repo, by_name[name], name))
+            continue
+        by_name[name] = repo
+    for repo in repos:
+        name = channel_name(repo)
+        if not name:
+            continue
+        holder = by_name.get(name)
+        if holder is not None and holder != repo:
+            refused.append(_collision_line(repo, holder, name))
+            continue
+        by_name[name] = repo
+        order.append((repo, name))
+    changed = False
+    for repo, name in order:
+        entry = channels.get(repo)
+        if entry and entry.get("name") == name and entry.get("id"):
+            continue
+        got = _ensure_channel(client, name, channels, log)
+        if got is None:
+            continue
+        channels[repo] = got
+        changed = True
+    if changed:
+        state.save_channels(channels)
+    for line in refused:
+        log(line)
+    return {"channels": channels, "refused": refused}
+
+
+def _collision_line(repo, holder, name):
+    """The one line that refuses a repository whose converted name another repository already holds."""
+    return f"voiced: {repo} and {holder} share the channel name {name}; no channel is created for {repo}"
+
+
+def _ensure_channel(client, name, channels, log):
+    """The channel called `name`: created and joined, else found when Slack already holds the name."""
+    for entry in channels.values():
+        if entry.get("name") == name and entry.get("id"):
+            return dict(entry)
+    got = client.api("conversations.create", {"name": name, "is_private": False}, post=True)
+    if got.get("ok"):
+        channel = got.get("channel") or {}
+    elif got.get("error") == "name_taken":
+        listing = client.api("conversations.list?types=public_channel,private_channel&limit=1000")
+        channel = next((c for c in listing.get("channels") or [] if c.get("name") == name), None)
+        if not channel:
+            log(f"voiced: Slack holds the name {name} and lists no channel for it")
+            return None
+    else:
+        log(f"voiced: cannot create the channel {name}: {got.get('error')}")
+        return None
+    cid = channel.get("id")
+    if not cid:
+        log(f"voiced: the channel {name} has no id")
+        return None
+    joined = client.api("conversations.join", {"channel": cid}, post=True)
+    if not joined.get("ok") and joined.get("error") not in ("already_in_channel", "is_archived"):
+        log(f"voiced: cannot join the channel {name}: {joined.get('error')}")
+    return {"name": name, "id": cid}
+
+
 class Daemon:
     """One handler for one event; the acknowledging loop is `serve` and `handle_envelope` beside it."""
 
-    def __init__(self, state, owner, transcriber, downloader, log=None):
+    def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
+                 synthesizer=None, uploader=None):
         self.state = state
         self.owner = owner
         self.transcriber = transcriber
         self.downloader = downloader
         self.log = log or (lambda line: print(line, file=sys.stderr))
+        self.client = client
+        self.projects = projects
+        self.synthesizer = synthesizer
+        self.uploader = uploader
+        self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
+
+    def sync_projects(self):
+        """Give every project the hub lists its channel, once; no client or no list leaves the channels as they are."""
+        if self.client is None or self.projects is None:
+            return {"channels": self.state.channels(), "refused": []}
+        return project_channels(self.state, self.client, self.projects(), self.log)
+
+    def inbox_path_of(self, event):
+        """The inbox one message belongs to: its project's when the channel names one, the DM's for an im, else None."""
+        repo = self.state.channel_for(event.get("channel"))
+        if repo:
+            return self.state.inbox_for(self.state.channels()[repo]["name"])
+        if (event.get("channel_type") or "im") == "im":
+            return self.state.inbox_path
+        return None
+
+    def answer(self, question, text):
+        """Post one answer in the channel its question came from, threaded under it. True when Slack accepts it."""
+        if self.client is None or not question.get("channel"):
+            return False
+        payload = {"channel": question["channel"], "text": text}
+        if question.get("ts"):
+            payload["thread_ts"] = question["ts"]
+        got = self.client.api("chat.postMessage", payload, post=True)
+        if not got.get("ok"):
+            self.log(f"voiced: answer refused: {got.get('error')}")
+            return False
+        return True
+
+    def outbox_sources(self):
+        """Every outbox the daemon answers from, one `(channel, path)` per entry: each project channel's, then the DM's.
+
+        A project outbox names its channel by the registry, so its session never repeats it; the DM outbox has no
+        registry entry, so a line there names its own `channel`.
+        """
+        sources = []
+        for entry in self.state.channels().values():
+            if entry.get("id") and entry.get("name"):
+                sources.append((entry["id"], self.state.outbox_for(entry["name"])))
+        sources.append((None, self.state.outbox_path))
+        return sources
+
+    def post_text(self, channel, thread_ts, text):
+        """Post the readable answer in its channel; True and its ts when Slack accepts it, so the clips answer it."""
+        if self.client is None:
+            return False, None
+        payload = {"channel": channel, "text": text}
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        got = self.client.api("chat.postMessage", payload, post=True)
+        if not got.get("ok"):
+            self.log(f"voiced: answer refused: {got.get('error')}")
+            return False, None
+        return True, got.get("ts")
+
+    def synth_clip(self, script):
+        """One spoken clip's path, or None when the voice refused: a missing voice never fails the answer."""
+        try:
+            return self.synthesizer(script) or None
+        except Exception as x:      # noqa: BLE001 - a refused TTS is a log line, and the text answer stands alone
+            # The error type only: a provider message can carry request material, and this log is never redacted.
+            self.log(f"voiced: speech skipped: {type(x).__name__}")
+            return None
+
+    def post_clip(self, path, channel, thread_ts, title):
+        """Upload one spoken clip, then drop its temporary file; False when the upload was refused."""
+        try:
+            if self.uploader is None:
+                return False
+            fid, err = self.uploader(path, channel, thread_ts, title)
+            if not fid:
+                self.log(f"voiced: clip refused: {err}")
+                return False
+            return True
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    async def deliver(self, record, channel=None, digest=None):
+        """Answer one outbox line: the text at once, the first spoken sentence with it, then the rest as one clip.
+
+        The first sentence's synthesis starts together with the text post, so a slow Slack write never holds the voice;
+        the rest is synthesized only after the first clip is out, so the owner hears the start without waiting for the
+        end. Each call runs in a worker thread, because both the Slack write and Gemini take seconds.
+
+        Returns two answers: whether the text is out, and whether every clip it meant to speak went out. A line whose
+        text is already out is spoken again and never posted again, and each clip already out is skipped, so a refused
+        stage costs the voice that stage alone.
+        """
+        text = (record.get("text") or "").strip()
+        cid = (record.get("channel") or channel or "").strip()
+        if not text or not cid:
+            self.log("voiced: outbox line names no channel or no text; nothing posted")
+            return False, False
+        thread = record.get("thread_ts")
+        first, rest = split_sentences((record.get("speech") or text).strip())
+        posted = self.state.posted().get(digest) if digest else None
+        done = set(posted.get("clips_done") or []) if posted else set()
+        # The first sentence is synthesized beside the text post when there is one, so the voice never waits for Slack.
+        speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first)) \
+            if (first and self.synthesizer and "first" not in done) else None
+        if posted is None:
+            ok, ts = await asyncio.to_thread(self.post_text, cid, thread, text)
+            if not ok:
+                if speaking is not None:
+                    await asyncio.gather(speaking, return_exceptions=True)
+                return False, False
+            if digest:
+                # The text is out before its voice: a crash from here repeats only the voice, never the text.
+                self.state.remember_posted(digest, ts)
+        else:
+            ts = posted.get("ts")
+        anchor = thread or ts
+        if speaking is not None:
+            path = await speaking
+            if path:
+                if not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer's first sentence"):
+                    return True, False      # the first clip is refused: the next drain speaks it, then the rest
+                if digest:
+                    self.state.remember_clip(digest, "first")
+        if rest and self.synthesizer and "rest" not in done:
+            path = await asyncio.to_thread(self.synth_clip, rest)
+            if path:
+                if not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer"):
+                    return True, False
+                if digest:
+                    self.state.remember_clip(digest, "rest")
+        return True, True
+
+    async def drain_outboxes(self):
+        """Post every outbox line not yet posted, over every outbox, and return how many answers fully went out.
+
+        The digest ledger is read once and extended as answers go fully out, so one drain posts each text once. The text
+        is recorded the moment Slack accepts it, so a refused clip repeats the voice and never the text; a line refused
+        `MAX_ATTEMPTS` times in one daemon is left to the next one, never spun at the poll interval.
+        """
+        delivered = self.state.delivered()
+        count = 0
+        for channel, path in self.outbox_sources():
+            for record in read_lines(path):
+                digest = outbox_digest(record)
+                if digest in delivered:
+                    continue
+                fails = self.failed.get(digest, 0)
+                if fails >= MAX_DELIVER_ATTEMPTS:
+                    continue
+                posted, voiced = await self.deliver(record, channel, digest)
+                if posted and voiced:
+                    self.state.remember_delivered(digest)
+                    delivered.add(digest)
+                    self.failed.pop(digest, None)
+                    count += 1
+                    continue
+                self.failed[digest] = fails + 1
+                if fails + 1 == MAX_DELIVER_ATTEMPTS:
+                    self.log(f"voiced: answer refused {MAX_DELIVER_ATTEMPTS} times; the next daemon tries it again")
+        return count
 
     def handle(self, envelope):
         """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here."""
@@ -234,6 +714,13 @@ class Daemon:
                 {"id": f.get("id"), "name": f.get("name"), "mimetype": f.get("mimetype")}
                 for f in event.get("files") or []
             ]
+        target = self.inbox_path_of(event)
+        if target is None:
+            # A channel no project owns is data, never a DM question the operator might answer as if it were one.
+            record["text"] = (event.get("text") or "").strip()
+            record["error"] = "unknown channel: no project owns it"
+            self.state.append_other(record)
+            return "other"
         text = (event.get("text") or "").strip()
         if event.get("user") != self.owner:
             record["text"] = text
@@ -266,7 +753,7 @@ class Daemon:
             return "other"
         record["text"] = text
         record["clip"] = bool(clip)
-        self.state.append_inbox(record)
+        self.state.append_inbox(record, target)
         return "inbox"
 
 
@@ -338,7 +825,35 @@ def ssl_context(log=None):
     return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
 
 
+async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
+    """Answer each new outbox line as soon as it appears, until `stop` is set.
+
+    The session appends a line and this is the only reader, so no call from the session is needed. The interval bounds
+    how long an answer waits for its post; a failed drain is a log line, never a watcher that stops answering.
+    """
+    while not (stop is not None and stop.is_set()):
+        try:
+            await daemon.drain_outboxes()
+        except Exception as x:      # noqa: BLE001 - a bad line is a log line, never a daemon that stops answering
+            daemon.log(f"voiced: outbox drain failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
 async def serve(daemon, app_token, connect=None, open_connection=None, stop=None):
+    """Hear Slack and answer the outboxes at once: the connection loop runs beside the outbox watcher.
+
+    The watcher is one task of the same loop, so an answer the session appends is posted while the socket is open and
+    while it reconnects. Both stop together, and the watcher is cancelled with the connection loop.
+    """
+    watcher = asyncio.create_task(watch_outboxes(daemon, stop))
+    try:
+        await hear(daemon, app_token, connect=connect, open_connection=open_connection, stop=stop)
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+
+
+async def hear(daemon, app_token, connect=None, open_connection=None, stop=None):
     """Keep the Socket Mode connection open, reconnecting with a growing wait; each envelope is handled, then acked.
 
     `connect` and `open_connection` are the two seams a test injects; `stop` ends the loop when it is set. Production
@@ -353,6 +868,12 @@ async def serve(daemon, app_token, connect=None, open_connection=None, stop=None
     context = ssl_context(log=daemon.log)
     wait = 1
     while not (stop is not None and stop.is_set()):
+        try:
+            # A project that entered the hub gets its channel before the connection is renewed; a failure to create
+            # one is a log line, never a daemon that stops hearing the DM.
+            await asyncio.to_thread(daemon.sync_projects)
+        except Exception as x:      # noqa: BLE001 - the DM keeps working even when the channel sync cannot
+            daemon.log(f"voiced: project sync failed: {type(x).__name__}: {str(x)[:120]}")
         answer = await asyncio.to_thread(open_connection)
         url = answer.get("url")
         if not url:
@@ -428,7 +949,10 @@ def main(argv):
         return 1
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
-                    downloader=lambda url: download(url, bot))
+                    downloader=lambda url: download(url, bot),
+                    client=SlackClient(bot), projects=hub_repos,
+                    synthesizer=lambda script: spoken_clip(key, script),
+                    uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title))
     try:
         asyncio.run(serve(daemon, app))
     except KeyboardInterrupt:

@@ -111,7 +111,8 @@ DRIVER = """
            span: ghs[0] ? ghs[0].querySelector(".sr").textContent : null,
            title: ghs[0] ? ghs[0].getAttribute("title") : null,
            kids: [...h.children].map(e => ({ g: e.dataset.g || null, t: e.textContent })),
-           live: $("runs-live").textContent, msg: $("runs-msg").textContent };
+           live: $("runs-live").textContent, msg: $("runs-msg").textContent,
+           histState: $("runs-history-state").textContent, histMsg: $("runs-history-msg").textContent };
 """
 
 
@@ -169,7 +170,8 @@ def test_a_hub_that_rejects_the_groups_query_still_lists_the_runs(hub):  # noqa:
                                               {"body": "bad request", "status": 400, "ct": "text/plain"}],
                                 "/api/ended": [{"body": "[]"}]})
     assert "implement #7" in out["live"], "a hub that rejects the groups query still lists its runs, as main did"
-    assert out["hidden"] and out["head"], "the history is empty rather than a wrong group"
+    assert out["hidden"], "a rejected history read draws no group"
+    assert not out["head"] and out["histMsg"], "its own error line sits under the history heading (#1445)"
     assert out["msg"] == "", "a rejected history read is not the runs list's error"
 
 
@@ -193,5 +195,6 @@ def test_an_old_hub_array_keeps_the_list_and_draws_no_history(hub):  # noqa: F81
     out = move.run_page(hub.MOBILE_PAGE, DRIVER,
                         routes={"/api/runs": [{"body": json.dumps([LIVE_ROW])}], "/api/ended": [{"body": "[]"}]})
     assert "implement #7" in out["live"], "an old hub's array is read as the runs, never as an object with no `runs`"
-    assert out["hidden"] and out["head"], "the history stays honestly empty instead of showing a stale group"
+    assert out["hidden"], "the history draws no group instead of showing a stale one"
+    assert "No run history is drawn." in out["histState"], "an empty history names the missing data (#1445)"
     assert re.search(r"\[hidden\]\.hist\{display:none\}", page()), "the grid's own display rule outranks hidden"
