@@ -13,6 +13,13 @@
 #  (ADR-0029), so the column is the dispatch's (Todo) and the release rule O owns the write. The board stub answers a
 #  read from the last status the pass itself wrote, as the live board does, so a second column for that card is a race
 #  the suite names, never a pass: with a stub that always answers In Progress, R's own Code Complete write stays hidden.
+# R (#1586): the owner's rearm clears the ledger and leaves auto/disp-<n> behind, and a run that left active-runs.txt with
+#  its folder gone is read by no other rule, so the issue stayed `claimed` for ever.
+#  (R1) a marker whose run is gone, with a rearm newer than the marker, is dropped with one line, so the frontier answers
+#       the issue startable again (sg_dispatch_claimed reads the marker's existence);
+#  (R2) a live run on the issue keeps its marker;
+#  (R3) a rearm older than the marker keeps it;
+#  (R4) a pending card write in the ledger keeps it (ADR-0165).
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-disp-expiry.sh [janitor.py]
 # The suite declares its own world (#393): the loop's own shell exports SG_* (SG_BOARD_VOCAB=shipped, SG_FORK_DIR, SG_LAND_BRANCH,
@@ -20,7 +27,7 @@
 # run went red on the owner's machine where shell-suites.sh -- which clears every SG_* for the gate -- stayed green.
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/issue_ledger.py" "$T/s/issue_ledger.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 cat > "$T/s/board.sh" <<'B'
 #!/bin/bash
 echo "$*" >> "CARDDIR/board.calls"
@@ -82,6 +89,27 @@ printf 'verdict pass (exit 0)\n' > "$T/st/frontier-ok.log"
 echo frontier-old > "$T/st/auto/disp-906"; touch -t 202001010000 "$T/st/auto/disp-906" "$T/st/frontier-old.log"
 echo frontier-ok > "$T/st/auto/disp-907"; touch -t 202001010000 "$T/st/auto/disp-907" "$T/st/frontier-ok.log"
 echo frontier-old > "$T/st/auto/disp-908"; touch -t 202001010000 "$T/st/auto/disp-908"
+# R (#1586): the owner's rearm is the fact that frees a dead dispatch's marker. No run helps: the marker names a run that left
+# active-runs.txt and left no folder (R1, R3, R4), except R2, whose run is still live in its launch window. The ledger is
+# written by its own writer, as the rearm writes it. The marker mtime is local 2020-01-01 00:00 (the touch below); the rearm
+# times are 2020-01-02 and 2019-12-31 local, so the ordering holds in any timezone.
+led() {   # <issue> <rearm ts|old> [pending]: the issue's ledger, with the owner's rearm at that time
+  SG_STATE="$T/st" python3 -I - "$T/s" "x/y#$1" "$2" "${3:-}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import issue_ledger as L
+rec = L.empty(sys.argv[2])
+rec["rearmed"] = {"ts": float(sys.argv[3]), "runs": []}
+if sys.argv[4] == "pending":
+    rec["board"] = {"run": "frontier-pend", "column": "Todo", "instant": float(sys.argv[3]), "state": "pending", "req": "frontier-pend"}
+L.save(sys.argv[2], rec)
+PY
+}
+echo frontier-gone > "$T/st/auto/disp-1001"; touch -t 202001010000 "$T/st/auto/disp-1001"; led 1001 1577934000
+mk frontier-live 1002
+echo frontier-live > "$T/st/auto/disp-1002"; touch -t 202001010000 "$T/st/auto/disp-1002"; led 1002 1577934000
+echo frontier-oldmark > "$T/st/auto/disp-1003"; touch -t 202001010000 "$T/st/auto/disp-1003"; led 1003 1577761200
+echo frontier-pend > "$T/st/auto/disp-1004"; touch -t 202001010000 "$T/st/auto/disp-1004"; led 1004 1577934000 pending
 run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run)
 [ ! -e "$T/st/auto/disp-901" ] && ok "O: an ended run with no landed change drops its disp marker" || ko "O disp-901 kept (the frontier starves on it): $o"
@@ -103,7 +131,15 @@ o=$(run)
 # operator can tell that decision from a dispatch that was released, and it writes no card of its own for the issue.
 /usr/bin/grep -q 'DISPATCH-FAILED #908:.*a work branch names the issue' "$T/st/cycle.log" 2>/dev/null && ok "E: the pass names the issue whose dispatch stands" || ko "E #908 kept without a word: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 908$' "$T/board.calls" 2>/dev/null)" = 0 ] && ok "E: the card of the issue a work branch names is left alone" || ko "E #908 card written: $(cat "$T/board.calls" 2>/dev/null)"
+# R1: the run is gone (not in active-runs.txt, no folder) and the rearm is newer than the marker: the marker goes, so
+# sg_dispatch_claimed reads the issue startable again, and one line names the run.
+[ ! -e "$T/st/auto/disp-1001" ] && ok "R: a rearm newer than a dead run's marker drops it (the frontier reads the issue startable)" || ko "R disp-1001 kept: the issue stays claimed for good: $o"
+/usr/bin/grep -q "DISP MARKER DROPPED #1001: the owner's rearm is newer than run frontier-gone" "$T/st/cycle.log" 2>/dev/null && ok "R: the drop names the run the marker held" || ko "R line: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ -e "$T/st/auto/disp-1002" ] && ok "R: a live run on the issue keeps its marker" || ko "R disp-1002 dropped although run frontier-live is live"
+[ -e "$T/st/auto/disp-1003" ] && ok "R: a rearm older than the marker keeps it" || ko "R disp-1003 dropped although the rearm predates the marker"
+[ -e "$T/st/auto/disp-1004" ] && ok "R: a pending card write keeps the marker (ADR-0165)" || ko "R disp-1004 dropped although its card write is pending"
 run >/dev/null   # the announcement is once per run, not once per pass
 [ "$(/usr/bin/grep -c 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "O: the drop is announced once" || ko "O re-announced: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'DISP MARKER DROPPED #1001' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "R: the marker is dropped and announced once" || ko "R re-announced or silent: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "R: a board that follows the writes is written once; the card does not flap" || ko "#901 flapped across passes: $(cat "$T/board.calls" 2>/dev/null)"
 rm -rf "$T"; exit $fail
