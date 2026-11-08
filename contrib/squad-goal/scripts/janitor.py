@@ -26,6 +26,7 @@
     A run that landed a change, an issue a live run works or a pending wave carries, and an issue with an open work branch keeps its marker; a run drops only a marker its own request wrote (#539). The loop-board card is rule R's: O writes none, and its comment names the column R wrote
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
+ U  an auto/disp-<n> marker whose named run or request is no longer live (no active-runs.txt entry and no run folder under the run root names it) and whose issue's ledger records the owner's rearm newer than the marker's mtime, with no pending card write: the marker is dropped (#1586), so the frontier answers the issue startable again. The card is rule R's and the dispatch count is rule O's, so U writes one line and nothing else; a live run, an older rearm and a pending card write (ADR-0165) each hold the marker. `auto/taken-*` is rule T's own case (ADR-0166) and is never read.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
@@ -346,6 +347,20 @@ def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its
     if c and c in (f.name, (i or {}).get("run_id")): return True
     try: return (st / "req" / f"{c}.txt").read_bytes() == (f / "request.txt").read_bytes()
     except OSError: return False
+def marker_live(m):   # #1586: a dispatch marker's named run or request is still live: an active-runs.txt entry whose folder
+    # name answers to it, or whose request.txt is the one the marker names; or a run folder under the run root by that name.
+    # A read that fails holds the marker (fail closed).
+    for r in names:
+        f = folder(r)
+        if f.name == m: return True
+        try: req = (st / "req" / f"{m}.txt").read_bytes()
+        except FileNotFoundError: continue
+        except OSError: return True
+        try: mine = (f / "request.txt").read_bytes()
+        except FileNotFoundError: continue
+        except OSError: return True
+        if mine == req: return True
+    return (co / "runs" / m).exists()
 pending = []   # markers of a reaped run, dropped after rule Q has read them
 reaped = set()   # C: the active-runs lines of the zombies this pass reaped; they stay in the file (#1230)
 def free_reaped(f, i):
@@ -1279,6 +1294,25 @@ if not dry:   # a run that left active-runs.txt is read no more, so its read-onc
     _ck = {f"counted-{folder(r).name}" for r in names}
     for m in (st / "auto").glob("counted-*"):
         if m.name not in _ck: m.unlink(missing_ok=True)
+# U (#1586): a dispatch marker whose named run or request is no longer live, and whose issue the owner rearmed after the
+# marker was written. A rearm clears the ledger and leaves auto/disp-<n> behind: the run may have left active-runs.txt, so
+# rule O never reads it, and its folder may be gone, so rule Q never finds it -- the issue then reads `claimed` on every
+# pass and never dispatches again. The rearm is the owner's one act that says the issue is his to settle now, so the marker
+# goes and the issue is startable at once. A live run or request, a pending card write (ADR-0165) and an older rearm each
+# hold it; auto/taken-* is rule T's own case (ADR-0166) and is never read here.
+if repo0:
+    for m in sorted((st / "auto").glob("disp-*")):
+        n = m.name[5:]; held_by = marker_text(m); mt = marker_mtime(m)
+        if not n.isdigit() or held_by is None or mt is None: continue
+        if marker_live(held_by): continue
+        try: rec = ledger().read(f"{repo0}#{n}")
+        except (OSError, ImportError, ValueError, KeyError): continue
+        if rec.get("state") == "held": continue
+        rm = rec.get("rearmed") or {}
+        if not (isinstance(rm.get("ts"), (int, float)) and rm["ts"] > mt): continue
+        if (rec.get("board") or {}).get("state") == "pending": continue
+        say(f"DISP MARKER DROPPED #{n}: the owner's rearm is newer than run {held_by}")
+        if not dry: m.unlink(missing_ok=True)
 if owner and proj and repo0:
     for r in names:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)

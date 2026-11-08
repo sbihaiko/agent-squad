@@ -103,6 +103,7 @@ contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-lock
 contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-token-stop.sh
 contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-drain.sh
 contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-restart.sh
+contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-singleton.sh
 contrib/squad-goal/scripts/watchtail.sh	contrib/squad-goal/scripts/test-watchtail.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-lifecycle.sh

@@ -5,6 +5,8 @@
 # (#1166) The lock comes first and the slots second: a gate queued behind a holder takes no slot while it waits, a gate that
 # cannot take its slots gives the lock back at once (exit 73), every exit frees both, and a killed holder loses both to the
 # next gate. A throwaway budget (SQUAD_CAPS_DIR) is the only one these slots are taken from.
+# (#1576) A gate whose caller is SIGKILLed is an orphan nobody waits for: it gives its slots back and exits, so the next gate
+# takes the budget it held. The cap is one there, because a freed slot other gates can spare proves nothing.
 # usage: bash test-gate-lock.sh [scripts dir]
 # mirrors: gate.sh serial.sh caps.sh
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the order is proved
@@ -109,4 +111,27 @@ for i in $(seq 1 100); do /bin/ps -p "$gk" >/dev/null 2>&1 || break; sleep 0.05;
 t0=$(date +%s); out=$(SERIAL_WAIT_SECONDS=5 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c 'echo $SQUAD_GATE_WORKERS' 2>"$T/err6"); rc=$?
 [ "$helds" = 2 ] && [ $rc = 0 ] && [ "$out" = 6 ] && [ $(( $(date +%s) - t0 )) -lt 5 ] && ok "a killed holder's lock is taken by the next gate, with no wait" || ko "after a kill: held $helds, rc $rc, out '$out', $(cat "$T/err6")"
 [ "$(occ gates)" = 0 ] && ok "the next gate gives back its slots" || ko "slots left behind: $(occ gates)"
-rm -rf "$T"; exit $fail
+
+# (#1576) A gate whose caller dies is an orphan: nothing waits for its answer, so it must give its slots back and exit instead of
+# holding them for its whole bound. The suite that started it is SIGKILLed and runs no trap, so the gate itself watches the
+# process that asked for it. The cap is one gate slot, lowered by a project file: the slot the orphan frees is then the one the
+# next gate needs, and with six slots the next gate would take a free one while the orphan kept its own, so the case would
+# prove nothing.
+rm -rf "$T/caps"
+mkdir -p "$T/one/docs/squad"; printf 'caps:\n  gates: 1\n' > "$T/one/docs/squad/defaults.yaml"
+cd "$T/one"
+SG_GATE_WORKERS=1 bash -c 'bash "$1" sh -c "sleep 60" & echo $! > "$2"; wait' sh "$T/s/gate.sh" "$T/ogid" 2>"$T/og1.err" & opar=$!
+for i in $(seq 1 100); do [ "$(occ gates)" = 1 ] && break; sleep 0.05; done
+[ "$(occ gates)" = 1 ] && ok "the orphan case starts with the only gate slot held" || ko "the orphan case held $(occ gates) slots, want 1"
+capsctl take gates probe --count 1 --target "$T/one" --pid "$live" --try 2>/dev/null; [ $? = 73 ] && ok "the only gate slot is full while the first gate runs" || ko "a probe took the slot the first gate holds"
+capsctl release gates probe >/dev/null 2>&1
+SERIAL_TRY=1 SG_GATE_WORKERS=1 bash "$T/s/gate.sh" true >/dev/null 2>&1; [ $? = 73 ] && ok "a second gate is refused while the first holds the only slot" || ko "a second gate was not refused"
+kill -9 "$opar" 2>/dev/null; wait "$opar" 2>/dev/null
+t0=$(date +%s)
+out=$(SERIAL_POLL_SECONDS=0.5 SERIAL_WAIT_SECONDS=15 SG_GATE_WORKERS=1 bash "$T/s/gate.sh" sh -c 'echo took' 2>"$T/og.err"); rc=$?
+[ $rc = 0 ] && [ "$out" = took ] && [ $(( $(date +%s) - t0 )) -le 15 ] && ok "an orphan gate gives its slot back: the next gate takes it within 15 s" \
+  || ko "the orphan kept its slot: rc=$rc out='$out' in $(( $(date +%s) - t0 ))s: $(tr '\n' ' ' < "$T/og.err")"
+[ "$(occ gates)" = 0 ] && ok "the orphan's slot is free after it exits" || ko "slots after the orphan: $(occ gates) held, want 0"
+/usr/bin/grep -q '^gate: orphan: ' "$T/og1.err" && ok "the orphan names itself on one line of its log" || ko "orphan line: $(cat "$T/og1.err")"
+og=$(cat "$T/ogid" 2>/dev/null); [ -z "$og" ] || ! kill -0 "$og" 2>/dev/null || kill_tree "$og"   # RED leaves the orphan running
+cd "$T"; rm -rf "$T"; exit $fail

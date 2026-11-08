@@ -199,6 +199,7 @@ test-watchd-driver-sha.sh 2.30
 test-watchd-lock.sh 4.15
 test-watchd-reload.sh 3.37
 test-watchd-restart.sh 27.21
+test-watchd-singleton.sh 7.76
 test-watchd-start.sh 6.67
 test-watchd-supervisor.sh 2.68
 test-watchd-token-stop.sh 6.28

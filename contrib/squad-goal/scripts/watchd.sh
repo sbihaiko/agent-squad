@@ -15,6 +15,19 @@ alive() { pid=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$pid" ] || {
 orphans() { $SG_PS -axwwo pid=,ppid=,command= 2>/dev/null | awk '$2 == 1 { for (i = 3; i <= NF; i++) if ($i ~ /(^|\/)(watch|fastloop|cqflush)\.sh$/) { print $1, $i; break } }' | while read -r p l; do
   case ${l##*/} in watch.sh) f=$SG_STATE/locks/watch/pid;; fastloop.sh) f=$SG_STATE/fastloop.pid;; cqflush.sh) f=$SG_STATE/cqflush.pid;; esac
   [ "$(cat "$f" 2>/dev/null)" = "$p" ] && printf '%s %s\n' "$p" "${l##*/}"; done; }
+# Every live driver of this state directory (#1587). A `watchd.sh run` writes its pid under $SG_STATE/watchd.runs on its way
+# up and removes the file on its way out, so a driver outside the slot -- a supervisor that died, a slot removed by hand --
+# is still visible to `start` and `stop`, which the slot alone never reached. A file whose pid no longer answers as a live
+# driver is dropped, so a killed driver leaves no record behind.
+RU="$SG_STATE/watchd.runs"
+drivers() { local f p; for f in "$RU"/*; do [ -e "$f" ] || continue; p=${f##*/}; if is_watchd "$p"; then printf '%s\n' "$p"; else rm -f "$f"; fi; done; }
+# A driver is one `run` under a live `watchd.sh supervise` (#1587): `start` launches `supervise`, and `supervise` launches
+# `run`, so a legitimate driver has that parent.
+is_supervise() { $SG_PS -p "$1" -ww -o command= 2>/dev/null | grep -qE '(^|[ /])watchd\.sh supervise$'; }
+# One signal path for a driver (#1587): a stop from inside the driver's group cannot signal that group, so it hands the
+# signal to a helper outside it; any other caller signals the group, so the lanes go with the driver (#489).
+sig_driver() { if [ "$($SG_PS -o pgid= -p $$ | tr -d ' ')" = "$1" ]; then python3 -I -c 'import os,signal,sys; os.kill(int(sys.argv[1]), signal.SIGTERM)' "$1"
+  else kill -TERM -- "-$1" 2>/dev/null || kill -TERM "$1"; fi; }
 # The drivers run the skill this script sits in: its PUBLISHED sha, else its git HEAD, goes to driver.sha, so live-guard.sh
 # names a later publish to another sha as a restart only the owner makes (#700). No sha known: no stale driver.sha.
 record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED" 2>/dev/null); [ -n "$ds" ] || ds=$(git -C "$k" rev-parse HEAD 2>/dev/null)
@@ -81,7 +94,13 @@ loop_bug_open() {
   printf '%s\n' "$n"
 }
 case "${1:-status}" in
-  start) alive && { drain_cancel; echo "watchd already running pid=$pid"; exit 0; }
+  start) # #1587: a driver that does not hold the slot is never a second loop this start may sit beside: it refuses, and
+    # names the drivers, before it spawns a supervisor.
+    ds=$(drivers); h=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$h" ] && is_watchd "$h" || h=
+    x=; for p in $ds; do [ "$p" = "$h" ] || x="$x $p"; done
+    [ -n "$x" ] && { printf 'watchd start refused: a driver still runs outside the slot: %s\n' \
+      "$(printf '%s\n' $x | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), "pid " $1 }')" >&2; exit 1; }
+    alive && { drain_cancel; echo "watchd already running pid=$pid"; exit 0; }
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
     # The live scripts call squad.caps.free_runs. A plugin cache older than the live copy lacks it, and every beat then prints
     # a traceback and dispatches nothing (#1422): one probe refuses the start and names the recovery.
@@ -120,13 +139,31 @@ case "${1:-status}" in
       rm -rf "$LK"; mkdir "$LK" 2>/dev/null || { printf 'WATCHD run %s refused: the slot was claimed again\n' "$$" >> "$L"; exit 0; }
     fi
     printf '%s\n' "$$" > "$LK/pid"; printf '%s\n' "$$" > "$P"
-    trap '[ -n "$child" ] && kill "$child" 2>/dev/null; [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
-    # The stop reaches every pass of both lanes, not the two lanes alone: a stop from inside the group signals this
-    # supervisor only (#489), and a lane's foreground pass (childcc and its reviews) would run on and spend (#529). The
-    # supervisor ignores the signal itself and sends it to its whole group.
-    fast=; cq=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P" "$SG_STATE/fastloop.pid"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
+    # #1587: a run whose parent is not a live `watchd.sh supervise` has no supervisor to restart it, and it would hold a
+    # loop of its own -- it took the slot only because no other driver held it. It releases the slot and leaves.
+    if ! is_supervise "$PPID"; then
+      printf 'WATCHD run %s refused: no live supervisor\n' "$$" >> "$L"
+      [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"
+      [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"
+      exit 0
+    fi
+    mkdir -p "$RU" && printf '%s\n' "$$" > "$RU/$$"
+    # The driver's own end, shared by the stop, a deleted script and the exit path (#1587): the lanes go with the group,
+    # and only the slot holder removes the files it owns. The stop reaches every pass of both lanes, not the two lanes
+    # alone: a stop from inside the group signals this supervisor only (#489), and a lane's foreground pass (childcc and
+    # its reviews) would run on and spend (#529). The supervisor ignores the signal itself and sends it to its whole group.
+    fast=; cq=
+    shutdown() { trap '' TERM INT; kill -TERM -- "-$$" 2>/dev/null
+      [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P" "$SG_STATE/fastloop.pid"
+      [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"
+      rm -f "$RU/$$"; exit 0; }
+    trap shutdown TERM INT
+    # #1587: a driver whose script file is gone can never restart its lanes, so a deleted test copy must not sleep for
+    # ever: it says so and ends the way a stop ends it.
+    gone() { [ -r "$me" ] || { printf 'WATCHD run %s refused: this script is gone\n' "$$" >> "$L"; shutdown; }; }
     reload=; trap 'reload=1' HUP
     while :; do
+      gone
       # A reload lands here, once the cycle has ended: the fast and comment lanes end their current pass, SG_SQUAD is read
       # again from the registry, and the lanes start under that install. The supervisor and the live runs keep their pids.
       [ -n "$reload" ] && { for p in $fast $cq; do kill -TERM "$p" 2>/dev/null; done
@@ -140,21 +177,26 @@ case "${1:-status}" in
       { [ -n "$cq" ] && kill -0 "$cq" 2>/dev/null; } || { bash "$(dirname "$me")/cqflush.sh" >> "$SG_STATE/cqflush.log" 2>&1 & cq=$!; }
       bash "$(dirname "$me")/watch.sh" >> "$L" 2>&1 & child=$!
       # watch.sh never exits by itself, so a reload ends this lane too: its TERM trap leaves after the step in flight.
-      while kill -0 "$child" 2>/dev/null; do wait "$child"; [ -n "$reload" ] && kill -TERM "$child" 2>/dev/null; done
+      # The wait is bounded to one second so a deleted script is noticed while the lane still runs (#1587).
+      while kill -0 "$child" 2>/dev/null; do
+        [ -n "$reload" ] && kill -TERM "$child" 2>/dev/null
+        gone
+        sleep 1
+      done
       [ -n "$reload" ] || { echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; }; done;;
   reload) alive || { [ -s "$P" ] || { echo "watchd not running"; exit 0; }; echo "watchd supervisor $(cat "$P") is not running: relighting"; bash "$me" start; exit $?; }
     kill -HUP "$pid" || { echo "watchd reload not sent: pid=$pid" >&2; exit 1; }; echo "watchd reload sent pid=$pid";;
-  stop) alive || { echo "watchd not running"; rm -f "$P"; exit 0; }
-    # The stop must reach the supervisor, and a signal a process sends to its own group is not delivered to itself: the
-    # guard path runs this stop from inside watch.sh, a child of the supervisor and a member of its group, so
-    # `kill -- -$pid` would spare the supervisor and it would restart the cycle (#489). A stop from outside the group
-    # keeps the group-wide signal; a stop from inside it is handed to a helper that is not in the group.
-    if [ "$($SG_PS -o pgid= -p $$ | tr -d ' ')" = "$pid" ]; then
-      python3 -I -c 'import os,signal,sys; os.kill(int(sys.argv[1]), signal.SIGTERM)' "$pid"
-    else
-      kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
-    fi
-    for _ in 1 2 3 4 5 6 7 8 9 10; do alive || { rm -f "$P" "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"; echo "watchd stopped"; exit 0; }; sleep 1; done
+  stop) alive || { [ -n "$(drivers)" ] || { echo "watchd not running"; rm -f "$P"; exit 0; }; }
+    # #1587: the stop reaches every driver of this state directory, not only the group of the slot holder. A driver whose
+    # supervisor died holds no slot, and a slot removed by hand leaves its driver invisible to `alive`, so both survive a
+    # stop that reads the slot alone. The slot is removed last, after the drivers are gone.
+    ds=$(drivers); [ -n "$pid" ] && is_watchd "$pid" && case " $ds " in *" $pid "*) ;; *) ds="$ds $pid";; esac
+    for d in $ds; do is_watchd "$d" && sig_driver "$d"; done
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      ! alive && [ -z "$(drivers)" ] && { rm -rf "$SG_STATE/watchd.lock"; rm -f "$P" "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"
+        echo "watchd stopped"; exit 0; }
+      sleep 1
+    done
     echo "watchd did not stop" >&2; exit 1;;
   drain) alive || { echo "watchd not running"; exit 0; }
     # A drain pauses dispatch and leaves the lanes running; a detached waiter stops the loop once no run or gate is live (#923).
