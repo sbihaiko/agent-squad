@@ -30,6 +30,14 @@ def stub(tmp_path, code, sleep=0, lead=0):
     return str(p)
 
 
+def killed(tmp_path):
+    """A review command that a signal ends: it prints a finding and kills itself, so its exit status is -15."""
+    p = tmp_path / "review-killed.sh"
+    p.write_text('#!/bin/sh\necho "blocking: a.txt lacks a test"\nkill -TERM $$\n')
+    p.chmod(0o755)
+    return str(p)
+
+
 def bare(d):
     """The router graph without the review gate it ships for the loop (#601): the graph with no review step."""
     name = node(d, "route").pop("review", None)
@@ -105,6 +113,25 @@ async def test_a_non_zero_review_holds_the_child_and_records_its_findings(tmp_pa
     assert rv["findings"] == "blocking: a.txt lacks a test\nblocking: no docs\n"
     disp = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
     assert disp["outcome"] == "fail" and "review_held" in disp["reasons"]
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_review_killed_by_a_signal_is_an_infrastructure_stop_not_a_hold(tmp_path):
+    """#1575: a review a signal ended never answered, so it is `review_killed`, never `review_held`."""
+    repo = sibling_repo(tmp_path / "t")
+    base = git.head(repo)
+    eng = make(tmp_path, {"router": routed(req(task="issue #1575")), "route.router.1": writer("a.txt")},
+               tweak=gated(killed(tmp_path)), target=repo)
+    assert (await eng.run()).verdict == "failed"
+    assert not (repo / "a.txt").exists() and git.head(repo) == base
+    [land] = ev(tmp_path, "land")
+    assert land["outcome"] == "fail" and land["reasons"] == ["review_killed"]
+    rv = land["effect"]["review"]
+    assert rv["verdict"] == "killed" and rv["exit_code"] == -15 and rv["signal"] == 15
+    [round_] = ev(tmp_path, "review_round")
+    assert round_["node"] == "route.router.1" and round_["verdict"] == "killed"
+    assert round_["exit_code"] == -15 and round_["signal"] == 15
 
 
 @pytest.mark.anyio

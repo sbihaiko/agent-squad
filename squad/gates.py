@@ -333,8 +333,9 @@ def _stop(proc):
 def review_command(argv, cwd, deadline, tick=60.0, on_tick=None, env=None):
     """Run one review command in `cwd` with a deadline (ADR-0051). Call `on_tick(elapsed)` at least once per `tick` seconds
     while it runs, so its run's record moves. Exit 0 approves, REVIEW_NONE_EXIT is "no review here", REVIEW_FIX_EXIT asks
-    for a fix round, REVIEW_RETRY_EXIT asks for another try (no verdict), REVIEW_NOCHANGE_PROBE_EXIT is a probe with nothing to review, any other exit holds. `env` adds variables to the command's environment (the round and the fix offer).
-    Return the review as the record keeps it: command, elapsed, exit code, verdict, findings (stdout) and a stderr tail."""
+    for a fix round, REVIEW_RETRY_EXIT asks for another try (no verdict), REVIEW_NOCHANGE_PROBE_EXIT is a probe with nothing to review, a signal ends the command `killed`, any other exit holds. `env` adds variables to the command's environment (the round and the fix offer).
+    Return the review as the record keeps it: command, elapsed, exit code, verdict, findings (stdout) and a stderr tail;
+    a killed review also names its `signal`."""
     t0 = time.monotonic()
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         try:
@@ -355,8 +356,10 @@ def review_command(argv, cwd, deadline, tick=60.0, on_tick=None, env=None):
                     on_tick(round(time.monotonic() - t0, 3))
         verdict = ("deadline" if code is None else "approve" if code == 0 else "no_review" if code == REVIEW_NONE_EXIT
                    else "fix" if code == REVIEW_FIX_EXIT else "retry" if code == REVIEW_RETRY_EXIT
-                   else "no_change" if code == REVIEW_NOCHANGE_PROBE_EXIT else "hold")
+                   else "no_change" if code == REVIEW_NOCHANGE_PROBE_EXIT
+                   else "killed" if code < 0 else "hold")
         return {"command": argv, "elapsed": round(time.monotonic() - t0, 3), "exit_code": code, "verdict": verdict,
+                **({"signal": -code} if verdict == "killed" else {}),      # a negative code is the signal that ended it
                 "findings": _read(out), "stderr": _read(err)[-1500:]}
 
 
