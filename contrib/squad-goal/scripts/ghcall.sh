@@ -342,9 +342,22 @@ gh_disk_stop() {
     line="DISK STOP: $(df -Pk "$p" | awk 'NR==2{print $6}') has $((k / 1048576)) GiB free, under the floor of $((10#$m)) GiB; nothing dispatched"
     printf '%s\n' "$line"
     printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+    gh_disk_top | tee -a "$SG_STATE/cycle.log"
     return 0
   done
   return 1
+}
+
+# gh_disk_top   Where the space went (#1581): one DISK TOP line for each of the three largest entries under the temp
+# directory and under the state directory, so a stop explains itself. Reads only; a directory that cannot be read prints nothing.
+gh_disk_top() {
+  local d
+  for d in "${TMPDIR:-/tmp}" "${PYTEST_DEBUG_TEMPROOT:-}" "$SG_STATE"; do
+    [ -n "$d" ] && [ -d "$d" ] || continue
+    ( cd "$d" 2>/dev/null && perl -e 'alarm 10; exec @ARGV' du -sk -- * .[!.]* 2>/dev/null | sort -rn | head -n 3 ) |   # bounded: 10 s a directory
+      while IFS=$'\t' read -r k n; do printf 'DISK TOP %s/%s: %s MiB\n' "${d%/}" "$n" $((k / 1024)); done
+  done
+  return 0
 }
 
 # gh_bug_first   A bug goes first (#616): autobug writes the startable bugs it left without a run to $SG_STATE/bugs-waiting.

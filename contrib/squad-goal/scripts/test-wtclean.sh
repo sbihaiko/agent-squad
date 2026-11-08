@@ -1,7 +1,8 @@
 #!/bin/bash
 # Regression test for wtclean.sh's zombie-run rule (throwaway repos, no network). usage: bash test-wtclean.sh [path/to/wtclean.sh]
 # A run with no verdict is cleaned only when it is a zombie: record.jsonl idle >20 min AND no process inside its folder; the tree must be clean and HEAD on a remote branch.
-src=${1:-$(dirname "$0")/wtclean.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+here=$(cd "$(dirname "$0")" && pwd -P); src=${1:-$here/wtclean.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+export PYTEST_DEBUG_TEMPROOT="$T/pytmp"   # hermetic: no pass below may prune the real pytest temp trees (#1581)
 mkdir -p "$T/s" "$T/st"; cp "$src" "$T/s/wtclean.sh"; printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR= SG_REPO=x/y SG_OWNER=x\n' "$T/co" "$T/st" > "$T/s/env.sh"
 # the suite resolves lsof as the real env.sh does (#393): wtclean.sh reads every live cwd through SG_LSOF, and with it unset
 # the read answers nothing, so a tree a live process works in reads as unused. The loop's shell exports it; a cleared shell does not.
@@ -191,4 +192,28 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ -d .claude/worktrees/wf-locked ] && ok "Q: locked .claude tree is kept" || ko "Q: locked .claude tree was removed: $out"
 [ -d .claude/worktrees/wf-dirty ] && ok "Q: dirty .claude tree is kept" || ko "Q: dirty .claude tree was removed: $out"
 case "$out" in *"WT CLEAN claude wf-done"*) ok "Q: the decision line names the class and the tree";; *) ko "Q: no claude decision line: $out";; esac
+# T (#1581): pytest temp trees a killed gate left behind. PYTEST_DEBUG_TEMPROOT points at a scratch root, as pytest reads it.
+# Three trees: a .lock naming a dead pid, a .lock naming a live pid (this shell's), and an unlocked one a week old. The first
+# and third go, the live one stays, and TMP PRUNED is printed once.
+tr="$T/tmproot/pytest-of-${USER:-$(id -un)}"; export PYTEST_DEBUG_TEMPROOT="$T/tmproot"; mkdir -p "$tr/pytest-1" "$tr/pytest-2" "$tr/pytest-3" "$tr/garbage-4"
+( exit 0 ) & dead=$!; wait $dead
+printf '%s' "$dead" > "$tr/pytest-1/.lock"; printf '%s' "$$" > "$tr/pytest-2/.lock"; echo x > "$tr/pytest-1/f"
+touch -t 202001010000 "$tr/pytest-3" "$tr/garbage-4"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d "$tr/pytest-1" ] && ok "T: a tree whose lock names a dead pid is pruned" || ko "T: dead-pid tree kept: $out"
+[ -d "$tr/pytest-2" ] && ok "T: a tree whose lock names a live pid is kept" || ko "T: live-pid tree was pruned"
+[ ! -d "$tr/pytest-3" ] && ok "T: an old unlocked tree is pruned" || ko "T: old unlocked tree kept: $out"
+[ ! -d "$tr/garbage-4" ] && ok "T: an old garbage-* tree is pruned" || ko "T: garbage tree kept"
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c '^TMP PRUNED ')" = 1 ] && case "$out" in *"TMP PRUNED 3 trees, "*) ok "T: TMP PRUNED is printed once with the count";; *) ko "T: wrong count: $out";; esac || ko "T: TMP PRUNED not once: $out"
+mkdir -p "$tr/pytest-5"; : > "$tr/pytest-5/.lock"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ -d "$tr/pytest-5" ] && ok "T: a fresh tree with an empty lock is kept" || ko "T: fresh empty-lock tree pruned"
+touch -t 202001010000 "$tr/pytest-5"; bash "$T/s/wtclean.sh" >/dev/null 2>&1
+[ ! -d "$tr/pytest-5" ] && ok "T: an old tree with an empty lock is pruned" || ko "T: old empty-lock tree kept"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+case "$out" in *"TMP PRUNED"*) ko "T: a second pass pruned again: $out";; *) ok "T: a second pass prunes nothing and prints nothing";; esac
+# DISK STOP names the largest entries under the temp directory and the state directory (ghcall.sh).
+mkdir -p "$T/dtmp/big" "$T/dtmp/small" "$T/dst"; head -c 3000000 /dev/zero > "$T/dtmp/big/f"; echo x > "$T/dtmp/small/f"
+out=$(TMPDIR="$T/dtmp" SG_STATE="$T/dst" SG_MIN_FREE_GB=999999 bash -c '. "$1"; gh_disk_stop' _ "$here/ghcall.sh" 2>&1)
+case "$out" in *"DISK STOP: "*"DISK TOP $T/dtmp/big: "*) ok "T: DISK STOP names the largest entries";; *) ko "T: no DISK TOP line: $out";; esac
 rm -rf "$T"; exit $fail
