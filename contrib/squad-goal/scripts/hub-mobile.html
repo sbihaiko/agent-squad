@@ -245,6 +245,15 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #runoverview .runov-row{margin:0 0 10px}
 #runov-issues{white-space:pre-line}
 #runov-verdict-row[hidden]{display:none}
+/* The run's one primary takes the row's free width; the secondary keeps its own size beside it (#1604). */
+#run-primary{flex:1 1 100%;min-height:44px;background:var(--acc);color:var(--bg);border:1px solid var(--acc);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#run-primary[hidden]{display:none}
+#run-menu{position:absolute;right:14px;bottom:calc(62px + 8px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);z-index:25}
+#run-menu[hidden]{display:none}
+#run-menu button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#runov-tail{margin:0;white-space:pre-line;font:var(--fs-caption) var(--font-mono);color:var(--mute);overflow-wrap:anywhere}
+#runov-session-row[hidden],#runov-open[hidden]{display:none}
+#runov-open{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
 #termview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
 #termview[hidden]{display:none}
 #termview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
@@ -494,8 +503,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section id="runview" hidden>
 <div id="runview-head"><button id="run-backtop" data-topback="run" type="button">&#8249; Runs</button><span id="runview-name"></span></div>
-<div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
-<div id="runview-actions"><button id="runview-back" type="button">Back</button><button id="rundesk-btn" type="button">Desktop dashboard</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div></div>
+<div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p><p id="runov-session-row" class="runov-row" hidden><b>Session</b> <button id="runov-open" type="button">Open the session</button></p><pre id="runov-tail" class="runov-tail"></pre></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
+<div id="runview-actions"><button id="runview-back" data-actback type="button">Back</button><button id="run-dots" type="button" aria-label="More actions" aria-haspopup="true">•••</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
+<div id="run-menu" hidden><button id="rundesk-btn" type="button">Desktop dashboard</button></div>
 </section>
 <!-- The control row of SPEC 1596 (#1598, rule 4): one row on every root, above the tab bar, never on a detail. -->
 <div id="control-row" data-role="control-row"><div id="cr-seg" role="group" aria-label="Filter"></div><button id="cr-scope" type="button">All projects</button></div>
@@ -2149,6 +2159,9 @@ async function loadRuns() {
 // Pause and resume: the one write the run screen makes. It posts through the hub's forward route to the run's own control
 // route, as the desktop page does, and it never starts a process (ADR-0118 rule 18). The decision is runControlView's.
 let runId = null, runReply = null, runBusy = false;
+// The run body's session (#1604): the record names the session the run last worked in, and the session route is the
+// conversation the chat screen reads. Nothing here invents a session, and a read that fails draws no row.
+const runBody = { sid: "", card: null, tail: [] };
 async function loadRunControl() {
   const id = runId;
   if (!id) return;
@@ -2161,6 +2174,45 @@ async function loadRunControl() {
   $("runctl-limits").textContent = RUN_LIMITS;
   msg.textContent = runReply ? runReply.text : v.note;
   msg.className = "msg" + (runReply && !runReply.ok ? " err" : "");
+  drawRunActions();
+}
+async function loadRunBody() {
+  const id = runId;
+  if (!id) return;
+  const u = runURLs(id);
+  let record = "";
+  try { record = await (await fetch(u.record, { cache: "no-store" })).text(); } catch (e) { record = ""; }
+  if (id !== runId) return;
+  runBody.sid = runSessionId(record);
+  runBody.card = null; runBody.tail = [];
+  if (runBody.sid) {
+    const q = "?sid=" + encodeURIComponent(runBody.sid);
+    const [card, page] = await Promise.all([
+      call("/api/sessions/card" + q).catch(() => ({ card: null })),
+      call("/api/sessions/conversation" + q).catch(() => ({ turns: [] })),
+    ]);
+    if (id !== runId) return;
+    runBody.card = (card && card.card) || null;
+    runBody.tail = runTailLines((page && page.turns) || []);
+  }
+  drawRunSession();
+  drawRunActions();
+}
+function drawRunSession() {
+  $("runov-tail").textContent = runBody.tail.join("\n");
+  $("runov-open").textContent = runBody.card ? "Answer the coder" : "Open the session";
+  $("runov-open").hidden = !runBody.sid;
+  $("runov-session-row").hidden = !runBody.sid;
+}
+function drawRunActions() {
+  const v = runPrimary(runRows[runId], runBody.card, runBody.sid);
+  $("run-primary-label").textContent = v.label;
+  $("run-primary").dataset.act = v.act;
+  $("run-primary").hidden = !v.act;
+}
+function openRunSession() {
+  if (!runBody.sid) return;
+  openConversation(runBody.sid, ($("runview-name").textContent || "") || "Run session");
 }
 async function sendRunControl() {
   const b = $("runctl-btn"), act = b.dataset.act, id = runId;
@@ -2197,14 +2249,23 @@ function openRun(id, url, name) {
 }
 function showRun(s) {
   runId = s.id; runReply = null;
+  runBody.sid = ""; runBody.card = null; runBody.tail = [];
   $("runframe").src = s.url; $("runview-name").textContent = s.name; $("runview").hidden = false;
   const row = runRows[runId];
-  showDesk(!row); drawRunOverview(row);
+  showDesk(!row); drawRunOverview(row); drawRunSession(); drawRunActions();
   $("runctl-btn").hidden = true; $("runctl-msg").textContent = "";
+  $("run-menu").hidden = true;
   loadRunControl();
+  loadRunBody();
 }
-function hideRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); runId = null; }
-$("rundesk-btn").onclick = () => showDesk($("runoverview").hidden === false);
+function hideRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); $("run-menu").hidden = true; runId = null; }
+$("rundesk-btn").onclick = () => { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); };
+$("run-dots").onclick = () => { $("run-menu").hidden = !$("run-menu").hidden; };
+$("runov-open").onclick = openRunSession;
+$("run-primary").onclick = () => {
+  if ($("run-primary").dataset.act === "session") openRunSession();
+  else { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); }
+};
 for (const id of ["runs-live", "runs-ended", "runs-history"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b && b.dataset.id) openRun(b.dataset.id, b.dataset.url, b.dataset.name); };
 $("runview-back").onclick = () => closeLayer("run");
 $("runctl-btn").onclick = sendRunControl;
@@ -2218,7 +2279,7 @@ document.addEventListener("touchend", e => {
   if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();
 }, { passive: true });
 every("runs", () => { if ($("runview").hidden) loadRuns(); }, 10000);
-every("runs", () => { if (runId && !$("runview").hidden) { loadRuns(); loadRunControl(); } }, 10000);   // the run may pause, resume or end while the screen is open
+every("runs", () => { if (runId && !$("runview").hidden) { loadRuns(); loadRunControl(); loadRunBody(); } }, 10000);   // the run may pause, resume, ask a question or end while the screen is open
 // terminals:begin
 const termOpen = () => !$("termview").hidden;
 let termSid = null, termCursor = null, termBusy = false;
