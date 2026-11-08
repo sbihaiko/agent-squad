@@ -117,14 +117,15 @@ def test_the_work_segment_filters_the_card_list(hub):
 
 @pytest.mark.node_bound
 def test_a_root_with_one_view_offers_one_filter_option(hub):
-    """A root the page cannot filter presents no second segment: no button promises a filter that does not exist."""
+    """A root the page cannot filter presents no second segment: no button promises a filter that does not exist. Now
+    offers two: Needs you (rule 10) and the whole item list."""
     out = run_page(hub.MOBILE_PAGE, """
         show("now");
         const now = [...document.querySelectorAll("#cr-seg button")].map(b => b.textContent);
         show("specs");
         return { now, specs: [...document.querySelectorAll("#cr-seg button")].map(b => b.textContent) };
     """)
-    assert out == {"now": ["Any item"], "specs": ["Every spec"]}, out
+    assert out == {"now": ["Needs you", "Any item"], "specs": ["Every spec"]}, out
 
 
 @pytest.mark.node_bound
