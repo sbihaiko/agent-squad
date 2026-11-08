@@ -321,6 +321,8 @@ def test_the_layers_open_and_close_by_call_never_by_a_watch_on_hidden(hub):
 def test_each_full_screen_layer_keeps_a_bottom_close_on_the_one_close_function(hub):
     page = hub.MOBILE_PAGE
     assert '<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button>' \
-           '<button id="sh-close" type="button">Close</button>' in page, "the card sheet keeps its bottom Back and Close"
+           '<button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true">•••</button>' \
+           '<button id="sh-close" type="button">Close</button>' in page, \
+        "the card sheet keeps its action row: Back, the dots menu, then the secondary"
     assert '<div id="psw-footer"><button id="ps-backact" data-actback type="button">Back</button>' \
            '<button id="pswx" type="button">Close</button></div>' in page, "the project sheet keeps its bottom Back and Close"

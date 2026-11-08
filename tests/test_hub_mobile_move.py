@@ -155,7 +155,9 @@ const boot = {
       return reply(row.body, row.status || 200, row.ct || "application/json");
     }
     if (String(path).startsWith("/api/promote")) {
+      if (opts && opts.method === "POST") boot.__state.posts.push({ path: name, url: String(path), opts });   // a lost reply still counts the send
       const p = boot.__state.promote || { status: 200, ct: "application/json", body: "{}" };
+      if (p.throw) throw new Error(p.throw === true ? "Failed to fetch" : String(p.throw));   // no answer at all, as a dropped network gives
       return reply(p.body, p.status, p.ct);
     }
     if (String(path).startsWith("/api/board")) {
