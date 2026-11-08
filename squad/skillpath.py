@@ -11,6 +11,10 @@ the links in `~/.claude/skills`.
     python3 -m squad.skillpath NAME            print the SKILL.md path; exit 1 when nothing resolves
     python3 -m squad.skillpath NAME --all      every copy, in order, with its source
     python3 -m squad.skillpath --check         drift report for every borrowed skill; exit 1 on a missing one
+    python3 -m squad.skillpath --script NAME   a voice pipeline script: this repo's `contrib/voice` copy, else the skill's
+
+`voice_script` follows the same rule for the slack-hal9k pipeline: the repository's own copy first, so a caller in this
+checkout runs and times the code the repository ships, else the global skill's copy.
 """
 import argparse
 import hashlib
@@ -29,6 +33,8 @@ SKIP_DIRS = {"learnings", ".git", "node_modules", "__pycache__"}    # left out o
 SKIP_FILES = {"install.sh", ".DS_Store"}
 HARNESS = "harness"
 NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+VOICE_SKILL = "slack-hal9k"
+SCRIPT = re.compile(r"[a-z0-9_]+\.py")
 
 
 @dataclass(frozen=True)
@@ -133,6 +139,24 @@ def resolve(name: str, base: Path | None = None, cwd: Path | None = None, plugin
     return hits[0] if hits else None
 
 
+def voice_script(name: str, root: Path = ROOT, base: Path | None = None, cwd: Path | None = None,
+                 plugins: list[str] | None = None) -> Path | None:
+    """A voice pipeline script by name: `contrib/voice` in this checkout when it carries the script, else the skill's copy.
+
+    The vendored copy wins so a caller in this repository runs the code it ships, and a probe times that code. A name is
+    one plain file name in the skill folder: no directory and no other suffix, so a caller cannot walk out of the tree.
+    """
+    if not SCRIPT.fullmatch(name):
+        return None
+    local = root / "contrib" / "voice" / name
+    if local.is_file():
+        return local
+    hit = resolve(VOICE_SKILL, base, cwd, plugins)
+    if hit and (hit.folder / name).is_file():
+        return hit.folder / name
+    return None
+
+
 def tree_hash(folder: Path) -> str:
     h = hashlib.sha256()
     for p in sorted(folder.rglob("*")):
@@ -214,7 +238,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("name", nargs="?")
     ap.add_argument("--all", action="store_true", help="every copy, in order")
     ap.add_argument("--check", action="store_true", help="drift report for every borrowed skill")
+    ap.add_argument("--script", metavar="NAME", help="a voice pipeline script: contrib/voice first, else the global skill")
     a = ap.parse_args(argv)
+    if a.script:
+        script = voice_script(a.script)
+        if not script:
+            print(f"voice script '{a.script}' is in neither contrib/voice nor the {VOICE_SKILL} skill", file=sys.stderr)
+            return 1
+        print(script)
+        return 0
     if a.check:
         problems, warnings = check()
         for p in problems:
