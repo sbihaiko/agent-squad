@@ -41,7 +41,7 @@ chmod +x "$T/origin.git/hooks/pre-receive"
 pushes() { awk -F'\t' -v r="${1:-}" '$3==r || r=="" {print $1, $2, $3}' "$T/pushes.log" 2>/dev/null; }
 # The stub gh: every argv is logged, and a close answers GitHub's own shape. SWEEPS resets the log between cases.
 # RED_BASE=1 answers a red completed check on every check-runs read (the base's own check, #786); otherwise the read is not a check-run list.
-printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *"/check-runs"*) if [ -n "${RED_BASE:-}" ]; then echo "{\\"check_runs\\":[{\\"id\\":1,\\"name\\":\\"check (3.11)\\",\\"status\\":\\"completed\\",\\"conclusion\\":\\"failure\\"}]}"; else echo "{}"; fi;; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *"/actions/runs/"*"/jobs"*) echo "{\\"total_count\\":1,\\"jobs\\":[{\\"conclusion\\":\\"failure\\",\\"steps\\":[{\\"name\\":\\"run\\"}]}]}";; *"/check-runs"*) if [ -n "${RED_BASE:-}" ]; then echo "{\\"check_runs\\":[{\\"id\\":1,\\"name\\":\\"check (3.11)\\",\\"status\\":\\"completed\\",\\"conclusion\\":\\"failure\\",\\"details_url\\":\\"https://github.com/x/y/actions/runs/7801/job/1\\"}]}"; else echo "{}"; fi;; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The remote is a bare repository on this machine: the whole suite runs against it, never against GitHub.
 [ "$($O rev-parse --is-bare-repository)" = true ] && ok "the suite runs against a bare local remote" || ko "the remote is not a bare repository"

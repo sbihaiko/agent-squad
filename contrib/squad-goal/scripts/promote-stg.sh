@@ -3,7 +3,9 @@
 #                            (ADR-0145, #743), and never otherwise. No script pushes refs/heads/stg.
 #
 # SG_PROMOTE_PROOF names the proof.
-#   ci (the default): the CI of the dev tip. Green promotes; red, running or a missing run promotes nothing.
+#   ci (the default): the CI of the dev tip. Green promotes; red, running, unproven, unknown or a missing run promotes nothing.
+#     A red check is red only when a job of its workflow run failed after it ran a step (#1629, ADR-0164): a job GitHub could not
+#     start measured nothing, so it never holds the promotion, as the base check reads it.
 #   local: the promotion gate's full-result line, $SG_STATE/gate-status-full. While the account's Actions billing keeps CI from
 #     starting, the full suite in both modes is the proof (owner decision on #439). The run that earns it writes the line through
 #     the existing seam, with the kind gate.sh names for a promotion to stg:
@@ -26,7 +28,7 @@
 # the pass opens or reuses the open `dev` -> `stg` pull request and merges it with a merge commit, so a later tip is measured by
 # ancestry, never by identity. The proof is read before the merge, so a red tip leaves the pull request open and promotes nothing.
 # The loop never writes main: the owner does, with promote-main.sh. The work happens in a throwaway clone.
-# $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red, running or unproven (the CI seam); SG_PROMOTE_PROOF
+# $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red, running, unproven or unknown (the CI seam); SG_PROMOTE_PROOF
 # selects the proof (ci, the default).
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
@@ -53,11 +55,15 @@ say() {  # sha, reason: one line per tip and reason
   echo "$(date -u +%FT%TZ) promote-stg: $1 $2" >> "$log"; }
 refuse() { say "$1" "$2"; echo "promote-stg: $2" >&2; exit 1; }   # the one reason, on the log line and stderr
 proof=${SG_PROMOTE_PROOF:-ci}
-ci_state() {  # sha -> green | red | running | unproven, from the check runs of the commit
+ci_state() {  # sha -> green | red | running | unproven | unknown, from the check runs of the commit, a red refined by its run's jobs
   if [ -n "$SG_CI_STATE_CMD" ]; then "$SG_CI_STATE_CMD" "$1"; return; fi
   . "$d/ghcall.sh"; . "$d/basecheck.sh"   # the classifier is the base check's own (#786): the two readers cannot disagree
   local cr c; cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || return 1
   c=$(printf '%s' "$cr" | sg_ci_class) || return 1
+  if [ "$c" = red ]; then   # sg_ci_class's red, refined by the jobs of its failed checks: a job that never started measured nothing (#1629)
+    c=$(sg_ci_refine "$cr") || return 1
+    c=${c%% *}
+  fi
   [ "$c" = none ] && c=running   # zero check runs is not yet green: promotion waits for them
   printf '%s\n' "$c"
 }
@@ -118,12 +124,14 @@ prove "$tip"
 . "$d/ghcall.sh"
 # ADR-0164 (#1196): delivery outranks the proof, but only an unfinished proof. A failed one always holds. Under the bound proof
 # nothing else measured the tip, so the pull request's own CI check is the only evidence left: a red check on the tip refuses the
-# merge by name. Only `failure` is a measured red: a `cancelled` or `timed_out` check is an unfinished proof (#1517), and it
-# holds nothing, as a running or absent check does, so a slow or cut-short CI never keeps delivery back. The ci proof already
-# reads that check, and the local proof is the owner's own full suite, which outranks a CI run of a narrower scope.
+# merge by name. Only a measured failure is red: a `cancelled` or `timed_out` check is an unfinished proof (#1517), and it holds
+# nothing, as a running or absent check does, and a job that never started measured nothing either (#1629). The refinement reads
+# that evidence, so this path and the base check cannot disagree. The ci proof already reads that check, and the local proof is
+# the owner's own full suite, which outranks a CI run of a narrower scope.
 if [ "$proof" = bound ]; then
-  red=$(gh_api "repos/$SG_REPO/commits/$tip/check-runs" -q '[.check_runs[] | select(.conclusion == "failure") | .name + " " + .conclusion] | join(", ")' 2>/dev/null) || red=""
-  [ -z "$red" ] || refuse "$tip" "not promoted: the CI check on the dev tip is red ($red)"
+  . "$d/ghcall.sh"; . "$d/basecheck.sh"
+  ref=$(gh_api "repos/$SG_REPO/commits/$tip/check-runs" 2>/dev/null | sg_ci_refine 2>/dev/null) || ref=""
+  case "$ref" in red\ *) refuse "$tip" "not promoted: the CI check on the dev tip is red ($(printf '%s' "${ref#red }" | sed 's/ ended / /'))";; esac
 fi
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
