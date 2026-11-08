@@ -273,7 +273,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #termview-acted[hidden]{display:none}
 /* The Chat root (SPEC 1596, rule 10; #1601): one row per project with its loop dot, last message, time and waiting mark. */
 .chatrow{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
-.chatrow .loopdot{width:10px;height:10px;border-radius:50%;background:var(--mute);align-self:center}
+.chatrow .loopdot{width:10px;height:10px;border-radius:var(--radius-full);background:var(--mute);align-self:center}
 .chatrow .loopdot.on{background:var(--ok)}.chatrow .loopdot.off{background:var(--err)}.chatrow .loopdot.draining,.chatrow .loopdot.starting{background:var(--warn)}
 .chatrow .mut{color:var(--mute);font-size:var(--fs-caption)}
 .chatrow .waitmark{grid-column:1/-1;color:var(--warn);font-size:var(--fs-caption)}
@@ -281,7 +281,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 /* One badge, on Chat (rule 10): the waiting rows of the scope, drawn from the element's own attribute so no extra node
    and no extra tap target reaches the bar. */
 nav [data-tab=chat]{position:relative}
-nav [data-tab=chat]::after{content:attr(data-badge);position:absolute;top:2px;right:6px;min-width:18px;height:18px;border-radius:9px;background:var(--err);color:#fff;font-size:11px;line-height:18px;text-align:center;padding:0 4px}
+nav [data-tab=chat]::after{content:attr(data-badge);position:absolute;top:2px;right:6px;min-width:18px;height:18px;border-radius:var(--radius-full);background:var(--err);color:var(--on-tone);font-size:var(--fs-caption);line-height:18px;text-align:center;padding:0 4px}
 nav [data-tab=chat]:not([data-badge])::after,nav [data-tab=chat][data-badge=""]::after{content:none}
 #termview-turns{flex:1;overflow:auto;padding:8px 12px;display:grid;gap:8px;align-content:start}
 .turn{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;font:var(--fs-body) system-ui,sans-serif}
