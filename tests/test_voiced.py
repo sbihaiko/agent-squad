@@ -159,12 +159,14 @@ class FakeClient:
         self._n = 0
         self.post_delay = post_delay
         self.stamped = []      # (method, monotonic moment) in call order, so a target is measured and not assumed
+        self.finished = []     # (method, monotonic moment) when the call returned, so an ordering is read, not timed
 
     def api(self, method, params=None, post=False):
         self.calls.append((method, dict(params or {}), post))
         self.stamped.append((method, time.monotonic()))
         if method == "chat.postMessage" and self.post_delay:
             time.sleep(self.post_delay)
+        self.finished.append((method, time.monotonic()))
         if method == "conversations.create":
             name = params.get("name")
             if name in self.channels:
@@ -600,9 +602,10 @@ class FakeVoice:
     that records each clip with the moment it was posted. Both can be made slow, so the targets are measured against a
     pipeline that takes time, never against a fake that answers at once."""
 
-    def __init__(self, tmp_path, delay=0.0, on_clip=None):
+    def __init__(self, tmp_path, delay=0.0, on_clip=None, refuse=0):
         self.delay = delay
         self.on_clip = on_clip
+        self.refuse = refuse      # how many uploads Slack refuses, counted from the first, so a retry can succeed
         self.scripts = []
         self.clips = []
         self.dir = Path(tmp_path) / "clips"
@@ -617,10 +620,14 @@ class FakeVoice:
         return str(path)
 
     def upload(self, path, channel, thread_ts, title):
-        self.clips.append({"channel": channel, "thread_ts": thread_ts, "at": time.monotonic()})
+        n = len(self.clips) + 1
+        refused = n <= self.refuse
+        self.clips.append({"channel": channel, "thread_ts": thread_ts, "at": time.monotonic(), "refused": refused})
         if self.on_clip:
-            self.on_clip(len(self.clips))
-        return f"F{len(self.clips):04d}", None
+            self.on_clip(n)
+        if refused:
+            return None, "upload refused"
+        return f"F{n:04d}", None
 
 
 def append_outbox(path, *records):
@@ -678,13 +685,14 @@ def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_te
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    written = time.monotonic()
     append_outbox(daemon.state.outbox_for(app["name"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
 
     assert [script for script, _ in voice.scripts] == ["The paint is green.", "It dries in an hour."]
-    assert voice.scripts[0][1] - written < client.post_delay, \
+    # Read the ordering, never the wall clock: the first synthesis begins before the text post returns.
+    text_posted_at = next(at for method, at in client.finished if method == "chat.postMessage")
+    assert voice.scripts[0][1] <= text_posted_at, \
         "the first synthesis waited for the text post instead of running with it"
     assert voice.clips[0]["at"] <= voice.scripts[1][1], "the rest was synthesized before the first clip went out"
     assert [c["thread_ts"] for c in voice.clips] == ["1762500000.000100"] * 2
@@ -778,6 +786,34 @@ def test_a_restart_does_not_post_the_same_outbox_line_again(tmp_path):
     assert restarted_voice.clips == [], "the restart spoke the same answer twice"
 
 
+def test_a_refused_clip_is_spoken_again_and_the_text_is_never_posted_twice(tmp_path):
+    """A text that went out and a clip Slack refused is no delivered line: the next daemon speaks the answer again and
+    posts no second text, so a refused upload never costs the owner the voice."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path, refuse=1)      # Slack refuses the first clip, and the next daemon's try succeeds
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.outbox_for(app["name"]),
+                  {"thread_ts": "1762500000.000100", "text": "One. Two."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert len(client.posts()) == 1
+    assert [c["refused"] for c in voice.clips] == [True], "a refused first clip is not followed by the rest"
+
+    # The restart: the text is already out, so only the voice is repeated, under the same thread.
+    restarted_voice = FakeVoice(tmp_path)
+    again = outbox_daemon(tmp_path, mod, client, None, restarted_voice)
+    asyncio.run(again.drain_outboxes())
+
+    assert len(client.posts()) == 1, "the restart posted the same text a second time"
+    assert [script for script, _ in restarted_voice.scripts] == ["One.", "Two."]
+    assert len(restarted_voice.clips) == 2, "the refused clip was never spoken"
+    assert [c["thread_ts"] for c in restarted_voice.clips] == ["1762500000.000100"] * 2
+
+
 def test_the_daemon_answers_a_line_the_session_appends_while_it_runs(tmp_path):
     """The session appends to the outbox and the daemon posts without any call from the session: the watcher is the seam."""
     mod = voiced()
@@ -827,6 +863,33 @@ def test_no_token_reaches_a_log_the_inbox_or_the_outbox(tmp_path):
         if path.is_file():
             assert token not in path.read_text(errors="replace"), f"{path.name} holds the token"
     assert all(token not in line for line in log), "a log line holds the token"
+
+
+def test_a_voice_error_carrying_a_secret_is_logged_by_its_type_only(tmp_path):
+    """Criterion (3), the failure path: a TTS error whose own message carries the key is one log line naming the error
+    type, so a provider message can never leak a secret into the daemon's log."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    log = []
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+
+    def synth(script):
+        raise RuntimeError(f"400 refused key {secret}")
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client, synthesizer=synth,
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+
+    append_outbox(state.outbox_for(app["name"]), {"text": "One. Two."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert client.posts(), "the text answer never went out, so the voice path was never exercised"
+    assert log, "a refused voice is a log line"
+    assert all(secret not in line for line in log), "a log line holds the key"
 
 
 def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):

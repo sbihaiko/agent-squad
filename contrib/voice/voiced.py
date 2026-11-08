@@ -34,9 +34,11 @@ The reverse direction is the outbox. An operator session appends one JSON line (
   in parallel with the text post and posted as one clip, so a slow Slack write never holds the voice;
 - the rest is synthesized only once the first clip is out, and posted as one clip.
 
-A line already posted is in `$VOICE_STATE/outbox-seen.jsonl` by a digest of its content, so a restart resumes without a
-second text or a second clip; the text is posted before its digest is written, so a crash repeats an answer rather
-than losing one. A refused post or a refused voice is a log line, never a daemon that stops answering.
+A line whose text and clips all went out is in `$VOICE_STATE/outbox-seen.jsonl` by a digest of its content, so a restart
+posts no second text and speaks no second clip. A line whose text went out and whose clip Slack refused is in
+`$VOICE_STATE/outbox-posted.jsonl` with the ts its clips answer, so the next drain speaks the voice again and never posts
+the text again. A refused post or a refused voice is a log line, never a daemon that stops answering, and a line refused
+three times in one daemon waits for the next daemon instead of spinning at the poll interval.
 
 Secrets come from the one reader the voice pipeline already uses (`keychain.py`): the bot token, the app token and the
 Gemini key live in the macOS Keychain. No value is ever printed, logged, or written to a state file. `VOICE_OWNER` (or
@@ -79,6 +81,7 @@ MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larg
 CHUNK = 1 << 16
 VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
+MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
 SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 
 
@@ -178,9 +181,11 @@ class State:
         self.outbox_path = os.path.join(directory, "outbox.jsonl")
         self.outboxes_dir = os.path.join(directory, "outboxes")
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
+        self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
         self._seen = None
         self._channels = None
         self._delivered = None
+        self._posted = None
 
     def channels(self):
         """repository -> {name, id}: the project channels this daemon created or joined, read from disk or stale-safe."""
@@ -226,10 +231,24 @@ class State:
             self._delivered = {r["digest"] for r in read_lines(self.delivered_path) if r.get("digest")}
         return self._delivered
 
+    def posted(self):
+        """Every outbox line whose text is already out, by digest, with the ts its clips answer: a restart speaks the
+        voice again without ever posting the text a second time."""
+        if self._posted is None:
+            self._posted = {r["digest"]: r for r in read_lines(self.posted_path) if r.get("digest")}
+        return self._posted
+
+    def remember_posted(self, digest, ts=None):
+        """One durable mark of a text already posted, written at once: a refused clip repeats the voice, never the text."""
+        record = {"digest": digest, "ts": ts}
+        self._append(self.posted_path, record)
+        self.posted()[digest] = record
+
     def remember_delivered(self, digest):
-        """One durable mark of an answer already posted, written after the post so a crash repeats rather than loses."""
-        self.delivered().add(digest)
+        """One durable mark of an answer fully posted, text and every clip: the ledger is written before the memory that
+        trusts it, so an append that fails makes the next drain try again instead of swallowing the answer."""
         self._append(self.delivered_path, {"digest": digest})
+        self.delivered().add(digest)
 
     def owner(self):
         """The one accepted user: VOICE_OWNER wins, else the owner file written once beside the inbox."""
@@ -497,6 +516,7 @@ class Daemon:
         self.projects = projects
         self.synthesizer = synthesizer
         self.uploader = uploader
+        self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
 
     def sync_projects(self):
         """Give every project the hub lists its channel, once; no client or no list leaves the channels as they are."""
@@ -557,7 +577,8 @@ class Daemon:
         try:
             return self.synthesizer(script) or None
         except Exception as x:      # noqa: BLE001 - a refused TTS is a log line, and the text answer stands alone
-            self.log(f"voiced: speech skipped: {type(x).__name__}: {str(x)[:120]}")
+            # The error type only: a provider message can carry request material, and this log is never redacted.
+            self.log(f"voiced: speech skipped: {type(x).__name__}")
             return None
 
     def post_clip(self, path, channel, thread_ts, title):
@@ -576,44 +597,57 @@ class Daemon:
             except OSError:
                 pass
 
-    async def deliver(self, record, channel=None):
+    async def deliver(self, record, channel=None, digest=None):
         """Answer one outbox line: the text at once, the first spoken sentence with it, then the rest as one clip.
 
         The first sentence's synthesis starts together with the text post, so a slow Slack write never holds the voice;
         the rest is synthesized only after the first clip is out, so the owner hears the start without waiting for the
         end. Each call runs in a worker thread, because both the Slack write and Gemini take seconds.
+
+        Returns two answers: whether the text is out, and whether every clip it meant to speak went out. A line whose
+        text is already out is spoken again and never posted again, so a refused upload costs the voice a delay, never
+        the answer.
         """
         text = (record.get("text") or "").strip()
         cid = (record.get("channel") or channel or "").strip()
         if not text or not cid:
             self.log("voiced: outbox line names no channel or no text; nothing posted")
-            return False
+            return False, False
         thread = record.get("thread_ts")
         first, rest = split_sentences((record.get("speech") or text).strip())
-        posting = asyncio.create_task(asyncio.to_thread(self.post_text, cid, thread, text))
+        posted = self.state.posted().get(digest) if digest else None
+        # The first sentence is synthesized beside the text post when there is one, so the voice never waits for Slack.
         speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first)) \
             if (first and self.synthesizer) else None
-        ok, ts = await posting
-        if not ok:
-            if speaking is not None:
-                await asyncio.gather(speaking, return_exceptions=True)
-            return False
+        if posted is None:
+            ok, ts = await asyncio.to_thread(self.post_text, cid, thread, text)
+            if not ok:
+                if speaking is not None:
+                    await asyncio.gather(speaking, return_exceptions=True)
+                return False, False
+            if digest:
+                # The text is out before its voice: a crash from here repeats only the voice, never the text.
+                self.state.remember_posted(digest, ts)
+        else:
+            ts = posted.get("ts")
         anchor = thread or ts
         if speaking is not None:
             path = await speaking
-            if path:
-                await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer's first sentence")
+            if path and not await asyncio.to_thread(self.post_clip, path, cid, anchor,
+                                                    "the answer's first sentence"):
+                return True, False      # the first clip is refused: the next drain speaks both, in order
         if rest and self.synthesizer:
             path = await asyncio.to_thread(self.synth_clip, rest)
-            if path:
-                await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer")
-        return True
+            if path and not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer"):
+                return True, False
+        return True, True
 
     async def drain_outboxes(self):
-        """Post every outbox line not yet posted, over every outbox, and return how many answers went out.
+        """Post every outbox line not yet posted, over every outbox, and return how many answers fully went out.
 
-        The digest ledger is read once and extended as lines go out, so one drain posts each line once. The text is
-        posted before its digest is written, so a crash repeats an answer rather than losing one.
+        The digest ledger is read once and extended as answers go fully out, so one drain posts each text once. The text
+        is recorded the moment Slack accepts it, so a refused clip repeats the voice and never the text; a line refused
+        `MAX_ATTEMPTS` times in one daemon is left to the next one, never spun at the poll interval.
         """
         delivered = self.state.delivered()
         count = 0
@@ -622,10 +656,19 @@ class Daemon:
                 digest = outbox_digest(record)
                 if digest in delivered:
                     continue
-                if await self.deliver(record, channel):
+                fails = self.failed.get(digest, 0)
+                if fails >= MAX_DELIVER_ATTEMPTS:
+                    continue
+                posted, voiced = await self.deliver(record, channel, digest)
+                if posted and voiced:
                     self.state.remember_delivered(digest)
                     delivered.add(digest)
+                    self.failed.pop(digest, None)
                     count += 1
+                    continue
+                self.failed[digest] = fails + 1
+                if fails + 1 == MAX_DELIVER_ATTEMPTS:
+                    self.log(f"voiced: answer refused {MAX_DELIVER_ATTEMPTS} times; the next daemon tries it again")
         return count
 
     def handle(self, envelope):
