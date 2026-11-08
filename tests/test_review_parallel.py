@@ -10,6 +10,7 @@ settled budget, a pause stops it, and its `{base}` never moves between a run and
 import json
 import time
 
+import anyio
 import pytest
 
 from squad import git
@@ -171,22 +172,29 @@ async def test_a_review_never_holds_a_slot_a_waiting_child_needs(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.heavy
-async def test_a_pause_cancels_a_review_still_retrying(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start_delay", [0.0, 1.5], ids=["idle", "loaded"])
+async def test_a_pause_cancels_a_review_still_retrying(tmp_path, monkeypatch, start_delay):
     """A pause ends the entry's reviews with it: a review that got no verdict retries no more, so the stop is not held up
-    by the gate's deadline and no round is recorded after the pause."""
+    by the gate's deadline and no round is recorded after the pause. The bound is measured from the first try, never from
+    the run's start (#1612): a shared runner took 3.06 s to reach the first try and the pause was read as the cause."""
     from squad.runners import dispatch as D
     monkeypatch.setattr(D, "REVIEW_RETRY_PAUSE_S", 2.0)
     p = tmp_path / "review.sh"
-    p.write_text(f'#!/bin/sh\necho "retry" >> "{tmp_path}/review.log"\nsleep 0.05\nexit 5\n')
+    p.write_text(f'#!/bin/sh\necho "retry $(python3 -c \'import time; print(time.time())\')" >> "{tmp_path}/review.log"\n'
+                 f'sleep 0.05\nexit 5\n')
     p.chmod(0o755)
     repo = sibling_repo(tmp_path / "t")
     eng = make(tmp_path, two_children(), tweak=gated(str(p), deadline=12), target=repo)
     Control(tmp_path).append("pause", nodes=[B])
-    t0 = time.monotonic()
+    t0 = time.time()
+    await anyio.sleep(start_delay)   # the runner's own pace, injected: time it spends before the run reaches its first try
     v = await eng.run()
-    took = time.monotonic() - t0
+    took = time.time() - t0
     assert (v.verdict, v.exit_code) == ("stopped", 30)
-    assert took < 1.5, f"the pause waited {took:.2f}s for the review's retry loop"
+    tries = [float(ln.split()[1]) for ln in (tmp_path / "review.log").read_text().splitlines() if ln.startswith("retry")]
+    first = tries[0] - t0 if tries else 0.0
+    pause = D.REVIEW_RETRY_PAUSE_S
+    assert took < first + pause, f"the pause waited {took:.2f}s after a first try at {first:.2f}s, past one {pause:g}s retry pause"
     assert [e for e in ev(tmp_path, "review_round") if e["node"] == A] == []
     assert ev(tmp_path, "land") == []
     assert (tmp_path / "review.log").read_text().count("retry") <= 2   # a cancelled reading is not tried again

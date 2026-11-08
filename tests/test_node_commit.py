@@ -37,6 +37,7 @@ def engine(tmp_path, nodes, children, step, **kw):
     return repo, Engine(from_doc(flow(nodes, children)), adapter, tmp_path / "run", target=repo, run_id="r1", **kw)
 
 
+@pytest.mark.heavy     # a git repo and a worktree: a loaded runner pushed this call past the 2 s line (#1612)
 async def test_a_passing_node_with_a_dirty_workspace_is_committed_and_the_tip_is_the_final_state(tmp_path):
     repo, eng = engine(tmp_path, [act("wt", "worktree_create"), worker()], ["wt", "a"], PASS)
     v = await eng.run()

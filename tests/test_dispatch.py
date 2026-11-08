@@ -719,6 +719,7 @@ async def test_a_child_with_after_starts_only_when_the_children_it_names_have_pa
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy     # a loaded runner pushed this call past the 2 s line at 0.3 s of work (#1612)
 async def test_a_child_whose_after_child_failed_fails_unrun_with_the_reason(tmp_path):
     bad = {"output": {"diff": {"files": []}, "ac_commands": ["false"]}, "spend": 0.2}
     eng = make(tmp_path, {"router": routed(req(), req("codebase-design", tools=["Read"], after=[0])), "route.router.1": {**bad, "output": {"ac_commands": ["true"]}, "error": "boom"},
