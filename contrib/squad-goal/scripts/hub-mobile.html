@@ -264,6 +264,25 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #termview-text{min-height:44px;font:inherit;font-size:var(--fs-field);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}
 #termview-name{font-size:var(--fs-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #termview-older{margin:8px 12px 0}
+#termview-facts{font-size:var(--fs-caption);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The quick answers sit between the thread and the composer, so they ride above the composer and above the keyboard. */
+#termview-chips{display:flex;flex-wrap:wrap;gap:8px;padding:0 12px 8px;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
+#termview-chips[hidden]{display:none}
+#termview-chips .qchip{min-height:44px;flex:1 1 auto;background:var(--bg);color:var(--fg);border:1px solid var(--acc);border-radius:var(--radius-md);padding:0 12px;font:var(--fs-body) system-ui,sans-serif;text-align:center}
+#termview-acted{min-height:44px;justify-self:start;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#termview-acted[hidden]{display:none}
+/* The Chat root (SPEC 1596, rule 10; #1601): one row per project with its loop dot, last message, time and waiting mark. */
+.chatrow{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
+.chatrow .loopdot{width:10px;height:10px;border-radius:var(--radius-full);background:var(--mute);align-self:center}
+.chatrow .loopdot.on{background:var(--ok)}.chatrow .loopdot.off{background:var(--err)}.chatrow .loopdot.draining,.chatrow .loopdot.starting{background:var(--warn)}
+.chatrow .mut{color:var(--mute);font-size:var(--fs-caption)}
+.chatrow .waitmark{grid-column:1/-1;color:var(--warn);font-size:var(--fs-caption)}
+.chatrow .waitmark:empty{display:none}
+/* One badge, on Chat (rule 10): the waiting rows of the scope, drawn from the element's own attribute so no extra node
+   and no extra tap target reaches the bar. */
+nav [data-tab=chat]{position:relative}
+nav [data-tab=chat]::after{content:attr(data-badge);position:absolute;top:2px;right:6px;min-width:18px;height:18px;border-radius:var(--radius-full);background:var(--err);color:var(--on-tone);font-size:var(--fs-caption);line-height:18px;text-align:center;padding:0 4px}
+nav [data-tab=chat]:not([data-badge])::after,nav [data-tab=chat][data-badge=""]::after{content:none}
 #termview-turns{flex:1;overflow:auto;padding:8px 12px;display:grid;gap:8px;align-content:start}
 .turn{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;font:var(--fs-body) system-ui,sans-serif}
 .turn b{display:block;color:var(--mute);font-size:var(--fs-caption);margin-bottom:2px}
@@ -361,6 +380,10 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id=bugs-msg class=msg role=status></p></div>
 <div id=bugs-actions><button id=bugs-backact data-actback type=button>Back</button></div>
 </article>
+<!-- Now › Needs you (SPEC 1596, rule 10; #1601): the same waiting rows the Chat badge counts, inside the scope, with no
+     badge of their own; answering a question clears it from here and from the badge. -->
+<div id="needs-you"></div>
+<p id="needs-you-msg" class="msg" role="status"></p>
 <div class=tiles>
 <div class=tile><b id=t-live>-</b><span>live runs</span></div>
 <div class=tile><b id=t-spend>-</b><span>spend today</span></div>
@@ -489,9 +512,11 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="sh-menu" hidden><button type="button" data-menu="close">Close</button><button type="button" data-menu="github">Open on GitHub</button></div>
 </div>
 <section id="termview" hidden>
-<div id="termview-head"><button id="term-backtop" data-topback="term" type="button">&#8249; Chat</button><span id="termview-name"></span></div>
+<div id="termview-head"><button id="term-backtop" data-topback="term" type="button">&#8249; Chat</button><span id="termview-name"></span><span id="termview-facts"></span></div>
 <button id="termview-older" type="button" hidden>Older turns</button>
 <div id="termview-turns"></div>
+<!-- The quick answers (SPEC 1596, rule 9; #1601): one 44 px chip per option, above the composer and above the keyboard. -->
+<div id="termview-chips" hidden></div>
 <p id="termview-msg" class="msg" role="status"></p>
 <div id="termview-compose">
 <button id="termview-back" type="button">Back</button>
@@ -499,6 +524,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
 <button id="termview-send" type="button">Send</button>
 <p id="termview-sent" class="msg" role="status"></p>
+<button id="termview-acted" type="button" hidden></button>
 </div>
 </section>
 <section id="runview" hidden>
@@ -534,6 +560,7 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*BOARD_FILTER*/
 /*CARD_RULES*/
 /*LOOP_RULES*/
+/*CHAT*/
 /*QUESTION*/
 const $ = id => document.getElementById(id);
 // <question-card-view>
@@ -732,7 +759,7 @@ function routeFromHash(hash) {
 // The segmented filter of each root, whose last option says what it includes (rule 4). A root with one view offers one
 // option, so no button presents a filter the page cannot apply (rule 6).
 const ROOT_FILTERS = {
-  now: ["Any item"],
+  now: ["Needs you", "Any item"],
   work: ["Live", "Any card"],
   specs: ["Every spec"],
   chat: ["Waiting", "Every chat"],
@@ -741,6 +768,7 @@ const ROOT_FILTERS = {
 // Each root's own predicate per segment, over the facts the hub serves: a card with a live run, a session waiting for the
 // owner, a live or an ended run. The last segment keeps every row.
 const ROOT_KEEP = {
+  now: [r => !!r.waiting, () => true],   // Now › Needs you keeps the rows that wait; "Any item" keeps every conversation
   work: [x => !!x.ho, () => true],
   chat: [s => !!s.waiting, () => true],
   runs: [r => !!r.running, r => !r.running, () => true],
@@ -748,7 +776,7 @@ const ROOT_KEEP = {
 const rootFilter = { now: 0, work: 1, specs: 0, chat: 1, runs: 2 };
 const rootKeep = (tab, x) => { const f = ROOT_KEEP[tab]; const keep = f && f[rootFilter[tab]]; return keep ? keep(x) : true; };
 // A segment change repaints the root it filters, never another one (rule 6).
-const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); else if (tab === "chat") drawSessions(); };
+const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); else if (tab === "chat") drawSessions(); else if (tab === "now") drawNeedsYou(); };
 const scopeName = () => { const me = location.pathname.split("/")[1]; return me && me !== "mobile" ? me : "All projects"; };
 function paintControlRow() {
   const row = $("control-row");
@@ -1042,6 +1070,9 @@ setInterval(() => { if (!document.hidden) status(); }, 5000);
 // and the change log across them; the loop page writes to one project only, through that project's own route. The state
 // rules live in the rule module (loopAggregate, loopPrimary), never here (ADR-0137).
 let loopV = null, loopSlug = "";
+// The chat rows draw their loop dot and live runs from this fact: the chat section sets the hook, after the page has
+// declared its session list, so a loop read that lands later repaints the rows with the one answer (ADR-0137).
+var onLoop = null;
 const loopProjects = () => (loopV && loopV.projects) || [];
 const loopOf = slug => loopProjects().find(p => p.slug === slug) || null;
 const loopHere = () => loopOf(loopSlug);
@@ -1114,7 +1145,7 @@ function openBugs() {
 }
 async function loopView(fresh) {
   if (!loopV) $("loops-msg").textContent = "Loading the loop status.";
-  try { loopV = await call("/api/loop", fresh); $("loops-msg").textContent = ""; loopDraw(); }
+  try { loopV = await call("/api/loop", fresh); $("loops-msg").textContent = ""; loopDraw(); if (onLoop) onLoop(); }
   catch (e) { $("loops-msg").textContent = e.message; }
 }
 async function loopAct(action, extra) {
@@ -2290,13 +2321,20 @@ const termDrafts = new Map();
 const termDraft = sid => { if (!termDrafts.has(sid)) termDrafts.set(sid, { text: "", sent: "", pending: false, cid: null, cidText: null }); return termDrafts.get(sid); };
 function keepDraft() { if (termSid) { const d = termDraft(termSid); d.text = $("termview-text").value; d.sent = $("termview-sent").textContent; } }
 function showDraft() { const d = termDraft(termSid); $("termview-text").value = d.text; $("termview-sent").textContent = d.sent; $("termview-send").disabled = d.pending; }
-function sessionRow(project, s) {
-  const b = document.createElement("button"), name = document.createElement("b"), meta = document.createElement("div");
-  b.type = "button"; b.className = "runrow"; b.dataset.sid = s.sid; b.dataset.name = s.name;
-  name.textContent = s.name;
-  meta.className = "mut";
-  meta.textContent = [project, s.status, s.last].filter(Boolean).join(" · ");
-  b.append(name, meta);
+// One project's row on the Chat root (SPEC 1596, rule 10; #1601): the loop dot, the name, the last message and the time,
+// and the waiting mark. The rules are hub-mobile-chat.js's; the row only draws them (ADR-0137).
+function chatRowNode(r) {
+  const b = document.createElement("button"), name = document.createElement("b"), dot = document.createElement("span"),
+        line = document.createElement("div"), mark = document.createElement("span");
+  b.type = "button"; b.className = "chatrow " + (r.loop || "");
+  b.dataset.project = r.project; b.dataset.sid = r.sid; b.dataset.loop = r.loop || ""; b.dataset.waiting = String(r.waiting);
+  dot.className = "loopdot " + (r.loop || "unknown");
+  dot.setAttribute("aria-label", r.loop ? "Loop " + loopStateWord(r.loop) : "Loop unknown");
+  name.textContent = r.project;
+  line.className = "mut"; line.textContent = chatRowLine(r);
+  mark.className = "waitmark"; mark.textContent = chatWaiting(r);
+  b.append(dot, name, line, mark);
+  b.onclick = () => openConversation(r.sid, r.project);
   return b;
 }
 function turnRow(t) {
@@ -2305,13 +2343,64 @@ function turnRow(t) {
   d.append(who, text);
   return d;
 }
-// The session list keeps what it last drew (#1445): the one helper draws the line, the error and then the rows it holds.
+// The chat list keeps what it last drew (#1445): the one helper draws the line, the error and then the rows it holds.
 const sessState = { ever: false, n: 0, error: "", groups: [],
   loading: "The terminal sessions are loading.", empty: "No terminal sessions are drawn." };
+// The chat rows and the one badge, drawn from the session list and the loop fact through the chat module (rule 10).
+let sessRows = [], badgeRows = null;   // badgeRows: what the boot read drew before the list itself read
+// The project the page is scoped to, when the address names one the session list groups; anything else is All projects,
+// so the one count covers every waiting row (rule 10).
+const chatScope = (rows) => {
+  const me = location.pathname.split("/")[1];
+  return me && me !== "mobile" && (rows || sessRows).some(r => r.project === me) ? me : "";
+};
+function drawChat() {
+  sessRows = chatRows({ groups: sessState.groups }, loopProjects());
+  $("sessions").replaceChildren(...sessRows.filter(r => rootKeep("chat", r)).map(chatRowNode));
+  drawBadge();
+  drawNeedsYou();
+  paintHeader();
+}
+// One badge, on Chat: the waiting rows of the scope, and no extra node in the bar (rule 10).
+function drawBadge(rows) {
+  const list = rows || sessRows;
+  if (rows) badgeRows = rows;
+  const b = document.querySelector("nav [data-tab=chat]"), n = chatBadge(list, chatScope(list));
+  if (!b) return;
+  b.dataset.badge = n ? String(n) : "";
+  if (n) b.setAttribute("aria-label", "Chat, " + n + " waiting for you"); else b.removeAttribute("aria-label");
+}
+// The bar carries the count from the first frame on every tab, so the page reads the list once at boot without touching
+// the Chat list's own four states: that list still says it is loading until its screen reads it (rule 10; #1445).
+async function loadBadge() {
+  try { drawBadge(chatRows(await call("/api/sessions"), loopProjects())); drawNeedsYou(); }
+  catch (e) { /* the Chat list names the error */ }
+}
+// Now › Needs you draws the same rows inside the scope and carries no badge of its own (rule 10). Answering a question
+// clears its row here as the hub's list changes, through the one count.
+function drawNeedsYou() {
+  const el = $("needs-you");
+  if (!el) return;
+  // Before the Chat list reads, the boot badge read already knows every waiting row, so Now is not empty on the first frame.
+  const list = sessState.ever ? sessRows : (badgeRows || []);
+  const rows = list.filter(r => rootKeep("now", r));
+  el.replaceChildren(...rows.map(chatRowNode));
+  $("needs-you-msg").textContent = rows.length ? "" : "Nothing waits for you in this scope.";
+}
+onLoop = () => drawChat();
 function drawSessions() {
-  drawList(sessState, $("sessions-state"), $("sessions-msg"), () => {
-    $("sessions").replaceChildren(...sessState.groups.flatMap(g => (g.sessions || []).filter(s => rootKeep("chat", s)).map(s => sessionRow(g.project, s))));
-  });
+  drawList(sessState, $("sessions-state"), $("sessions-msg"), drawChat);
+}
+// The conversation header names the project, its loop state and its live runs (rule 10; #1601).
+function paintHeader() {
+  if (!termOpen() || !termSid) return;
+  const row = sessRows.find(r => r.sid === termSid) || null;
+  if (!row) return;
+  $("termview-name").textContent = row.project;
+  $("termview-facts").textContent = chatHeader(row);
+  const acted = chatActedOn(row);
+  $("termview-acted").hidden = !acted;
+  if (acted) { $("termview-acted").dataset.run = acted.run; $("termview-acted").textContent = acted.label; }
 }
 function applySessions(d) {
   const groups = d && Array.isArray(d.groups) ? d.groups : [];
@@ -2369,12 +2458,47 @@ squadStream.on("gap", d => {
 // card still pending when the page closed is answerable when it comes back.
 let termCard = null;   // { id, el } of the drawn card
 function dropCard() { if (termCard) termCard.el.remove(); termCard = null; }
+// The quick answers (rule 9; #1601): one 44 px chip per option of the question in view, above the composer. A chip pick
+// goes through the same card rules and the same answer route as the card's own controls; when every question is answered
+// the card submits, so a one-question card answers on one tap.
+let chipCard = null, chipState = null;
+function drawChips(card) {
+  // The card rules read the document itself, so the hub's id stays outside the questions they check.
+  chipCard = card ? { id: card.id, questions: card.questions } : null;
+  chipState = chipCard ? cardStart(chipCard) : null;
+  paintChips();
+}
+function paintChips() {
+  const el = $("termview-chips");
+  const v = chipCard && chipState ? cardView({ questions: chipCard.questions }, chipState) : null;
+  if (!v || !v.ok || v.sent || v.cancelled) { el.replaceChildren(); el.hidden = true; return; }
+  el.replaceChildren(...v.options.map((o, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "qchip"; b.dataset.index = String(i);
+    b.textContent = o.label;
+    if (o.recommended) b.dataset.recommended = "1";
+    if (o.selected) b.setAttribute("aria-pressed", "true");
+    b.onclick = () => answerChip(i);
+    return b;
+  }));
+  el.hidden = !v.options.length;
+}
+function answerChip(i) {
+  if (!chipCard || !chipState) return;
+  const card = chipCard, sid = termSid;
+  chipState = cardStep(card, chipState, { act: "pick", index: i });
+  const r = cardSubmit(card, chipState);
+  chipState = r.state;
+  paintChips();
+  if (r.ok) answerCard(sid, card.id, chipState.answers.slice());
+}
 async function loadCard() {
   const sid = termSid;
   const { card } = await call("/api/sessions/card?sid=" + encodeURIComponent(sid));
   if (sid !== termSid) return;
   if (termCard && (!card || termCard.id !== card.id)) dropCard();
   if (card && !termCard) termCard = { id: card.id, el: drawQuestionCard({ questions: card.questions }, (answers, picks) => answerCard(sid, card.id, picks)) };
+  if ((chipCard && chipCard.id) !== (card ? card.id : "")) drawChips(card || null);
 }
 async function pollCard() {
   const sid = termSid;
@@ -2415,22 +2539,41 @@ function openConversation(sid, name) {
 }
 function showConversation(sid, name) {
   keepDraft();
-  termSid = sid; termCursor = null; termDrawn.clear(); dropCard();
+  termSid = sid; termCursor = null; termDrawn.clear(); dropCard(); drawChips(null);
   $("termview-turns").replaceChildren();
   $("termview-name").textContent = name;
+  $("termview-facts").textContent = "";
+  $("termview-acted").hidden = true;
   $("termview-older").hidden = true;
   $("termview-msg").textContent = "";
   showDraft();
   $("termview").hidden = false;
+  fitKeyboard();
+  paintHeader();
   loadConversation(true);
   pollCard();
 }
 function hideConversation() {
   keepDraft(); $("termview").hidden = true;
   if (termSid) squadStream.unwatch(termSid);
-  termSid = null; dropCard(); $("termview-turns").replaceChildren();
+  termSid = null; dropCard(); drawChips(null); $("termview-turns").replaceChildren();
 }
-$("sessions").onclick = e => { const b = e.target.closest(".runrow"); if (b) openConversation(b.dataset.sid, b.dataset.name); };
+// The quick answers and the composer stay above the keyboard (rule 9): while the keyboard is up, the visual viewport is
+// the conversation's own box, so the chips sit on the field's top edge instead of under the keyboard.
+function fitKeyboard() {
+  const vv = window.visualViewport, v = $("termview");
+  if (!vv || !v) return;
+  v.style.top = (vv.offsetTop || 0) + "px";
+  v.style.height = (vv.height || window.innerHeight) + "px";
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", fitKeyboard);
+  window.visualViewport.addEventListener("scroll", fitKeyboard);
+}
+$("termview-acted").onclick = () => {
+  const id = $("termview-acted").dataset.run;
+  if (id) openRun(id, runURLs(id).page, "Run " + id);
+};
 $("termview-back").onclick = () => closeLayer("term");
 $("termview-older").onclick = loadOlder;
 $("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
@@ -2458,13 +2601,15 @@ $("termview-send").onclick = async () => {
   } catch (err) { say(err.message); }
   finally { d.pending = false; if (sid === termSid) $("termview-send").disabled = false; }
 };
-every("terminals", () => { if (!termOpen() && !squadStream.live()) loadSessions(); }, 10000);
+// The one badge and Now › Needs you read the session list on every tab, so this poll is not gated by a panel (rule 10).
+setInterval(() => { if (!document.hidden && !termOpen() && !squadStream.live()) loadSessions(); }, 10000);
 // terminals:end
 // The first frame (#1445): every list says it is loading before its first reply, drawn through the same helper that draws
 // its later states.
 const route = routeFromHash(location.hash);
 const was = history.state || {};
-drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"]')); loadNowToday();
+drawRuns(); drawSessions(); loadBadge();   // the Chat badge is read on every tab from the first frame (rule 10)
+drawCost(document.querySelector('[data-screen="cost"]')); loadNowToday();
 // The address names the screen first, then the entry's own state, then the tab the owner left: a reload lands on it.
 show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getItem("squad-mobile-tab"))));
 // A card link in the address opens its card once the board's read answers (#1459).

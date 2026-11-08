@@ -663,6 +663,26 @@ def test_parked_front_stays_when_its_job_is_gone(home, tmp_path):
     assert [s["sid"] for g in out["groups"] for s in g["sessions"]] == ["front1"]
 
 
+def test_a_row_carries_the_transcript_time_and_the_run_that_opened_it(home, tmp_path):
+    """#1601: the transcript's mtime is the session's real last activity (owner), and a session whose checkout sits in a
+    run's folder names that run, so the phone's chat can show the time and link the run that acted on the answer."""
+    run = "run-20261015-191451-9f6b30"
+    cwd = tmp_path / "checkout" / "runs" / run / "ws" / "node1"
+    add_session(home, os.getpid(), "s1", cwd)
+    transcript = home.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd)) / "s1.jsonl"
+    os.utime(transcript, (1_700_000_000, 1_700_000_000))
+    row = load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])["groups"][0]["sessions"][0]
+    assert row["t"] == 1_700_000_000, row
+    assert row["run"] == run, row
+
+
+def test_a_row_outside_a_run_folder_names_no_run(home, tmp_path):
+    """A session the owner opened in a plain checkout belongs to no run: the page shows no acted-on link for it."""
+    add_session(home, os.getpid(), "s1", tmp_path / "app")
+    row = load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])["groups"][0]["sessions"][0]
+    assert row["run"] == "", row
+
+
 def test_project_sessions_open_the_job_not_the_parked_front(home, tmp_path):
     cwd = tmp_path / "app"
     add_session(home, os.getpid(), "front1", cwd, name="front", parkedJobId="job1")

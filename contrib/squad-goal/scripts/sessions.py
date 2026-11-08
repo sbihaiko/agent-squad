@@ -65,9 +65,10 @@ def _open_file(dir_fd, name):
         os.close(fd); raise PermissionError(f"{name} is not a private regular file")
     return fd
 
-def _read_under_home(parts, limit=None, end=None):
+def _read_under_home(parts, limit=None, end=None, with_mtime=False):
     """Bytes of a file under the hub's Claude folder, walked by descriptors: no link followed at any level, owner and mode
-    checked on the descriptor opened. The `limit` bytes before `end` (the file's end when None). Also the offset of the first byte."""
+    checked on the descriptor opened. The `limit` bytes before `end` (the file's end when None). Also the offset of the first
+    byte, and with `with_mtime` the file's mtime from the same descriptor."""
     *dirs, name = parts
     dfd = os.open(claude_home(), os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -78,14 +79,15 @@ def _read_under_home(parts, limit=None, end=None):
     finally:
         os.close(dfd)
     try:
-        size = os.fstat(fd).st_size
+        st = os.fstat(fd)
+        size = st.st_size
         stop = size if end is None else min(end, size)
         start = max(0, stop - limit) if limit is not None else 0
         os.lseek(fd, start, os.SEEK_SET)
         chunks, left = [], stop - start
         while left > 0 and (chunk := os.read(fd, min(65536, left))):
             chunks.append(chunk); left -= len(chunk)
-        return b"".join(chunks), start
+        return (b"".join(chunks), start, int(st.st_mtime)) if with_mtime else (b"".join(chunks), start)
     finally:
         os.close(fd)
 
@@ -151,11 +153,21 @@ def profiles_of(cwd):
     rows = subprocess.run(["bash", str(ADDRESS), "--list"], capture_output=True, text=True, env=env).stdout.splitlines()
     return [slug for slug, r in (row.split("\t", 1) for row in rows if "\t" in row) if r.lower() == repo.lower()]
 
-def read_last_message(cwd, sid, secrets=()):
-    """The text of the last turn in the session's transcript, redacted and cut to a preview; None when it cannot be read."""
-    if SID.fullmatch(sid) is None: return None
-    try: raw, start = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=TAIL_BYTES)
-    except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
+# A run's workspace sits under `runs/<run id>/` in its checkout, so the session's own checkout names the run that opened
+# it (#1601, owner). A session outside a run folder names none.
+RUN_DIR = re.compile(r"(?:^|/)runs/(run-\d{8}-\d{6}-[0-9a-f]{6})(?:/|$)")
+
+def run_id_of(cwd):
+    """The run that opened a session in `cwd`, from the run's own folder in its path; "" when the folder names none."""
+    m = RUN_DIR.search("/" + str(cwd or "").replace(os.sep, "/").lstrip("/"))
+    return m.group(1) if m else ""
+
+def read_last_turn(cwd, sid, secrets=()):
+    """The text of the last turn in the session's transcript, redacted and cut to a preview, and the transcript's mtime:
+    the session's real last activity (#1601, owner). (None, None) when it cannot be read."""
+    if SID.fullmatch(sid) is None: return None, None
+    try: raw, start, mtime = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=TAIL_BYTES, with_mtime=True)
+    except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None, None
     lines = raw.decode(errors="replace").splitlines()[1 if start else 0:]
     last = ""
     for line in lines:
@@ -164,7 +176,11 @@ def read_last_message(cwd, sid, secrets=()):
         content = (turn.get("message") or {}).get("content")
         text = content if isinstance(content, str) else " ".join(p.get("text", "") for p in content or [] if isinstance(p, dict))
         if text.strip(): last = text.strip()
-    return redact(last, secrets)[:PREVIEW_CHARS]
+    return redact(last, secrets)[:PREVIEW_CHARS], mtime
+
+def read_last_message(cwd, sid, secrets=()):
+    """The text of the last turn in the session's transcript, redacted and cut to a preview; None when it cannot be read."""
+    return read_last_turn(cwd, sid, secrets)[0]
 
 HARNESS_TAGS = ("local-command-caveat", "command-name", "command-message", "command-args", "local-command-stdout",
                 "task-notification")
@@ -405,11 +421,12 @@ def list_sessions(profile, profiles_of=profiles_of, seen=None):
     rows = []
     for rec, secret in live_sessions(profile, profiles_of, seen=seen):
         sid, cwd = rec["sessionId"], rec["cwd"]
+        last, at = read_last_turn(cwd, sid, [secret])
         rows.append({"project": os.path.basename(cwd.rstrip("/")) or cwd, "sid": sid, "name": rec["name"], "status": rec["status"],
-                     "waiting": rec["status"] == "waiting", "last": read_last_message(cwd, sid, [secret]) or ""})
+                     "waiting": rec["status"] == "waiting", "last": last or "", "t": at, "run": run_id_of(cwd)})
     groups = {}
     for r in sorted(rows, key=lambda r: (not r["waiting"], r["name"], r["sid"])):
-        groups.setdefault(r["project"], []).append({k: r[k] for k in ("sid", "name", "status", "waiting", "last")})
+        groups.setdefault(r["project"], []).append({k: r[k] for k in ("sid", "name", "status", "waiting", "last", "t", "run")})
     return {"waiting": sum(r["waiting"] for r in rows),
             "groups": [{"project": p, "sessions": s} for p, s in sorted(groups.items())]}
 
