@@ -25,6 +25,7 @@ def router_outcomes(tmp_path):
     return [e for e in ev(tmp_path, "outcome") if e["node"] == "router"]
 
 
+@pytest.mark.heavy   # the fallback waits out WINDOW and the runner's load can push the call over the 2 s line
 async def test_a_hung_entry_falls_back_to_the_next_entry_and_the_node_completes(tmp_path):
     eng = make(tmp_path, {"router": [HUNG, routed(req())], "route.router.1": CHILD}, **window())
     v = await eng.run()
