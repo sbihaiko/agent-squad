@@ -156,14 +156,22 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     gated_list=$(printf '%s, ' "${ci_gated[@]}"); gated_list=${gated_list%, }
     mark "$tip" "not promoted: the workflow gates $gated_list to another pull request, so the dev tip never proves it"; exit 1
   fi
-  ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
-    local cr n st c v=pass
+  ci_verdict() {  # <tip>: pass, "fail <check>" for a measured red, or pending
+    local cr n st c v=pass ref
     [ "${#ci_names[@]}" -gt 0 ] || { echo pending; return; }   # a workflow that names no job proves nothing
     cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
+    . "$d/basecheck.sh"   # the same refinement the base check reads (#1629): a job that never started measured nothing
+    ref=$(sg_ci_refine "$cr" 2>/dev/null) || ref=
     for n in "${ci_names[@]}"; do
       read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" '[.check_runs[] | select(.name == $n)] | last | "\(.status) \(.conclusion)"')
-      [ "$st" = completed ] && [ "$c" = failure ] && { echo "fail $n"; return; }
+      if [ "$st" = completed ] && [ "$c" = failure ]; then
+        case "$ref" in
+          red\ *) echo "fail $n"; return;;   # a job of the run ran a step and failed: the red job is the one read
+          *) v=pending;;   # nothing measured the fail: the tip is unproven, never a pass
+        esac
+        continue
+      fi
       { [ "$st" = completed ] && [ "$c" = success ]; } || v=pending
     done
     echo "$v"

@@ -25,6 +25,7 @@ echo "\$*" >> "$T/gh.log"
 case "\$*" in
   *"pulls?per_page"*) echo "\${PRS:-[]}";;
   *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7}; do printf '{"number":%s,"title":"t","body":"","state":"OPEN"},' "\$x"; done); [ -n "\${LANDBUG:-}" ] && n="\$n{\"number\":\$LANDBUG,\"title\":\"t\",\"body\":\"\",\"state\":\"OPEN\",\"labels\":{\"nodes\":[{\"name\":\"\${LANDBUG_LABEL:-loop-bug:landing}\"}]}},"; echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
+  *"/actions/runs/"*"/jobs"*) echo '{"total_count":1,"jobs":[{"name":"check (3.11)","status":"completed","conclusion":"failure","steps":[{"name":"Run tests","number":1,"conclusion":"failure"}]}]}';;
   *"/check-runs"*) d=\$(/usr/bin/git -C $T/origin.git rev-parse -q --verify refs/heads/dev); x=\${CHECKS:-{\"check_runs\":[]\}}; case "\$*" in *"/commits/\$d/"*) x=\${BASECHECKS:-\$x};; esac; echo "\$x";;
   *"issues/7/comments"*) cat > "$T/comment.body"; echo '{"id":1}';;
   *"issues/7"*) echo '{"number":7,"state":"closed"}';;
@@ -34,7 +35,7 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 GREEN='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"success"}]}'
 # OLDG: green with its checks finished long ago, so the base read caches its answer (#790).
 OLDG='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"success","completed_at":"2001-01-01T00:00:00Z"}]}'
-RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"failure"}]}'
+RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"failure","details_url":"https://github.com/x/y/actions/runs/7701/job/10"}]}'
 RUNNING='{"check_runs":[{"id":10,"name":"check (3.11)","status":"in_progress","conclusion":null}]}'
 # The review verdict of the branch tip, which the lander waits for beside the check (#357): VERDICT=APPROVE|CHANGES|none, kept
 # the way branchreview.sh keeps it (review-<key>.md and review-<key>.sha under the state directory).

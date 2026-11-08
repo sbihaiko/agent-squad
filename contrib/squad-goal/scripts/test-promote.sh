@@ -32,6 +32,9 @@ case "\$*" in
   *graphql*) if [ -e "$T/pr" ]; then printf '{"data":{"repository":{"pullRequests":{"nodes":[{"number":%s,"headRefName":"dev","baseRefName":"stg","isDraft":false,"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false}}}}}\n' "\$(cat "$T/pr")"; else echo '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'; fi;;
   *"-X POST repos/x/emu/pulls"*) echo 7 > "$T/pr"; echo '{"number":7}';;
   *"-X PUT repos/x/emu/pulls/"*"/merge"*) if git -C "$T/w" fetch -q origin && git -C "$T/w" push -q origin origin/dev:refs/heads/stg; then rm -f "$T/pr"; echo '{"merged":true,"message":"Pull Request successfully merged"}'; else echo '{"merged":false,"message":"Pull Request is not mergeable"}'; fi;;
+  *"/actions/runs/"*"/jobs"*)
+    id=\$(printf '%s' "\$*" | sed -n 's#.*/actions/runs/\([0-9][0-9]*\)/jobs.*#\1#p')
+    if [ -f "$T/jobs-\$id.json" ]; then cat "$T/jobs-\$id.json"; else echo '{"total_count":1,"jobs":[{"conclusion":"failure","steps":[{"name":"run"}]}]}'; fi;;
   *"/check-runs"*) cat "$T/checks.json";;
   *) echo '{}';;
 esac
@@ -79,11 +82,19 @@ case "$out" in *running*) ok "the pending line says the CI is running";; *) ko "
 # (#790) The real CI path (no SG_CI_STATE_CMD): the tip's check runs are read through gh and classified by the base check's own
 # classifier. Red, unknown and running promote nothing; green promotes.
 unset SG_CI_STATE_CMD SG_PROMOTE_PROOF
-RED_P='{"check_runs":[{"id":1,"name":"check (3.11)","status":"completed","conclusion":"failure"}]}'
+RED_P='{"check_runs":[{"id":1,"name":"check (3.11)","status":"completed","conclusion":"failure","details_url":"https://github.com/x/emu/actions/runs/7901/job/1"}]}'
+QUIET_P='{"check_runs":[{"id":1,"name":"check (3.11)","status":"completed","conclusion":"failure","details_url":"https://github.com/x/emu/actions/runs/7902/job/1"}]}'
 GREEN_P='{"check_runs":[{"id":1,"name":"check (3.11)","status":"completed","conclusion":"success"}]}'
 adv dev real-red; before=$(tip stg); printf '%s' "$RED_P" > "$T/checks.json"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI is red"*) ok "real CI: a red tip promotes nothing and says red";; *) ko "real CI red: out '$out'";; esac || ko "real CI red: rc $rc stg moved or out '$out'"
+# (#1629) A failure check whose jobs all failed before their first step measured nothing: the CI proof reads it as unproven, never
+# red, exactly as the base check reads the landing. It promotes nothing, and the refusal names unproven.
+adv dev real-quiet; before=$(tip stg); printf '%s' "$QUIET_P" > "$T/checks.json"
+printf '{"total_count":1,"jobs":[{"status":"completed","conclusion":"failure","steps":[]}]}' > "$T/jobs-7902.json"   # the API always names the status
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI is unproven"*) ok "real CI: a red check whose jobs never started is unproven, not red, and promotes nothing";; *) ko "real CI quiet: out '$out'";; esac || ko "real CI quiet: rc $rc stg moved or out '$out'"
+rm -f "$T/jobs-7902.json"
 adv dev real-unknown; before=$(tip stg); printf '%s' '{}' > "$T/checks.json"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI is unknown"*) ok "real CI: an answer that is not a check-run list promotes nothing";; *) ko "real CI unknown: out '$out'";; esac || ko "real CI unknown: rc $rc"
