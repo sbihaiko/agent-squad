@@ -13,6 +13,7 @@ MODULES = (
     ("hub-mobile-usage.js", "USAGE"),
     ("hub-mobile-specs.js", "SPECS"),
     ("hub-mobile-chat.js", "CHAT"),
+    ("hub-mobile-voice.js", "VOICE"),
 )
 
 
