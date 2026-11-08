@@ -16,7 +16,8 @@ const primaryView = (f, now) => {
     return { state: "unknown", label: "Board unreachable", sub: "checking · " + secs + " s", disabled: true };
   }
   if (r.phase === "refused") {
-    return { state: "refused", label: base, sub: "refused · " + (r.rule || "a rule forbids it"), disabled: true, secondary: r.rule || "" };
+    const rule = r.rule || "a rule forbids it";
+    return { state: "refused", label: base, sub: "refused · " + rule, disabled: true, secondary: rule };
   }
   if (r.phase === "requested" || (f && f.pending)) {
     return { state: "requested", label: base, sub: "requested" + (r.at ? " " + hhmm(r.at) : "") + " · board pending", disabled: true };

@@ -1506,7 +1506,7 @@ function paintActionRow(x) {
   $("sh-todo-sub").textContent = v.sub || "";
   $("sh-todo-sub").hidden = !v.sub;
   // The secondary is Close, but a refused move offers its rule there instead (rule 7).
-  $("sh-close").textContent = v.state === "refused" ? (v.secondary || "The rule") : "Close";
+  $("sh-close").textContent = v.secondary ? v.secondary : "Close";
 }
 function showCardReason(n, why) {
   // The refusal is page state keyed by issue number, and the card draws it on every render (#829): the read that follows
