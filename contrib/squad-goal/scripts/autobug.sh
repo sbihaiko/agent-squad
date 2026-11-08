@@ -290,8 +290,10 @@ gh_dispatch_hold && { AB_REASON="a dispatch hold"; exit 0; }
 gh_disk_stop && { AB_REASON="disk stop"; exit 0; }
 # The column Todo is the owner's go signal, and the go label says an agent may take the issue (#550): a candidate needs both.
 go=${SG_FRONTIER_LABEL:-ready-for-agent}
-todo=$(sg_todo_cards) || { AB_REASON="the board did not answer"; echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
-todo=" $(echo $todo) "
+board=$(sg_board_rows) || { AB_REASON="the board did not answer"; echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
+printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
+export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from this pass's one board read (#1620)
+todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "
 ready_now() {   # <issue>: 0 when stack.sh answers READY
   local n=$1 out w
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null

@@ -23,7 +23,7 @@ for a in "$@"; do
   prev="$a"
 done
 case "$*" in *"issues(states: OPEN"*)   # the open-issue list is one GraphQL request through the door (#383): the REST fixture in its shape
-  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[])},blockedBy:{nodes:[]},subIssues:{nodes:[(.sub_issues//[])[]|{number:.}]},comments:{nodes:[(.comments//[])[]|{body:.}]}}]}}}}' "$GH_ISSUES"; exit 0;; esac
+  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[])},blockedBy:{nodes:[]},parent:(if .parent then {number:.parent} else null end),subIssues:{nodes:[(.sub_issues//[])[]|{number:.}]},comments:{nodes:[(.comments//[])[]|{body:.}]}}]}}}}' "$GH_ISSUES"; exit 0;; esac
 case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  f=$GH_CLOSED;;
@@ -359,6 +359,19 @@ issues '[{"number":85,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(CARDS_DOWN=1 run)
 [ "$(marked 85)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 0 ] && ok "X: a board that does not answer dispatches nothing" || ko "X: #85 went out with no board read: '$r'"
 case "$r" in *"board"*) ok "X: the pass says the board did not answer";; *) ko "X: the pass is silent about the board: '$r'";; esac
+
+# X2 (#1620, ADR-0142 rule 6): a ticket of a spec is work only once the owner starts the spec. The board's automation adds
+# a linked sub-issue to the Project with Status Todo by itself, so the ticket's own column proves nothing about the spec's:
+# a spec whose card sits in Backlog holds its ticket, whatever the ticket's card reads, and the pass names the parent spec.
+# No card moves. The blocker gate here is the real stack.sh, because that WAIT is the fact the case reads.
+scene specbacklog 24
+cp "$(dirname "$src")/stack.sh" "$T/scripts/stack.sh"
+issues '[{"number":700,"title":"SPEC","body":"b","card":"Backlog","sub_issues":[801],"labels":[{"name":"spec"}]},{"number":801,"title":"a","body":"b","parent":700,"labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 801)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 0 ] && ok "X2: a ticket whose spec card sits in Backlog is not dispatched" || ko "X2: #801 went out beside a spec in Backlog: '$r'"
+case "$r" in *"spec #700"*"Backlog"*) ok "X2: the wait names the parent spec and its column";; *) ko "X2: the wait does not name the parent spec: '$r'";; esac
+[ ! -s "$BOARDLOG" ] && ok "X2: no card moves for a ticket whose spec is not started" || ko "X2: a card moved: '$(cat "$BOARDLOG")'"
+printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
 
 # Y (#596, ADR-0146): an open issue carrying `loop-bug:dispatch` is a defect in the loop's dispatch path. The loop cannot dispatch
 # its own fix, so the frontier pass dispatches nothing, names the issue exactly once per pass, and exits 0. The stop is read
