@@ -58,6 +58,12 @@
 # retry and the delta that follows spend one budget. A command that does not answer at the deadline is stopped with every
 # descendant, five seconds past it so a command that is writing its record is not cut in half, and the outcome is unproven
 # with a reason that says bounded. A defect the command already wrote is fail, and so is any red that stands for the tree.
+# A gate watches the process that asked for it (#1576). The outermost gate exports that pid as SG_GATE_PARENT before the lock is
+# taken, so --inner and --run, which serial.sh forks below the lock holder, watch the caller and never their own parent. When
+# that process is gone (or this one is reparented to pid 1) nobody waits for the answer any more: the gate stops its command,
+# names the orphan on one line of its log, and gives the lock and its slots back, instead of holding them for its whole bound
+# while every later gate exits 73 on a budget it cannot use. A suite that is SIGKILLed runs no trap, so the watch is the gate's
+# own. A gate whose caller lives never takes that path.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 . "$here/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS in every branch, the --run child too (#1508)
 write_status() {  # <path> <line>
@@ -78,6 +84,22 @@ gate_bound() {
 }
 gate_reserve() {
   local r=${SG_GATE_DELTA_RESERVE_SECONDS:-${SG_PROMOTE_FALLBACK_SECONDS:-240}}; case $r in ''|*[!0-9]*) r=240;; esac; printf '%s\n' "$r"
+}
+# The orphan watch (#1576). gate_parent_gone <pid> is true when the system no longer answers for the process, or answers Z: a
+# killed process its own parent has not reaped yet is gone, as serial.sh reads it. A pid of 1 or of nothing names no caller, and
+# a read that cannot tell (ps refused the pid) is never taken for a death: an alive caller must never take this path.
+gate_parent_gone() {
+  local p=$1 s
+  case $p in ''|*[!0-9]*|1) return 1;; esac
+  kill -0 "$p" 2>/dev/null || return 0
+  s=$($SG_PS -o stat= -p "$p" 2>/dev/null | cut -c1)
+  [ "$s" = Z ]
+}
+# gate_orphaned: true when the process that asked for this gate is gone, or when this process was reparented to pid 1, which is
+# the same loss when the caller is the gate's own parent. It runs in the --run child, so `$$` is the gate it belongs to.
+gate_orphaned() {
+  if [ -n "${SG_GATE_PARENT:-}" ]; then gate_parent_gone "$SG_GATE_PARENT" && return 0; fi
+  [ "$($SG_PS -o ppid= -p "$$" 2>/dev/null | tr -d ' ')" = 1 ]
 }
 red_dir() { printf '%s\n' "$st/gate-reds"; }
 red_file() {  # <repo> <sha>: the record of that tree, standing or cleared
@@ -308,6 +330,7 @@ case "${1:-}" in
       while read -r x; do [ -n "$x" ] && kill -KILL "$x" 2>/dev/null; done < "$list"
       rm -f "$list"; }
     timedout=$(mktemp "${TMPDIR:-/tmp}/gate-timeout.XXXXXX" 2>/dev/null) || timedout=; [ -z "$timedout" ] || rm -f "$timedout"
+    orphfile=$(mktemp "${TMPDIR:-/tmp}/gate-orphan.XXXXXX" 2>/dev/null) || orphfile=; [ -z "$orphfile" ] || rm -f "$orphfile"
     wd=
     # reap_wd <pid>: the watchdog's own group when it leads one, its children and its pid when it does not, so the sleep it
     # forked is never reparented and left to run out its bound (#1441).
@@ -317,13 +340,35 @@ case "${1:-}" in
     "$@" & cpid=$!
     # The command is the one that knows how to stop its own tree and write what it found; the wrapper's own stop waits a
     # short grace past the deadline, so a command that answers at the deadline is never killed mid-record. A command that
-    # does not answer is stopped here, with every descendant (ADR-0163, #1171).
+    # does not answer is stopped here, with every descendant (ADR-0163, #1171). One watchdog answers both, because both are
+    # a reason to stop the command's tree: a look every two seconds finds the deadline five seconds past its clock, and it
+    # finds a caller that died (#1576), which is a gate nobody waits for. A sleep cut short is no deadline: the bound is read
+    # from the clock at every look (#392).
     set -m   # the watchdog leads its own process group, so reap_wd reaches the sleep it forks
-    ( sleep "$(( bound + 5 ))"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - start )) -ge "$bound" ] || exit 0
-      [ -z "$timedout" ] || : > "$timedout"; stop_tree "$cpid" ) >/dev/null 2>&1 & wd=$!
+    stopat=$(( start + bound + 5 ))
+    ( while :; do
+        sleep 2
+        kill -0 $$ 2>/dev/null || exit 0
+        if gate_orphaned; then [ -z "$orphfile" ] || : > "$orphfile"; break; fi
+        [ "$(date +%s)" -lt "$stopat" ] && continue
+        [ -z "$timedout" ] || : > "$timedout"; break
+      done
+      stop_tree "$cpid" ) >/dev/null 2>&1 & wd=$!
     set +m
     wait "$cpid" 2>/dev/null; rc=$?
     reap_wd "$wd"
+    # An orphan answers for no caller: it writes no status, no history line and no obligation, because nobody asked this tree
+    # for a word, and a stale status would read as this gate's. It gives back what it holds -- the slots here, the lock when
+    # serial.sh's holder exits -- and names the orphan on one line of its log.
+    if [ -n "$orphfile" ] && [ -e "$orphfile" ]; then
+      rm -f "$orphfile"; [ -z "$timedout" ] || rm -f "$timedout"
+      [ -z "$GATE_SELECT_FILE" ] || rm -f "$GATE_SELECT_FILE"
+      [ -z "$GATE_SCOPE_FILE" ] || rm -f "$GATE_SCOPE_FILE"
+      [ -z "$GATE_OUTCOME_FILE" ] || rm -f "$GATE_OUTCOME_FILE"
+      [ -z "$GATE_BASE_FILE" ] || rm -f "$GATE_BASE_FILE"
+      echo "gate: orphan: the process that asked for this gate (pid ${SG_GATE_PARENT:-?}) is gone: the gate stops and releases its slots" >&2
+      exit 143
+    fi
     if [ -n "$timedout" ] && [ -e "$timedout" ]; then
       rm -f "$timedout"
       note fail unproven "bounded: the gate passed its ${bound}s deadline and no check reported a defect"
@@ -339,6 +384,10 @@ esac
 [ $# -gt 0 ] || { echo "usage: gate.sh <command...>   (lock in \$SG_STATE/locks/gate; SG_STATE unset: /tmp/sg-state, never TMPDIR)" >&2; exit 2; }
 # The lock's hold is the attempt bound plus a backstop: the gate's own clock stops its tree first and writes the outcome,
 # and a holder that wedges past that loses the lock to the next gate (serial.sh).
+# The process that asked for this gate (#1576) is read here, before the exec below, because serial.sh forks --inner and --run
+# and their own parent is the lock holder, which lives as long as the gate does. An outermost gate sets it; a gate inside a gate
+# inherits the one caller of the chain.
+[ -n "${SG_GATE_PARENT:-}" ] || export SG_GATE_PARENT=$PPID
 wave_wait=${SERIAL_WAIT_SECONDS:-1800}
 export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-$(( $(gate_bound) + 300 ))}
 case ":${SG_SERIAL_HELD:-}:" in
