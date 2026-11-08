@@ -45,10 +45,12 @@ def hub(monkeypatch, tmp_path):
     (state / "auto").mkdir(parents=True, exist_ok=True)
     calls = []
 
-    def watchd(*a):   # a start brings the supervisor up: this process stands for it
+    own_state = state
+
+    def watchd(*a, state=None, checkout=None, profile=None):   # a start brings the supervisor up: this process stands for it
         calls.append(list(a))
         if a == ("start",):
-            (state / "watchd.pid").write_text(f"{os.getpid()}\n")
+            ((pathlib.Path(state) if state else own_state) / "watchd.pid").write_text(f"{os.getpid()}\n")
         return 0
     mod.loop_watchd = watchd
     tn = {"host": TN_HOST, "allow": ["alice@example.com"]}
@@ -66,11 +68,11 @@ def hub(monkeypatch, tmp_path):
     srv.server_close()
 
 
-def ask(port, method, body=None, *, origin=None, host=None):
+def ask(port, method, body=None, *, origin=None, host=None, path="/api/loop"):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Host": host or f"127.0.0.1:{port}", "Content-Type": "application/json",
                "Origin": origin if origin is not None else f"http://127.0.0.1:{port}"}
-    c.request(method, "/api/loop", body=None if body is None else json.dumps(body), headers=headers)
+    c.request(method, path, body=None if body is None else json.dumps(body), headers=headers)
     r = c.getresponse()
     data = json.loads(r.read() or b"{}")
     c.close()
@@ -634,9 +636,9 @@ def farm(monkeypatch, tmp_path):
         "landed": [{"n": 12, "m": True, "c": "2026-11-01T10:00:00Z"}],
         "items": [{"n": 40, "t": "[loop-bug] the queue stalls", "l": ["loop-bug:dispatch"], "s": "OPEN"},
                   {"n": 41, "t": "a plain bug", "l": ["bug"], "s": "OPEN"}]}))
-    def watchd(*a):   # a start brings this project's supervisor up: this process stands for it
+    def watchd(*a, state=None, checkout=None, profile=None):   # a start brings the named project's supervisor up: this process stands for it
         if a == ("start",):
-            (base / "a" / "watchd.pid").write_text(f"{os.getpid()}\n")
+            (pathlib.Path(state or base / "a") / "watchd.pid").write_text(f"{os.getpid()}\n")
         return 0
     mod.loop_watchd = watchd
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
@@ -702,3 +704,34 @@ def test_the_loop_switch_records_which_page_changed_it(farm):
     assert code == 200
     last = [json.loads(x) for x in (base / "a" / "loop-audit.jsonl").read_text().splitlines()][-1]
     assert last["client"] == "phone" and last["action"] == "start"
+
+
+def test_the_profile_list_is_the_seams_own_list(farm):
+    """The per-project rows are discovered from the one seam. This runs the real `address.sh --list` over the farm's real
+    profiles directory, so a change in what the seam prints is caught here and not only on a live hub (#1599)."""
+    mod, _, _ = farm
+    out = subprocess.run(["bash", str(mod.SCRIPTS / "address.sh"), "--list"], capture_output=True, text=True, timeout=20)
+    seam = [ln.split("\t")[0] for ln in out.stdout.splitlines() if ln.strip()]
+    assert seam == ["a", "b"], f"the seam prints the two slugs: {out.stdout!r}"
+    assert mod.profile_list() == seam
+    assert [r["slug"] for r in mod.project_contexts()] == ["a", "b"], "every profile the seam lists is a project the hub serves"
+
+
+def test_a_write_to_one_project_lands_in_that_projects_own_state(farm):
+    """A loop page writes to one project only: `/<slug>/api/loop` applies the start to that project's state directory and
+    audits it there, and the hub's own project is untouched (AC4; ADR-0162)."""
+    _, port, base = farm
+    (base / "b" / "watchd.pid").unlink()   # project b is off, so a start applies to it
+    code, out = ask(port, "POST", {"action": "start", "client": "phone"}, path="/b/api/loop")
+    assert code == 200, out
+    assert (base / "b" / "watchd.pid").is_file(), "the start ran that project's own supervisor, not the hub's"
+    assert [x["action"] for x in audit(base / "b")] == ["drain", "start"], "the change is audited in that project's log"
+    assert audit(base / "a") == [], "the hub's own project is never written by another project's page"
+
+
+def test_a_write_to_a_project_the_hub_does_not_serve_is_refused(farm):
+    """A slug the hub serves no profile for is refused, and no state directory is read or written from it."""
+    _, port, base = farm
+    code, out = ask(port, "POST", {"action": "start", "client": "phone"}, path="/nope/api/loop")
+    assert code == 404 and "nope" in (out.get("reason") or ""), out
+    assert not (base / "nope").exists()

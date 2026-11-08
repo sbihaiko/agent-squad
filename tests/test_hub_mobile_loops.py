@@ -61,15 +61,14 @@ OPEN_LOOP = """
 """
 
 
-@pytest.fixture(scope="module")
-def hub():
-    import os
-    import tempfile
-    os.environ.setdefault("SG_REPO", "x/y")
-    os.environ.setdefault("SG_OWNER", "x")
-    os.environ.setdefault("SG_PROJECT", "4")
-    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
-    os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+@pytest.fixture
+def hub(monkeypatch, tmp_path):
+    """The page module, loaded in a scoped environment: a test never leaks an SG_* value into the next one."""
+    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
+                 ("SG_CHECKOUT", str(tmp_path)), ("SG_HUB_DIR", str(tmp_path / "hub"))):
+        monkeypatch.setenv(k, v)
+    for k in ("SG_STATE_BASE", "SG_SHARED", "SG_PROFILE", "SG_STATE", "SG_PROFILES_DIR"):
+        monkeypatch.delenv(k, raising=False)
     return _module("hub_mobile_loops", HUB_PY)
 
 
@@ -196,7 +195,55 @@ def test_the_rule_module_holds_the_aggregate_and_the_primary_alone():
     assert "fetch(" not in src and "POST" not in src
 
 
+def test_a_change_line_names_what_it_cannot_read():
+    """AC1 wants time, source and author on every change. An old audit line that carries none of them says so in each
+    column, so the row never reads as an anonymous change (ADR-0137: the rule lives in the module, not the view)."""
+    src = LOOP_JS.read_text()
+    assert run_js(src, 'loopChangeLine({})') == "unknown author · unknown source · time not read · unknown action"
+    assert run_js(src, 'loopChangeLine({who:"owner", action:"start"})') == "owner · unknown source · time not read · start"
+    assert run_js(src, "loopChangeLine(null)") == "no change yet"
+
+
 def test_the_loop_rules_are_inlined_and_the_page_names_no_all_loops_switch(hub):
     assert LOOP_JS.read_text() in hub.MOBILE_PAGE
     assert "/*LOOP_RULES*/" not in hub.MOBILE_PAGE
     assert "data-loop-all" not in hub.MOBILE_PAGE
+
+
+# --- the fact the pages draw comes from the hub's real profile discovery, never a hand-built stub ---
+
+def _profile(dirpath, slug, repo, project, checkout):
+    dirpath.mkdir(parents=True, exist_ok=True)
+    (dirpath / f"{slug}.sh").write_text(
+        f': "${{SG_REPO:={repo}}}"\n: "${{SG_OWNER:={repo.split("/")[0]}}}"\n'
+        f': "${{SG_PROJECT:={project}}}"\n: "${{SG_CHECKOUT:={checkout}}}"\n')
+
+
+def test_the_loop_fact_is_read_from_every_projects_own_state(monkeypatch, tmp_path):
+    """The phone's pages are drawn from the hub's loop fact, so the fact is tested against the real seam: two profiles in
+    a real profiles directory, each with its own state directory. A regression in `address.sh --list` parsing or in the
+    per-project context read shows here, not only on a live hub (AC1; #1599)."""
+    import os
+    base, prof = tmp_path / "base", tmp_path / "profiles"
+    _profile(prof, "a", "x/a", 1, tmp_path / "a")
+    _profile(prof, "b", "x/b", 2, tmp_path / "b")
+    for k, v in (("SG_REPO", "x/a"), ("SG_OWNER", "x"), ("SG_PROJECT", "1"), ("SG_PROFILE", "a"),
+                 ("SG_CHECKOUT", str(tmp_path / "a")), ("SG_STATE", str(base / "a")),
+                 ("SG_HUB_DIR", str(tmp_path / "hub")), ("HOME", str(tmp_path)),
+                 ("SG_PROFILES_DIR", str(prof)), ("SG_STATE_BASE", str(base))):
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("SG_SHARED", raising=False)
+    mod = _module("hub_loops_fact", HUB_PY)
+    for slug in ("a", "b"):
+        (base / slug / "auto").mkdir(parents=True, exist_ok=True)
+    (base / "b" / "watchd.pid").write_text(f"{os.getpid()}\n")
+    (base / "b" / "loop-audit.jsonl").write_text(json.dumps(
+        {"at": "2026-11-02T09:00:00-03:00", "who": "owner", "client": "phone", "action": "drain"}) + "\n")
+    mod.tailnet_block = lambda checkout=None: {"host": "", "allow": [], "loop_write": False}
+    v = mod.loop_view(mod.Access(True, "", "", False))
+    ps = {p["slug"]: p for p in v["projects"]}
+    assert set(ps) == {"a", "b"}, "every profile the seam lists is one row of the fact"
+    assert ps["a"]["own"] is True and ps["b"]["own"] is False
+    assert ps["a"]["state"] == "off" and ps["b"]["state"] == "on"
+    assert ps["b"]["change"]["client"] == "phone"
+    assert [c["project"] for c in v["changes"]] == ["b"], "the change log carries the project that changed"

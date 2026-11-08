@@ -22,10 +22,12 @@ const loopAggregate = projects => {
   return parts.join(" · ");
 };
 const loopWhen = at => { const m = String(at || "").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/); return m ? m[1] + " " + m[2] : String(at || ""); };
-// The last change of one project: who, from which page, when, and what. The transport is the fallback source when the
-// writer named no page, so a change always states a source.
+// The last change of one project: who, from which page, when, and what. Every column is always there: an old audit line
+// that carries no time, source or author says so in that column rather than dropping it, so a change never reads as an
+// anonymous one (AC1). The transport is the fallback source when the writer named no page.
 const loopChangeLine = e => e
-  ? [e.who, e.client || e.from, loopWhen(e.at), String(e.action || "")].filter(Boolean).join(" · ")
+  ? [e.who || "unknown author", e.client || e.from || "unknown source", loopWhen(e.at) || "time not read",
+     String(e.action || "unknown action")].join(" · ")
   : "no change yet";
 const loopRun = r => String(r || "").split("/").filter(Boolean).pop() || String(r || "");
 const loopLiveNames = live => ((live || {}).runs || []).map(r => "run " + loopRun(r)).concat((live || {}).gates || []);
