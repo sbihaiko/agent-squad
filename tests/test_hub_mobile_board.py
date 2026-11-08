@@ -27,11 +27,12 @@ GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended", "/api/version",
-          "/api/sessions", "/api/sessions/card", "/api/sessions/card/answer", "/api/sessions/conversation", "/api/sessions/send", "/api/sessions/attach", "/api/sessions/image", "/api/promote", "/api/loop",
+          "/api/sessions", "/api/sessions/card", "/api/sessions/card/answer", "/api/sessions/conversation", "/api/sessions/send",
+          "/api/sessions/attach", "/api/sessions/image", "/api/sessions/clip", "/api/sessions/voice", "/api/promote", "/api/loop",
           "/api/load", "/api/chart/lead", "/api/leadtime"}
 # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the phone's photo takes the one
-# attach write (#1155); the lead chart and its zoom read the routes the desktop draws (#1333); a bubble's thumbnail reads
-# the image route the overlay already serves (#1602)
+# attach write (#1155); a bubble's thumbnail reads the image route the overlay already serves (#1602); the phone's voice
+# reads one clip and writes one recording (#1603); the lead chart and its zoom read the routes the desktop draws (#1333)
 
 
 def run_js(src, expr, prelude=""):
@@ -177,13 +178,15 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     assert writes == {"/api/promote", "/api/sessions/send", "/api/sessions/card/answer"}, f"the mobile page writes other routes: {sorted(writes)}"
     assert 'fetch(path, { method: "POST"' in hub.MOBILE_PAGE and 'p && p.own ? "/api/loop" : "/" + loopSlug + "/api/loop"' in hub.MOBILE_PAGE, \
         "the loop page's write is the one project's own loop route (#1599)"
-    # Six writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
+    # Seven writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
     # the hub's forward route (#831), the session composer's send (#834), the loop switch (#923, ADR-0162), the answer
-    # to a session's question card (#1093), and the composer's one photo (#1155). Each carries the word once: a route
+    # to a session's question card (#1093), the composer's one photo (#1155), and the composer's one recording (#1603).
+    # Each carries the word once: a route
     # reached through a variable path, or a method set after the call's own `)`, carries it once too often, whatever the
     # shape of the call (#829).
     assert 'fetch(runURLs(id).control, { method: "POST"' in hub.MOBILE_PAGE, "the run screen's write is not the run's control route"
     assert 'fetch("/api/sessions/attach?" + q, { method: "POST"' in hub.MOBILE_PAGE, "the phone's photo is not the one attach route"
+    assert 'fetch("/api/sessions/voice?" + q, { method: "POST"' in hub.MOBILE_PAGE, "the phone's recording is not the one voice route"
     # The session overlay (#898) rides on the page and posts six routes through the source the page names: its send route,
     # its screenshot route (#903), the one attach route a staged file takes (#1154), and its hosted terminal's attach,
     # input and start routes (#1216). Each carries the word once.
@@ -192,7 +195,7 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     assert 'fetch(s.src.api + "/attach?" + q, { method: "POST"' in hub.OVERLAY_JS, "the overlay's attach write is not the one attach route"
     assert '"/terminals/attach", { method: "POST"' in hub.OVERLAY_JS and '"/terminals/write", { method: "POST"' in hub.OVERLAY_JS
     assert '"/terminals/start", { method: "POST"' in hub.OVERLAY_JS
-    assert hub.MOBILE_PAGE.count("method:") == 6 + overlay, "the mobile page holds a seventh write, or a method outside the six fetches"
+    assert hub.MOBILE_PAGE.count("method:") == 7 + overlay, "the mobile page holds an eighth write, or a method outside the seven fetches"
 
 
 def test_the_sheet_links_to_the_issue_on_github(hub):

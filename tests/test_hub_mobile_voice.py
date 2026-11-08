@@ -52,14 +52,14 @@ def test_a_hold_starts_the_recording_and_the_row_names_the_two_hints_and_the_cap
     src = VOICE_JS.read_text()
     out = run_js(src, """(() => {
         const r = voiceStart(1000);
-        return { state: r.state, time: voiceTime(0), hints: voiceHints(), cap: VOICE_CAP_SECONDS,
+        return { phase: r.phase, time: voiceTime(0), hints: voiceHints(), cap: VOICE_CAP_SECONDS,
                  row: voiceRow(voiceStart(1000), 1000) };
     })()""")
-    assert out["state"] == "recording", out
+    assert out["phase"] == "recording", out
     assert out["time"] == "0:00", out
     assert out["hints"] == ["Release to send", "Slide left to cancel", "max 2:00"], out
     assert out["cap"] == 120, out
-    assert out["row"]["state"] == "recording" and out["row"]["time"] == "0:00", out
+    assert out["row"]["phase"] == "recording" and out["row"]["time"] == "0:00", out
     assert out["row"]["hints"] == ["Release to send", "Slide left to cancel", "max 2:00"], out
 
 
@@ -82,8 +82,8 @@ def test_a_release_outside_the_zone_sends_and_a_slide_into_it_cancels():
     src = VOICE_JS.read_text()
     out = run_js(src, """(() => {
         const r = voiceStart(1000);
-        return { send: voiceRelease(voiceSlide(r, -10)).state,
-                 cancel: voiceRelease(voiceSlide(r, -400)).state,
+        return { send: voiceRelease(voiceSlide(r, -10)).phase,
+                 cancel: voiceRelease(voiceSlide(r, -400)).phase,
                  armed: voiceRow(voiceSlide(r, -400), 2000).into,
                  disarmed: voiceRow(voiceSlide(voiceSlide(r, -400), 0), 2000).into };
     })()""")
@@ -96,7 +96,7 @@ def test_the_two_minute_cap_stops_the_recording():
     src = VOICE_JS.read_text()
     out = run_js(src, """(() => {
         const r = voiceStart(1000);
-        return { early: voiceTick(r, 119000).state, at: voiceTick(r, 121000).state,
+        return { early: voiceTick(r, 119000).phase, at: voiceTick(r, 121000).phase,
                  capped: voiceRow(r, 121000).time, elapsed: voiceElapsed(r, 121000) };
     })()""")
     assert out["early"] == "recording", out

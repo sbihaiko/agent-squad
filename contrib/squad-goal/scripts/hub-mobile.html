@@ -554,6 +554,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="termview-chips" hidden></div>
 <p id="termview-msg" class="msg" role="status"></p>
 <div id="termview-compose">
+<button id="termview-back" type="button">Back</button>
 <!-- The recording row (SPEC 1596, frames 17 and 19, rule 10; #1603): while the mic is held it names the timer, the
      waveform, the cancel zone and the three hints. The row draws the rules of hub-mobile-voice.js (ADR-0137). -->
 <div id="termview-rec" hidden>
@@ -564,7 +565,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <span class="voicemic" aria-hidden="true">Mic</span>
 <p id="voice-hints" class="voicehints"><span class="voicehint">Release to send</span><span class="voicehint">Slide left to cancel</span><span class="voicehint">max 2:00</span></p>
 </div>
-<button id="termview-back" type="button">Back</button>
 <p class="mut" id="termview-note">Your message arrives as a message from another session, not as your typed input or approval.</p>
 <!-- Rule 9 (#1602): the banner names the outage and the waiting count, and the line names the kept draft's start. -->
 <p id="termview-outage" role="alert" hidden></p>
@@ -2762,7 +2762,7 @@ function drawVoiceWave(tick) {
 function paintVoice() {
   const el = $("termview-rec");
   if (!el) return;
-  if (!voiceRec || voiceRec.state !== "recording") { el.hidden = true; return; }
+  if (!voiceRec || voiceRec.phase !== "recording") { el.hidden = true; return; }
   const v = voiceRow(voiceRec, Date.now());
   $("voice-time").textContent = v.time;
   $("voice-cancel").dataset.into = v.into ? "1" : "";
@@ -2781,8 +2781,8 @@ function paintVoice() {
   el.hidden = false;
 }
 function voiceStep() {
-  if (!voiceRec || voiceRec.state !== "recording") return;
-  const act = voiceTick(voiceRec, Date.now()).state;
+  if (!voiceRec || voiceRec.phase !== "recording") return;
+  const act = voiceTick(voiceRec, Date.now()).phase;
   voiceRec.tick = (voiceRec.tick || 0) + 1;
   paintVoice();
   if (act === "send") voiceFinish("send");   // the two-minute cap stops the recording and sends it
@@ -2820,9 +2820,9 @@ async function voiceSend(sid, clip) {
   } catch (err) { voiceSaid(err.message); }
 }
 async function voiceFinish(act) {
-  if (!voiceRec || voiceRec.state !== "recording") return;
+  if (!voiceRec || voiceRec.phase !== "recording") return;
   const r = voiceRec, sid = termSid;
-  voiceRec.state = act === "cancel" ? "cancelled" : "sending";
+  voiceRec.phase = act === "cancel" ? "cancelled" : "sending";
   clearInterval(r.timer);
   const clip = await voiceClose(r);
   try { (r.stream && r.stream.getTracks ? r.stream.getTracks() : []).forEach(t => t.stop()); } catch (e) { /* a dead stream */ }
@@ -2850,12 +2850,12 @@ async function voiceHold(ev) {
 }
 $("termview-mic").addEventListener("pointerdown", voiceHold);
 document.addEventListener("pointermove", ev => {
-  if (!voiceRec || voiceRec.state !== "recording") return;
+  if (!voiceRec || voiceRec.phase !== "recording") return;
   voiceRec = voiceSlide(voiceRec, (Number(ev.clientX) || 0) - voiceRec.x0);
   paintVoice();
 });
-document.addEventListener("pointerup", () => { if (voiceRec && voiceRec.state === "recording") voiceFinish(voiceRelease(voiceRec).state); });
-document.addEventListener("pointercancel", () => { if (voiceRec && voiceRec.state === "recording") voiceFinish("cancel"); });
+document.addEventListener("pointerup", () => { if (voiceRec && voiceRec.phase === "recording") voiceFinish(voiceRelease(voiceRec).phase); });
+document.addEventListener("pointercancel", () => { if (voiceRec && voiceRec.phase === "recording") voiceFinish("cancel"); });
 // One Kore clip per answer (frame 17; #1603): one play or pause control, and elapsed over total once the audio knows its
 // length. The clip is the whole answer, so a sentence boundary never draws a second control.
 function clipSource(t) { return "/api/sessions/clip?sid=" + encodeURIComponent(termSid) + "&k=" + encodeURIComponent(t.k); }
