@@ -32,7 +32,7 @@
 # : "${SG_SQUAD:=$HOME/src/agent-squad}"   # unset: the installed agent-squad plugin
 : "${SG_AUTO_BUGFIX:=yes}"           # autobug.sh dispatches open bug issues automatically (no = off)
 : "${SG_BUG_LABEL:=bug}"
-: "${SG_BUG_SKIP_LABELS:=needs-owner,no-auto,wontfix,question}"
+# : "${SG_BUG_SKIP_LABELS:=needs-owner,no-auto,wontfix,question}"   # the default, with SG_FRONTIER_SKIP_LABELS, lives in skiplabels.sh (#1593)
 # : "${SG_BUG_PROJECT:=2}"; : "${SG_BUG_DOING:=Doing}"   # a separate bug board, if any
 : "${SG_FRONTIER_LABEL:=}"             # autofrontier.sh: label of dispatchable issues (empty = off)
 # : "${SG_FRONTIER_PREAMBLE:=$here/profiles/<name>.frontier.txt}"   # shared rules prepended to every frontier request

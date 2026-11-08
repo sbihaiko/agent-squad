@@ -222,10 +222,7 @@ fi
 # The pass owns one line in cycle.log (#1582). A dry pass dispatches nothing and is no loop pass, so it writes none.
 AB_REASON=""; AB_PENDING=""; AB_DISPATCHED=""; AB_PASS_ENDED=""
 if [ -n "${AB_DRY:-}" ]; then AB_PASS_ENDED=1; else AB_PASS_NO=$(ab_pass_count); trap ab_pass_end EXIT; fi
-lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
-# The frozen labels autofrontier.sh skips too (#530) are a floor, never a default (#537): a profile sets its own
-# SG_BUG_SKIP_LABELS and env.sh exports it, so a default here never applied and a frozen:dependency issue was dispatched.
-skip="$skip,frozen:owner,frozen:dependency,needs-info"   # needs-info: a ticket waits on an answer (#729); frozen:not-startable is read with its marker (ADR-0159), never a floor
+lab=${SG_BUG_LABEL:-bug}; skip=$(sg_skip_labels)   # the one skip set every pass reads (#1593); the freeze markers are its floor (#537)
 read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, sys
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered

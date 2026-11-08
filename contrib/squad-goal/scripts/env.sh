@@ -24,9 +24,9 @@ SG_PROFILES_DIR="$(sg_profiles_dir)"; export SG_PROFILES_DIR   # a session a run
 _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 . "$(sg_profiles_dir)/$SG_PROFILE.sh"
 # These three defaults are read after the profile, so a profile's := default wins (#757).
-# A spec is a document until the owner starts it, and a freeze marker holds the card without changing its column:
-# the dispatch pass never takes one of these labels as work (SG_FRONTIER_SKIP_LABELS, beside the bug label it already skips).
-: "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
+# The labels no dispatch pass takes as work are one set (skiplabels.sh, #1593): the frontier, the bug and the health passes
+# read it from there, so the health pass never reports a card startable that the dispatchers skip.
+. "$here/skiplabels.sh"
 # The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types, the fast
 # battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
 # enters a wave ungated (ADR-0145 rule 9).

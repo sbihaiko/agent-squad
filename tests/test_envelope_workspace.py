@@ -34,7 +34,7 @@ def issue_worktree_note(tmp_path):
     co, s = (tmp_path / d for d in ("co", "s"))
     (co / "worktrees" / "child").mkdir(parents=True)
     s.mkdir(parents=True)
-    for f in ("startability.sh", "ghcall.sh"):   # startability.sh sources the one GitHub door beside it
+    for f in ("startability.sh", "skiplabels.sh", "ghcall.sh"):   # startability.sh sources the skip set and the one GitHub door beside it
         (s / f).write_bytes((SCRIPTS / f).read_bytes())
 
     def g(*a):
