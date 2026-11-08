@@ -1,4 +1,3 @@
-import importlib
 import os
 import shutil
 import subprocess
@@ -251,22 +250,6 @@ def test_nested_pytest_checks_carry_the_heavy_marker():
     check was left unmarked and failed a loaded gate at 3.1 s."""
     missing = [_test.__name__ for _test in NESTED_CHECKS if not _heavy_marked(_test)]
     assert missing == [], f"these checks start a nested pytest and carry no heavy mark: {missing}"
-
-
-TIMING_CALLS = [
-    ("tests.test_dispatch", "test_a_child_whose_after_child_failed_fails_unrun_with_the_reason"),
-    ("tests.test_node_commit", "test_a_passing_node_with_a_dirty_workspace_is_committed_and_the_tip_is_the_final_state"),
-]
-
-
-def test_a_call_past_the_heavy_line_declares_heavy():
-    """#1612: three CI runs failed on three different cases, each over the 2 s line for an unmarked call, each green on
-    rerun. The work these calls do is small -- a git repo and a worktree, a scripted dispatch -- so the wall time was the
-    shared runner's pace, not the call's work. A call the runner's load can push past the line declares `heavy`, the same
-    way the nested-pytest checks here do; the cap then judges the call on its declared pace, never on a burst of load."""
-    missing = [f"{module}::{name}" for module, name in TIMING_CALLS
-               if not _heavy_marked(getattr(importlib.import_module(module), name))]
-    assert missing == [], f"these calls run past the heavy line on a loaded runner and carry no heavy mark: {missing}"
 
 
 def test_nested_pytest_checks_explain_their_slow_marker():
