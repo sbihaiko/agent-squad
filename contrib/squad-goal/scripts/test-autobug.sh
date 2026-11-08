@@ -1160,4 +1160,80 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err33"); rc=$?
 [ "$rc" = 0 ] && ok "33 an exhausted resource exits 0" || ko "33 the pass exited $rc: '$(cat "$T/err33")'"
 $G -qE "^AUTOBUG: rate limited until 22:13 UTC;" "$T/err33" && ok "33 the line names the earliest reset of an exhausted resource" || ko "33 wrong reset: '$(cat "$T/err33")'"
 
+# 34) (#1582) every autobug pass writes exactly one line to cycle.log, so a stopped bug lane is not read as an idle one.
+# The line names what the pass dispatched, or the first reason it dispatched nothing, in this order: loop off; no free
+# run slot; a pending card event (ADR-0165); no startable bug. One line per pass, never one per issue.
+PL=$T/passline; mkdir -p "$PL/bin" "$PL/st/auto" "$PL/co/docs/squad/workflows" "$PL/s" "$T/caps/runs"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$PL/s/"
+: > "$PL/st/active-runs.txt"
+printf 'caps:\n  runs: 1\n' > "$PL/co/docs/squad/defaults.yaml"
+printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$PL/st" "$PL/co" > "$PL/s/env.sh"
+printf '#!/bin/bash\necho READY\n' > "$PL/s/stack.sh"; chmod +x "$PL/s/stack.sh"
+printf 'print("-")\n' > "$PL/s/fundroom.py"
+printf '#!/bin/bash\necho "#%s -> In Progress"\n' "\$5" > "$PL/s/board.sh"; chmod +x "$PL/s/board.sh"
+printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "{}" > "$SG_STATE/req/$1.json"; echo "$SG_STATE/req/$1.json"\n' > "$PL/s/mkreq.sh"; chmod +x "$PL/s/mkreq.sh"
+printf 'import sys\nsys.exit(0)\n' > "$PL/s/launch.py"; chmod +x "$PL/s/launch.py"
+cat > "$PL/s/issue_state.py" <<PY
+import sys
+if sys.argv[1:2] not in ([], ["--go"]): sys.exit(1)
+try: sys.stdout.write(open("$PL/cards.tsv").read())
+except OSError: print("no board", file=sys.stderr); sys.exit(1)
+PY
+printf '1601\tTodo\n1602\tTodo\n' > "$PL/cards.tsv"
+# two open bugs whose bodies name one shared file: one root cause, so one pass picks both (a per-issue line would be two)
+cat > "$PL/issues.json" <<'JSON'
+[
+  {"number":1601,"title":"Core: null deref","body":"step src/core.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":1602,"title":"Core: other crash","body":"step src/core.py","created_at":"2026-10-10T15:05:00Z","labels":["bug","ready-for-agent"]}
+]
+JSON
+cat > "$PL/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$PL/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$PL/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) jq -c 'map(select(.labels|index("bug"))|.labels=[.labels[]|{name:.}])' "$PL/issues.json" ;;
+  *"issues?state=open"*) jq -c 'map(.labels=[.labels[]|{name:.}])' "$PL/issues.json" ;;
+  *issues/*/comments*) echo "[]" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$PL/issues.json" ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$PL/bin/gh"
+pl_fresh() {   # the counter and the log of one pass
+  rm -f "$PL/st/auto/pass"; : > "$PL/st/cycle.log"; rm -rf "$PL/st/auto/bug-"* "$PL/st/state"; : > "$T/caps/runs/.empty"
+  rm -f "$T/caps/runs/p-full.json"
+}
+pl_run() { PATH="$PL/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$PL/s/board.sh" bash "$PL/s/autobug.sh" 2>&1; }
+# 34a: two open bugs, the run cap full: nothing is dispatched, and the pass says so with its first reason
+pl_fresh; printf '{"pid":%s,"holder":"passline-slot"}\n' "$$" > "$T/caps/runs/p-full.json"
+r=$(pl_run); rc=$?
+[ "$rc" = 0 ] && ok "34a a full-cap pass exits 0" || ko "34a the pass exited $rc: '$r'"
+$G -qxF 'AUTOBUG pass 1: none (no slot)' "$PL/st/cycle.log" && ok "34a a full-cap pass writes 'none (no slot)'" \
+  || ko "34a cycle.log: '$(cat "$PL/st/cycle.log")'"
+[ "$($G -c '^AUTOBUG pass ' "$PL/st/cycle.log")" = 1 ] && ok "34a the pass writes one line, never one per issue" \
+  || ko "34a the line repeats: '$(cat "$PL/st/cycle.log")'"
+# 34b: the same two bugs with a free slot: the pass dispatches, and names the issue it took
+pl_fresh
+r=$(pl_run); rc=$?
+[ "$rc" = 0 ] && ok "34b a dispatching pass exits 0" || ko "34b the pass exited $rc: '$r'"
+$G -qE '^AUTOBUG pass 1: dispatched #160[12]$' "$PL/st/cycle.log" && ok "34b a dispatching pass writes what it dispatched" \
+  || ko "34b cycle.log: '$(cat "$PL/st/cycle.log")'"
+[ "$($G -c '^AUTOBUG pass ' "$PL/st/cycle.log")" = 1 ] && ok "34b the pass writes one line for two issues, never one each" \
+  || ko "34b the line repeats: '$(cat "$PL/st/cycle.log")'"
+# 34c: no bug to take: the pass names that reason, not an idle silence
+pl_fresh; printf '[]\n' > "$PL/issues.json"
+r=$(pl_run)
+$G -qxF 'AUTOBUG pass 1: none (no startable bug)' "$PL/st/cycle.log" && ok "34c an idle pass says no startable bug" \
+  || ko "34c cycle.log: '$(cat "$PL/st/cycle.log")'"
+# 34d: the loop switch off: the pass says loop off, and says it once
+pl_fresh; : > "$PL/st/auto/off"
+r=$(pl_run)
+$G -qxF 'AUTOBUG pass 1: none (loop off)' "$PL/st/cycle.log" && ok "34d a pass with the loop off says loop off" \
+  || ko "34d cycle.log: '$(cat "$PL/st/cycle.log")'"
+[ "$($G -c '^AUTOBUG pass ' "$PL/st/cycle.log")" = 1 ] && ok "34d the loop-off line is written once" \
+  || ko "34d the line repeats: '$(cat "$PL/st/cycle.log")'"
+rm -f "$PL/st/auto/off"
+
 rm -rf "$T"; exit $fail

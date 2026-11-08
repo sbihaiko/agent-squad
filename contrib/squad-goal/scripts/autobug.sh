@@ -172,14 +172,43 @@ ab_resume() {   # the pending events of earlier passes: a Doing event launches i
     ab_board_write "$run" Doing $ids || continue
     for n in $ids; do echo "$run" > "$A/bug-$n"; done
     if ab_launch "$req" "$run"; then
-      free=$((free - 1)); echo "AUTOBUG $run: its pending card write landed; its stored request is launched" >&2
+      free=$((free - 1)); [ -n "$AB_DISPATCHED" ] || AB_DISPATCHED="${ids%% *}"
+      echo "AUTOBUG $run: its pending card write landed; its stored request is launched" >&2
     else
       ab_free_refused "$run" "$req" $ids
     fi
   done 3<<<"$groups"
 }
-[ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
-[ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
+# ---- The one line a pass writes to cycle.log (#1582) ---------------------------------------------------------------
+# A pass that dispatched nothing used to write nothing, and its own lines went to stderr: a stopped bug lane read as an
+# idle one. Every pass now writes exactly one line, either what it dispatched or the first reason it took no issue, in
+# this order: loop off; no free run slot; a pending card event (ADR-0165); no startable bug. The number is the pass's
+# own, counted in the state directory, so a reader tells one pass from the next.
+ab_pass_count() {   # the number of this pass: one counter per state directory, this pass included
+  local f="$A/pass" n=0
+  [ -f "$f" ] && read -r n < "$f"
+  case "$n" in ''|*[!0-9]*) n=0;; esac
+  n=$((n + 1)); printf '%s\n' "$n" > "$f"; printf '%s' "$n"
+}
+ab_pass_end() {   # EXIT: the one line of the pass, whichever door it leaves by
+  [ -n "${AB_PASS_ENDED:-}" ] && return 0
+  AB_PASS_ENDED=1
+  local why
+  if [ -n "${AB_DISPATCHED:-}" ]; then
+    printf 'AUTOBUG pass %s: dispatched #%s\n' "$AB_PASS_NO" "${AB_DISPATCHED%% *}" >> "$SG_STATE/cycle.log"
+    return 0
+  fi
+  why=${AB_REASON:-}
+  if [ -z "$why" ]; then
+    if [ -n "${AB_PENDING:-}" ]; then why="a pending card event"; else why="no startable bug"; fi
+  fi
+  printf 'AUTOBUG pass %s: none (%s)\n' "$AB_PASS_NO" "$why" >> "$SG_STATE/cycle.log"
+}
+if [ "${SG_AUTO_BUGFIX:-yes}" != yes ] || [ -e "$A/off" ]; then
+  printf 'AUTOBUG pass %s: none (loop off)\n' "$(ab_pass_count)" >> "$SG_STATE/cycle.log"; exit 0
+fi
+# the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh). It is the loop's switch too.
+[ -e "$SG_STATE/token-pause" ] && { printf 'AUTOBUG pass %s: none (loop off)\n' "$(ab_pass_count)" >> "$SG_STATE/cycle.log"; exit 0; }
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
@@ -190,6 +219,9 @@ if [ -z "${SG_SINGLE_AUTOBUG:-}" ]; then
   [ "$rc" = 76 ] && rc=0
   exit $rc
 fi
+# The pass owns one line in cycle.log (#1582). A dry pass dispatches nothing and is no loop pass, so it writes none.
+AB_REASON=""; AB_PENDING=""; AB_DISPATCHED=""; AB_PASS_ENDED=""
+if [ -n "${AB_DRY:-}" ]; then AB_PASS_ENDED=1; else AB_PASS_NO=$(ab_pass_count); trap ab_pass_end EXIT; fi
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
 # The frozen labels autofrontier.sh skips too (#530) are a floor, never a default (#537): a profile sets its own
 # SG_BUG_SKIP_LABELS and env.sh exports it, so a default here never applied and a frozen:dependency issue was dispatched.
@@ -212,8 +244,8 @@ PY
 
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
-[ -n "${free:-}" ] || { echo "autobug: no free-slot count; see the squad.caps line above" >&2; exit 1; }
-[ "$free" -gt 0 ] || exit 0
+[ -n "${free:-}" ] || { AB_REASON="no slot"; echo "autobug: no free-slot count; see the squad.caps line above" >&2; exit 1; }
+[ "$free" -gt 0 ] || { AB_REASON="no slot"; exit 0; }
 # bugs first, then debt (only when no bug is startable -- AB_SKIP_DEBT=1 is the idle hunt's startable check, bugs only)
 # gather <label>: prints "number<US>labels" per issue; a refusal is not a candidate list at all (#1855).
 gather() {
@@ -247,21 +279,21 @@ refs=" $(sg_work_issues) "
 # The blocker gate is stack.sh's, as in the frontier (#479): one aggregate read of the open issues carries each entry's
 # blockers and their states, and a bug is a candidate only when stack.sh answers READY. A WAIT is logged when its reason
 # changes, never on every pass (auto/abwait-<n>).
-F=$(mktemp -d); trap 'rm -rf "$F"' EXIT
+F=$(mktemp -d); trap 'rm -rf "$F"; ab_pass_end' EXIT   # the one pass line is written however the pass ends (#1582)
 gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json"; agg_rc=$?
 if [ "$agg_rc" -ne 0 ]; then
-  if ab_rate_limit "$(cat "$F/issues.json")"; then ab_rate_limited; exit 0; fi   # #847: named once, nothing filed
-  echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0
+  if ab_rate_limit "$(cat "$F/issues.json")"; then ab_rate_limited; AB_REASON="rate limited"; exit 0; fi   # #847: named once, nothing filed
+  AB_REASON="the open issues are not readable"; echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0
 fi
 # A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): the pass already holds the open issues,
 # so the stop costs no second read, and it has no marker -- closing the issue resumes dispatch with no other action.
-gh_loop_stop "$F/issues.json" && exit 0
+gh_loop_stop "$F/issues.json" && { AB_REASON="a loop defect stops dispatch"; exit 0; }
 # Too many finished children wait for review (#562): a new run only adds more, so the pass holds until childcc catches up.
-gh_dispatch_hold && exit 0
-gh_disk_stop && exit 0
+gh_dispatch_hold && { AB_REASON="a dispatch hold"; exit 0; }
+gh_disk_stop && { AB_REASON="disk stop"; exit 0; }
 # The column Todo is the owner's go signal, and the go label says an agent may take the issue (#550): a candidate needs both.
 go=${SG_FRONTIER_LABEL:-ready-for-agent}
-todo=$(sg_todo_cards) || { echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
+todo=$(sg_todo_cards) || { AB_REASON="the board did not answer"; echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
 todo=" $(echo $todo) "
 ready_now() {   # <issue>: 0 when stack.sh answers READY
   local n=$1 out w
@@ -279,19 +311,20 @@ ab_check_open() {
   live=()
   for n in "$@"; do
     j=$(sg_issue_body "$n"); rc=$?
-    [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: not a readable non-PR issue; nothing dispatched" >&2; exit 0; }
+    [ "$rc" -eq 0 ] || { AB_REASON="a candidate is not readable"; echo "AUTOBUG: dropping candidate #$n: not a readable non-PR issue; nothing dispatched" >&2; exit 0; }
     [ "$(printf '%s' "$j" | jq -r '.state // ""')" = closed ] && { echo "AUTOBUG skip #$n: its issue is closed, so it is not dispatched"; continue; }
     printf '%s' "$j" > "$F/body-$n.json"; live+=("$n")
   done
 }
 [ -n "${AB_DRY:-}" ] || ab_resume
-[ "$free" -gt 0 ] || exit 0
+[ "$free" -gt 0 ] || { AB_REASON="no slot"; exit 0; }
 pendset=" $(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | cut -f1 | tr '\n' ' ') "
+case "$pendset" in *[0-9]*) AB_PENDING=1;; esac   # a pending card event (ADR-0165): the pass writes before it picks anything new
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
 cand=(); cj="["; nb=0
 for sel in "$lab" debt; do
   [ "$sel" = "$lab" ] || { [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ] || continue; }
-  if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || exit 0; else list=$(gather "$sel") || exit 0; fi            # refused selection: no candidate, no marker, no request (#1855)
+  if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || { AB_REASON="the candidate list is not readable"; exit 0; }; else list=$(gather "$sel") || { AB_REASON="the candidate list is not readable"; exit 0; }; fi   # refused selection: no candidate, no marker, no request (#1855)
   while IFS=$'\x1f' read -r n labels; do
     [ -n "$n" ] || continue; case "$n" in *[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac   # before any gate, so a word is named, never dropped in silence (#1855)
     sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
@@ -330,13 +363,13 @@ done
 for n in "${cand[@]}"; do cj+="$(cat "$F/body-$n.json"),"; done   # one read per candidate, made by ab_check_open (#556)
 cj="${cj%,}]"
 # One candidate is already one cluster of one, so the pass spends no Python startup on cluster.py for it (#556).
-if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || exit 0; fi   # cluster.py itself never answered: no cluster to trust
+if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || { AB_REASON="the clusters are not readable"; exit 0; }; fi   # cluster.py itself never answered: no cluster to trust
 # One cluster is one child, and a run funds only so many children (#480): the engine rejects the rest (spend_over_remainder),
 # and their issues would sit in Doing with nobody on them. So the pass asks for no more than the free run slots and the
 # children one run can fund (fundroom.py; "-" when the graph does not say).
 lim=$free; fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)
 case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$lim" ] && lim=$fr;; esac
-[ "$lim" -gt 0 ] || { echo "AUTOBUG: one run funds no child (fundroom.py: $fr); nothing dispatched" >&2; exit 0; }
+[ "$lim" -gt 0 ] || { AB_REASON="one run funds no child"; echo "AUTOBUG: one run funds no child (fundroom.py: $fr); nothing dispatched" >&2; exit 0; }
 clusters=(); while read -r c; do [ -n "$c" ] && clusters+=("$c"); [ ${#clusters[@]} -ge "$lim" ] && break; done <<<"$cl"
 # a cluster is a list of issue numbers, read as one list: the words of a bad payload must never be re-split into issues,
 # and a cluster whose numbers are not all valid is dropped (#1855).
@@ -392,6 +425,7 @@ for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
 # this pass wrote -- the refusal itself already went to stderr (ADR-0274) -- and let the next pass pick them up again.
 if ! req=$("$here/mkreq.sh" "$name" "$body"); then
   for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done
+  AB_REASON="mkreq.sh refused the request"
   echo "AUTOBUG $name refused by mkreq.sh; freed its dispatch markers, next pass retries" >&2
   exit 0
 fi
@@ -409,9 +443,9 @@ try: items = json.load(sys.stdin)
 except Exception: items = []
 print(" ".join(str(i.get("number")) for i in items if isinstance(i, dict) and str(i.get("number")) in pick
       and ((i.get("title") or "").startswith("[SQUAD] refused") or "Filed by autobug" in (i.get("body") or ""))))' "${pick[@]}" 2>/dev/null)
-ab_board_event "$name" Doing "$req" "${pick[@]}" || { for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done; echo "AUTOBUG $name held: the ledger did not record its card write; nothing launched" >&2; exit 0; }
-ab_board_write "$name" Doing "${pick[@]}" || { for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done; echo "AUTOBUG $name held: its card write is pending; nothing launched, the next pass writes it" >&2; exit 0; }
-ab_launch "$req" "$name" || { ab_free_refused "$name" "$req" "${pick[@]}"; exit 0; }
+ab_board_event "$name" Doing "$req" "${pick[@]}" || { for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done; AB_REASON="the ledger did not record the card write"; echo "AUTOBUG $name held: the ledger did not record its card write; nothing launched" >&2; exit 0; }
+ab_board_write "$name" Doing "${pick[@]}" || { for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done; AB_REASON="a pending card event"; echo "AUTOBUG $name held: its card write is pending; nothing launched, the next pass writes it" >&2; exit 0; }
+if ab_launch "$req" "$name"; then AB_DISPATCHED="${pick[0]}"; else ab_free_refused "$name" "$req" "${pick[@]}"; AB_REASON="launch.py refused the request"; exit 0; fi
 hunt_fix=0; now=$(date +%s)
 for c in "${clusters[@]}"; do set -- $c; p=$1
   for n in "$@"; do echo "$name" > "$A/bug-$n"
