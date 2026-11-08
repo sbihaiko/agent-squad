@@ -470,7 +470,10 @@ def project_channels(state, client, repos, log=None):
     changed = False
     for repo, name in order:
         entry = channels.get(repo)
-        if entry and entry.get("name") == name and entry.get("id"):
+        # The registry on disk is the source of truth: a repository it already maps keeps that channel, whatever name the
+        # conversion would compute now (#1610). The computed name is the default for a repository it does not hold, so an
+        # operator who renamed a project channel, or who pointed it at an existing one, is never handed a second channel.
+        if entry and entry.get("name") and entry.get("id"):
             continue
         got = _ensure_channel(client, name, channels, log)
         if got is None:

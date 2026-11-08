@@ -428,6 +428,18 @@ def test_a_project_that_enters_the_hub_gets_its_channel_created_once(tmp_path):
     assert client.created() == ["my-app"], "a restart created the channel again"
 
 
+def test_a_channel_the_registry_already_maps_is_kept_under_its_own_name(tmp_path):
+    """#1610: the on-disk map wins over the computed name. A project the operator pointed at an existing channel (its
+    channel is `proj-<name>`) is never handed a second, bare-named one on the next sync."""
+    mod = voiced()
+    client = FakeClient()
+    state = mod.State(str(tmp_path))
+    state.save_channels({"Acme/My.App": {"name": "proj-my-app", "id": "C0PROJ0001"}})
+    got = mod.project_channels(state, client, ["Acme/My.App"], log=lambda line: None)
+    assert got["channels"]["Acme/My.App"] == {"name": "proj-my-app", "id": "C0PROJ0001"}
+    assert client.created() == [], "the sync created a second channel for a mapped project"
+
+
 def test_a_clip_in_a_project_channel_reaches_only_that_projects_inbox_and_its_answer_goes_back_there(tmp_path):
     """Criterion (b): the line lands in that project's inbox alone, and the answer is posted in the same channel."""
     mod = voiced()
