@@ -568,11 +568,22 @@ function paintBack() {
   }
 }
 // The address mirrors the top of the stack, so a reload lands on the same screen: "#/work/card=7", "#/now/more".
+// A screen that draws from its own fields carries them in the segment's query, so a cold load fills them like the open does.
+const queryString = pairs => pairs.filter(([, v]) => v).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
+const withQuery = (head, pairs) => { const q = queryString(pairs); return head + (q ? "?" + q : ""); };
+const queryOf = s => {
+  const out = {};
+  for (const part of s.split("&")) {
+    const at = part.indexOf("=");
+    if (at > 0) out[decodeURIComponent(part.slice(0, at))] = decodeURIComponent(part.slice(at + 1));
+  }
+  return out;
+};
 const SEG = {
   sheet: s => "card=" + s.n,
   psheet: () => "profile",
-  term: s => "session=" + encodeURIComponent(s.sid),
-  run: s => "run=" + encodeURIComponent(s.id || s.url || ""),
+  term: s => withQuery("session=" + encodeURIComponent(s.sid), [["name", s.name]]),
+  run: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
   cost: () => "usage",
   lead: () => "lead",
   more: () => "more",
@@ -581,14 +592,15 @@ const routeHash = s => "#/" + ((s && s.tab) || tabActive) + (s && s.layer && SEG
 function routeFromHash(hash) {
   const m = /^#\/(now|work|specs|chat|runs)(?:\/([^/]+))?$/.exec(String(hash || ""));
   if (!m) return null;
-  const tab = m[1], seg = m[2] || "", out = { tab, layer: null, data: {} };
-  if (seg === "profile") out.layer = "psheet";
-  else if (seg === "more") out.layer = "more";
-  else if (seg === "usage") out.layer = "cost";
-  else if (seg === "lead") out.layer = "lead";
-  else if (seg.startsWith("card=")) { out.layer = "sheet"; out.data = { n: +seg.slice(5) }; }
-  else if (seg.startsWith("session=")) { out.layer = "term"; out.data = { sid: decodeURIComponent(seg.slice(8)), name: "" }; }
-  else if (seg.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(seg.slice(4)), url: "", name: "" }; }
+  const tab = m[1], seg = m[2] || "", at = seg.indexOf("?"), out = { tab, layer: null, data: {} };
+  const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
+  if (head === "profile") out.layer = "psheet";
+  else if (head === "more") out.layer = "more";
+  else if (head === "usage") out.layer = "cost";
+  else if (head === "lead") out.layer = "lead";
+  else if (head.startsWith("card=")) { out.layer = "sheet"; out.data = { n: +head.slice(5) }; }
+  else if (head.startsWith("session=")) { out.layer = "term"; out.data = { sid: decodeURIComponent(head.slice(8)), name: q.name || "" }; }
+  else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
   return out;
 }
 // The panel in view: the tab's root, or the More screen where it stands over Now.
@@ -617,7 +629,10 @@ function openLayer(name, data, restore) {
   stack.push(name);
   if (tab !== tabActive) { paintPanel(); return; }   // a read that answered on another tab: its screen waits there
   const s = { tab, layer: name, depth: stack.length, ...data };
-  if (restore || (history.state && history.state.layer === name && !layerBacks)) history.replaceState(s, "", routeHash(s));
+  // A reload reuses the entry it landed on for the bottom screen of the chain and pushes every screen above it, so the
+  // parent of the top keeps an entry of its own and a Back from the top lands on it ("push" forces that push).
+  if (restore === "push") history.pushState(s, "", routeHash(s));
+  else if (restore || (history.state && history.state.layer === name && !layerBacks)) history.replaceState(s, "", routeHash(s));
   else history.pushState(s, "", routeHash(s));
   LAYER[name].show(s);
   paintBack();
@@ -1954,13 +1969,17 @@ drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"
 show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getItem("squad-mobile-tab"))));
 // A card link in the address opens its card once the board's read answers (#1459).
 if (linkHash(location.hash) !== null) linkOpen();
-// A reload restores the screens its entry names on that entry, so no entry is pushed and Back still closes the top (#1450).
+// A reload restores the screens its entry names on that entry: the entry it landed on holds the bottom screen of the chain
+// and each screen above it gets an entry of its own, so Back still closes the top and lands on the screen under it (#1450).
 const restore = was.layer && LAYER[was.layer] ? { layer: was.layer, data: fieldsOf(was) }
   : route && route.layer ? { layer: route.layer, data: route.data } : null;
 if (restore) {
-  for (const parent of screenChain(restore.layer)) openLayer(parent, {}, true);
-  if (restore.layer === "sheet") { if (Number.isInteger(restore.data.n)) pendingSheet = restore.data.n; }
-  else openLayer(restore.layer, restore.data, true);
+  if (restore.layer === "sheet") {
+    if (Number.isInteger(restore.data.n)) pendingSheet = restore.data.n;
+  } else {
+    const chain = [...screenChain(restore.layer), restore.layer];
+    for (const [i, name] of chain.entries()) openLayer(name, i === chain.length - 1 ? restore.data : {}, i === 0 ? true : "push");
+  }
 }
 // The installed app's theme colour is the page's own background role, never a copy of its value.
 const themeMeta = document.querySelector("meta[name=theme-color]");

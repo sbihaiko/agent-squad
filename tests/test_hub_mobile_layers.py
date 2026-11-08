@@ -233,17 +233,40 @@ def test_a_reload_with_a_layer_open_restores_it_without_a_second_push(hub, layer
     out = run_page(hub.MOBILE_PAGE, f"""
         {MORE_TAP}
         await loadBoard();
-        const restored = [history.index, history.entries.length, layers.slice(), {LAYER_HIDDEN[layer]}, __pending()];
+        const restored = [history.index, history.entries.length, layers.slice(), {LAYER_HIDDEN[layer]}, history.state.layer, __pending()];
         {LAYER_BACK[layer]}
         __popAll();
-        return {{ restored, after: [history.index, layers.slice(), {LAYER_HIDDEN[layer]}] }};
+        return {{ restored, after: [history.index, layers.slice(), {LAYER_HIDDEN[layer]}, history.state.layer || null] }};
     """, history_state=RESTORE_STATE[layer], history_below=True, board=[BOARD_ONE])
-    # Usage and lead time stand on More (SPEC 1596): the chain above them is restored with them.
-    stack = ["more", layer] if layer in ("cost", "lead") else [layer]
-    assert out == {"restored": [1, 2, stack, False, 0], "after": [0, stack[:-1], True]}, out
+    # Usage and lead time stand on More (SPEC 1596): the chain above them is restored with them, each on its own entry, so
+    # closing the top leaves both the screen under it and the entry that names it: the next Back is the browser's own.
+    nested = layer in ("cost", "lead")
+    assert out == {"restored": [2, 3, ["more", layer], False, layer, 0] if nested
+                             else [1, 2, [layer], False, layer, 0],
+                   "after": [1, ["more"], True, "more"] if nested
+                            else [0, [], True, None]}, out
 
 
 OWNER_TAB = {"term": "chat", "run": "runs", "cost": "now", "lead": "now"}
+
+
+@pytest.mark.node_bound
+def test_a_cold_load_of_a_run_hash_restores_its_address_and_name(hub):
+    """The address carries the whole screen (SPEC 1596, rule 2): a run reloaded from its hash draws its own title and page."""
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard();
+        return { tab: tabActive, hidden: $("runview").hidden, src: $("runframe").src, name: $("runview-name").textContent };
+    """, hash="#/runs/run=r1?url=%2Frun%2Fr1&name=Run%20one", board=[BOARD_ONE])
+    assert out == {"tab": "runs", "hidden": False, "src": "/run/r1", "name": "Run one"}, out
+
+
+@pytest.mark.node_bound
+def test_a_cold_load_of_a_session_hash_restores_its_name(hub):
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard();
+        return { tab: tabActive, hidden: $("termview").hidden, name: $("termview-name").textContent };
+    """, hash="#/chat/session=s1?name=Session%20one", board=[BOARD_ONE])
+    assert out == {"tab": "chat", "hidden": False, "name": "Session one"}, out
 
 
 @pytest.mark.node_bound
