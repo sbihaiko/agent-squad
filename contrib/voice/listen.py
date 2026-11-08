@@ -14,33 +14,19 @@ no text — so the caller answers it the same way. The bot's own messages, joins
 
 The connection is long-lived and Slack closes it after about an hour or on a redeploy: a `disconnect` event reconnects,
 and a dropped socket is retried with a growing wait. A secret resolves in one order and is never printed or logged: the
-macOS Keychain, then the project's gitignored .env, then the sibling project's .env (SKILL.md, Access); the Slack tokens
-are Keychain entries, and a tracked .env is never a source.
+macOS Keychain, then the project's gitignored .env (secretstore.env_value), then the sibling project's .env
+(SKILL.md, Access); a tracked .env is never a source.
 """
 import json
 import os
-import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import channels  # noqa: E402
+import secretstore  # noqa: E402
 
 BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
-
-
-def keychain(service):
-    out = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
-                         capture_output=True, text=True, timeout=15)
-    return out.stdout.strip() or None if out.returncode == 0 else None
-
-
-def keychain_any(names):
-    for n in names:
-        v = keychain(n)
-        if v:
-            return v
-    return None
+SIBLING = os.environ.get("SG_TTS_SIBLING", "~/VSCodeProjects/agent-squad")
 
 
 def open_url(app_token):
@@ -85,17 +71,15 @@ def main(argv):
             i += 2
         else:
             i += 1
-    bot_service = bot_service or next((s for s in (f"{project}-slack-bot-token", f"{project}-voice-slack-bot-token")
-                                       if keychain(s)), f"{project}-slack-bot-token")
-    app_service = app_service or next((s for s in (f"{project}-slack-app-token", f"{project}-voice-slack-app-token")
-                                       if keychain(s)), f"{project}-slack-app-token")
-    bot = keychain(bot_service)
-    app = keychain(app_service)
+    bot_names = [bot_service] if bot_service else [f"{project}-slack-bot-token", f"{project}-voice-slack-bot-token"]
+    app_names = [app_service] if app_service else [f"{project}-slack-app-token", f"{project}-voice-slack-app-token"]
+    bot = secretstore.find(bot_names, ("SLACK_BOT_TOKEN",), SIBLING)
+    app = secretstore.find(app_names, ("SLACK_APP_TOKEN",), SIBLING)
     if not bot:
-        print(f"{bot_service}: missing in the Keychain", file=sys.stderr)
+        print(f"{bot_names[0]}: missing in the Keychain and in the project's .env", file=sys.stderr)
         return 1
     if not app:
-        print(f"{app_service}: missing in the Keychain", file=sys.stderr)
+        print(f"{app_names[0]}: missing in the Keychain and in the project's .env", file=sys.stderr)
         return 1
     me = channels.api(bot, "auth.test")
     bot_user = me.get("user_id")

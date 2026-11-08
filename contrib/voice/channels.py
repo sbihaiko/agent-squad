@@ -9,8 +9,9 @@ against it — `proj-<slug>` exactly, then `<slug>`, then a name that carries th
 similarity ratio of the remaining names. The best score wins, and a score under MIN says nothing matched, so the caller
 names the channel instead of writing into the wrong one.
 
-A channel the bot is not in is joined with `channels:join` when the app holds that scope, and reported when it does not.
-This module reads no secret: the caller passes the token.
+A public channel the bot is not in is joined with `channels:join` when the app holds that scope, and reported when it does
+not. A private channel is listed too, but the bot cannot join it: the caller is told to invite it. This module reads no
+secret: the caller passes the token.
 """
 import difflib
 import json
@@ -77,7 +78,7 @@ def resolve(token, wanted, project, cwd="."):
     """(channel_id, error). A named channel is returned as given; with none, the closest name to the repository wins."""
     if wanted and ID.fullmatch(wanted):
         return wanted, None
-    d = api(token, "conversations.list?types=public_channel&limit=1000")
+    d = api(token, "conversations.list?types=public_channel,private_channel&limit=1000")
     if not d.get("ok"):
         return None, f"cannot list channels: {d.get('error')}"
     chans = d.get("channels") or []
@@ -104,6 +105,8 @@ def _member(token, c, name):
     cid = c.get("id")
     if c.get("is_member"):
         return cid, None
+    if c.get("is_private"):
+        return cid, f"the bot is not in #{name}: run `/invite @<bot>` in it once (a private channel cannot be joined)"
     j = api(token, "conversations.join", {"channel": cid}, post=True)
     if j.get("ok"):
         return cid, None

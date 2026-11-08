@@ -8,8 +8,8 @@ usage: tts.py <text> [--voice Kore] [--out /tmp/say.wav] [--service <keychain se
 The key comes from the macOS Keychain first, then GOOGLE_API_KEY in the project's .env, then in a sibling project's .env
 — the sibling is named with --sibling-env or SG_TTS_SIBLING (default: the agent-squad checkout beside this skill's
 project, which holds the shared Gemini key). The service name defaults to <project>-gemini-key and
-<project>-voice-gemini-key. A .env that git tracks is never a source: a key in it is committed, and this script skips it.
-No value is ever printed or logged.
+<project>-voice-gemini-key. The one lookup is `secretstore.find`; the project is the git repository the caller stands
+in, and a .env that git tracks is never a source. No value is ever printed or logged.
 
 Gemini returns raw PCM (16-bit mono, 24 kHz, audio/L16); Slack plays a WAV and not a bare stream, so the bytes are wrapped
 here. The spoken script is the caller's: keep it short, the reply's text carries the detail.
@@ -21,56 +21,16 @@ import subprocess
 import sys
 import wave
 
+import secretstore
+
 TIMEOUT = 60
 MODELS = ("gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts")
-
-
-def keychain(service):
-    out = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
-                         capture_output=True, text=True, timeout=15)
-    return out.stdout.strip() or None if out.returncode == 0 else None
-
-
-def tracked(path):
-    """True when git tracks `path`: a secret there is committed, so it is not a source. A path outside git is untracked."""
-    try:
-        out = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(path)), "ls-files", "--error-unmatch",
-                              os.path.basename(path)], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return out.returncode == 0
-
-
-def env_value(path, name):
-    try:
-        with open(path, encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith(f"{name}="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'") or None
-    except OSError:
-        return None
-    return None
 
 
 def gemini_key(project, service, sibling):
     """Keychain, then the project's .env, then the sibling's .env: a project that never stored the key still gets one."""
     names = [service] if service else [f"{project}-gemini-key", f"{project}-voice-gemini-key"]
-    for s in names:
-        v = keychain(s)
-        if v:
-            return v
-    here = os.getcwd()
-    candidates = [os.path.join(here, ".env")]
-    if sibling:
-        candidates.append(os.path.join(os.path.expanduser(sibling), ".env"))
-    for p in candidates:
-        if not os.path.isfile(p) or tracked(p):
-            continue
-        v = env_value(p, "GOOGLE_API_KEY") or env_value(p, "GEMINI_API_KEY")
-        if v:
-            return v
-    return None
+    return secretstore.find(names, ("GOOGLE_API_KEY", "GEMINI_API_KEY"), sibling)
 
 
 def wav_from_pcm(pcm, path, rate=24000, width=2, channels=1):

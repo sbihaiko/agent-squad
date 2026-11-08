@@ -5,9 +5,11 @@ with `python3 -m squad.skillpath --script watch.py` (squad/skillpath.py) and nev
 
 usage: watch.py <project> [--channel <id|name>] [--all] [--peek] [--bot-service S]
 
-The cursor is one file per channel under ~/.cache/slack-hal9k/, holding the ts of the newest message this script has
-printed. Only a message newer than the cursor is printed, and the cursor moves only for messages printed — a run that
-dies leaves the message for the next one. `--peek` prints without moving it.
+The cursor is one file per project and channel under ~/.cache/slack-hal9k/, holding the ts of the newest message this
+script has printed; two projects in one shared channel therefore keep separate cursors. Each thread keeps its own cursor
+too, so a reply is never hidden by an unrelated newer message in the channel. Only a message newer than its cursor is
+printed, and a cursor moves only for messages printed — a run that dies leaves the message for the next one. `--peek`
+prints without moving it.
 
 What counts: a message that carries `<@BOT_USER_ID>` (Slack writes a mention as that token, or `<!subteam>` for a group),
 and, with `--all`, every message from a human. The bot's own messages and joins are never printed.
@@ -15,33 +17,25 @@ and, with `--all`, every message from a human. The bot's own messages and joins 
 The line is `<ts>\\t<user>\\t<text>`, one per message, so a caller answers each and posts into its thread. A channel with
 nothing new prints nothing and exits 0 — a watcher runs every minute, so silence must be silent.
 
-A secret resolves in one order and is never printed or logged: the macOS Keychain, then the project's gitignored .env,
-then the sibling project's .env (SKILL.md, Access); the Slack token is a Keychain entry, and a tracked .env is never a
-source.
+A secret resolves in one order and is never printed or logged: the macOS Keychain, then the project's gitignored .env
+(secretstore.env_value), then the sibling project's .env (SKILL.md, Access); a tracked .env is never a source.
 """
 import json
 import os
-import subprocess
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import channels  # noqa: E402
+import secretstore  # noqa: E402
 
 CURSOR_DIR = os.path.expanduser("~/.cache/slack-hal9k")
+SIBLING = os.environ.get("SG_TTS_SIBLING", "~/VSCodeProjects/agent-squad")
 
 
-def keychain(service):
-    out = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
-                         capture_output=True, text=True, timeout=15)
-    return out.stdout.strip() or None if out.returncode == 0 else None
-
-
-def keychain_any(names):
-    for n in names:
-        v = keychain(n)
-        if v:
-            return v
-    return None
+def slug(project):
+    """A project name safe to use in a cursor file name."""
+    return re.sub(r"[^a-z0-9_-]+", "-", (project or "project").lower()).strip("-") or "project"
 
 
 def main(argv):
@@ -67,11 +61,10 @@ def main(argv):
         else:
             i += 1
 
-    service = service or next((s for s in (f"{project}-slack-bot-token", f"{project}-voice-slack-bot-token")
-                               if keychain(s)), f"{project}-slack-bot-token")
-    token = keychain(service)
+    names = [service] if service else [f"{project}-slack-bot-token", f"{project}-voice-slack-bot-token"]
+    token = secretstore.find(names, ("SLACK_BOT_TOKEN",), SIBLING)
     if not token:
-        print(f"{service}: missing in the Keychain", file=sys.stderr)
+        print(f"{names[0]}: missing in the Keychain and in the project's .env", file=sys.stderr)
         return 1
     cid, why = channels.resolve(token, wanted, project)
     if not cid:
@@ -85,11 +78,19 @@ def main(argv):
     bot_id = me.get("bot_id")
 
     os.makedirs(CURSOR_DIR, exist_ok=True)
-    cf = os.path.join(CURSOR_DIR, f"{cid}.ts")
+    base = f"{slug(project)}-{cid}"
+    cf = os.path.join(CURSOR_DIR, f"{base}.ts")
+    tf = os.path.join(CURSOR_DIR, f"{base}.threads")
     try:
         cursor = open(cf, encoding="utf-8").read().strip() or "0"
     except OSError:
         cursor = "0"
+    try:
+        threads = json.load(open(tf, encoding="utf-8"))
+        if not isinstance(threads, dict):
+            threads = {}
+    except (OSError, ValueError):
+        threads = {}
     q = f"conversations.history?channel={cid}&limit=50&oldest={cursor}"
     d = channels.api(token, q)
     if not d.get("ok"):
@@ -107,7 +108,9 @@ def main(argv):
         tt = m.get("thread_ts")
         if not (tt and m.get("reply_count")):
             continue
-        r = channels.api(token, f"conversations.replies?channel={cid}&ts={tt}&limit=60&oldest={cursor}")
+        # A thread's own cursor, never the channel's: an unrelated newer channel message must not hide its replies.
+        oldest = threads.get(tt) or "0"
+        r = channels.api(token, f"conversations.replies?channel={cid}&ts={tt}&limit=60&oldest={oldest}")
         if not r.get("ok"):
             continue
         replies = [x for x in (r.get("messages") or []) if x.get("ts") != tt]
@@ -118,11 +121,17 @@ def main(argv):
             thread_msgs.extend(replies)
     msgs = sorted(msgs + thread_msgs, key=lambda m: float(m.get("ts") or 0))
     out, newest = [], cursor
+    moved = dict(threads)
     for m in msgs:
         ts = m.get("ts") or ""
-        if float(ts or 0) <= float(cursor or 0) or ts == cursor:
+        tt = m.get("thread_ts") if m.get("_thread") else None
+        floor = (threads.get(tt) if tt else cursor) or "0"
+        if float(ts or 0) <= float(floor or 0):
             continue
-        if float(ts) > float(newest or 0):
+        if tt:
+            if float(ts) > float(moved.get(tt, "0") or 0):
+                moved[tt] = ts
+        elif float(ts) > float(newest or 0):
             newest = ts
         if m.get("user") == bot_user or m.get("bot_id"):
             continue
@@ -146,6 +155,11 @@ def main(argv):
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(newest)
             os.replace(tmp, cf)
+            if moved != threads:
+                tmp = tf + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(moved, f, sort_keys=True)
+                os.replace(tmp, tf)
     return 0
 
 

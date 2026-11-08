@@ -12,14 +12,13 @@ a slow TTS never delays the answer. Events keep the one-line shape in SKILL.md â
 a log line.
 
 A secret resolves in one order and is never printed or logged: the macOS Keychain (`<project>-slack-bot-token`, also
-tried with `-voice-` in the middle), then the project's gitignored .env, then the sibling project's .env (SKILL.md,
-Access). The Slack token itself is a Keychain entry; the Gemini key follows the full three steps in tts.gemini_key. A
-tracked .env is never a source.
+tried with `-voice-` in the middle), then the project's gitignored .env (secretstore.env_value), then the sibling
+project's .env (SKILL.md, Access). The Gemini key follows the same three steps in tts.gemini_key. A tracked .env is
+never a source.
 
 The spoken script is the caller's, not the text's: `--speech` names what the clip says, and without it the first 240
 characters of the text are spoken.
 """
-import json
 import os
 import subprocess
 import sys
@@ -28,26 +27,14 @@ TIMEOUT = 30
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import channels  # noqa: E402  the one resolver: the named channel, else the one closest to the repository
+import secretstore  # noqa: E402
 
-
-def keychain(service):
-    out = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
-                         capture_output=True, text=True, timeout=15)
-    return out.stdout.strip() or None if out.returncode == 0 else None
+SIBLING = os.environ.get("SG_TTS_SIBLING", "~/VSCodeProjects/agent-squad")
 
 
 def api(token, method, params=None, post=False):
-    cmd = ["curl", "-sS", "--max-time", str(TIMEOUT), "-H", f"Authorization: Bearer {token}"]
-    if post:
-        cmd += ["-H", "Content-type: application/json", "-X", "POST"]
-        if params is not None:
-            cmd += ["-d", json.dumps(params)]
-    cmd.append(f"https://slack.com/api/{method}")
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT + 5)
-    try:
-        return json.loads(out.stdout or "{}")
-    except ValueError:
-        return {"ok": False, "error": (out.stdout or out.stderr).strip()[:120]}
+    """One Slack call path: channels.api, resolved at call time, so reply.py keeps no second copy of it."""
+    return channels.api(token, method, params, post)
 
 
 def channel_id(token, wanted, project):
@@ -130,12 +117,10 @@ def main(argv):
         print("nothing to send", file=sys.stderr)
         return 2
 
-    if not service:
-        service = next((s for s in (f"{project}-slack-bot-token", f"{project}-voice-slack-bot-token") if keychain(s)),
-                       f"{project}-slack-bot-token")
-    token = keychain(service)
+    names = [service] if service else [f"{project}-slack-bot-token", f"{project}-voice-slack-bot-token"]
+    token = secretstore.find(names, ("SLACK_BOT_TOKEN",), SIBLING)
     if not token:
-        print(f"{service}: missing in the Keychain", file=sys.stderr)
+        print(f"{names[0]}: missing in the Keychain and in the project's .env", file=sys.stderr)
         return 1
     cid, why = channel_id(token, wanted, project)
     if not cid:
