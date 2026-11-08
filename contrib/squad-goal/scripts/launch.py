@@ -237,7 +237,8 @@ def _issue_worktree(issue, land):
 
     A profile whose fork checkout is another checkout keeps today's target: the child commits in the fork, which is no
     worktree of this run. A path that is no worktree of its own, or that sits on another branch, is left alone with the
-    reason printed: the loop must not reset or replace work an earlier child left behind (#65)."""
+    reason printed: the loop must not reset or replace work an earlier child left behind (#65).
+    A tree made now on a branch an earlier dispatch left behind starts from the landing branch, as a reused one does (#1591)."""
     co, fork = os.environ.get("SG_CHECKOUT"), os.environ.get("SG_FORK_DIR")
     if not co or not fork or pathlib.Path(co).resolve() != pathlib.Path(fork).resolve(): return None
     br = (os.environ.get("SG_FORK_BRANCH") or "gui/%n").replace("%n", str(issue))
@@ -250,12 +251,24 @@ def _issue_worktree(issue, land):
         return wt if _start_from(wt, br, land) else None
     wt.parent.mkdir(parents=True, exist_ok=True)
     have = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", f"refs/heads/{br}"], capture_output=True).returncode == 0
+    if have:   # #1591: a cleanup can take the worktree away and leave its branch at an earlier tip, and a dispatch that made
+        # the tree on that tip started the child on a stale base (the base's files and merges were absent). The branch is reused
+        # only when it carries no commit the landing branch lacks: then the tree is made on it and moves up as a reused tree
+        # does. Otherwise whether it holds work worth keeping cannot be told here, so it is left exactly as it is, its tip is
+        # named, and the run starts elsewhere: nothing is deleted, and no unnamed work rides into the wave.
+        tip = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", f"refs/heads/{br}^{{commit}}"], capture_output=True, text=True).stdout.strip()
+        rev = subprocess.run(["git", "-C", co, "rev-list", "--count", f"{land}..refs/heads/{br}"], capture_output=True, text=True)
+        if rev.returncode or not tip or rev.stdout.strip() != "0":
+            print(f"note: the issue branch {br} is left behind at {(tip or 'an unreadable tip')[:9]} and carries commits not in {land}"
+                  f"{'' if rev.returncode == 0 else ' (unreadable)'}: the run does not reuse it, and the branch is left as it is; "
+                  f"the run gets {FALLBACK}, and a person must look", file=sys.stderr)
+            return None
     made = subprocess.run(["git", "-C", co, "worktree", "add", "-q", str(wt), br] if have else
                           ["git", "-C", co, "worktree", "add", "-q", "-b", br, str(wt), land], capture_output=True, text=True)
     if made.returncode:
         print(f"note: cannot make the issue worktree {wt} on {br}: {made.stderr.strip()}: the run gets {FALLBACK}", file=sys.stderr)
         return None
-    return wt
+    return wt if _start_from(wt, br, land) else None
 
 def _named_target(co, path):
     """The tree a fix run names in SG_RUN_TARGET (#654): the child's kept worktree, used as it is (no reset, no new tree), so every
