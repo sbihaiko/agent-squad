@@ -160,10 +160,13 @@ class FakeClient:
         self.post_delay = post_delay
         self.stamped = []      # (method, monotonic moment) in call order, so a target is measured and not assumed
         self.finished = []     # (method, monotonic moment) when the call returned, so an ordering is read, not timed
+        self.before_post = None   # called with each method before it runs, so a test can gate a write on another event
 
     def api(self, method, params=None, post=False):
         self.calls.append((method, dict(params or {}), post))
         self.stamped.append((method, time.monotonic()))
+        if self.before_post is not None:
+            self.before_post(method, params or {})
         if method == "chat.postMessage" and self.post_delay:
             time.sleep(self.post_delay)
         self.finished.append((method, time.monotonic()))
@@ -602,10 +605,12 @@ class FakeVoice:
     that records each clip with the moment it was posted. Both can be made slow, so the targets are measured against a
     pipeline that takes time, never against a fake that answers at once."""
 
-    def __init__(self, tmp_path, delay=0.0, on_clip=None, refuse=0):
+    def __init__(self, tmp_path, delay=0.0, on_clip=None, refuse=0, refuse_nth=(), started=None):
         self.delay = delay
         self.on_clip = on_clip
         self.refuse = refuse      # how many uploads Slack refuses, counted from the first, so a retry can succeed
+        self.refuse_nth = set(refuse_nth)   # one upload to refuse by its position, so a later stage can fail alone
+        self.started = started    # an event the first synthesis sets, so a test reads the ordering without a clock
         self.scripts = []
         self.clips = []
         self.dir = Path(tmp_path) / "clips"
@@ -613,6 +618,8 @@ class FakeVoice:
 
     def synth(self, script):
         self.scripts.append((script, time.monotonic()))
+        if self.started is not None:
+            self.started.set()
         if self.delay:
             time.sleep(self.delay)
         path = self.dir / f"clip-{len(self.scripts)}.wav"
@@ -621,8 +628,9 @@ class FakeVoice:
 
     def upload(self, path, channel, thread_ts, title):
         n = len(self.clips) + 1
-        refused = n <= self.refuse
-        self.clips.append({"channel": channel, "thread_ts": thread_ts, "at": time.monotonic(), "refused": refused})
+        refused = n <= self.refuse or n in self.refuse_nth
+        self.clips.append({"channel": channel, "thread_ts": thread_ts, "at": time.monotonic(), "refused": refused,
+                           "title": title})
         if self.on_clip:
             self.on_clip(n)
         if refused:
@@ -682,18 +690,23 @@ def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_te
     client = FakeClient(post_delay=0.2)
     channels = one_channel(tmp_path, mod, client)
     app = channels["acme/app"]
-    voice = FakeVoice(tmp_path)
+    started = threading.Event()
+    voice = FakeVoice(tmp_path, started=started)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    # A structural ordering, never a clock: the text post may not return until the first synthesis has begun, so a
+    # post that waited for the voice to finish, or a voice that waited for the post, hangs here and fails the test.
+    def gate(method, _params):
+        if method == "chat.postMessage":
+            assert started.wait(5.0), "the first synthesis waited for the text post instead of running with it"
+
+    client.before_post = gate
 
     append_outbox(daemon.state.outbox_for(app["name"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
 
     assert [script for script, _ in voice.scripts] == ["The paint is green.", "It dries in an hour."]
-    # Read the ordering, never the wall clock: the first synthesis begins before the text post returns.
-    text_posted_at = next(at for method, at in client.finished if method == "chat.postMessage")
-    assert voice.scripts[0][1] <= text_posted_at, \
-        "the first synthesis waited for the text post instead of running with it"
     assert voice.clips[0]["at"] <= voice.scripts[1][1], "the rest was synthesized before the first clip went out"
     assert [c["thread_ts"] for c in voice.clips] == ["1762500000.000100"] * 2
     assert [c["channel"] for c in voice.clips] == [app["id"]] * 2
@@ -812,6 +825,60 @@ def test_a_refused_clip_is_spoken_again_and_the_text_is_never_posted_twice(tmp_p
     assert [script for script, _ in restarted_voice.scripts] == ["One.", "Two."]
     assert len(restarted_voice.clips) == 2, "the refused clip was never spoken"
     assert [c["thread_ts"] for c in restarted_voice.clips] == ["1762500000.000100"] * 2
+    # One clip per stage across the retry: the refused first sentence once, then the rest once.
+    assert [c["title"] for c in restarted_voice.clips] == ["the answer's first sentence", "the answer"]
+
+
+def test_a_refused_rest_clip_respeaks_only_the_rest(tmp_path):
+    """A first sentence the owner already heard is never spoken again: a refusal of the rest stage repeats that clip
+    alone, so the retry costs the owner one clip, never the first sentence twice."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path, refuse_nth=(2,))   # the first clip is accepted, the rest is refused
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.outbox_for(app["name"]),
+                  {"thread_ts": "1762500000.000100", "text": "One. Two."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert len(client.posts()) == 1
+    assert [c["title"] for c in voice.clips] == ["the answer's first sentence", "the answer"]
+    assert [c["refused"] for c in voice.clips] == [False, True]
+
+    # The restart repeats the refused stage only: the first sentence already went out and is never spoken twice.
+    restarted_voice = FakeVoice(tmp_path)
+    again = outbox_daemon(tmp_path, mod, client, None, restarted_voice)
+    asyncio.run(again.drain_outboxes())
+
+    assert len(client.posts()) == 1, "the restart posted the same text a second time"
+    assert [script for script, _ in restarted_voice.scripts] == ["Two."], \
+        "the first sentence was synthesized again after it had already been spoken"
+    assert [c["title"] for c in restarted_voice.clips] == ["the answer"]
+
+
+def test_a_second_refusal_of_the_rest_clip_still_never_repeats_the_first(tmp_path):
+    """Two daemons in a row meet a refused rest clip: the first sentence is spoken once for all of them."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path, refuse_nth=(2,))
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.outbox_for(app["name"]),
+                  {"thread_ts": "1762500000.000100", "text": "One. Two."})
+    asyncio.run(daemon.drain_outboxes())
+
+    second = FakeVoice(tmp_path, refuse_nth=(1,))
+    asyncio.run(outbox_daemon(tmp_path, mod, client, None, second).drain_outboxes())
+    third = FakeVoice(tmp_path)
+    asyncio.run(outbox_daemon(tmp_path, mod, client, None, third).drain_outboxes())
+
+    assert [script for script, _ in second.scripts] == ["Two."]
+    assert [script for script, _ in third.scripts] == ["Two."]
+    assert [c["title"] for c in third.clips] == ["the answer"]
 
 
 def test_the_daemon_answers_a_line_the_session_appends_while_it_runs(tmp_path):

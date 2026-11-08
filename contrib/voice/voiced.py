@@ -244,6 +244,20 @@ class State:
         self._append(self.posted_path, record)
         self.posted()[digest] = record
 
+    def remember_clip(self, digest, stage):
+        """One durable mark of a clip already out, written at once: a later stage's refusal repeats that stage alone,
+        never a clip the owner already heard."""
+        record = self.posted().get(digest)
+        if record is None:
+            return
+        done = list(record.get("clips_done") or [])
+        if stage in done:
+            return
+        done.append(stage)
+        record = {"digest": digest, "ts": record.get("ts"), "clips_done": done}
+        self._append(self.posted_path, record)
+        self.posted()[digest] = record      # the last line for a digest wins, so a restart reads the newest stage set
+
     def remember_delivered(self, digest):
         """One durable mark of an answer fully posted, text and every clip: the ledger is written before the memory that
         trusts it, so an append that fails makes the next drain try again instead of swallowing the answer."""
@@ -605,8 +619,8 @@ class Daemon:
         end. Each call runs in a worker thread, because both the Slack write and Gemini take seconds.
 
         Returns two answers: whether the text is out, and whether every clip it meant to speak went out. A line whose
-        text is already out is spoken again and never posted again, so a refused upload costs the voice a delay, never
-        the answer.
+        text is already out is spoken again and never posted again, and each clip already out is skipped, so a refused
+        stage costs the voice that stage alone.
         """
         text = (record.get("text") or "").strip()
         cid = (record.get("channel") or channel or "").strip()
@@ -616,9 +630,10 @@ class Daemon:
         thread = record.get("thread_ts")
         first, rest = split_sentences((record.get("speech") or text).strip())
         posted = self.state.posted().get(digest) if digest else None
+        done = set(posted.get("clips_done") or []) if posted else set()
         # The first sentence is synthesized beside the text post when there is one, so the voice never waits for Slack.
         speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first)) \
-            if (first and self.synthesizer) else None
+            if (first and self.synthesizer and "first" not in done) else None
         if posted is None:
             ok, ts = await asyncio.to_thread(self.post_text, cid, thread, text)
             if not ok:
@@ -633,13 +648,18 @@ class Daemon:
         anchor = thread or ts
         if speaking is not None:
             path = await speaking
-            if path and not await asyncio.to_thread(self.post_clip, path, cid, anchor,
-                                                    "the answer's first sentence"):
-                return True, False      # the first clip is refused: the next drain speaks both, in order
-        if rest and self.synthesizer:
+            if path:
+                if not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer's first sentence"):
+                    return True, False      # the first clip is refused: the next drain speaks it, then the rest
+                if digest:
+                    self.state.remember_clip(digest, "first")
+        if rest and self.synthesizer and "rest" not in done:
             path = await asyncio.to_thread(self.synth_clip, rest)
-            if path and not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer"):
-                return True, False
+            if path:
+                if not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer"):
+                    return True, False
+                if digest:
+                    self.state.remember_clip(digest, "rest")
         return True, True
 
     async def drain_outboxes(self):
