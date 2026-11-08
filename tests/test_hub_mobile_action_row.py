@@ -125,7 +125,7 @@ def test_a_root_with_one_view_offers_one_filter_option(hub):
         show("specs");
         return { now, specs: [...document.querySelectorAll("#cr-seg button")].map(b => b.textContent) };
     """)
-    assert out == {"now": ["Needs you", "Any item"], "specs": ["Every spec"]}, out
+    assert out == {"now": ["Needs you", "Any item"], "specs": ["Any spec"]}, out
 
 
 @pytest.mark.node_bound

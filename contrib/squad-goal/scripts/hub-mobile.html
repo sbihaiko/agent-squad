@@ -165,6 +165,13 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #cr-seg button{min-height:44px;flex:none;background:var(--bg);color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #cr-seg button[aria-pressed=true]{color:var(--fg);border-color:var(--acc)}
 #cr-scope{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-caption);white-space:nowrap}
+/* Search (#1600): the field takes the control row's slot, above the keyboard and the tab bar, and Back clears it. */
+#searchbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));display:flex;gap:8px;padding:6px 14px;background:var(--panel);border-top:1px solid var(--line);z-index:39}
+#searchbar[hidden]{display:none}
+#searchbar input{flex:1;min-width:0;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-field)}
+#search-back,#specs-search{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#bhead #work-search{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+#cards[hidden],#dots[hidden],#work-results[hidden]{display:none}
 #now-head,#more-head,#specs-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 8px}
 #now-head h2,#more-head h2,#specs-head h2{margin:0}
 [data-topback],#now-more{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
@@ -418,6 +425,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <!-- Now › Needs you (SPEC 1596, rule 10; #1601): the same waiting rows the Chat badge counts, inside the scope, with no
      badge of their own; answering a question clears it from here and from the badge. -->
 <div id="needs-you"></div>
+<p id="now-rest" class="mut" role="status" hidden></p>
 <p id="needs-you-msg" class="msg" role="status"></p>
 <div class=tiles>
 <div class=tile><b id=t-live>-</b><span>live runs</span></div>
@@ -437,6 +445,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button id="col-prev" aria-label="Previous column">&lsaquo;</button>
 <div id="col-title"><span id="col-name"></span><span id="col-count"></span></div>
 <button id="col-next" aria-label="Next column">&rsaquo;</button>
+<button id="work-search" type="button" aria-label="Search cards by title, number or label">Search</button>
 </div>
 <div id="dots"></div>
 <div id="bfilter">
@@ -447,6 +456,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <p id="empty-cols" hidden></p>
 <div id="cards" data-role="gap"></div>
+<!-- The Work search results replace the columns (SPEC 1596, rule 5; #1600); the counted remainder names what the filter hid. -->
+<div id="work-results" class="runlist" hidden></div>
+<p id="work-rest" class="mut" role="status" hidden></p>
 <div id="undo" role="status" hidden><span id="undo-text"></span><button id="undo-btn" type="button" hidden>Undo</button></div>
 <p id="bread"></p>
 <p id="bmsg"></p>
@@ -458,6 +470,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="runs-live" class="runlist"></div>
 <h3 class="sub">Ended today</h3>
 <div id="runs-ended" class="runlist"></div>
+<p id="runs-rest" class="mut" role="status" hidden></p>
 <p id="runs-state" class="msg" role="status">The runs are loading.</p>
 <p id="runs-msg" class="msg" role="status"></p>
 <h3 class="sub" id="runs-history-h">Run history</h3>
@@ -468,6 +481,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <section data-panel="terminals" hidden>
 <h2>Terminals</h2>
 <div id="sessions" class="runlist" aria-live="polite"></div>
+<p id="chat-rest" class="mut" role="status" hidden></p>
 <p id="sessions-state" class="msg" role="status">The terminal sessions are loading.</p>
 <p id="sessions-msg" class="msg" role="status"></p>
 </section>
@@ -499,7 +513,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-ltf="2" type="button">48h</button>
 <button data-ltf="7" type="button">1 week</button>
 <button data-ltf="30" type="button">1 month</button>
-<button data-ltf="all" type="button">All</button>
+<button data-ltf="all" type="button">All time</button>
 </div>
 <div id="ltplot"></div>
 <div id="ltlegend"></div>
@@ -515,7 +529,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="more-actions"><button id="more-backact" data-actback type="button">Back</button></div>
 </section>
 <section data-panel="specs" hidden>
-<div id="specs-head" data-role="header"><h2>Specs</h2></div>
+<div id="specs-head" data-role="header"><h2>Specs</h2><button id="specs-search" type="button" aria-label="Search specs by title, number or label">Search</button></div>
 <p id="specs-state" class="msg" role="status"></p>
 <div id="specs-list" class="runlist"></div>
 </section>
@@ -585,6 +599,12 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="runview-actions"><button id="runview-back" data-actback type="button">Back</button><button id="run-dots" type="button" aria-label="More actions" aria-haspopup="true">•••</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
 <div id="run-menu" hidden><button id="rundesk-btn" type="button">Desktop dashboard</button></div>
 </section>
+<!-- Search on Work and Specs (SPEC 1596, rule 5; #1600): the field opens above the keyboard in the control row's slot,
+     Enter-less matching runs on every keystroke, the results replace the root's list, and Esc or Back clears it. -->
+<div id="searchbar" data-role="search" hidden>
+<button id="search-back" type="button">Back</button>
+<input id="search-input" type="search" autocomplete="off" aria-label="Search by title, number or label">
+</div>
 <!-- The control row of SPEC 1596 (#1598, rule 4): one row on every root, above the tab bar, never on a detail. -->
 <div id="control-row" data-role="control-row"><div id="cr-seg" role="group" aria-label="Filter"></div><button id="cr-scope" type="button">All projects</button></div>
 <!-- The tab bar of SPEC 1596 (#1597): five tabs, drawn on every screen, a detail included, and over every sheet. -->
@@ -609,6 +629,7 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*RUN*/
 /*USAGE*/
 /*SPECS*/
+/*SEARCH*/
 /*BOARD_FILTER*/
 /*CARD_RULES*/
 /*LOOP_RULES*/
@@ -814,7 +835,7 @@ function routeFromHash(hash) {
 const ROOT_FILTERS = {
   now: ["Needs you", "Any item"],
   work: ["Live", "Any card"],
-  specs: ["Every spec"],
+  specs: ["Any spec"],
   chat: ["Waiting", "Every chat"],
   runs: ["Live", "Ended", "Any run"],
 };
@@ -824,7 +845,7 @@ const ROOT_KEEP = {
   now: [r => !!r.waiting, () => true],   // Now › Needs you keeps the rows that wait; "Any item" keeps every conversation
   work: [x => !!x.ho, () => true],
   chat: [s => !!s.waiting, () => true],
-  runs: [r => !!r.running, r => !r.running, () => true],
+  runs: [r => !!r.live, r => !r.live, () => true],   // Live is the hub's live-process fact, never a derived "running"
 };
 const rootFilter = { now: 0, work: 1, specs: 0, chat: 1, runs: 2 };
 const rootKeep = (tab, x) => { const f = ROOT_KEEP[tab]; const keep = f && f[rootFilter[tab]]; return keep ? keep(x) : true; };
@@ -834,7 +855,7 @@ const scopeName = () => { const me = location.pathname.split("/")[1]; return me 
 function paintControlRow() {
   const row = $("control-row");
   if (!row) return;
-  row.hidden = layers.length > 0;   // a detail draws its action row instead
+  row.hidden = layers.length > 0 || searchState.open;   // a detail draws its action row instead; Search takes the slot
   const seg = $("cr-seg");
   if (seg.dataset.tab !== tabActive) {
     seg.dataset.tab = tabActive;
@@ -851,6 +872,59 @@ function paintControlRow() {
   $("cr-scope").textContent = scopeName();
 }
 $("cr-scope").onclick = () => openLayer("psheet");
+// Search on Work and Specs (SPEC 1596, rule 5; #1600): one field in the control row's slot, a title/number/label match from
+// the pure rule module, the results in place of the root's list, and Esc or Back to clear it. The page binds the field and
+// its buttons; the match and the remainder line stay in hub-mobile-search.js (ADR-0137).
+const searchState = { open: false, tab: "", query: "" };
+const searchOn = () => searchState.open && (searchState.tab === "work" || searchState.tab === "specs");
+const workSearchPool = () => ((board && board.groups) || []).flatMap(g => (g.items || [])
+  .map(x => ({ ...x, title: x.t, labels: x.l || [] })));
+function searchResultEl(x) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "runrow"; b.dataset.n = String(x.n);
+  const t = document.createElement("b");
+  t.textContent = "#" + x.n + " " + (x.t || "");
+  b.append(t);
+  if (x.l && x.l.length) { const s = document.createElement("div"); s.className = "mut"; s.textContent = x.l.join(" · "); b.append(s); }
+  b.onclick = () => { const n = x.n; clearSearch(); openCard(n); };
+  return b;
+}
+// The results replace the columns while the query names a row (rule 5); an empty field leaves the board where it was.
+function paintWorkSearch(q) {
+  const rows = q ? searchRows(workSearchPool(), q) : [];
+  $("work-results").replaceChildren(...rows.map(searchResultEl));
+  $("work-results").hidden = !q;
+  $("cards").hidden = !!q;
+  $("dots").hidden = !!q;
+}
+function paintSearch() {
+  const on = searchOn();
+  $("searchbar").hidden = !on;
+  if (!on) return;
+  paintControlRow();
+  if (searchState.tab === "work") paintWorkSearch(searchState.query.trim()); else drawSpecs();
+}
+function openSearch(tab) {
+  searchState.open = true; searchState.tab = tab; searchState.query = "";
+  $("search-input").value = "";
+  paintSearch();
+  const f = $("search-input"); if (f && f.focus) f.focus();
+}
+function clearSearch() {
+  const tab = searchState.tab;
+  searchState.open = false; searchState.tab = ""; searchState.query = "";
+  $("searchbar").hidden = true;
+  $("search-input").value = "";
+  $("work-results").replaceChildren(); $("work-results").hidden = true;
+  $("cards").hidden = false; $("dots").hidden = false;
+  paintControlRow();
+  if (tab === "specs") drawSpecs(); else if (tab === "work") renderBoard();
+}
+$("work-search").onclick = () => openSearch("work");
+$("specs-search").onclick = () => openSearch("specs");
+$("search-input").oninput = () => { searchState.query = $("search-input").value; paintSearch(); };
+$("search-input").onkeydown = e => { if (e && e.key === "Escape") clearSearch(); };
+$("search-back").onclick = clearSearch;
 // The panel in view: the tab's root, or the More screen where it stands over Now.
 function paintPanel() {
   const panel = layers.includes("more") ? "more" : TAB_PANEL[tabActive];
@@ -941,6 +1015,12 @@ function show(name) {
   if (tabNow) tabScroll[tabNow] = window.scrollY;
   if (tab !== tabActive) pauseStack(tabActive);
   tabActive = tab;
+  // Search belongs to Work and Specs: leaving them closes the field and puts the root's own list back (#1600).
+  if (searchState.open && searchState.tab !== tab) {
+    searchState.open = false; searchState.tab = ""; searchState.query = "";
+    $("searchbar").hidden = true; $("work-results").hidden = true;
+    $("cards").hidden = false; $("dots").hidden = false;
+  }
   layers = tabStacks[tab];
   tabNow = TAB_PANEL[tab];
   localStorage.setItem("squad-mobile-tab", tab);
@@ -1316,6 +1396,11 @@ function renderBoard() {
   // With the filter on (the default), a column with no visible card is left out and named in one list (#877).
   const { shown: cols, hidden, closed } = carouselColumns(groups, groups.map(g => columnCards(g).length), bo.hideEmpty !== false);
   $("hide-empty").textContent = bo.hideEmpty !== false ? "Empty columns: hidden" : "Empty columns: shown";
+  // The segment hides a card the filter cannot keep: one quiet line counts the remainder (#1600).
+  const allCards = groups.reduce((m, g) => m + (g.items || []).length, 0);
+  const keptCards = groups.reduce((m, g) => m + (g.items || []).filter(x => rootKeep("work", x)).length, 0);
+  const restText = restLine(allCards, keptCards, ROOT_FILTERS.work[rootFilter.work]);
+  $("work-rest").textContent = restText; $("work-rest").hidden = !restText;
   const notes = [];
   if (hidden.length) notes.push("Empty: " + hidden.map(h => h.name + " " + h.count).join(" · "));
   if (closed.length) notes.push(closed.map(c => c.name + " " + c.count).join(" · "));
@@ -1571,8 +1656,11 @@ function renderFilters() {
 const refresh = () => { renderBoard(); renderSheet(); renderFilters(); drawSpecs(); };
 // Specs (#1604): each open spec with its tickets by column, from the board this page reads. hub-mobile-specs.js shapes it.
 function drawSpecs() {
-  const rows = specProgress(board);
-  $("specs-state").textContent = !board ? "The board is loading." : rows.length ? "" : "No open spec.";
+  const all = specProgress(board);
+  // Search matches a spec's title, number or label and its results replace the list (rule 5; #1600).
+  const q = searchState.open && searchState.tab === "specs" ? searchState.query.trim() : "";
+  const rows = q ? searchRows(all, q) : all;
+  $("specs-state").textContent = !board ? "The board is loading." : rows.length ? "" : q ? "No spec matches." : "No open spec.";
   $("specs-list").replaceChildren(...rows.map(specRowEl));
 }
 function specRowEl(s) {
@@ -2210,6 +2298,10 @@ function drawRuns() {
   drawList(runsState, $("runs-state"), $("runs-msg"), () => {
     $("runs-live").replaceChildren(...runsState.rows.filter(r => r.running && rootKeep("runs", r)).map(r => runRow(r, r.url || runURLs(r.id).page)));
     $("runs-ended").replaceChildren(...runsState.ended.filter(r => rootKeep("runs", r)).map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
+    // One quiet line counts the runs the segment hid (#1600).
+    const pool = [...runsState.rows, ...runsState.ended];
+    const restText = restLine(pool.length, pool.filter(r => rootKeep("runs", r)).length, ROOT_FILTERS.runs[rootFilter.runs]);
+    $("runs-rest").textContent = restText; $("runs-rest").hidden = !restText;
   });
   const v = drawList(histState, $("runs-history-state"), $("runs-history-msg"),
     () => drawHistory(histState.rows, histState.groups, histState.muted));
@@ -2461,6 +2553,9 @@ const chatScope = (rows) => {
 function drawChat() {
   sessRows = chatRows({ groups: sessState.groups }, loopProjects());
   $("sessions").replaceChildren(...sessRows.filter(r => rootKeep("chat", r)).map(chatRowNode));
+  // One quiet line counts the conversations the segment hid (#1600).
+  const restText = restLine(sessRows.length, sessRows.filter(r => rootKeep("chat", r)).length, ROOT_FILTERS.chat[rootFilter.chat]);
+  $("chat-rest").textContent = restText; $("chat-rest").hidden = !restText;
   drawBadge();
   drawNeedsYou();
   paintHeader();
@@ -2489,6 +2584,8 @@ function drawNeedsYou() {
   const list = sessState.ever ? sessRows : (badgeRows || []);
   const rows = list.filter(r => rootKeep("now", r));
   el.replaceChildren(...rows.map(chatRowNode));
+  const restText = restLine(list.length, rows.length, ROOT_FILTERS.now[rootFilter.now]);
+  $("now-rest").textContent = restText; $("now-rest").hidden = !restText;
   $("needs-you-msg").textContent = rows.length ? "" : "Nothing waits for you in this scope.";
 }
 onLoop = () => drawChat();
