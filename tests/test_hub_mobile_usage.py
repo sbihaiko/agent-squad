@@ -61,6 +61,13 @@ def test_pie_groups_every_model_past_five_as_other():
     assert got[-1]["tokens"] == 20
 
 
+def test_the_ring_lays_each_slice_end_to_end_around_the_circle():
+    got = js(f"usageRing(usageSlices({json.dumps(MODELS)}), 50)")
+    circle = 2 * 3.141592653589793 * 50
+    assert [round(s["len"], 3) for s in got] == [round(0.6 * circle, 3), round(0.3 * circle, 3), round(0.1 * circle, 3)]
+    assert [round(s["off"], 3) for s in got] == [0, round(-0.6 * circle, 3), round(-0.9 * circle, 3)]
+
+
 def test_peak_names_the_busiest_bucket_in_millions():
     assert js(f"usagePeak({json.dumps(BUCKETS)}, 'hour')") == "4.0M at 11:00"
 

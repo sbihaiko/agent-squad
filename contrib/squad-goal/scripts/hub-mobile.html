@@ -310,6 +310,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
 <section data-panel="monitor">
+<button id="now-today" type="button" hidden></button>
 <div id="now-head" data-role="header"><h2>Now</h2><button id="now-more" type="button">More</button></div>
 <!--INST_CARD-->
 <!-- The loop strip (SPEC 1596, rule 8; #1599): one loop belongs to one project, so the strip aggregates every project
@@ -385,6 +386,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section data-panel="runs" hidden>
 <h2>Runs</h2>
+<button id="runs-usage" type="button">Usage</button>
 <h3 class="sub">Live</h3>
 <div id="runs-live" class="runlist"></div>
 <h3 class="sub">Ended today</h3>
@@ -450,6 +452,17 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p class="msg" role="status">The specs list is not drawn on this build.</p>
 </section>
 </main>
+<section id="usage-screen" hidden>
+<div class="scr-head"><button id="usage-back" data-topback="usage" type="button">&#8249; Runs</button><h2>Usage</h2></div>
+<div id="usage-periods" role="group" aria-label="Period"><button data-usage-period="hour" type="button" aria-pressed="false">Hour</button><button data-usage-period="day" type="button" aria-pressed="true">Day</button><button data-usage-period="month" type="button" aria-pressed="false">Month</button></div>
+<p id="usage-state" class="msg" role="status"></p>
+<h3 class="sub">Tokens</h3>
+<div id="usage-bars"></div>
+<p id="usage-peak" class="mut"></p>
+<h3 class="sub">Models · this month</h3>
+<div id="usage-pie"></div>
+<div id="usage-legend"></div>
+</section>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
 <div id="sheet-content"><div class="grab"></div>
 <div id="sh-head"><button id="sh-backtop" data-topback="sheet" type="button">&#8249; Work</button><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
@@ -505,6 +518,7 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*CARD_DETAIL*/
 /*LINK*/
 /*RUN*/
+/*USAGE*/
 /*BOARD_FILTER*/
 /*CARD_RULES*/
 /*LOOP_RULES*/
@@ -621,6 +635,7 @@ const LAYER = {
   term: { show(s) { showConversation(s.sid, s.name); }, hide() { hideConversation(); } },
   run: { show(s) { showRun(s); }, hide() { hideRun(); } },
   cost: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
+  usage: { show() { showUsage(); }, hide() { hideUsage(); } },
   lead: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
   more: { show() { moreScreen = null; paintPanel(); }, hide() { moreScreen = null; paintPanel(); } },
   // The Loops list names every project and the change log across them; a row opens one project's loop; the loop page
@@ -632,8 +647,8 @@ const LAYER = {
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
 // screen a nested one stands on.
-const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now" };
-const LAYER_TITLE = { sheet: "Card", psheet: "Projects", term: "Session", run: "Run", cost: "Cost and usage", lead: "Lead time", more: "More",
+const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", usage: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now" };
+const LAYER_TITLE = { sheet: "Card", psheet: "Projects", term: "Session", run: "Run", usage: "Usage", cost: "Cost and usage", lead: "Lead time", more: "More",
                       loops: "Loops", loop: "Loop", bugs: "Loop-bugs" };
 const LAYER_PARENT = { cost: "more", lead: "more", loop: "loops", bugs: "loop" };
 const screenChain = name => { const out = []; for (let p = LAYER_PARENT[name]; p; p = LAYER_PARENT[p]) out.unshift(p); return out; };
@@ -674,6 +689,7 @@ const SEG = {
   term: s => withQuery("session=" + encodeURIComponent(s.sid), [["name", s.name]]),
   run: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
   cost: () => "usage",
+  usage: () => "usage",
   lead: () => "lead",
   more: () => "more",
   loops: () => "loops",
@@ -688,7 +704,7 @@ function routeFromHash(hash) {
   const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
   if (head === "profile") out.layer = "psheet";
   else if (head === "more") out.layer = "more";
-  else if (head === "usage") out.layer = "cost";
+  else if (head === "usage") out.layer = tab === "runs" ? "usage" : "cost";
   else if (head === "lead") out.layer = "lead";
   else if (head === "loops") out.layer = "loops";
   else if (head === "bugs") out.layer = "bugs";
@@ -1851,6 +1867,83 @@ document.querySelector('[data-screen="lead"] #ltplot').addEventListener("click",
 });
 // The cost list keeps what it last drew (#1445): the one helper draws the line, the error and then the held rows. The
 // lead-time screen keeps its single line, which this change leaves alone.
+// Runs › Usage (#1604): the desktop's /api/stats payload for the period the owner picks. hub-mobile-usage.js shapes it; the
+// screen fetches, draws and computes no number of its own (ADR-0137).
+const usageState = { period: "day", data: null, seq: 0 };
+const NS_SVG = "http://www.w3.org/2000/svg";
+function usageBarsEl(bars) {
+  const svg = document.createElementNS(NS_SVG, "svg"), bw = CH_W / bars.length;
+  svg.setAttribute("viewBox", `0 0 ${CH_W} ${CH_H}`);
+  bars.forEach((b, i) => {
+    const r = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title"), h = b.h / 100 * (CH_H - 4);
+    r.setAttribute("x", i * bw + 1);
+    r.setAttribute("y", CH_H - h);
+    r.setAttribute("width", Math.max(1, bw - 2));
+    r.setAttribute("height", h);
+    r.setAttribute("fill", "var(--acc)");
+    t.textContent = `${b.label}: ${usageCount(b.tokens)}`;
+    r.append(t);
+    svg.append(r);
+  });
+  return svg;
+}
+function usageRingEl(slices) {
+  const svg = document.createElementNS(NS_SVG, "svg");
+  svg.setAttribute("viewBox", "0 0 120 120");
+  usageRing(slices, 50).forEach((s, i) => {
+    const c = document.createElementNS(NS_SVG, "circle");
+    c.setAttribute("cx", 60);
+    c.setAttribute("cy", 60);
+    c.setAttribute("r", 50);
+    c.setAttribute("fill", "none");
+    c.setAttribute("stroke-width", 20);
+    c.setAttribute("stroke", `hsl(${i * 60} 60% 55%)`);
+    c.setAttribute("stroke-dasharray", `${s.len} ${2 * Math.PI * 50}`);
+    c.setAttribute("stroke-dashoffset", s.off);
+    c.setAttribute("transform", "rotate(-90 60 60)");
+    svg.append(c);
+  });
+  return svg;
+}
+function paintUsage() {
+  const d = usageState.data;
+  const bars = usageBars(d.buckets || [], usageState.period), slices = usageSlices(d.models || []);
+  $("usage-bars").replaceChildren(...(bars.length ? [usageBarsEl(bars)] : []));
+  $("usage-peak").textContent = bars.length ? "Peak " + usagePeak(d.buckets, usageState.period) : "";
+  $("usage-pie").replaceChildren(...(slices.length ? [usageRingEl(slices)] : []));
+  $("usage-legend").replaceChildren(...slices.map(s => { const p = document.createElement("p"); p.className = "mut"; p.textContent = s.legend; return p; }));
+}
+function drawUsagePeriod() {
+  for (const b of document.querySelectorAll("[data-usage-period]")) b.setAttribute("aria-pressed", String(b.dataset.usagePeriod === usageState.period));
+}
+async function loadUsage() {
+  const seq = ++usageState.seq, period = usageState.period;
+  try {
+    const d = await call("/api/stats?period=" + period);
+    if (seq !== usageState.seq) return;
+    usageState.data = d;
+    paintUsage();
+    $("usage-state").textContent = "";
+  } catch (e) {
+    if (seq === usageState.seq) $("usage-state").textContent = e.message;
+  }
+}
+function selectUsagePeriod(period) { usageState.period = period; drawUsagePeriod(); return loadUsage(); }
+function showUsage() { $("usage-screen").hidden = false; drawUsagePeriod(); loadUsage(); }
+function hideUsage() { $("usage-screen").hidden = true; }
+async function loadNowToday() {
+  try {
+    const t = (await call("/api/stats?period=day")).totals || {};
+    $("now-today").textContent = "Today · " + usageTodayLine(t);
+    $("now-today").hidden = false;
+  } catch (e) {
+    $("now-today").hidden = true;
+  }
+}
+$("runs-usage").onclick = () => openLayer("usage");
+$("now-today").onclick = () => { tabTap("runs"); openLayer("usage"); };
+for (const b of document.querySelectorAll("[data-usage-period]")) b.onclick = () => selectUsagePeriod(b.dataset.usagePeriod);
+every("monitor", loadNowToday, 60000);
 const costState = { ever: false, n: 0, error: "", data: null,
   loading: "Cost and usage are loading.", empty: "No model spend is drawn for this period." };
 function drawCost(el) {
@@ -2278,7 +2371,7 @@ every("terminals", () => { if (!termOpen() && !squadStream.live()) loadSessions(
 // its later states.
 const route = routeFromHash(location.hash);
 const was = history.state || {};
-drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"]'));
+drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"]')); loadNowToday();
 // The address names the screen first, then the entry's own state, then the tab the owner left: a reload lands on it.
 show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getItem("squad-mobile-tab"))));
 // A card link in the address opens its card once the board's read answers (#1459).

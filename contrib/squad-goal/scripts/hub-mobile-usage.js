@@ -22,6 +22,11 @@ function usageSlices(models) {
   }
   return out;
 }
+function usageRing(slices, r) {
+  const circle = 2 * Math.PI * r;
+  let at = 0;
+  return slices.map(s => { const len = s.pct / 100 * circle, out = { model: s.model, len, off: -at }; at += len; return out; });
+}
 function usagePeak(buckets, period) {
   const top = buckets.reduce((a, b) => (b.tokens || 0) > (a.tokens || 0) ? b : a, buckets[0]);
   return usageMillions(top.tokens || 0) + " at " + usageLabel(top.t, period);
