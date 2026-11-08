@@ -9,7 +9,7 @@ pg checkout -q -b gui/7 local/next; echo 7 > "$P/g"; pg add g; pg commit -q -m w
 export SG_FORK_DIR="$P" SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORK_ORPHAN_MINUTES=0
 unset "${!SG_@}"; export HOME="$T/home"   # hermetic: whatever the caller exports (the live loop's SG_*) stops here
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"   # ...and so do the live loops of this machine: health.sh counts watch.sh processes by command line, so without this a second real loop adds a loops-duplicated alert to every count below
-mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"; cp "$(dirname "$src")/startability.sh" "$T/s/startability.sh"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/caps.sh" "$T/s/"   # the claimed column's name (#1342); the process read is caps.sh, which resolves to squad.procs through SG_SQUAD inside the child's sandbox (#1594)
+mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"; cp "$(dirname "$src")/startability.sh" "$T/s/startability.sh"; cp "$(dirname "$src")/skiplabels.sh" "$T/s/skiplabels.sh"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/caps.sh" "$T/s/"   # the claimed column's name (#1342); the process read is caps.sh, which resolves to squad.procs through SG_SQUAD inside the child's sandbox (#1594); the skip set is skiplabels.sh (#1593)
 # hermetic: health.sh counts watch.sh with a real pgrep, so the default pattern would count the host's own live loop (a duplicate there is a third cause)
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"
 export SQUAD_CAPS_DIR="$T/caps"   # hermetic: the reap step (#1226) reclaims leases here, never in the machine's caps folder
@@ -131,6 +131,20 @@ fr; printf '41\tTodo\n' > "$T/board.tsv"; page 1 "$(iss 41 'Spec of a thing' 'sp
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a spec was named startable: $o" || ok "a spec issue is never named startable (ADR-0142)"
 fr; printf '41\tTodo\n' > "$T/board.tsv"; page 1 "$(iss 41 'Has a live run' '')"; liverun run-old 41
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a live run older than 30 min did not suppress frontier-idle: $o" || ok "a live run older than 30 min suppresses frontier-idle"
+# #1593: every label the frontier skips is no work at all, so a card that carries one is never reported startable.
+# The set is the frontier's own (skiplabels.sh): a card autofrontier.sh will never start must never be named here.
+i=0; for l in frozen:owner needs-owner wontfix frozen:dependency needs-info needs-ratification; do
+  i=$((i+1)); n=$((500+i))   # one number per label: the board cache keeps a repeated number's card
+  fr; printf '%s\tTodo\n' "$n" > "$T/board.tsv"; page 1 "$(iss "$n" "Waits on $l" "$l")"
+  o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a $l issue was named startable: $o" || ok "a $l issue is never named startable (#1593)"
+done
+# A label only the bug lane skips (no-auto, question) never holds a frontier card: the frontier starts it, so a starved one
+# is a real frontier-idle and health names it. The two lanes keep their own sets; only the union hid this work (#1593).
+i=0; for l in no-auto question; do
+  i=$((i+1)); n=$((520+i))   # a number per label
+  fr; printf '%s\tTodo\n' "$n" > "$T/board.tsv"; page 1 "$(iss "$n" "Carries $l" "$l")"
+  o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF "HEALTH frontier-idle: startable $n" && ok "a $l issue is named startable: the frontier starts it (#1593)" || ko "a $l issue was hidden from frontier-idle: $o"
+done
 fr; printf '41\tCode Complete\n' > "$T/board.tsv"; page 1 "$(iss 41 'Already in code' '')"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'frontier-idle' && ko "a card not in Todo was named startable: $o" || ok "a card not in Todo is not named"
 fr; rm -f "$T/board.tsv"; page 1 "$(iss 41 'Board unreadable' '')"

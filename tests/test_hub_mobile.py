@@ -20,7 +20,7 @@ SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
 MUX_PY = SCRIPTS / "hubmux.py"
 GHREAD_PY = SCRIPTS / "ghread.py"
-TABS = ["monitor", "board", "runs", "terminals", "more"]
+TABS = ["now", "work", "specs", "chat", "runs"]
 TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"
 
@@ -170,7 +170,7 @@ def test_mobile_page_holds_no_board_rule_code(hub):
 def test_mobile_page_keeps_no_credential(hub):
     mod, port = hub
     _, _, body = get(port, "/mobile")
-    assert 'data-tab="monitor"' in body
+    assert 'data-tab="now"' in body
     low = body.lower()
     assert "<form" not in low
     assert 'type="password"' not in low and "type=password" not in low

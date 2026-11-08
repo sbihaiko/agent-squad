@@ -16,7 +16,7 @@ from tests.test_hub_spec_progress import BOARD
 
 NOW = 1_000_000.0
 SHA = "0123456789abcdef0123456789abcdef01234567"
-TABS = ["monitor", "board", "runs", "terminals", "more"]
+TABS = ["now", "work", "specs", "chat", "runs"]
 
 
 @pytest.fixture(scope="module")
@@ -43,10 +43,12 @@ def _routes(hub, loop=None):
     return {"/api/load": [{"body": json.dumps(_load(hub))}], "/api/loop": [{"body": json.dumps(v)}]}
 
 
-def test_the_first_tab_is_the_monitor(hub):
+def test_the_monitor_draws_the_now_tab(hub):
+    """The Monitor is what the Now tab draws (SPEC 1596): the bar names the tab, the panel keeps the card."""
     page = hub.MOBILE_PAGE
     assert re.findall(r'data-tab="(\w+)"', page) == TABS
-    assert re.search(r'<button data-tab="monitor">Monitor</button>', page)
+    assert re.search(r'<button data-tab="now">Now</button>', page)
+    assert '<section data-panel="monitor">' in page, "the Now tab no longer draws the Monitor panel"
     assert 'data-panel="status"' not in page and 'data-tab="status"' not in page
 
 
@@ -76,9 +78,10 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     assert out["sum"] == "", "the summary no longer counts the gate; a red gate stays in the footer (#1260)"
 
 
-@pytest.mark.parametrize("stored, tab", [(None, "monitor"), ("status", "monitor"), ("monitor", "monitor"),
-                                         ("board", "board"), ("gone", "monitor")])
-def test_a_stored_tab_maps_status_to_monitor(hub, stored, tab):
+@pytest.mark.parametrize("stored, tab", [(None, "now"), ("status", "now"), ("monitor", "now"), ("board", "work"),
+                                         ("terminals", "chat"), ("more", "now"), ("gone", "now")])
+def test_a_stored_tab_keeps_its_meaning(hub, stored, tab):
+    """A tab stored by an older build opens the tab that draws it now, and an unknown name opens the first tab."""
     assert run_page(hub.MOBILE_PAGE, f"return tabOf({json.dumps(stored)});", routes=_routes(hub)) == tab
 
 

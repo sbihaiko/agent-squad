@@ -35,7 +35,7 @@ def _needs_human(tmp_path, verdict_ts: float) -> None:
     The freeze write is the one call this file proves, so it takes the door the write goes through (`ghcall.sh`) and the
     queue directory a failed dispatch writes into. Neither is in the shared fixture, which reads cards and never labels one.
     """
-    for name in ("ghcall.sh", "startability.sh"):
+    for name in ("ghcall.sh", "startability.sh", "skiplabels.sh"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "st/cq").mkdir(exist_ok=True)
     run = tmp_path / "co/runs/run-stacked"

@@ -216,13 +216,21 @@ const box = {
 box.sessionStorage = box.sessionStorage;
 box.window = box;
 const popQueue = [];
+// An entry keeps the address it names, as the browser's does: a push or a replace sets location.hash, and Back or Forward
+// restores the hash of the entry it lands on.
 box.history = {
   entries: __ENTRIES__, index: __INDEX__,
   get state() { return this.entries[this.index].state; },
-  pushState(s) { this.entries.length = this.index + 1; this.entries.push({ state: s }); this.index++; },
-  replaceState(s) { this.entries[this.index].state = s; },
-  back() { if (this.index > 0) { this.index--; popQueue.push(1); } },
-  forward() { if (this.index < this.entries.length - 1) { this.index++; popQueue.push(1); } },
+  go(url) { if (typeof url === "string" && url.startsWith("#")) box.location.hash = url; },
+  pushState(s, _t, url) {
+    this.entries.length = this.index + 1;
+    this.entries.push({ state: s, url: url || "" }); this.index++; this.go(url);
+  },
+  replaceState(s, _t, url) { this.entries[this.index] = { state: s, url: url || "" }; this.go(url); },
+  back() { if (this.index > 0) { this.index--; this.go(this.entries[this.index].url); popQueue.push(1); } },
+  forward() {
+    if (this.index < this.entries.length - 1) { this.index++; this.go(this.entries[this.index].url); popQueue.push(1); }
+  },
 };
 box.__popOne = () => { if (popQueue.length) { popQueue.shift(); box.__dispatch("popstate", {}); } };
 box.__popAll = () => { while (popQueue.length) box.__popOne(); };
@@ -260,7 +268,8 @@ def run_page(page, driver, board=None, promote=None, routes=None, history_state=
     `routes` answers any other path the driver's screen asks, and records every POST it takes. `history_state` is the entry
     the page boots on; `history_below` puts a page entry under it, as a reload of a layer's entry has. `hash` is the hash
     the address holds before the page loads (#1459)."""
-    entries = [{"state": {}}, {"state": history_state}] if history_below else [{"state": history_state}]
+    entries = [{"state": {}, "url": hash or ""},
+               {"state": history_state, "url": ""}] if history_below else [{"state": history_state, "url": hash or ""}]
     script = (DOM_HARNESS.replace("__PAGE__", json.dumps(page))
                          .replace("__DRIVER__", json.dumps(driver))
                          .replace("__BOARD__", json.dumps(board or [BOARD_ONE]))

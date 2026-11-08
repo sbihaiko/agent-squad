@@ -40,7 +40,7 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
 # The dispatchers share one claim namespace and one read of the live requests (startability.sh, #428), so the stand-in
 # carries the real file's own reads and fakes only what this suite fixes by hand.
-cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(dirname "$src")/issue_ledger.py" "$T/scripts/"
+cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(dirname "$src")/skiplabels.sh" "$T/scripts/skiplabels.sh"; cp "$(dirname "$src")/issue_ledger.py" "$T/scripts/"
 printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 # mkreq.sh appends the body it was handed (one pass may build several requests, #728) and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
 printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
@@ -286,6 +286,13 @@ r=$(run)
 issues '[{"number":43,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":44,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 43 44)" = 2 ] && ok "removing either freeze makes the item startable" || ko "removing a freeze did not start both items: '$r'"
+
+# 9) #1593: the bug lane's own labels (no-auto, question) are a hold for autobug.sh alone. The frontier still starts a card
+#    that carries one beside its go label, and health.sh reads the same lane, so that card is never hidden as startable work.
+scene bugskip 24
+issues '[{"number":53,"title":"a","body":"b","labels":[{"name":"no-auto"},{"name":"wave:01"}]},{"number":54,"title":"a","body":"b","labels":[{"name":"question"},{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 53 54)" = 2 ] && ok "a bug-lane label never holds a frontier card" || ko "the frontier skipped a bug-lane label: $(marked 53 54) marker(s): '$r'"
 
 # 10) #340: a run parent issue is a roll-up of a run's children, never work. It carries the run-parent label, and the pass
 #     skips it whatever SG_FRONTIER_SKIP_LABELS says.

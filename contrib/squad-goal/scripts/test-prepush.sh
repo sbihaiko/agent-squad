@@ -25,7 +25,7 @@ r=$(pp /dev/null) && ok "an empty body file is no failure of its own" || ko "emp
 # that carries SG_PROFILES_DIR runs the worktree's own prepush against the loop's profile; without it the same copy
 # exits 2 and prints nothing, which is the failure a fix run reported.
 wt="$T/wt"; mkdir -p "$wt/profiles" "$T/live"
-cp "$d/env.sh" "$d/address.sh" "$d/caps.sh" "$d/prepush.sh" "$wt/"; cp "$d/profiles/example.sh" "$wt/profiles/"
+cp "$d/env.sh" "$d/skiplabels.sh" "$d/address.sh" "$d/caps.sh" "$d/prepush.sh" "$wt/"; cp "$d/profiles/example.sh" "$wt/profiles/"
 printf 'SG_REPO=x/y\nSG_BASE=main\nSG_CHECKOUT=%s\n' "$T/co" > "$T/live/agent-squad.sh"
 ppwt() { ( cd "$T/co" && "$@" bash "$wt/prepush.sh" --local /dev/null 2>&1 ); }
 r=$(ppwt env SG_PROFILE=agent-squad SG_PROFILES_DIR="$T/live" SG_STATE="$T/st" SG_SQUAD=/dev/null); rc=$?
@@ -37,7 +37,7 @@ r=$(ppwt env -u SG_PROFILES_DIR SG_PROFILE=agent-squad SG_STATE="$T/st" SG_SQUAD
 # The loop's own env.sh resolves the profiles beside it; it must export that directory, so the session it starts carries
 # the path and the worktree's prepush resolves the same profile.
 lv="$T/livewt"; mkdir -p "$lv/profiles"
-cp "$d/env.sh" "$d/address.sh" "$d/caps.sh" "$wt/prepush.sh" "$lv/"
+cp "$d/env.sh" "$d/skiplabels.sh" "$d/address.sh" "$d/caps.sh" "$wt/prepush.sh" "$lv/"
 printf 'SG_REPO=x/y\nSG_BASE=main\nSG_CHECKOUT=%s\n' "$T/co" > "$lv/profiles/agent-squad.sh"
 r=$(cd "$T/co" && env -u SG_PROFILES_DIR SG_PROFILE=agent-squad SG_STATE="$T/st" SG_SQUAD=/dev/null \
   bash -c '. "$1/env.sh" >/dev/null 2>&1; env' _ "$lv" | sed -n 's/^SG_PROFILES_DIR=//p')

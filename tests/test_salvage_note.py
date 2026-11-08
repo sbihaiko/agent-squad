@@ -13,7 +13,7 @@ def note(tmp_path, salvage):
     co, s, st = (tmp_path / d for d in ("co", "s", "st"))
     for d in (co, s, st / "auto"):
         d.mkdir(parents=True)
-    for f in ("startability.sh", "ghcall.sh"):
+    for f in ("startability.sh", "skiplabels.sh", "ghcall.sh"):
         (s / f).write_bytes((SCRIPTS / f).read_bytes())
     if salvage is not None:
         (st / "auto" / "salvage-34").write_text(salvage)

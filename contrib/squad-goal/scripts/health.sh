@@ -82,7 +82,16 @@ undef=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_req
 [ -n "${undef// /}" ] && add defect-without-bug "open defect(s) that carry no bug label:$(for n in $undef; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
 # A ready issue with no run or work branch for one pass must remain visible even when it has only a wave label.
-ra=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("debt")) // false | not))|select((([.labels[].name]|index("spec")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
+# A label the frontier skips is no work for it (#1593): the set is the frontier's own (skiplabels.sh), with its structural
+# labels, so a card autofrontier.sh will never start is never named startable here. A label only the bug lane skips
+# (no-auto, question) is no hold for the frontier, so that card stays visible: the alert names it when it is starved.
+skiplist=$(sg_skip_labels frontier bug,debt,run-parent)
+ra=""
+while IFS=$'\t' read -r n l; do
+  [ -n "$n" ] || continue
+  s=0; for k in ${skiplist//,/ }; do case ",$l," in *",$k,"*) s=1;; esac; done
+  [ "$s" = 1 ] || ra="$ra $n"
+done < <(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\t")' 2>/dev/null)
 ready=""
 for n in $ra; do
   "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^READY' && ready="$ready $n"

@@ -8,7 +8,7 @@ header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1p
 /* The project switcher (#876): the header names the project; a tap opens the list in a sheet, rows 44 px tall. */
 #profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:center;gap:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 10px;font-size:var(--fs-body);text-align:left}
 #pswm{color:var(--mute);font-size:var(--fs-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));z-index:25;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
+#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(56px + env(safe-area-inset-bottom));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));z-index:25;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
 #psw-content{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
 #psw-footer{flex:none;margin-top:8px}
 /* Keep display discrete and immediate; only translate uses the exit duration. */
@@ -113,9 +113,17 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #sh-last .mut{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
 #sh-todo{flex:1;width:100%;min-height:44px;margin:0;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 #sh-todo[hidden]{display:none}
-nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
+/* The tab bar is on every screen, a detail included: it paints over every sheet and every full-screen screen, and each
+   screen's bottom row keeps a 56 px clearance for it (#1597). */
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);z-index:40}
+nav[hidden]{display:none}
 nav button{flex:1;min-height:56px;white-space:nowrap;background:none;border:0;color:var(--mute);font:var(--fs-caption) system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc)}
+#now-head,#more-head,#specs-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 8px}
+#now-head h2,#more-head h2,#specs-head h2{margin:0}
+[data-topback],#now-more{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+.scr-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+#more-actions{display:flex;gap:8px;margin:8px 0 calc(64px + env(safe-area-inset-bottom))}
 #reconnect{position:fixed;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));text-align:center}
 #reconnect[hidden]{display:none}
 #reconnect button{min-height:44px;min-width:120px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
@@ -151,7 +159,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 [data-screen]{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
 [data-screen][hidden]{display:none}
 #cost-content,#lead-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
-#cost-actions,#lead-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(8px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#cost-actions,#lead-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
@@ -174,7 +182,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #runview[hidden]{display:none}
 #runview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
 /* The run view's back and control sit at the bottom edge of the screen, in the thumb zone (#1142). */
-#runview-actions{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;background:var(--panel);border-top:1px solid var(--line);padding:6px 12px calc(6px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
+#runview-actions{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;background:var(--panel);border-top:1px solid var(--line);padding:6px 12px calc(62px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
 #runview-actions button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
 #runview-name{font-size:var(--fs-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 #runctl{display:flex;flex:1;align-items:center;flex-wrap:wrap;gap:6px 8px}
@@ -196,7 +204,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #termview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
 #termview-back,#termview-older,#termview-send{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
 /* The terminal's back sits in its composer, at the bottom edge and in the thumb zone, by the Send it stands beside (#1142). */
-#termview-compose{display:grid;gap:6px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));border-top:1px solid var(--line)}
+#termview-compose{display:grid;gap:6px;padding:8px 12px calc(64px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));border-top:1px solid var(--line)}
 #termview-back{justify-self:start}
 #termview-text{min-height:44px;font:inherit;font-size:var(--fs-field);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}
 #termview-name{font-size:var(--fs-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -249,12 +257,14 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </header>
 <div id="psheet" role="dialog" aria-label="Projects" hidden>
 <div id="psw-content"><div class="grab"></div>
+<button id="ps-backtop" data-topback="psheet" type="button">&#8249; Now</button>
 <div id="pswl"></div></div>
-<div id="psw-footer"><button id="pswx" type="button">Close</button></div>
+<div id="psw-footer"><button id="ps-backact" data-actback type="button">Back</button><button id="pswx" type="button">Close</button></div>
 </div>
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
 <section data-panel="monitor">
+<div id="now-head" data-role="header"><h2>Now</h2><button id="now-more" type="button">More</button></div>
 <!--INST_CARD-->
 <div id=iloop></div>
 <div id=loop-box>
@@ -320,7 +330,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id="sessions-msg" class="msg" role="status"></p>
 </section>
 <section data-panel="more" hidden>
-<h2>More</h2>
+<div id="more-head" data-role="header"><button id="more-backtop" data-topback="more" type="button">&#8249; Now</button><h2>More</h2></div>
 <div id="more-menu">
 <button data-more="cost" type="button">Cost and usage</button>
 <button data-more="lead" type="button">Lead time</button>
@@ -329,7 +339,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <p class="msg" role="status">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
 <article data-screen="cost" data-src="/api/stats" hidden>
-<div id="cost-content"><h2>Cost and usage</h2>
+<div id="cost-content"><div class="scr-head"><button id="cost-backtop" data-topback="cost" type="button">&#8249; More</button><h2>Cost and usage</h2></div>
 <div id="periods">
 <button data-period="hour" type="button">Per hour</button>
 <button data-period="day" type="button">Per day</button>
@@ -342,7 +352,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="cost-actions"><button data-back type="button">Back</button></div>
 </article>
 <article data-screen="lead" data-src="/api/chart/lead" hidden>
-<div id="lead-content"><h2>Lead time</h2>
+<div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button">&#8249; More</button><h2>Lead time</h2></div>
 <div id="ltbars">
 <button data-ltf="2" type="button">48h</button>
 <button data-ltf="7" type="button">1 week</button>
@@ -360,21 +370,26 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p class="msg" role="status"></p></div>
 <div id="lead-actions"><button data-back type="button">Back</button></div>
 </article>
+<div id="more-actions"><button id="more-backact" data-actback type="button">Back</button></div>
+</section>
+<section data-panel="specs" hidden>
+<div id="specs-head" data-role="header"><h2>Specs</h2></div>
+<p class="msg" role="status">The specs list is not drawn on this build.</p>
 </section>
 </main>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
 <div id="sheet-content"><div class="grab"></div>
-<div id="sh-head"><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
+<div id="sh-head"><button id="sh-backtop" data-topback="sheet" type="button">&#8249; Work</button><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
 <div id="sh-nav"><button id="sh-prev" type="button" aria-label="Previous card">&#8249;</button><span id="sh-set"></span><button id="sh-next" type="button" aria-label="Next card">&#8250;</button></div>
 <h2 id="sh-title"></h2>
 <div id="sh-chips"></div>
 <div id="sh-meta"></div>
 <div id="sh-body"></div>
 <div id="sh-last"></div></div>
-<div id="sheet-actions"><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden></button></div>
+<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden></button></div>
 </div>
 <section id="termview" hidden>
-<div id="termview-head"><span id="termview-name"></span></div>
+<div id="termview-head"><button id="term-backtop" data-topback="term" type="button">&#8249; Chat</button><span id="termview-name"></span></div>
 <button id="termview-older" type="button" hidden>Older turns</button>
 <div id="termview-turns"></div>
 <p id="termview-msg" class="msg" role="status"></p>
@@ -387,16 +402,17 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 </section>
 <section id="runview" hidden>
-<div id="runview-head"><span id="runview-name"></span></div>
+<div id="runview-head"><button id="run-backtop" data-topback="run" type="button">&#8249; Runs</button><span id="runview-name"></span></div>
 <div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
 <div id="runview-actions"><button id="runview-back" type="button">Back</button><button id="rundesk-btn" type="button">Desktop dashboard</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div></div>
 </section>
+<!-- The tab bar of SPEC 1596 (#1597): five tabs, drawn on every screen, a detail included, and over every sheet. -->
 <nav>
-<button data-tab="monitor">Monitor</button>
-<button data-tab="board">Board</button>
+<button data-tab="now">Now</button>
+<button data-tab="work">Work</button>
+<button data-tab="specs">Specs</button>
+<button data-tab="chat">Chat</button>
 <button data-tab="runs">Runs</button>
-<button data-tab="terminals">Terminals</button>
-<button data-tab="more">More</button>
 </nav>
 <!-- The session overlay (#898) sits above the tab bar; the page script stays the last one. -->
 <style>:root{--sq-ov-bottom:calc(72px + env(safe-area-inset-bottom))}</style>
@@ -496,13 +512,25 @@ $("more-settings").href = "./#set-" + lastSetTheme;
 $("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
 // settings-handoff:end
 
-// The phone's full-screen layers (#1450, #1451): the card sheet, the project sheet, the terminal, the run view, and the Cost
-// and Lead Time screens. Each open layer owns one history entry that names the layer, its depth and its data, so Back closes
-// the top layer, Forward reopens the layer its entry names, and a reload restores the layer it was on. Every close goes
-// through closeLayer.
+// The phone's navigation shell (SPEC 1596, #1597): five tabs, one stack of screens per tab, and one history entry per
+// screen that names its tab and the address the location mirrors. A screen opens inside the tab whose list it came from,
+// so leaving a tab on a detail and coming back shows the same detail. Back, the action row's Back, the open tab's tap and
+// the browser's Back all leave by one pop.
+const TAB_LABEL = { now: "Now", work: "Work", specs: "Specs", chat: "Chat", runs: "Runs" };
+// The panel each tab draws, and the older names a stored tab still spells.
+const TAB_PANEL = { now: "monitor", work: "board", specs: "specs", chat: "terminals", runs: "runs" };
+const TAB_ALIAS = { monitor: "now", board: "work", terminals: "chat", more: "now" };
+const tabKey = n => TAB_LABEL[n] ? n : (TAB_ALIAS[n] || "now");
+// A tab stored by an older build keeps its meaning: the tab that draws it now opens.
+const tabOf = s => tabKey(s === "status" ? "now" : s);
 const LAYER = {
   sheet: {
-    show(s) { if (Number.isInteger(s.n) && !view.sheet) openCard(s.n); },
+    show(s) {
+      if (Number.isInteger(s.n) && !view.sheet) openCard(s.n);
+      else $("sheet").hidden = tabActive !== "work";   // the card is drawn: a return to Work shows it again
+    },
+    // A tab left keeps its screens, hidden: the card's own state waits for the return, so no read closes it.
+    pause() { $("sheet").hidden = true; },
     hide() { view = { ...view, sheet: false }; offBoard = null; issueKey = ""; linkSheet = null; $("sheet").hidden = true; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; },
   },
   psheet: {
@@ -513,61 +541,197 @@ const LAYER = {
   run: { show(s) { showRun(s); }, hide() { hideRun(); } },
   cost: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
   lead: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
+  more: { show() { moreScreen = null; paintPanel(); }, hide() { moreScreen = null; paintPanel(); } },
 };
-const layers = [];
+// The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
+// screen a nested one stands on.
+const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", cost: "now", lead: "now", more: "now" };
+const LAYER_TITLE = { sheet: "Card", psheet: "Projects", term: "Session", run: "Run", cost: "Cost and usage", lead: "Lead time", more: "More" };
+const LAYER_PARENT = { cost: "more", lead: "more" };
+const screenChain = name => { const out = []; for (let p = LAYER_PARENT[name]; p; p = LAYER_PARENT[p]) out.unshift(p); return out; };
+const tabStacks = { now: [], work: [], specs: [], chat: [], runs: [] };
+const layerState = { now: {}, work: {}, specs: {}, chat: {}, runs: {} };
+let tabActive = "now";
+let layers = tabStacks[tabActive];
 let layerBacks = 0, pendingSheet = null;
 const topLayer = () => layers[layers.length - 1];
-function openLayer(name, data) {
-  if (layers.includes(name)) {
-    if (topLayer() === name && data) { const s = { layer: name, depth: layers.length, ...data }; history.replaceState(s, ""); LAYER[name].show(s); }
+const fieldsOf = s => { const { tab, layer, depth, ...data } = s; return data; };
+// The screen under the top of the stack names the Back: "‹ Work" on a card, "‹ More" on the usage above it.
+const titleOf = n => LAYER_TITLE[n] || TAB_LABEL[n] || "";
+const backLabel = () => "‹ " + (layers.length > 1 ? titleOf(layers[layers.length - 2]) : TAB_LABEL[tabActive]);
+function paintBack() {
+  const top = topLayer() || "";
+  for (const b of document.querySelectorAll("[data-topback]")) {
+    const mine = b.dataset.topback === top;
+    b.hidden = !mine;
+    if (mine) b.textContent = backLabel();
+  }
+}
+// The address mirrors the top of the stack, so a reload lands on the same screen: "#/work/card=7", "#/now/more".
+// A screen that draws from its own fields carries them in the segment's query, so a cold load fills them like the open does.
+const queryString = pairs => pairs.filter(([, v]) => v).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
+const withQuery = (head, pairs) => { const q = queryString(pairs); return head + (q ? "?" + q : ""); };
+const queryOf = s => {
+  const out = {};
+  for (const part of s.split("&")) {
+    const at = part.indexOf("=");
+    if (at > 0) out[decodeURIComponent(part.slice(0, at))] = decodeURIComponent(part.slice(at + 1));
+  }
+  return out;
+};
+const SEG = {
+  sheet: s => "card=" + s.n,
+  psheet: () => "profile",
+  term: s => withQuery("session=" + encodeURIComponent(s.sid), [["name", s.name]]),
+  run: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
+  cost: () => "usage",
+  lead: () => "lead",
+  more: () => "more",
+};
+const routeHash = s => "#/" + ((s && s.tab) || tabActive) + (s && s.layer && SEG[s.layer] ? "/" + SEG[s.layer](s) : "");
+function routeFromHash(hash) {
+  const m = /^#\/(now|work|specs|chat|runs)(?:\/([^/]+))?$/.exec(String(hash || ""));
+  if (!m) return null;
+  const tab = m[1], seg = m[2] || "", at = seg.indexOf("?"), out = { tab, layer: null, data: {} };
+  const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
+  if (head === "profile") out.layer = "psheet";
+  else if (head === "more") out.layer = "more";
+  else if (head === "usage") out.layer = "cost";
+  else if (head === "lead") out.layer = "lead";
+  else if (head.startsWith("card=")) { out.layer = "sheet"; out.data = { n: +head.slice(5) }; }
+  else if (head.startsWith("session=")) { out.layer = "term"; out.data = { sid: decodeURIComponent(head.slice(8)), name: q.name || "" }; }
+  else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
+  return out;
+}
+// The panel in view: the tab's root, or the More screen where it stands over Now.
+function paintPanel() {
+  const panel = layers.includes("more") ? "more" : TAB_PANEL[tabActive];
+  for (const p of document.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== panel;
+  for (const b of document.querySelectorAll("nav [data-tab]")) {
+    b.dataset.tab === tabActive ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
+  }
+}
+function entryOf(tab) {
+  const st = tabStacks[tab], top = st[st.length - 1];
+  return top ? { tab, layer: top, depth: st.length, ...layerState[tab][top] } : { tab };
+}
+function openLayer(name, data, restore) {
+  const tab = LAYER_TAB[name] || tabActive;
+  const stack = tabStacks[tab], at = stack.indexOf(name);
+  layerState[tab][name] = data || {};
+  if (at >= 0) {
+    if (tab === tabActive && topLayer() === name) {
+      history.replaceState({ tab, layer: name, depth: at + 1, ...data }, "", routeHash({ tab, layer: name, ...data }));
+      LAYER[name].show({ tab, layer: name, depth: at + 1, ...data });
+    }
     return;
   }
-  layers.push(name);
-  const s = { layer: name, depth: layers.length, ...data };
-  if (history.state && history.state.layer === name && !layerBacks) history.replaceState(s, "");
-  else history.pushState(s, "");
+  stack.push(name);
+  if (tab !== tabActive) { paintPanel(); return; }   // a read that answered on another tab: its screen waits there
+  const s = { tab, layer: name, depth: stack.length, ...data };
+  // A reload reuses the entry it landed on for the bottom screen of the chain and pushes every screen above it, so the
+  // parent of the top keeps an entry of its own and a Back from the top lands on it ("push" forces that push).
+  if (restore === "push") history.pushState(s, "", routeHash(s));
+  else if (restore || (history.state && history.state.layer === name && !layerBacks)) history.replaceState(s, "", routeHash(s));
+  else history.pushState(s, "", routeHash(s));
   LAYER[name].show(s);
+  paintBack();
 }
-// A layer closes with every layer above it, top first, and each close leaves its own history entry.
+// A screen closes with every screen above it, top first, and each close leaves its own history entry.
 function closeLayer(name) {
-  const at = layers.indexOf(name);
-  if (at < 0) return;
+  let at = layers.indexOf(name);
+  if (at < 0) {
+    for (const t of Object.keys(TAB_LABEL)) {
+      const i = tabStacks[t].indexOf(name);
+      if (i < 0) continue;
+      for (const g of tabStacks[t].splice(i).reverse()) { LAYER[g].hide(); delete layerState[t][g]; }
+      return;                                        // a screen of a tab out of view leaves no entry to pop
+    }
+    return;
+  }
   const gone = layers.splice(at);
-  for (const g of gone.reverse()) LAYER[g].hide();
+  for (const g of gone.reverse()) { LAYER[g].hide(); delete layerState[tabActive][g]; }
+  paintPanel(); paintBack();
   layerBacks += gone.length;
   for (let i = 0; i < gone.length; i++) history.back();
 }
-// Back, Forward and a reload all land here: the open layers become the ones the entry names, at the entry's depth.
+// One pop for the top Back, the action row's Back and the open tab's tap.
+function popScreen() {
+  const top = topLayer();
+  if (!top) return;
+  if (top === "sheet") step({ act: "close" });
+  else closeLayer(top);
+}
+// Back, Forward and a reload all land here: the tab and the screens become the ones the entry names.
 addEventListener("popstate", () => {
   if (layerBacks) { layerBacks--; return; }
   const s = history.state || {};
-  const want = s.layer ? s.depth || 1 : 0;
-  while (layers.length > want || (layers.length === want && want && topLayer() !== s.layer)) LAYER[layers.pop()].hide();
-  if (s.layer && layers.length < want) { layers.push(s.layer); LAYER[s.layer].show(s); }
+  const tab = TAB_LABEL[s.tab] ? s.tab : tabActive;
+  if (tab !== tabActive) show(tab);
+  const want = s.layer ? (s.depth || 1) : 0;
+  while (layers.length > want || (layers.length === want && want && topLayer() !== s.layer)) {
+    const g = layers.pop(); LAYER[g].hide(); delete layerState[tabActive][g];
+  }
+  if (s.layer && layers.length < want) {
+    layers.push(s.layer); layerState[tabActive][s.layer] = fieldsOf(s); LAYER[s.layer].show(s);
+  }
+  paintPanel(); paintBack();
 });
-
 const tabs = [...document.querySelectorAll("nav [data-tab]")];
 // Each tab keeps its own page scroll (#1008): the scroll of the tab left is saved, the scroll of the tab shown is restored.
 const tabScroll = {};
 let tabNow = null;
+// A tab left hides its screens and keeps them: the stack and each screen's state wait for the return.
+const pauseStack = tab => { const st = tabStacks[tab]; for (let i = st.length - 1; i >= 0; i--) (LAYER[st[i]].pause || LAYER[st[i]].hide)(); };
+const showStack = tab => {
+  const st = tabStacks[tab];
+  for (const name of st) LAYER[name].show({ tab, layer: name, depth: st.indexOf(name) + 1, ...layerState[tab][name] });
+};
 function show(name) {
+  const tab = tabKey(name);
   if (tabNow) tabScroll[tabNow] = window.scrollY;
-  for (const p of document.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== name;
-  for (const b of tabs) b.dataset.tab === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
-  localStorage.setItem("squad-mobile-tab", name);
-  if (name !== "board") cancelMove("tab");   // the Undo is on the Board tab: no move runs on unseen (#1007)
-  if (layers.length) closeLayer(layers[0]);   // a tab change closes every open layer (#1450)
-  if (name === "board") loadBoard();
-  else { view = afterGesture(view, { act: "close" }); renderSheet(); }
-  if (name === "more") showMore();
-  else moreScreen = null;
-  if (name === "runs") loadRuns();
-  if (name === "terminals") loadSessions();
-  if (name === "monitor") { status(); loopView(); loadPoll(); }
-  tabNow = name;
-  window.scrollTo(0, tabScroll[name] || 0);
+  if (tab !== tabActive) pauseStack(tabActive);
+  tabActive = tab;
+  layers = tabStacks[tab];
+  tabNow = TAB_PANEL[tab];
+  localStorage.setItem("squad-mobile-tab", tab);
+  paintPanel();
+  if (tabNow !== "board") cancelMove("tab");   // the Undo is on the Work tab: no move runs on unseen (#1007)
+  if (tabNow === "board") loadBoard();
+  if (tabNow === "runs") loadRuns();
+  if (tabNow === "terminals") loadSessions();
+  if (tabNow === "monitor") { status(); loopView(); loadPoll(); }
+  showStack(tab);
+  paintBack();
+  window.scrollTo(0, tabScroll[tabNow] || 0);
 }
-tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
+// A tap on the tab in view returns to its root and the next tap reaches the top; another tab opens where it was left.
+function tabTap(tab) {
+  if (tab === tabActive) {
+    if (layers.length) closeLayer(layers[0]);
+    else window.scrollTo(0, 0);
+    return;
+  }
+  const entry = entryOf(tab);
+  history.pushState(entry, "", routeHash(entry));   // the entry names the screen the tab was left on
+  show(tab);
+}
+tabs.forEach(b => b.onclick = () => tabTap(b.dataset.tab));
+// A text field raises the keyboard, and the bar sits under it: a field in focus hides the bar, and the blur returns it.
+const tabBar = document.querySelector("nav");
+const typingField = el => !!el && (el.tagName === "TEXTAREA" || el.isContentEditable === true
+  || (el.tagName === "INPUT" && !/^(button|checkbox|radio|submit|reset|file|color|range|image)$/.test((el.type || "text").toLowerCase())));
+document.addEventListener("focusin", e => { if (typingField(e.target)) tabBar.hidden = true; });
+document.addEventListener("focusout", e => { if (typingField(e.target)) tabBar.hidden = false; });
+for (const b of document.querySelectorAll("[data-actback]")) b.onclick = popScreen;
+$("more-backtop").onclick = popScreen;
+$("sh-backtop").onclick = popScreen;
+$("ps-backtop").onclick = popScreen;
+$("term-backtop").onclick = popScreen;
+$("run-backtop").onclick = popScreen;
+$("cost-backtop").onclick = popScreen;
+$("lead-backtop").onclick = popScreen;
+$("now-more").onclick = () => openLayer("more");
 
 // The phone follows the hub's build as the desktop does (#1114). A new build reloads the page once, and the reload waits
 // while a write is in flight, a draft or photo is held in any session, or a move is staged (#1455).
@@ -936,6 +1100,7 @@ function scrollCardIntoView(x) {
 }
 function openCard(n) {
   linkSheet = null;   // every open but a card link's own clears the card a hash opened
+  if (tabActive !== "work") show("work");   // the card belongs to Work: opening one shows Work, whoever asked
   // A blocker link opens that ticket in the same sheet (#919), never a new tab: the card is found in its own column, and
   // the board is drawn there before the sheet reads it.
   // A card in a collapsed lane opens its lane first: the sheet never names a card the column does not draw (#893).
@@ -958,7 +1123,7 @@ function renderSheet() {
   const open = view.sheet && !!x;
   if (!open) { closeLayer("sheet"); return; }
   openLayer("sheet", { n: x.n });
-  $("sheet").hidden = false;
+  $("sheet").hidden = tabActive !== "work";   // the card belongs to Work: a read that answers on another tab never covers it
   const key = (x.r || "") + "#" + x.n;
   // The selection is the cards this column shows (#919), narrowed to the opened card's run when it holds one (#997): the
   // position, the previous and next buttons and the number chips all read it, and a closed sheet clears the read key, so
@@ -1122,7 +1287,7 @@ $("sh-todo").onclick = () => {
   if (x && x.pm && el) stageMove(x, el);
 };
 addEventListener("keydown", e => {
-  if (e.key === "Escape") { if (topLayer() === "psheet") closeLayer("psheet"); else if (view.sheet) step({ act: "close" }); return; }
+  if (e.key === "Escape") { popScreen(); return; }
   if (!view.sheet) return;
   if (e.key === "ArrowLeft" || e.key === "k") step({ act: "card", step: -1 });
   else if (e.key === "ArrowRight" || e.key === "j") step({ act: "card", step: 1 });
@@ -1406,7 +1571,7 @@ document.querySelector('[data-panel="more"]').onclick = e => {
   const b = e.target.closest("button");
   if (!b) return;
   if (b.dataset.more) openLayer(b.dataset.more);
-  else if ("back" in b.dataset) closeLayer(moreScreen);
+  else if ("back" in b.dataset) popScreen();
   else if (b.dataset.period) { period = b.dataset.period; showMore(); }
 };
 every("more", loadMore, 10000);
@@ -1588,7 +1753,10 @@ function drawRunOverview(row) {
   $("runov-verdict").textContent = v; $("runov-verdict-row").hidden = !v;
   $("runov-issues").textContent = runIssueLines(row);
 }
-function openRun(id, url, name) { openLayer("run", { id: id || null, url, name }); }
+function openRun(id, url, name) {
+  if (tabActive !== "runs") show("runs");   // the run belongs to Runs: opening one shows its tab, whoever asked
+  openLayer("run", { id: id || null, url, name });
+}
 function showRun(s) {
   runId = s.id; runReply = null;
   $("runframe").src = s.url; $("runview-name").textContent = s.name; $("runview").hidden = false;
@@ -1741,7 +1909,10 @@ async function loadOlder() {
   } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
   finally { termBusy = false; }
 }
-function openConversation(sid, name) { openLayer("term", { sid, name }); }
+function openConversation(sid, name) {
+  if (tabActive !== "chat") show("chat");   // the session belongs to Chat: opening one shows its tab, whoever asked
+  openLayer("term", { sid, name });
+}
 function showConversation(sid, name) {
   keepDraft();
   termSid = sid; termCursor = null; termDrawn.clear(); dropCard();
@@ -1789,21 +1960,26 @@ $("termview-send").onclick = async () => {
 };
 every("terminals", () => { if (!termOpen() && !squadStream.live()) loadSessions(); }, 10000);
 // terminals:end
-// The first tab was "Status" before it became the Monitor: a stored "status" opens the Monitor.
-function tabOf(s) { const t = s === "status" ? "monitor" : s; return tabs.some(b => b.dataset.tab === t) ? t : tabs[0].dataset.tab; }
-const last = localStorage.getItem("squad-mobile-tab");
 // The first frame (#1445): every list says it is loading before its first reply, drawn through the same helper that draws
 // its later states.
+const route = routeFromHash(location.hash);
+const was = history.state || {};
 drawRuns(); drawSessions(); drawCost(document.querySelector('[data-screen="cost"]'));
-show(tabOf(last));
+// The address names the screen first, then the entry's own state, then the tab the owner left: a reload lands on it.
+show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getItem("squad-mobile-tab"))));
 // A card link in the address opens its card once the board's read answers (#1459).
 if (linkHash(location.hash) !== null) linkOpen();
-// A reload restores the layer its entry names on that entry, so no entry is pushed and Back still closes the layer (#1450).
-const was = history.state;
-if (was && was.layer) {
-  const { layer, depth, ...data } = was;
-  if (layer === "sheet") { if (Number.isInteger(data.n)) pendingSheet = data.n; }
-  else if (LAYER[layer]) openLayer(layer, data);
+// A reload restores the screens its entry names on that entry: the entry it landed on holds the bottom screen of the chain
+// and each screen above it gets an entry of its own, so Back still closes the top and lands on the screen under it (#1450).
+const restore = was.layer && LAYER[was.layer] ? { layer: was.layer, data: fieldsOf(was) }
+  : route && route.layer ? { layer: route.layer, data: route.data } : null;
+if (restore) {
+  if (restore.layer === "sheet") {
+    if (Number.isInteger(restore.data.n)) pendingSheet = restore.data.n;
+  } else {
+    const chain = [...screenChain(restore.layer), restore.layer];
+    for (const [i, name] of chain.entries()) openLayer(name, i === chain.length - 1 ? restore.data : {}, i === 0 ? true : "push");
+  }
 }
 // The installed app's theme colour is the page's own background role, never a copy of its value.
 const themeMeta = document.querySelector("meta[name=theme-color]");
