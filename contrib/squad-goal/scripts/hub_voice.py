@@ -12,6 +12,7 @@ import pathlib
 import sys
 
 VOICE = "Kore"                 # the owner's chosen Gemini TTS voice (contrib/voice/tts.py)
+DEFAULT_PROJECT = "agent-squad"   # the keychain name's project when the caller names none
 CLIP_MAX_CHARS = 4000          # one answer's spoken text: the same cap a message carries
 VOICE_MAX_BYTES = 12 * 1024 * 1024   # one recording: a two-minute clip of a phone's own audio stays far below it
 VOICE_TYPES = {"audio/webm": "webm", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/ogg": "ogg",
@@ -36,25 +37,27 @@ def pipeline():
     return tts, voiced
 
 
-def key(project="agent-squad"):
-    """The Gemini key the pipeline's own lookup finds, or None."""
+def key(project=None, checkout=None):
+    """The Gemini key the pipeline's own lookup finds for this hub, or None. `project` names the keychain entry (this
+    hub's own repository, never agent-squad's when it serves another project), and `checkout` is the tree whose `.env`
+    the lookup falls back to, so a hub for another profile reads that profile's files."""
     tts, _ = pipeline()
-    return tts.gemini_key(project, None, os.environ.get("SG_TTS_SIBLING") or "")
+    return tts.gemini_key(project or DEFAULT_PROJECT, None, os.environ.get("SG_TTS_SIBLING") or checkout or "")
 
 
-def heard(raw, mime):
+def heard(raw, mime, project=None, checkout=None):
     """One recording as text, through the pipeline's one transcription. A hub with no key refuses; it never invents text."""
     _, voiced = pipeline()
-    found = key()
+    found = key(project, checkout)
     if not found:
         raise RuntimeError("no Gemini key for the phone's voice")
     return voiced.transcribe(raw, mime, found)
 
 
-def spoken(text, out):
+def spoken(text, out, project=None, checkout=None):
     """One answer's words as a WAV in Kore's voice, through the pipeline's one synthesis."""
     tts, _ = pipeline()
-    found = key()
+    found = key(project, checkout)
     if not found:
         raise RuntimeError("no Gemini key for the phone's voice")
     path, err = tts.synth(found, text[:CLIP_MAX_CHARS], VOICE, out)
@@ -63,23 +66,29 @@ def spoken(text, out):
     return path
 
 
-def clip_name(sid, turn_key, text):
-    """One answer's clip name: the voice, the turn and the words, so two answers never share a file and the same answer is
-    synthesized once."""
-    digest = hashlib.sha256(("\n".join((VOICE, sid, turn_key, text))).encode("utf-8")).hexdigest()[:32]
+def clip_name(sid, turn_key):
+    """One answer's clip name: the voice, the session and the turn. The words are not in the name, so a page that reads
+    the answer slightly differently serves the clip it already has; a refresh is the one way to ask for another."""
+    digest = hashlib.sha256(("\n".join((VOICE, sid, turn_key))).encode("utf-8")).hexdigest()[:32]
     return digest + ".wav"
 
 
-def clip_for(state, sid, turn_key, text):
-    """One answer's clip file, synthesized once. A file already there is reused; a part file is written and renamed, so an
-    interrupted synthesis never serves half a clip."""
-    path = pathlib.Path(state) / "voice" / "clips" / sid / clip_name(sid, turn_key, text)
-    if path.is_file() and path.stat().st_size > 0:
+def clip_for(state, sid, turn_key, text, refresh=False, synth=True, project=None, checkout=None):
+    """One answer's clip file. The file is keyed on the session and the turn, and the text it was made from is kept beside
+    it. A file already there is reused, and only a `refresh` synthesizes again. A part file is written and renamed, so an
+    interrupted synthesis never serves half a clip. `synth` False serves a cached clip and writes nothing, so a reader
+    that may not write this hub's state never spends a synthesis."""
+    path = pathlib.Path(state) / "voice" / "clips" / sid / clip_name(sid, turn_key)
+    said = path.with_suffix(".txt")
+    if path.is_file() and path.stat().st_size > 0 and not refresh:
         return path
+    if not synth:
+        raise RuntimeError("no clip: this reader may not synthesize")
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(path.name + ".part")
-    spoken(text, str(part))
+    spoken(text, str(part), project=project, checkout=checkout)
     os.replace(part, path)
+    said.write_text(text, encoding="utf-8")
     return path
 
 

@@ -43,12 +43,12 @@ def served(hub, monkeypatch):
     mod, state = hub
     calls = {"synth": [], "heard": [], "sent": []}
 
-    def fake_spoken(text, out):   # the one synthesis, written where the caller asked: no Gemini, no key
+    def fake_spoken(text, out, **kw):   # the one synthesis, written where the caller asked: no Gemini, no key
         calls["synth"].append(text)
         pathlib.Path(out).write_bytes(WAV)
         return out
 
-    def fake_heard(raw, mime):
+    def fake_heard(raw, mime, **kw):
         calls["heard"].append((raw, mime))
         return "Why did the token chart spike at two?"
 
@@ -98,7 +98,9 @@ def test_an_answer_is_served_as_one_wav_clip_and_synthesized_once(served):
     assert (status2, data2) == (200, WAV), "a cached clip is served again without a second synthesis"
     assert len(calls["synth"]) == 1, calls
     clip = state / "voice" / "clips" / SID
-    assert [p.suffix for p in clip.iterdir()] == [".wav"], sorted(p.name for p in clip.iterdir())
+    assert sorted(p.suffix for p in clip.iterdir()) == [".txt", ".wav"], sorted(p.name for p in clip.iterdir())
+    said = next(p for p in clip.iterdir() if p.suffix == ".txt")
+    assert said.read_text() == ANSWER, "the clip keeps the text it was made from"
 
 
 def test_a_turn_that_is_no_answer_serves_no_clip(served):
@@ -136,3 +138,126 @@ def test_a_transcription_the_pipeline_refuses_sends_nothing(served, monkeypatch)
     assert json.loads(data)["err"] == "no transcript", data
     assert "Gemini key" not in data.decode(), "a refusal never carries the key's story to the phone"
     assert calls["sent"] == [], calls
+
+
+def test_the_clip_route_refuses_a_cross_origin_reader(served):
+    """A cross-site page must not make this hub synthesize and write a clip: the route keeps the stream's origin rule."""
+    mod, state, port, calls = served
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("GET", f"/api/sessions/clip?sid={SID}&k=0%3A2", headers={"Origin": "https://evil.example"})
+    r = conn.getresponse()
+    data = r.read()
+    conn.close()
+    assert r.status == 403, data
+    assert calls["synth"] == [], calls
+    assert not (state / "voice" / "clips").exists(), "a refused clip writes nothing"
+
+
+def test_the_clip_route_refuses_a_request_the_seam_denies(served, monkeypatch):
+    mod, state, port, calls = served
+    monkeypatch.setattr(mod, "tailnet_seam", lambda: None)
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("GET", f"/api/sessions/clip?sid={SID}&k=0%3A2", headers={"Tailscale-User-Login": "mallory"})
+    r = conn.getresponse()
+    r.read()
+    conn.close()
+    assert r.status == 403, "an unauthenticated reader gets no clip"
+    assert calls["synth"] == [] and not (state / "voice" / "clips").exists(), calls
+
+
+def test_a_voice_send_the_seam_denies_is_refused_and_writes_nothing(served, monkeypatch):
+    mod, state, port, calls = served
+    monkeypatch.setattr(mod, "tailnet_seam", lambda: None)
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("POST", f"/api/sessions/voice?sid={SID}&client_id={CID}&mime=audio/webm", body=b"\x1aE\xdf\xa3-webm",
+                 headers={"Content-Type": "audio/webm", "Tailscale-User-Login": "mallory"})
+    r = conn.getresponse()
+    r.read()
+    conn.close()
+    assert r.status == 403, "an unauthenticated send is refused"
+    assert calls["heard"] == [] and calls["sent"] == [], calls
+
+
+def test_a_body_over_the_voice_cap_is_refused_before_it_is_read(served):
+    """A Content-Length of gigabytes must not block the handler: the cap is answered first, and the connection ends."""
+    mod, state, port, calls = served
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.putrequest("POST", f"/api/sessions/voice?sid={SID}&client_id={CID}&mime=audio/webm")
+    conn.putheader("Content-Type", "audio/webm")
+    conn.putheader("Origin", f"http://127.0.0.1:{port}")
+    conn.putheader("Content-Length", str(10 * 1024 ** 3))
+    conn.endheaders()
+    r = conn.getresponse()
+    data = r.read()
+    conn.close()
+    assert r.status == 413 and json.loads(data) == {"err": "too large"}, data
+    assert calls["heard"] == [], calls
+
+
+def test_one_answer_keeps_one_clip_keyed_on_its_turn_and_sid(served, monkeypatch):
+    """The clip is named for the sid and the turn only. A streamed page that reads the answer slightly differently must not
+    buy a second synthesis under the same key, and a refresh is the one way to ask for a new one."""
+    mod, state, port, calls = served
+    status, data, _ = get(port, f"/api/sessions/clip?sid={SID}&k=0%3A2")
+    assert (status, data) == (200, WAV), data
+    mod.conversation_payload = lambda q: {"turns": [
+        {"id": "a2", "k": "0:2", "role": "answer", "text": ANSWER + " A trailing clause.", "at": "", "m": "claude"},
+    ], "next": None}
+    status2, data2, _ = get(port, f"/api/sessions/clip?sid={SID}&k=0%3A2")
+    assert (status2, data2) == (200, WAV), "the same turn serves the clip it already has"
+    assert calls["synth"] == [ANSWER], "the text a clip was made from never renames it: " + repr(calls)
+    status3, _, _ = get(port, f"/api/sessions/clip?sid={SID}&k=0%3A2&refresh=1")
+    assert status3 == 200, status3
+    assert calls["synth"] == [ANSWER, ANSWER + " A trailing clause."], "only a refresh synthesizes again: " + repr(calls)
+    clip = state / "voice" / "clips" / SID
+    assert [p.suffix for p in sorted(clip.iterdir())] == [".txt", ".wav"], sorted(p.name for p in clip.iterdir())
+
+
+def test_the_key_is_found_for_the_hubs_own_project_and_checkout(hub, monkeypatch):
+    """A hub for another project reads that project's keychain entry and its own checkout's .env, never agent-squad's."""
+    mod, state = hub
+    seen = {}
+
+    class TTS:
+        def gemini_key(self, project, service, sibling):
+            seen.update(project=project, service=service, sibling=sibling)
+            return "k"
+
+    monkeypatch.setattr(mod.hub_voice, "pipeline", lambda: (TTS(), None))
+    assert mod.hub_voice.key(project="other", checkout="/tmp/other") == "k"
+    assert seen == {"project": "other", "service": None, "sibling": "/tmp/other"}, seen
+
+
+def test_the_routes_ask_for_the_hubs_own_project_and_checkout(served, monkeypatch):
+    mod, state, port, calls = served
+    seen = []
+
+    def spy_spoken(text, out, project=None, checkout=None):
+        seen.append((project, checkout))
+        pathlib.Path(out).write_bytes(WAV)
+        return out
+
+    def spy_heard(raw, mime, project=None, checkout=None):
+        seen.append((project, checkout))
+        return "heard"
+
+    monkeypatch.setattr(mod.hub_voice, "spoken", spy_spoken)
+    monkeypatch.setattr(mod.hub_voice, "heard", spy_heard)
+    get(port, f"/api/sessions/clip?sid={SID}&k=0%3A2")
+    post(port, f"/api/sessions/voice?sid={SID}&client_id={CID}&mime=audio/webm", b"\x1aE\xdf\xa3-webm")
+    assert seen == [("y", str(state.parent))] * 2, "both calls name this hub's project and checkout, never agent-squad's: " + repr(seen)
+
+
+def test_a_clip_for_memory_only_is_never_synthesized_on_the_tailnet(served, monkeypatch):
+    """A tailnet reader with no loop write may have a cached clip but never spends a synthesis or writes state."""
+    mod, state, port, calls = served
+    monkeypatch.setattr(mod, "access", lambda h, action: mod.Access(True, "", "someone", True))
+    monkeypatch.setattr(mod, "tailnet_block", lambda checkout=None: {"host": "hub.example.ts.net", "loop_write": False,
+                                                                     "terminals_send": True, "allow": ["someone"]})
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("GET", f"/api/sessions/clip?sid={SID}&k=0%3A2", headers={"Origin": "https://hub.example.ts.net"})
+    r = conn.getresponse()
+    data = r.read()
+    conn.close()
+    assert r.status == 404, data
+    assert calls["synth"] == [] and not (state / "voice" / "clips").exists(), calls

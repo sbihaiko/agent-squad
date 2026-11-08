@@ -7525,10 +7525,17 @@ def conversation_payload(query):
     if not before.isdigit() and hubstream.enabled(): return TRANSCRIPTS.refresh(sid, hubstream.tick())
     return sessions.conversation(PROFILE_NAME, sid, int(before) if before.isdigit() else None, profiles_of=profiles_of_cwd)
 
-def clip_payload(query):
+def voice_project():
+    """The project the phone's voice pipeline asks for its Gemini key: this hub's own repository name, so a hub that serves
+    another project reads that project's keychain entry and never agent-squad's."""
+    return (REPO or "").rsplit("/", 1)[-1] or hub_voice.DEFAULT_PROJECT
+
+def clip_payload(query, a=None):
     """One answer's Kore clip (#1603), as (bytes, content type), or None. The answer is the session's own turn, named by
     the key the conversation route served, so the route speaks only what the session said and never a text a caller
-    sent. The clip is the answer's whole text, synthesized once by the one voice pipeline and served again from the cache."""
+    sent. The clip is the answer's whole text, keyed on the session and the turn: an answer already spoken is served from
+    the cache whatever the page read this time, and only `refresh=1` synthesizes again. A tailnet reader with no loop
+    write may have the cached clip but never spends a synthesis or writes this hub's state."""
     q = urllib.parse.parse_qs(query or "")
     sid, key = (q.get("sid") or [""])[0], (q.get("k") or [""])[0]
     if sessions.SID.fullmatch(sid) is None or not key: return None
@@ -7536,7 +7543,11 @@ def clip_payload(query):
     turn = next((t for t in ((page or {}).get("turns") or [])
                  if t.get("k") == key and t.get("role") == "answer" and str(t.get("text") or "").strip()), None)
     if turn is None: return None
-    try: path = hub_voice.clip_for(STATE, sid, key, str(turn["text"]))
+    refresh = (q.get("refresh") or [""])[0] == "1"
+    synth = a is None or not a.tailnet or tailnet_block().get("loop_write") is True
+    try:
+        path = hub_voice.clip_for(STATE, sid, key, str(turn["text"]), refresh=refresh, synth=synth,
+                                  project=voice_project(), checkout=CHECKOUT)
     except Exception: return None   # no pipeline, no key, or a refused synthesis: the phone draws no clip, never a half one
     try: return path.read_bytes(), "audio/wav"
     except OSError: return None
@@ -8273,7 +8284,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/clip"):   # the answer's one Kore clip (#1603)
-            got = clip_payload(self.path.partition("?")[2])
+            if not stream_origin_ok(self, a.tailnet): return self.refuse("forbidden origin")   # a cross-site page earns no clip, and no synthesis
+            got = clip_payload(self.path.partition("?")[2], a)
             if got is None: return self.not_found()
             self.send_response(200); self.send_header("Content-Type", got[1]); self.send_header("Cache-Control", "max-age=3600")
             self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
@@ -8324,13 +8336,18 @@ class H(BaseHTTPRequestHandler):
 
     def send_voice(self, a):
         """The phone's one recording (#1603): raw audio under the send's write gate. The hub transcribes the clip with the
-        one voice pipeline and sends the transcript as a message from another session, so the send keeps one path. The
-        body is drained before any refusal, the type is the phone's stated audio type and nowhere else, and the cap is
-        VOICE_MAX_BYTES. A pipeline with no key, or a refused transcription, sends nothing and says so."""
+        one voice pipeline and sends the transcript as a message from another session, so the send keeps one path. A body
+        the cap cannot carry is refused before a byte of it is read and the connection ends there, so a stated
+        Content-Length of gigabytes never blocks the handler; under the cap the body is drained before any refusal. The
+        type is the phone's stated audio type and nowhere else, and the cap is VOICE_MAX_BYTES. A pipeline with no key,
+        or a refused transcription, sends nothing and says so."""
         q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         sid, cid, mime = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], (q.get("mime") or [""])[0]
         length = self.headers.get("Content-Length") or "0"
         n = int(length) if length.isdigit() else 0
+        if n > hub_voice.VOICE_MAX_BYTES:
+            self.close_connection = True   # the rest of this body is never read, so this connection ends with the answer
+            return self.answer(413, {"err": "too large"})
         raw = self.rfile.read(min(n, hub_voice.VOICE_MAX_BYTES + 1))
         left = n - len(raw)
         while left > 0 and (chunk := self.rfile.read(min(left, 1 << 16))): left -= len(chunk)
@@ -8340,10 +8357,9 @@ class H(BaseHTTPRequestHandler):
         if not (send_rule(a)[0] and origin_ok): return self.refuse("forbidden")
         if sessions.SID.fullmatch(sid) is None or not session_send.CLIENT_ID.fullmatch(cid):
             return self.answer(400, {"err": "malformed id"})
-        if n > hub_voice.VOICE_MAX_BYTES: return self.answer(413, {"err": "too large"})
         if hub_voice.voice_type(mime) is None: return self.answer(415, {"err": "type not allowed"})
         try:
-            text = hub_voice.heard(raw, mime)
+            text = hub_voice.heard(raw, mime, project=voice_project(), checkout=CHECKOUT)
         except Exception:   # no pipeline, no key or a refused call: the phone is told, and the key's story never leaves
             return self.answer(502, {"err": "no transcript"})
         if not str(text or "").strip(): return self.answer(502, {"err": "no transcript"})

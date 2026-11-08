@@ -68,13 +68,13 @@ def test_the_timer_reads_minutes_and_seconds_and_the_waveform_follows_the_mic():
     out = run_js(src, """(() => {
         const r = voiceStart(1000);
         return { t7: voiceRow(r, 8000).time, t59: voiceRow(r, 60000).time, t66: voiceRow(r, 67000).time,
-                 wave: voiceWave(0, 5), wave2: voiceWave(1, 5), bars: voiceBarCount() };
+                 silent: voiceWave(0, 0, 8), quiet: voiceWave(0.4, 0, 8), loud: voiceWave(1, 0, 8), bars: voiceBarCount() };
     })()""")
     assert out["t7"] == "0:07", out
     assert out["t59"] == "0:59", out
     assert out["t66"] == "1:06", out
-    assert len(out["wave"]) == 5 and len(out["wave2"]) == 5, out
-    assert out["wave"] != out["wave2"], "the waveform moves with the mic: " + repr(out)
+    assert len(out["silent"]) == 8 and len(out["loud"]) == 8, out
+    assert max(out["silent"]) < max(out["quiet"]) < max(out["loud"]), "the waveform follows the mic's level: " + repr(out)
     assert out["bars"] >= 16, out
 
 
@@ -227,3 +227,130 @@ def test_a_streamed_answer_plays_its_one_clip_as_it_arrives(hub, monkeypatch):  
     assert out["clips"] == 1, "a streamed answer draws one clip: " + repr(out)
     assert out["playing"] == "1" and out["label"] == "Pause", "the clip plays as the answer streams: " + repr(out)
     assert "/api/sessions/clip" in out["src"] and "k=0%3A9" in out["src"], out
+
+
+def test_a_clip_the_hub_cannot_serve_returns_its_control_to_play(hub):  # noqa: F811
+    """A 404 from the clip route is the phone's ordinary case: no pipeline, no key, or a turn that is not an answer. The
+    control must not stay on Pause over 0:00 / 0:00 for the rest of the page's life."""
+    routes = dict(ROUTES, **{"/api/sessions/clip": [{"status": 404, "body": ""}]})
+    out = _voice_page(hub, """
+        const turn = $("termview-turns").querySelectorAll(".turn").find(t => t.dataset.k === "0:2");
+        const box = turn.querySelectorAll(".clip")[0], play = box.querySelector(".clip-play"), audio = box.__audio;
+        audio.play = async () => { throw new Error("the hub served no clip"); };
+        play.listeners.click[0]({});
+        await __tick(30);
+        return { label: play.textContent, state: play.dataset.playing, said: $("termview-sent").textContent,
+                 time: box.querySelector(".clip-time").textContent };
+    """, routes=routes)
+    assert out["label"] == "Play" and out["state"] == "", "a refused clip never stays on Pause: " + repr(out)
+    assert "unavailable" in out["said"].lower(), "the row says the clip is unavailable: " + repr(out)
+    assert out["time"] == "0:00 / 0:00", out
+
+
+def test_an_audio_error_after_the_tap_clears_the_playing_state(hub):  # noqa: F811
+    out = _voice_page(hub, """
+        const turn = $("termview-turns").querySelectorAll(".turn").find(t => t.dataset.k === "0:2");
+        const box = turn.querySelectorAll(".clip")[0], play = box.querySelector(".clip-play"), audio = box.__audio;
+        audio.play = async () => {};
+        play.listeners.click[0]({});
+        await __tick(30);
+        const playing = { label: play.textContent, state: play.dataset.playing };
+        const errors = audio.listeners.error || [];
+        errors.forEach(fn => fn({}));
+        return { playing, after: { label: play.textContent, state: play.dataset.playing },
+                 said: $("termview-sent").textContent };
+    """)
+    assert out["playing"]["label"] == "Pause" and out["playing"]["state"] == "1", out
+    assert out["after"]["label"] == "Play" and out["after"]["state"] == "", "an error clears the playing state: " + repr(out)
+    assert "unavailable" in out["said"].lower(), out
+
+
+def test_the_clip_audio_is_hidden_and_its_button_paints_from_waiting_and_playing(hub):  # noqa: F811
+    out = _voice_page(hub, """
+        const turn = $("termview-turns").querySelectorAll(".turn").find(t => t.dataset.k === "0:2");
+        const box = turn.querySelectorAll(".clip")[0], play = box.querySelector(".clip-play"), audio = box.__audio;
+        audio.play = async () => {};
+        play.listeners.click[0]({});
+        await __tick(30);
+        const shown = { hidden: audio.hidden, aria: audio.getAttribute("aria-hidden") };
+        (audio.listeners.waiting || []).forEach(fn => fn({}));
+        const waiting = { label: play.textContent, state: play.dataset.playing };
+        (audio.listeners.playing || []).forEach(fn => fn({}));
+        return { shown, waiting, playing: { label: play.textContent, state: play.dataset.playing } };
+    """)
+    assert out["shown"]["hidden"] is True and out["shown"]["aria"] == "true", \
+        "the clip's audio element is out of the reading order: " + repr(out)
+    assert out["waiting"]["label"] == "Play" and out["waiting"]["state"] == "", out
+    assert out["playing"]["label"] == "Pause" and out["playing"]["state"] == "1", out
+
+
+def test_the_waveform_draws_the_measured_mic_level(hub):  # noqa: F811
+    """The bars are the analyser's RMS, never a shape the tick alone invents: a silent mic draws one flat line."""
+    audio_fakes = """
+    globalThis.__tracks = [];
+    navigator.mediaDevices = { getUserMedia: async () => ({ getTracks: () => { const t = { stop() { this.stopped = true; } };
+      globalThis.__tracks.push(t); return [t]; } }) };
+    globalThis.AudioContext = class {
+      constructor() { this.state = "running"; }
+      createAnalyser() { return { fftSize: 8, getByteTimeDomainData(a) { a.fill(globalThis.__level === undefined ? 128 : globalThis.__level); } }; }
+      createMediaStreamSource() { return { connect() {} }; }
+      close() {}
+    };
+    globalThis.MediaRecorder = class {
+      constructor(stream) { this.stream = stream; this.state = "inactive"; }
+      start() { this.state = "recording"; }
+      stop() { this.state = "inactive"; if (this.onstop) this.onstop(); }
+    };
+    """
+    out = run_page(hub.MOBILE_PAGE, audio_fakes + """
+        openConversation("s1", "alpha");
+        await __tick(30);
+        const mic = $("termview-mic");
+        globalThis.__level = 128;                       // a silent microphone
+        mic.listeners.pointerdown[0]({ clientX: 300, clientY: 700, preventDefault() {} });
+        await __tick(30);
+        window.__intervals.filter(i => i.ms === 250).forEach(i => i.fn());
+        const silent = $("voice-wave").children.map(b => parseInt(b.style.height, 10));
+        globalThis.__level = 200;                       // the same tick, a loud microphone
+        window.__intervals.filter(i => i.ms === 250).forEach(i => i.fn());
+        const loud = $("voice-wave").children.map(b => parseInt(b.style.height, 10));
+        __dispatch("pointerup", { clientX: 300, clientY: 700 });
+        await __tick(50);
+        return { silent, loud };
+    """, routes=ROUTES)
+    assert len(out["silent"]) >= 16 and len(out["loud"]) >= 16, out
+    assert max(out["silent"]) <= 5, "a silent microphone draws one flat line: " + repr(out)
+    assert max(out["loud"]) > max(out["silent"]) + 4, "a loud microphone draws taller bars: " + repr(out)
+
+
+def test_a_recorder_that_never_stops_leaves_no_hold_behind(hub):  # noqa: F811
+    """A stop() that never answers onstop must not hold the microphone forever: the tracks stop, the hold clears, and the
+    next hold starts."""
+    stuck = """
+    globalThis.__tracks = [];
+    navigator.mediaDevices = { getUserMedia: async () => ({ getTracks: () => { const t = { stop() { this.stopped = true; } };
+      globalThis.__tracks.push(t); return [t]; } }) };
+    globalThis.MediaRecorder = class {
+      constructor(stream) { this.stream = stream; this.state = "inactive"; }
+      start() { this.state = "recording"; }
+      stop() { this.state = "inactive"; }                // onstop never fires
+    };
+    """
+    out = run_page(hub.MOBILE_PAGE, stuck + """
+        openConversation("s1", "alpha");
+        await __tick(30);
+        const mic = $("termview-mic");
+        mic.listeners.pointerdown[0]({ clientX: 300, clientY: 700, preventDefault() {} });
+        await __tick(30);
+        __dispatch("pointerup", { clientX: 300, clientY: 700 });
+        await __tick(30);
+        const fired = __fire();                            // the close's own timeout runs
+        await __tick(50);
+        const after = { hidden: $("termview-rec").hidden, stopped: globalThis.__tracks.map(t => !!t.stopped) };
+        mic.listeners.pointerdown[0]({ clientX: 300, clientY: 700, preventDefault() {} });
+        await __tick(30);
+        return { fired, after, again: $("termview-rec").hidden };
+    """, routes=ROUTES)
+    assert out["after"]["hidden"] is True, "a stuck recorder still clears the row: " + repr(out)
+    assert out["after"]["stopped"] and all(out["after"]["stopped"]), "the stream's tracks are stopped anyway: " + repr(out)
+    assert out["again"] is False, "the next hold is not refused: " + repr(out)

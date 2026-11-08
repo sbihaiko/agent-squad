@@ -2754,10 +2754,21 @@ const voiceSaid = msg => { if (termSid) $("termview-sent").textContent = msg; };
 // One client id for the send: the stub DOM has no Web Crypto, so the fallback keeps the same id shape on every page.
 const voiceId = () => (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID()
   : "voice-" + Date.now() + "-" + Math.random().toString(16).slice(2);
-function drawVoiceWave(tick) {
+function drawVoiceWave(level, tick) {
   const w = $("voice-wave");
   if (!w) return;
-  w.replaceChildren(...voiceWave(tick).map(h => { const b = document.createElement("span"); b.style.height = h + "px"; return b; }));
+  w.replaceChildren(...voiceWave(level, tick).map(h => { const b = document.createElement("span"); b.style.height = h + "px"; return b; }));
+}
+// The one reading of the microphone's level: the analyser's RMS, scaled so ordinary speech fills the row. A browser with
+// no Web Audio, or an analyser that refuses, reads as silence rather than inventing a shape.
+function voiceLevel(r) {
+  const an = r && r.analyser;
+  if (!an || !an.getByteTimeDomainData) return 0;
+  const buf = r.waveBuf || (r.waveBuf = new Uint8Array(an.fftSize || 256));
+  an.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.min(1, Math.sqrt(sum / (buf.length || 1)) * 4);
 }
 function paintVoice() {
   const el = $("termview-rec");
@@ -2777,13 +2788,14 @@ function paintVoice() {
     s.append(b, rest);
     return s;
   }));
-  drawVoiceWave(voiceRec.tick || 0);
+  drawVoiceWave(voiceRec.level || 0, voiceRec.tick || 0);
   el.hidden = false;
 }
 function voiceStep() {
   if (!voiceRec || voiceRec.phase !== "recording") return;
   const act = voiceTick(voiceRec, Date.now()).phase;
   voiceRec.tick = (voiceRec.tick || 0) + 1;
+  voiceRec.level = voiceLevel(voiceRec);
   paintVoice();
   if (act === "send") voiceFinish("send");   // the two-minute cap stops the recording and sends it
 }
@@ -2819,15 +2831,26 @@ async function voiceSend(sid, clip) {
     voiceSaid(word + (res.reason ? " (" + res.reason + ")" : ""));
   } catch (err) { voiceSaid(err.message); }
 }
+// One close is bounded: a recorder whose stop() never answers onstop would otherwise hold the microphone, the timer and
+// the hold forever, and every later hold would be refused. Past the bound the hold clears anyway.
+const VOICE_CLOSE_MS = 1500;
+function voiceStop(r) {
+  try { (r.stream && r.stream.getTracks ? r.stream.getTracks() : []).forEach(t => t.stop()); } catch (e) { /* a dead stream */ }
+  try { if (r.ctx && r.ctx.close) r.ctx.close(); } catch (e) { /* an audio context that is already gone */ }
+}
 async function voiceFinish(act) {
   if (!voiceRec || voiceRec.phase !== "recording") return;
   const r = voiceRec, sid = termSid;
   voiceRec.phase = act === "cancel" ? "cancelled" : "sending";
   clearInterval(r.timer);
-  const clip = await voiceClose(r);
-  try { (r.stream && r.stream.getTracks ? r.stream.getTracks() : []).forEach(t => t.stop()); } catch (e) { /* a dead stream */ }
-  voiceRec = null;
-  paintVoice();
+  let clip = null;
+  try {
+    clip = await Promise.race([voiceClose(r), new Promise(done => setTimeout(() => done({ bytes: null, type: "audio/webm" }), VOICE_CLOSE_MS))]);
+  } finally {
+    voiceStop(r);   // the stream's tracks stop whatever the recorder answered
+    voiceRec = null;
+    paintVoice();
+  }
   if (act === "send" && sid) await voiceSend(sid, clip);
 }
 async function voiceHold(ev) {
@@ -2843,6 +2866,15 @@ async function voiceHold(ev) {
     r.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     r.rec = new MediaRecorder(r.stream);
     r.rec.start();
+    // The row's waveform is the level this stream measures, never a shape the tick invents (rule 10; #1603).
+    const AC = typeof AudioContext !== "undefined" ? AudioContext : (typeof webkitAudioContext !== "undefined" ? webkitAudioContext : null);
+    if (AC) {
+      try {
+        r.ctx = new AC();
+        r.analyser = r.ctx.createAnalyser();
+        r.ctx.createMediaStreamSource(r.stream).connect(r.analyser);
+      } catch (e) { r.analyser = null; voiceStop({ ctx: r.ctx }); r.ctx = null; }
+    }
   } catch (e) { voiceSaid("No recording: the microphone was refused."); return; }
   voiceRec = r;
   r.timer = setInterval(voiceStep, 250);
@@ -2867,17 +2899,29 @@ function paintClip(box) {
   const total = a && isFinite(a.duration) && a.duration > 0 ? a.duration : 0;
   box.querySelector(".clip-time").textContent = clipTime(a && a.currentTime ? a.currentTime : 0, total);
 }
+// A clip the hub cannot serve (no pipeline, no key, a refused synthesis, or a turn that is not an answer) comes back as a
+// 404, and the audio element reports it as an error. The control then returns to Play and the row says why, so a refused
+// clip never leaves a Pause over 0:00 / 0:00 on the answer for the life of the page.
+function clipFailed(box) {
+  box.dataset.playing = ""; box.dataset.waiting = ""; box.dataset.unavailable = "1";
+  paintClip(box);
+  voiceSaid("The spoken answer is unavailable: the hub could not speak it.");
+}
 async function clipToggle(box) {
   const a = box.__audio;
   if (box.dataset.playing === "1") {
     if (a.pause) a.pause();
-    box.dataset.playing = "";
+    box.dataset.playing = ""; box.dataset.waiting = "";
     paintClip(box);
     return;
   }
   if (!a.src) a.src = clipSource(box.__turn);
-  box.dataset.playing = "1";
-  if (a.play) { try { await a.play(); } catch (e) { box.dataset.playing = ""; } }
+  box.dataset.waiting = "1";   // the tap is answered at once; play starts only when the media says it did
+  paintClip(box);
+  if (typeof a.play === "function") {
+    try { await a.play(); } catch (e) { return clipFailed(box); }
+  }
+  box.dataset.waiting = ""; box.dataset.playing = "1";
   paintClip(box);
 }
 function clipRow(t) {
@@ -2889,11 +2933,15 @@ function clipRow(t) {
   wave.className = "clipwave"; voice.className = "clip-voice"; voice.textContent = (voiceClip(t).voice);
   time.className = "clip-time"; time.textContent = clipTime(0, 0);
   a.preload = "none";
+  a.hidden = true; a.setAttribute("aria-hidden", "true");   // the control is the button: the audio stays out of the reading order
   box.__audio = a; box.__turn = t;
   play.addEventListener("click", () => clipToggle(box));
   a.addEventListener("timeupdate", () => paintClip(box));
   a.addEventListener("loadedmetadata", () => paintClip(box));
-  a.addEventListener("ended", () => { box.dataset.playing = ""; paintClip(box); });
+  a.addEventListener("waiting", () => { box.dataset.waiting = "1"; box.dataset.playing = ""; paintClip(box); });
+  a.addEventListener("playing", () => { box.dataset.waiting = ""; box.dataset.playing = "1"; paintClip(box); });
+  a.addEventListener("error", () => clipFailed(box));
+  a.addEventListener("ended", () => { box.dataset.playing = ""; box.dataset.waiting = ""; paintClip(box); });
   box.append(play, wave, voice, time, a);
   paintClip(box);
   return box;
