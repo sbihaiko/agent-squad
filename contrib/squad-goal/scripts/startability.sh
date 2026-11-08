@@ -23,13 +23,19 @@ sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/d
 # it is rescued by its known node id when that answers Todo, else named once on stderr and in alerts.log. No list is the plain read.
 # The go list was read at another time, so the read is told the go label (#1031): an issue the list still names go-labelled is
 # named that only when the issue itself agrees, and one it answers closed, or without the label, is a NOTE instead of an alert.
-sg_todo_cards() {
-  local out here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+sg_board_rows() {   # [go-csv]: the one board read of a pass, every card the carrier answers, "<issue>\t<state>" a row
+  local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [ $# -gt 0 ]; then
-    if [ -n "${SG_FRONTIER_LABEL:-}" ]; then out=$(python3 "$here/issue_state.py" --go "$1" --label "$SG_FRONTIER_LABEL" 2>/dev/null) || return 1
-    else out=$(python3 "$here/issue_state.py" --go "$1" 2>/dev/null) || return 1; fi
-  else out=$(python3 "$here/issue_state.py" 2>/dev/null) || return 1; fi
-  printf '%s\n' "$out" | awk -F '\t' -v t="${SG_TODO:-Todo}" '$1 == "UNREAD" { print "FRONTIER: go-labelled #" $2 " has no readable card on the board (named in alerts.log)" > "/dev/stderr"; next } $1 == "NOTE" { print "FRONTIER: #" $2 " is " $3 "; it is not go-labelled, and nothing alerts" > "/dev/stderr"; next } $2 == t { print $1 }'
+    if [ -n "${SG_FRONTIER_LABEL:-}" ]; then python3 "$here/issue_state.py" --go "$1" --label "$SG_FRONTIER_LABEL" 2>/dev/null || return 1
+    else python3 "$here/issue_state.py" --go "$1" 2>/dev/null || return 1; fi
+  else python3 "$here/issue_state.py" 2>/dev/null || return 1; fi
+}
+sg_todo_of() {   # the Todo issues of the rows on stdin; the go list's UNREAD and NOTE rows are said on stderr
+  awk -F '\t' -v t="${SG_TODO:-Todo}" '$1 == "UNREAD" { print "FRONTIER: go-labelled #" $2 " has no readable card on the board (named in alerts.log)" > "/dev/stderr"; next } $1 == "NOTE" { print "FRONTIER: #" $2 " is " $3 "; it is not go-labelled, and nothing alerts" > "/dev/stderr"; next } $2 == t { print $1 }'
+}
+sg_todo_cards() {
+  local out; out=$(sg_board_rows "$@") || return 1
+  printf '%s\n' "$out" | sg_todo_of
 }
 # The go-labelled open issues of the pass's issue list, comma-separated (#800): the list sg_todo_cards checks for a card.
 sg_go_csv() {   # <issues.json> <label>

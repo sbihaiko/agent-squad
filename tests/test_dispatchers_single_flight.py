@@ -35,7 +35,8 @@ sg_fork_branch_pattern() { echo "gui/%n"; }
 sg_issue_worktree_note() { :; }
 sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/disp-$1" ]; }   # as the real one: the shared claim
 sg_live_issues() { :; }   # active-runs.txt is empty here: no live run holds an issue
-sg_todo_cards() { echo 42; }   # the card of #42 sits in Todo, the owner's go signal (#550)
+sg_board_rows() { printf '42\tTodo\n'; }   # the card of #42 sits in Todo, the owner's go signal (#550)
+sg_todo_of() { awk -F '\t' -v t="${SG_TODO:-Todo}" '$2 == t { print $1 }'; }
 """
 
 @pytest.fixture(autouse=True)
@@ -59,7 +60,7 @@ def _scripts(tmp_path, cluster_sleep):
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
     for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py",
-                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py"):
+                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py", "loopbug.sh"):
         (d / name).write_text((SCRIPTS / name).read_text())
     (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
     (d / "startability.sh").write_text(STARTABILITY)
