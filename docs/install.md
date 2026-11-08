@@ -137,7 +137,7 @@ bash ~/.claude/skills/squad-goal/scripts/health.sh                            # 
 Start the loop, and open the one page that shows it:
 
 ```bash
-bash ~/.claude/skills/squad-goal/scripts/watchd.sh run &   # the loop
+bash ~/.claude/skills/squad-goal/scripts/watchd.sh start   # the loop, under its supervisor
 bash ~/.claude/skills/squad-goal/scripts/hubctl.sh         # prints the hub URL
 ```
 
