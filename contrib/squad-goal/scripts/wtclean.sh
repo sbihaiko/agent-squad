@@ -82,7 +82,40 @@ wt_remove() { wt_forced=; wt_sub=0; has_sub "$2" && wt_sub=1
   [ $wt_sub = 1 ] || return 1
   $G -C "$1" worktree remove --force "$2" 2>/dev/null || return 2
   wt_forced=1; return 0; }   # empty unless the flag was used: the lines test it with ${wt_forced:+...}
+# T (#1581): the pytest temp trees a killed gate left behind. pytest keeps a tree with a .lock for three days
+# (_pytest.pathlib.LOCK_TIMEOUT), and the loop kills gates on purpose (the proof bound, a takeover, a tree kill), so those trees
+# filled the disk. The root is resolved as pytest does: PYTEST_DEBUG_TEMPROOT, else the temp directory plus pytest-of-<user>.
+# A tree goes when its .lock names a pid that is gone (`kill -0`; a reused pid reads as live, so the tree stays), or when it has
+# no lock and is a day old (SG_PYTEST_TMP_DAYS). garbage-* trees follow the same rule. A removal that fails is one line and the
+# pass goes on. One TMP PRUNED line names the count and the size.
+tmp_prune() {
+  troot=${PYTEST_DEBUG_TEMPROOT:-}
+  [ -n "$troot" ] || troot=$(python3 -c 'import getpass,os,tempfile;print(os.path.join(tempfile.gettempdir(),"pytest-of-"+getpass.getuser()))' 2>/dev/null)
+  [ -n "$troot" ] || troot="${TMPDIR:-/tmp}/pytest-of-${USER:-$(id -un)}"
+  [ -n "${PYTEST_DEBUG_TEMPROOT:-}" ] && troot="$troot/pytest-of-${USER:-$(id -un)}"
+  pn=0; pk=0
+  if [ -d "$troot" ]; then
+    for t in "$troot"/pytest-[0-9]* "$troot"/garbage-*; do
+      [ -d "$t" ] && [ ! -L "$t" ] || continue
+      if [ -e "$t/.lock" ]; then
+        lp=$(tr -dc '0-9' < "$t/.lock" 2>/dev/null)
+        # no digits (a gate killed before it wrote its pid) ages out like an unlocked tree; a pid is dead only when kill says "No such process" (EPERM is a live process of another user)
+        if [ -n "$lp" ]; then
+          case "$(kill -0 "$lp" 2>&1)" in *"No such process"*) ;; *) continue;; esac
+        else
+          [ $(( now - $(mtime "$t") )) -ge $(( ${SG_PYTEST_TMP_DAYS:-1} * 86400 )) ] || continue
+        fi
+      else
+        [ $(( now - $(mtime "$t") )) -ge $(( ${SG_PYTEST_TMP_DAYS:-1} * 86400 )) ] || continue
+      fi
+      sk=$(du -sk "$t" 2>/dev/null | awk '{print $1+0}')
+      if rm -rf "$t" 2>/dev/null && [ ! -e "$t" ]; then pn=$((pn + 1)); pk=$((pk + ${sk:-0})); else echo "TMP KEPT ${t##*/}: could not remove it"; fi
+    done
+  fi
+  [ $pn -eq 0 ] || echo "TMP PRUNED $pn trees, $(awk -v k=$pk 'BEGIN{ if (k >= 1048576) printf "%.1f GiB", k/1048576; else printf "%.1f MiB", k/1024 }')"
+}
 now=$(date +%s)
+tmp_prune   # before the cd: the prune needs no checkout
 cd "$SG_CHECKOUT" || exit 0
 SG_CHECKOUT=$(pwd -P)   # resolved: every liveness test below compares a path with a process cwd, and lsof answers with the resolved one. Under a symlinked checkout (/var -> /private/var, a linked home) the unresolved form never matched, so a tree a live process was working in read as unused.
 cwds=$("$SG_LSOF" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')   # every live process's cwd, for the zombie test
@@ -294,32 +327,6 @@ done < "$act"
 if [ -s "$drop" ]; then grep -vxF -f "$drop" "$act" > "$act.$$" ; mv -f "$act.$$" "$act"; fi
 rm -f "$drop"
 $G worktree prune
-# T (#1581): the pytest temp trees a killed gate left behind. pytest keeps a tree with a .lock for three days
-# (_pytest.pathlib.LOCK_TIMEOUT), and the loop kills gates on purpose (the proof bound, a takeover, a tree kill), so those trees
-# filled the disk. The root is resolved as pytest does: PYTEST_DEBUG_TEMPROOT, else the temp directory plus pytest-of-<user>.
-# A tree goes when its .lock names a pid that is gone (`kill -0`; a reused pid reads as live, so the tree stays), or when it has
-# no lock and is a day old (SG_PYTEST_TMP_DAYS). garbage-* trees follow the same rule. A removal that fails is one line and the
-# pass goes on. One TMP PRUNED line names the count and the size.
-troot=${PYTEST_DEBUG_TEMPROOT:-}
-[ -n "$troot" ] || troot=$(python3 -c 'import getpass,os,tempfile;print(os.path.join(tempfile.gettempdir(),"pytest-of-"+getpass.getuser()))' 2>/dev/null)
-[ -n "$troot" ] || troot="${TMPDIR:-/tmp}/pytest-of-${USER:-$(id -un)}"
-[ -n "${PYTEST_DEBUG_TEMPROOT:-}" ] && troot="$troot/pytest-of-${USER:-$(id -un)}"
-pn=0; pk=0
-if [ -d "$troot" ]; then
-  for t in "$troot"/pytest-[0-9]* "$troot"/garbage-*; do
-    [ -d "$t" ] && [ ! -L "$t" ] || continue
-    if [ -e "$t/.lock" ]; then
-      lp=$(tr -dc '0-9' < "$t/.lock" 2>/dev/null)
-      [ -n "$lp" ] || continue
-      kill -0 "$lp" 2>/dev/null && continue
-    else
-      [ $(( now - $(mtime "$t") )) -ge $(( ${SG_PYTEST_TMP_DAYS:-1} * 86400 )) ] || continue
-    fi
-    sk=$(du -sk "$t" 2>/dev/null | awk '{print $1+0}')
-    if rm -rf "$t" 2>/dev/null && [ ! -e "$t" ]; then pn=$((pn + 1)); pk=$((pk + ${sk:-0})); else echo "TMP KEPT ${t##*/}: could not remove it"; fi
-  done
-fi
-[ $pn -eq 0 ] || echo "TMP PRUNED $pn trees, $(awk -v k=$pk 'BEGIN{ if (k >= 1048576) printf "%.1f GiB", k/1048576; else printf "%.1f MiB", k/1024 }')"
 # What the hub's footer reads: the tree count this pass saw in the child directories and how many of them it freed. The file
 # is written last, so a pass killed halfway leaves the previous reading in place instead of a half one.
 printf '{"total": %s, "cleanable": %s, "ts": %s}\n' \

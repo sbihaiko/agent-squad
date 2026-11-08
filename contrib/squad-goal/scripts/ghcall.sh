@@ -352,9 +352,9 @@ gh_disk_stop() {
 # directory and under the state directory, so a stop explains itself. Reads only; a directory that cannot be read prints nothing.
 gh_disk_top() {
   local d
-  for d in "${TMPDIR:-/tmp}" "$SG_STATE"; do
-    [ -d "$d" ] || continue
-    ( cd "$d" 2>/dev/null && du -sk -- * .[!.]* 2>/dev/null | sort -rn | head -n 3 ) |
+  for d in "${TMPDIR:-/tmp}" "${PYTEST_DEBUG_TEMPROOT:-}" "$SG_STATE"; do
+    [ -n "$d" ] && [ -d "$d" ] || continue
+    ( cd "$d" 2>/dev/null && perl -e 'alarm 10; exec @ARGV' du -sk -- * .[!.]* 2>/dev/null | sort -rn | head -n 3 ) |   # bounded: 10 s a directory
       while IFS=$'\t' read -r k n; do printf 'DISK TOP %s/%s: %s MiB\n' "${d%/}" "$n" $((k / 1024)); done
   done
   return 0

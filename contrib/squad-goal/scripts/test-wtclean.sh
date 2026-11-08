@@ -205,6 +205,11 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d "$tr/pytest-3" ] && ok "T: an old unlocked tree is pruned" || ko "T: old unlocked tree kept: $out"
 [ ! -d "$tr/garbage-4" ] && ok "T: an old garbage-* tree is pruned" || ko "T: garbage tree kept"
 [ "$(printf '%s\n' "$out" | /usr/bin/grep -c '^TMP PRUNED ')" = 1 ] && case "$out" in *"TMP PRUNED 3 trees, "*) ok "T: TMP PRUNED is printed once with the count";; *) ko "T: wrong count: $out";; esac || ko "T: TMP PRUNED not once: $out"
+mkdir -p "$tr/pytest-5"; : > "$tr/pytest-5/.lock"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ -d "$tr/pytest-5" ] && ok "T: a fresh tree with an empty lock is kept" || ko "T: fresh empty-lock tree pruned"
+touch -t 202001010000 "$tr/pytest-5"; bash "$T/s/wtclean.sh" >/dev/null 2>&1
+[ ! -d "$tr/pytest-5" ] && ok "T: an old tree with an empty lock is pruned" || ko "T: old empty-lock tree kept"
 out=$(bash "$T/s/wtclean.sh" 2>&1)
 case "$out" in *"TMP PRUNED"*) ko "T: a second pass pruned again: $out";; *) ok "T: a second pass prunes nothing and prints nothing";; esac
 # DISK STOP names the largest entries under the temp directory and the state directory (ghcall.sh).
