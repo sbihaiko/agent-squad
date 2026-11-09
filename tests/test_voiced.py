@@ -403,12 +403,13 @@ def configure(tmp_path, mod, client, repos):
     return state, mod.project_channels(state, client=client, repos=repos, log=lambda line: None)
 
 
-def test_a_repository_name_with_uppercase_letters_or_a_dot_becomes_a_channel_name():
-    """Criterion (c): the channel name is the repository's name, lowercased, each dot a hyphen."""
+def test_a_repository_name_with_uppercase_letters_or_a_dot_becomes_a_proj_channel_name():
+    """Criterion (c) and #1615: the channel name is the repository's name, lowercased, each dot a hyphen, behind the
+    `proj-` prefix every project channel carries."""
     mod = voiced()
-    assert mod.channel_name("Acme/My.App") == "my-app"
-    assert mod.channel_name("acme/agent-squad") == "agent-squad"
-    assert mod.channel_name("Acme/Agent.Squad_2") == "agent-squad_2"
+    assert mod.channel_name("Acme/My.App") == "proj-my-app"
+    assert mod.channel_name("acme/agent-squad") == "proj-agent-squad"
+    assert mod.channel_name("Acme/Agent.Squad_2") == "proj-agent-squad_2"
 
 
 def test_a_project_that_enters_the_hub_gets_its_channel_created_once(tmp_path):
@@ -416,16 +417,16 @@ def test_a_project_that_enters_the_hub_gets_its_channel_created_once(tmp_path):
     mod = voiced()
     client = FakeClient()
     state, got = configure(tmp_path, mod, client, ["Acme/My.App"])
-    assert client.created() == ["my-app"]
+    assert client.created() == ["proj-my-app"]
     assert ("conversations.join", {"channel": got["channels"]["Acme/My.App"]["id"]}, True) in client.calls
     assert got["refused"] == []
-    assert got["channels"]["Acme/My.App"]["name"] == "my-app"
+    assert got["channels"]["Acme/My.App"]["name"] == "proj-my-app"
 
     configure(tmp_path, mod, client, ["Acme/My.App"])      # a second sync over the same state
-    assert client.created() == ["my-app"], "a second sync created the channel again"
+    assert client.created() == ["proj-my-app"], "a second sync created the channel again"
 
     mod.project_channels(mod.State(str(tmp_path)), client=client, repos=["Acme/My.App"], log=lambda line: None)
-    assert client.created() == ["my-app"], "a restart created the channel again"
+    assert client.created() == ["proj-my-app"], "a restart created the channel again"
 
 
 def test_a_channel_the_registry_already_maps_is_kept_under_its_own_name(tmp_path):
@@ -469,12 +470,12 @@ def test_two_repositories_that_collide_after_conversion_are_refused_with_one_lin
     client = FakeClient()
     _, got = configure(tmp_path, mod, client, ["acme/My.App", "acme/my-app"])
 
-    assert client.created() == ["my-app"], "the colliding second repository created a channel"
+    assert client.created() == ["proj-my-app"], "the colliding second repository created a channel"
     assert len(got["refused"]) == 1
     line = got["refused"][0]
     assert "acme/My.App" in line and "acme/my-app" in line, line
     assert got["channels"].get("acme/my-app") is None
-    assert ("conversations.create", {"name": "my-app", "is_private": False}, True) in client.calls
+    assert ("conversations.create", {"name": "proj-my-app", "is_private": False}, True) in client.calls
 
 
 def test_the_dm_keeps_working_for_a_question_that_belongs_to_no_project(tmp_path):
@@ -512,12 +513,12 @@ def test_a_channel_no_project_owns_never_reaches_the_dm_inbox(tmp_path):
 def test_a_channel_slack_already_holds_is_adopted_by_name_and_joined(tmp_path):
     """Criterion (a), adoption: a channel Slack already holds is joined by its id, never replaced by a second one."""
     mod = voiced()
-    client = FakeClient(existing=[{"id": "C0PREEXISTING", "name": "my-app", "is_member": False}])
+    client = FakeClient(existing=[{"id": "C0PREEXISTING", "name": "proj-my-app", "is_member": False}])
 
     state, got = configure(tmp_path, mod, client, ["Acme/My.App"])
 
-    assert got["channels"]["Acme/My.App"] == {"name": "my-app", "id": "C0PREEXISTING"}
-    assert client.channels["my-app"]["id"] == "C0PREEXISTING", "the daemon replaced Slack's own channel"
+    assert got["channels"]["Acme/My.App"] == {"name": "proj-my-app", "id": "C0PREEXISTING"}
+    assert client.channels["proj-my-app"]["id"] == "C0PREEXISTING", "the daemon replaced Slack's own channel"
     assert ("conversations.join", {"channel": "C0PREEXISTING"}, True) in client.calls
 
 
@@ -529,7 +530,7 @@ def test_a_restart_over_the_registry_creates_and_joins_nothing(tmp_path):
     cid = got["channels"]["Acme/My.App"]["id"]
 
     # The restart: a fresh daemon, a fresh client whose Slack holds the channel the registry names.
-    second = FakeClient(existing=[{"id": cid, "name": "my-app", "is_member": True}])
+    second = FakeClient(existing=[{"id": cid, "name": "proj-my-app", "is_member": True}])
     _, again = configure(tmp_path, mod, second, ["Acme/My.App"])
 
     assert second.created() == [], "the restart created the channel again"
@@ -556,8 +557,8 @@ def test_a_repository_that_collides_with_a_channel_already_on_disk_is_refused(tm
     """Criterion (d), across a restart: the channel on disk still belongs to its repository, and the newcomer is refused."""
     mod = voiced()
     client = FakeClient()
-    mod.State(str(tmp_path)).save_channels({"acme/old": {"name": "my-app", "id": "C0OLD"}})
-    client.channels["my-app"] = {"id": "C0OLD", "name": "my-app", "is_member": True}
+    mod.State(str(tmp_path)).save_channels({"acme/old": {"name": "proj-my-app", "id": "C0OLD"}})
+    client.channels["proj-my-app"] = {"id": "C0OLD", "name": "proj-my-app", "is_member": True}
 
     got = mod.project_channels(mod.State(str(tmp_path)), client=client,
                                repos=["acme/My.App"], log=lambda line: None)

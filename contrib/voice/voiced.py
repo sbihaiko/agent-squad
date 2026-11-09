@@ -18,8 +18,8 @@ its id are fsync'd before the envelope is acknowledged, so a crash after the ack
 cannot read lands in `other.jsonl` with an `error`, never in the inbox as a half line the operator might read as an
 instruction.
 
-Every project the hub lists gets one channel in the dedicated workspace, named after its GitHub repository (lowercased,
-each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
+Every project the hub lists gets one channel in the dedicated workspace, named `proj-` and its GitHub repository
+(lowercased, each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
 `$VOICE_STATE/channels.json`, writes one inbox per channel (`$VOICE_STATE/inboxes/<channel>.jsonl`) and posts an answer
 in the channel its question came from. Two repositories whose names collide after the conversion are refused with one
 line that names both, and no channel is created for the second. A message in a channel no project owns is data in
@@ -72,6 +72,7 @@ import keychain  # noqa: E402  the one reader for the three voice secrets
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
 CHANNEL_MAX = 80     # Slack's channel-name cap
+PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
@@ -94,16 +95,20 @@ class ClipTooLarge(Exception):
 
 
 def channel_name(repo):
-    """The channel for one repository: its name, lowercased, each dot a hyphen; every other character Slack refuses
-    becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484).
+    """The channel for one repository: `proj-` and its name, lowercased, each dot a hyphen; every other character Slack
+    refuses becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484). The `proj-` prefix is the
+    rule a reader and the check both read: a project channel is told by its name (#1615).
 
     Slack refuses a name that starts or ends with a hyphen and a run of hyphens; both are collapsed and trimmed. A name
     past the cap keeps a short digest of the whole name, so two long repositories that agree up to the cut never share
-    one channel.
+    one channel. An empty repository name yields no channel name at all, never a bare prefix.
     """
     name = (repo or "").rstrip("/").rsplit("/", 1)[-1]
     name = re.sub(r"[^a-z0-9_-]", "-", name.lower().replace(".", "-"))
     name = re.sub(r"-{2,}", "-", name).strip("-")
+    if not name:
+        return ""
+    name = PROJ_PREFIX + name
     if len(name) > CHANNEL_MAX:
         digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
         name = name[:CHANNEL_MAX - len(digest) - 1].strip("-") + "-" + digest
