@@ -62,6 +62,16 @@ def test_the_phone_page_carries_the_desktop_card_from_one_source(hub):
     assert "/*INST" not in page and "__REPO__" not in page and "__LOADERR__" not in page
 
 
+def test_the_monitor_scope_defines_the_formatters_the_cut_calls(hub):
+    """The card's script is cut from the desktop page and runs in its own scope. A helper it calls must ride along inside
+    that scope, or the card dies on the phone with "Can't find variable" (#1632)."""
+    page = hub.MOBILE_PAGE
+    i = page.index("const inst = (() => {")
+    j = page.index("return { instDraw };", i)
+    scope = page[i:j]
+    assert "const fpct" in scope, "the quota formatter rides along with the card it draws"
+    assert "fpct(" in scope
+
 def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     out = run_page(hub.MOBILE_PAGE, """
       await loadPoll(); await __tick(10);
@@ -98,11 +108,9 @@ def test_the_loop_control_obeys_the_hub(hub):
       await __tick(10);
       openLayer("loop", { slug: "x" });
       const b = id => document.getElementById(id);
-      return { rows: b("loops-rows").querySelectorAll(".looprow").length,
-               label: b("loop-primary").textContent, disabled: b("loop-primary").disabled,
+      return { label: b("loop-primary").textContent, disabled: b("loop-primary").disabled,
                state: b("loop-primary").dataset.state, reason: b("loop-reason").textContent };
     """, routes=_routes(hub, loop=LOOP_FACT))
-    assert out["rows"] == 1, "the Now strip names the project"
     assert (out["label"], out["disabled"], out["state"]) == ("Refused", True, "refused")
     assert "read-only from the tailnet" in out["reason"]
 

@@ -73,16 +73,17 @@ def hub(monkeypatch, tmp_path):
 
 
 @pytest.mark.node_bound
-def test_the_strip_aggregates_the_projects_and_names_one_row_for_each(hub):
+def test_the_strip_aggregates_every_project_and_names_no_row(hub):
+    """The owner removed the per-project rows from Now (2026-11-08): the strip carries the aggregate alone and opens the
+    Loops list, which is where every project is named."""
     out = run_page(hub.MOBILE_PAGE, """
       await __tick(10);
       return { agg: $("loops-agg").textContent, sub: $("loops-sub").textContent,
-               rows: $("loops-rows").querySelectorAll(".looprow").map(b => [b.dataset.loopProject, b.textContent]) };
+               strip: $("loops-strip").querySelectorAll(".looprow").length };
     """, routes=routes())
     assert out["agg"] == "1 on · 1 off · 1 draining", out
     assert out["sub"] == "3 projects"
-    assert [r[0] for r in out["rows"]] == ["alpha", "beta", "gamma"], "one row per project, each named"
-    assert all(r[1].strip() for r in out["rows"]), "no row is an unnamed switch"
+    assert out["strip"] == 0, "the strip names no project; the Loops list does"
 
 
 @pytest.mark.node_bound

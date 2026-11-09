@@ -5901,7 +5901,8 @@ $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget
 $("#pie").addEventListener("focusin",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("focusout",()=>hlPie(""));
 const qcol=p=>`hsl(${Math.round(120*(1-Math.min(Math.max(+p||0,0),100)/100))} 65% 42%)`;   // a quota bar fills green when empty and red when full; only the fill takes colour (owner)
-const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
+const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok";
+const fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));   // carried into the phone's Monitor (#1632)
 const qbar=(label,pct,resets,sm,tip)=>{const left=resets?resets-Date.now()/1000:null,when=left==null?"":(left<=0?"resets now":"resets in "+span(left));
  return `<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span><span class=rst>${esc(when)}${resets?" · "+esc(moment(resets)):""}</span></div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"></div></div></div>`};
 const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.",aged=a.asof?span(Date.now()/1000-a.asof)+" ago":"";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${aged}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${aged}</span></div>`};
@@ -7727,6 +7728,7 @@ CARD_RULES_JS = re.search(r"// <card-rules>.*?// </card-rules>", (pathlib.Path(_
 INST_CARD = re.search(r"<details id=inst\b.*?</details>", PAGE, re.S).group(0)
 INST_CSS = re.search(r"^/\* INST-CSS\{ \*/$.*?^/\* \}INST-CSS \*/$", PAGE, re.M | re.S).group(0)
 INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
+                     re.search(r"^const fpct=.*$", PAGE, re.M).group(0),
                      *re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", PAGE, re.M),
                      re.search(r"^// INST\{.*?^// \}INST$", PAGE, re.M | re.S).group(0)]).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__REPO__", REPO)
 
