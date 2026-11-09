@@ -14,8 +14,8 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HUB_PY = os.path.join(ROOT, "contrib/squad-goal/scripts/hub.py")
 EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️]")
-# The glyphs a page reaches for when it has no icon set: angle quotes, guillemets and bullets.
-GLYPH = re.compile("[‹›«»•]")
+# The glyphs a page reaches for when it has no icon set: angle quotes, guillemets, bullets, and the close, check and arrow marks.
+GLYPH = re.compile("[‹›«»•×✕✖✓✔✗✘←→↑↓⋯]")
 BUTTON = re.compile(r"<button\b[^>]*>(.*?)</button>", re.S)
 STROKE = re.compile(r"(?<![\w-])stroke-width\s*:\s*([\d.]+)")
 

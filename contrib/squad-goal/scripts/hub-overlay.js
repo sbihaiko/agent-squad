@@ -229,7 +229,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
 <p id="sq-ov-live" aria-live="off" hidden></p>
 <div id="sq-ov-form">
-<div id="sq-ov-attach" role="group" aria-label="Attachment" hidden><img id="sq-ov-attach-img" alt=""><span id="sq-ov-attach-name"></span><button type="button" id="sq-ov-attach-x" aria-label="Remove the attachment" title="Remove the attachment">×</button></div>
+<div id="sq-ov-attach" role="group" aria-label="Attachment" hidden><img id="sq-ov-attach-img" alt=""><span id="sq-ov-attach-name"></span><button type="button" id="sq-ov-attach-x" aria-label="Remove the attachment" title="Remove the attachment"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M3 3l6 6M9 3l-6 6"/></svg></button></div>
 <div id="sq-ov-row">
 <button type="button" id="sq-ov-plus" aria-label="Add to the message" aria-haspopup="menu" aria-expanded="false" aria-controls="sq-ov-menu">+</button>
 <div id="sq-ov-menu" role="menu" hidden><button type="button" role="menuitem" data-act="shot">Attach screenshot</button><button type="button" role="menuitem" data-act="ctx">Page context</button></div>

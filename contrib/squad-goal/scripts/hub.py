@@ -7748,7 +7748,8 @@ MOBILE_PHOTO_CSS = """
 MOBILE_PHOTO_MARKUP = (f"<style>{MOBILE_PHOTO_CSS}</style>\n"
                        '<div id="termview-attach" role="group" aria-label="Photo" hidden><img id="termview-attach-img" alt="">'
                        '<span id="termview-attach-name"></span><button id="termview-attach-x" type="button" '
-                       'aria-label="Remove the photo" title="Remove the photo">×</button></div>\n')
+                       'aria-label="Remove the photo" title="Remove the photo"><svg class="ico" viewBox="0 0 12 12" '
+                       'aria-hidden="true" focusable="false"><path d="M3 3l6 6M9 3l-6 6"/></svg></button></div>\n')
 MOBILE_PHOTO_ROW = ('<label id="termview-photo" for="termview-file">Attach</label>'
                     '<input id="termview-file" type="file" accept="image/*" aria-label="Take or choose a photo">'
                     '<button id="termview-send" type="button">Send</button>')
