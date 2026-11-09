@@ -4,9 +4,11 @@
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body) system-ui,sans-serif;min-height:100dvh}
 /* Every fixed edge clears the notch and the home indicator (#1142): the top inset on the header, both side insets in
    landscape, and the bottom inset on anything that touches the bottom of the screen. */
-header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);padding-top:calc(8px + env(safe-area-inset-top));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
+header{display:flex;gap:10px;align-items:baseline;padding:2px 14px 2px;padding-top:calc(2px + env(safe-area-inset-top));border-0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
 /* The project switcher (#876): the header names the project; a tap opens the list in a sheet, rows 44 px tall. */
-#profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:center;gap:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 10px;font-size:var(--fs-body);text-align:left}
+#profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:baseline;gap:8px;background:none;color:var(--fg);border:0;border-radius:0;padding:0;font-size:var(--fs-body);font-weight:600;text-align:left;line-height:1.25}
+#profile b{white-space:nowrap;flex:none}
+#profile span{color:var(--mute);font-size:var(--fs-caption);font-weight:400;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #pswm{color:var(--mute);font-size:var(--fs-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 #psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(56px + env(safe-area-inset-bottom));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));z-index:25;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
 #psw-content{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
@@ -19,7 +21,7 @@ header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1p
 #pswl .psw-all{color:var(--ok)}
 #pswx{display:block;width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 header a{color:var(--acc);font-size:var(--fs-caption);white-space:nowrap}
-#to-desktop{display:inline-flex;align-items:center;min-height:44px;padding:0 4px}
+#to-desktop{display:inline-flex;align-items:center;min-height:44px;padding:0 2px;color:var(--mute);font-size:var(--fs-caption)}
 main{padding:12px var(--page-gutter-phone) 148px}
 section[hidden]{display:none}
 h2{font-size:var(--fs-heading);margin:6px 0 10px}
@@ -36,8 +38,6 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #loops-strip{display:grid;gap:8px;padding:12px;border-radius:var(--radius-lg);background:var(--panel);border:1px solid var(--line)}
 #loops-open{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;min-height:44px;text-align:left;background:none;color:var(--fg);border:0;font:var(--fs-body) system-ui,sans-serif;padding:0}
 #loops-open b{font-size:var(--fs-body)}#loops-sub{color:var(--mute);font-size:var(--fs-caption)}
-#loops-rows{list-style:none;margin:0;padding:0;display:grid;gap:6px}
-#loops-rows:empty{display:none}
 .looprow{display:block;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
 .looprow b{display:block;font-weight:600}.looprow .mut{color:var(--mute);font-size:var(--fs-caption)}
 .looprow.on b{color:var(--ok)}.looprow.off b{color:var(--err)}.looprow.draining b,.looprow.starting b{color:var(--warn,var(--warn))}
@@ -164,7 +164,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #cr-seg{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto}
 #cr-seg button{min-height:44px;flex:none;background:var(--bg);color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #cr-seg button[aria-pressed=true]{color:var(--fg);border-color:var(--acc)}
-#cr-scope{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-caption);white-space:nowrap}
+#cr-scope{flex:none;max-width:52%;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-caption);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Search (#1600): the field takes the control row's slot, above the keyboard and the tab bar, and Back clears it. */
 #searchbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));display:flex;gap:8px;padding:6px 14px;background:var(--panel);border-top:1px solid var(--line);z-index:39}
 #searchbar[hidden]{display:none}
@@ -216,6 +216,13 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
+#specs-list{display:grid;gap:10px}
+#specs-list .row{padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg)}
+#specs-list .row b{font-size:var(--fs-heading);line-height:1.35;font-weight:600;display:block}
+#specs-list .row .mut{line-height:1.5}
+.specbar{display:block;width:100%;height:8px;border-radius:var(--radius-full);background:var(--line);margin:10px 0 8px}
+#specs-search{display:grid;place-items:center;width:44px;height:44px;padding:0;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-xl)}
+#specs-search svg{width:18px;height:18px}
 .runrow{display:block;width:100%;text-align:left;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 12px;font:var(--fs-body) system-ui,sans-serif}
 .runrow .mut{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
 /* The run row draws the shared state chip: the served word in the state's tone, behind its shared mark (#1142). */
@@ -388,7 +395,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id=iloop>
 <div id=loops-strip data-role=loops>
 <button id=loops-open type=button aria-haspopup="dialog"><b id=loops-agg>Loops</b> <span id=loops-sub></span></button>
-<ul id=loops-rows></ul>
 <p id=loops-msg role=status></p>
 </div>
 </div>
@@ -529,7 +535,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="more-actions"><button id="more-backact" data-actback type="button">Back</button></div>
 </section>
 <section data-panel="specs" hidden>
-<div id="specs-head" data-role="header"><h2>Specs</h2><button id="specs-search" type="button" aria-label="Search specs by title, number or label">Search</button></div>
+<div id="specs-head" data-role="header"><h2>Specs</h2><button id="specs-search" type="button" aria-label="Search specs by title, number or label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg></button></div>
 <p id="specs-state" class="msg" role="status"></p>
 <div id="specs-list" class="runlist"></div>
 </section>
@@ -927,7 +933,7 @@ function clearSearch() {
   $("work-results").replaceChildren(); $("work-results").hidden = true;
   $("cards").hidden = false; $("dots").hidden = false;
   paintControlRow();
-  if (tab === "specs") drawSpecs(); else if (tab === "work") renderBoard();
+  if (tab === "specs") { if (!board) loadBoard(); drawSpecs(); } else if (tab === "work") renderBoard();
 }
 $("work-search").onclick = () => openSearch("work");
 $("specs-search").onclick = () => openSearch("specs");
@@ -942,6 +948,9 @@ function paintPanel() {
     b.dataset.tab === tabActive ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
   }
   paintControlRow();
+  // A tab restored on its own opens with its own facts (SPEC 1596, rule 5): Specs reads the board, and asks for it when it
+  // is the panel on show and the board has not answered yet (#1604).
+  if (panel === "specs") { if (!board) loadBoard(); drawSpecs(); }
 }
 function entryOf(tab) {
   const st = tabStacks[tab], top = st[st.length - 1];
@@ -1237,7 +1246,6 @@ function loopDraw() {
   $("loops-agg").textContent = agg;
   $("loops-sub").textContent = ps.length ? n : "";
   $("loops-agg-line").textContent = ps.length ? agg + " · " + n : agg;
-  $("loops-rows").replaceChildren(...loopItems(ps));
   $("loops-list").replaceChildren(...loopItems(ps));
   $("loops-log").replaceChildren(...((loopV && loopV.changes) || []).map(e => {
     const li = document.createElement("li");
@@ -1681,6 +1689,9 @@ function specRowEl(s) {
   head.textContent = (s.repo ? s.repo + " · " : "") + "SPEC " + s.n + " " + s.title;
   const bar = document.createElementNS(NS_SVG, "svg"), at = { x: 0 };
   bar.setAttribute("viewBox", "0 0 100 8");
+  bar.setAttribute("preserveAspectRatio", "none");
+  bar.setAttribute("class", "specbar");
+  bar.setAttribute("aria-hidden", "true");
   for (const seg of s.bar) {
     const r = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title");
     r.setAttribute("x", at.x); r.setAttribute("y", 0); r.setAttribute("width", seg.w); r.setAttribute("height", 8); r.setAttribute("fill", seg.color || "var(--acc)");   // the column's own fill, served on the group
@@ -1698,10 +1709,14 @@ function specRowEl(s) {
   return row;
 }
 const step = g => { offBoard = null; view = sheetStep(view, shown, g); refresh(); };
+// The Specs tab draws from the board (SPEC 1596, rule 5): a board that answers after the tab opened repaints it, and the
+// tab asks for the board on its own the first time it opens (#1604).
+const specsPanel = () => document.querySelector('[data-panel="specs"]');
+const redrawSpecs = () => { const p = specsPanel(); if (p && !p.hidden) drawSpecs(); };
 async function loadBoard(fresh) {
   if (!board) renderBoard();   // before the first read answers, the board says it is loading (#1008)
-  try { applyBoard(await call("/api/board", fresh)); }
-  catch (e) { $("bmsg").textContent = e.message; }
+  try { applyBoard(await call("/api/board", fresh)); redrawSpecs(); }
+  catch (e) { $("bmsg").textContent = e.message; redrawSpecs(); }
 }
 let boardRead = 0, boardStale = false;
 setInterval(() => {

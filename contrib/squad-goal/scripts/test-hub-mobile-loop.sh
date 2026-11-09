@@ -18,8 +18,8 @@ def check(label, ok):
     fail |= not ok
 def has(txt, i): return f'id={i}' in txt or f'id="{i}"' in txt
 # The strip (rule 8): the aggregate over every project and one row per project. No single unnamed switch.
-strip = ("loops-strip", "loops-open", "loops-agg", "loops-rows", "loops-msg")
-check("the Now strip has its aggregate, its rows and its status line", all(has(t, i) for i in strip))
+strip = ("loops-strip", "loops-open", "loops-agg", "loops-msg")
+check("the Now strip has its aggregate and its status line, and no row of its own", all(has(t, i) for i in strip) and "loops-rows" not in t)
 check("the strip is a button that opens the Loops list", 'openLayer("loops")' in t)
 check("a project row opens that project's loop", re.search(r'openLayer\("loop", \{ slug:', t) is not None)
 check("a row names its project, so no switch is unnamed", re.search(r'b\.setAttribute\("data-loop-project", p\.slug \|\| ""\)', t) is not None)
