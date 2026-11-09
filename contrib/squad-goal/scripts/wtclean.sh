@@ -29,6 +29,14 @@ wave_hold() { local m="$SG_STATE/auto/wave-$1" t; [ -e "$m" ] || return 1
   [ $(( now - t )) -lt "${SG_WAVE_HOLD_MAX_SECONDS:-86400}" ] && return 0
   grep -qx "lapsed $1" "$seen" || { echo "WT HOLD LAPSED $1: its wave started $(( now - t )) s ago, past the hold cap (${SG_WAVE_HOLD_MAX_SECONDS:-86400} s); its trees follow the other rules"; echo "lapsed $1" >> "$seen"; }
   return 1; }
+# disp_hold <tree>: 0 while an in-flight dispatch names this tree (#1637). autobug writes auto/bug-<n> (autofrontier
+# auto/disp-<n>) before the wave cuts the tree, and the run folder that would name it exists only after launch.py writes it, so
+# a tree cut at the base tip reads as landed and unused for the one moment that matters. The issue number is the one the tree's
+# name carries (gui-<n>); the hold lapses after SG_WT_DISP_HOLD_SECONDS so a marker no pass frees never keeps a tree for good.
+disp_hold() { local n=${1##*/} f; n=${n#*-}; case $n in ''|*[!0-9]*) return 1;; esac
+  for f in "$SG_STATE/auto/bug-$n" "$SG_STATE/auto/disp-$n"; do [ -e "$f" ] || continue
+    [ $(( now - $(mtime "$f") )) -lt "${SG_WT_DISP_HOLD_SECONDS:-3600}" ] && { disp=$n; return 0; }; done
+  return 1; }
 # in_base <tree>: every commit of the tree's HEAD is in origin/$SG_BASE, by its sha or by its patch. A wave rebases each child
 # on its tip and on the base, so a child that landed carries a sha no remote has; `git cherry` reads its patch in the base
 # (a merge commit has no patch and is skipped, so a target's `squad: land` merges do not hold it). A commit with no diff
@@ -175,6 +183,9 @@ for rel in worktrees/child .worktrees; do
     # clean, and its HEAD may already be in the base: between the run's verdict and its wave's landing only the marker keeps it.
     hold=; for r in "$w"/runs/*/; do [ -d "$r" ] && wave_hold "$(basename "$r")" && { hold=$(basename "$r"); break; }; done
     if [ -n "$hold" ]; then grep -qx "wave $w" "$seen" || { echo "WT HELD wave $hold ${w##*/}: the run's wave has not landed; kept"; echo "wave $w" >> "$seen"; }
+      continue; fi
+    # #1637: a tree an in-flight dispatch cut is held before the run folder can name it.
+    if disp_hold "$w"; then grep -qx "disp $w" "$seen" || { echo "WT HELD dispatch #$disp ${w##*/}: the dispatch of #$disp has not started its run; kept"; echo "disp $w" >> "$seen"; }
       continue; fi
     in_base "$w" || { kept child "$w" ahead "commits not in origin/$SG_BASE"; continue; }
     # An active run folder inside the child itself owns this tree, even before it starts a process. The janitor drops a
