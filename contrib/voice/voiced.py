@@ -24,9 +24,10 @@ Every project the hub lists gets one channel in the dedicated workspace, named `
 and posts an answer in the channel its question came from. A queue is keyed by Slack's channel id, never by its name,
 so a channel renamed in Slack keeps its inbox, its outbox and its delivery record. A name-keyed file an older build wrote
 is moved to its id once, on the version 1 to 2 start, with every pending line, and is left alone when its id file
-already exists or when the directory already carries version 2. Two
-repositories whose names collide after the conversion are refused with one line that names both, and no channel is
-created for the second. A message in a channel no project owns is data in `other.jsonl`, never a DM question.
+already exists or when the directory already carries version 2. A name file `channels.json` never names has no
+successor any start could give it, so it stays in place and never holds the version at 1. Two repositories whose names
+collide after the conversion are refused with one line that names both, and no channel is created for the second. A
+message in a channel no project owns is data in `other.jsonl`, never a DM question.
 
 `$VOICE_STATE/schema.json` carries this build's state version. A directory with no version is an older build's and is
 migrated once; a version this build does not know stops the daemon with one named line before it writes anything.
@@ -94,7 +95,6 @@ SCHEMA_FILE = "schema.json"
 SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
 SUPPORTED_SCHEMA = (1, SCHEMA_VERSION)
 DM = "dm"                            # the DM is one scope beside the channels, so its queues carry a key too
-CHANNEL_ID = re.compile(r"[CGD][A-Z0-9]{6,}")   # Slack's id shape: a queue key that is not this is a channel name
 
 
 class SchemaRefused(Exception):
@@ -228,6 +228,7 @@ class State:
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
         self._seen = None
         self._channels = None
+        self._registry_read = False
         self._delivered = None
         self._posted = None
         if self.version < SCHEMA_VERSION:
@@ -262,9 +263,11 @@ class State:
         root, and they move into the same `dm` key. A file no registry entry names has no known successor and is not
         touched.
 
-        Returns True when no name-keyed queue is left, so the caller stamps the version only over a finished migration.
-        A registry that was missing or stale at this start leaves a name file behind and the version unstamped, and the
-        next start retries the move.
+        Returns True when this start settles the version 1 layout, so the caller stamps the version and the stamp is the
+        one record that the migration ran. A readable registry settles it: every move it names is done, and a name file
+        no entry names has no successor any later start could give it, so leaving it in place loses nothing. A registry
+        that was missing or unreadable moves nothing, so the version stays 1 and the next start retries; so does a
+        directory with no name file at all, which needs no registry to settle.
         """
         moves = []
         for entry in list(self.channels().values()):
@@ -280,10 +283,20 @@ class State:
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             os.replace(source, target)      # atomic: every pending line travels with the file
-        return not self._name_keyed_queues()
+        return self._registry_read or not self._name_keyed_queues()
+
+    def _id_keys(self):
+        """Every key a queue may carry: `dm` and each id the registry names, never a key's shape on its own."""
+        keys = {DM}
+        for entry in self.channels().values():
+            cid = (entry.get("id") or "").strip()
+            if cid:
+                keys.add(cid)
+        return keys
 
     def _name_keyed_queues(self):
-        """Every queue file whose key is neither `dm` nor a channel id: a name no registry entry has moved yet."""
+        """Every queue file whose key is neither `dm` nor an id the registry names: a name no entry has moved yet."""
+        known = self._id_keys()
         found = []
         for directory in (self.inboxes_dir, self.outboxes_dir):
             try:
@@ -294,19 +307,25 @@ class State:
                 if not name.endswith(".jsonl"):
                     continue
                 key = name[:-len(".jsonl")]
-                if key != DM and not CHANNEL_ID.fullmatch(key):
+                if key not in known:
                     found.append(os.path.join(directory, name))
         return found
 
     def channels(self):
-        """repository -> {name, id}: the project channels this daemon created or joined, read from disk or stale-safe."""
+        """repository -> {name, id}: the project channels this daemon created or joined, read from disk or stale-safe.
+
+        The read also records whether the registry was usable: a missing or malformed file leaves the version 1 layout
+        for a later start to settle, never stamps a migration it could not finish.
+        """
         if self._channels is None:
             self._channels = {}
+            self._registry_read = False
             try:
                 with open(self.channels_path, encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
                     self._channels = {k: v for k, v in data.items() if isinstance(v, dict)}
+                    self._registry_read = True
             except (OSError, ValueError):
                 pass
         return self._channels
@@ -320,6 +339,7 @@ class State:
             os.fsync(f.fileno())
         os.replace(tmp, self.channels_path)
         self._channels = {k: dict(v) for k, v in mapping.items()}
+        self._registry_read = True
 
     def channel_for(self, channel_id):
         """The repository one project channel belongs to, or None for the DM and any channel no project owns."""

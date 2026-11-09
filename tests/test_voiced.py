@@ -676,6 +676,50 @@ def test_a_name_queue_waits_for_its_registry_and_moves_on_the_start_that_has_it(
     assert not legacy.exists()
 
 
+def test_an_id_the_registry_names_is_never_read_as_a_channel_name(tmp_path):
+    """#1614 (2): the stamp records the migration, so it never depends on the shape of the key. An id whose prefix or
+    suffix this build does not expect is still an id the registry names, so the version 1 directory stamps version 2
+    and no later start runs the migration again over the same file."""
+    mod = voiced()
+    (tmp_path / "inboxes").mkdir()
+    (tmp_path / "outboxes").mkdir()
+    (tmp_path / "channels.json").write_text(json.dumps({"acme/app": {"name": "my-app", "id": "x0app-0001"}}))
+    good_id = tmp_path / "inboxes" / "x0app-0001.jsonl"
+    good_id.write_text(json.dumps({"id": "cid-1", "text": "one"}) + "\n")
+
+    state = mod.State(str(tmp_path))
+
+    assert state.version == mod.SCHEMA_VERSION, "an id the registry names held the version at 1 forever"
+    assert (tmp_path / "schema.json").exists()
+    assert lines(good_id) == [{"id": "cid-1", "text": "one"}], "a file keyed by its own id was moved by mistake"
+
+
+def test_a_name_file_no_registry_entry_names_does_not_hold_the_version(tmp_path):
+    """#1614 (2): the registry moves what it can and the version stamps over it. A name file no entry names has no
+    successor any start could move it to, so it stays in place and never makes the directory retry the migration."""
+    mod = voiced()
+    (tmp_path / "inboxes").mkdir()
+    (tmp_path / "channels.json").write_text(json.dumps({"acme/app": {"name": "my-app", "id": "C0APP0001"}}))
+    moved = tmp_path / "inboxes" / "my-app.jsonl"
+    moved.write_text(json.dumps({"id": "cid-1", "text": "one"}) + "\n")
+    orphan = tmp_path / "inboxes" / "C-team.jsonl"      # id-shaped, yet no registry entry maps it
+    orphan.write_text(json.dumps({"id": "cid-2", "text": "two"}) + "\n")
+
+    first = mod.State(str(tmp_path))
+
+    assert first.version == mod.SCHEMA_VERSION, "an orphan name file held the version at 1 forever"
+    assert lines(tmp_path / "inboxes" / "C0APP0001.jsonl") == [{"id": "cid-1", "text": "one"}]
+    assert lines(orphan) == [{"id": "cid-2", "text": "two"}], "a file no registry entry names was touched"
+
+    # The next start over the stamped directory does no migration work at all.
+    (tmp_path / "inboxes" / "later-app.jsonl").write_text(json.dumps({"id": "cid-3", "text": "three"}) + "\n")
+    second = mod.State(str(tmp_path))
+
+    assert second.version == mod.SCHEMA_VERSION
+    assert not (tmp_path / "inboxes" / "C0APP0002.jsonl").exists()
+    assert lines(tmp_path / "inboxes" / "later-app.jsonl") == [{"id": "cid-3", "text": "three"}]
+
+
 def test_an_unknown_state_version_refuses_to_start_and_writes_nothing(tmp_path, capsys):
     """#1614 (3): the directory declares a schema version; one this build does not know stops the daemon with a named
     error, and no file in the directory changes."""
