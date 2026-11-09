@@ -57,8 +57,13 @@ DRAW_CHIPS = """
 
 # The recording row the mic draws while it is held: the timer, the waveform, the cancel zone and the three hints.
 DRAW_RECORDING = """
-() => {
+(args) => {
+  const [KEYBOARD] = args;
   /*BOX*/
+  const term = document.getElementById("termview");
+  term.hidden = false;
+  term.style.top = "0px";
+  term.style.height = (window.innerHeight - KEYBOARD) + "px";   // the keyboard is up while the mic is held
   const rec = document.getElementById("termview-rec");
   rec.hidden = false;
   return { box: box(document.getElementById("termview")), rec: box(rec),
@@ -134,7 +139,8 @@ try {
   const size = p => { try { return fs.statSync(p).size; } catch (e) { return 0; } };
   const chips = await page.evaluate(DRAW_CHIPS, [KEYBOARD]);
   const chipsShot = size(await page.screenshot({ path: SHOT_DIR + "/chips.png" }));
-  const recording = await page.evaluate(DRAW_RECORDING);
+  const recording = await page.evaluate(DRAW_RECORDING, [KEYBOARD]);
+  const recordingShot = size(await page.screenshot({ path: SHOT_DIR + "/recording.png" }));
   const notSent = await page.evaluate(DRAW_NOT_SENT);
   const notSentShot = size(await page.screenshot({ path: SHOT_DIR + "/not-sent.png" }));
   const run = await page.evaluate(DRAW_RUN);
@@ -145,7 +151,7 @@ try {
     vw: chips.vw, vh: chips.vh,
     frames: {
       chips: { ...chips, shot: chipsShot },
-      recording: { ...recording, shot: 0 },
+      recording: { ...recording, shot: recordingShot },
       notsent: { ...notSent, shot: notSentShot },
       run: { ...run, shot: runShot },
       attach: { ...attach, shot: attachShot },
@@ -253,5 +259,5 @@ def test_the_named_frames_sit_inside_the_viewport_and_the_thumb_zone(phone):
         assert button["h"] >= TAP, f"attach door {i} is {button['h']} px tall"
 
     # Each captured frame was really rendered: the screenshots on disk carry bytes.
-    for name in ("chips", "notsent", "run", "attach"):
+    for name in ("chips", "recording", "notsent", "run", "attach"):
         assert seen["frames"][name]["shot"] > 1000, f"the {name} frame rendered no screenshot"
