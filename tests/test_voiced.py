@@ -441,6 +441,58 @@ def test_a_channel_the_registry_already_maps_is_kept_under_its_own_name(tmp_path
     assert client.created() == [], "the sync created a second channel for a mapped project"
 
 
+def test_a_mapped_channel_outside_the_proj_prefix_fails_the_rule():
+    """#1615 guard: the rule names every mapped channel outside the `proj-` prefix, so a bare name is a reported
+    violation and never an assumption that the registry happens to be right."""
+    mod = voiced()
+    mapped = {"acme/app": {"name": "proj-app", "id": "C0APP"},
+              "acme/zesty": {"name": "proj-zesty", "id": "C0ZESTY"}}
+    live = [{"id": "C0APP", "name": "proj-app"}, {"id": "C0ZESTY", "name": "proj-zesty"}]
+
+    assert mod.channel_name_violations(mapped, live) == []
+
+    bare = dict(mapped, **{"acme/old": {"name": "old", "id": "C0OLD"}})
+    lines = mod.channel_name_violations(bare, live + [{"id": "C0OLD", "name": "old"}])
+    assert len(lines) == 1, lines
+    assert "acme/old" in lines[0] and "old" in lines[0]
+
+
+def test_the_rule_reads_the_live_channel_names_so_a_slack_rename_is_caught():
+    """#1615: the registry still says `proj-app`, but Slack lists the same id as `app`; the check reads Slack's own
+    list, through the client it is handed, and reports the rename. A mapped channel Slack no longer lists is reported
+    too, and the id each line names is the one that keeps the channel's history."""
+    mod = voiced()
+    mapped = {"acme/app": {"name": "proj-app", "id": "C0APP"},
+              "acme/gone": {"name": "proj-gone", "id": "C0GONE"}}
+    client = FakeClient(existing=[{"id": "C0APP", "name": "app", "is_member": True}])
+
+    lines = mod.check_channel_names(mapped, client)
+
+    assert any(m.startswith("conversations.list") for m in client.methods()), "the check never read Slack's list"
+    assert len(lines) == 2, lines
+    renamed = next(line for line in lines if "C0APP" in line)
+    assert "acme/app" in renamed and "app" in renamed
+    gone = next(line for line in lines if "C0GONE" in line)
+    assert "acme/gone" in gone and "proj-gone" in gone
+
+
+def test_a_sync_reports_a_mapped_channel_that_slipped_outside_the_prefix(tmp_path):
+    """#1615: the sync runs the rule against Slack's live list, so a channel renamed on the Slack side is a log line the
+    daemon reports, never a name it silently accepts."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    state.save_channels({"acme/app": {"name": "proj-app", "id": "C0APP"}})
+    client = FakeClient(existing=[{"id": "C0APP", "name": "app", "is_member": True}])
+    log = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=None, downloader=None, log=log.append,
+                        client=client, projects=lambda: ["acme/app"])
+
+    daemon.sync_projects()
+
+    assert len(log) == 1, log
+    assert "acme/app" in log[0] and "C0APP" in log[0]
+
+
 def test_a_clip_in_a_project_channel_reaches_only_that_projects_inbox_and_its_answer_goes_back_there(tmp_path):
     """Criterion (b): the line lands in that project's inbox alone, and the answer is posted in the same channel."""
     mod = voiced()
