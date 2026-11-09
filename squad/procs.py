@@ -213,6 +213,24 @@ def _darwin_path(pid: int) -> str | None:
     return _vis(buf.value) if n > 0 else None
 
 
+ARGV_SETTLE_S = 0.02   # how long a read waits for the argv of a process this user owns that is still exec'ing
+ARGV_SETTLE_STEP_S = 0.002
+
+
+def _darwin_command(pid: int, ours: bool) -> str:
+    """The command line, as ps prints it: the exec path and its arguments. A process of this user caught mid-exec answers no
+    argv for a moment, and the read waits for it, bounded by ARGV_SETTLE_S: taken as the truth, the exec path alone read as
+    a command with no argument, so a fresh `squad start` was no squad run and the hub's stop-now missed it (#1635). Only this
+    user's process is waited for: another user's argv is refused for good, and a wait on it would stall every snapshot."""
+    command = _darwin_argv(pid)
+    if command is None and ours:
+        deadline = time.monotonic() + ARGV_SETTLE_S
+        while command is None and time.monotonic() < deadline:
+            time.sleep(ARGV_SETTLE_STEP_S)
+            command = _darwin_argv(pid)
+    return command if command is not None else (_darwin_path(pid) or "")
+
+
 def _darwin_listing() -> list[int]:
     lib = _libproc()
     n = lib.proc_listallpids(None, 0)
@@ -242,21 +260,20 @@ def _darwin_kinfo(pid: int) -> tuple[float | None, int, int, str] | None:
 
 def _darwin_proc(pid: int) -> Proc | None:
     info = _BsdInfo()
+    ours = False
     if _libproc().proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, ctypes.byref(info), ctypes.sizeof(info)) == ctypes.sizeof(info):
         start = info.pbi_start_tvsec + info.pbi_start_tvusec / 1e6 if info.pbi_start_tvsec else None
         ppid, pgid = info.pbi_ppid, info.pbi_pgid
         cpu = _darwin_cpu(pid)
         stat = "Z" if info.pbi_status == SZOMB else "S"
+        ours = info.pbi_uid == os.getuid()
     else:
         known = _darwin_kinfo(pid)   # refused for another user's process: the sysctl still names it
         if known is None:
             return None   # gone
         start, ppid, pgid, stat = known
         cpu = 0.0   # the task read is refused for another user's process
-    command = _darwin_argv(pid)
-    if command is None:
-        command = _darwin_path(pid) or ""
-    return Proc(pid, ppid, pgid, start, command, cpu, stat)
+    return Proc(pid, ppid, pgid, start, _darwin_command(pid, ours), cpu, stat)
 
 
 def _linux_listing() -> list[int]:

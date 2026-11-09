@@ -143,3 +143,38 @@ def test_1508_a_script_reads_its_own_tree_before_a_foreign_sg_squad(tmp_path, mo
         assert hasattr(mod._procs(), "snapshot")
     finally:
         sys.modules.pop("squad_procs", None)
+
+
+# (#1635) A process caught mid-exec answers no argv for a moment, and `sysctl` says nothing instead. A read that took that
+# moment as the truth reported the executable path alone as the command, so a fresh `squad start` read as no squad run and
+# a stop-now missed it. The read waits for the argv a moment, only for a process this user owns, and only for a bound.
+@pytest.mark.skipif(sys.platform != "darwin", reason="the exec-transition argv read is the darwin seam")
+def test_1635_a_process_caught_mid_exec_still_reads_its_arguments(child, monkeypatch):
+    real = procs._darwin_argv
+    calls = []
+
+    def first_read_misses(pid):
+        calls.append(pid)
+        return None if len(calls) == 1 else real(pid)
+
+    monkeypatch.setattr(procs, "_darwin_argv", first_read_misses)
+    snap = procs.snapshot([child.pid])
+    assert snap[child.pid].command == "/bin/sleep 30"
+
+
+def test_1635_another_users_process_is_not_waited_for(monkeypatch):
+    """Another user's argv is refused for good, so its read answers from the path at once: a snapshot never waits on every
+    process the system holds."""
+    calls = []
+    monkeypatch.setattr(procs, "_darwin_argv", lambda pid: calls.append(pid))
+    monkeypatch.setattr(procs, "_darwin_path", lambda pid: "/usr/bin/login")
+    assert procs._darwin_command(4321, ours=False) == "/usr/bin/login"
+    assert calls == [4321]
+
+
+def test_1635_the_wait_for_an_argv_is_bounded(monkeypatch):
+    monkeypatch.setattr(procs, "_darwin_argv", lambda pid: None)
+    monkeypatch.setattr(procs, "_darwin_path", lambda pid: "/usr/bin/python3")
+    t = time.monotonic()
+    assert procs._darwin_command(4321, ours=True) == "/usr/bin/python3"
+    assert time.monotonic() - t < 1
