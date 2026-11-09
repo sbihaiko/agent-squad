@@ -15,6 +15,9 @@ use `$VOICE_STATE/inboxes/dm.jsonl`. `-n 0` skips the lines already answered, an
 when the daemon reopens it. Each printed line wakes the session at once. A line that arrives while the session is busy
 is delivered when the turn ends.
 
+After an upgrade, a Monitor still tailing the old root `$VOICE_STATE/inbox.jsonl` sees no new line, because the
+daemon now writes the DM queue to `$VOICE_STATE/inboxes/dm.jsonl`. Restart that Monitor on the new path.
+
 The inbox line carries `id`, `ts`, `user`, `channel`, `text` and `clip`. `text` is the owner's words, or the
 transcription of the clip. A line from any other user never reaches the inbox.
 

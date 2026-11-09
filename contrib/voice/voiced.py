@@ -23,7 +23,8 @@ Every project the hub lists gets one channel in the dedicated workspace, named `
 `$VOICE_STATE/channels.json`, writes one inbox per channel (`$VOICE_STATE/inboxes/<channel id>.jsonl`, `dm` for the DM)
 and posts an answer in the channel its question came from. A queue is keyed by Slack's channel id, never by its name,
 so a channel renamed in Slack keeps its inbox, its outbox and its delivery record. A name-keyed file an older build wrote
-is moved to its id once at start, with every pending line, and is left alone when its id file already exists. Two
+is moved to its id once, on the version 1 to 2 start, with every pending line, and is left alone when its id file
+already exists or when the directory already carries version 2. Two
 repositories whose names collide after the conversion are refused with one line that names both, and no channel is
 created for the second. A message in a channel no project owns is data in `other.jsonl`, never a DM question.
 
@@ -93,6 +94,7 @@ SCHEMA_FILE = "schema.json"
 SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
 SUPPORTED_SCHEMA = (1, SCHEMA_VERSION)
 DM = "dm"                            # the DM is one scope beside the channels, so its queues carry a key too
+CHANNEL_ID = re.compile(r"[CGD][A-Z0-9]{6,}")   # Slack's id shape: a queue key that is not this is a channel name
 
 
 class SchemaRefused(Exception):
@@ -228,9 +230,9 @@ class State:
         self._channels = None
         self._delivered = None
         self._posted = None
-        self.migrate()
         if self.version < SCHEMA_VERSION:
-            self._stamp_schema()
+            if self.migrate():     # a name file no registry entry can move yet holds the version, so a later start retries
+                self._stamp_schema()
 
     @property
     def inbox_path(self):
@@ -259,6 +261,10 @@ class State:
         already exists is the stale copy of a finished move and is left alone. The DM's queues were two files at the
         root, and they move into the same `dm` key. A file no registry entry names has no known successor and is not
         touched.
+
+        Returns True when no name-keyed queue is left, so the caller stamps the version only over a finished migration.
+        A registry that was missing or stale at this start leaves a name file behind and the version unstamped, and the
+        next start retries the move.
         """
         moves = []
         for entry in list(self.channels().values()):
@@ -274,6 +280,23 @@ class State:
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             os.replace(source, target)      # atomic: every pending line travels with the file
+        return not self._name_keyed_queues()
+
+    def _name_keyed_queues(self):
+        """Every queue file whose key is neither `dm` nor a channel id: a name no registry entry has moved yet."""
+        found = []
+        for directory in (self.inboxes_dir, self.outboxes_dir):
+            try:
+                names = os.listdir(directory)
+            except OSError:
+                continue
+            for name in names:
+                if not name.endswith(".jsonl"):
+                    continue
+                key = name[:-len(".jsonl")]
+                if key != DM and not CHANNEL_ID.fullmatch(key):
+                    found.append(os.path.join(directory, name))
+        return found
 
     def channels(self):
         """repository -> {name, id}: the project channels this daemon created or joined, read from disk or stale-safe."""

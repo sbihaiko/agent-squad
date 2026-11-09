@@ -615,30 +615,65 @@ def test_every_queue_file_is_keyed_by_a_channel_id_and_never_by_its_name(tmp_pat
 
 
 def test_a_name_keyed_queue_is_moved_once_to_its_id_and_keeps_its_pending_lines(tmp_path):
-    """#1614 (2): a queue file named after the channel is moved to the id once, with every pending line; a name file
-    whose id file is already there is left alone, because the id file is the live one."""
+    """#1614 (2): a queue file named after the channel is moved to the id once, on the version 1 to 2 start, with every
+    pending line; a name file whose id file is already there is left alone, because the id file is the live one; a name
+    file that appears after the directory is stamped version 2 is never migrated again."""
     mod = voiced()
-    state = mod.State(str(tmp_path))
-    state.save_channels({"acme/app": {"name": "my-app", "id": "C0APP0001"}})
     pending = [{"id": "cid-1", "text": "first"}, {"id": "cid-2", "text": "second"}]
     (tmp_path / "inboxes").mkdir()
     (tmp_path / "outboxes").mkdir()
+    # The version 1 layout an older build wrote: a registry by name and queues keyed by name, with no schema file.
+    (tmp_path / "channels.json").write_text(json.dumps({"acme/app": {"name": "my-app", "id": "C0APP0001"}}))
     legacy_inbox = tmp_path / "inboxes" / "my-app.jsonl"
     legacy_outbox = tmp_path / "outboxes" / "my-app.jsonl"
     legacy_inbox.write_text("".join(json.dumps(r) + "\n" for r in pending))
     legacy_outbox.write_text(json.dumps({"text": "still pending"}) + "\n")
 
-    mod.State(str(tmp_path))      # the next daemon start
+    first = mod.State(str(tmp_path))      # the version 1 start: one migration, then the stamp
 
+    assert first.version == mod.SCHEMA_VERSION
     assert lines(tmp_path / "inboxes" / "C0APP0001.jsonl") == pending
     assert lines(tmp_path / "outboxes" / "C0APP0001.jsonl") == [{"text": "still pending"}]
     assert not legacy_inbox.exists() and not legacy_outbox.exists(), "a moved name file was left behind"
 
     # A name file that reappears beside its id successor is not moved again and not deleted.
     legacy_inbox.write_text(json.dumps({"id": "cid-3", "text": "third"}) + "\n")
-    mod.State(str(tmp_path))
+    # A second name file with no id successor appears after the stamp. The migration ran once, on the version
+    # transition, so a version 2 directory never moves it.
+    (tmp_path / "channels.json").write_text(json.dumps(
+        {"acme/app": {"name": "my-app", "id": "C0APP0001"}, "acme/other": {"name": "other-app", "id": "C0APP0002"}}))
+    late_inbox = tmp_path / "inboxes" / "other-app.jsonl"
+    late_inbox.write_text(json.dumps({"id": "cid-4", "text": "late"}) + "\n")
+
+    mod.State(str(tmp_path))      # the next daemon start, over a version 2 directory
+
     assert [r["id"] for r in lines(tmp_path / "inboxes" / "C0APP0001.jsonl")] == ["cid-1", "cid-2"]
     assert lines(legacy_inbox) == [{"id": "cid-3", "text": "third"}], "the name file beside its successor was touched"
+    assert lines(late_inbox) == [{"id": "cid-4", "text": "late"}], "a version 2 directory was migrated again"
+    assert not (tmp_path / "inboxes" / "C0APP0002.jsonl").exists()
+
+
+def test_a_name_queue_waits_for_its_registry_and_moves_on_the_start_that_has_it(tmp_path):
+    """#1614 (2): a registry that is missing or stale at the upgrade start never strands a name-keyed queue. The
+    version stays 1, so the file is left for the start that finds the registry, which moves it and stamps the version.
+    """
+    mod = voiced()
+    (tmp_path / "inboxes").mkdir()
+    legacy = tmp_path / "inboxes" / "my-app.jsonl"
+    legacy.write_text(json.dumps({"id": "cid-1", "text": "first"}) + "\n")
+
+    without = mod.State(str(tmp_path))
+
+    assert without.version == 1, "the version was stamped over a migration no registry could finish"
+    assert not (tmp_path / "schema.json").exists()
+    assert lines(legacy) == [{"id": "cid-1", "text": "first"}], "a file no registry entry names was touched"
+
+    (tmp_path / "channels.json").write_text(json.dumps({"acme/app": {"name": "my-app", "id": "C0APP0001"}}))
+    repaired = mod.State(str(tmp_path))
+
+    assert repaired.version == mod.SCHEMA_VERSION
+    assert lines(tmp_path / "inboxes" / "C0APP0001.jsonl") == [{"id": "cid-1", "text": "first"}]
+    assert not legacy.exists()
 
 
 def test_an_unknown_state_version_refuses_to_start_and_writes_nothing(tmp_path, capsys):
