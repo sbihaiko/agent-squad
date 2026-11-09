@@ -144,7 +144,7 @@ rm -f "$SG_STATE/auto/off"; : > "$SG_STATE/active-runs.txt"
 SCRIPTS="$d" WATCHD="$T/watchd.sh" SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_DRAIN_POLL=1 python3 - <<'PY' || fail=1
 import importlib.util, json, os, pathlib, subprocess, time
 spec = importlib.util.spec_from_file_location("hub", os.environ["SCRIPTS"] + "/hub.py"); hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)
-hub.WATCHD = pathlib.Path(os.environ["WATCHD"]); hub.tailnet_block = lambda: {}
+hub.WATCHD = pathlib.Path(os.environ["WATCHD"]); hub.tailnet_block = lambda checkout=None: {}
 import sys; sys.path.insert(0, str(pathlib.Path(os.environ["SCRIPTS"]).parents[2])); from squad import record as R
 ST, T = pathlib.Path(os.environ["SG_STATE"]), pathlib.Path(os.environ["SG_CHECKOUT"])
 LB = hub.Access(True, "", "", False); bad = 0
