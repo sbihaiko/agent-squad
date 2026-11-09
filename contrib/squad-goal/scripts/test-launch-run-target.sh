@@ -16,6 +16,7 @@ mkdir -p "$T/squad/squad"; printf 'OTHER = ("fix_run",)\n' > "$T/squad/squad/opt
 printf '#!/bin/bash\necho "note: wave stub $*"\n' > "$T/s/wave.sh"
 cat > "$T/bin/caffeinate" <<'C'
 #!/bin/bash
+case " $* " in *" squad start "*) ;; *) exit 0;; esac   # launch.py also caffeinates the hub: only the start is this stub's subject (#1637)
 argv="$*"
 while [ "${1#-}" != "$1" ]; do shift; done
 t=; rd=$PWD/runs; while [ $# -gt 0 ]; do [ "$1" = --target ] && t=$2; [ "$1" = --runs-dir ] && rd=$2; shift; done

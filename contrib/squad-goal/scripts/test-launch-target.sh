@@ -11,6 +11,7 @@ printf '{"coding_models":["test-model"],"hours":{}}\n' > "$T/s/models.json"
 printf 'print("hub")\n' > "$T/s/hub.py"
 cat > "$T/bin/caffeinate" <<'C'
 #!/bin/bash
+case " $* " in *" squad start "*) ;; *) exit 0;; esac   # launch.py also caffeinates the hub: only the start is this stub's subject (#1637)
 while [ "${1#-}" != "$1" ]; do shift; done
 printf '%s\n' "$*" > "$CAFF_ARGV"; printf '%s\n' "$PWD" > "$CAFF_CWD"
 mkdir -p runs/run-20261011-000000-dead
