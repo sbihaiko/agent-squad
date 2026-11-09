@@ -302,8 +302,8 @@ def test_the_operator_note_names_the_monitor_and_the_outbox_format():
 
     assert "Monitor" in note
     assert "tail -n 0 -F" in note, "the Monitor follows the inbox; a tail that stops leaves the owner unanswered"
-    assert "inbox.jsonl" in note, "the note names the DM inbox"
-    assert "inboxes/<channel>.jsonl" in note, "a project session watches only its own inbox"
+    assert "inboxes/dm.jsonl" in note, "the note names the DM inbox"
+    assert "inboxes/<channel id>.jsonl" in note, "a project session watches only its own inbox, keyed by its id"
 
     blocks = re.findall(r"```json\n(.*?)```", note, re.S)
     assert blocks, "the note gives the outbox line as a JSON example"
@@ -311,8 +311,8 @@ def test_the_operator_note_names_the_monitor_and_the_outbox_format():
     assert {"thread_ts", "text", "speech"} <= set(answer), f"the example carries {sorted(answer)}"
     for field in ("thread_ts", "text", "speech", "channel"):
         assert f"`{field}`" in note, f"the note explains `{field}`"
-    assert "outboxes/<channel>.jsonl" in note, "a project answers in its own channel's outbox"
-    assert "outbox.jsonl" in note, "the note names the DM outbox"
+    assert "outboxes/<channel id>.jsonl" in note, "a project answers in its own channel's outbox"
+    assert "outboxes/dm.jsonl" in note, "the note names the DM outbox"
 
 
 def test_the_one_minute_poll_is_no_longer_scheduled():

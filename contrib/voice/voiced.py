@@ -5,8 +5,8 @@ usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--p
 The daemon holds one long-lived Socket Mode connection (`apps.connections.open` with the app token), so Slack pushes
 each `message.im` event instead of the operator polling for it. For every event it does one of three things:
 
-- a message from the owner that carries a clip is downloaded, transcribed with Gemini, and appended to
-  `$VOICE_STATE/inbox.jsonl` as one JSON line (`id`, `ts`, `user`, `channel`, `text`, `clip`), where `text` is the
+- a message from the owner that carries a clip is downloaded, transcribed with Gemini, and appended to the DM's inbox
+  `$VOICE_STATE/inboxes/dm.jsonl` as one JSON line (`id`, `ts`, `user`, `channel`, `text`, `clip`), where `text` is the
   transcription. A text message from the owner is appended the same way with `clip` false; an owner message with no
   text at all is recorded in `other.jsonl` with an `error`, never dropped and never left unacknowledged.
 - a message from any other user is appended to `$VOICE_STATE/other.jsonl` as data and never to the inbox.
@@ -20,14 +20,19 @@ instruction.
 
 Every project the hub lists gets one channel in the dedicated workspace, named `proj-` and its GitHub repository
 (lowercased, each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
-`$VOICE_STATE/channels.json`, writes one inbox per channel (`$VOICE_STATE/inboxes/<channel>.jsonl`) and posts an answer
-in the channel its question came from. Two repositories whose names collide after the conversion are refused with one
-line that names both, and no channel is created for the second. A message in a channel no project owns is data in
-`other.jsonl`, never a DM question.
+`$VOICE_STATE/channels.json`, writes one inbox per channel (`$VOICE_STATE/inboxes/<channel id>.jsonl`, `dm` for the DM)
+and posts an answer in the channel its question came from. A queue is keyed by Slack's channel id, never by its name,
+so a channel renamed in Slack keeps its inbox, its outbox and its delivery record. A name-keyed file an older build wrote
+is moved to its id once at start, with every pending line, and is left alone when its id file already exists. Two
+repositories whose names collide after the conversion are refused with one line that names both, and no channel is
+created for the second. A message in a channel no project owns is data in `other.jsonl`, never a DM question.
+
+`$VOICE_STATE/schema.json` carries this build's state version. A directory with no version is an older build's and is
+migrated once; a version this build does not know stops the daemon with one named line before it writes anything.
 
 The reverse direction is the outbox. An operator session appends one JSON line (`thread_ts`, `text`, an optional
-`speech`, and for the DM an optional `channel`) to its own outbox (`$VOICE_STATE/outboxes/<channel>.jsonl`, or
-`$VOICE_STATE/outbox.jsonl` for the DM), and the daemon answers it with no call from the session:
+`speech`, and for the DM an optional `channel`) to its own outbox (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
+`$VOICE_STATE/outboxes/dm.jsonl` for the DM), and the daemon answers it with no call from the session:
 
 - the text is posted as the bot at once, threaded under `thread_ts` (else under nothing);
 - the spoken script (the `speech` field, else the text) is split into sentences, and the first sentence is synthesized
@@ -84,6 +89,14 @@ VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
 SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
+SCHEMA_FILE = "schema.json"
+SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
+SUPPORTED_SCHEMA = (1, SCHEMA_VERSION)
+DM = "dm"                            # the DM is one scope beside the channels, so its queues carry a key too
+
+
+class SchemaRefused(Exception):
+    """A state directory whose schema version this build does not know. The message names the version and the file."""
 
 
 class ClipTooLarge(Exception):
@@ -171,19 +184,43 @@ class SlackClient:
         return channels.api(self.token, method, params, post)
 
 
+def read_schema(directory):
+    """The state directory's schema version, or `SchemaRefused` when this build does not know it.
+
+    No file means a directory an older build wrote, which is version 1 and is migrated once. A file this build cannot
+    read, or a version outside `SUPPORTED_SCHEMA`, refuses the start before any other file is touched.
+    """
+    path = os.path.join(directory, SCHEMA_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return 1
+    except OSError as x:
+        raise SchemaRefused(f"cannot read {path}: {type(x).__name__}") from x
+    except ValueError as x:
+        raise SchemaRefused(f"{path} is not a JSON object naming a state version") from x
+    version = data.get("version") if isinstance(data, dict) else None
+    if isinstance(version, bool) or version not in SUPPORTED_SCHEMA:
+        raise SchemaRefused(
+            f"state schema version {version!r} in {path} is unknown to this build, which reads "
+            f"{' and '.join(str(v) for v in SUPPORTED_SCHEMA)}; refusing to start")
+    return version
+
+
 class State:
     """The daemon's state in one directory: the inbox, the record of other users, the seen ids and the owner id."""
 
     def __init__(self, directory):
         self.dir = directory
+        self.version = read_schema(directory)      # before any write: an unknown version stops the start here
         os.makedirs(directory, exist_ok=True)
-        self.inbox_path = os.path.join(directory, "inbox.jsonl")
         self.other_path = os.path.join(directory, "other.jsonl")
         self.seen_path = os.path.join(directory, "seen.jsonl")
         self.owner_path = os.path.join(directory, "owner")
         self.channels_path = os.path.join(directory, "channels.json")
+        self.schema_path = os.path.join(directory, SCHEMA_FILE)
         self.inboxes_dir = os.path.join(directory, "inboxes")
-        self.outbox_path = os.path.join(directory, "outbox.jsonl")
         self.outboxes_dir = os.path.join(directory, "outboxes")
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
@@ -191,6 +228,52 @@ class State:
         self._channels = None
         self._delivered = None
         self._posted = None
+        self.migrate()
+        if self.version < SCHEMA_VERSION:
+            self._stamp_schema()
+
+    @property
+    def inbox_path(self):
+        """The DM's inbox: one scope beside the channels, keyed `dm` like any other."""
+        return self.inbox_for(DM)
+
+    @property
+    def outbox_path(self):
+        """The DM's outbox: the file the owner's session appends its DM answers to."""
+        return self.outbox_for(DM)
+
+    def _stamp_schema(self):
+        """One atomic write of this build's version, after the migration it covers (ADR-0030)."""
+        tmp = self.schema_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"version": SCHEMA_VERSION}, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.schema_path)
+        self.version = SCHEMA_VERSION
+
+    def migrate(self):
+        """Move a queue file keyed by a channel name to the channel id, once, with every pending line.
+
+        The registry names the id each name belongs to. A name file with no id successor is renamed; one whose id file
+        already exists is the stale copy of a finished move and is left alone. The DM's queues were two files at the
+        root, and they move into the same `dm` key. A file no registry entry names has no known successor and is not
+        touched.
+        """
+        moves = []
+        for entry in list(self.channels().values()):
+            name, cid = (entry.get("name") or "").strip(), (entry.get("id") or "").strip()
+            if not name or not cid or name == cid:
+                continue
+            for directory in (self.inboxes_dir, self.outboxes_dir):
+                moves.append((os.path.join(directory, f"{name}.jsonl"), os.path.join(directory, f"{cid}.jsonl")))
+        moves.append((os.path.join(self.dir, "inbox.jsonl"), self.inbox_path))
+        moves.append((os.path.join(self.dir, "outbox.jsonl"), self.outbox_path))
+        for source, target in moves:
+            if not os.path.exists(source) or source == target or os.path.exists(target):
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.replace(source, target)      # atomic: every pending line travels with the file
 
     def channels(self):
         """repository -> {name, id}: the project channels this daemon created or joined, read from disk or stale-safe."""
@@ -222,13 +305,13 @@ class State:
                 return repo
         return None
 
-    def inbox_for(self, name):
-        """One project channel's inbox: one file per channel, so a project's session watches only its own."""
-        return os.path.join(self.inboxes_dir, f"{name}.jsonl")
+    def inbox_for(self, key):
+        """One channel's inbox, keyed by its id (`dm` for the DM): a rename in Slack never moves it."""
+        return os.path.join(self.inboxes_dir, f"{key}.jsonl")
 
-    def outbox_for(self, name):
-        """One project channel's outbox: the file its operator session appends its answers to."""
-        return os.path.join(self.outboxes_dir, f"{name}.jsonl")
+    def outbox_for(self, key):
+        """One channel's outbox, keyed by its id (`dm` for the DM): its session names no second path."""
+        return os.path.join(self.outboxes_dir, f"{key}.jsonl")
 
     def delivered(self):
         """Every outbox line already posted, by digest of its content: a restart posts no line a second time."""
@@ -601,7 +684,7 @@ class Daemon:
         """The inbox one message belongs to: its project's when the channel names one, the DM's for an im, else None."""
         repo = self.state.channel_for(event.get("channel"))
         if repo:
-            return self.state.inbox_for(self.state.channels()[repo]["name"])
+            return self.state.inbox_for(self.state.channels()[repo]["id"])
         if (event.get("channel_type") or "im") == "im":
             return self.state.inbox_path
         return None
@@ -627,8 +710,8 @@ class Daemon:
         """
         sources = []
         for entry in self.state.channels().values():
-            if entry.get("id") and entry.get("name"):
-                sources.append((entry["id"], self.state.outbox_for(entry["name"])))
+            if entry.get("id"):
+                sources.append((entry["id"], self.state.outbox_for(entry["id"])))
         sources.append((None, self.state.outbox_path))
         return sources
 
@@ -989,7 +1072,11 @@ def main(argv):
             print("usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH]]",
                   file=sys.stderr)
             return 2
-    state = State(state_dir)
+    try:
+        state = State(state_dir)
+    except SchemaRefused as x:
+        print(f"voiced: {x}", file=sys.stderr)
+        return 1
     owner = owner or state.owner()
     if not owner:
         print("voiced: no owner id: set VOICE_OWNER or write one user id to $VOICE_STATE/owner", file=sys.stderr)

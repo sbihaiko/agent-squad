@@ -11,6 +11,7 @@ transcriber stands in for Gemini, so no network, no key and no launchd job is to
 import asyncio
 import importlib.util
 import json
+import re
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -218,7 +219,7 @@ def test_the_line_is_durable_before_the_ack(tmp_path):
     seen_at_ack = []
 
     def look(envelope_id):
-        seen_at_ack.extend(lines(tmp_path / "inbox.jsonl"))
+        seen_at_ack.extend(lines(tmp_path / "inboxes" / "dm.jsonl"))
 
     drive(tmp_path, [clip_event()], on_ack=look)
 
@@ -263,7 +264,7 @@ def test_a_crash_and_restart_writes_no_duplicate_line(tmp_path):
     event = clip_event()
     transcriber = FakeTranscriber(text="only once")
     drive(tmp_path, [event], transcriber=transcriber)
-    assert len(lines(tmp_path / "inbox.jsonl")) == 1
+    assert len(lines(tmp_path / "inboxes" / "dm.jsonl")) == 1
 
     # The restart: a new daemon over the same state receives Slack's redelivery of the same message.
     second = FakeTranscriber(text="only once")
@@ -277,7 +278,8 @@ def test_a_crash_and_restart_writes_no_duplicate_line(tmp_path):
 def test_a_half_line_from_a_crash_is_skipped_and_one_complete_line_survives(tmp_path):
     """Criterion (c), crash mid-write: a truncated line is no record, so the redelivery writes one complete line."""
     event = clip_event()
-    (tmp_path / "inbox.jsonl").write_text('{"id": "cid-1762500000.000100", "text": "buy the gr')
+    (tmp_path / "inboxes").mkdir()
+    (tmp_path / "inboxes" / "dm.jsonl").write_text('{"id": "cid-1762500000.000100", "text": "buy the gr')
 
     transcriber = FakeTranscriber(text="buy the green paint")
     _, state, _ = drive(tmp_path, [event], transcriber=transcriber)
@@ -504,16 +506,16 @@ def test_a_clip_in_a_project_channel_reaches_only_that_projects_inbox_and_its_an
         tmp_path, [clip_event(channel=app["id"], channel_type="channel")],
         transcriber=FakeTranscriber(text="buy the green paint"), client=client)
 
-    box = lines(daemon.state.inbox_for(app["name"]))
+    box = lines(daemon.state.inbox_for(app["id"]))
     assert len(box) == 1 and box[0]["text"] == "buy the green paint"
     assert box[0]["channel"] == app["id"]
-    assert lines(daemon.state.inbox_for(other["name"])) == [], "the clip reached another project's inbox"
+    assert lines(daemon.state.inbox_for(other["id"])) == [], "the clip reached another project's inbox"
     assert lines(daemon.state.inbox_path) == [], "the clip reached the DM inbox"
     assert socket.sent == ["env-1"]
 
     assert daemon.answer(box[0], "the answer") is True
     assert client.posts() == [{"channel": app["id"], "text": "the answer", "thread_ts": box[0]["ts"]}]
-    assert lines(daemon.state.inbox_for(other["name"])) == []
+    assert lines(daemon.state.inbox_for(other["id"])) == []
 
 
 def test_two_repositories_that_collide_after_conversion_are_refused_with_one_line_naming_both(tmp_path):
@@ -541,7 +543,7 @@ def test_the_dm_keeps_working_for_a_question_that_belongs_to_no_project(tmp_path
 
     box = lines(daemon.state.inbox_path)
     assert len(box) == 1 and box[0]["text"] == "a question with no project"
-    assert lines(daemon.state.inbox_for(app["name"])) == []
+    assert lines(daemon.state.inbox_for(app["id"])) == []
 
 
 def test_a_channel_no_project_owns_never_reaches_the_dm_inbox(tmp_path):
@@ -588,6 +590,101 @@ def test_a_restart_over_the_registry_creates_and_joins_nothing(tmp_path):
     assert second.created() == [], "the restart created the channel again"
     assert ("conversations.join", {"channel": cid}, True) not in second.calls, "the restart joined again"
     assert again["channels"]["Acme/My.App"]["id"] == cid
+
+
+def test_every_queue_file_is_keyed_by_a_channel_id_and_never_by_its_name(tmp_path):
+    """#1614 (1): a project channel's inbox and outbox are `<id>.jsonl`; no file in the state is keyed by a name."""
+    mod = voiced()
+    client = FakeClient()
+    _, got = configure(tmp_path, mod, client, ["acme/app"])
+    app = got["channels"]["acme/app"]
+
+    _, daemon, _ = drive_daemon(
+        tmp_path, [message_event(text="a question", channel=app["id"], channel_type="channel")], client=client)
+    append_outbox(daemon.state.outbox_for(app["id"]), {"text": "an answer"})
+
+    assert [r["text"] for r in lines(tmp_path / "inboxes" / f"{app['id']}.jsonl")] == ["a question"]
+    assert [r["text"] for r in lines(tmp_path / "outboxes" / f"{app['id']}.jsonl")] == ["an answer"]
+    # The DM is one scope too, and it is keyed `dm`, never left as a file with no key at all.
+    _, dm, _ = drive_daemon(tmp_path, [message_event(text="a dm question", ts="3.000003")], client=client)
+    assert [r["text"] for r in lines(tmp_path / "inboxes" / "dm.jsonl")] == ["a dm question"]
+    assert dm.state.inbox_path == str(tmp_path / "inboxes" / "dm.jsonl")
+    for box in list((tmp_path / "inboxes").glob("*.jsonl")) + list((tmp_path / "outboxes").glob("*.jsonl")):
+        stem = box.stem
+        assert stem == "dm" or re.fullmatch(r"[CGD][A-Z0-9]{6,}", stem), f"{box.name} is keyed by a name"
+
+
+def test_a_name_keyed_queue_is_moved_once_to_its_id_and_keeps_its_pending_lines(tmp_path):
+    """#1614 (2): a queue file named after the channel is moved to the id once, with every pending line; a name file
+    whose id file is already there is left alone, because the id file is the live one."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    state.save_channels({"acme/app": {"name": "my-app", "id": "C0APP0001"}})
+    pending = [{"id": "cid-1", "text": "first"}, {"id": "cid-2", "text": "second"}]
+    (tmp_path / "inboxes").mkdir()
+    (tmp_path / "outboxes").mkdir()
+    legacy_inbox = tmp_path / "inboxes" / "my-app.jsonl"
+    legacy_outbox = tmp_path / "outboxes" / "my-app.jsonl"
+    legacy_inbox.write_text("".join(json.dumps(r) + "\n" for r in pending))
+    legacy_outbox.write_text(json.dumps({"text": "still pending"}) + "\n")
+
+    mod.State(str(tmp_path))      # the next daemon start
+
+    assert lines(tmp_path / "inboxes" / "C0APP0001.jsonl") == pending
+    assert lines(tmp_path / "outboxes" / "C0APP0001.jsonl") == [{"text": "still pending"}]
+    assert not legacy_inbox.exists() and not legacy_outbox.exists(), "a moved name file was left behind"
+
+    # A name file that reappears beside its id successor is not moved again and not deleted.
+    legacy_inbox.write_text(json.dumps({"id": "cid-3", "text": "third"}) + "\n")
+    mod.State(str(tmp_path))
+    assert [r["id"] for r in lines(tmp_path / "inboxes" / "C0APP0001.jsonl")] == ["cid-1", "cid-2"]
+    assert lines(legacy_inbox) == [{"id": "cid-3", "text": "third"}], "the name file beside its successor was touched"
+
+
+def test_an_unknown_state_version_refuses_to_start_and_writes_nothing(tmp_path, capsys):
+    """#1614 (3): the directory declares a schema version; one this build does not know stops the daemon with a named
+    error, and no file in the directory changes."""
+    mod = voiced()
+    (tmp_path / "schema.json").write_text(json.dumps({"version": 99}))
+    (tmp_path / "owner").write_text(OWNER)
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    code = mod.main(["--state", str(tmp_path)])
+
+    err = capsys.readouterr().err
+    assert code == 1, "the daemon started over a state version it does not know"
+    assert "99" in err and "refus" in err, err
+    assert sorted(p.name for p in tmp_path.iterdir()) == before, "a refused start wrote to the state directory"
+
+
+def test_a_renamed_channel_keeps_its_queue_and_its_record(tmp_path):
+    """#1614 (4): a channel renamed in the registry between two passes keeps the same id, so the same inbox and outbox
+    file hold both passes and an answer already delivered is never delivered twice."""
+    mod = voiced()
+    client = FakeClient()
+    _, got = configure(tmp_path, mod, client, ["acme/app"])
+    app = got["channels"]["acme/app"]
+
+    _, first, _ = drive_daemon(
+        tmp_path, [message_event(text="one", channel=app["id"], channel_type="channel", ts="1.000001")],
+        client=client)
+    append_outbox(first.state.outbox_for(app["id"]), {"text": "the answer"})
+    asyncio.run(first.drain_outboxes())
+
+    # The operator renames the channel: Slack keeps the id, the registry takes the new name.
+    mod.State(str(tmp_path)).save_channels({"acme/app": {"name": "renamed-app", "id": app["id"]}})
+    _, second, _ = drive_daemon(
+        tmp_path, [message_event(text="two", channel=app["id"], channel_type="channel", ts="2.000002")],
+        client=client)
+
+    box = lines(tmp_path / "inboxes" / f"{app['id']}.jsonl")
+    assert [r["text"] for r in box] == ["one", "two"], "the rename moved the queue"
+    assert not (tmp_path / "inboxes" / "renamed-app.jsonl").exists()
+    assert second.state.inbox_for(app["id"]) == str(tmp_path / "inboxes" / f"{app['id']}.jsonl")
+    assert second.state.outbox_for(app["id"]) == str(tmp_path / "outboxes" / f"{app['id']}.jsonl")
+    assert len(second.state.delivered()) == 1, "the rename lost the delivery record"
+    asyncio.run(second.drain_outboxes())
+    assert len([p for p in client.posts() if p["text"] == "the answer"]) == 1, "the rename posted the answer again"
 
 
 def test_two_repository_names_that_agree_up_to_the_cut_do_not_share_one_channel(tmp_path):
@@ -738,7 +835,7 @@ def test_the_outbox_line_is_posted_as_text_by_the_bot_within_three_seconds(tmp_p
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
     written = time.monotonic()
-    append_outbox(daemon.state.outbox_for(app["name"]),
+    append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -767,7 +864,7 @@ def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_te
 
     client.before_post = gate
 
-    append_outbox(daemon.state.outbox_for(app["name"]),
+    append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -787,7 +884,7 @@ def test_the_first_clip_and_the_full_answer_arrive_inside_their_targets(tmp_path
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
     written = time.monotonic()
-    append_outbox(daemon.state.outbox_for(app["name"]),
+    append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -805,7 +902,7 @@ def test_a_line_with_no_speech_speaks_its_own_text(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    append_outbox(daemon.state.outbox_for(app["name"]), {"text": "Green. Then blue."})
+    append_outbox(daemon.state.outbox_for(app["id"]), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
 
     assert [script for script, _ in voice.scripts] == ["Green.", "Then blue."]
@@ -820,7 +917,7 @@ def test_the_spoken_script_wins_over_the_text(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    append_outbox(daemon.state.outbox_for(app["name"]),
+    append_outbox(daemon.state.outbox_for(app["id"]),
                   {"text": "A long answer with the detail. " * 20, "speech": "Short version. Done."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -836,7 +933,7 @@ def test_a_clip_is_threaded_under_its_own_text_when_the_line_names_no_thread(tmp
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    append_outbox(daemon.state.outbox_for(app["name"]), {"text": "One. Two."})
+    append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
     assert [c["thread_ts"] for c in voice.clips] == ["1762500009.000900"] * 2
@@ -851,7 +948,7 @@ def test_a_restart_does_not_post_the_same_outbox_line_again(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    append_outbox(daemon.state.outbox_for(app["name"]), {"text": "One. Two."})
+    append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
     assert len(client.posts()) == 1 and len(voice.clips) == 2
 
@@ -874,7 +971,7 @@ def test_a_refused_clip_is_spoken_again_and_the_text_is_never_posted_twice(tmp_p
     voice = FakeVoice(tmp_path, refuse=1)      # Slack refuses the first clip, and the next daemon's try succeeds
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    append_outbox(daemon.state.outbox_for(app["name"]),
+    append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -904,7 +1001,7 @@ def test_a_refused_rest_clip_respeaks_only_the_rest(tmp_path):
     voice = FakeVoice(tmp_path, refuse_nth=(2,))   # the first clip is accepted, the rest is refused
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    append_outbox(daemon.state.outbox_for(app["name"]),
+    append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -932,7 +1029,7 @@ def test_a_second_refusal_of_the_rest_clip_still_never_repeats_the_first(tmp_pat
     voice = FakeVoice(tmp_path, refuse_nth=(2,))
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
-    append_outbox(daemon.state.outbox_for(app["name"]),
+    append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -955,7 +1052,7 @@ def test_the_daemon_answers_a_line_the_session_appends_while_it_runs(tmp_path):
     stop = asyncio.Event()
     voice = FakeVoice(tmp_path, on_clip=lambda n: stop.set() if n >= 2 else None)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
-    path = daemon.state.outbox_for(app["name"])
+    path = daemon.state.outbox_for(app["id"])
 
     def later():
         time.sleep(0.1)
@@ -987,7 +1084,7 @@ def test_no_token_reaches_a_log_the_inbox_or_the_outbox(tmp_path):
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=log.append, client=slack, synthesizer=voice.synth, uploader=voice.upload)
 
-    append_outbox(state.outbox_for(app["name"]), {"text": "One. Two."})
+    append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
     assert client.posts(), "the delivery made no post, so the token path was never exercised"
@@ -1016,7 +1113,7 @@ def test_a_voice_error_carrying_a_secret_is_logged_by_its_type_only(tmp_path):
                         log=log.append, client=client, synthesizer=synth,
                         uploader=lambda path, channel, thread_ts, title: ("F0001", None))
 
-    append_outbox(state.outbox_for(app["name"]), {"text": "One. Two."})
+    append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
     assert client.posts(), "the text answer never went out, so the voice path was never exercised"
