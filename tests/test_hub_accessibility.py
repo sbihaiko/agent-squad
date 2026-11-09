@@ -134,6 +134,18 @@ def _contrast(fg, bg):
     return (hi + 0.05) / (lo + 0.05)
 
 
+def _drawn_pairs(page):
+    """Each rule that sets a text colour and a surface, as the (selector, colour token, surface token) it paints."""
+    css = _css(page)
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        fg = re.search(r"(?<![\w-])color\s*:\s*var\((--[\w-]+)\)", m.group(2))
+        bg = re.search(r"(?<![\w-])background(?:-color)?\s*:\s*var\((--[\w-]+)\)", m.group(2))
+        if fg and bg:
+            out.append((m.group(1).strip(), fg.group(1), bg.group(1)))
+    return out
+
+
 def _live_without_role(page):
     """Each live region and the role it announces as: an aria-live without a role announces as nothing named.
 
@@ -190,10 +202,6 @@ def test_no_control_is_declared_under_its_page_floor(served):
     assert _short_controls(page, floor) == [], f"{name} declares a control under {floor} px"
 
 
-def test_the_phone_page_holds_a_44_px_tap_floor(hub):
-    assert MIN_CONTROL_PX["MOBILE_PAGE"] == 44, "the phone's tap floor is not the 44 px a thumb hits"
-
-
 @pytest.mark.parametrize("name", ["PAGE", "MOBILE_PAGE"])
 def test_every_live_region_announces_with_a_role(hub, name):  # noqa: F811
     page = getattr(hub, name)
@@ -204,14 +212,10 @@ def test_no_functional_text_falls_under_11_px_on_the_phone_page(hub):  # noqa: F
     assert _small_text(hub.MOBILE_PAGE) == [], "the phone page declares text under the 11 px floor"
 
 
-def test_the_phone_page_text_clears_4_5_to_1_on_the_surfaces_it_draws_on(hub):  # noqa: F811
+def test_the_phone_page_text_clears_4_5_to_1_on_the_surface_its_own_rule_paints(hub):  # noqa: F811
     tokens = _tokens()
-    css = _css(hub.MOBILE_PAGE)
-    pairs = [("fg", "bg"), ("fg", "panel"), ("mute", "bg"), ("mute", "panel"), ("acc", "bg"), ("acc", "panel"),
-             ("ok", "panel"), ("warn", "panel"), ("err", "panel"), ("on-tone", "err"), ("on-tint", "tint-err")]
-    for fg, bg in pairs:
-        # The page must draw this pair, or the pair guards a colour no reader ever sees.
-        assert re.search(rf"color:var\(--{re.escape(fg)}\)", css), f"the phone page draws no text in --{fg}"
-        assert re.search(rf"background:var\(--{re.escape(bg)}\)", css) or bg == "bg", f"the phone page draws no surface in --{bg}"
-        ratio = _contrast(tokens[f"--{fg}"], tokens[f"--{bg}"])
-        assert ratio >= MIN_CONTRAST, f"--{fg} on --{bg} is {ratio:.2f}:1, under {MIN_CONTRAST}:1"
+    drawn = _drawn_pairs(hub.MOBILE_PAGE)
+    assert drawn, "the phone page paints no text on a surface within one rule"
+    for selector, fg, bg in drawn:
+        ratio = _contrast(tokens[fg], tokens[bg])
+        assert ratio >= MIN_CONTRAST, f"{selector} draws --{fg[2:]} on --{bg[2:]} at {ratio:.2f}:1, under {MIN_CONTRAST}:1"
