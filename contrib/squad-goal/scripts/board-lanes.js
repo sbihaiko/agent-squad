@@ -46,12 +46,12 @@ const keptHidden=(saved,groups)=>{const ends=new Set(groups.filter(g=>g.end).map
 // laneWaveOf, which each page declares once: the board above, the mobile page in its gesture module (#980).
 // A spec's color (#917): the spec number picks a palette slot, number mod 8. A slot already taken goes to the next free
 // slot, so two specs differ while the palette has room. Specs are read in number order, so the board order changes nothing.
-const SPEC_GREY="var(--mute)";   // a card with no spec
+const SPEC_GREY="var(--mute)";   // the stale board's cue alone (#1640): a board the hub names stale is drawn grey, never a card
 const specSlots=nums=>{const m=new Map(),used=new Set();
   [...new Set(nums.map(Number).filter(n=>Number.isFinite(n)))].sort((a,b)=>a-b).forEach(n=>{let s=n%8;
     if(used.size<8)while(used.has(s))s=(s+1)%8;used.add(s);m.set(n,s+1)});return m};
 const specColor=(slots,n)=>n==null||!Number.isFinite(Number(n))?SPEC_GREY:`var(--s${slots.get(Number(n))||Number(n)%8+1})`;
-const cardSpec=x=>x.sp?x.n:x.pa;   // a spec card wears its own color
+const cardSpec=x=>x.sp?x.n:(x.pa??x.n);   // a spec card wears its own color, and a card of no spec its number's: a card is never grey (#1640)
 const isLoopBug=x=>(x.l||[]).some(l=>l==="loop-bug"||String(l).startsWith("loop-bug:"));
 const cardColor=(slots,x)=>isLoopBug(x)?"var(--err)":specColor(slots,cardSpec(x));   // a loop-bug has no spec: it wears the Loop bugs lane red
 // The wave chip (#917): text that names the card's wave, never a shade; a card with no wave shows none.

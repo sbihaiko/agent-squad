@@ -26,7 +26,7 @@ HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 # the card data the ticket sheet reads (#919): an empty one is the empty string, never a missing key.
 NO_COUNT_CARD = (
     '<div class=it data-n="1" data-r="__REPO__" data-col="Todo" data-pm="" data-b="%5B%5D" '
-    'data-bl="%5B%5D" data-ho="" data-hr="" data-prf="%5B%5D" style="--cc:#000000;--lc:var(--mute)">'   # no spec: grey (#917)
+    'data-bl="%5B%5D" data-ho="" data-hr="" data-prf="%5B%5D" style="--cc:#000000;--lc:var(--s2)">'   # no spec: its own number's slot, never grey (#1640)
     '<a class="id ghl" target=_blank rel=noopener title="open issue #1 on GitHub" '
     'aria-label="open issue #1 on GitHub" href="https://github.com/__REPO__/issues/1">#1 {ghm}</a>'   # the card names its issue number, and the number opens the issue like the mark (#1268)
     '<span class=tt>a spec</span><span class=lbs><span class="">gui</span></span></div>'

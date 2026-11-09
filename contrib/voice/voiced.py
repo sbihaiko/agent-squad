@@ -18,8 +18,8 @@ its id are fsync'd before the envelope is acknowledged, so a crash after the ack
 cannot read lands in `other.jsonl` with an `error`, never in the inbox as a half line the operator might read as an
 instruction.
 
-Every project the hub lists gets one channel in the dedicated workspace, named after its GitHub repository (lowercased,
-each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
+Every project the hub lists gets one channel in the dedicated workspace, named `proj-` and its GitHub repository
+(lowercased, each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
 `$VOICE_STATE/channels.json`, writes one inbox per channel (`$VOICE_STATE/inboxes/<channel>.jsonl`) and posts an answer
 in the channel its question came from. Two repositories whose names collide after the conversion are refused with one
 line that names both, and no channel is created for the second. A message in a channel no project owns is data in
@@ -72,6 +72,7 @@ import keychain  # noqa: E402  the one reader for the three voice secrets
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
 CHANNEL_MAX = 80     # Slack's channel-name cap
+PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
@@ -94,16 +95,20 @@ class ClipTooLarge(Exception):
 
 
 def channel_name(repo):
-    """The channel for one repository: its name, lowercased, each dot a hyphen; every other character Slack refuses
-    becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484).
+    """The channel for one repository: `proj-` and its name, lowercased, each dot a hyphen; every other character Slack
+    refuses becomes a hyphen too, so a GitHub name always yields a valid channel name (#1484). The `proj-` prefix is the
+    rule a reader and the check both read: a project channel is told by its name (#1615).
 
     Slack refuses a name that starts or ends with a hyphen and a run of hyphens; both are collapsed and trimmed. A name
     past the cap keeps a short digest of the whole name, so two long repositories that agree up to the cut never share
-    one channel.
+    one channel. An empty repository name yields no channel name at all, never a bare prefix.
     """
     name = (repo or "").rstrip("/").rsplit("/", 1)[-1]
     name = re.sub(r"[^a-z0-9_-]", "-", name.lower().replace(".", "-"))
     name = re.sub(r"-{2,}", "-", name).strip("-")
+    if not name:
+        return ""
+    name = PROJ_PREFIX + name
     if len(name) > CHANNEL_MAX:
         digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
         name = name[:CHANNEL_MAX - len(digest) - 1].strip("-") + "-" + digest
@@ -492,6 +497,50 @@ def _collision_line(repo, holder, name):
     return f"voiced: {repo} and {holder} share the channel name {name}; no channel is created for {repo}"
 
 
+def channel_name_violations(mapping, live):
+    """Every mapped channel outside the `proj-` prefix, read against the live names Slack lists (#1615).
+
+    `mapping` is the registry (repository -> {name, id}); `live` is the channel list the caller read from Slack, each
+    entry carrying its `id` and `name`. A mapped channel is matched by its id, never by its name: a channel renamed on
+    the Slack side keeps its id and its history, and only its live name is reported. A name the registry itself carries
+    outside the prefix is reported too, so the file a reader sees stays honest. One line per violation; an empty list
+    means every mapped channel complies.
+    """
+    names = {c.get("id"): (c.get("name") or "") for c in live or () if c.get("id")}
+    lines = []
+    for repo in sorted(mapping or {}):
+        entry = mapping[repo] or {}
+        cid = entry.get("id")
+        mapped_name = (entry.get("name") or "")
+        if not cid:
+            lines.append(f"voiced: {repo} maps no channel id")
+            continue
+        live_name = names.get(cid)
+        if live_name is None:
+            lines.append(f"voiced: {repo} maps #{mapped_name} ({cid}), which Slack does not list")
+            continue
+        live_bare = not live_name.startswith(PROJ_PREFIX)
+        registry_bare = bool(mapped_name) and not mapped_name.startswith(PROJ_PREFIX)
+        if live_bare:
+            also = "" if not registry_bare or mapped_name == live_name else f"; the registry names #{mapped_name}"
+            lines.append(f"voiced: {repo} maps #{live_name} ({cid}), outside the {PROJ_PREFIX} prefix{also}")
+        elif registry_bare:
+            lines.append(f"voiced: {repo} names #{mapped_name} in the registry, outside the {PROJ_PREFIX} prefix")
+    return lines
+
+
+def check_channel_names(mapping, client):
+    """The `proj-` rule read from Slack's own list, so a rename on the Slack side is caught and never only assumed.
+
+    The client is the one source of live channel names, handed in by the caller; no token is read here. A listing Slack
+    refuses yields one line naming the error, never an empty pass over a list the check never read.
+    """
+    listing = client.api("conversations.list?types=public_channel,private_channel&limit=1000")
+    if not listing.get("ok"):
+        return [f"voiced: cannot list channels to check their names: {listing.get('error')}"]
+    return channel_name_violations(mapping, listing.get("channels") or [])
+
+
 def _ensure_channel(client, name, channels, log):
     """The channel called `name`: created and joined, else found when Slack already holds the name."""
     for entry in channels.values():
@@ -536,10 +585,17 @@ class Daemon:
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
 
     def sync_projects(self):
-        """Give every project the hub lists its channel, once; no client or no list leaves the channels as they are."""
+        """Give every project the hub lists its channel, once; no client or no list leaves the channels as they are.
+
+        The mapped names are then checked against Slack's own list, so a channel renamed on the Slack side is reported
+        as a line, never a rule the daemon only assumes (#1615).
+        """
         if self.client is None or self.projects is None:
             return {"channels": self.state.channels(), "refused": []}
-        return project_channels(self.state, self.client, self.projects(), self.log)
+        got = project_channels(self.state, self.client, self.projects(), self.log)
+        for line in check_channel_names(self.state.channels(), self.client):
+            self.log(line)
+        return got
 
     def inbox_path_of(self, event):
         """The inbox one message belongs to: its project's when the channel names one, the DM's for an im, else None."""
