@@ -1,7 +1,8 @@
 """Cards show their spec in its color and their wave as a chip (SPEC 889, #917).
 
-The color comes from the spec number through the eight palette slots `--s1`..`--s8`. A card with no spec is grey. The
-wave is a text chip, never a shade. No card carries its column's left border. The spec filter shows each spec's color.
+The color comes from the spec number through the eight palette slots `--s1`..`--s8`. A card with no spec takes its own
+number's slot, so every card carries a color; grey (`var(--mute)`) is the stale board's cue alone (#1640). The wave is a
+text chip, never a shade. No card carries its column's left border. The spec filter shows each spec's color.
 
 The rules are `board-lanes.js`, run in node as the page carries them; the page text is checked for their use.
 """
@@ -57,9 +58,12 @@ def test_a_ninth_spec_still_gets_a_palette_color():
     assert all(re.fullmatch(r"var\(--s[1-8]\)", c) for c in out), out
 
 
-def test_a_card_with_no_spec_is_grey():
-    out = _node('const s=specSlots([889]);console.log(JSON.stringify([specColor(s,cardSpec({n:5})),SPEC_GREY]))')
-    assert out[0] == out[1] == "var(--mute)", out
+def test_a_card_with_no_spec_takes_a_palette_color():
+    """Grey says the board read is stale, never that a card belongs to no spec (#1640): the on-call read a grey card as
+    a dead board. A card of no spec wears its own number's slot."""
+    out = _node('const s=specSlots([889]);console.log(JSON.stringify([specColor(s,cardSpec({n:5})),cardColor(s,{n:7})]))')
+    assert all(re.fullmatch(r"var\(--s[1-8]\)", c) for c in out), out
+    assert not [c for c in out if c == "var(--mute)"], out
 
 
 def test_a_loop_bug_card_wears_the_loop_bugs_lane_red():
@@ -67,7 +71,7 @@ def test_a_loop_bug_card_wears_the_loop_bugs_lane_red():
     out = _node('const s=specSlots([889]);console.log(JSON.stringify([cardColor(s,{n:5,l:["loop-bug"]}),'
                 'cardColor(s,{n:6,l:["loop-bug:landing"],pa:889}),cardColor(s,{pa:889}),cardColor(s,{n:7})]))')
     assert out[0] == out[1] == "var(--err)", out
-    assert re.fullmatch(r"var\(--s[1-8]\)", out[2]) and out[3] == "var(--mute)", out
+    assert re.fullmatch(r"var\(--s[1-8]\)", out[2]) and re.fullmatch(r"var\(--s[1-8]\)", out[3]), out
 
 
 def test_the_wave_chip_names_the_wave_and_a_card_with_no_wave_shows_none():
@@ -87,6 +91,15 @@ def test_the_spec_lane_header_takes_the_spec_color():
     page = HUB_PY.read_text()
     lane = re.search(r"const laneHtml=m=>\{.*?\n\s*h\+=`<section", page, re.S).group(0)
     assert "specColor(SLOTS,l.num)" in lane, "the spec lane header color does not come from the spec number"
+
+
+def test_the_no_spec_lane_header_is_not_the_stale_grey():
+    """The `No spec` lane holds cards of several slots, so its header names no spec; it takes the accent, because grey
+    is the stale board's cue alone (#1640)."""
+    page = HUB_PY.read_text()
+    lane = re.search(r"const laneHtml=m=>\{.*?\n\s*h\+=`<section", page, re.S).group(0)
+    assert "SPEC_GREY" not in lane, "the No spec lane header still wears the stale grey"
+    assert '"var(--acc)"' in lane, "the No spec lane header takes no color of its own"
 
 
 def test_no_card_carries_the_column_left_border():
