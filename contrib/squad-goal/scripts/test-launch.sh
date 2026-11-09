@@ -16,6 +16,9 @@ printf 'print("hub")\n' > "$T/s/hub.py"
 cat > "$T/bin/caffeinate" <<'C'
 #!/bin/bash
 while [ "${1#-}" != "$1" ]; do shift; done
+# Only the squad start is this stub's subject: launch.py also caffeinates the hub, and a stub that records whatever argv it
+# is handed let the hub's line overwrite the start's, so the argv checks read the wrong call (#1637).
+case " $* " in *" squad start "*) ;; *) exec sleep 1;; esac
 printf '%s ' "$@" > "${SG_ARGV:?}"
 mkdir -p runs/run-20261011-000000-dead
 sleep 5
@@ -66,4 +69,25 @@ o=$(cd "$T/co" && SG_STATE="$T/st2" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_A
 printf '{"event": "verdict"}\n' >> "$H/record.jsonl"
 o=$(cd "$T/co" && SG_STATE="$T/st2" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/req133.txt" 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "an issue whose holder has a verdict starts again" || ko "an ended holder still blocks the start (rc=$rc): $o"
+# #1637: a workspace removed while the dispatch starts is a refusal, never a traceback. The run folder exists when launch.py
+# finds it, then goes with the culled tree; writing launch.log into it raised an uncaught FileNotFoundError, and the crash left
+# the issue claimed by a marker no pass frees. The wave cut is the long step, so a tree culled beside it refuses by name.
+mkdir -p "$T/st3"
+cat > "$T/bin/caffeinate" <<'C'
+#!/bin/bash
+while [ "${1#-}" != "$1" ]; do shift; done
+mkdir -p runs/run-20261109-105033-gone
+sleep 1
+rm -rf runs/run-20261109-105033-gone
+sleep 5
+C
+chmod +x "$T/bin/caffeinate"
+printf '#!/bin/bash\nsleep 2\n' > "$T/s/wave.sh"
+printf 'Coding model: test-model\nCHILD — GitHub issue(s) #9 (a): do it\n' > "$T/reqgone.txt"
+o=$(cd "$T/co" && SG_STATE="$T/st3" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/reqgone.txt" 2>&1); rc=$?
+{ [ $rc -ne 0 ] && echo "$o" | /usr/bin/grep -q "launch refused: the run folder" && echo "$o" | /usr/bin/grep -q "run-20261109-105033-gone"; } \
+  && ok "a workspace removed under the dispatch refuses by name, with no traceback" || ko "the removed workspace did not refuse by name (rc=$rc): $o"
+case "$o" in *Traceback*) ko "the removed workspace still raises a traceback: $o";; *) ok "the removed workspace raises no traceback";; esac
+[ -z "$(cat "$T/st3/active-runs.txt" 2>/dev/null)" ] && ok "a refused dispatch adds no live run" || ko "a refused dispatch holds a live run"
+
 rm -rf "$T"; exit $fail

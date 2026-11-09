@@ -136,6 +136,21 @@ case "$out" in *"WT CLEAN child c-merged"*) ok "C: the decision line names the c
 # a tree with no submodule is removed with no flag, and its line says no more (#393: every line claimed the --force removal)
 case "$out" in *"WT CLEAN child c-merged"*"submodule tree"*) ko "C: a tree with no submodule is named a submodule tree: $out";; *) ok "C: a plain tree's line names no submodule";; esac
 [ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 8 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 3 ] && ok "C: tally 3/8, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
+# X (#1637): a tree an in-flight dispatch cut is held. autobug writes auto/bug-<n> before the wave cuts the tree, and the run
+# folder that would name the tree exists only after launch.py writes it: at the base tip, clean and with no run folder, the tree
+# read as landed and unused and was culled under the dispatch, which then crashed and left the issue claimed for good. The hold
+# lapses after its own cap, so a marker no pass frees never keeps a tree. A tree no marker names still goes.
+$G worktree add -q worktrees/child/c-1635 -b gui/1635 HEAD; echo autobug-test > "$T/st/auto/bug-1635"
+$G worktree add -q worktrees/child/c-1636 -b gui/1636 HEAD; echo autofrontier-test > "$T/st/auto/disp-1636"
+$G worktree add -q worktrees/child/c-1637 -b gui/1637 HEAD; echo autobug-stale > "$T/st/auto/bug-1637"; touch -t 202001010000 "$T/st/auto/bug-1637"
+$G worktree add -q worktrees/child/c-1638 -b gui/1638 HEAD
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ -d worktrees/child/c-1635 ] && ok "X: a tree an in-flight bug dispatch names is kept" || ko "X: c-1635 was culled under its dispatch: $out"
+case "$out" in *"WT HELD dispatch #1635 c-1635"*) ok "X: the hold names the issue and the tree";; *) ko "X: no dispatch hold line: $out";; esac
+[ -d worktrees/child/c-1636 ] && ok "X: a tree an in-flight frontier dispatch names is kept" || ko "X: c-1636 was culled under its dispatch: $out"
+[ ! -d worktrees/child/c-1637 ] && ok "X: a dispatch hold past its age cap lapses, and the landed tree goes" || ko "X: c-1637 is held past the cap: $out"
+[ ! -d worktrees/child/c-1638 ] && ok "X: a tree no dispatch names still goes" || ko "X: c-1638 kept with no marker: $out"
+rm -rf worktrees/child/c-1635 worktrees/child/c-1636; rm -f "$T/st/auto/bug-1635" "$T/st/auto/disp-1636" "$T/st/auto/bug-1637"
 kill $cpid 2>/dev/null; for d in c-ahead c-dirty c-busy c-run c-wave c-stale; do rm -rf "$T/co/worktrees/child/$d"; done   # S below measures the tally alone, so the C trees leave first
 # S: a tree whose submodules are CHECKED OUT. `git worktree remove` refuses the whole tree — `fatal: working trees containing
 # submodules cannot be moved or removed` — a line git prints with no run id and no class, so the tree was never freed and the

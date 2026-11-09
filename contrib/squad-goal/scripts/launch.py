@@ -400,6 +400,11 @@ while True:
         sys.exit(f"no run folder appeared in 180 s; see {log}")
     time.sleep(0.1)
 run = new[-1]
+# A workspace removed under the dispatch is a refusal, not a traceback (#1637): the child tree is culled between the cut and
+# this write, the folder goes with it, and a crash here left the issue claimed by a marker no pass frees. A refusal frees it
+# and returns the card to Todo (#852).
+def _gone(): sys.exit(f"launch refused: the run folder {runs / run} is gone; its workspace was removed while the dispatch started, so nothing started")
+if not (runs / run).is_dir(): _gone()
 (runs / run / "request.txt").write_text(req_file.read_text())   # consult.sh reads the request from the run folder
 # One branch per wave (#375, ADR-0145 rules 8 and 10): a run that dispatches children cuts its wave branch from the base
 # as it starts, so every child has a wave to enter and the run's completion has one to land. `wave.sh start` owns the cut
@@ -413,7 +418,10 @@ if _issue_child_request(req_text):
 run_log = runs / run / "launch.log"
 def _copy_launch_log():   # the janitor quotes this file to explain why the run never started; state/<req>.log is the same stream
     try: run_log.write_text(pathlib.Path(log).read_text())
-    except OSError: run_log.write_text("")
+    except OSError:
+        try: run_log.write_text("")
+        except OSError: pass   # the folder went too: the refusal below names it, and this copy names nothing (#1637)
+if not (runs / run).is_dir(): _gone()   # the wave cut takes time, and the cull runs beside it
 _copy_launch_log()
 if proc.poll() is None:   # launch.py exits at once, so a follower process (a thread would die with it) keeps the copy live until the squad exits, which is exactly when a refused start writes its reason
     subprocess.Popen(["bash", "-c", 'while kill -0 "$1" 2>/dev/null; do cp -f "$2" "$3"; sleep 1; done; cp -f "$2" "$3"', "launchlog", str(proc.pid), str(log), str(run_log)],
