@@ -175,6 +175,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #now-head,#more-head,#specs-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 8px}
 #now-head h2,#more-head h2,#specs-head h2{margin:0}
 [data-topback],#now-more{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
+/* One icon (SPEC 1596, #1605): every icon is an inline SVG, and this rule is the one stroke width they all draw at. */
+.ico{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.ico-lbl{margin-left:6px}
 .scr-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 #more-actions{display:flex;gap:8px;margin:8px 0 calc(64px + env(safe-area-inset-bottom))}
 #reconnect{position:fixed;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));text-align:center}
@@ -274,7 +277,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #termview-back,#termview-older,#termview-send{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
 /* The terminal's back sits in its composer, at the bottom edge and in the thumb zone, by the Send it stands beside (#1142). */
 #termview-compose{display:grid;gap:6px;padding:8px 12px calc(64px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));border-top:1px solid var(--line)}
-#termview-back{justify-self:start}
+#termview-row{display:flex;align-items:center;gap:8px}
 #termview-text{min-height:44px;font:inherit;font-size:var(--fs-field);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}
 #termview-name{font-size:var(--fs-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #termview-older{margin:8px 12px 0}
@@ -380,7 +383,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </header>
 <div id="psheet" role="dialog" aria-label="Projects" hidden>
 <div id="psw-content"><div class="grab"></div>
-<button id="ps-backtop" data-topback="psheet" type="button">&#8249; Now</button>
+<button id="ps-backtop" data-topback="psheet" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button>
 <div id="pswl"></div></div>
 <div id="psw-footer"><button id="ps-backact" data-actback type="button">Back</button><button id="pswx" type="button">Close</button></div>
 </div>
@@ -399,7 +402,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 </div>
 <article id=loops data-screen=loops hidden>
-<div id=loops-content><div class=scr-head><button id=loops-backtop data-topback=loops type=button>&#8249; Now</button><h2>Loops</h2></div>
+<div id=loops-content><div class=scr-head><button id=loops-backtop data-topback=loops type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>Loops</h2></div>
 <p id=loops-agg-line></p>
 <ul id=loops-list></ul>
 <h3 class=sub>Change log</h3>
@@ -408,7 +411,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id=loops-actions><button id=loops-backact data-actback type=button>Back</button></div>
 </article>
 <article id=looppage data-screen=loop hidden>
-<div id=loop-content><div class=scr-head><button id=loop-backtop data-topback=loop type=button>&#8249; Loops</button><h2 id=loop-title>Loop</h2></div>
+<div id=loop-content><div class=scr-head><button id=loop-backtop data-topback=loop type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Loops</span></button><h2 id=loop-title>Loop</h2></div>
 <div id=loop-state></div>
 <dl id=loop-facts></dl>
 <p id=loop-reason role=status></p>
@@ -416,14 +419,14 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <div id=loop-actions>
 <button id=loop-backact data-actback type=button>Back</button>
-<button id=loop-dots type=button aria-label="More actions" aria-haspopup="true">&#8226;&#8226;&#8226;</button>
+<button id=loop-dots type=button aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button>
 <button id=loop-secondary type=button hidden></button>
 <button id=loop-primary type=button></button>
 </div>
 <div id=loop-menu hidden><button id=loop-menu-stop type=button>Stop now</button></div>
 </article>
 <article id=loopbugs data-screen=bugs hidden>
-<div id=bugs-content><div class=scr-head><button id=bugs-backtop data-topback=bugs type=button>&#8249; Loop</button><h2 id=bugs-title>Loop-bugs</h2></div>
+<div id=bugs-content><div class=scr-head><button id=bugs-backtop data-topback=bugs type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Loop</span></button><h2 id=bugs-title>Loop-bugs</h2></div>
 <ul id=bugs-list></ul>
 <p id=bugs-msg class=msg role=status></p></div>
 <div id=bugs-actions><button id=bugs-backact data-actback type=button>Back</button></div>
@@ -448,9 +451,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
      here; the phone reader opens the desktop page for them. -->
 <section data-panel="board" hidden>
 <div id="bhead" data-role="header">
-<button id="col-prev" aria-label="Previous column">&lsaquo;</button>
+<button id="col-prev" aria-label="Previous column"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg></button>
 <div id="col-title"><span id="col-name"></span><span id="col-count"></span></div>
-<button id="col-next" aria-label="Next column">&rsaquo;</button>
+<button id="col-next" aria-label="Next column"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M4 2l4 4-4 4"/></svg></button>
 <button id="work-search" type="button" aria-label="Search cards by title, number or label">Search</button>
 </div>
 <div id="dots"></div>
@@ -486,13 +489,13 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section data-panel="terminals" hidden>
 <h2>Terminals</h2>
-<div id="sessions" class="runlist" aria-live="polite"></div>
+<div id="sessions" class="runlist" role="status" aria-live="polite"></div>
 <p id="chat-rest" class="mut" role="status" hidden></p>
 <p id="sessions-state" class="msg" role="status">The terminal sessions are loading.</p>
 <p id="sessions-msg" class="msg" role="status"></p>
 </section>
 <section data-panel="more" hidden>
-<div id="more-head" data-role="header"><button id="more-backtop" data-topback="more" type="button">&#8249; Now</button><h2>More</h2></div>
+<div id="more-head" data-role="header"><button id="more-backtop" data-topback="more" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>More</h2></div>
 <div id="more-menu">
 <button data-more="cost" type="button">Cost and usage</button>
 <button data-more="lead" type="button">Lead time</button>
@@ -501,7 +504,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <p class="msg" role="status">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
 <article data-screen="cost" data-src="/api/stats" hidden>
-<div id="cost-content"><div class="scr-head"><button id="cost-backtop" data-topback="cost" type="button">&#8249; More</button><h2>Cost and usage</h2></div>
+<div id="cost-content"><div class="scr-head"><button id="cost-backtop" data-topback="cost" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">More</span></button><h2>Cost and usage</h2></div>
 <div id="periods">
 <button data-period="hour" type="button">Per hour</button>
 <button data-period="day" type="button">Per day</button>
@@ -514,7 +517,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="cost-actions"><button data-back type="button">Back</button></div>
 </article>
 <article data-screen="lead" data-src="/api/chart/lead" hidden>
-<div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button">&#8249; More</button><h2>Lead time</h2></div>
+<div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">More</span></button><h2>Lead time</h2></div>
 <div id="ltbars">
 <button data-ltf="2" type="button">48h</button>
 <button data-ltf="7" type="button">1 week</button>
@@ -541,7 +544,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 </main>
 <section id="usage-screen" hidden>
-<div class="scr-head"><button id="usage-back" data-topback="usage" type="button">&#8249; Runs</button><h2>Usage</h2></div>
+<div class="scr-head"><button id="usage-back" data-topback="usage" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Runs</span></button><h2>Usage</h2></div>
 <div id="usage-periods" role="group" aria-label="Period"><button data-usage-period="hour" type="button" aria-pressed="false">Hour</button><button data-usage-period="day" type="button" aria-pressed="true">Day</button><button data-usage-period="month" type="button" aria-pressed="false">Month</button></div>
 <p id="usage-state" class="msg" role="status"></p>
 <h3 class="sub">Tokens</h3>
@@ -553,8 +556,8 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
 <div id="sheet-content"><div class="grab"></div>
-<div id="sh-head"><button id="sh-backtop" data-topback="sheet" type="button">&#8249; Work</button><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
-<div id="sh-nav"><button id="sh-prev" type="button" aria-label="Previous card">&#8249;</button><span id="sh-set"></span><button id="sh-next" type="button" aria-label="Next card">&#8250;</button></div>
+<div id="sh-head"><button id="sh-backtop" data-topback="sheet" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Work</span></button><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
+<div id="sh-nav"><button id="sh-prev" type="button" aria-label="Previous card"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg></button><span id="sh-set"></span><button id="sh-next" type="button" aria-label="Next card"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M4 2l4 4-4 4"/></svg></button></div>
 <h2 id="sh-title"></h2>
 <div id="sh-chips"></div>
 <div id="sh-meta"></div>
@@ -563,18 +566,17 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="sh-related"><h3>Related</h3><div id="sh-related-list"></div></div>
 <div id="sh-body"></div>
 <div id="sh-last"></div></div>
-<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true">•••</button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden><span id="sh-todo-label"></span><span id="sh-todo-sub" class="sub" hidden></span></button></div>
+<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden><span id="sh-todo-label"></span><span id="sh-todo-sub" class="sub" hidden></span></button></div>
 <div id="sh-menu" hidden><button type="button" data-menu="close">Close</button><button type="button" data-menu="github">Open on GitHub</button></div>
 </div>
 <section id="termview" hidden>
-<div id="termview-head"><button id="term-backtop" data-topback="term" type="button">&#8249; Chat</button><span id="termview-name"></span><span id="termview-facts"></span></div>
+<div id="termview-head"><button id="term-backtop" data-topback="term" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Chat</span></button><span id="termview-name"></span><span id="termview-facts"></span></div>
 <button id="termview-older" type="button" hidden>Older turns</button>
 <div id="termview-turns"></div>
 <!-- The quick answers (SPEC 1596, rule 9; #1601): one 44 px chip per option, above the composer and above the keyboard. -->
 <div id="termview-chips" hidden></div>
 <p id="termview-msg" class="msg" role="status"></p>
 <div id="termview-compose">
-<button id="termview-back" type="button">Back</button>
 <!-- The recording row (SPEC 1596, frames 17 and 19, rule 10; #1603): while the mic is held it names the timer, the
      waveform, the cancel zone and the three hints. The row draws the rules of hub-mobile-voice.js (ADR-0137). -->
 <div id="termview-rec" hidden>
@@ -590,8 +592,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id="termview-outage" role="alert" hidden></p>
 <p id="termview-draft" role="status" hidden></p>
 <textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
-<button id="termview-mic" type="button" aria-label="Hold to record a spoken message">Mic</button>
-<button id="termview-send" type="button">Send</button>
+<div id="termview-row"><button id="termview-back" type="button">Back</button><button id="termview-mic" type="button" aria-label="Hold to record a spoken message">Mic</button><button id="termview-send" type="button">Send</button></div>
 <p id="termview-sent" class="msg" role="status"></p>
 <button id="termview-acted" type="button" hidden></button>
 </div>
@@ -600,9 +601,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
      them from the chat module's list, so the view holds no option of its own. -->
 <div id="attach-sheet" role="dialog" aria-label="Attach" hidden></div>
 <section id="runview" hidden>
-<div id="runview-head"><button id="run-backtop" data-topback="run" type="button">&#8249; Runs</button><span id="runview-name"></span></div>
+<div id="runview-head"><button id="run-backtop" data-topback="run" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Runs</span></button><span id="runview-name"></span></div>
 <div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p><p id="runov-session-row" class="runov-row" hidden><b>Session</b> <button id="runov-open" type="button">Open the session</button></p><pre id="runov-tail" class="runov-tail"></pre></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
-<div id="runview-actions"><button id="runview-back" data-actback type="button">Back</button><button id="run-dots" type="button" aria-label="More actions" aria-haspopup="true">•••</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
+<div id="runview-actions"><button id="runview-back" data-actback type="button">Back</button><button id="run-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
 <div id="run-menu" hidden><button id="rundesk-btn" type="button">Desktop dashboard</button></div>
 </section>
 <!-- Search on Work and Specs (SPEC 1596, rule 5; #1600): the field opens above the keyboard in the control row's slot,
@@ -643,6 +644,16 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*VOICE*/
 /*QUESTION*/
 const $ = id => document.getElementById(id);
+// One icon builder (SPEC 1596, #1605): an icon the script draws is the inline SVG the markup carries, so the one .ico
+// rule gives it its stroke and its weight. A glyph is never an icon.
+const SVG_NS = "http://www.w3.org/2000/svg";
+function icon(d) {
+  const s = document.createElementNS(SVG_NS, "svg");
+  s.setAttribute("class", "ico"); s.setAttribute("viewBox", "0 0 12 12");
+  s.setAttribute("aria-hidden", "true"); s.setAttribute("focusable", "false");
+  const p = document.createElementNS(SVG_NS, "path"); p.setAttribute("d", d); s.append(p);
+  return s;
+}
 // <question-card-view>
 // The one renderer of a question card: it draws the view the rule module answers and sends each control's action back to
 // the rule module. It checks no schema, answers nothing and decides no submit of its own (ADR-0137).
@@ -778,15 +789,17 @@ let layers = tabStacks[tabActive];
 let layerBacks = 0, pendingSheet = null;
 const topLayer = () => layers[layers.length - 1];
 const fieldsOf = s => { const { tab, layer, depth, ...data } = s; return data; };
-// The screen under the top of the stack names the Back: "‹ Work" on a card, "‹ More" on the usage above it.
+// The screen under the top of the stack names the Back: "Work" on a card, "More" on the usage above it. The arrow is the
+// inline icon the markup draws, never a glyph inside the button's word (SPEC 1596, #1605).
 const titleOf = n => LAYER_TITLE[n] || TAB_LABEL[n] || "";
-const backLabel = () => "‹ " + (layers.length > 1 ? titleOf(layers[layers.length - 2]) : TAB_LABEL[tabActive]);
+const backLabel = () => layers.length > 1 ? titleOf(layers[layers.length - 2]) : TAB_LABEL[tabActive];
 function paintBack() {
   const top = topLayer() || "";
   for (const b of document.querySelectorAll("[data-topback]")) {
     const mine = b.dataset.topback === top;
     b.hidden = !mine;
-    if (mine) b.textContent = backLabel();
+    const lbl = b.querySelector(".ico-lbl");
+    if (mine) (lbl || b).textContent = backLabel();
   }
   paintControlRow();
 }
@@ -1500,7 +1513,7 @@ function paintCardBody(x, d) {
     if (r.kind === "activity") row.id = "sh-act-row";
     if (r.kind === "description" || r.kind === "activity") row.setAttribute("role", "button");
     const t = document.createElement("span"); t.textContent = r.text;
-    const ch = document.createElement("span"); ch.className = "chev"; ch.textContent = "›";
+    const ch = icon("M4 2l4 4-4 4"); ch.classList.add("chev");
     row.append(t, ch);
     return row;
   }));

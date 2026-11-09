@@ -137,8 +137,8 @@ def test_the_top_back_names_the_screen_below_it(hub):
                         said: document.querySelector('[data-topback="cost"]').textContent }};
         return {{ card, usage }};
     """, board=[BOARD_ONE])
-    assert out["card"] == {"open": True, "said": "‹ Work"}, out
-    assert out["usage"] == {"open": True, "said": "‹ More"}, out
+    assert out["card"] == {"open": True, "said": "Work"}, out
+    assert out["usage"] == {"open": True, "said": "More"}, out
 
 
 @pytest.mark.node_bound
@@ -176,7 +176,8 @@ def test_the_browser_back_matches_the_two_backs(hub):
 
 def test_the_first_button_of_an_action_row_is_a_back(hub):
     page = hub.MOBILE_PAGE
-    for row in ("sheet-actions", "psw-footer", "termview-compose", "runview-actions", "cost-actions", "lead-actions"):
+    # The chat's action row is the composer's bottom row, where the thumb is (SPEC 1596, rule 2; #1605).
+    for row in ("sheet-actions", "psw-footer", "termview-row", "runview-actions", "cost-actions", "lead-actions"):
         m = re.search(rf'<div id="{row}">(.*?)</div>', page, re.S)
         assert m, row
         assert re.search(r'^\s*<button[^>]*(?:data-actback|data-back|id="(?:termview|runview)-back")', m.group(1)), \

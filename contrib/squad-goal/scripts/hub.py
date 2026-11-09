@@ -7736,7 +7736,6 @@ INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
 # no capture, so the picker offers the camera and the library; the chip previews a blob the page owns; the send takes the
 # overlay's one attach route with the words in the same message. The page's own text send and 4000-character cap stay.
 MOBILE_PHOTO_CSS = """
-#termview-row{display:flex;align-items:center;gap:8px}
 #termview-photo{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer}
 /* The one image input (#1155) sits out of the flow, so its label opens the picker with the camera and the library. */
 #termview-file{position:absolute;width:1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%)}
@@ -7750,9 +7749,9 @@ MOBILE_PHOTO_MARKUP = (f"<style>{MOBILE_PHOTO_CSS}</style>\n"
                        '<div id="termview-attach" role="group" aria-label="Photo" hidden><img id="termview-attach-img" alt="">'
                        '<span id="termview-attach-name"></span><button id="termview-attach-x" type="button" '
                        'aria-label="Remove the photo" title="Remove the photo">×</button></div>\n')
-MOBILE_PHOTO_ROW = ('<div id="termview-row"><label id="termview-photo" for="termview-file">Attach</label>'
+MOBILE_PHOTO_ROW = ('<label id="termview-photo" for="termview-file">Attach</label>'
                     '<input id="termview-file" type="file" accept="image/*" aria-label="Take or choose a photo">'
-                    '<button id="termview-send" type="button">Send</button></div>')
+                    '<button id="termview-send" type="button">Send</button>')
 MOBILE_TEXTAREA = '<textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>'
 MOBILE_SEND = '<button id="termview-send" type="button">Send</button>'
 MOBILE_PHOTO_JS = """
