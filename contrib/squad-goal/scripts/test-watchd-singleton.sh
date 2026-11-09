@@ -125,6 +125,24 @@ waitfor '! kill -0 '"$live"' 2>/dev/null' && ok "a driver whose script is gone e
 gone=1; for l in locks/watch/pid fastloop.pid cqflush.pid; do p=$(lane_pid "$st" "$l"); [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null || gone=0; done
 [ "$gone" = 1 ] && ok "the deleted-script driver takes its lanes with it" || ko "a lane of the deleted-script driver survived"
 
+# 6. A driver that wrote no record under watchd.runs is still named through its lanes (#1634): `start` refuses it and
+#    `stop` ends it, so a state directory never keeps a loop the driver list does not read.
+st=$T/st7; export SG_STATE=$st; mkdir -p "$st"
+drive "$S/watchd.sh" || ko "the driver did not start for the unrecorded case"
+lanes_up "$st" || ko "the unrecorded driver's three lanes did not start"
+live=$DRV; kill -9 "$spv" 2>/dev/null
+waitfor '[ "$(ppid_of '"$live"')" = 1 ]' && ok "the unrecorded driver is orphaned under pid 1" || ko "the unrecorded driver was not orphaned (parent $(ppid_of "$live"))"
+rm -rf "$st/watchd.lock" "$st/watchd.runs"; rm -f "$st/watchd.pid"
+{ kill -0 "$live" 2>/dev/null && [ ! -e "$st/watchd.runs" ] && [ ! -e "$st/watchd.pid" ]; } && ok "the driver is alive with no slot, no record and no pid file" || ko "the driver did not survive the deleted record"
+out=$(SG_STATE=$st bash "$S/watchd.sh" start 2>&1); rc=$?
+{ [ "$rc" != 0 ] && echo "$out" | /usr/bin/grep -q "refused" && echo "$out" | /usr/bin/grep -q "$live"; } \
+  && ok "start refuses and names a driver the record does not list" || ko "start with an unrecorded driver: rc=$rc $out"
+out=$(SG_STATE=$st bash "$S/watchd.sh" stop 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "the stop succeeds with an unrecorded driver" || ko "the stop failed: rc=$rc $out"
+waitfor '! kill -0 '"$live"' 2>/dev/null' && ok "the stop ends the unrecorded driver" || ko "the unrecorded driver survived the stop"
+gone=1; for l in locks/watch/pid fastloop.pid cqflush.pid; do p=$(lane_pid "$st" "$l"); [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null || gone=0; done
+[ "$gone" = 1 ] && ok "the stop ends every lane of the unrecorded driver" || ko "a lane of the unrecorded driver survived"
+
 # Nothing this suite started outlives it, on the pass path and the fail path alike (#1514).
 stopall
 left() { driver_tree_pids "$T" | tr '\n' ' ' | sed 's/ $//'; }

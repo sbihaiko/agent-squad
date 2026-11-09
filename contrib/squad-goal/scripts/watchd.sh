@@ -18,9 +18,16 @@ orphans() { $SG_PS -axwwo pid=,ppid=,command= 2>/dev/null | awk '$2 == 1 { for (
 # Every live driver of this state directory (#1587). A `watchd.sh run` writes its pid under $SG_STATE/watchd.runs on its way
 # up and removes the file on its way out, so a driver outside the slot -- a supervisor that died, a slot removed by hand --
 # is still visible to `start` and `stop`, which the slot alone never reached. A file whose pid no longer answers as a live
-# driver is dropped, so a killed driver leaves no record behind.
+# driver is dropped, so a killed driver leaves no record behind. A driver with no record there is named by its lanes.
 RU="$SG_STATE/watchd.runs"
-drivers() { local f p; for f in "$RU"/*; do [ -e "$f" ] || continue; p=${f##*/}; if is_watchd "$p"; then printf '%s\n' "$p"; else rm -f "$f"; fi; done; }
+# A driver that wrote no record there -- a build older than the record, or a reader that dropped it -- still launched the
+# lanes as its own children (#1634): each lane writes its pid under this state directory, so a live lane names its driver
+# by its parent, whatever the driver wrote.
+lane_drivers() { local f p q; for f in "$SG_STATE/locks/watch/pid" "$SG_STATE/fastloop.pid" "$SG_STATE/cqflush.pid"; do
+  p=$(cat "$f" 2>/dev/null); [ -n "$p" ] || continue
+  q=$($SG_PS -o ppid= -p "$p" 2>/dev/null | tr -d ' '); [ -n "$q" ] || continue
+  is_watchd "$q" && printf '%s\n' "$q"; done; }
+drivers() { local f p; { for f in "$RU"/*; do [ -e "$f" ] || continue; p=${f##*/}; if is_watchd "$p"; then printf '%s\n' "$p"; else rm -f "$f"; fi; done; lane_drivers; } | LC_ALL=C sort -u; }
 # A driver is one `run` under a live `watchd.sh supervise` (#1587): `start` launches `supervise`, and `supervise` launches
 # `run`, so a legitimate driver has that parent.
 is_supervise() { $SG_PS -p "$1" -ww -o command= 2>/dev/null | grep -qE '(^|[ /])watchd\.sh supervise$'; }

@@ -11,7 +11,7 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import HUB_PY, _module, run_page
+from tests.test_hub_mobile_move import HUB_PY, _module, run_js, run_page
 from tests.test_hub_spec_progress import BOARD
 
 NOW = 1_000_000.0
@@ -86,6 +86,46 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     assert "Loop" not in out["ian"], "the loop state lives in its own panel (#1071)"
     assert "Specs" in out["ispeed"] and "5/9 tickets · 55%" in out["ispeed"]
     assert out["sum"] == "", "the summary no longer counts the gate; a red gate stays in the footer (#1260)"
+
+
+CUT_SCOPE = """const $ = () => ({ classList: { toggle() {} }, style: {}, children: [], innerHTML: "", textContent: "",
+  querySelector: () => null });
+const esc = t => String(t);
+"""
+
+
+def test_the_cut_carries_every_name_the_monitor_draws_with(hub):
+    """The cut lands in the phone page's Monitor scope with only `$` and `esc` beside it, so a helper the block draws with
+    must ride in the cut itself. `fpct` stayed behind in the desktop's main script, and the card threw "Can't find
+    variable: fpct" and drew no quota (#1632)."""
+    body = {"cpu": 12, "ram": 97, "gpu": None, "warn": False, "facts": [],
+            "subs": [{"label": "Claude", "pct": 42.5, "resets": NOW + 86400}],
+            "speed": {"specs": {"value": "no open spec"}}}
+    src = (CUT_SCOPE + hub.INST_JS + "\nlet drewError = null;\ntry { instDraw(" + json.dumps(body)
+           + "); } catch (e) { drewError = String((e && e.message) || e); }\n")
+    err = run_js(src, "drewError")
+    assert err is None, f"the cut draws a name it does not carry: {err}"
+
+
+def test_the_count_gauges_draw_on_a_390x844_phone(hub):
+    """The phone is one 390 by 844 screen and the Monitor is the whole tab: the three count gauges still draw there, and a
+    load that carries subscriptions does not stop the draw half way (#1632)."""
+    routes = _routes(hub)
+    body = _load(hub)
+    body["subs"] = [{"label": "Claude", "pct": 42.5, "window": "weekly", "resets": NOW + 86400}]
+    routes["/api/load"] = [{"body": json.dumps(body)}]
+    out = run_page(hub.MOBILE_PAGE, """
+      window.innerWidth = 390; window.innerHeight = 844;   // drawing now sees the phone, not the harness's wide default
+      await loadPoll(); await __tick(10);
+      const h = id => String(document.getElementById(id).innerHTML || "");
+      const inst = document.getElementById("inst");
+      return { w: innerWidth, hgt: innerHeight, igs: h("igs"), ispeed: h("ispeed"),
+               note: String((document.getElementById("inst-stale") || {}).textContent || ""), stale: inst.classList.contains("stale") };
+    """, routes=routes)
+    assert (out["w"], out["hgt"]) == (390, 844)
+    assert out["igs"].count("<svg") == 3, "the three count gauges draw"
+    assert "Specs" in out["ispeed"], "the draw runs to the end of the card"
+    assert not out["stale"] and "fpct" not in out["note"], out["note"]
 
 
 @pytest.mark.parametrize("stored, tab", [(None, "now"), ("status", "now"), ("monitor", "now"), ("board", "work"),

@@ -1,8 +1,10 @@
-"""The hub pages name their language, their landmarks and every control, and no control is under 28 px tall (#912).
+"""The hub pages name their language, their landmarks and every control, and a control meets its page's tap floor.
 
-The desktop page and the phone page are read as served strings. A control is named by aria-label, aria-labelledby,
-an enclosing label or a label's `for`; a placeholder alone is not a name. The height check reads the declared px
-heights of every rule whose selector names a control. Controls built by script at run time are not seen here.
+The desktop page holds a 28 px floor (#912); the phone page holds a 44 px floor, an 11 px floor on its functional text
+and 4.5:1 on the text it draws (SPEC 1596, #1605). The pages are read as served strings. A control is named by
+aria-label, aria-labelledby, an enclosing label or a label's `for`; a placeholder alone is not a name. The height check
+reads the declared px heights of every rule whose selector names a control. Controls built by script at run time are
+not seen here.
 """
 import importlib.util
 import os
@@ -15,9 +17,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
-MIN_CONTROL_PX = 28
+TOKENS = ROOT / "contrib/squad-goal/scripts/web-tokens.css"
+# The desktop keeps its 28 px floor; the phone, held in the hand, needs the 44 px a thumb hits (#1605).
+MIN_CONTROL_PX = {"PAGE": 28, "MOBILE_PAGE": 44}
+MIN_TEXT_PX = 11
+MIN_CONTRAST = 4.5
 CONTROL = re.compile(r"(^|[\s>+~,])(button|select|input|textarea|summary)\b|\[role=button\]")
 HEIGHT = re.compile(r"(?<![\w-])(?:min-)?height\s*:\s*(\d+(?:\.\d+)?)px")
+FONT_SIZE = re.compile(r"(?<![\w-])font-size\s*:\s*([^;}]+)")
+FONT_SHORTHAND = re.compile(r"(?<![\w-])font\s*:\s*([^;}]+)")
+LIVE = re.compile(r"<(\w+)\b([^>]*\baria-live=[\"']?(\w+)[\"']?[^>]*)>")
+ROLE = re.compile(r"(?<![\w-])role=[\"']?(\w+)")
+LIVE_ROLES = {"status", "alert", "log"}
 
 
 class _Landmarks(HTMLParser):
@@ -67,7 +78,7 @@ def _unnamed(page):
     return out
 
 
-def _short_controls(page):
+def _short_controls(page, floor):
     css = "".join(re.findall(r"<style>(.*?)</style>", page, flags=re.S))
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     out = []
@@ -75,8 +86,77 @@ def _short_controls(page):
         if not any(CONTROL.search(s) for s in m.group(1).split(",")):
             continue
         for h in HEIGHT.findall(m.group(2)):
-            if float(h) < MIN_CONTROL_PX:
+            if float(h) < floor:
                 out.append(f"{m.group(1).strip()} -> {h}px")
+    return out
+
+
+def _css(page):
+    return re.sub(r"/\*.*?\*/", "", "".join(re.findall(r"<style>(.*?)</style>", page, flags=re.S)), flags=re.S)
+
+
+def _tokens():
+    return dict(re.findall(r"(--[\w-]+)\s*:\s*([^;]+);", TOKENS.read_text()))
+
+
+def _size(value, tokens):
+    """One font declaration to px: a token reference reads the token file, a bare px stays as it is."""
+    value = value.strip()
+    m = re.fullmatch(r"var\((--[\w-]+)\)", value)
+    if m:
+        value = tokens.get(m.group(1), value)
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)px", value.strip())
+    return float(m.group(1)) if m else None
+
+
+def _small_text(page):
+    """Every declared text size under the floor, with the rule that declares it."""
+    tokens = _tokens()
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", _css(page)):
+        body = m.group(2)
+        for decl in FONT_SIZE.findall(body) + FONT_SHORTHAND.findall(body):
+            for part in decl.split():
+                px = _size(part, tokens)
+                if px is not None and px < MIN_TEXT_PX:
+                    out.append(f"{m.group(1).strip()} -> {part}")
+    return out
+
+
+def _luminance(hex_color):
+    channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(fg, bg):
+    hi, lo = sorted([_luminance(fg), _luminance(bg)], reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _drawn_pairs(page):
+    """Each rule that sets a text colour and a surface, as the (selector, colour token, surface token) it paints."""
+    css = _css(page)
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        fg = re.search(r"(?<![\w-])color\s*:\s*var\((--[\w-]+)\)", m.group(2))
+        bg = re.search(r"(?<![\w-])background(?:-color)?\s*:\s*var\((--[\w-]+)\)", m.group(2))
+        if fg and bg:
+            out.append((m.group(1).strip(), fg.group(1), bg.group(1)))
+    return out
+
+
+def _live_without_role(page):
+    """Each live region and the role it announces as: an aria-live without a role announces as nothing named.
+
+    `aria-live="off"` is no live region at all, so it is not read here."""
+    out = []
+    for m in LIVE.finditer(page):
+        if m.group(3) == "off":
+            continue
+        role = ROLE.search(m.group(2))
+        if not role or role.group(1) not in LIVE_ROLES:
+            out.append(m.group(0)[:100])
     return out
 
 
@@ -116,6 +196,26 @@ def test_every_form_control_has_a_name(served):
     assert _unnamed(page) == [], f"{name} has unnamed controls"
 
 
-def test_no_control_is_declared_under_28_px_tall(served):
+def test_no_control_is_declared_under_its_page_floor(served):
     name, page = served
-    assert _short_controls(page) == [], f"{name} declares a control under {MIN_CONTROL_PX} px"
+    floor = MIN_CONTROL_PX[name]
+    assert _short_controls(page, floor) == [], f"{name} declares a control under {floor} px"
+
+
+@pytest.mark.parametrize("name", ["PAGE", "MOBILE_PAGE"])
+def test_every_live_region_announces_with_a_role(hub, name):  # noqa: F811
+    page = getattr(hub, name)
+    assert _live_without_role(page) == [], f"{name} carries a live region with no announced role"
+
+
+def test_no_functional_text_falls_under_11_px_on_the_phone_page(hub):  # noqa: F811
+    assert _small_text(hub.MOBILE_PAGE) == [], "the phone page declares text under the 11 px floor"
+
+
+def test_the_phone_page_text_clears_4_5_to_1_on_the_surface_its_own_rule_paints(hub):  # noqa: F811
+    tokens = _tokens()
+    drawn = _drawn_pairs(hub.MOBILE_PAGE)
+    assert drawn, "the phone page paints no text on a surface within one rule"
+    for selector, fg, bg in drawn:
+        ratio = _contrast(tokens[fg], tokens[bg])
+        assert ratio >= MIN_CONTRAST, f"{selector} draws --{fg[2:]} on --{bg[2:]} at {ratio:.2f}:1, under {MIN_CONTRAST}:1"
