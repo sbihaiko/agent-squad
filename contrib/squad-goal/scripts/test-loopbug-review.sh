@@ -2,7 +2,7 @@
 # Guard for ADR-0171 (#1358): a loop defect is reviewed by Fable or Astra before it is built, and autobug.sh dispatches
 # no loop-bug issue without an approving plan review of its current body. Offline: stub gh and stub claude, no model.
 # usage: bash test-loopbug-review.sh [scripts dir]
-# 1) the loop-defect chain: its first entry is claude-fable-5-1 or gpt-6-astra, its second the other, both on the cli route,
+# 1) the loop-defect chain: its first entry is claude-fable-5-2 or gpt-6-astra, its second the other, both on the cli route,
 #    and the rest is the review chain in its own order (deepseek-flash reachable, never first).
 # 2) review.sh takes the loop-defect chain for an issue carrying loop-bug (or any loop-bug:* label), the ordinary chain
 #    otherwise, and a failed label read keeps the ordinary chain and says so in one line on stderr.
@@ -27,8 +27,8 @@ J
 loop_ids=($(python3 "$d/modelreg.py" chain loop_defect --models "$d/models.json" 2>/dev/null))
 review_ids=($(python3 "$d/modelreg.py" chain review --models "$d/models.json" 2>/dev/null))
 routes=$(python3 "$d/modelreg.py" chain loop_defect --models "$d/models.json" --tsv 2>/dev/null | head -2 | cut -f3 | paste -sd, -)
-if { [ "${loop_ids[0]:-}" = claude-fable-5-1 ] && [ "${loop_ids[1]:-}" = gpt-6-astra ]; } \
-   || { [ "${loop_ids[0]:-}" = gpt-6-astra ] && [ "${loop_ids[1]:-}" = claude-fable-5-1 ]; }; then
+if { [ "${loop_ids[0]:-}" = claude-fable-5-2 ] && [ "${loop_ids[1]:-}" = gpt-6-astra ]; } \
+   || { [ "${loop_ids[0]:-}" = gpt-6-astra ] && [ "${loop_ids[1]:-}" = claude-fable-5-2 ]; }; then
   ok "1a loop_defect head is Fable and Astra, in some order"
 else ko "1a loop_defect head is not Fable then Astra: ${loop_ids[*]:-none}"; fi
 [ "$routes" = cli,cli ] && ok "1b the first two entries are on the cli route" || ko "1b the first two routes are not cli,cli: ${routes:-none}"
@@ -71,17 +71,17 @@ chmod +x "$T/bin/gh" "$T/bin/ghrest" "$T/bin/claude"
 export PATH="$T/bin:$PATH" GHLOG="$T/gh.log" CLAUDE_ARGS="$T/claude.args" SG_GHREAD="$T/bin/ghrest"
 pick() { rm -f "$T/st/review-"*.model "$T/claude.args" "$T/st/review-"*.md "$T/st/review-"*.sha; LB_LABELS="$1" GH_LABELS_BAD="$2" bash "$T/s/review.sh" --branch fix/8-x 8 >/dev/null 2>"$T/err"; }
 pick '{"name":"loop-bug"}' ''
-[ "$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)" = claude-fable-5-1 ] \
-  && ok "2a a loop-bug issue is first reviewed by claude-fable-5-1" || ko "2a a loop-bug issue was not reviewed by Fable first: $(cat "$T/st/review-fix_8-x.model" 2>/dev/null || echo none)"
+[ "$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)" = claude-fable-5-2 ] \
+  && ok "2a a loop-bug issue is first reviewed by claude-fable-5-2" || ko "2a a loop-bug issue was not reviewed by Fable first: $(cat "$T/st/review-fix_8-x.model" 2>/dev/null || echo none)"
 pick '{"name":"loop-bug:dispatch"}' ''
-[ "$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)" = claude-fable-5-1 ] \
+[ "$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)" = claude-fable-5-2 ] \
   && ok "2b a loop-bug:dispatch issue is reviewed by Fable first" || ko "2b a loop-bug:dispatch issue was not reviewed by Fable first"
 pick '{"name":"bug"}' ''
 m=$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)
-[ -n "$m" ] && [ "$m" != claude-fable-5-1 ] && ! grep -q 'claude-fable-5-1' "$T/claude.args" 2>/dev/null \
+[ -n "$m" ] && [ "$m" != claude-fable-5-2 ] && ! grep -q 'claude-fable-5-2' "$T/claude.args" 2>/dev/null \
   && ok "2c an ordinary issue keeps the ordinary chain ($m)" || ko "2c an ordinary issue reached Fable or ran no model: ${m:-none}"
 pick '' 'bad'
-[ "$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)" != claude-fable-5-1 ] && grep -q 'label' "$T/err" \
+[ "$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)" != claude-fable-5-2 ] && grep -q 'label' "$T/err" \
   && ok "2d a failed label read keeps the ordinary chain and names it on stderr" \
   || ko "2d a failed label read did not keep the ordinary chain with one stderr line: $(head -1 "$T/err" 2>/dev/null)"
 
