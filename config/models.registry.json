@@ -297,8 +297,8 @@
       "gateway_only": false
     },
     {
-      "id": "claude-fable-5-1",
-      "label": "Claude Fable 5.1",
+      "id": "claude-fable-5-2",
+      "label": "Claude Fable 5.2",
       "provider": "claude",
       "subscription": "claude",
       "efforts": [
@@ -320,14 +320,14 @@
             "{prompt_file}"
           ],
           "served": [
-            "claude-fable-5-1"
+            "claude-fable-5-2"
           ]
         },
         "gateway": {
           "auth": "unverified",
-          "model": "claude-fable-5-1",
+          "model": "claude-fable-5-2",
           "served": [
-            "claude-fable-5-1"
+            "claude-fable-5-2"
           ]
         }
       },

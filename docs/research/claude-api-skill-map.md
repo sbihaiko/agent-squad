@@ -75,7 +75,7 @@ Check four things before you build an agent: complexity, value, viability, and c
 
 ## 5. Model features
 
-Current models (cached): Fable 5.1, Mythos 5.1, Fable 5, Opus 5.5, Opus 5, Opus 4.8, 4.7, 4.6, Sonnet 5.5, Sonnet 5, Sonnet 4.6, Haiku 4.5.
+Current models (cached): Fable 5.2, Fable 5.1, Mythos 5.1, Fable 5, Opus 5.5, Opus 5, Opus 4.8, 4.7, 4.6, Sonnet 5.5, Sonnet 5, Sonnet 4.6, Haiku 4.5.
 Live lookup: `client.models.list()` and `client.models.retrieve(id)`. Field reference: `shared/models.md`.
 
 | Feature | Note | Detail file |
