@@ -166,6 +166,36 @@ def test_the_model_proxy_relays_its_target_and_refuses_every_other(tmp_path):
     assert "refused CONNECT 93.184.216.34:443" in log.read_text()
 
 
+def test_the_model_endpoint_is_read_from_the_base_url(monkeypatch):
+    """The CLI may send its model calls to a loopback gateway instead of the API host, so the probe reads the endpoint it
+    must keep open and must not assume the public one (#1656)."""
+    probe = load("operator_probe")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    assert probe.model_endpoint() == ("127.0.0.1", 8016, True)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL")
+    assert probe.model_endpoint() == ("api.anthropic.com", 443, False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://model.example:8080")
+    assert probe.model_endpoint() == ("model.example", 8080, False)
+
+
+def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatch):
+    """A loopback gateway is reached under the profile's own loopback rule, so a proxy in front of it would prove nothing
+    and break the call (#1656)."""
+    probe = load("operator_probe")
+    seen = {}
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    monkeypatch.setattr(probe, "denials", lambda *a: (False, False, False))
+    monkeypatch.setattr(probe, "check_denials", lambda *a: None)
+
+    def fake_session(work, profile, cli, proxy_url=None):
+        seen["proxy_url"] = proxy_url
+        return ({"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False})
+
+    monkeypatch.setattr(probe, "session", fake_session)
+    probe.run_probe(tmp_path, "/bin/true")
+    assert seen["proxy_url"] is None
+
+
 def test_the_session_reaches_the_model_only_through_the_proxy(tmp_path, monkeypatch):
     probe = load("operator_probe")
     seen = {}

@@ -7,10 +7,11 @@ host on port 443 must each fail. Then one bounded `claude -p` call runs with the
 HTTPS goes only through a loopback proxy that relays the model host and refuses every other target. A denial that does
 not happen, or a session that starts with another tool set, fails the probe.
 
-Network bound: the profile allows network out to localhost only. The kernel refuses a foreign host on port 443. The model
-call reaches its host through contrib/voice/model_proxy.py, which refuses every other CONNECT target and records each
-refusal. The probe proves the kernel refusal, the proxy refusal and the recorded refusal, and that the model call
-succeeds through the proxy.
+Network bound: the profile allows network out to localhost only, so the kernel refuses every foreign host, port 443
+included. How the call reaches the model follows the CLI's endpoint (`ANTHROPIC_BASE_URL`): a loopback gateway is reached
+under that same loopback rule, and any other host is reached through contrib/voice/model_proxy.py, which relays that one
+target and refuses every other CONNECT, recording each refusal. The probe proves the kernel refusal, the refusal the proxy
+records, and a model call that succeeds.
 
 usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
@@ -23,6 +24,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -41,6 +43,7 @@ SENTINEL = "PROBE-OTHER-INBOX-LINE"
 PROMPT = "Reply with the single word ok. Use no tool."
 DENIED = "Operation not permitted"      # the kernel's own refusal, the only reason a denial counts
 LOOPBACK = "127.0.0.1"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 NETWORK_HOST = "93.184.216.34"          # a literal address: the rule is a port rule, never a name-resolution result
 NETWORK_DENIED = 443                    # a foreign host on the port the model call uses: refused by the kernel
 CONNECT = "import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 2)"
@@ -135,12 +138,26 @@ def denials(work, profile, leak, other_inbox, proxy_port):
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
-def session(work, profile, cli, proxy_url):
-    """One bounded `claude -p` call under the profile, through the proxy; return its init event and its result event."""
+def model_endpoint(env=None):
+    """The host, the port and whether it is loopback, for the endpoint the CLI sends its model calls to.
+
+    The CLI takes its endpoint from `ANTHROPIC_BASE_URL`, which may name a loopback gateway, an HTTP host or nothing at
+    all. A loopback endpoint is reached under the profile's own loopback rule, so it needs no proxy; any other endpoint is
+    a foreign host the profile refuses, so it is reached through the proxy.
+    """
+    base = (env or os.environ).get("ANTHROPIC_BASE_URL") or f"https://{MODEL_HOST}"
+    parts = urllib.parse.urlsplit(base)
+    host = parts.hostname or MODEL_HOST
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return host, port, host in LOOPBACK_HOSTS
+
+
+def session(work, profile, cli, proxy_url=None):
+    """One bounded `claude -p` call under the profile, through the proxy when one is given; return its events."""
     args = ["-p", PROMPT, "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
             "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
             "--model", MODEL]
-    proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""}
+    proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
     done = sandboxed(profile, cli, args, work, DEADLINE, proxy_env)
     events = []
     for line in done.stdout.splitlines():
@@ -176,7 +193,13 @@ def run_probe(work, cli):
     outbox.write_text("")
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text(str(outbox.parent), str(other_inbox))
-    with ModelProxy((MODEL_HOST, MODEL_PORT), work / "proxy.log") as proxy:
+    host, port, loopback = model_endpoint()
+    if loopback:
+        check_denials(*denials(work, profile, leak, other_inbox, port))
+        init, result = session(work, profile, cli)
+        check_session(init, result)
+        return 0
+    with ModelProxy((host, port), work / "proxy.log") as proxy:
         check_denials(*denials(work, profile, leak, other_inbox, proxy.port))
         check_proxy_refuses(proxy)
         init, result = session(work, profile, cli, proxy.url)
@@ -200,9 +223,11 @@ def main(argv=None):
         return 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    host, port, loopback = model_endpoint()
+    route = f"the loopback endpoint {host}:{port} carried the call" if loopback else \
+        f"the proxy refused {refused} target(s) and recorded them"
     print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, loopback "
-          f"open); the proxy refused {refused} target(s) and recorded them; session tools {TOOLS}, dontAsk, "
-          f"cap ${SPEND}")
+          f"open); {route}; session tools {TOOLS}, dontAsk, cap ${SPEND}")
     return 0
 
 
