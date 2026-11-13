@@ -22,6 +22,8 @@
 # clock never restarts. Past the deadline every descendant is stopped, TERM then KILL. A defect a check reported before the
 # deadline is a fail the bound never turns into a pass (#1170); an attempt that reported nothing is recorded bounded.
 d=$(cd "$(dirname "$0")" && pwd)
+dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promotion branch, both named by the profile (#1646)
+[ "${SG_PROMOTE:-on}" = off ] && exit 0         # a profile that delivers by another path promotes nothing: no fetch, no line
 # ci_job_names <workflow file> [gated]: the check-run name of every job under jobs:, one per line; with `gated`, only the
 # jobs whose `if:` names base_ref. The reader stays inside the jobs: block (a line at column zero ends it), so a step's
 # `name:`, a `with: name:` or any other four-space `name:` outside a job never becomes a check run whose absence would hold
@@ -136,7 +138,14 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job that
   # is missing, running or timed out holds nothing, and the proof below answers as before.
   # SG_CI_WORKFLOW names the workflow file the check names are read from: the repository's own by default, a fixture in a test.
-  ci_file=${SG_CI_WORKFLOW:-$d/../../../.github/workflows/ci.yml}
+  # The workflow file lives in the checkout the profile names, never beside the live copy: a live copy holds no
+  # .github, so the old default read nothing and every tip waited for checks that were never named (#1646). A value
+  # with a slash is a path as it stands, which is how a test names its fixture.
+  case "${SG_CI_WORKFLOW:-}" in
+    "") ci_file=${SG_CHECKOUT:-$SG_SQUAD}/.github/workflows/ci.yml;;
+    */*) ci_file=$SG_CI_WORKFLOW;;
+    *) ci_file=${SG_CHECKOUT:-$SG_SQUAD}/.github/workflows/$SG_CI_WORKFLOW;;
+  esac
   full_status() {  # <tip> <description>: the squad/full-proof status on the sha, read back; the reason is printed when it does not stand
     local o st
     o=$(gh_send -X POST "repos/$SG_REPO/statuses/$1" -f state=success -f "context=$ctx" -f "description=$2") \
@@ -305,13 +314,13 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
   mark "$tip" "promoted: the local full suite answered for the tip"; exit 0
 fi
-tip=$(/usr/bin/git ls-remote "$remote" refs/heads/dev | cut -f1); [ -n "$tip" ] || { echo "promote-pass: dev does not resolve on $remote" >&2; exit 1; }
+tip=$(/usr/bin/git ls-remote "$remote" "refs/heads/$dev" | cut -f1); [ -n "$tip" ] || { echo "promote-pass: $dev does not resolve on $remote" >&2; exit 1; }
 /usr/bin/grep -q "^$tip " "$marks" 2>/dev/null && exit 0   # already proved or refused
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
 g remote set-url origin "$remote"
-o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
-[ "$(g rev-parse origin/dev)" = "$tip" ] || exit 0   # dev moved under the read: a later pass takes the new tip
-g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg
+o=$(g fetch -q origin "+refs/heads/$dev:refs/remotes/origin/$dev" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
+[ "$(g rev-parse "origin/$dev")" = "$tip" ] || exit 0   # the work branch moved under the read: a later pass takes the new tip
+g merge-base --is-ancestor "$tip" "origin/$stg" && exit 0   # the tip is already in the promotion branch
 # ADR-0164 (#1051, #1461): the dev-to-stg pull request starts both CI tiers on the tip, so promote-stg.sh opens it before the
 # quiet window passes and the checks run while it does. Best effort: a failure there leaves the proof below to answer.
 SG_PROMOTE_OPEN_ONLY=1 bash "$d/promote-stg.sh" >/dev/null 2>&1
@@ -360,8 +369,8 @@ if [ "$loaded" = 1 ] && [ "${SG_PROMOTE_PROOF:-}" != ci ]; then
 fi
 # A promotion leaves a merge commit in stg (#743), so stg is never an ancestor of the next dev tip: only the work stg holds and
 # dev lacks decides. Any plain commit there is the owner's to resolve, and no suite is spent on it.
-o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
-[ -z "$o" ] || { mark "$tip" "not promoted: stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the dev tip lacks; the owner resolves it"; exit 1; }
+o=$(g rev-list --no-merges "$tip..origin/$stg" 2>/dev/null) || o=
+[ -z "$o" ] || { mark "$tip" "not promoted: $stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the $dev tip lacks; the owner resolves it"; exit 1; }
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { mark "$tip" "not promoted: the clean tree could not check out the tip"; exit 1; }
 SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SG_PROMOTE_HOLD_SECONDS:-10800} \
   bash "$d/serial.sh" full-proof bash "$0" --hold "$tip" 2>"$state/promote-pass.err"; rc=$?

@@ -149,6 +149,7 @@ def _elapsed(where: Path, readers: int, total: int) -> float:
     return clock.at - 1000.0
 
 
+@pytest.mark.heavy     # 1.45 s here and 2.1 s on a loaded CI runner, over the two-second line for an unmarked call
 def test_the_documented_default_serves_a_healthy_pass_with_no_wait(tmp_path):
     """Generous enough that a healthy loop never waits: even the per-candidate shape the aggregate reads retired (201 routes
     for 100 candidates) sleeps not once."""

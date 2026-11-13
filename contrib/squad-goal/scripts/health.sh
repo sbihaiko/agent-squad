@@ -92,10 +92,21 @@ while IFS=$'\t' read -r n l; do
   s=0; for k in ${skiplist//,/ }; do case ",$l," in *",$k,"*) s=1;; esac; done
   [ "$s" = 1 ] || ra="$ra $n"
 done < <(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\t")' 2>/dev/null)
-ready=""
-for n in $ra; do
-  "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^READY' && ready="$ready $n"
+# The readiness facts are read in ONE batched request, 100 aliases per request (#1648): stack.sh read one issue per card,
+# and this pass runs every two minutes, so that walk spent more than a thousand GraphQL reads an hour on its own.
+ready=""; scache=$(mktemp -d)
+rest=$ra
+while [ -n "${rest// /}" ]; do
+  chunk=$(printf '%s\n' $rest | head -100 | paste -sd, -)
+  rest=$(printf '%s\n' $rest | tail -n +101 | paste -sd' ' -)
+  [ -n "$chunk" ] || break
+  gh_api "repos/$SG_REPO/issues?numbers=$chunk" 2>/dev/null | jq -c '.[]?' 2>/dev/null | while IFS= read -r it; do printf '%s' "$it" > "$scache/$(printf '%s' "$it" | jq -r '.number')"; done
 done
+for n in $ra; do
+  if [ -s "$scache/$n" ]; then SG_STACK_ISSUE="$scache/$n" "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^READY' && ready="$ready $n"
+  else "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^READY' && ready="$ready $n"; fi   # a card the batch missed is read as it was before (#1648)
+done
+rm -rf "$scache"
 if [ -n "${ready// /}" ]; then
   brs=" $(sg_work_issues) "
   free=""; for n in $ready; do case "$brs" in *" $n "*) ;; *) free="$free $n";; esac; done

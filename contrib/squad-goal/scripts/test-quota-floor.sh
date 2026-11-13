@@ -1,6 +1,7 @@
 #!/bin/bash
 # (#847) A quota floor: below SG_GH_FLOOR (default 300) core requests left, reconcile.py skips its pass for that cycle with
 # one line and makes no call. A reading that is missing or whose hour has rolled over is no floor, so the pass runs.
+# (#1648) GraphQL is a pool of its own, and it floors the pass the same way.
 # Offline: a stub gh records every call; the board read is patched to an empty board.
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/grep
@@ -46,5 +47,23 @@ out=$(run 4000 $((now + 1800)))
 # 4) a reading whose hour has rolled over describes a window that is gone: no floor
 out=$(run 10 $((now - 60)))
 [ -s "$T/calls" ] && ok "4 a rolled-over reading is no floor" || ko "4 a rolled-over reading held the pass: '$out'"
+
+# 5) GraphQL is a pool of its own (#1648): 3,000 core requests left and 20 GraphQL left is a floor, because the pass
+# reads through GraphQL and a refusal there renews the limit the core reading says nothing about.
+rm -f "$T/calls" "$T/st/api.log"
+printf '{"core": {"remaining": 3000, "limit": 5000, "reset": %s, "at": %s}, "graphql": {"remaining": 20, "limit": 5000, "reset": %s, "at": %s}}' "$((now + 1800))" "$now" "$((now + 1800))" "$now" > "$T/st/gh-ratelimit.json"
+out=$(python3 - "$d" <<'PY' 2>&1
+import runpy, sys
+d = sys.argv[1]; sys.path.insert(0, d)
+import issue_state
+class _Empty:
+    def read_all(self): return {}
+issue_state.board_state = lambda **k: _Empty()
+sys.argv = [d + "/reconcile.py"]
+runpy.run_path(d + "/reconcile.py", run_name="__main__")
+PY
+)
+$G -qE "^RECONCILE: skipped this pass: graphql quota 20 is under SG_GH_FLOOR 300" <<<"$out" && ok "5 the graphql pool floors the pass on its own" || ko "5 no graphql skip line: '$out'"
+[ ! -s "$T/calls" ] && ok "5 no call under the graphql floor" || ko "5 calls made under the graphql floor: $(cat "$T/calls")"
 
 rm -rf "$T"; exit $fail

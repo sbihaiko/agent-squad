@@ -18,6 +18,10 @@ printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7 SG
 # the door's reader, stubbed: the open-issue list one page at a time, from $T/pages/<n>.json (a page past the last is an empty list)
 mkdir -p "$T/pages"; cat > "$T/bin/rd" <<'RD'
 #!/bin/bash
+case "$1" in   # the numbered list (#1648): one entry per issue asked, in the door's own shape, and the route is recorded
+  *"numbers="*) printf '%s\n' "$1" >> "$(dirname "$0")/../numreads"
+    for n in $(printf '%s' "$1" | sed -n 's/.*numbers=\([^&]*\).*/\1/p' | tr ',' ' '); do jq -nc --argjson n "$n" '{number:$n,body:"",blocked_by:[],blocked_by_read:true,blockers:[]}'; done | jq -s .; exit 0;;
+esac
 n=$(printf '%s' "$1" | sed -n 's/.*[?&]page=\([0-9]*\).*/\1/p'); f="$(dirname "$0")/../pages/${n:-1}.json"
 [ -f "$f" ] && cat "$f" || echo '[]'
 RD
@@ -68,7 +72,7 @@ printf '%s' "$o" | /usr/bin/grep -qE 'defect-without-bug.*#(502|503)' && ko "a b
 printf '%s' "$o" | /usr/bin/grep -q 'HEALTH untyped-issues:' && ko "typed issues reported untyped: $o" || ok "typed issues are not untyped"
 rm -f "$T/pages/"*.json
 # ---- #1795: runs-board-drift, the loop against its own board ----
-bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; *"issues?state=open"*) "$(dirname "$0")/issues" "$@";; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
+bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; *"issues?state=open"*) "$(dirname "$0")/issues" "$@";; esac\n' "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 alerts() { local n; n=$(/usr/bin/grep -c 'HEALTH runs-board-drift' "$T/st/alerts.log" 2>/dev/null); echo "${n:-0}"; }
 notif() { local n; n=$(/usr/bin/grep -c . "$T/notify.calls" 2>/dev/null); echo "${n:-0}"; }
 liverun() { mkdir -p "$T/co/runs/$1"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #%s"}\n' "$2" > "$T/co/runs/$1/record.jsonl"
@@ -445,5 +449,13 @@ rm -f "$T/st/watchd.pid"; printf '%s\n%s\n%s\n' "$((now - 90))" "$((now - 60))" 
 bash "$T/s/health.sh" >/dev/null
 /usr/bin/grep -q 'loop-flapping' "$T/st/health.json" && ok "a fourth relight in the hour raises loop-flapping" || ko "no loop-flapping at four: $(cat "$T/st/health.json")"
 /usr/bin/grep -q '"relights":4' "$T/st/health.json" && ok "health.json counts the relights in the window" || ko "count: $(cat "$T/st/health.json")"
-rm -f "$T/st/relights" "$T/st/watchd.pid"; pkill -f "$T/s/watchd.sh run" 2>/dev/null
+# The readiness walk reads its facts in one numbered list, never one per card (#1648): this pass runs every two minutes,
+# and a per-card read here spent more than a thousand GraphQL requests an hour on its own.
+rm -f "$T/st/relights" "$T/st/watchd.pid" "$T/numreads"
+page 1 "$(iss 427 'Add a thing' 'enhancement')" "$(iss 428 'Another thing' 'enhancement')"
+bd
+GH_READY="427 428" bash "$T/s/health.sh" >/dev/null
+[ -s "$T/numreads" ] && ok "the readiness walk asks the numbered list once" || ko "the readiness walk asked no numbered list"
+[ "$(/usr/bin/grep -c 'numbers=' "$T/numreads")" = 1 ] && ok "one numbered list covers the startable cards" || ko "the numbered list ran $(/usr/bin/grep -c 'numbers=' "$T/numreads") times: $(cat "$T/numreads")"
+pkill -f "$T/s/watchd.sh run" 2>/dev/null
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail

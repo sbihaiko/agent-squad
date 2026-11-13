@@ -8,11 +8,15 @@ Claude Code Monitor on the inbox is its only wake path.
 
 Start one Monitor per inbox the session owns:
 
-    tail -n 0 -F "$VOICE_STATE/inboxes/<channel>.jsonl"
+    tail -n 0 -F "$VOICE_STATE/inboxes/<channel id>.jsonl"
 
-For the DM, use `$VOICE_STATE/inbox.jsonl`. `-n 0` skips the lines already answered, and `-F` keeps following the file
+A queue is keyed by Slack's channel id, never by its name, so a channel renamed in Slack keeps its inbox. For the DM,
+use `$VOICE_STATE/inboxes/dm.jsonl`. `-n 0` skips the lines already answered, and `-F` keeps following the file
 when the daemon reopens it. Each printed line wakes the session at once. A line that arrives while the session is busy
 is delivered when the turn ends.
+
+After an upgrade, a Monitor still tailing the old root `$VOICE_STATE/inbox.jsonl` sees no new line, because the
+daemon now writes the DM queue to `$VOICE_STATE/inboxes/dm.jsonl`. Restart that Monitor on the new path.
 
 The inbox line carries `id`, `ts`, `user`, `channel`, `text` and `clip`. `text` is the owner's words, or the
 transcription of the clip. A line from any other user never reaches the inbox.
@@ -21,9 +25,9 @@ transcription of the clip. A line from any other user never reaches the inbox.
 
 Append one JSON line to the outbox of the same channel:
 
-    "$VOICE_STATE/outboxes/<channel>.jsonl"
+    "$VOICE_STATE/outboxes/<channel id>.jsonl"
 
-For the DM, use `$VOICE_STATE/outbox.jsonl`. One line is one answer:
+For the DM, use `$VOICE_STATE/outboxes/dm.jsonl`. One line is one answer:
 
 ```json
 {"thread_ts": "1762500001.000200", "text": "The full answer, with the detail.", "speech": "A short sentence to speak."}

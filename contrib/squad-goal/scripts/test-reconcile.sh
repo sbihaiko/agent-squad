@@ -16,8 +16,10 @@ case "$*" in
   *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n1170\tClosed\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
   *"--method POST"*"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
   *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
-  *"issue(number:"*) n=$(echo "$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+'); r=$("$0" api "repos/x/y/issues/$n" 2>/dev/null)
-    jq -c --arg k "i$n" --argjson n "$n" --argjson r "$r" '{data:{repository:{($k):{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),createdAt:null,labels:{nodes:[]},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}}}}' <<<"{}" ;;   # the single-issue read is the GraphQL fact: its state and body are the REST answer below
+  *"issue(number:"*) b=''; sep=''
+    for n in $(echo "$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+'); do r=$("$0" api "repos/x/y/issues/$n" 2>/dev/null)
+      b="$b$sep\"i$n\":$(jq -c --argjson n "$n" --argjson r "$r" '{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),createdAt:null,labels:{nodes:[]},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}' <<<"{}")"; sep=','; done
+    echo "{\"data\":{\"repository\":{$b}}}" ;;   # the GraphQL fact: one alias per issue asked, whether the route named one issue or a numbers= list (#1648)   # the single-issue read is the GraphQL fact: its state and body are the REST answer below
   *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1093,"title":"t","body":"","state":"OPEN"},{"number":1095,"title":"t","body":"","state":"OPEN"},{"number":1120,"title":"t","body":"## Blocked by\n\n- #1093\n","state":"OPEN"},{"number":1140,"title":"t","body":"","state":"OPEN"},{"number":1150,"title":"t","body":"","state":"OPEN"},{"number":1160,"title":"t","body":"","state":"OPEN"}]}}}}';;   # the open-issue aggregate, one GraphQL request (#853)
   *"issues/1090") echo '{"state":"closed","body":""}';;
   *"issues/1092") echo '{"state":"closed","body":""}';;
@@ -104,4 +106,28 @@ echo "info gh calls in one pass: $(printf '%s\n' "$calls" | /usr/bin/grep -c '^a
 cov=$(printf '%s\n' "$calls" | /usr/bin/grep -E 'issue\(number: (1093|1095|1120|1140|1150|1160)[ )]|repos/x/y/issues/(1093|1095|1120|1140|1150|1160)$')
 [ -z "$cov" ] && ok "no open card the aggregate covers is read one by one, below RECONCILE_MIN or not" || ko "an open card was read one by one: '$cov'"
 [ "$(printf '%s\n' "$calls" | /usr/bin/grep -c 'compare/dev\.\.\.sha1150')" = 1 ] && ok "two cards on one branch tip cost one compare" || ko "the shared branch tip was compared $(printf '%s\n' "$calls" | /usr/bin/grep -c 'compare/dev\.\.\.sha1150') times"
+# The cards the open list lacks are read in ONE batched request, never one per card (#1648): a closed card cost its own
+# read on every pass, and seven hours of that walk emptied the GraphQL quota while the core quota was untouched.
+rm -f "$T/ghcalls" "$T/st/api.log" "$T/st/gh-cooldown.json"; SG_BOARD_VOCAB=shipped python3 "$T/s/reconcile.py" >/dev/null 2>&1; log=$(cat "$T/st/api.log" 2>/dev/null)
+one=$(printf '%s\n' "$log" | /usr/bin/grep -cE ' issues/(1090|1092|1110|1130|1170)( |$)')
+[ "$one" = 0 ] && ok "no card the open list lacks is read one by one" || ko "a closed card was read one by one: $(printf '%s\n' "$log" | /usr/bin/grep -E ' issues/(1090|1092|1110|1130|1170)( |$)' | head -2)"
+batch=$(printf '%s\n' "$log" | /usr/bin/grep -c 'issues?numbers=')
+[ "$batch" = 1 ] && ok "the cards the open list lacks are asked in one batched read" || ko "the batched read ran $batch times"
+nums=$(printf '%s\n' "$log" | /usr/bin/grep -o 'numbers=[0-9,]*' | head -1)
+for n in 1090 1092 1110 1130 1170; do
+  case "$nums" in *"$n"*) true;; *) ko "the batched read does not name #$n: '$nums'";; esac
+done
+printf '%s\n' "$nums" | /usr/bin/grep -q '1090.*1170' && ok "one list names every open-list miss" || ko "the batched route does not carry the numbered list: '$nums'"
+# The spend is attributed (#1647's sibling): a pass that names itself in the call log can be read in the log that spends it.
+if [ -s "$T/st/api.log" ]; then
+  u=$(/usr/bin/grep -c ' unattributed$' "$T/st/api.log"); a=$(/usr/bin/grep -c ' reconcile$' "$T/st/api.log")
+  [ "$u" = 0 ] && [ "$a" -gt 0 ] && ok "every read of the pass is logged under its own name" || ko "the pass spent $u unattributed and $a attributed reads"
+else ko "the pass wrote no call log line"; fi
+# A cooldown that still holds ends the pass before its first request (#1648): retrying into a refusal renews the limit.
+printf '{"until": %s, "at": 0, "message": "API rate limit already exceeded", "pass": "other"}\n' "$(( $(date +%s) + 600 ))" > "$T/st/gh-cooldown.json"
+rm -f "$T/ghcalls"; r=$(SG_BOARD_VOCAB=shipped python3 "$T/s/reconcile.py" 2>&1); rc=$?
+if [ -s "$T/ghcalls" ] && /usr/bin/grep -q 'repos/x/y' "$T/ghcalls"; then ko "a cooling pass still read the repository: $(/usr/bin/grep 'repos/x/y' "$T/ghcalls" | head -2)"; else ok "a pass under a cooldown sends no repository request"; fi
+case "$r" in *cooldown*) ok "the cooling pass names the cooldown" ;; *) ko "the cooling pass did not name it: '$r'";; esac
+[ "$rc" = 0 ] && ok "a cooling pass ends clean" || ko "a cooling pass ended $rc"
+[ $fail = 0 ] && echo "PASS" || echo "TDD RED"
 rm -rf "$T"; exit $fail

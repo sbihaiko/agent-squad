@@ -31,15 +31,17 @@
 # $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red, running, unproven or unknown (the CI seam); SG_PROMOTE_PROOF
 # selects the proof (ci, the default).
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
+dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promotion branch, both named by the profile (#1646)
+[ "${SG_PROMOTE:-on}" = off ] && exit 0           # a profile that delivers by another path promotes nothing: no fetch, no line
 export GIT_TERMINAL_PROMPT=0
 # SG_PROMOTE_OPEN_ONLY opens or reuses the dev -> stg pull request and nothing else: no lock, no proof, no merge (ADR-0164,
 # #1051). promote-pass.sh calls it so the full suite's shard jobs start on the tip while the quiet window passes.
 if [ -n "${SG_PROMOTE_OPEN_ONLY:-}" ]; then
   . "$d/ghcall.sh"
-  pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) || exit 0
+  pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "'"$dev"'" and .base.ref == "'"$stg"'")][0].number // empty' 2>/dev/null) || exit 0
   [ -n "$pr" ] && exit 0
-  gh_send -X POST "repos/$SG_REPO/pulls" -f head=dev -f base=stg -f "title=Promote dev into stg" \
-    -f "body=The dev tip is under CI. Merge this to move stg." >/dev/null 2>&1
+  gh_send -X POST "repos/$SG_REPO/pulls" -f head="$dev" -f base="$stg" -f "title=Promote $dev into $stg" \
+    -f "body=The $dev tip is under CI. Merge this to move $stg." >/dev/null 2>&1
   exit 0
 fi
 # The promotion reads the machine-wide gate lock (#392), so the proof cannot change under it and two promotions never overlap;
@@ -112,14 +114,14 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     [ "$st" = green ] || refuse "$1" "not promoted: CI is ${st:-unknown} (green needed)"
   fi; }
 g init -q . 2>/dev/null; g remote add origin "$remote"
-o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-stg: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
-tip=$(g rev-parse origin/dev) || exit 1
+o=$(g fetch -q origin "+refs/heads/$dev:refs/remotes/origin/$dev" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) || { echo "promote-stg: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
+tip=$(g rev-parse "origin/$dev") || exit 1
 echo "promote-stg: tip $tip"
-g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg: no pull request is opened
+g merge-base --is-ancestor "$tip" "origin/$stg" && exit 0   # the tip is already in the promotion branch: no pull request is opened
 # A promotion leaves a merge commit in stg, so stg is never an ancestor of the next dev tip. The work stg holds and dev lacks
 # must be those merge commits alone; any plain commit is the owner's to resolve before a merge.
-o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
-[ -z "$o" ] || refuse "$tip" "not promoted: stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the dev tip lacks; the owner resolves it"
+o=$(g rev-list --no-merges "$tip..origin/$stg" 2>/dev/null) || o=
+[ -z "$o" ] || refuse "$tip" "not promoted: $stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the $dev tip lacks; the owner resolves it"
 prove "$tip"
 . "$d/ghcall.sh"
 # ADR-0164 (#1196): delivery outranks the proof, but only an unfinished proof. A failed one always holds. Under the bound proof
@@ -135,12 +137,12 @@ if [ "$proof" = bound ]; then
 fi
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
-pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) \
-  || { echo "promote-stg: pending $tip: the open dev -> stg pull request could not be read" >&2; exit 75; }   # a transport failure is unproven, never a verdict (ADR-0164, #1490)
+pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "'"$dev"'" and .base.ref == "'"$stg"'")][0].number // empty' 2>/dev/null) \
+  || { echo "promote-stg: pending $tip: the open $dev -> $stg pull request could not be read" >&2; exit 75; }   # a transport failure is unproven, never a verdict (ADR-0164, #1490)
 if [ -z "$pr" ]; then
-  o=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head=dev -f base=stg -f "title=Promote dev into stg" \
-      -f "body=The dev tip $tip carries its proof. Merge this to move stg." 2>&1) \
-    || refuse "$tip" "not promoted: the dev -> stg pull request could not be opened: $(printf '%s' "$o" | tail -1)"
+  o=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head="$dev" -f base="$stg" -f "title=Promote $dev into $stg" \
+      -f "body=The $dev tip $tip carries its proof. Merge this to move $stg." 2>&1) \
+    || refuse "$tip" "not promoted: the $dev -> $stg pull request could not be opened: $(printf '%s' "$o" | tail -1)"
   pr=$(printf '%s' "$o" | jq -r '.number // empty' 2>/dev/null)
   [ -n "$pr" ] || refuse "$tip" "not promoted: the pull request was opened but its number was not read"
 fi
@@ -149,4 +151,4 @@ o=$(gh_send -X PUT "repos/$SG_REPO/pulls/$pr/merge" -f merge_method=merge 2>&1) 
 printf '%s' "$o" | jq -e '.merged == true' >/dev/null 2>&1 \
   || refuse "$tip" "not promoted: pull request #$pr did not merge: $(printf '%s' "$o" | jq -r '.message // "no reason"' 2>/dev/null)"
 [ -n "${carried:-}" ] && echo "$carried" >> "$state/gate-carried"
-echo "PROMOTED stg $tip via pull request #$pr"
+echo "PROMOTED $stg $tip via pull request #$pr"

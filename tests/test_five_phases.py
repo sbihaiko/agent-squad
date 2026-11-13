@@ -56,6 +56,7 @@ async def test_a_trivial_input_skips_spec_and_plan_but_the_gates_still_run(tmp_p
     assert (repo / "item-1.txt").exists()      # the item landed on the target through the merge action
 
 
+@pytest.mark.heavy     # 1.0 s here and 3.0 s on a loaded runner, over the two-second line for an unmarked call
 async def test_a_medium_input_runs_spec_and_skips_plan(tmp_path):
     repo = make_repo(tmp_path / "repo")
     eng = engine(tmp_path, repo, script(MEDIUM))
