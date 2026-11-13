@@ -299,3 +299,19 @@ _Avoid_: review queue, review mutex
 **Dispatch stop**:
 A check that each dispatch pass runs first (`ghcall.sh`). A stop prints one line, writes it to `cycle.log`, and the pass dispatches nothing. The stops: a loop defect (`loop-bug`, ADR-0146); too many children waiting for review; the disk floor, under `SG_MIN_FREE_GB` GiB free (20); bug first, where the frontier pass waits while `bugs-waiting` names a startable bug with no run.
 _Avoid_: pause, throttle
+
+### Who holds a card
+
+Three carriers take work, and a card names which one holds it.
+
+**Manual**:
+The owner's own work on a card. It moves the card the way any other holder does, and it never enters a slot count, a spend total or a run record.
+_Avoid_: hand fix, by hand, human
+
+**HAL9k**:
+The operator session's own work on a card — the agent the owner talks to, outside the loop. It claims and releases a card like any other holder and is never mistaken for a run.
+_Avoid_: the agent, Claude, operator (as a holder)
+
+**Squad**:
+The loop's work on a card: a run the supervisors dispatch. It is the only carrier that holds a slot, spends under a cap and writes a run record.
+_Avoid_: the loop (as a holder), robot, bot
