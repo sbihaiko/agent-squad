@@ -171,6 +171,7 @@ test-review-grok-probe.sh 53.00
 test-review.sh 266.80
 test-run-state-table.sh 0.03
 test-runreview.sh 4.06
+test-serial-orphan.sh 5.14
 test-serial.sh 36.68
 test-sg-ps-fallback.sh 0.24
 test-shell-suites-gate.sh 4.22

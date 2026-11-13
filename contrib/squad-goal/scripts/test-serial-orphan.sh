@@ -17,5 +17,5 @@ kill -9 "$h" 2>/dev/null; wait "$h" 2>/dev/null   # the holder dies the way a ki
 gone=0
 for _ in $(seq 1 30); do kill -0 "$wd" 2>/dev/null || { gone=1; break; }; sleep 0.2; done
 [ "$gone" = 1 ] && ok "the watchdog ends within 6 s of its holder's death" \
-  || ko "the watchdog outlived its holder by more than 6 s: $(/bin/ps -o pid=,ppid=,etime=,command= -p "$wd" 2>/dev/null)"
+  || ko "the watchdog outlived its holder by more than 6 s: $(/bin/ps -ww -o pid=,ppid=,etime=,command= -p "$wd" 2>/dev/null)"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAIL"; exit 1; }

@@ -17,5 +17,5 @@ def test_the_live_check_suite_leaves_no_holder_behind():
     done = subprocess.run(["bash", str(SUITE)], capture_output=True, text=True, timeout=180, check=False)
     assert done.returncode == 0, f"the suite failed:\n{done.stdout[-2000:]}{done.stderr[-1000:]}"
     ps = subprocess.run(["/bin/ps", "ax", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=False)
-    left = [l.strip() for l in ps.stdout.splitlines() if "serial.sh live-check" in l and str(ROOT) in l]
+    left = [line.strip() for line in ps.stdout.splitlines() if "serial.sh live-check" in line and str(ROOT) in line]
     assert not left, "the suite left a live-check holder behind:\n" + "\n".join(left[:6])
