@@ -3,7 +3,11 @@
 : "${SG_OWNER:=owner}"                 # GitHub user that owns the Project board
 : "${SG_PROJECT:=1}"                   # Project (v2) number of the board
 : "${SG_CHECKOUT:=$HOME/src/repo}"     # main checkout the squad runs from
-: "${SG_BASE:=dev}"
+: "${SG_BASE:=dev}"                   # the branch a wave is cut from and lands in
+# The branch the promotion merges into, `stg` unless named: a repository that promotes dev into `staging` sets it here (#1646).
+# : "${SG_STG_BRANCH:=staging}"
+# A profile that delivers by another path turns the promotion pass off: it exits 0 before any fetch and grows no log line (#1646).
+# : "${SG_PROMOTE:=off}"
 : "${SG_MERGE_METHOD:=squash}"
 : "${SG_AUTO_MERGE:=yes}"
 # : "${SG_PROMOTE_PROOF:=local}"         # promote-stg.sh: the promotion proof. `ci` (unset: the default) takes the dev tip's CI; `local` takes the promotion gate's own status line, the full suite in both modes, for when CI cannot start (#439)
