@@ -47,17 +47,13 @@ DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _no_model_proxy_survives(tmp_path_factory):
-    """A model proxy a test started must be ended by that test; one that outlives the run is a leak (#1686)."""
+def _no_model_proxy_survives():
+    """A model proxy this test process started must be ended by its test; one that outlives the session is a leak (#1686)."""
     yield
-    root = str(tmp_path_factory.getbasetemp())
-    try:
-        out = subprocess.run(["pgrep", "-fl", "model_proxy.py"], capture_output=True, text=True, timeout=10).stdout
-    except OSError:
-        return
-    leaked = [line.split(None, 1)[0] for line in out.splitlines() if f"--refusals {root}" in line]
+    from tests.proxystop import live_proxy_pids
+    leaked = live_proxy_pids(os.getpid())
     if leaked:
-        raise AssertionError(f"model proxy process(es) {', '.join(leaked)} outlived the test session under {root} (#1686)")
+        raise AssertionError(f"model proxy process(es) {', '.join(map(str, leaked))} outlived the test session (#1686)")
 
 
 @pytest.fixture(autouse=True)

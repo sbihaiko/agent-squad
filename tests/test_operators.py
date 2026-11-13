@@ -9,12 +9,13 @@ import hashlib
 import importlib.util
 import json
 import os
-import signal
 import socket
 import time
 from pathlib import Path
 
 import pytest
+
+from tests.proxystop import end_proxy
 
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
@@ -36,27 +37,16 @@ exit 2
 """
 
 
-STARTED_PROXIES = []
+PROXIES_BY_TEST = {}
 
 
 @pytest.fixture(autouse=True)
-def _proxies_end_with_their_test():
-    yield
-    for entry in STARTED_PROXIES:
-        pid = entry["pid"]
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            continue
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            try:
-                if os.waitpid(pid, os.WNOHANG)[0]:
-                    break
-            except ChildProcessError:
-                break
-            time.sleep(0.05)
-    STARTED_PROXIES.clear()
+def _proxies_end_with_their_test(tmp_path):
+    try:
+        yield
+    finally:
+        for entry in PROXIES_BY_TEST.pop(tmp_path, []):
+            end_proxy(entry["pid"])
 
 
 def operators(tmp_path, monkeypatch):
@@ -68,7 +58,7 @@ def operators(tmp_path, monkeypatch):
 
     def tracked(*args, **kwargs):
         entry = start_proxy(*args, **kwargs)
-        STARTED_PROXIES.append(entry)
+        PROXIES_BY_TEST.setdefault(tmp_path, []).append(entry)
         return entry
 
     module.start_proxy = tracked
