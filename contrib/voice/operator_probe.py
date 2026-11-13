@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619).
+"""Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619, #1656).
 
 Two phases, one command. Every call runs through contrib/squad-goal/scripts/claude-sandboxed.sh with the profile this
-probe writes. The denials come first: a write outside the scope's outbox, a read of another scope's inbox and a network
-call on a port the model call does not use must each fail. Then one bounded `claude -p` call runs with the operator's
-tool set and `dontAsk`. A denial that does not happen, or a session that starts with another tool set, fails the probe.
+probe writes. The denials come first: a write outside the scope's outbox, a read of another scope's inbox and a foreign
+host on port 443 must each fail. Then one bounded `claude -p` call runs with the operator's tool set and `dontAsk`. Its
+HTTPS goes only through a loopback proxy that relays the model host and refuses every other target. A denial that does
+not happen, or a session that starts with another tool set, fails the probe.
 
-Network bound: proven at port level only. The profile allows outbound TCP port 443 to every host, and loopback. It denies
-port 80 to foreign hosts. Seatbelt accepts only `*` or `localhost` as a network host, so the profile cannot name the model
-endpoint. UNPROVEN: host-level isolation. An operator session can reach any host on port 443. This probe does not claim
-otherwise. The stronger bound, a loopback proxy that allows only the model host, is a follow-up.
+Network bound: the profile allows network out to localhost only. The kernel refuses a foreign host on port 443. The model
+call reaches its host through contrib/voice/model_proxy.py, which refuses every other CONNECT target and records each
+refusal. The probe proves the kernel refusal, the proxy refusal and the recorded refusal, and that the model call
+succeeds through the proxy.
 
 usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
@@ -18,26 +19,30 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from model_proxy import ModelProxy  # noqa: E402
 from operators import TOOLS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = str(ROOT / "contrib" / "squad-goal" / "scripts" / "claude-sandboxed.sh")
 MODEL = "haiku"
+MODEL_HOST = "api.anthropic.com"
+MODEL_PORT = 443
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
 PROMPT = "Reply with the single word ok. Use no tool."
 DENIED = "Operation not permitted"      # the kernel's own refusal, the only reason a denial counts
+LOOPBACK = "127.0.0.1"
 NETWORK_HOST = "93.184.216.34"          # a literal address: the rule is a port rule, never a name-resolution result
-NETWORK_DENIED = 80                     # a port the profile denies to a foreign host
-NETWORK_OPEN = 443                      # the port the model call uses, open to every host
+NETWORK_DENIED = 443                    # a foreign host on the port the model call uses: refused by the kernel
 CONNECT = "import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 2)"
 
 
@@ -56,17 +61,26 @@ def check_denials(write_landed, read_leaked, network_reached):
     if read_leaked:
         raise ProbeFailed("a denial did not happen: read of another scope's inbox returned its lines")
     if network_reached:
-        raise ProbeFailed("a denial did not happen: a port the network rule denies was reached")
+        raise ProbeFailed("a denial did not happen: a foreign host on port 443 was reached")
 
 
-def check_port_bound(open_port):
-    """The control for the network denial: the port the model call uses must pass the kernel, or the rule bounds nothing.
+def check_loopback_open(loopback):
+    """The control for the network denial: loopback must pass the kernel, or the proxy path is unproven."""
+    if loopback.returncode != 0:
+        raise ProbeFailed(f"the network rule refuses loopback, so the model proxy path is unproven: "
+                          f"{loopback.stderr.strip() or 'no reason'}")
 
-    A refusal of port 443 is unproven as well as useless, since a session that cannot open it cannot reach the model.
-    A timeout or a refused connection is the network's answer and passes: the kernel let the connect through.
-    """
-    if open_port.returncode != 0 and DENIED in open_port.stderr:
-        raise ProbeFailed(f"the network rule refuses port {NETWORK_OPEN}, so no port bound is proven")
+
+def check_proxy_refuses(proxy):
+    """A foreign target fails at the proxy, and the proxy records it: a refusal the owner can read, not a silent one."""
+    target = f"{NETWORK_HOST}:{NETWORK_DENIED}"
+    with socket.create_connection((LOOPBACK, proxy.port), 5) as s:
+        s.sendall(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+        status = s.makefile("rb").readline().decode(errors="replace").strip()
+    if not status.startswith("HTTP/1.1 403"):
+        raise ProbeFailed(f"the proxy answered a foreign target with {status!r}, not a refusal")
+    if target not in proxy.refusals:
+        raise ProbeFailed("the proxy refused a foreign target and did not record it")
 
 
 def profile_text(outbox_dir, other_inbox):
@@ -80,14 +94,14 @@ def profile_text(outbox_dir, other_inbox):
         f"(allow file-write* {subpaths} (literal \"{home}/.claude.json\"))",
         f'(deny file-read* (subpath "{other_inbox}"))',
         "(deny network-outbound)",
-        # Seatbelt accepts only `*` or `localhost` as a host, so 443 stays open to every host.
-        '(allow network-outbound (remote ip "localhost:*") (remote tcp "*:443") (remote udp "*:53"))',
+        # Seatbelt takes only `*` or `localhost` as a host, so the model host is reached through the loopback proxy.
+        '(allow network-outbound (remote ip "localhost:*"))',
     ]) + "\n"
 
 
-def sandboxed(profile, cli, args, cwd, timeout):
+def sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
     """One call through the sandbox wrapper: the profile text, the program it wraps and its arguments."""
-    env = {**os.environ, "SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": cli}
+    env = {**os.environ, "SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": cli, **(extra_env or {})}
     try:
         return subprocess.run([WRAPPER, *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout,
                               check=False)
@@ -95,39 +109,39 @@ def sandboxed(profile, cli, args, cwd, timeout):
         raise ProbeFailed(f"a sandboxed call passed its {timeout:.0f}s deadline") from None
 
 
-def denials(work, profile, leak, other_inbox):
+def denials(work, profile, leak, other_inbox, proxy_port):
     """Run each denial under the profile, with no model in the loop, and return what got through.
 
     A denial counts only when the profile applied (the control echo ran) and the command refused with its own
     `Operation not permitted`; a failure of any other kind is unproven, so the probe fails rather than passes.
-    The network denial is a port rule, so it is measured as a pair on one literal address: port 80 refused, port 443
-    open. The open port is the control: without it a refused port 80 says nothing about the bound.
+    The loopback control is the proxy's port: the model call needs it open, so a refused loopback proves nothing.
     """
     def run(command):
         return sandboxed(profile, "/bin/sh", ["-c", command], work, DENIAL_DEADLINE)
 
-    def connect(port):
-        return sandboxed(profile, sys.executable, ["-c", CONNECT, NETWORK_HOST, str(port)], work, DENIAL_DEADLINE)
+    def connect(host, port):
+        return sandboxed(profile, sys.executable, ["-c", CONNECT, host, str(port)], work, DENIAL_DEADLINE)
 
     control = run("echo control")
     if control.returncode != 0 or "control" not in control.stdout:
         raise ProbeFailed(f"sandbox-exec did not apply the profile: {control.stderr.strip() or 'no output'}")
     write = run(f'echo leaked > "{leak}"')
     read = run(f'cat "{other_inbox}"')
-    network = connect(NETWORK_DENIED)
+    network = connect(NETWORK_HOST, NETWORK_DENIED)
     for name, res in (("write", write), ("read", read), ("network", network)):
         if res.returncode != 0 and DENIED not in res.stderr:
             raise ProbeFailed(f"the {name} denial is unproven: {res.stderr.strip() or 'no reason'}")
-    check_port_bound(connect(NETWORK_OPEN))
+    check_loopback_open(connect(LOOPBACK, proxy_port))
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
-def session(work, profile, cli):
-    """One bounded `claude -p` call under the profile; return its init event and its result event."""
+def session(work, profile, cli, proxy_url):
+    """One bounded `claude -p` call under the profile, through the proxy; return its init event and its result event."""
     args = ["-p", PROMPT, "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
             "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
             "--model", MODEL]
-    done = sandboxed(profile, cli, args, work, DEADLINE)
+    proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""}
+    done = sandboxed(profile, cli, args, work, DEADLINE, proxy_env)
     events = []
     for line in done.stdout.splitlines():
         try:
@@ -162,9 +176,12 @@ def run_probe(work, cli):
     outbox.write_text("")
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text(str(outbox.parent), str(other_inbox))
-    check_denials(*denials(work, profile, leak, other_inbox))
-    init, result = session(work, profile, cli)
-    check_session(init, result)
+    with ModelProxy((MODEL_HOST, MODEL_PORT), work / "proxy.log") as proxy:
+        check_denials(*denials(work, profile, leak, other_inbox, proxy.port))
+        check_proxy_refuses(proxy)
+        init, result = session(work, profile, cli, proxy.url)
+        check_session(init, result)
+    return len(proxy.refusals)
 
 
 def main(argv=None):
@@ -177,14 +194,15 @@ def main(argv=None):
     work_root().mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="run-", dir=work_root())).resolve()
     try:
-        run_probe(work, cli)
+        refused = run_probe(work, cli)
     except ProbeFailed as e:
         print(f"operator-probe: fail: {e}", file=sys.stderr)
         return 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print(f"operator-probe: pass: denials held (write, read, port {NETWORK_DENIED} refused, "
-          f"port {NETWORK_OPEN} open); session tools {TOOLS}, dontAsk, cap ${SPEND}")
+    print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, loopback "
+          f"open); the proxy refused {refused} target(s) and recorded them; session tools {TOOLS}, dontAsk, "
+          f"cap ${SPEND}")
     return 0
 
 
