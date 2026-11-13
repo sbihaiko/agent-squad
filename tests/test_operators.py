@@ -9,9 +9,12 @@ import hashlib
 import importlib.util
 import json
 import os
+import signal
 import socket
 import time
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
@@ -33,11 +36,42 @@ exit 2
 """
 
 
+STARTED_PROXIES = []
+
+
+@pytest.fixture(autouse=True)
+def _proxies_end_with_their_test():
+    yield
+    for entry in STARTED_PROXIES:
+        pid = entry["pid"]
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                if os.waitpid(pid, os.WNOHANG)[0]:
+                    break
+            except ChildProcessError:
+                break
+            time.sleep(0.05)
+    STARTED_PROXIES.clear()
+
+
 def operators(tmp_path, monkeypatch):
     """The module, with its CLI name bound to the fake on the path."""
     spec = importlib.util.spec_from_file_location("operators", VOICE / "operators.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    start_proxy = module.start_proxy
+
+    def tracked(*args, **kwargs):
+        entry = start_proxy(*args, **kwargs)
+        STARTED_PROXIES.append(entry)
+        return entry
+
+    module.start_proxy = tracked
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "claude"
