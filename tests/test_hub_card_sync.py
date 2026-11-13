@@ -103,7 +103,7 @@ def test_the_refreshed_row_carries_the_new_column_labels_holder_edges_and_count(
     _cache(hub, monkeypatch, [card(5), card(6)])
     monkeypatch.setattr(hub, "read_one_card", lambda n: fresh(n))
     row = hub.sync_card(5)["rows"][0]
-    assert row["st"] == "In Progress", "the row draws the column read at press time"
+    assert row["st"] == "Doing", "the row draws the column read at press time (Status In Progress draws Doing)"
     assert row["l"] == ["bug"]
     assert row["b"] == [9], "the open blocking edges the read carried"
     assert row["sc"] == "1/3", "completed over total sub-issues"
@@ -120,7 +120,7 @@ def test_the_refreshed_row_carries_its_own_read_instant(hub, monkeypatch):
 
 
 def test_the_page_gives_the_synced_row_its_own_age_and_never_ages_the_board(hub):
-    line = next((l for l in hub.PAGE.splitlines() if 'closest("#bbody .syncb")' in l), "")
+    line = next((ln for ln in hub.PAGE.splitlines() if 'closest("#bbody .syncb")' in ln), "")
     assert line, "the page serves a Sync control on a card"
     assert "lastBoardT" not in line, "a synced row never claims the whole board was read at that instant"
     assert "data-ri" in hub.PAGE, "the row wears the instant of its own read as its age"
@@ -192,7 +192,7 @@ def test_a_press_issues_no_write_to_github(hub, monkeypatch):
 # --- AC7: the button is disabled while its press runs -------------------------------------------------------------
 
 def test_the_button_is_disabled_while_its_press_runs(hub):
-    line = next((l for l in hub.PAGE.splitlines() if 'closest("#bbody .syncb")' in l), "")
+    line = next((ln for ln in hub.PAGE.splitlines() if 'closest("#bbody .syncb")' in ln), "")
     assert line, "the page serves a Sync control on a card"
     assert "disabled=true" in line
     assert line.index("disabled=true") < line.index('fetch("/api/sync"'), "the button is disabled before the read starts"

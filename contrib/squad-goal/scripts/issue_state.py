@@ -267,6 +267,12 @@ class State:
         """The run that holds `issue`, {"run": id, "started": time}; None when no run holds it."""
         return self.holders().get(str(issue))
 
+    def holder_one(self, issue):
+        """The holder one card carries, read by its item in one call (#1668). None when the binding has no one-card read,
+        no id is known, or the read failed, so a caller keeps the holder it held; {} when the card carries no Run."""
+        ask = getattr(self.binding, "node_holder", None)
+        return ask(issue) if ask else None
+
     def hold(self, issue, run, started):
         """Name the run that holds `issue` on the issue, then read it back: the read is the proof, as for a state.
         An empty value is written as no value (#101). Returns the holder the issue then carries."""
@@ -647,6 +653,28 @@ class BoardBinding:
             if isinstance(name, dict): name = name.get("raw") or name.get("html")
             return self.state_name(name) if name else ""
         return ""
+
+    def node_holder(self, issue):
+        """The holder one card carries, read by the one-item REST route in one call (#1668), beside the Status that route
+        already answers. None when no id is known for the card, or the read is refused, unparsable, archived or names
+        another issue, so the caller keeps the holder it held; {} when the card carries no Run."""
+        iid = self.item_hints.get(str(issue)) or self.known_ids().get(str(issue))
+        if not iid: return None
+        try: tf = self.text_fields()
+        except Exception: return None
+        if "Run" not in tf or "Run started" not in tf: return {}
+        q = f"?fields[]={tf['Run']}&fields[]={tf['Run started']}"
+        try: d = json.loads(self.api(f"{self.base}/items/{iid}{q}"))
+        except (RuntimeError, ValueError): return None
+        if not isinstance(d, dict) or str((d.get("content") or {}).get("number", "")) != str(issue) or d.get("isArchived"): return None
+        out = {}
+        for f in d.get("fields") or []:
+            if not isinstance(f, dict): continue
+            v = f.get("value")
+            val = (v.get("raw") or v.get("text")) if isinstance(v, dict) else v   # the route answers {raw,html}; a stub a name
+            if f.get("name") == "Run": out["run"] = val or ""
+            elif f.get("name") == "Run started": out["started"] = val or ""
+        return out if out.get("run") else {}
 
     def read_fallback(self, issue):
         """The card of one issue the REST items read omitted, asked of the GraphQL projectItems read (#1463): one
