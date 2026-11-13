@@ -187,5 +187,7 @@ def test_the_card_chip_says_running_only_for_a_live_holder(hub):
               '{n:242,t:"live",l:[],ho:"held by r since then",hs:"running"}];console.log(cards({name:"Todo"},I,I));\n')
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
-    assert '<span class=hld title="held · run r ended 2026-11-13 08:59 UTC">held · run r ended 2026-11-13 08:59 UTC</span>' in out.stdout
-    assert '<span class=hld title="held by r since then">running</span>' in out.stdout
+    # The chip names the holder on every card (#1664) and says `running` only while the run's process lives (#1661);
+    # the full holder text is its tooltip.
+    assert '<span class=hld title="held · run r ended 2026-11-13 08:59 UTC">Squad</span>' in out.stdout
+    assert '<span class=hld title="held by r since then">Squad · running</span>' in out.stdout

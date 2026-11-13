@@ -93,7 +93,7 @@ def test_the_card_paints_the_holder_the_row_carries(hub):
     assert out.returncode == 0, out.stderr
     # The chip names the holder (#1664): "Squad" now, "Squad · taken over <time>" once a takeover marker names it;
     # the full holder text is its tooltip.
-    assert '<span class=hld title="held by run-x since then">Squad</span>' in out.stdout
+    assert '<span class=hld title="held by run-x since then">Squad · running</span>' in out.stdout   # a live run says so (#1661)
 
 
 def test_an_epoch_start_is_shown_as_a_utc_date(hub):
