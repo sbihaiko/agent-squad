@@ -18,7 +18,7 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SG_STATE=$T/st SG_REPO=o/r SQUAD_CAPS
 export SG_LIVE_CHECK_WINDOW_SECONDS=3600
 pids=()
 hold() { sleep 300 >/dev/null 2>&1 & pids+=("$!"); printf '%s\n' "$!"; }
-cleanup() { local p; for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$T"; }
+cleanup() { local p; for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; [ ${#pids[@]} -gt 0 ] && wait "${pids[@]}" 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
 fresh() { rm -rf "$T/st" "$T/caps"; mkdir -p "$T/st/locks/waiting" "$T/caps/waiting" "$T/caps/gates"; : > "$T/st/gate-history"; }
 age() { python3 -c 'import os,sys,time; t=time.time()-float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
