@@ -136,7 +136,7 @@ def drive(tmp_path, envelopes, transcriber=None, downloader=None, owner=OWNER, o
 
 
 def drive_daemon(tmp_path, envelopes, transcriber=None, downloader=None, owner=OWNER, on_ack=None, mod=None,
-                 client=None, projects=None):
+                 client=None, projects=None, log=None):
     """The same one connection, returning the daemon too, for a case that reads its answers back."""
     mod = mod or voiced()
     stop = asyncio.Event()
@@ -145,7 +145,7 @@ def drive_daemon(tmp_path, envelopes, transcriber=None, downloader=None, owner=O
     daemon = mod.Daemon(state=mod.State(str(tmp_path)), owner=owner,
                         transcriber=transcriber or FakeTranscriber(),
                         downloader=downloader or (lambda url: b"audio-bytes"),
-                        log=lambda line: None, client=client, projects=projects)
+                        log=log or (lambda line: None), client=client, projects=projects)
     asyncio.run(mod.serve(daemon, "xapp-fake", connect=lambda url, **kw: socket,
                           open_connection=lambda: {"url": "wss://fake"}, stop=stop))
     return mod, daemon, socket
@@ -321,11 +321,15 @@ def test_a_clip_that_cannot_be_transcribed_is_answered_once_in_its_own_thread(tm
     keeps the failure so a restart never calls the failing model again, and the next message is still answered."""
     client = FakeClient()
     transcriber = FakeTranscriber(fail=True)
+    posts_at_ack = {}
 
     _, daemon, socket = drive_daemon(tmp_path, [clip_event(), message_event(text="hello operator")],
-                                     transcriber=transcriber, client=client)
+                                     transcriber=transcriber, client=client,
+                                     on_ack=lambda envelope_id: posts_at_ack.update({envelope_id: len(client.posts())}))
 
     assert socket.sent == ["env-1", "env-2"]
+    assert posts_at_ack == {"env-1": 1, "env-2": 1}, \
+        "the failure answer was not posted before the next message was processed"
     posts = client.posts()
     assert len(posts) == 1, posts
     assert posts[0]["channel"] == "D0OWNER"
@@ -334,12 +338,32 @@ def test_a_clip_that_cannot_be_transcribed_is_answered_once_in_its_own_thread(tm
     assert "transcription failed: RuntimeError" in text and text.endswith("."), text
     other = lines(daemon.state.other_path)
     assert len(other) == 1 and other[0]["error"] == "transcription failed: RuntimeError"
+    assert other[0]["answer"] == "transcription failed: RuntimeError.", "the record does not carry its one sentence"
     box = lines(daemon.state.inbox_path)
     assert [line["text"] for line in box] == ["hello operator"], "the next message stopped reaching the inbox"
 
     # The restart: the recorded failure keeps the clip from a second call the model will fail again.
-    _, daemon, _ = drive_daemon(tmp_path, [clip_event()], transcriber=transcriber, client=FakeClient())
+    second = FakeClient()
+    _, daemon, _ = drive_daemon(tmp_path, [clip_event()], transcriber=transcriber, client=second)
     assert len(transcriber.calls) == 1, "the restart retried a clip that will fail again"
+    assert second.posts() == [], "the restart answered the same failure a second time"
+
+
+def test_a_clip_with_no_channel_records_the_failure_and_says_it_could_not_answer(tmp_path):
+    """A clip event that names no channel still records its failure, and the daemon says the answer went nowhere."""
+    client = FakeClient()
+    logged = []
+
+    _, daemon, socket = drive_daemon(tmp_path, [clip_event(channel=""), message_event(text="still here")],
+                                     transcriber=FakeTranscriber(fail=True), client=client, log=logged.append)
+
+    other = lines(daemon.state.other_path)
+    assert len(other) == 1 and other[0]["error"].startswith("transcription failed")
+    assert client.posts() == [], "a failure answer was posted without a channel to post it in"
+    assert any("no channel" in line for line in logged), f"the daemon dropped the answer silently: {logged}"
+    assert [line["text"] for line in lines(daemon.state.inbox_path)] == ["still here"], \
+        "the daemon stopped answering the next message"
+    assert socket.sent == ["env-1", "env-2"]
 
 
 def test_an_oversized_clip_is_recorded_with_its_size_and_never_sent_inline(tmp_path):
@@ -347,14 +371,28 @@ def test_an_oversized_clip_is_recorded_with_its_size_and_never_sent_inline(tmp_p
     mod = voiced()
     mod.MAX_CLIP_BYTES = 8
     big = b"x" * 64
-    _, state, socket = drive(tmp_path, [clip_event()], downloader=lambda url: big, mod=mod)
+    client = FakeClient()
+    _, daemon, socket = drive_daemon(tmp_path, [clip_event()], downloader=lambda url: big, mod=mod, client=client)
 
-    assert lines(state.inbox_path) == []
-    other = lines(state.other_path)
+    assert lines(daemon.state.inbox_path) == []
+    other = lines(daemon.state.other_path)
     assert len(other) == 1
     assert other[0]["bytes"] == 64
     assert "too large" in other[0]["error"]
+    posts = client.posts()
+    assert len(posts) == 1 and posts[0]["thread_ts"] == "1762500000.000100", posts
+    text = posts[0]["text"]
+    assert text.endswith(".") and text.count(".") == 1, f"the failure answer is not one sentence: {text!r}"
     assert socket.sent == ["env-1"]
+
+
+def test_a_failure_is_posted_as_one_sentence_whatever_the_exception_says():
+    """The sentence the owner reads is built here, never taken from an exception message that may hold several."""
+    mod = voiced()
+
+    assert mod.one_sentence("  file may not   exceed 20MB. Split the clip. ") == "file may not exceed 20MB."
+    assert mod.one_sentence("no period here") == "no period here."
+    assert mod.one_sentence("transcription failed: RuntimeError") == "transcription failed: RuntimeError."
 
 
 def test_the_owner_is_resolved_from_the_environment_then_the_state_file(tmp_path, monkeypatch):

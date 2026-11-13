@@ -15,8 +15,9 @@ each `message.im` event instead of the operator polling for it. For every event 
 
 The id is Slack's `client_msg_id`, else `<channel>:<ts>` (Slack omits `client_msg_id` on some events). The inbox line and
 its id are fsync'd before the envelope is acknowledged, so a crash after the ack can never lose a line. A clip Gemini
-cannot read lands in `other.jsonl` with an `error`, never in the inbox as a half line the operator might read as an
-instruction.
+cannot read lands in `other.jsonl` with an `error` and its one-sentence `answer`, never in the inbox as a half line the
+operator might read as an instruction; the answer is posted under the clip in its own channel and thread, and the
+record keeps the failure so a restart never calls the model that failed again.
 
 Every project the hub lists gets one channel in the dedicated workspace, named `proj-` and its GitHub repository
 (lowercased, each dot a hyphen). The daemon creates and joins the channel once, keeps the repository-to-channel map in
@@ -107,6 +108,17 @@ class ClipTooLarge(Exception):
     def __init__(self, size):
         super().__init__(f"clip too large: {size} bytes over the {MAX_CLIP_BYTES} byte cap")
         self.size = size
+
+
+def one_sentence(text):
+    """The failure as one sentence: whitespace collapsed, the first sentence only, and a closing period.
+
+    The daemon builds the sentence the owner reads, so a failure whose text holds several sentences or none still
+    yields one clean line under the clip (#1618).
+    """
+    flat = " ".join(str(text).split())
+    first = re.split(r"(?<=[.!?])\s+", flat, maxsplit=1)[0].rstrip(".!?")
+    return f"{first}."
 
 
 def channel_name(repo):
@@ -749,14 +761,16 @@ class Daemon:
         """One line under a clip that did not work, in its own channel and thread, naming the failure in one sentence.
 
         The record is already durable when this runs, so a refused post never loses the failure and never makes the
-        clip a second model call on the next start (#1618).
+        clip a second model call on the next start (#1618). The sentence comes from `record['answer']`, which the
+        recording path builds with `one_sentence`, so the line is the same shape whatever failed.
         """
         if not record.get("channel"):
+            self.log(f"voiced: failure answer not posted, the clip names no channel: {record.get('error')}")
             return
         try:
-            self.answer(record, f"Your clip arrived, but it did not work: {record['error']}.")
+            self.answer(record, f"Your clip arrived, but it did not work: {record['answer']}")
         except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a lost record or a lost ack
-            self.log(f"voiced: failure answer refused: {type(x).__name__}")
+            self.log(f"voiced: failure answer refused: {type(x).__name__}: {x}")
 
     def outbox_sources(self):
         """Every outbox the daemon answers from, one `(channel, path)` per entry: each project channel's, then the DM's.
@@ -934,6 +948,7 @@ class Daemon:
                 text = (self.transcriber(audio, clip.get("mimetype") or "audio/mp4") or "").strip()
             except ClipTooLarge as x:   # a clip past the inline cap is a record with its size
                 record["error"] = str(x)
+                record["answer"] = one_sentence(record["error"])
                 record["bytes"] = x.size
                 self.state.append_other(record)
                 self.answer_failed_clip(record)
@@ -941,6 +956,7 @@ class Daemon:
                 return "failed"
             except Exception as x:      # noqa: BLE001 - a clip no model could read is data, never an inbox line
                 record["error"] = f"transcription failed: {type(x).__name__}"
+                record["answer"] = one_sentence(record["error"])
                 self.state.append_other(record)
                 self.answer_failed_clip(record)
                 self.log(f"voiced: {record['error']} for {mid}")
