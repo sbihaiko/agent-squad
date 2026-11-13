@@ -204,3 +204,23 @@ def test_the_control_is_served_in_the_page_with_one_route(hub):
     assert 'fetch("/api/sync"' in hub.PAGE, "the control posts from the served page"
     assert hub.PAGE.count('fetch("/api/sync"') == 1, "one read route serves the control, and no second route does"
     assert "class=syncb" in hub.PAGE, "each card carries the control"
+
+
+def test_the_read_stores_label_names_and_never_the_reads_own_objects(hub, monkeypatch):
+    """#1682: `ghread` answers REST-shaped labels (`[{"name": ...}]`). Storing that list verbatim made every later board
+    draw raise `unhashable type: 'dict'`, so the press answered `bad request` and the card stayed poisoned: the cache
+    carries names, as every other reader of the same answer does."""
+    class Answer:
+        is_answer = True
+        answer = {"number": 7, "title": "a card", "state": "open", "created_at": "2026-11-01T10:00:00Z",
+                  "labels": [{"name": "bug"}, {"name": "ready-for-agent"}], "blocked_by_read": False}
+        def line(self): return ""
+    class Seam:
+        def read_one(self, n): return "Todo"
+        def holder_one(self, n): return None
+    monkeypatch.setattr(hub.ghread, "read", lambda route: Answer())
+    monkeypatch.setattr(hub, "board_seam", lambda: Seam())
+    monkeypatch.setattr(hub, "board_cache", {"items": []})
+    item = hub.read_one_card(7)
+    assert item["l"] == ["bug", "ready-for-agent"], item["l"]
+    assert hub._columns_module.view_column(item["st"], False, item["l"], None)
