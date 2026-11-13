@@ -25,6 +25,8 @@ from tests.gitrepo import sibling_repo
 from tests.helpers import KIND_CHAINS, router
 from tests.test_dispatch import CHILD, req, routed
 
+ROOT = Path(__file__).resolve().parent.parent
+
 
 def plugin_file(tmp_path, **block):
     cfg = defaults.load()
@@ -183,6 +185,25 @@ def test_reaping_a_dead_holders_slot_says_so_on_one_line(tmp_path, capsys):
     lines = capsys.readouterr().err.splitlines()
     assert len(lines) == 1, lines
     assert "reaping stale slot" in lines[0] and lease.name in lines[0] and str(dead) in lines[0] and "dead" in lines[0]
+
+
+def test_a_refusal_names_the_lease_pid_and_never_dead(tmp_path):
+    """A gate names its holder `gate-$$` while its lease carries the lock holder's pid, so a reader that follows the name
+    alone lands on a pid the kernel answers nothing for, and read the refusal as a holder that had died (#1653). The line
+    names the lease's own facts, and the count that refused proves the holder lives, so it never says `dead`."""
+    live = subprocess.Popen(["sleep", "30"])
+    try:
+        e = {**os.environ, "SQUAD_CAPS_DIR": str(tmp_path / "leases"), "PYTHONPATH": str(ROOT)}
+        full = {k: caps.resolve()[k] for k in caps.KINDS}
+        assert caps.Ceiling(full, tmp_path / "leases").try_take_many("gates", "gate-56345", full["gates"], pid=live.pid)
+        r = subprocess.run([sys.executable, "-m", "squad.caps", "take", "gates", "gate-next", "--try",
+                            "--target", str(tmp_path)], capture_output=True, text=True, env=e, cwd=tmp_path, timeout=60)
+        assert r.returncode == caps.SKIPPED, r.stderr
+        assert f"gate-56345 (lease pid {live.pid}, live" in r.stderr, r.stderr
+        assert "dead" not in r.stderr, r.stderr
+    finally:
+        live.kill()
+        live.wait()
 
 
 def test_reaping_a_zombie_holders_slot_names_the_zombie(tmp_path, capsys):
