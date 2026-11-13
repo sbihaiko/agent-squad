@@ -59,6 +59,7 @@ loading it into the owner's launchd is the owner's step, and the daemon never ru
 """
 import asyncio
 import base64
+import fcntl
 import glob
 import hashlib
 import json
@@ -1160,6 +1161,13 @@ def main(argv):
                                     state_dir=state_dir, owner=owner,
                                     checkout=os.path.abspath(os.path.join(HERE, "..", ".."))))
         return 0
+    lock = open(os.path.join(state_dir, "voiced.lock"), "a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"voiced: another daemon holds {state_dir}; this start stands aside", file=sys.stderr)
+        lock.close()
+        return 1
     try:
         bot = keychain.read_secret(keychain.BOT_TOKEN)
         app = keychain.read_secret(keychain.APP_TOKEN)
