@@ -72,8 +72,15 @@ FULL_SHARDS = 6
 SHARD_JOBS = tuple(f"full-xdist-{k}" for k in range(1, FULL_SHARDS + 1)) + tuple(
     f"full-serial-{k}" for k in range(1, FULL_SHARDS + 1))
 COMPLETE_TIER_JOBS = SHARD_JOBS + ("fast-battery-311", "gui-e2e")
-TIER_JOBS = FAST_TIER_JOBS + COMPLETE_TIER_JOBS
+# #1644: the complete tier starts on the `promote` label alone, and the guard job starts it once per tip. The fast tier runs
+# on every other event of the dev-to-stg pull request, a push included.
+GUARD_JOB = "complete-guard"
+TIER_JOBS = FAST_TIER_JOBS + (GUARD_JOB,) + COMPLETE_TIER_JOBS
 DEV_TO_STG = "github.head_ref == 'dev'"
+FAST_TIER_IF = f"{DEV_TO_STG} && github.event.action != 'labeled'"
+GUARD_IF = f"{DEV_TO_STG} && github.event.action == 'labeled' && github.event.label.name == 'promote'"
+COMPLETE_TIER_IF = f"{GUARD_IF} && needs.{GUARD_JOB}.outputs.run == 'true'"
+PULL_REQUEST_TYPES = ["opened", "synchronize", "reopened", "labeled"]
 
 
 def _ci_workflow() -> dict:
@@ -127,7 +134,7 @@ def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
     assert tuple(wf["jobs"]) == TIER_JOBS, f"the workflow is the two tiers, {TIER_JOBS}; found {list(wf['jobs'])}"
     for name in FAST_TIER_JOBS:
         job = wf["jobs"][name]
-        assert job.get("if") == DEV_TO_STG, f"{name} starts on the dev-to-stg pull request; found {job.get('if')!r}"
+        assert job.get("if") == FAST_TIER_IF, f"{name} starts on every event of the dev-to-stg pull request; found {job.get('if')!r}"
         for key in ("needs", "strategy", "environment", "concurrency"):
             assert key not in job, f"{name} carries `{key}:`, which can hold it behind another job or a gate"
         assert job.get("continue-on-error") in (None, False), f"{name} would report green on a red"
@@ -150,9 +157,10 @@ def test_every_complete_tier_job_runs_on_the_pull_request_whose_head_is_dev():
         f"a job gated on a base branch never runs on the dev-to-stg pull request: {gated_on_base}")
     for name in COMPLETE_TIER_JOBS:
         job = wf["jobs"][name]
-        assert job.get("if") == DEV_TO_STG, (
-            f"{name} starts on the dev-to-stg pull request, never on another pair; found {job.get('if')!r}")
-        for key in ("needs", "strategy", "environment", "concurrency"):
+        assert job.get("if") == COMPLETE_TIER_IF, (
+            f"{name} starts on the dev-to-stg pull request whose `promote` label asks for it; found {job.get('if')!r}")
+        assert job.get("needs") == [GUARD_JOB], f"{name} waits on the guard that starts the tier once per tip"
+        for key in ("strategy", "environment", "concurrency"):
             assert key not in job, f"{name} carries `{key}:`, which can hold it behind another job or a gate"
         assert job.get("continue-on-error") in (None, False), f"{name} would report green on a red"
     on = wf.get("on", wf.get(True))
@@ -208,9 +216,10 @@ def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job()
     it carries its own guard too, and the workflow starts no run on a push, so both halves of the rule are checked and
     an edit that drops either one fails."""
     claude = (ROOT / "CLAUDE.md").read_text().splitlines()
-    rule = next(line for line in claude if line.startswith("- **CI runs"))
+    rule = next(line for line in claude if line.startswith("- **CI "))
     assert "fast tier" in rule and "complete tier" in rule and "tests/test_tooling.py" in rule, rule
-    named = {n for n in re.findall(r"`([a-z0-9-]+)`", rule) if n not in ("dev", "stg", "main")}
+    # `promote` is the label the complete tier starts on, never a job of the workflow (#1644).
+    named = {n for n in re.findall(r"`([a-z0-9-]+)`", rule) if n not in ("dev", "stg", "main", "promote")}
     jobs = set(_ci_workflow()["jobs"])
     # A shard job is named by its family (`full-xdist`, `full-serial`): tests/test_setup.py caps a rule line at 300 characters,
     # and the twelve shard job ids do not fit one short rule (#1518). The guard expands each family from the workflow, so a
@@ -290,7 +299,8 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
     assert wf["permissions"] == {"contents": "read"}
     for name, job in wf["jobs"].items():
         gate = str(job.get("if", ""))
-        assert gate == DEV_TO_STG, f"{name} refuses every other pull request: {job.get('if')!r}"
+        want = FAST_TIER_IF if name in FAST_TIER_JOBS else GUARD_IF if name == GUARD_JOB else COMPLETE_TIER_IF
+        assert gate.startswith(want), f"{name} refuses every other pull request: {job.get('if')!r}"
         assert job["timeout-minutes"] == 20, "each job keeps the twenty minutes it gives itself"
     uses = [s["uses"] for j in wf["jobs"].values() for s in j["steps"] if "uses" in s]
     assert uses and all("@v" in u and u.rsplit("@v", 1)[1].isdigit() for u in uses)
@@ -371,9 +381,9 @@ def test_the_full_suite_runs_in_shard_jobs_of_both_modes():
         f"the full suite's shard jobs are {SHARD_JOBS}; found {list(wf['jobs'])}"
     for name in SHARD_JOBS:
         job = wf["jobs"][name]
-        assert job.get("if") == DEV_TO_STG, f"{name} starts on the dev-to-stg pull request; found {job.get('if')!r}"
+        assert job.get("if") == COMPLETE_TIER_IF, f"{name} starts on the promote request of the dev-to-stg pull request; found {job.get('if')!r}"
         assert "matrix" not in (job.get("strategy") or {}), f"{name} splits by matrix, never by test path"
-        assert "needs" not in job, f"{name} waits behind another job instead of starting with its siblings"
+        assert job.get("needs") == [GUARD_JOB], f"{name} waits on the once-per-tip guard, never behind a sibling"
         assert (job.get("env") or {}).get("SQUAD_CI_RUNNER") == "1", f"{name} does not set SQUAD_CI_RUNNER=1 (#1323)"
         assert job["timeout-minutes"] <= 20, f"{name} gives itself {job['timeout-minutes']} minutes, over the twenty"
         gates = [s.get("run") for s in job["steps"] if str(s.get("run", "")).startswith("python3 -m pytest")]
@@ -410,6 +420,46 @@ def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
     assert "$shard_list" not in promote, "promote-pass.sh reads the shard checks from a matrix the workflow forbids"
     stg = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-stg.sh").read_text()
     assert "sg_ci_class" in stg, "promote-stg.sh reads every check run of the tip, so a red shard job refuses the merge"
+    # #1644: the complete tier starts on the promote request alone, so a green check set of the tip does not prove it ran.
+    # promote-stg.sh reads the tier the workflow declares and refuses a tip with no green run of it.
+    assert "--ci-complete-job-names" in stg, \
+        "promote-stg.sh reads the complete tier's job names through the one structural reader"
+    r = subprocess.run(["bash", str(ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh"),
+                        "--ci-complete-job-names", str(ROOT / ".github" / "workflows" / "ci.yml")],
+                       cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(r.stdout.split()) == sorted(job.get("name", name) for name, job in wf["jobs"].items()
+                                               if name in COMPLETE_TIER_JOBS + (GUARD_JOB,)), \
+        f"the complete tier are the jobs the workflow starts on the promote label: {r.stdout!r}"
+
+
+def test_the_complete_tier_starts_on_the_promote_label_alone():
+    """Guard for #1644: a push to the dev-to-stg pull request starts the fast tier alone, and the complete tier starts when
+    the pull request carries the `promote` label, once per tip.
+
+    The label event is the promotion request. A second label event on the same tip starts nothing: the guard job reads the
+    tip's own check runs and answers once, so the twelve shard jobs, the 3.11 battery and the GUI e2e suite run once on a
+    tip and never again. A run a job skipped is no evidence the tier ran: the guard reads `filter=all` and ignores a skipped
+    conclusion, and the proof reads green runs the same way.
+    """
+    wf = _ci_workflow()
+    on = wf.get("on", wf.get(True))
+    assert on["pull_request"]["types"] == PULL_REQUEST_TYPES, \
+        f"the label event starts the complete tier; found {on['pull_request'].get('types')!r}"
+    for name in FAST_TIER_JOBS:
+        assert wf["jobs"][name].get("if") == FAST_TIER_IF, f"{name} starts on a push: {wf['jobs'][name].get('if')!r}"
+    guard = wf["jobs"][GUARD_JOB]
+    assert guard.get("if") == GUARD_IF, f"the guard starts on a promote label alone; found {guard.get('if')!r}"
+    assert "needs" not in guard, "the guard waits on no job: it is what the tier waits on"
+    assert guard.get("outputs") == {"run": "${{ steps.once.outputs.run }}"}, \
+        f"the guard answers one output the tier reads: {guard.get('outputs')!r}"
+    text = "\n".join(str(s.get("run", "")) for s in guard["steps"])
+    assert "filter=all" in text, "the guard reads every check run of the tip, not the latest of each name"
+    assert "skipped" in text, "the guard reads a skipped run as no run: another event's skip never starts the tier"
+    for name in COMPLETE_TIER_JOBS:
+        job = wf["jobs"][name]
+        assert job.get("if") == COMPLETE_TIER_IF, f"{name} starts on the promote request alone; found {job.get('if')!r}"
+        assert job.get("needs") == [GUARD_JOB], f"{name} reads the guard's answer, so a second label starts it not"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

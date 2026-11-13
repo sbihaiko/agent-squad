@@ -4,6 +4,9 @@
 #
 # SG_PROMOTE_PROOF names the proof.
 #   ci (the default): the CI of the dev tip. Green promotes; red, running, unproven, unknown or a missing run promotes nothing.
+#     Two tiers prove the tip (#1644): the fast tier, which every event starts, and the complete tier, which the `promote` label
+#     starts. A tip with no green run of the complete tier is refused, and the refusal names the tier and the jobs it misses:
+#     a green fast tier alone is half the proof.
 #     A red check is red only when a job of its workflow run failed after it ran a step (#1629, ADR-0164): a job GitHub could not
 #     start measured nothing, so it never holds the promotion, as the base check reads it.
 #   local: the promotion gate's full-result line, $SG_STATE/gate-status-full. While the account's Actions billing keeps CI from
@@ -28,7 +31,8 @@
 # the pass opens or reuses the open `dev` -> `stg` pull request and merges it with a merge commit, so a later tip is measured by
 # ancestry, never by identity. The proof is read before the merge, so a red tip leaves the pull request open and promotes nothing.
 # The loop never writes main: the owner does, with promote-main.sh. The work happens in a throwaway clone.
-# $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red, running, unproven or unknown (the CI seam); SG_PROMOTE_PROOF
+# $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red, running, unproven or unknown (the CI seam);
+# SG_CI_WORKFLOW names the workflow the complete tier's job names are read from (the repository's own by default); SG_PROMOTE_PROOF
 # selects the proof (ci, the default).
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promotion branch, both named by the profile (#1646)
@@ -39,9 +43,19 @@ export GIT_TERMINAL_PROMPT=0
 if [ -n "${SG_PROMOTE_OPEN_ONLY:-}" ]; then
   . "$d/ghcall.sh"
   pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "'"$dev"'" and .base.ref == "'"$stg"'")][0].number // empty' 2>/dev/null) || exit 0
-  [ -n "$pr" ] && exit 0
-  gh_send -X POST "repos/$SG_REPO/pulls" -f head="$dev" -f base="$stg" -f "title=Promote $dev into $stg" \
-    -f "body=The $dev tip is under CI. Merge this to move $stg." >/dev/null 2>&1
+  if [ -z "$pr" ]; then
+    pr=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head="$dev" -f base="$stg" -f "title=Promote $dev into $stg" \
+      -f "body=The $dev tip is under CI. Merge this to move $stg." -q '.number // empty' 2>/dev/null) || pr=
+  fi
+  # #1644: the complete tier runs only when the promotion is requested, and the `promote` label is that request: it starts the
+  # tier once on the tip the pull request carries. The request is made once per tip, recorded here, and the workflow's guard
+  # starts nothing for a second request on the same tip. Best effort: the CI verdict reads what actually started.
+  tip=${SG_PROMOTE_TIP:-$(/usr/bin/git ls-remote "$remote" "refs/heads/$dev" 2>/dev/null | cut -f1)}
+  st=${SG_STATE:-/tmp/sg-state}
+  if [ -n "$pr" ] && [ -n "$tip" ] && [ "$(cat "$st/promote-requested" 2>/dev/null)" != "$tip" ]; then
+    gh_send -X POST "repos/$SG_REPO/issues/$pr/labels" -f 'labels[]=promote' >/dev/null 2>&1 \
+      && printf '%s\n' "$tip" > "$st/promote-requested"
+  fi
   exit 0
 fi
 # The promotion reads the machine-wide gate lock (#392), so the proof cannot change under it and two promotions never overlap;
@@ -70,6 +84,23 @@ ci_state() {  # sha -> green | red | running | unproven | unknown, from the chec
   printf '%s\n' "$c"
 }
 hash_list() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
+# #1644: the complete tier starts on the `promote` label alone, so the check set a push produces is the fast tier. The names
+# are the jobs the workflow starts on that label, read through the one structural reader (promote-pass.sh), never a list kept
+# here. A run another event skipped is no evidence the tier ran: the newest completed run that is not skipped answers for a
+# name, read with `filter=all`. complete_gap prints the jobs with no green run, one per line; nothing prints when every job of
+# the tier is green or when the workflow names no complete-tier job.
+ci_file=${SG_CI_WORKFLOW:-$d/../../../.github/workflows/ci.yml}
+complete_gap() {
+  local cr n st c
+  . "$d/ghcall.sh"
+  cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=all") || { printf 'its check runs\n'; return; }
+  printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { printf 'its check runs\n'; return; }
+  for n in $(bash "$d/promote-pass.sh" --ci-complete-job-names "$ci_file" 2>/dev/null); do
+    read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" \
+      '[.check_runs[] | select(.name == $n) | select(.status == "completed") | select(.conclusion != "skipped")] | sort_by(.id) | last | "\(.status // "missing") \(.conclusion // "")"')
+    { [ "$st" = completed ] && [ "$c" = success ]; } || printf '%s\n' "$n"
+  done
+}
 prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal in its own words
   if [ "$proof" = local ]; then
     IFS=$'\t' read -r _ kind res sha < "$state/gate-status-full" 2>/dev/null
@@ -112,6 +143,10 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     # A cancelled or timed-out check never reports again, so unproven is a refusal, never a wait: the ci proof promotes only a
     # green tip (#1532).
     [ "$st" = green ] || refuse "$1" "not promoted: CI is ${st:-unknown} (green needed)"
+    # #1644: the label starts the complete tier, so a green fast tier is half the proof. A tip with no green run of the tier is
+    # refused, and the refusal names the tier and the jobs it is missing; a tier still in flight was the running class above.
+    gap=$(complete_gap "$1")
+    [ -z "$gap" ] || refuse "$1" "not promoted: the complete tier has no green run on the dev tip (not green: $(printf '%s' "$gap" | tr '\n' ' ' | sed 's/ $//'))"
   fi; }
 g init -q . 2>/dev/null; g remote add origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$dev:refs/remotes/origin/$dev" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) || { echo "promote-stg: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }

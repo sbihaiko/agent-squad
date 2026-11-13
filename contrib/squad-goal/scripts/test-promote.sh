@@ -12,14 +12,34 @@ unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this sui
 unset SG_CHILD_SESSION   # the merge door refuses a child session; the merge here is the gh stub's, into a local bare remote
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
-export SG_STATE=$T/state SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0; mkdir -p "$SG_STATE"
+# SQUAD_CAPS_DIR is a throwaway: the promotion takes the machine-wide gate budget, and a box whose slots other gates hold
+# would refuse this suite's promotions with no defect to find (#1171). test-promote-pass.sh takes the same budget for itself.
+export SG_STATE=$T/state SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"
 git init -q --bare "$R"; git init -q "$T/w"; W="$G -C $T/w"
 $W checkout -q -b main; $W commit -q --allow-empty -m base; $W remote add origin "$R"
 for b in dev stg main; do $W push -q origin "main:refs/heads/$b"; done
 tip() { git -C "$R" rev-parse "refs/heads/$1"; }
 adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --allow-empty -m "$2"; $W push -q origin "$1"; }
 # ci <green|red|running>: the stub CI seam. It logs the sha it was read for, so a test proves which proof the script used.
-ci() { printf '#!/bin/bash\necho "ci read %s" >> "%s/ci.log"\necho "%s"\n' "$1" "$T" "$1" > "$T/ci"; chmod +x "$T/ci"; export SG_CI_STATE_CMD=$T/ci; }
+# #1644: the complete tier is the jobs the workflow starts on the `promote` label alone, and the proof reads them beside the
+# class. This fixture names two of them, and every ci() answer writes the check runs of the tip: the complete tier green on a
+# green answer, so the two halves of the proof agree.
+printf "jobs:\n  ruff:\n    name: ruff\n  fast-battery:\n    name: fast-battery\n  full-xdist:\n    name: full-xdist\n    if: github.head_ref == 'dev' && github.event.label.name == 'promote'\n  gui-e2e:\n    name: gui-e2e\n    if: github.head_ref == 'dev' && github.event.label.name == 'promote'\n" > "$T/ci.yml"
+export SG_CI_WORKFLOW=$T/ci.yml
+checks() {  # <fast> <complete>: the check runs of the tip. A half is a conclusion, `running` or `none` (no run at all).
+  local f=$1 c=$2 n out=""
+  for n in ruff fast-battery; do
+    case $f in none) ;; running) out="$out{\"name\":\"$n\",\"status\":\"in_progress\",\"conclusion\":null},";;
+      *) out="$out{\"name\":\"$n\",\"status\":\"completed\",\"conclusion\":\"$f\"},";; esac
+  done
+  for n in full-xdist gui-e2e; do
+    case $c in none) ;; running) out="$out{\"name\":\"$n\",\"status\":\"in_progress\",\"conclusion\":null},";;
+      *) out="$out{\"name\":\"$n\",\"status\":\"completed\",\"conclusion\":\"$c\"},";; esac
+  done
+  printf '{"check_runs":[%s]}\n' "${out%,}" > "$T/checks.json"
+}
+ci() { local c=$1; case "$c" in green) c=success;; red) c=failure;; esac   # the class word is not a conclusion
+  printf '#!/bin/bash\necho "ci read %s" >> "%s/ci.log"\necho "%s"\n' "$1" "$T" "$1" > "$T/ci"; chmod +x "$T/ci"; export SG_CI_STATE_CMD=$T/ci; checks "$c" "$c"; }
 # line <kind> <result> <sha>: gate.sh keeps the full result apart from the hub's latest status.
 line() { printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" > "$SG_STATE/gate-status"; [ "$1" != full ] || cp "$SG_STATE/gate-status" "$SG_STATE/gate-status-full"; }
 # The stub GitHub (#743): the open dev -> stg pull request lives in $T/pr, and merging it moves stg through the same bare
@@ -72,6 +92,27 @@ out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 /usr/bin/grep -q -- "-X PUT repos/x/emu/pulls/4/merge" "$T/gh.log" && ok "the reused pull request is the one merged" || ko "the reused pull request was not merged: $(cat "$T/gh.log")"
 [ "$(tip main)" = "$base" ] && ok "the loop left main alone" || ko "the loop moved main"
 
+# #1644: the complete tier starts on the `promote` label alone, so opening the pull request also asks for the tier: one label
+# per dev tip, so the tier starts once on that tip and a repeat asks for nothing. The open mode opens or reuses the pull
+# request, asks, and does nothing else: no proof, no merge.
+adv dev request; req=$(tip dev); stgb=$(tip stg); : > "$T/gh.log"; rm -f "$T/pr" "$SG_STATE/promote-requested"
+SG_PROMOTE_OPEN_ONLY=1 SG_PROMOTE_TIP=$req bash "$d/promote-stg.sh" >/dev/null 2>&1
+/usr/bin/grep -q -- "-X POST repos/x/emu/pulls" "$T/gh.log" && ok "the open mode opens the dev -> stg pull request" || ko "no pull request opened: $(cat "$T/gh.log")"
+/usr/bin/grep -q -- "-X POST repos/x/emu/issues/7/labels" "$T/gh.log" && ok "opening the pull request asks for the complete tier with the promote label" \
+  || ko "no promote label: $(cat "$T/gh.log")"
+[ "$(cat "$SG_STATE/promote-requested" 2>/dev/null)" = "$req" ] && ok "the request is recorded for the tip it asks for" \
+  || ko "request record: '$(cat "$SG_STATE/promote-requested" 2>/dev/null)'"
+[ "$(tip stg)" = "$stgb" ] && ok "the open mode proves nothing and merges nothing" || ko "the open mode moved stg"
+: > "$T/gh.log"
+SG_PROMOTE_OPEN_ONLY=1 SG_PROMOTE_TIP=$req bash "$d/promote-stg.sh" >/dev/null 2>&1
+/usr/bin/grep -q -- "/labels" "$T/gh.log" && ko "a second request asked for the same tip again: $(cat "$T/gh.log")" \
+  || ok "a second open on the same tip asks for nothing"
+adv dev request-next; nreq=$(tip dev); : > "$T/gh.log"
+SG_PROMOTE_OPEN_ONLY=1 SG_PROMOTE_TIP=$nreq bash "$d/promote-stg.sh" >/dev/null 2>&1
+/usr/bin/grep -q -- "-X POST repos/x/emu/issues/7/labels" "$T/gh.log" && ok "a new tip asks for its own complete tier" \
+  || ko "no label for the new tip: $(cat "$T/gh.log")"
+rm -f "$T/pr"
+
 # A missing CI run (no check runs) reads as running: nothing is promoted.
 adv dev one-absent; before=$(tip stg); ci running
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
@@ -84,7 +125,7 @@ case "$out" in *running*) ok "the pending line says the CI is running";; *) ko "
 unset SG_CI_STATE_CMD SG_PROMOTE_PROOF
 RED_P='{"check_runs":[{"id":1,"name":"check (3.11)","status":"completed","conclusion":"failure","details_url":"https://github.com/x/emu/actions/runs/7901/job/1"}]}'
 QUIET_P='{"check_runs":[{"id":1,"name":"check (3.11)","status":"completed","conclusion":"failure","details_url":"https://github.com/x/emu/actions/runs/7902/job/1"}]}'
-GREEN_P='{"check_runs":[{"id":1,"name":"check (3.11)","status":"completed","conclusion":"success"}]}'
+GREEN_P='{"check_runs":[{"id":1,"name":"ruff","status":"completed","conclusion":"success"},{"id":2,"name":"full-xdist","status":"completed","conclusion":"success"},{"id":3,"name":"gui-e2e","status":"completed","conclusion":"success"}]}'
 adv dev real-red; before=$(tip stg); printf '%s' "$RED_P" > "$T/checks.json"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI is red"*) ok "real CI: a red tip promotes nothing and says red";; *) ko "real CI red: out '$out'";; esac || ko "real CI red: rc $rc stg moved or out '$out'"
@@ -101,6 +142,29 @@ out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 adv dev real-green; printf '%s' "$GREEN_P" > "$T/checks.json"; rm -f "$T/pr"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "real CI: a green tip is promoted" || ko "real CI green: rc $rc out '$out'"
+
+# #1644: the complete tier starts on the `promote` label alone, so a push to dev leaves it unrun. A tip whose fast tier is
+# green and whose complete tier never ran is refused, and the refusal names the tier and the jobs the workflow declares.
+adv dev complete-absent; before=$(tip stg); checks success none; rm -f "$T/pr"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ $rc -ne 75 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"complete tier"*full-xdist*) true;; *) false;; esac \
+  && ok "a tip with no complete-tier run is refused, and the refusal names the tier and its jobs" \
+  || ko "complete tier absent: rc $rc, stg $(tip stg), out '$out'"
+# A run the event skipped (the tier starts on the label alone) is no evidence the tier ran: the tip still has no complete tier.
+checks success skipped
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ $rc -ne 75 ] && case "$out" in *"complete tier"*) true;; *) false;; esac \
+  && ok "a skipped complete-tier run is no green run: the tip is refused" || ko "complete tier skipped: rc $rc, out '$out'"
+# One green complete-tier job beside the other absent is still no complete tier.
+checks success success; printf '{"check_runs":[{"id":1,"name":"ruff","status":"completed","conclusion":"success"},{"id":2,"name":"full-xdist","status":"completed","conclusion":"success"}]}' > "$T/checks.json"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && case "$out" in *"complete tier"*gui-e2e*) true;; *) false;; esac \
+  && ok "the refusal names the complete-tier job that has no green run" || ko "half complete tier: rc $rc, out '$out'"
+# A complete tier in flight is a wait, never a refusal: the promotion reads it again on a later pass.
+checks success running
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 75 ] && ok "a complete tier still in flight is the pending exit, never a refusal" || ko "complete tier in flight: rc $rc, out '$out'"
+checks success success
 
 # (#1532) A cancelled check beside a green one is unproven, never green: the ci proof promotes nothing and names it, and it is no
 # wait (a cancelled check never reports again).

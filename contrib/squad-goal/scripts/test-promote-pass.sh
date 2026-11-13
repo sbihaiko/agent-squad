@@ -238,7 +238,8 @@ case "$1" in
       m="git -C $CHECKS_DIR/w -c user.email=a@b -c user.name=t"
       $m fetch -q origin && $m checkout -q -B dev origin/dev && $m commit -q --allow-empty -m moved-during-proof && $m push -q origin dev
     fi;;
-  *pulls?state=open*) [ -e "$CHECKS_DIR/read-fail" ] && exit 1; echo '{}';;   # (#1490) a transient read failure while the file stands
+  *pulls?state=open*) [ -e "$CHECKS_DIR/read-fail" ] && exit 1   # (#1490) a transient read failure while the file stands
+    if [ -e "$CHECKS_DIR/pr-open" ]; then echo '[{"number":11,"head":{"ref":"dev"},"base":{"ref":"stg"}}]'; else echo '{}'; fi;;
   *) echo '{}';;
 esac
 EOF
@@ -300,6 +301,24 @@ shards "$tu" success success running timed_out; SG_PROMOTE_CI_WAIT=0 SG_GHREAD="
 /usr/bin/grep -q "promote-pass: $tu promoted: the local full suite answered" "$SG_STATE/promote.log" && ok "the record names the local full suite as the proof" \
   || ko "local record: $(/usr/bin/grep "$tu" "$SG_STATE/promote.log")"
 
+# #1644: the complete tier starts on the `promote` label alone, so the run that event starts carries the complete tier and no
+# fast tier: its fast-tier checks report `skipped`. A skipped run is no evidence either way, and the tip's own earlier run is
+# the proof of that half (#1644). The complete tier green, the fast tier of an earlier run green, promotes with no suite.
+skipped_runs() {  # <sha>: the fast tier of an earlier run and its skipped twin on the labeled run, beside four green shards
+  local s=$1 j k n=10 out=""
+  for j in ruff mypy fast-battery; do
+    out="$out{\"id\":$n,\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"success\"},{\"id\":$((n + 1)),\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"skipped\"},"
+    n=$((n + 2))
+  done
+  for k in 0 1 2 3; do out="$out{\"id\":$n,\"name\":\"full-proof shard $k\",\"status\":\"completed\",\"conclusion\":\"success\"},"; n=$((n + 1)); done
+  echo "{\"check_runs\":[${out%,}]}" > "$T/checks-$s"
+}
+adv dev labeled-skip; tls=$(tip dev); n=$(runs)
+skipped_runs "$tls"; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tls" ] && [ "$(runs)" = "$n" ] \
+  && ok "a labeled run's skipped fast tier holds nothing: the tip's own runs prove both halves" \
+  || ko "labeled run: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
+
 # A workflow file that names no shard job is its own checks alone, and a green check set promotes the tip: the pass reads
 # the names the file carries, never a shard count of its own.
 printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n' > "$T/ci-no-shards.yml"
@@ -336,6 +355,21 @@ tierchecks "$tcn" success; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin
   && ok "the record names every job of both tiers" || ko "record: $(/usr/bin/grep "statuses/$tcn" "$T/gh.log")"
 /usr/bin/grep "promote-pass: $tcn CI checks green:" "$SG_STATE/promote.log" | tail -n 1 | /usr/bin/grep -q "ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e" \
   && ok "the log names every CI job the status reads" || ko "job log: $(/usr/bin/grep "CI checks green" "$SG_STATE/promote.log" | tail -n 1)"
+
+# #1644: the complete tier runs only when the promotion is requested, so the pass asks for it: the `promote` label on the
+# open dev -> stg pull request. The request is recorded for its tip, so a later pass on the same tip asks for nothing.
+adv dev promote-request; tpq=$(tip dev); : > "$T/gh.log"; touch "$T/pr-open"
+shards "$tpq" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tpq" ] || ko "promote request: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+/usr/bin/grep -q -- "-X POST repos/x/emu/issues/11/labels" "$T/gh.log" && ok "the pass requests the complete tier with the promote label" \
+  || ko "no promote label: $(cat "$T/gh.log")"
+[ "$(cat "$SG_STATE/promote-requested" 2>/dev/null)" = "$tpq" ] && ok "the request is recorded for the tip it asks for" \
+  || ko "request record: $(cat "$SG_STATE/promote-requested" 2>/dev/null)"
+adv dev promote-next; tpn=$(tip dev); : > "$T/gh.log"
+shards "$tpn" success success success success; SG_GHREAD="$T/bin/ghread" pass
+/usr/bin/grep -q -- "-X POST repos/x/emu/issues/11/labels" "$T/gh.log" && ok "a new tip asks for its own complete tier" \
+  || ko "no label for the new tip: $(cat "$T/gh.log")"
+rm -f "$T/pr-open"
 
 # The Statuses API rejects a description past 140 characters with a 422, so a green set whose names do not fit would never
 # write its status and never promote (#1518). The description is asserted on the repository's own workflow, where the shard

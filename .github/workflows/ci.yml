@@ -3,17 +3,21 @@ name: ci
 on:
   pull_request:
     branches: ["stg"]
+    # A push to dev reaches the pull request as `synchronize`; the `promote` label is the promotion request.
+    types: [opened, synchronize, reopened, labeled]
 
 # CI runs both tiers on the one pull request that carries dev to stg, the pass the loop promotes through. The fast tier is
-# ruff, mypy and the fast battery, three jobs each on Python 3.13. The complete tier is the full suite on 3.13 with `-n auto`,
-# the full suite on 3.13 serial, the fast battery on 3.11 and the GUI e2e suite. Every job gates on
-# `github.head_ref == 'dev'`, so every check the promotion reads runs on the tip it promotes. The complete tier ran on a
-# stg-to-main pull request alone, and promote-main.sh fast-forwards main from stg, so that pull request never existed and
-# the complete tier never ran on the path that reached main. No branch push starts a run; a work branch is proven by the
-# local fast gate, and a landing by the promotion proof. A pull request of any other pair starts nothing, because each job's
-# own condition refuses it.
+# ruff, mypy and the fast battery, three jobs each on Python 3.13, and it runs on every event of that pull request, a push
+# included. The complete tier is the full suite on 3.13 with `-n auto`, the full suite on 3.13 serial, the fast battery on
+# 3.11 and the GUI e2e suite, and it runs only when the promotion is requested: the `promote` label on the pull request
+# starts it once on the tip it carries. Every job gates on `github.head_ref == 'dev'`, so every check the promotion reads
+# runs on the tip it promotes. The complete tier ran on a stg-to-main pull request alone, and promote-main.sh fast-forwards
+# main from stg, so that pull request never existed and the complete tier never ran on the path that reached main. No branch
+# push starts a run; a work branch is proven by the local fast gate, and a landing by the promotion proof. A pull request of
+# any other pair starts nothing, because each job's own condition refuses it.
 # Each tier's jobs have no `needs:` between them, so they start together and the pull request reports in the time of the
-# slowest one. The fast-battery job carries one explicit GUI e2e run beside the battery: the battery's `-m "not heavy"`
+# slowest one. The one `needs:` is the complete tier's read of `complete-guard`, which starts the tier once per tip: it is
+# the tier's entry, never a sibling it waits behind, and the twelve shard jobs still start together. The fast-battery job carries one explicit GUI e2e run beside the battery: the battery's `-m "not heavy"`
 # leaves that file's `heavy` tests out, and they ran on every promotion before this tier existed. The complete tier's GUI
 # e2e job carries them alone. On each tier the host-bound tests are deselected by name (ADR-0139), and the complete tier
 # also simulates a runner (SQUAD_CI_RUNNER=1), so every deselected test prints its id and reason in the job log (#1323).
@@ -36,7 +40,9 @@ on:
 # test file is assigned there before a green shard set can stand for the full proof.
 # promote-pass.sh reads every job name in this file as a check the dev-to-stg tip waits on, the twelve shard jobs included,
 # and it refuses the promotion by name when a job is gated on `base_ref`: such a job never runs on that pull request, so
-# the dev tip could never prove it. promote-stg.sh refuses the merge on a red check run of the tip, whatever its name.
+# the dev tip could never prove it. promote-stg.sh refuses the merge on a red check run of the tip, whatever its name, and
+# under the CI proof it also refuses a tip with no green run of the complete tier: the label starts that tier, so a push
+# alone never proves the full suite. A check run another event skipped is no evidence of either tier.
 concurrency:
   group: ci-${{ github.head_ref }}-${{ github.sha }}
   cancel-in-progress: false
@@ -47,7 +53,7 @@ permissions:
 jobs:
   ruff:
     name: ruff
-    if: github.head_ref == 'dev'   # the one pass that carries dev to stg
+    if: github.head_ref == 'dev' && github.event.action != 'labeled'   # every event but the promotion request: a push starts the fast tier alone
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -62,7 +68,7 @@ jobs:
 
   mypy:
     name: mypy
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -77,7 +83,7 @@ jobs:
 
   fast-battery:
     name: fast-battery
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -95,9 +101,44 @@ jobs:
         # names the file so a missing checkout is reported rather than silently collected by the tree walk.
         run: python3 -m pytest tests/test_gui_test_e2e.py -q
 
+  complete-guard:
+    name: complete-guard
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      checks: read
+    outputs:
+      run: ${{ steps.once.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: The complete tier starts once per tip
+        id: once
+        # The `promote` label asks for the complete tier, and the tier runs once on a tip: a label removed and applied again,
+        # or a second label event on the same commit, starts nothing. The tip's own check runs answer it, read with
+        # `filter=all`: a run another event skipped is no run of this tier, so it starts nothing and blocks nothing. The
+        # complete-tier names are the jobs started on that label, read from this file, never a list kept here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          names=$(bash contrib/squad-goal/scripts/promote-pass.sh --ci-complete-job-names .github/workflows/ci.yml)
+          runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100&filter=all" \
+            -q '.check_runs[] | select(.conclusion != "skipped") | .name' 2>/dev/null || true)
+          run=true
+          for n in $names; do
+            if printf '%s\n' "$runs" | grep -qxF "$n"; then
+              echo "the tip already carries $n: the complete tier started on it"; run=false
+            fi
+          done
+          echo "complete tier: $names"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   full-xdist-1:
     name: full-xdist-1
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -116,7 +157,8 @@ jobs:
 
   full-xdist-2:
     name: full-xdist-2
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -135,7 +177,8 @@ jobs:
 
   full-xdist-3:
     name: full-xdist-3
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -154,7 +197,8 @@ jobs:
 
   full-xdist-4:
     name: full-xdist-4
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -173,7 +217,8 @@ jobs:
 
   full-xdist-5:
     name: full-xdist-5
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -192,7 +237,8 @@ jobs:
 
   full-xdist-6:
     name: full-xdist-6
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -211,7 +257,8 @@ jobs:
 
   full-serial-1:
     name: full-serial-1
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -230,7 +277,8 @@ jobs:
 
   full-serial-2:
     name: full-serial-2
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -249,7 +297,8 @@ jobs:
 
   full-serial-3:
     name: full-serial-3
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -268,7 +317,8 @@ jobs:
 
   full-serial-4:
     name: full-serial-4
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -287,7 +337,8 @@ jobs:
 
   full-serial-5:
     name: full-serial-5
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -306,7 +357,8 @@ jobs:
 
   full-serial-6:
     name: full-serial-6
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -325,7 +377,8 @@ jobs:
 
   fast-battery-311:
     name: fast-battery-311
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -342,7 +395,8 @@ jobs:
 
   gui-e2e:
     name: gui-e2e
-    if: github.head_ref == 'dev'
+    if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    needs: [complete-guard]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
