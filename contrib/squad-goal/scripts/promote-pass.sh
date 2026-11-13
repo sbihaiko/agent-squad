@@ -24,8 +24,9 @@
 d=$(cd "$(dirname "$0")" && pwd)
 dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promotion branch, both named by the profile (#1646)
 [ "${SG_PROMOTE:-on}" = off ] && exit 0         # a profile that delivers by another path promotes nothing: no fetch, no line
-# ci_job_names <workflow file> [gated]: the check-run name of every job under jobs:, one per line; with `gated`, only the
-# jobs whose `if:` names base_ref. The reader stays inside the jobs: block (a line at column zero ends it), so a step's
+# ci_job_names <workflow file> [gated|complete]: the check-run name of every job under jobs:, one per line; with `gated`,
+# only the jobs whose `if:` names base_ref; with `complete`, only the jobs whose `if:` asks for the `promote` label, the tier
+# the promotion request starts (#1644). The reader stays inside the jobs: block (a line at column zero ends it), so a step's
 # `name:`, a `with: name:` or any other four-space `name:` outside a job never becomes a check run whose absence would hold
 # every tip forever (ADR-0164, #1322). Only a job that names itself is read; the full suite's shard jobs name themselves, so
 # they are read like every other job (#1518). A file that names no job answers nothing, and its caller reads that as pending,
@@ -34,13 +35,18 @@ dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promo
 # over the jobs that did run.
 ci_job_names() {
   awk -v want="${2:-}" '
-    function flush() { if (cur != "" && (want != "gated" || gated)) print cur; cur = ""; gated = 0 }
+    function flush() {
+      if (cur != "" && (want == "" || (want == "gated" && gated) || (want == "complete" && complete && waits))) print cur
+      cur = ""; gated = 0; complete = 0; waits = 0
+    }
     /^jobs:[[:space:]]*$/ { injobs = 1; next }
     /^[^[:space:]#]/ { if (injobs) flush(); injobs = 0 }
     !injobs { next }
     /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { flush(); job = 1; next }
     /^    name:[[:space:]]+/ { if (!job) next; cur = $0; sub(/^    name:[[:space:]]+/, "", cur); next }
     /^    if:[[:space:]]/ && /base_ref/ { gated = 1 }
+    /^    if:[[:space:]]/ && /label[.]name == .promote./ { complete = 1 }
+    /^    needs:[[:space:]]/ { waits = 1 }
     END { flush() }
   ' "$1" 2>/dev/null
 }
@@ -67,6 +73,10 @@ full_status_desc() {  # <prefix> <check name...>: a status description the Statu
 if [ "${1:-}" = --ci-job-names ]; then   # the check names a workflow's job block produces, printed one per line
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-job-names needs a workflow file" >&2; exit 2; }
   ci_job_names "$2"; exit 0
+fi
+if [ "${1:-}" = --ci-complete-job-names ]; then   # the jobs a workflow starts on the `promote` label, one per line
+  [ -n "${2:-}" ] || { echo "promote-pass: --ci-complete-job-names needs a workflow file" >&2; exit 2; }
+  ci_job_names "$2" complete; exit 0
 fi
 if [ "${1:-}" = --ci-description ]; then   # the bounded status description a workflow's job list produces
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-description needs a workflow file" >&2; exit 2; }
@@ -168,12 +178,16 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   ci_verdict() {  # <tip>: pass, "fail <check>" for a measured red, or pending
     local cr n st c v=pass ref
     [ "${#ci_names[@]}" -gt 0 ] || { echo pending; return; }   # a workflow that names no job proves nothing
-    cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
+    cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=all") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
     . "$d/basecheck.sh"   # the same refinement the base check reads (#1629): a job that never started measured nothing
     ref=$(sg_ci_refine "$cr" 2>/dev/null) || ref=
     for n in "${ci_names[@]}"; do
-      read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" '[.check_runs[] | select(.name == $n)] | last | "\(.status) \(.conclusion)"')
+      # #1644: a check run the event skipped is no evidence either way. The complete tier starts on the `promote` label, so
+      # the labeled run carries the fast tier as `skipped`; a push carries the complete tier that way. The newest completed
+      # run that is not skipped answers for the name, and a name with no such run holds the verdict pending.
+      read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" \
+        '[.check_runs[] | select(.name == $n) | select(.status == "completed") | select(.conclusion != "skipped")] | sort_by(.id) | last | "\(.status) \(.conclusion)"')
       if [ "$st" = completed ] && [ "$c" = failure ]; then
         case "$ref" in
           red\ *) echo "fail $n"; return;;   # a job of the run ran a step and failed: the red job is the one read
@@ -321,9 +335,10 @@ g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$dev:refs/remotes/origin/$dev" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 [ "$(g rev-parse "origin/$dev")" = "$tip" ] || exit 0   # the work branch moved under the read: a later pass takes the new tip
 g merge-base --is-ancestor "$tip" "origin/$stg" && exit 0   # the tip is already in the promotion branch
-# ADR-0164 (#1051, #1461): the dev-to-stg pull request starts both CI tiers on the tip, so promote-stg.sh opens it before the
-# quiet window passes and the checks run while it does. Best effort: a failure there leaves the proof below to answer.
-SG_PROMOTE_OPEN_ONLY=1 bash "$d/promote-stg.sh" >/dev/null 2>&1
+# ADR-0164 (#1051, #1461): the work-to-promotion pull request carries the CI of the tip, so promote-stg.sh opens it before the
+# quiet window passes and the checks run while it does. #1644: opening it also asks for the complete tier, the `promote` label,
+# once per tip. Best effort: a failure there leaves the proof below to answer.
+SG_PROMOTE_OPEN_ONLY=1 SG_PROMOTE_TIP=$tip bash "$d/promote-stg.sh" >/dev/null 2>&1
 last=$(awk -F'\t' '$1 > m {m = $1} END {print m + 0}' "$state/landed.tsv" 2>/dev/null); last=${last:-0}
 # ADR-0164: the guards below protect a local suite from a loaded box. When SG_PROMOTE_PROOF=ci names the dev-to-stg check as
 # the proof, no local suite runs, so a recent landing, a loaded box, a low-memory box and a nightly that owns the machine

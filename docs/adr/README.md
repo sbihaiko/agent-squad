@@ -78,6 +78,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0170](0170-the-gate-is-a-column-and-an-attempt-count-is-a-board-fact.md) | The gate is a column between Code Complete and Closed, and its attempt count is one number field: a red or unproven attempt is a marker, never a move, the definition, the pinned copy and the hash move in one step, and a retired option goes only when no card carries it |
 | [0171](0171-a-loop-defect-is-reviewed-by-fable-or-astra.md) | A loop defect is reviewed by Fable or Astra before it is built: its chain starts with Fable, then Astra, and the review chain follows; a `loop-bug` label selects it; autobug builds a loop-bug only after an approving plan review of its current body |
 | [0172](0172-a-blocking-finding-names-its-repro.md) | A Blocking finding names a repro run at the head: a repro that exits 0 or cannot run moves the finding to Debt, a finding with no repro is Debt, and a markdown answer has none (amends 0151) |
+| [0173](0173-the-complete-tier-runs-on-the-promotion-request.md) | The complete tier runs on the promotion request: the fast tier starts on every event of the dev-to-stg pull request, the complete tier on the `promote` label through a guard that starts it once per tip, a skipped run is no evidence, and the promotion still refuses a tip with no green complete tier |
 
 ## Adding an ADR
 
