@@ -91,8 +91,9 @@ def test_the_card_paints_the_holder_the_row_carries(hub):
               + line + '\nconst I=[{n:241,t:"held",l:[],ho:"held by run-x since then",hs:"running"}];console.log(cards({name:"Todo"},I,I));\n')
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
-    # Re-anchored to the owner-approved mock (#889): the card head wears a short "running"; the full holder text is its tooltip
-    assert '<span class=hld title="held by run-x since then">running</span>' in out.stdout
+    # The chip names the holder (#1664): "Squad" now, "Squad · taken over <time>" once a takeover marker names it;
+    # the full holder text is its tooltip.
+    assert '<span class=hld title="held by run-x since then">Squad</span>' in out.stdout
 
 
 def test_an_epoch_start_is_shown_as_a_utc_date(hub):

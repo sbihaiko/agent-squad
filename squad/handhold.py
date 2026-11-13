@@ -18,7 +18,7 @@ Every write verb touches `$SG_STATE/board-dirty`, so the board pass re-reads at 
 
 usage: python3 -m squad.handhold hold <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold renew <n>... [--by manual|hal9k] [--minutes N]
-       python3 -m squad.handhold release <n>... --to Todo|Doing|"Code Complete"|Closed [--by manual|hal9k]
+       python3 -m squad.handhold release <n>... --to Todo|"Code Complete"|Closed [--by manual|hal9k]
        python3 -m squad.handhold holds
 
 The bound defaults to `SG_HAND_HOLD_MINUTES` (240). Exit 0 when every write lands, 1 on a refusal (one stderr line each).
@@ -38,7 +38,7 @@ from squad import reap, record
 from squad import run_liveness as RL
 
 CARRIERS = ("manual", "hal9k")
-COLUMNS = ("Todo", "Doing", "Code Complete", "Closed")
+COLUMNS = ("Todo", "Code Complete", "Closed")   # the columns a release may name: work is done or it goes back to Todo
 DEFAULT_MINUTES = 240
 ENV_MINUTES = "SG_HAND_HOLD_MINUTES"
 ISO = "%Y-%m-%dT%H:%M:%SZ"
@@ -245,7 +245,7 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=
         raise ValueError(f"--by names one of {', '.join(CARRIERS)}, not {by!r}")
     if verb == "release":
         if to is None:
-            raise ValueError('release needs --to Todo|Doing|"Code Complete"|Closed: a card is never left in a ghost state')
+            raise ValueError('release needs --to Todo|"Code Complete"|Closed: a card is never left in a ghost state')
         if to not in COLUMNS:
             raise ValueError(f"--to names one of {', '.join(COLUMNS)}, not {to!r}")
     nums = _numbers(issues)
@@ -347,7 +347,8 @@ def alerts(state=None, closed=None, now=None, path=None):
         with log.open("a") as f:
             for line in lines:
                 f.write(line + "\n")
-    record.atomic_write(seen_path, "".join(f"{key}\n" for key in sorted(want)))
+    if set(want) != seen:   # the dedupe file changes only when an episode starts or ends, never on every read
+        record.atomic_write(seen_path, "".join(f"{key}\n" for key in sorted(want)))
     return lines
 
 

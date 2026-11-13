@@ -36,6 +36,19 @@ def hub():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def clean(hub):
+    """Each case starts with no hold and an empty board cache, so one case's hold never leaks into the next."""
+    d = Path(hub.STATE) / "auto"
+    d.mkdir(parents=True, exist_ok=True)
+    for p in d.glob("hold-*"):
+        p.unlink()
+    (d / "hold-alerts").unlink(missing_ok=True)
+    (Path(hub.STATE) / "alerts.log").unlink(missing_ok=True)
+    hub.board_cache = {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None}
+    yield
+
+
 def _hold(hub, n, by="manual", minutes=60, now=None):
     from squad import handhold
     rc = handhold.hold([n], by=by, minutes=minutes, state=hub.STATE, now=now or time.time(), procs={},
@@ -71,12 +84,14 @@ def test_a_stale_hold_is_not_live_work(hub):
     _closed(hub)
     _hold(hub, 1666, minutes=1, now=time.time() - 3600)
     assert hub.hold_rows() == []
+    assert "HOLD STALE #1666" in (Path(hub.STATE) / "alerts.log").read_text()
 
 
 def test_an_orphan_hold_is_never_live_work(hub):
     _hold(hub, 1667)
     _closed(hub, 1667)
     assert hub.hold_rows() == []
+    assert "HOLD ORPHAN #1667" in (Path(hub.STATE) / "alerts.log").read_text()
 
 
 def test_the_chip_names_the_holder(hub):
@@ -93,7 +108,9 @@ def test_the_card_paints_the_holder_name_the_row_carries(hub):
     if NODE is None:
         pytest.skip("node is required")
     line = re.search(r"^const cards=.*$", hub.PAGE, re.M).group(0)
-    script = ('const esc=s=>String(s);const isPR=n=>false;const colOf=()=>"#000000";const tint=()=>"";'
+    lanes = (ROOT / "contrib/squad-goal/scripts/board-lanes.js").read_text()
+    script = (lanes + "const SLOTS=specSlots([]);\n"
+              'const esc=s=>String(s);const isPR=n=>false;const colOf=()=>"#000000";const tint=()=>"";'
               'const lbc=()=>"";const gstrip=()=>"";const age=()=>"";const ageC=()=>"";const bo={labels:[]};const CN=["Todo"];\n'
               + line + '\nconst I=[{n:241,t:"x",l:[],ho:"held by run-x since then",hc:"Squad"}];'
               'console.log(cards({name:"Todo"},I,I));\n')
