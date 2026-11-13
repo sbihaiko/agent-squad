@@ -2503,7 +2503,9 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
     window (`c`, the close stamp the board cache already carries, #1361), read from the stamp alone; `open` is every card
     the board draws open now, the same `drawn_column` rule the kanban serves, so a closed card and a card in the Abandoned
     column are no open card. The two rules never override each other, so a row agrees with the kanban it sits beside.
-    A card with no readable stamp is never invented as an arrival or a close."""
+    The row covers the past week: a card the row can prove opened before it is in no row at all, while a card with no
+    readable stamp is kept, because an unreadable stamp is not a proof of age. Such a card is still never invented as an
+    arrival or a close."""
     if moves is None: moves = read_moves() if overlay_on() else {}
     if window is None: window = pending_window()
     since, ends = now_ts - window_secs, (COLUMN["issue_closed"], COLUMN["abandoned"])
@@ -2516,7 +2518,8 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
         kinds = [k for k, hit in (("bugs", "bug" in labels or loop_defect(i)), ("loop_bugs", loop_defect(i))) if hit]
         if not kinds: continue
         o, c = _close_instant(i.get("o")), _close_instant(i.get("c"))
-        if o is None or o < now_ts - BUG_ROW_SECONDS: continue   # the row counts the past week, never the whole backlog
+        if o is not None and o < now_ts - BUG_ROW_SECONDS: continue   # the past week, never the whole backlog; a card with no
+        # readable stamp cannot be proved old, so it stays, and it is still never invented as an arrival
         came = o is not None and since <= o <= now_ts
         went = c is not None and since <= c <= now_ts   # the close stamp alone, so a lagging state never hides a close
         still = open_now(i)
@@ -2542,7 +2545,7 @@ def tasks_fact(items, now_ts):
     n, of = 0, 0
     for i in items or []:   # the owner, 2026-11-13: the row covers the past week, like the two bug rows
         opened = _close_instant(i.get("o"))
-        if opened is None or opened < now_ts - BUG_ROW_SECONDS: continue
+        if opened is not None and opened < now_ts - BUG_ROW_SECONDS: continue   # the past week, like the two bug rows
         labels = [str(x) for x in (i.get("l") or [])]
         if "spec" in labels or "bug" in labels or any(x.startswith("loop-bug") for x in labels): continue
         of += 1

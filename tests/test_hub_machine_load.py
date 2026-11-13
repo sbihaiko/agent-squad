@@ -1321,7 +1321,7 @@ def test_the_arrival_rows_read_the_creation_stamp_never_the_close_stamp(hub, tmp
              {**_arrival_card(2, ["bug"], 0), "o": "not a stamp"}]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 1, "open": 0}, arrivals
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 1, "open": 1}, arrivals
 
 
 def test_the_arrival_rows_follow_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
