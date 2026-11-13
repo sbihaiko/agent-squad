@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619).
 
-Two phases, one command. The denials run under `sandbox-exec` with the profile this probe writes: a write outside the
-scope's outbox, a read of another scope's inbox and a network call past the model endpoint must each fail. Then one
-bounded `claude -p` call runs under the same profile with the operator's tool set and `dontAsk`. A denial that does not
-happen, or a session that starts with another tool set, fails the probe.
+Two phases, one command. Every call runs through contrib/squad-goal/scripts/claude-sandboxed.sh with the profile this
+probe writes. The denials come first: a write outside the scope's outbox, a read of another scope's inbox and a network
+call past the model endpoint must each fail. Then one bounded `claude -p` call runs with the operator's tool set and
+`dontAsk`. A denial that does not happen, or a session that starts with another tool set, fails the probe.
 
-usage: operator_probe.py [--work DIR]
+usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
 """
 import argparse
@@ -21,7 +21,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from operators import TOOLS  # noqa: E402
 
-SANDBOX = "/usr/bin/sandbox-exec"
+ROOT = Path(__file__).resolve().parents[2]
+WRAPPER = str(ROOT / "contrib" / "squad-goal" / "scripts" / "claude-sandboxed.sh")
 MODEL = "haiku"
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
@@ -33,6 +34,11 @@ NETWORK_CALL = "curl -sS -m 8 -o /dev/null http://example.com/"
 
 class ProbeFailed(Exception):
     """A denial did not hold, or the session did not start with the tool set."""
+
+
+def work_root():
+    """The folder each probe run works in: under the home directory, outside the profile's writable roots."""
+    return Path.home() / ".local" / "state" / "agent-squad" / "operator-probe"
 
 
 def check_denials(write_landed, read_leaked, network_reached):
@@ -59,15 +65,24 @@ def profile_text(outbox_dir, other_inbox):
     ]) + "\n"
 
 
-def denials(work, profile_path, leak, other_inbox):
+def sandboxed(profile, cli, args, cwd, timeout):
+    """One call through the sandbox wrapper: the profile text, the program it wraps and its arguments."""
+    env = {**os.environ, "SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": cli}
+    try:
+        return subprocess.run([WRAPPER, *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout,
+                              check=False)
+    except subprocess.TimeoutExpired:
+        raise ProbeFailed(f"a sandboxed call passed its {timeout:.0f}s deadline") from None
+
+
+def denials(work, profile, leak, other_inbox):
     """Run each denial under the profile, with no model in the loop, and return what got through.
 
     A denial counts only when the profile applied (the control echo ran) and the command refused with its own
     `Operation not permitted`; a failure of any other kind is unproven, so the probe fails rather than passes.
     """
     def run(command):
-        return subprocess.run([SANDBOX, "-f", profile_path, "/bin/sh", "-c", command], cwd=work,
-                              capture_output=True, text=True, timeout=DENIAL_DEADLINE, check=False)
+        return sandboxed(profile, "/bin/sh", ["-c", command], work, DENIAL_DEADLINE)
     control = run("echo control")
     if control.returncode != 0 or "control" not in control.stdout:
         raise ProbeFailed(f"sandbox-exec did not apply the profile: {control.stderr.strip() or 'no output'}")
@@ -80,15 +95,12 @@ def denials(work, profile_path, leak, other_inbox):
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
-def session(work, profile_path):
+def session(work, profile, cli):
     """One bounded `claude -p` call under the profile; return its init event and its result event."""
-    argv = [SANDBOX, "-f", profile_path, "claude", "-p", PROMPT, "--tools", TOOLS, "--allowedTools", TOOLS,
-            "--permission-mode", "dontAsk", "--strict-mcp-config", "--output-format", "stream-json", "--verbose",
-            "--max-budget-usd", SPEND, "--model", MODEL]
-    try:
-        done = subprocess.run(argv, cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
-    except subprocess.TimeoutExpired:
-        raise ProbeFailed(f"the CLI call passed its {DEADLINE:.0f}s deadline") from None
+    args = ["-p", PROMPT, "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
+            "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
+            "--model", MODEL]
+    done = sandboxed(profile, cli, args, work, DEADLINE)
     events = []
     for line in done.stdout.splitlines():
         try:
@@ -114,14 +126,7 @@ def check_session(init, result):
         raise ProbeFailed(f"the CLI call did not succeed: {result.get('subtype')}")
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--work", help="a folder for the probe's files (default: a fresh temporary folder)")
-    args = ap.parse_args(argv)
-    if shutil.which("claude") is None:
-        print("operator-probe: no claude CLI on the path", file=sys.stderr)
-        return 1
-    work = Path(args.work or tempfile.mkdtemp(prefix="operator-probe-")).resolve()
+def run_probe(work, cli):
     outbox = work / "state" / "outboxes" / "dm.jsonl"
     other_inbox = work / "state" / "inboxes" / "proj-other.jsonl"
     leak = work / "elsewhere" / "leak.txt"
@@ -129,15 +134,28 @@ def main(argv=None):
         folder.mkdir(parents=True, exist_ok=True)
     outbox.write_text("")
     other_inbox.write_text(SENTINEL + "\n")
-    profile_path = work / "operator.sb"
-    profile_path.write_text(profile_text(str(outbox.parent), str(other_inbox)))
+    profile = profile_text(str(outbox.parent), str(other_inbox))
+    check_denials(*denials(work, profile, leak, other_inbox))
+    init, result = session(work, profile, cli)
+    check_session(init, result)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.parse_args(argv)
+    cli = shutil.which("claude")
+    if cli is None:
+        print("operator-probe: no claude CLI on the path", file=sys.stderr)
+        return 1
+    work_root().mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="run-", dir=work_root())).resolve()
     try:
-        check_denials(*denials(work, str(profile_path), leak, other_inbox))
-        init, result = session(work, str(profile_path))
-        check_session(init, result)
+        run_probe(work, cli)
     except ProbeFailed as e:
         print(f"operator-probe: fail: {e}", file=sys.stderr)
         return 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     print(f"operator-probe: pass: denials held (write, read, network); session tools {TOOLS}, dontAsk, cap ${SPEND}")
     return 0
 
