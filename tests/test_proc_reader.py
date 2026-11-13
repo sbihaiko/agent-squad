@@ -129,7 +129,13 @@ def test_a_multi_pid_shape_is_left_to_the_module(tmp_path):
 @pytest.mark.process_bound   # its fallback reads the process table, which a nested sandbox denies (#1617, ADR-0139)
 def test_a_shape_the_compiled_reader_does_not_serve_falls_back_to_the_module(tmp_path):
     """The command line and the whole table stay the module's: a read the compiled reader refuses is still answered, in
-    the ps text the callers parse."""
-    out = read(tmp_path, "-o", "command=", "-p", os.getpid())
+    the ps text the callers parse. The row is a child this test starts, so its line names the command this test wrote,
+    whatever process runs the suite: a worker's own line names the test, not an interpreter."""
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        out = read(tmp_path, "-o", "command=", "-p", child.pid)
+    finally:
+        child.kill()
+        child.wait()
     assert out.returncode == 0, out.stderr
-    assert sys.executable.split("/")[-1] in out.stdout or "python" in out.stdout.lower(), out.stdout
+    assert out.stdout.split()[:2] == ["sleep", "30"], out.stdout
