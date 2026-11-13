@@ -220,7 +220,7 @@ function boot(){
   function mdlLoad(){ CALLS.mdlLoad++; }
   function limLoad(){ CALLS.limLoad++; }   // Settings > Spend & limits (#926) answers its own header, like squad models
   const ls = JSON.parse(localStorage.hub || "{}");
-  let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null;
+  let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null, liveWork = null;
   let q = ls.q || "", per = ls.per || "day", src = ls.src || "both";
   let GROUPS = [];   // the answer's group entries, as the runs answer carries them (#1277)
   let FETCH = {}, FETCHED = [];   // what each poll's fetch answers, and the exact url it asked
