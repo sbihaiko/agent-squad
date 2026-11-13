@@ -40,8 +40,10 @@ def _env(state):
 
 def _watchdog(state, lock):
     """The pid of the lock's live watchdog, as the holder recorded it in `<lock>/wd`; empty while none is written."""
-    try: pid = (Path(state) / "locks" / lock / "wd").read_text().strip()
-    except OSError: return ""
+    try:
+        pid = (Path(state) / "locks" / lock / "wd").read_text().strip()
+    except OSError:
+        return ""
     return pid if pid and _alive(pid) else ""
 
 def _alive(pid):
