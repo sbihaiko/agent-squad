@@ -101,7 +101,13 @@ sg_ps() {
     [ "$_sg_ps_rc" -eq 3 ] || _sg_ps_fast=
   fi
   [ -n "$_sg_ps_py" ] || { _sg_ps_py=$(sg_gate_python); case $_sg_ps_py in /*) ;; */*) _sg_ps_py=$PWD/$_sg_ps_py;; esac; }
-  PYTHONPATH="$_sg_ps_root${PYTHONPATH:+:$PYTHONPATH}" "$_sg_ps_py" -m squad.procs ps "$@"
+  # A module that answers with no row is no reader: a live pid is a non-empty answer, and a table is never empty, so
+  # rc 0 with nothing is a stale or absent squad.procs (a plugin cache older than the live copy). ps answers then,
+  # and the loop never reads an empty table as "no process runs" (#1647).
+  local out rc
+  out=$(PYTHONPATH="$_sg_ps_root${PYTHONPATH:+:$PYTHONPATH}" "$_sg_ps_py" -m squad.procs ps "$@"); rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+  command ps "$@"
 }
 # SG_PS: the one word callers expand (`$SG_PS -o pid= -p 1`): the sg_ps function, unless the caller names its own reader.
 # It is not exported: a shell function does not reach a child, and each script sources this file for its own.
