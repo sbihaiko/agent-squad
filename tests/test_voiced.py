@@ -9,9 +9,12 @@ transcriber stands in for Gemini, so no network, no key and no launchd job is to
 `serve` loop production runs, never a second copy of it.
 """
 import asyncio
+import fcntl
 import importlib.util
+import io
 import json
 import re
+import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -1278,3 +1281,23 @@ def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):
 
     assert client.posts() == [{"channel": "D0OWNER", "text": "One. Two."}]
     assert [c["channel"] for c in voice.clips] == ["D0OWNER"] * 2
+
+
+def test_a_second_start_on_one_state_stands_aside_before_the_keychain(tmp_path, monkeypatch):
+    """Criterion 4: a manual start and a launchd start never both hold the Slack socket on one state directory."""
+    mod = voiced()
+    state = tmp_path / "state"
+    state.mkdir()
+    held = open(state / "voiced.lock", "w")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    reads = []
+    monkeypatch.setattr(mod.keychain, "read_secret", lambda name: reads.append(name) or "secret")
+    err = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", err)
+    try:
+        code = mod.main(["--state", str(state), "--owner", OWNER])
+    finally:
+        held.close()
+    assert code != 0
+    assert reads == [], "a second daemon read the Keychain before it proved it was the only one"
+    assert "another daemon holds" in err.getvalue()

@@ -262,10 +262,11 @@ def test_the_sessions_subject_is_read_once_an_interval_not_once_a_tick(tmp_path,
     subject with no answer yet publishes nothing, so a cold page never waits for one (#1217)."""
     mod = _fresh_hub(tmp_path, monkeypatch)
     reads = []
+    release = threading.Event()   # the first read stays in flight until the five ticks are done: the test's own work, never a sleep (#1617)
 
     def slow(*a, **k):
         reads.append(1)
-        time.sleep(0.3)
+        release.wait(5.0)
         return SCANNED
 
     monkeypatch.setattr(mod.sessions, "list_sessions", slow)
@@ -273,7 +274,7 @@ def test_the_sessions_subject_is_read_once_an_interval_not_once_a_tick(tmp_path,
     versions = _hubstream().Versions({"sessions": mod.sessions_subject})
     for _ in range(5):   # five ticks of the sessions subject's own reader
         versions.refresh_one("sessions")
-        time.sleep(0.02)
+    release.set()
     assert versions.newer({}) == {}, "a subject with no answer yet publishes no version"
     deadline = time.monotonic() + 2.0
     while "sessions" not in versions.newer({}) and time.monotonic() < deadline:   # the one scan lands and publishes

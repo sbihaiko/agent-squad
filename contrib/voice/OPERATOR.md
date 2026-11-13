@@ -49,5 +49,7 @@ Monitor alone wakes it, and a line the daemon writes is the only thing that star
 ## Setup
 
 The owner creates the workspace, the app and the tokens. Run `python3 contrib/voice/setup_wizard.py` for each step and
-its Keychain entry. Run `python3 contrib/voice/voiced.py --print-plist` for the launchd agent that keeps the daemon
-alive, then load it. Neither command prints a secret.
+its Keychain entry. Run `contrib/voice/install-agents.sh <promoted-sha>` to pin a deployment checkout to a promoted commit
+and load the daemon (`com.squad.voiced`) and the supervisor (`com.squad.operators`) agents from it.
+`contrib/voice/rollback-agents.sh` returns to the previous proven commit, and `contrib/voice/uninstall-agents.sh` removes
+both agents. None of these commands prints a secret.

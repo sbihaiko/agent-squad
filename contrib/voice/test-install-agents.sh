@@ -1,0 +1,49 @@
+#!/bin/bash
+# usage: test-install-agents.sh   Launch-job guard for install-agents.sh: both agents are named, pinned to a promoted
+# commit in a deployment checkout, idempotent, and refused for a commit main does not carry. launchctl is a fake.
+set -u
+here="$(cd "$(dirname "$0")" && pwd)"
+fail() { echo "FAIL: $*" >&2; exit 1; }
+mkfix() {
+  T=$(mktemp -d); mkdir -p "$T/bin" "$T/src/contrib"
+  cp -R "$here" "$T/src/contrib/voice"
+  git -C "$T/src" init -q -b main
+  git -C "$T/src" -c user.name=t -c user.email=t@t add -A
+  git -C "$T/src" -c user.name=t -c user.email=t@t commit -q -m proven; A=$(git -C "$T/src" rev-parse HEAD)
+  echo promoted >> "$T/src/contrib/voice/OPERATOR.md"
+  git -C "$T/src" -c user.name=t -c user.email=t@t commit -qam promoted; B=$(git -C "$T/src" rev-parse HEAD)
+  git clone -q --bare "$T/src" "$T/origin.git"
+  printf '#!/bin/bash\necho "$*" >> "%s"\n' "$T/launchctl.log" > "$T/bin/launchctl"; chmod +x "$T/bin/launchctl"
+  export SG_DEPLOY="$T/deploy" SG_DEPLOY_REMOTE="$T/origin.git" SG_LAUNCH_DIR="$T/LaunchAgents" LAUNCHCTL="$T/bin/launchctl"
+  export VOICE_STATE="$T/state" VOICE_OWNER=U0TEST SG_PYTHON="$(command -v python3)"
+}
+mkfix; trap 'rm -rf "$T"' EXIT
+V="$T/LaunchAgents/com.squad.voiced.plist"; O="$T/LaunchAgents/com.squad.operators.plist"
+key() { plutil -extract "$2" raw -o - "$1"; }
+
+bash "$here/install-agents.sh" "$B" >/dev/null 2>&1 || fail "install of the promoted commit exited non-zero"
+[ "$(git -C "$T/deploy" rev-parse HEAD)" = "$B" ] || fail "deployment checkout is not pinned to the promoted commit"
+[ -f "$V" ] && [ -f "$O" ] || fail "both plists must be written to the LaunchAgents folder"
+plutil -lint "$V" "$O" >/dev/null || fail "a plist does not lint"
+[ "$(key "$V" Label)" = com.squad.voiced ] && [ "$(key "$O" Label)" = com.squad.operators ] || fail "agent labels are not com.squad.*"
+[ "$(key "$V" RunAtLoad)" = true ] && [ "$(key "$V" KeepAlive)" = true ] || fail "voiced plist lacks RunAtLoad or KeepAlive"
+[ "$(key "$O" RunAtLoad)" = true ] && [ "$(key "$O" StartInterval)" = 300 ] || fail "operators plist lacks RunAtLoad or StartInterval 300"
+case "$(key "$V" ProgramArguments.1)" in "$T/deploy/"*) ;; *) fail "voiced runs outside the deployment checkout";; esac
+case "$(key "$O" ProgramArguments.1)" in "$T/deploy/"*) ;; *) fail "operators runs outside the deployment checkout";; esac
+grep -qF "$V" "$T/launchctl.log" && grep -qF "$O" "$T/launchctl.log" || fail "install did not load both agents"
+
+cp "$V" "$T/v1"; cp "$O" "$T/o1"; pins_before=$(cat "$T/deploy/.git/squad-pins" 2>/dev/null | wc -l)
+bash "$here/install-agents.sh" "$B" >/dev/null 2>&1 || fail "a second install exited non-zero"
+cmp -s "$V" "$T/v1" && cmp -s "$O" "$T/o1" || fail "a second install changed a plist"
+[ "$(git -C "$T/deploy" rev-parse HEAD)" = "$B" ] || fail "a second install moved the checkout"
+pins_after=$(cat "$T/deploy/.git/squad-pins" 2>/dev/null | wc -l)
+[ "$pins_before" = "$pins_after" ] || fail "a second install grew the pin history"
+
+git -C "$T/src" checkout -q -b side
+echo side > "$T/src/side.txt"; git -C "$T/src" add side.txt
+git -C "$T/src" -c user.name=t -c user.email=t@t commit -qm side; S=$(git -C "$T/src" rev-parse HEAD)
+git -C "$T/src" push -q "$T/origin.git" side
+if bash "$here/install-agents.sh" "$S" >/dev/null 2>&1; then fail "install pinned a commit main does not carry"; fi
+[ "$(git -C "$T/deploy" rev-parse HEAD)" = "$B" ] || fail "a refused install moved the checkout"
+
+echo "ok: install-agents.sh"
