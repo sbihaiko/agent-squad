@@ -117,3 +117,47 @@ def test_the_card_paints_the_holder_name_the_row_carries(hub):
     out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert '<span class=hld title="held by run-x since then">Squad</span>' in out.stdout
+
+
+def _lines(hub, items=(), **kw):
+    return hub.live_work_lines(list(items), state=hub.STATE, checkout=hub.CHECKOUT, procs={}, now=time.time(), **kw)
+
+
+def test_a_stopped_loop_reads_loop_off_never_no_live_work(hub):
+    lines = _lines(hub)
+    assert "loop off" in lines
+    assert not any("no live work" in x for x in lines)
+
+
+def test_a_live_gate_lock_names_its_pid_and_the_child_it_serves(hub):
+    lock = Path(hub.STATE) / "locks" / "gate"
+    lock.mkdir(parents=True, exist_ok=True)
+    (lock / "pid").write_text(f"{os.getpid()}\n")
+    (lock / "cmd").write_text("bash contrib/squad-goal/scripts/fast-gate.sh\n")
+    try:
+        lines = _lines(hub)
+    finally:
+        shutil.rmtree(lock)
+    assert any(f"pid {os.getpid()}" in x and "fast-gate.sh" in x for x in lines)
+
+
+def test_a_ready_for_human_issue_is_listed_with_its_label(hub):
+    items = [{"n": 1681, "t": "Health rule", "s": "open", "l": ["ready-for-human", "bug"]}]
+    lines = _lines(hub, items)
+    assert any("#1681" in x and "ready-for-human" in x for x in lines)
+
+
+def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
+    run = tmp_path / "run-20261113-200000-abcd"
+    run.mkdir()
+    now = time.time()
+    (run / "record.jsonl").write_text(
+        f'{{"ts": {now}, "event": "spawn_accepted", "text": "GitHub issue #1674"}}\n'
+        f'{{"ts": {now}, "event": "outcome", "node": "wave.landing"}}\n')
+    monkeypatch.setattr(hub, "loop_live", lambda **kw: {"runs": [str(run)], "gates": []})
+    lines = _lines(hub)
+    assert any("#1674" in x and "wave.landing" in x and "age" in x for x in lines)
+
+
+def test_the_panel_says_it_cannot_see_hand_work(hub):
+    assert any("hand" in x and "not visible" in x for x in _lines(hub))
