@@ -126,6 +126,7 @@ def test_a_multi_pid_shape_is_left_to_the_module(tmp_path):
 
 
 @pytest.mark.cc_bound
+@pytest.mark.process_bound   # its fallback reads the process table, which a nested sandbox denies (#1617, ADR-0139)
 def test_a_shape_the_compiled_reader_does_not_serve_falls_back_to_the_module(tmp_path):
     """The command line and the whole table stay the module's: a read the compiled reader refuses is still answered, in
     the ps text the callers parse."""

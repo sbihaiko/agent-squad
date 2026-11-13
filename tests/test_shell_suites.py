@@ -9,8 +9,9 @@ import pytest
 
 from tests import shell_suites
 
-# The fast lane's own beat reads the process table with ps to prove the lane it pid-files is alive (#513).
-PROCESS_BOUND_SUITES = {"test-fastloop-pid.sh"}
+# The fast lane's own beat reads the process table with ps to prove the lane it pid-files is alive (#513), and the
+# fallback suite reads this shell's own command line through ps (#1647).
+PROCESS_BOUND_SUITES = {"test-fastloop-pid.sh", "test-sg-ps-fallback.sh"}
 
 
 def _param(suite):
