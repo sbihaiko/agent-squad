@@ -696,6 +696,7 @@ async def test_a_read_only_child_starts_in_a_directory_that_exists_when_its_name
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy     # 3.2 s here and 2.1 s on a loaded CI runner, over the two-second line for an unmarked call
 async def test_a_child_with_after_starts_only_when_the_children_it_names_have_passed(tmp_path):
     """`after` holds indexes of earlier requests; code turns them into child names."""
     order = []
