@@ -9,6 +9,8 @@ row and is named. The control is served in the page itself, and a press disables
 import http.client
 import importlib.util
 import json
+import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -224,3 +226,41 @@ def test_the_read_stores_label_names_and_never_the_reads_own_objects(hub, monkey
     item = hub.read_one_card(7)
     assert item["l"] == ["bug", "ready-for-agent"], item["l"]
     assert hub._columns_module.view_column(item["st"], False, item["l"], None)
+
+
+# --- #1685: the pressed row draws at its own scope ----------------------------------------------------------------
+
+SYNC_STUB = """
+const noop=()=>{};
+global.mk=()=>({innerHTML:"",textContent:"",dataset:{},classList:{contains:()=>false},closest:()=>null,
+  querySelector:()=>null,appendChild:noop,insertAdjacentHTML:noop,remove:noop});
+global.document={querySelector:()=>null,createElement:()=>global.mk()};
+global.CSS={escape:s=>s};
+const esc=s=>String(s==null?"":s), age=()=>"now", $=()=>null, cur=null, pollBoard=noop;
+const bo={labels:[],lc:{}}, syncInstant=d=>String((d&&d.at)||"");
+"""
+
+SYNC_CALL = """
+const el=global.mk();
+syncRow(el,{n:1,t:"a card",col:"Todo",labels:["bug"],b:[],bl:[],prf:[],ho:"",hc:"",hs:""});
+console.log("ROW-OK");
+"""
+
+
+def test_a_pressed_row_draws_a_labelled_card_at_its_own_scope(hub):
+    """#1685: `syncRow` called `lbc`, a name the draw function's own scope owns, so a press on a card that carried a label
+    threw after the read had answered, and the page reported that throw as "the hub did not answer". The helpers the page
+    serves run here against a labelled row, exactly as the browser runs them."""
+    assert shutil.which("node"), "node is not installed: the shipped page cannot be run, and this guard never skips"
+    page = hub.PAGE
+    start = page.index("const syncFacts=")
+    end = page.index('document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .syncb")')
+    assert start < end, "the served page carries the sync helpers as one block"
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+        f.write(SYNC_STUB + page[start:end] + SYNC_CALL)
+        path = f.name
+    try:
+        out = subprocess.run(["node", path], capture_output=True, text=True, timeout=60)
+    finally:
+        Path(path).unlink(missing_ok=True)
+    assert "ROW-OK" in out.stdout, f"a pressed row threw: {out.stdout[-300:]}{out.stderr[-500:]}"
