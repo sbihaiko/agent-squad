@@ -161,3 +161,19 @@ def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
 
 def test_the_panel_says_it_cannot_see_hand_work(hub):
     assert any("hand" in x and "not visible" in x for x in _lines(hub))
+
+
+def test_the_card_draws_the_loop_lines_and_no_run_twice(hub):
+    if NODE is None:
+        pytest.skip("node is required")
+    fn = re.search(r"^function liveCard\(.*?^ return\{[^\n]*$", hub.PAGE, re.M | re.S).group(0)
+    script = ('const esc=s=>String(s);const age=s=>s+"s";const liveRow=(r,shown)=>"<row "+r.id+">";const LIVE_ROWS=4;\n'
+              'let liveWork=["loop off","run run-b · #1674 · node wave.landing · age 3 min","run run-c · #1676 · node wave · age 1 min",'
+              '"hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here"];\n'
+              + fn + '\nconsole.log(JSON.stringify(liveCard([{id:"run-b",age:5,spend:0}],"").html));\n')
+    out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    html = out.stdout
+    assert "loop off" in html and "run-c" in html and "not visible" in html
+    assert "no live work" not in html
+    assert html.count("run-b") == 1

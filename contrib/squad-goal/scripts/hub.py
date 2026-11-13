@@ -3330,6 +3330,31 @@ def hold_rows(now=None):
                     "age": int(h["activity"] or 0), "rank": 0, "spend": 0, "dur": 0, "kind": "hold", "live": True,
                     "running": False, "titles": {str(h["issue"]): TITLE.get(h["issue"], "")}})
     return out
+def live_work_lines(items, state=None, checkout=None, procs=None, now=None):
+    """The Live work panel's lines, all from local state and the board read the hub already holds: the loop's state,
+    each live run (its issue, node and age), each gate lock (its pid and the child it serves), each hand hold, each issue
+    labelled ready-for-human, and one line on the work the hub cannot see (a hand gate or a Claude Code fix pass)."""
+    now = time.time() if now is None else now
+    base = pathlib.Path(state) if state else STATE
+    lines = []
+    if loop_state({}, now=now, state=base) == "off": lines.append("loop off")
+    for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
+        folder = active_folder(entry)
+        if not folder: continue
+        row, _ = run_row(folder, "", procs or {})
+        issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
+        lines.append(f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min")
+    for d in sorted((base / "locks").glob("*")):
+        pid = _read(d / "pid").strip()
+        if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
+            lines.append(f"lock {d.name}: pid {pid} serves {_read(d / 'cmd').strip() or 'an unknown child'}")
+    for i in items:
+        if "ready-for-human" in (i.get("l") or []):
+            lines.append(f"ready-for-human #{i['n']} {i.get('t') or ''} · label ready-for-human")
+    if not lines: lines.append("no live work")
+    lines.append("hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here")
+    return lines
+
 def task_count(i):
     """How far a card's own work got, `completed` over `total` (`3/5`), off the sub-issue summary the items route the
     pass already reads hands over (#153). Nothing when the issue has no tasks, and nothing when the summary is missing
@@ -5866,12 +5891,14 @@ const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"
 // first, and one control that opens the Runs tab. Each row is two lines -- the label and its stage, then the issue title -- and
 // keeps its `data-id`, so the card's own handler still opens the run sheet. Its liveness slot says whether the run is moving.
 const LIVE_ROWS=4;
+let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the ready-for-human issues
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
 function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0),total=live.reduce((s,r)=>s+(+r.spend||0),0);   // a reduce, never a spread: the live list is unbounded
  const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
  const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
- return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")||"<div class=m>no live work</div>")+more}}
+ const extra=(liveWork||[]).filter(t=>!live.some(r=>t.includes(r.id))).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a run row already drawn is not drawn twice
+ return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")+extra||"<div class=m>no live work</div>")+more}}
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
@@ -5919,7 +5946,7 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   const fresh=allRuns.filter(r=>r.kind!=="childcc"&&!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
-async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh()}catch(e){}}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277)
+async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh();livePoll()}catch(e){}}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277)
 function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
   const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
   const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
@@ -6788,6 +6815,7 @@ function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=
  setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
+async function livePoll(){try{liveWork=await (await fetch("/api/live")).json();refresh()}catch(e){}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
@@ -8579,6 +8607,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
+        elif self.path.startswith("/api/live"): body, ct = json.dumps(live_work_lines(board_cache.get("items", []))).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
