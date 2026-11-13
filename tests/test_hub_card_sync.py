@@ -195,7 +195,7 @@ def test_the_button_is_disabled_while_its_press_runs(hub):
     line = next((ln for ln in hub.PAGE.splitlines() if 'closest("#bbody .syncb")' in ln), "")
     assert line, "the page serves a Sync control on a card"
     assert "disabled=true" in line
-    assert line.index("disabled=true") < line.index('fetch("/api/sync"'), "the button is disabled before the read starts"
+    assert line.index("disabled=true") < line.index("syncOne("), "the button is disabled before the read starts"
 
 
 # --- AC8: the control is served in the page, with no second route -------------------------------------------------
