@@ -2,6 +2,7 @@
 bound. A fake CLI never stands in for the permission boundary, so the denial cases run the real sandbox-exec profile.
 """
 import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -41,10 +42,18 @@ def test_a_session_starts_with_its_tool_set_restricted(tmp_path, monkeypatch):
     assert argv[argv.index("--allowedTools") + 1] == operators.TOOLS
 
 
-def test_the_real_cli_probe_is_deselected_when_the_cli_is_absent(tmp_path, monkeypatch):
-    from tests import conftest
-    monkeypatch.setenv("PATH", str(tmp_path))
-    assert conftest.claude_present() is False
+def collect_probe(path_dir):
+    env = {"PATH": str(path_dir), "HOME": str(Path.home()), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    return subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:deepeval",
+                           "tests/test_operator_probe.py"], cwd=ROOT, env=env, capture_output=True, text=True,
+                          check=False)
+
+
+@pytest.mark.heavy
+def test_the_real_cli_probe_is_deselected_when_the_cli_is_absent(tmp_path):
+    done = collect_probe(tmp_path)
+    assert "deselected: tests/test_operator_probe.py::test_the_real_cli_probe_passes" in done.stdout
+    assert "skipped" not in done.stdout
 
 
 def test_every_probe_call_runs_through_the_sandbox_wrapper(tmp_path, monkeypatch):
@@ -96,9 +105,39 @@ def test_the_session_is_bounded_in_time_and_spend():
     assert float(probe.SPEND) <= 1.0
 
 
-def test_one_command_repeats_the_probe():
-    done = subprocess.run([sys.executable, str(PROBE_SCRIPT), "--help"], capture_output=True, text=True, check=False)
-    assert done.returncode == 0
+def test_one_command_repeats_the_probe(tmp_path):
+    probe = load("operator_probe")
+    assert "usage: operator_probe.py" in probe.__doc__
+    done = subprocess.run([sys.executable, str(PROBE_SCRIPT)], capture_output=True, text=True, check=False,
+                          env={"PATH": str(tmp_path)})
+    assert done.returncode == 1
+    assert "no claude CLI on the path" in done.stderr
+
+
+def test_the_profile_opens_no_write_root_beyond_the_outbox_and_the_claude_home():
+    probe = load("operator_probe")
+    text = probe.profile_text("/work/state/outboxes", "/work/state/inboxes/proj-other.jsonl")
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    for root in ("/private/tmp", "/private/var/folders", '"/dev"', '"/tmp"'):
+        assert root not in write
+
+
+@pytest.mark.sandbox_bound
+def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
+    probe = load("operator_probe")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    inbox = tmp_path / "other-inbox.jsonl"
+    inbox.write_text("")
+    profile = probe.profile_text(str(outbox), str(inbox))
+    leak = Path(tempfile.gettempdir()) / f"operator-probe-leak-{os.getpid()}.txt"
+    try:
+        done = probe.sandboxed(profile, "/bin/sh", ["-c", f'echo leaked > "{leak}"'], tmp_path, 30)
+        landed = leak.exists()
+    finally:
+        leak.unlink(missing_ok=True)
+    assert not landed
+    assert "Operation not permitted" in done.stderr
 
 
 @pytest.mark.claude_bound

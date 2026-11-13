@@ -3,8 +3,9 @@
 
 Two phases, one command. Every call runs through contrib/squad-goal/scripts/claude-sandboxed.sh with the profile this
 probe writes. The denials come first: a write outside the scope's outbox, a read of another scope's inbox and a network
-call past the model endpoint must each fail. Then one bounded `claude -p` call runs with the operator's tool set and
-`dontAsk`. A denial that does not happen, or a session that starts with another tool set, fails the probe.
+call on a port the model call does not use must each fail. Then one bounded `claude -p` call runs with the operator's
+tool set and `dontAsk`. A denial that does not happen, or a session that starts with another tool set, fails the probe.
+The kernel cannot name a host in a network rule, so the model endpoint is bounded by port 443, not by host.
 
 usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
@@ -52,7 +53,7 @@ def check_denials(write_landed, read_leaked, network_reached):
 
 def profile_text(outbox_dir, other_inbox):
     home = os.path.realpath(os.path.expanduser("~"))
-    writable = [outbox_dir, os.path.join(home, ".claude"), "/private/tmp", "/private/var/folders", "/dev"]
+    writable = [outbox_dir, os.path.join(home, ".claude")]
     subpaths = " ".join(f'(subpath "{p}")' for p in writable)
     return "\n".join([
         "(version 1)",
@@ -61,6 +62,7 @@ def profile_text(outbox_dir, other_inbox):
         f"(allow file-write* {subpaths} (literal \"{home}/.claude.json\"))",
         f'(deny file-read* (subpath "{other_inbox}"))',
         "(deny network-outbound)",
+        # Seatbelt accepts only `*` or `localhost` as a host, so 443 stays open to every host.
         '(allow network-outbound (remote ip "localhost:*") (remote tcp "*:443") (remote udp "*:53"))',
     ]) + "\n"
 
