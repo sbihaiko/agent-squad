@@ -745,6 +745,19 @@ class Daemon:
             return False
         return True
 
+    def answer_failed_clip(self, record):
+        """One line under a clip that did not work, in its own channel and thread, naming the failure in one sentence.
+
+        The record is already durable when this runs, so a refused post never loses the failure and never makes the
+        clip a second model call on the next start (#1618).
+        """
+        if not record.get("channel"):
+            return
+        try:
+            self.answer(record, f"Your clip arrived, but it did not work: {record['error']}.")
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a lost record or a lost ack
+            self.log(f"voiced: failure answer refused: {type(x).__name__}")
+
     def outbox_sources(self):
         """Every outbox the daemon answers from, one `(channel, path)` per entry: each project channel's, then the DM's.
 
@@ -923,11 +936,13 @@ class Daemon:
                 record["error"] = str(x)
                 record["bytes"] = x.size
                 self.state.append_other(record)
+                self.answer_failed_clip(record)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
             except Exception as x:      # noqa: BLE001 - a clip no model could read is data, never an inbox line
                 record["error"] = f"transcription failed: {type(x).__name__}"
                 self.state.append_other(record)
+                self.answer_failed_clip(record)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
         if not text:

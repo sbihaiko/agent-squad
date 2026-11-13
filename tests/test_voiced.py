@@ -316,6 +316,32 @@ def test_a_failed_transcription_is_recorded_and_never_reaches_the_inbox(tmp_path
     assert socket.sent == ["env-1"]
 
 
+def test_a_clip_that_cannot_be_transcribed_is_answered_once_in_its_own_thread(tmp_path):
+    """#1618: the owner hears that the clip arrived and did not work, in the clip's own channel and thread, the record
+    keeps the failure so a restart never calls the failing model again, and the next message is still answered."""
+    client = FakeClient()
+    transcriber = FakeTranscriber(fail=True)
+
+    _, daemon, socket = drive_daemon(tmp_path, [clip_event(), message_event(text="hello operator")],
+                                     transcriber=transcriber, client=client)
+
+    assert socket.sent == ["env-1", "env-2"]
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert posts[0]["channel"] == "D0OWNER"
+    assert posts[0]["thread_ts"] == "1762500000.000100"
+    text = posts[0]["text"]
+    assert "transcription failed: RuntimeError" in text and text.endswith("."), text
+    other = lines(daemon.state.other_path)
+    assert len(other) == 1 and other[0]["error"] == "transcription failed: RuntimeError"
+    box = lines(daemon.state.inbox_path)
+    assert [line["text"] for line in box] == ["hello operator"], "the next message stopped reaching the inbox"
+
+    # The restart: the recorded failure keeps the clip from a second call the model will fail again.
+    _, daemon, _ = drive_daemon(tmp_path, [clip_event()], transcriber=transcriber, client=FakeClient())
+    assert len(transcriber.calls) == 1, "the restart retried a clip that will fail again"
+
+
 def test_an_oversized_clip_is_recorded_with_its_size_and_never_sent_inline(tmp_path):
     """A clip past Gemini's inline limit is a record with its size, not a request the model would reject unseen."""
     mod = voiced()
