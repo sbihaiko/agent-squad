@@ -62,6 +62,11 @@
         "route": "cli"
       },
       {
+        "id": "gemini-4-carbon",
+        "raw": "claude-gemini-4-carbon[1m]",
+        "route": "gateway"
+      },
+      {
         "id": "deepseek-flash",
         "raw": "claude:claude-deepseek-flash",
         "route": "cli",

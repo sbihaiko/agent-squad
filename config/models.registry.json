@@ -1118,6 +1118,47 @@
       "gateway_only": false
     },
     {
+      "id": "gemini-4-carbon",
+      "label": "Gemini 4 Carbon",
+      "provider": "gemini",
+      "subscription": "gemini",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "routes": {
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-gemini-4-carbon[1m]",
+          "served": [
+            "claude-gemini-4-carbon",
+            "claude-gemini-4-carbon[1m]",
+            "gemini-4-carbon",
+            "gemini-4-carbon[1m]"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "thinking_off": false,
+        "vision": true,
+        "context": 1048576
+      },
+      "display_price": {
+        "cache_read": 0.1,
+        "input": 2,
+        "output": 10,
+        "currency": "USD",
+        "per": "mtok"
+      },
+      "aliases": [
+        "claude-gemini-4-carbon"
+      ],
+      "retired": false,
+      "gateway_only": true
+    },
+    {
       "id": "gemini-3.8-flash",
       "label": "Gemini 3.8 Flash",
       "provider": "gemini",
