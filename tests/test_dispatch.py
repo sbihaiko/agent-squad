@@ -769,6 +769,7 @@ async def test_a_capped_child_with_a_valid_artifact_passes_and_its_cap_rides_as_
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_dispatch_with_no_accepted_child_names_why_each_request_was_refused(tmp_path):
     wrong = req(name="P.12", skills=["tdd"], budget={"stalls": 5}, acceptance_commands=["true"])      # the shape a model invented for a repo it did not know
     del wrong["skill"]
