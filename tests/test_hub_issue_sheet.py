@@ -164,7 +164,7 @@ def test_the_board_names_the_run_that_holds_a_card(hub):
     mod.board_cache["items"] = [_item(920, status="Doing", h={"run": "run-20261031-132937-e1eead", "started": "2026-10-31T10:00:00Z"})]
     row = _row(mod.board(), 920)
     assert row["hr"] == "run-20261031-132937-e1eead", row
-    assert row["ho"].startswith("held by run-20261031-132937-e1eead"), row
+    assert row["ho"].startswith("held \u00b7 run run-20261031-132937-e1eead"), row   # the Live work reading: what holds it, and how old
 
 
 def test_the_board_names_the_pull_request_that_closes_a_card(hub):

@@ -4,17 +4,24 @@
 The operator session reaches the model through HTTPS_PROXY=http://127.0.0.1:<port>, so its sandbox allows network out to
 localhost only. The proxy runs outside the sandbox and relays only its one target, host and port; any other CONNECT is
 answered 403 and recorded in `refusals` and in the log, so a denial is visible.
+
+usage: model_proxy.py --allow HOST:PORT --scope SCOPE --refusals PATH
+Prints `port <n>` once it listens, then serves until it is ended.
 """
+import argparse
+import json
 import socket
 import socketserver
+import sys
 import threading
 import time
 
 
 class ModelProxy:
-    def __init__(self, allowed, log_path):
+    def __init__(self, allowed, log_path, scope=""):
         self.allowed = allowed
         self.log_path = log_path
+        self.scope = scope
         self.refusals = []
         self._lock = threading.Lock()
         self._server = None
@@ -69,7 +76,7 @@ class ModelProxy:
         upstream.close()
 
     def refuse(self, target, wfile, status):
-        line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} refused CONNECT {target}"
+        line = json.dumps({"at": time.strftime('%Y-%m-%dT%H:%M:%S'), "scope": self.scope, "target": target})
         with self._lock:
             self.refusals.append(target)
             if self.log_path:
@@ -96,3 +103,19 @@ def relay(a, b):
     back.start()
     pump(a, b)
     back.join()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="a loopback model proxy for one operator session (#1658)")
+    ap.add_argument("--allow", required=True, help="the one HOST:PORT the proxy relays")
+    ap.add_argument("--scope", required=True)
+    ap.add_argument("--refusals", required=True, help="the JSON-lines file each refusal is appended to")
+    a = ap.parse_args(argv)
+    host, _, port = a.allow.rpartition(":")
+    with ModelProxy((host, int(port)), a.refusals, scope=a.scope) as proxy:
+        print(f"port {proxy.port}", flush=True)
+        threading.Event().wait()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

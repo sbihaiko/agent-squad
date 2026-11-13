@@ -426,7 +426,8 @@ done
 # at once: serial.sh runs this script, so a check awaited here would keep the nightly lock for its whole hour and refuse
 # every promotion tick (ADR-0163, ADR-0164). It takes its own lock in try mode and writes its own record; SG_SERIAL_HELD is
 # dropped because this script no longer holds `nightly` once it returns. Its exit never reaches this run's result: a
-# finding raises its own alert, and nohup keeps the check alive after this shell is gone.
-env -u SG_SERIAL_HELD nohup bash "$here/live-check.sh" >/dev/null 2>&1 &
+# finding raises its own alert, and nohup keeps the check alive after this shell is gone. `--start` starts it only when no
+# live lease names a check (#1660): one check per state directory, however many nightly runs start one.
+env -u SG_SERIAL_HELD bash "$here/live-check.sh" --start
 [ "$res" = pass ] && [ -z "$obred" ] && exit 0   # a red settlement fails the run too: it measured a defect
 exit 1

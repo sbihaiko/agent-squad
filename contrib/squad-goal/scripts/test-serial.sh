@@ -102,21 +102,21 @@ kill -9 "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
 [ -d "$SG_STATE/locks/gate" ] && ko "the lock stayed after the reaping gate" || ok "the lock is released when the reaping gate ends"
 rm -rf "$SG_STATE/locks/gate"
 
-# (#392) The holder's own cleanup TERMs its watchdog's process group when the command ends, and the sleep of that watchdog can be
-# the process that dies. A sleep cut short is not a deadline: the holder keeps its command's exit code. SERIAL_HOLD_SECONDS=4242
-# puts the deadline hours away and names that one sleep, so the cut is the only thing that can end it. Finding that sleep reads the
-# process table, and a reading is not the behavior: the probe runs the holder again when it found nothing to cut in time.
+# (#392) The holder's own cleanup TERMs its watchdog's process group when the command ends, and the watchdog can be the process
+# that dies. A watchdog cut short is not a deadline: the holder keeps its command's exit code. SERIAL_HOLD_SECONDS=4242 puts the
+# deadline hours away, so the cut is the only thing that can end it. The watchdog is found by the pid the holder writes for it
+# ($L/wd), never by a sleep's argument: the watchdog sleeps its hold in short steps so it can notice a holder that died without
+# its traps (#1660), so its children are short sleeps and name no hold. A reading is not the behavior: the probe runs the holder
+# again when it found nothing to cut in time.
 rc=1; cut=0
 for attempt in 1 2 3; do
   SERIAL_HOLD_SECONDS=4242 bash "$src" gate sh -c 'sleep 3; exit 7' 2>/dev/null & hp=$!
-  # The sleep is found by its place in this holder's tree (holder -> watchdog subshell -> sleep), never by its command name alone:
-  # a parallel run's sleep, or an unrelated one, is not this test's to cut.
-  sp=""; for i in $(seq 1 30); do sp=$(/bin/ps -ww -o pid=,ppid=,command= -ax | awk '$NF=="4242" && $3 ~ /sleep/ {print $1, $2}' | while read -r p pp; do [ "$(/bin/ps -o ppid= -p "$pp" 2>/dev/null | tr -d ' ')" = "$hp" ] && echo "$p"; done); [ -n "$sp" ] && break; sleep 0.1; done
-  [ -n "$sp" ] && { cut=1; kill -TERM "$sp" 2>/dev/null; }
+  wp=""; for i in $(seq 1 30); do wp=$(cat "$SG_STATE/locks/gate/wd" 2>/dev/null); [ -n "$wp" ] && kill -0 "$wp" 2>/dev/null && break; wp=""; sleep 0.1; done
+  [ -n "$wp" ] && { cut=1; kill -TERM "$wp" 2>/dev/null; }
   wait "$hp"; rc=$?
   [ "$cut" = 1 ] && break
 done
-[ "$cut" = 1 ] && ok "the holder's watchdog is found by the hold it sleeps, and its sleep is cut" || ko "no watchdog sleep to cut short"
+[ "$cut" = 1 ] && ok "the holder's watchdog is named by the holder and its sleep is cut" || ko "no watchdog sleep to cut short"
 [ "$rc" = 7 ] && ok "a watchdog sleep cut short is not a deadline: the exit code passes through" || ko "a cut-short sleep failed the holder (rc=$rc)"
 
 # (#392) A pid is not an identity: the system reuses one. The holder records the start time of its own pid beside it, and a lock

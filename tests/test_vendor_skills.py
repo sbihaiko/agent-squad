@@ -70,6 +70,23 @@ def test_check_reports_a_source_that_changed_and_a_copy_edited_by_hand(tmp_path)
     assert any("differs from its source" in p for p in B.build(cfg, out, check=True)[0])
 
 
+def test_a_rebuild_keeps_the_patch_overlay_and_check_covers_it(tmp_path):
+    """A patch survives a rebuild: the copy carries the appended text, `--check` passes, and a hand edit after it is red."""
+    src, cfg = make_source(tmp_path)
+    patches = tmp_path / "patches"
+    patches.mkdir()
+    (patches / "demo.md").write_text("PATCHED RULE: a child carries no prefix\n")
+    out = tmp_path / "out"
+    assert B.build(cfg, out, patches=patches)[0] == []
+    copied = out / "skills" / "demo" / "SKILL.md"
+    assert copied.read_text() == "---\nname: demo\n---\nbody\n\nPATCHED RULE: a child carries no prefix\n"
+    assert B.build(cfg, out, check=True, patches=patches)[0] == []
+    assert B.build(cfg, out, patches=patches)[0] == []          # a second rebuild writes the patch again
+    assert "PATCHED RULE: a child carries no prefix" in copied.read_text()
+    copied.write_text(copied.read_text() + "edited by hand")
+    assert any("differs from its source" in p for p in B.build(cfg, out, check=True, patches=patches)[0])
+
+
 def test_the_to_tickets_skill_states_the_spec_prefix_rule():
     """A child of a spec carries the spec's number first in its title, and the vendored copy states it.
 

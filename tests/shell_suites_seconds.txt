@@ -133,6 +133,7 @@ test-janitor-terminal-comment.sh 2.71
 test-janitor-unlanded-branch.sh 0.97
 test-janitor-watchd-orphan.sh 3.78
 test-janitor-wave-exclusion.sh 0.65
+test-janitor-wip.sh 1.40
 test-janitor-zombie-dashboard.sh 3.43
 test-land-target.sh 0.12
 test-launch-run-target.sh 1.98
@@ -170,6 +171,7 @@ test-review-grok-probe.sh 53.00
 test-review.sh 266.80
 test-run-state-table.sh 0.03
 test-runreview.sh 4.06
+test-serial-orphan.sh 5.14
 test-serial.sh 36.68
 test-sg-ps-fallback.sh 0.24
 test-shell-suites-gate.sh 4.22
@@ -203,6 +205,7 @@ test-watchd-reload.sh 3.37
 test-watchd-restart.sh 27.21
 test-watchd-singleton.sh 7.76
 test-watchd-start.sh 6.67
+test-watchd-stop.sh 6.70
 test-watchd-supervisor.sh 2.68
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17

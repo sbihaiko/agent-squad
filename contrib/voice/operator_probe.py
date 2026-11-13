@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from model_proxy import ModelProxy  # noqa: E402
-from operators import TOOLS  # noqa: E402
+from operators import TOOLS, profile_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = str(ROOT / "contrib" / "squad-goal" / "scripts" / "claude-sandboxed.sh")
@@ -84,22 +84,6 @@ def check_proxy_refuses(proxy):
         raise ProbeFailed(f"the proxy answered a foreign target with {status!r}, not a refusal")
     if target not in proxy.refusals:
         raise ProbeFailed("the proxy refused a foreign target and did not record it")
-
-
-def profile_text(outbox_dir, other_inbox):
-    home = os.path.realpath(os.path.expanduser("~"))
-    writable = [outbox_dir, os.path.join(home, ".claude")]
-    subpaths = " ".join(f'(subpath "{p}")' for p in writable)
-    return "\n".join([
-        "(version 1)",
-        "(allow default)",
-        "(deny file-write*)",
-        f"(allow file-write* {subpaths} (literal \"{home}/.claude.json\"))",
-        f'(deny file-read* (subpath "{other_inbox}"))',
-        "(deny network-outbound)",
-        # Seatbelt takes only `*` or `localhost` as a host, so the model host is reached through the loopback proxy.
-        '(allow network-outbound (remote ip "localhost:*"))',
-    ]) + "\n"
 
 
 def sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
@@ -192,7 +176,7 @@ def run_probe(work, cli):
         folder.mkdir(parents=True, exist_ok=True)
     outbox.write_text("")
     other_inbox.write_text(SENTINEL + "\n")
-    profile = profile_text(str(outbox.parent), str(other_inbox))
+    profile = profile_text(str(outbox), str(other_inbox.parent), str(other_inbox.parent / "dm.jsonl"))
     host, port, loopback = model_endpoint()
     if loopback:
         check_denials(*denials(work, profile, leak, other_inbox, port))

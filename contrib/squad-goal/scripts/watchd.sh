@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: watchd.sh start|stop|drain|restart|reload|status   (run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873; `restart` drains the live runs first, #1471)
+# usage: watchd.sh start|stop [--force]|drain|restart|reload|status   (`stop` drains the live runs first, #1662; run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873; `restart` drains the live runs first, #1471)
 # Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
@@ -100,6 +100,34 @@ loop_bug_open() {
   [ -n "$n" ] || return 1
   printf '%s\n' "$n"
 }
+# #1662: the WIP snapshot of every run the loop still lists without a verdict, before a hard stop kills its trees. One line per
+# tree goes to cycle.log. A tree that could not be saved is named there, and the stop goes on: the owner asked for it.
+wip_live() {
+  [ -s "$SG_STATE/active-runs.txt" ] || return 0
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$r" in /*) f=$r;; *) f="$SG_CHECKOUT/runs/$r";; esac
+    grep -q '"event": *"verdict"' "$f/record.jsonl" 2>/dev/null && continue
+    python3 -I "$(dirname "$me")/wip_snapshot.py" "$f" >> "$SG_STATE/cycle.log" 2>&1 || printf 'WIP failed run %s: a tree could not be saved; the stop goes on\n' "$f" >> "$SG_STATE/cycle.log"
+  done < "$SG_STATE/active-runs.txt"
+}
+# #1662: the hard stop. It reaches every driver of this state directory and waits up to ten seconds for them to end. It takes
+# no snapshot: `stop --force` snapshots the live runs first (wip_live), and the drained waiter ends with `halt`.
+hard_stop() {
+  alive || { [ -n "$(drivers)" ] || { echo "watchd not running"; rm -f "$P"; return 0; }; }
+    # #1587: the stop reaches every driver of this state directory, not only the group of the slot holder. A driver whose
+    # supervisor died holds no slot, and a slot removed by hand leaves its driver invisible to `alive`, so both survive a
+    # stop that reads the slot alone. The slot is removed last, after the drivers are gone.
+    ds=$(drivers); [ -n "$pid" ] && is_watchd "$pid" && case " $ds " in *" $pid "*) ;; *) ds="$ds $pid";; esac
+    for d in $ds; do is_watchd "$d" && sig_driver "$d"; done
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      ! alive && [ -z "$(drivers)" ] && { rm -rf "$SG_STATE/watchd.lock"; rm -f "$P" "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"
+        echo "watchd stopped"; return 0; }
+      sleep 1
+    done
+    echo "watchd did not stop" >&2; return 1
+}
+
 case "${1:-status}" in
   start) # #1587: a driver that does not hold the slot is never a second loop this start may sit beside: it refuses, and
     # names the drivers, before it spawns a supervisor.
@@ -193,18 +221,12 @@ case "${1:-status}" in
       [ -n "$reload" ] || { echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; }; done;;
   reload) alive || { [ -s "$P" ] || { echo "watchd not running"; exit 0; }; echo "watchd supervisor $(cat "$P") is not running: relighting"; bash "$me" start; exit $?; }
     kill -HUP "$pid" || { echo "watchd reload not sent: pid=$pid" >&2; exit 1; }; echo "watchd reload sent pid=$pid";;
-  stop) alive || { [ -n "$(drivers)" ] || { echo "watchd not running"; rm -f "$P"; exit 0; }; }
-    # #1587: the stop reaches every driver of this state directory, not only the group of the slot holder. A driver whose
-    # supervisor died holds no slot, and a slot removed by hand leaves its driver invisible to `alive`, so both survive a
-    # stop that reads the slot alone. The slot is removed last, after the drivers are gone.
-    ds=$(drivers); [ -n "$pid" ] && is_watchd "$pid" && case " $ds " in *" $pid "*) ;; *) ds="$ds $pid";; esac
-    for d in $ds; do is_watchd "$d" && sig_driver "$d"; done
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      ! alive && [ -z "$(drivers)" ] && { rm -rf "$SG_STATE/watchd.lock"; rm -f "$P" "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"
-        echo "watchd stopped"; exit 0; }
-      sleep 1
-    done
-    echo "watchd did not stop" >&2; exit 1;;
+  stop) # #1662: a stop drains by default. Under live work it hands off to the drain's waiter and returns, so the run finishes;
+    # `stop --force` is the hard stop: it snapshots the live runs' trees (wip_live) before it kills, and it does not wait.
+    if [ "${2:-}" != --force ] && alive && drain_busy; then bash "$me" drain; exit $?; fi
+    [ "${2:-}" = --force ] && wip_live
+    hard_stop; exit $?;;
+  halt) hard_stop; exit $?;;   # the drained waiter's end: no live work is left, so nothing is snapshotted
   drain) alive || { echo "watchd not running"; exit 0; }
     # A drain pauses dispatch and leaves the lanes running; a detached waiter stops the loop once no run or gate is live (#923).
     # A drain that finds a live waiter joins it and drops the restart mark: a drain means stop, so the stop intent is never
@@ -235,7 +257,7 @@ case "${1:-status}" in
     # The restart's decision is read before the stop, because the stop itself clears both marks (#1471).
     r=; [ -e "$SG_STATE/auto/drain" ] && [ -e "$SG_STATE/auto/restart" ] && alive && r=1
     if [ -e "$SG_STATE/auto/drain" ] && alive; then
-      if bash "$me" stop >/dev/null; then
+      if bash "$me" halt >/dev/null; then
         if [ -n "$r" ]; then
           printf '%s WATCHD RESTART the live work ended, the supervisor restarts\n' "$(date '+%F %T')" >> "$L"
           # The lanes die with the supervisor's group, and a lane still listed under pid 1 is an orphan the start refuses:

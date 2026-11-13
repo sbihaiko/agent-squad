@@ -621,7 +621,7 @@ def test_a_stored_chart_range_waits_for_the_lead_chart_and_the_type_is_never_sto
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    fresh = {"ty": "bug", "tf": "2", "a": "Todo", "b": "", "own": False}
+    fresh = {"ty": "bug", "tf": "7", "a": "Todo", "b": "", "own": False}   # a fresh page opens on the past week
     for stored in ({"tf": "30", "a": "Doing", "b": "Closed"}, {"ty": "task", "tf": "3", "a": "Doing"}, {}):
         assert loaded(stored) == fresh, "a stored chart range never reaches the Board tab's shared state"
 
@@ -663,7 +663,7 @@ const pre=snap();"""
     assert json.loads(second["store"]["squad-chart"]) == {"a": "Doing", "b": ""}, \
         "the chart key carries the range only; the timeframe stays the visit's choice (#1247)"
 
-    span = f"/api/leadtime?tf=2&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
+    span = f"/api/leadtime?tf=7&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
     answers = {f"/api/chart/lead?{_bar(fk='bug', ty='bug')}": {"lead": {}, "t": 1}, span: {"dots": []}}
     third = _page_harness(hub, answers, observe + 'await flowOpen("lead");await settle();' + report,
                           onchange=onchange, store=second["store"])
@@ -673,7 +673,7 @@ const pre=snap();"""
     assert "a=Doing" not in third["pre"]["route"] and "b=" not in third["pre"]["route"], \
         "the board's own route carries neither the stored Start nor a stored End"
     assert third["pre"]["cards"] == first["pre"]["cards"] == [2], "the chart range never narrows the board's cards"
-    assert third["tf"] == "2" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
+    assert third["tf"] == "7" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
     assert span in third["fetched"], "the restored range is what the opened chart reads"
     assert third["post"]["route"] == third["pre"]["route"] and third["post"]["cards"] == first["pre"]["cards"], \
         "opening the chart reads the board's route and cards unchanged"
@@ -842,7 +842,8 @@ def test_the_flow_filters_restore_from_the_page_key_after_a_reload(hub):
     assert out["stored"] == {"ty": "spec", "hidden": ["Doing"]}, "the page writes the two filters to its own key"
     assert out["reload"] == {"ty": "spec", "hidden": ["Doing"]}, "a reload restores both filters"
     assert out["bad"] == {"ty": "task", "hidden": []}, "a value that is no type opens on the tasks default; a hidden set that is no list is none"
-    assert 'let CF={r:"30",...flowFilter()}' in hub.PAGE, "the chart state restores from the page key at load"
+    assert 'let CF={r:"all",...flowFilter()}' in hub.PAGE, \
+        "the chart state restores from the page key at load, and opens on the whole history (All)"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

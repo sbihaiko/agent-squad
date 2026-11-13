@@ -5,9 +5,12 @@ Every case drives the module production runs, with a fake `claude` on the path: 
 a scenario file and records every call it gets, so no live session, no network and no key is touched. One test per
 acceptance criterion.
 """
+import hashlib
 import importlib.util
 import json
 import os
+import socket
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +48,10 @@ def operators(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_SCENARIO", str(tmp_path / "scenario.json"))
     monkeypatch.setenv("FAKE_FAIL_STOP", str(tmp_path / "fail-stop"))
     monkeypatch.setenv("FAKE_NEW", "aaaaaaaa-0000-0000-0000-000000000001")
+    passthrough = bin_dir / "passthrough.sh"
+    passthrough.write_text('#!/bin/sh\nexec "$SQUAD_CLAUDE_CLI" "$@"\n')
+    passthrough.chmod(0o755)
+    module.WRAPPER = str(passthrough)
     module.CLI = "claude"
     module.DEADLINE = 5.0
     module.LOCK_WAIT = 1.0
@@ -139,6 +146,24 @@ def test_a_marked_session_outside_the_record_is_adopted_after_two_passes(tmp_pat
     assert not [c for c in calls(tmp_path) if c.startswith("--bg")], "an adopted scope was started again"
 
 
+def test_an_adopted_scope_keeps_the_profile_and_proxy_it_ran_under(tmp_path, monkeypatch):
+    """#1658: adoption replaces the session id, never the profile or the proxy the record holds for the scope."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [])
+    live = session(tmp_path, "dm", "dddddddd-0000-0000-0000-000000000001")
+    scenario(tmp_path, [live])
+    profile = {"path": "/state/operators/profiles/dm.sb", "sha256": "ab" * 32}
+    proxy = {"pid": 999999, "port": 1}
+    held = {"id": "eeeeeeee-0000-0000-0000-00000000000a", "pid": 1, "started": 100, "profile": profile, "proxy": proxy}
+    (tmp_path / "state" / "operators.json").write_text(json.dumps({"dm": held}))
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    entry = record(tmp_path)["dm"]
+    assert entry["id"] == live["sessionId"]
+    assert entry["profile"] == profile
+    assert entry["proxy"] == proxy
+
+
 def test_two_sessions_on_one_scope_keep_the_older(tmp_path, monkeypatch):
     """Criterion 5: two sessions on one scope keep the older and stop the newer."""
     op = operators(tmp_path, monkeypatch)
@@ -195,7 +220,7 @@ def test_every_cli_call_has_a_deadline_and_one_lock_bounds_a_pass(tmp_path, monk
     scenario(tmp_path, [])
     timeouts = []
     real = op.call
-    monkeypatch.setattr(op, "call", lambda argv, cwd=None, timeout=op.DEADLINE: (timeouts.append(timeout), real(argv, cwd, timeout))[1])
+    monkeypatch.setattr(op, "call", lambda argv, cwd=None, timeout=op.DEADLINE, env=None: (timeouts.append(timeout), real(argv, cwd, timeout, env))[1])
     held = op.acquire(str(tmp_path / "state"))
     try:
         assert op.acquire(str(tmp_path / "state")) is None, "a second pass took the lock"
@@ -212,3 +237,95 @@ def test_a_refused_start_is_named_and_exits_non_zero(tmp_path, monkeypatch):
     (tmp_path / "scenario.json").write_text("not json")
     code = op.main(["--state", str(tmp_path / "state"), "--repo", str(ROOT)])
     assert code == 1
+
+
+WRAP = """#!/bin/sh
+{
+  printf 'profile=%s\\n' "$SQUAD_SIGNAL_PROFILE"
+  printf 'proxy=%s\\n' "${HTTPS_PROXY-unset}"
+  printf 'argv1=%s\\n' "$1"
+} >> "$FAKE_WRAP_LOG"
+exec "$SQUAD_CLAUDE_CLI" "$@"
+"""
+
+
+def wrapped(tmp_path, monkeypatch, base_url=None):
+    """The module with its sandbox wrapper bound to a fake that logs the profile, the proxy env and the argv."""
+    op = operators(tmp_path, monkeypatch)
+    wrap = tmp_path / "wrap.sh"
+    wrap.write_text(WRAP)
+    wrap.chmod(0o755)
+    monkeypatch.setattr(op, "WRAPPER", str(wrap))
+    monkeypatch.setenv("FAKE_WRAP_LOG", str(tmp_path / "wrap.log"))
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    if base_url is None:
+        monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", base_url)
+    registry(tmp_path, [])
+    scenario(tmp_path, [])
+    return op
+
+
+def wrap_log(tmp_path):
+    return (tmp_path / "wrap.log").read_text() if (tmp_path / "wrap.log").exists() else ""
+
+
+def test_a_session_starts_through_the_sandbox_wrapper_under_the_operator_profile(tmp_path, monkeypatch):
+    """#1658: each operator session starts through claude-sandboxed.sh, and the profile it runs under is recorded."""
+    op = wrapped(tmp_path, monkeypatch)
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    log = wrap_log(tmp_path)
+    assert "argv1=--bg" in log, f"the session did not start through the wrapper: {log!r}"
+    state = os.path.realpath(tmp_path / "state")
+    assert f'(literal "{state}/outboxes/dm.jsonl")' in log
+    assert "(deny network-outbound)" in log
+    entry = record(tmp_path)["dm"]
+    profile = (tmp_path / "state" / "operators" / "profiles" / "dm.sb").read_text()
+    assert entry["profile"]["path"].endswith("profiles/dm.sb")
+    assert entry["profile"]["sha256"] == hashlib.sha256(profile.encode()).hexdigest()
+
+
+def test_a_loopback_endpoint_starts_its_session_with_no_proxy(tmp_path, monkeypatch):
+    """#1658: a loopback model endpoint is reached under the profile's loopback rule, so no proxy starts."""
+    op = wrapped(tmp_path, monkeypatch, base_url="http://localhost:8016")
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert "proxy=unset" in wrap_log(tmp_path)
+    assert "proxy" not in record(tmp_path)["dm"]
+
+
+def test_a_foreign_endpoint_gets_a_proxy_that_ends_with_its_session(tmp_path, monkeypatch):
+    """#1658: a foreign endpoint goes through model_proxy.py, HTTPS_PROXY names it, and retiring the session ends it."""
+    op = wrapped(tmp_path, monkeypatch, base_url="https://api.anthropic.com")
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    proxy_url = next(line.split("=", 1)[1] for line in wrap_log(tmp_path).splitlines() if line.startswith("proxy="))
+    assert proxy_url.startswith("http://127.0.0.1:")
+    port = int(proxy_url.rsplit(":", 1)[1])
+    assert record(tmp_path)["dm"]["proxy"]["port"] == port
+    op.retire_proxy(record(tmp_path)["dm"])
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            socket.create_connection(("127.0.0.1", port), 0.2).close()
+        except OSError:
+            return
+        time.sleep(0.05)
+    raise AssertionError("the proxy still listens after its session was retired")
+
+
+def test_a_proxy_refusal_is_reported_by_the_supervisor(tmp_path, monkeypatch, capsys):
+    """#1658: a refusal the proxy records is printed by the next pass, so the owner reads it."""
+    op = wrapped(tmp_path, monkeypatch)
+    refusals = tmp_path / "state" / "operators" / "refusals.jsonl"
+    refusals.parent.mkdir(parents=True, exist_ok=True)
+    refusals.write_text('{"at": "2026-11-13T05:00:00", "scope": "dm", "target": "evil.example:443"}\n')
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert "model proxy refused evil.example:443 for dm" in capsys.readouterr().err
+
+
+def test_the_session_is_told_the_repository_is_read_only_under_its_profile(tmp_path, monkeypatch):
+    """#1658: the profile writes only the outbox file and the Claude home, so the brief names the repository as read-only."""
+    op = operators(tmp_path, monkeypatch)
+    text = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
+    assert "Read /repo" in text
+    assert "Work in /repo" not in text

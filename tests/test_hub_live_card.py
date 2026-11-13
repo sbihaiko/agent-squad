@@ -162,7 +162,7 @@ def test_the_control_routes_through_the_page_tab_handler(page):
 def test_the_card_says_none_and_draws_no_control_when_nothing_is_live(page):
     out = _card(page, [])
     assert out["head"] == "none"
-    assert "no live runs" in _visible(out["html"])
+    assert "no live work" in _visible(out["html"])
     assert "id=lrmore" not in out["html"]
 
 

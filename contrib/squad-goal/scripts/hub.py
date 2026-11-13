@@ -678,6 +678,11 @@ def liveness():
     (RL,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("run_liveness",))
     return RL
 
+def reaper():
+    """squad/reap.py, whose `run_live` is the one predicate that says a held run has a live process (#1661), from the same roots."""
+    (R,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("reap",))
+    return R
+
 CAPS_LOGGED = set()
 def log_once(line, seen=CAPS_LOGGED, out=None):
     """One stderr line per distinct text per process: a failure that repeats every poll is named once, never silenced and never a flood."""
@@ -2316,9 +2321,9 @@ def loop_switch(a, body, origin_ok, row=None):
         return 409, {"err": "the loop is not running" if state == "off" else f"the loop is {state}: {action} does not apply"}
     who, frm = a.login or "owner", "tailnet" if a.tailnet else "loopback"
     client = body.get("client") if body.get("client") in LOOP_CLIENTS else None   # the page that asked, stated, never guessed
-    def watchd(verb):   # the hub's own supervisor takes no target; another project's names its own files (#1599)
-        if t["profile"] is None and t["state"] == STATE: return loop_watchd(verb)
-        return loop_watchd(verb, state=t["state"], checkout=t["checkout"] or None, profile=t["profile"])
+    def watchd(*verbs):   # the hub's own supervisor takes no target; another project's names its own files (#1599)
+        if t["profile"] is None and t["state"] == STATE: return loop_watchd(*verbs)
+        return loop_watchd(*verbs, state=t["state"], checkout=t["checkout"] or None, profile=t["profile"])
     if action == "start":
         for f in ("off", "drain", "drain-pause"): (t["state"] / "auto" / f).unlink(missing_ok=True)
         t["starting"].parent.mkdir(parents=True, exist_ok=True); t["starting"].write_text(f"{time.time()}\n")
@@ -2338,7 +2343,7 @@ def loop_switch(a, body, origin_ok, row=None):
         return 200, {"ok": True, "action": action}
     if body.get("confirm") is not True: return 400, {"err": "confirm the stop: it kills the live runs and gates listed"}
     live = loop_live(state=t["state"], checkout=t["checkout"] or None)
-    if watchd("stop"): return 500, {"err": "watchd did not stop"}
+    if watchd("stop", "--force"): return 500, {"err": "watchd did not stop"}   # stop-now is the hard stop: the snapshot runs first (#1662)
     killed, survived = loop_stop_now(live, t["checkout"] or None)
     extra = {"survived": survived} if survived["runs"] or survived["gates"] else {}
     loop_audit_add(who, frm, action, killed, client=client, path=t["audit"], **extra)
@@ -2498,11 +2503,14 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
     window (`c`, the close stamp the board cache already carries, #1361), read from the stamp alone; `open` is every card
     the board draws open now, the same `drawn_column` rule the kanban serves, so a closed card and a card in the Abandoned
     column are no open card. The two rules never override each other, so a row agrees with the kanban it sits beside.
-    A card with no readable stamp is never invented as an arrival or a close."""
+    The row covers the past week: a card the row can prove opened before it is in no row at all, while a card with no
+    readable stamp is kept, because an unreadable stamp is not a proof of age. Such a card is still never invented as an
+    arrival or a close."""
     if moves is None: moves = read_moves() if overlay_on() else {}
     if window is None: window = pending_window()
     since, ends = now_ts - window_secs, (COLUMN["issue_closed"], COLUMN["abandoned"])
-    rows = {"bugs": {"in": 0, "out": 0, "open": 0}, "loop_bugs": {"in": 0, "out": 0, "open": 0}}
+    rows = {"bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0},
+            "loop_bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0}}
     def loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
     def open_now(i): return cache_row_column(i, moves, window) not in ends   # the kanban's own column, never a second rule
     for i in items or []:
@@ -2510,35 +2518,40 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
         kinds = [k for k, hit in (("bugs", "bug" in labels or loop_defect(i)), ("loop_bugs", loop_defect(i))) if hit]
         if not kinds: continue
         o, c = _close_instant(i.get("o")), _close_instant(i.get("c"))
+        if o is not None and o < now_ts - BUG_ROW_SECONDS: continue   # the past week, never the whole backlog; a card with no
+        # readable stamp cannot be proved old, so it stays, and it is still never invented as an arrival
         came = o is not None and since <= o <= now_ts
         went = c is not None and since <= c <= now_ts   # the close stamp alone, so a lagging state never hides a close
         still = open_now(i)
+        closed_now = cache_row_column(i, moves, window) == COLUMN["issue_closed"]
         for k in kinds:
             rows[k]["in"] += 1 if came else 0
             rows[k]["out"] += 1 if went else 0
             rows[k]["open"] += 1 if still else 0
+            rows[k]["total"] += 1
+            rows[k]["closed"] += 1 if closed_now else 0
     return rows
 
-def tasks_fact(items, now_ts, window_secs, closed_n):
-    """The Tasks row under the hero figure: planned delivery closed inside the window (#1362). A task is a closed card with
-    no `spec` label, no `bug` label and no label beginning with `loop-bug` — a spec is a document and never work, and a
-    closed defect is a fix — and with a close reason that is not the carrier's not-delivered one (#921, one copy of the
-    vocabulary in board_columns). The share runs over `closed_n`, every card the hero figure counts closed in the window
-    whatever its kind, so a spec and an abandoned card sit in the denominator and never in the numerator.
+def tasks_fact(items, now_ts):
+    """The Tasks row under the hero figure: the week's planned delivery (#1362). The row covers the past week, like the two
+    bug rows, and counts a card opened inside it by its creation stamp: a spec is a document and never work, and a defect is
+    a fix, so a card carrying `spec`, `bug` or a label beginning with `loop-bug` is in neither count. The share runs over
+    every task opened in the week whatever became of it, so an abandoned task sits in the denominator and never in the
+    numerator, and a task not yet closed does the same.
 
-    The row reads the close stamps from the same two sources as the hero: the board cache's `c` stamps, and the store's
-    `closed` events when the cache holds nothing, whose rows carry no label and no reason and so are closures without a
-    task. A share over a zero denominator is None, as on the arrival rows."""
-    since, n = now_ts - window_secs, 0
-    for i in items or []:
-        if i.get("s") != "closed": continue
-        ts = _close_instant(i.get("c"))
-        if ts is None or not since <= ts <= now_ts: continue
+    A task counts closed when it carries the closed state and a close reason that is not the carrier's not-delivered one
+    (#921, one copy of the vocabulary in board_columns). The store's `closed` events carry no label and no creation stamp,
+    so a closure read from them enters no count. A share over a zero denominator is None, as on the arrival rows."""
+    n, of = 0, 0
+    for i in items or []:   # the owner, 2026-11-13: the row covers the past week, like the two bug rows
+        opened = _close_instant(i.get("o"))
+        if opened is not None and opened < now_ts - BUG_ROW_SECONDS: continue   # the past week, like the two bug rows
         labels = [str(x) for x in (i.get("l") or [])]
         if "spec" in labels or "bug" in labels or any(x.startswith("loop-bug") for x in labels): continue
+        of += 1
+        if i.get("s") != "closed": continue
         if _columns_module.not_planned(i.get("cr")): continue
         n += 1
-    of = int(closed_n or 0)
     return {"n": n, "of": of, "share": round(n / of, 3) if of else None}
 
 def throughput_fact(now=None):
@@ -2573,23 +2586,24 @@ def throughput_fact(now=None):
     if median is None: trend = None
     elif median > 0: trend = "up" if window_n > median * 1.2 else "down" if window_n < median * 0.8 else "flat"
     else: trend = "up" if window_n > 0 else "flat"   # a ratio at a zero median has no meaning
-    # One age for the two sources, the older of them: a fresh history stamp never hides a stalled board cache. The store
-    # moves only when a timeline is read, and the cache is the one the loop keeps fresh on its own (#1193).
-    reads = ([max((r.get("t") or 0 for r in store.values()), default=0)] if store else []) + \
-            ([board_cache.get("t") or 0] if items else [])
-    oldest = min((r for r in reads if r), default=0) or None
-    age = now_ts - oldest if oldest else None
-    cache_t = board_cache.get("t") or 0   # the item read that carries each card's labels (#1424)
-    labels_age = now_ts - cache_t if cache_t else None
+    # Each age names its own read (#1661): the board item read (the cards, their labels and their closures) is the cache's
+    # `t`; the history read is the newest timeline stamp in the store. Neither ages the other.
+    board_t = board_cache.get("t") or 0
+    board_age = now_ts - board_t if board_t else None
+    hist_t = max((r.get("t") or 0 for r in store.values()), default=0) if store else 0
+    hist_age = now_ts - hist_t if hist_t else None
+    bound = board_stale_bound()
     moves = read_moves() if overlay_on() else {}
     window = pending_window()
     return {"window_secs": w, "window": window_n, "day": sum(s["n"] for s in slots),   # closes in the whole day: none means no history
             "arrivals": arrivals_fact(items, now_ts, w, moves, window),   # the Bugs and Loop-bugs rows, off the cache's stamps
-            "tasks": tasks_fact(items, now_ts, w, window_n),   # planned delivery over the same window as the hero figure
-            "labels": {"age_secs": labels_age, "stale": labels_age is not None and labels_age > LABELS_STALE_SECS},
+            "tasks": tasks_fact(items, now_ts),   # planned delivery over the past week, like the two bug rows
+            "labels": {"age_secs": board_age, "stale": board_age is not None and board_age > LABELS_STALE_SECS},   # the card labels ride the item read
+            "board": {"as_of": board_t or None, "age_secs": board_age, "stale": board_age is not None and board_age > bound,
+                      "overdue": board_read_overdue(board_t, now_ts)},
+            "history": {"as_of": hist_t or None, "age_secs": hist_age, "stale": hist_age is not None and hist_age > bound},
             "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
-            "max": max(avail + [window_n]), "trend": trend,
-            "as_of": oldest, "age_secs": age, "stale": age is not None and age > board_stale_bound()}
+            "max": max(avail + [window_n]), "trend": trend}
 
 def subs_gauges(now=None):
     """Each subscription's weekly window for the Monitor: its used share and when it resets, or why there is no reading.
@@ -2869,6 +2883,7 @@ def runs():
         out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "running": not lost and st in LIVE_STATES, "agents": 0})
     cc = childcc_row()
     if cc: out.append(cc)   # the pass is a worker beside the runs, never one of them: working() and the header count skip its kind
+    out.extend(hold_rows())   # the hand holds beside the runs: Live work lists both, so the page and the card agree (#1664)
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
     attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
@@ -3233,6 +3248,81 @@ def holder_text(i):
     try: t = dt.datetime.fromtimestamp(float(t), dt.timezone.utc).strftime("%Y-%m-%d %H:%M")   # an epoch start
     except (ValueError, OverflowError, OSError): t = t[:16].replace("T", " ")   # an ISO start
     return f"held by {h['run']}" + (f" since {t} UTC" if t else "")
+def run_folder(run):
+    """The folder of one run the profile's roots hold a record for, or None when no root holds one (#1661)."""
+    for root in sorted(own_roots()):
+        folder = pathlib.Path(root) / run
+        if (folder / "record.jsonl").is_file(): return folder
+    return None
+def holder_fact(i, now=None):
+    """(text, state) of the run that holds a card (#1661). `running` with `held by <run> since <start>` only while the run's
+    process is live (squad/reap.py `run_live`, the one predicate). Otherwise `ended` with `held · run <run> ended <time>`, the
+    record's last write, or `held · run <run>, no record` when no root holds that run. (None, None) when no run holds the card.
+    The Project's Run field is the claim; it never proves that work is in flight."""
+    h = i.get("h") or {}
+    run = h.get("run")
+    if not run: return None, None
+    folder = run_folder(run)
+    if folder is not None and reaper().run_live(folder, now):
+        return holder_text(i), "running"
+    try: moved = (folder / "record.jsonl").stat().st_mtime if folder is not None else None
+    except OSError: moved = None
+    if moved is None: return f"held · run {run}, no record", "ended"
+    return f"held · run {run} ended " + dt.datetime.fromtimestamp(moved, dt.timezone.utc).strftime("%Y-%m-%d %H:%M") + " UTC", "ended"
+def board_read_overdue(t, now=None):
+    """True when the board item read began more than BOARD_OVERDUE_SECS ago: a stalled pass is marked, never printed as normal
+    (#1661). A board never read (t 0) is not overdue; the page says it is not read yet."""
+    if not t: return False
+    return (time.time() if now is None else now) - t > BOARD_OVERDUE_SECS
+def taken_map():
+    """{issue: takeover epoch} for every `auto/taken-<run>` marker: the issues a takeover left owed to a hand fix
+    (ADR-0166). The marker's own write time is when it took over. An unreadable marker is skipped, never read as no
+    takeover."""
+    out = {}
+    d = STATE / "auto"
+    try: marks = sorted(d.glob("taken-*"))
+    except OSError: return out
+    for p in marks:
+        try: text, when = p.read_text(), p.stat().st_mtime
+        except OSError: continue
+        for line in text.splitlines():
+            if line.startswith("issues "):
+                for n in line.split()[1:]:
+                    if n.isdigit(): out.setdefault(n, when)
+    return out
+def holder_chip(i, taken=None, state=None):
+    """The short text a held card wears: `Squad`, `Squad · running` while the run's own process lives, and
+    `Squad · taken over <time>` once a takeover marker names it, so the chip names the holder on every card and says
+    `running` only for a live one (#1661, #1664)."""
+    h = i.get("h") or {}
+    if not h.get("run"): return None
+    when = (taken or {}).get(str(i["n"]))
+    if when:
+        t = dt.datetime.fromtimestamp(float(when), dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return f"Squad · taken over {t} UTC"
+    return "Squad · running" if state == "running" else "Squad"
+def hold_rows(now=None):
+    """The Live work rows for hand holds: a Manual or HAL9k hold proven by folder activity (the marker's own write time,
+    under the one bound `SG_HAND_HOLD_MINUTES`), never stale and never an orphan. A Squad run is a run row, proven by its
+    live process. The read and the write are `squad.handhold`'s, so the page holds no rule of its own (ADR-0137)."""
+    now = time.time() if now is None else now
+    closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
+    try:
+        (HH,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__),
+                           ("handhold",))
+        HH.alerts(state=STATE, closed=closed, now=now)   # one line per stale or orphan episode, never one per poll
+        rows = HH.holds(state=STATE, closed=closed, now=now)
+    except Exception as e:
+        log_once(f"hub: the hand holds are unknown: {type(e).__name__}: {' '.join(str(e).split())}"); return []
+    out = []
+    for h in rows:
+        if not h["live"]: continue   # a stale hold is marked on the card; an orphan is alerted, never drawn as work
+        carrier = "HAL9k" if h["carrier"] == "hal9k" else "Manual"
+        out.append({"id": f"hold-{h['issue']}", "port": "", "state": "held", "badge": "held",
+                    "label": f"{carrier} · #{h['issue']}", "carrier": h["carrier"], "issues": [str(h["issue"])],
+                    "age": int(h["activity"] or 0), "rank": 0, "spend": 0, "dur": 0, "kind": "hold", "live": True,
+                    "running": False, "titles": {str(h["issue"]): TITLE.get(h["issue"], "")}})
+    return out
 def task_count(i):
     """How far a card's own work got, `completed` over `total` (`3/5`), off the sub-issue summary the items route the
     pass already reads hands over (#153). Nothing when the issue has no tasks, and nothing when the summary is missing
@@ -3441,6 +3531,7 @@ def save_board():
 FULL_EVERY = 600   # seconds between full board reads; a board-dirty flag reads at once
 FAST_EVERY = 15    # seconds between fast reads of the open cards
 FULL_DEADLINE = 300   # the full read's overall deadline (ADR-0051): its page loops and branch fetches stop past it
+BOARD_OVERDUE_SECS = FULL_EVERY + FULL_DEADLINE   # a board item read older than the cadence plus one full pass is overdue (#1661)
 FAST_DEADLINE = 60   # the fast read's overall deadline (ADR-0051)
 FAST_POINTS_PER_HOUR = 2400   # five pages of 100 cards at two points each, every 15 s (GitHub's documented cost, not measured live); spent, it stops for the hour
 FAST_BUDGET = board_fast.Budget(FAST_POINTS_PER_HOUR)
@@ -4076,6 +4167,8 @@ def _x_ticks(days):
     return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
 
 
+BUG_ROW_SECONDS = 7 * 86400   # the Bugs and Loop-bugs rows count the cards opened in the past week (owner, 2026-11-13)
+FLOW_MOVED = "moved"   # the label a card carries once it left for another board: no band of this board counts it (#1663)
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
 LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)
 LEAD_START = COLUMN["issue_todo"]   # the Lead Time view opens measured from Todo (#1247): the payload the page reads carries it
@@ -4239,7 +4332,8 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     cards = [_hist.intervals(rec.get("events") or []) for rec in store.values()
-             if rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty)]
+             if (rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty))
+             and FLOW_MOVED not in _hist.labels_now(rec.get("events") or [])]   # a moved card is another board's work (#1663)
     zone = day_zone()
     cfd = _cfd.cfd(cards, ORDER, zone=zone, now=dt.datetime.now(dt.UTC))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
@@ -4307,7 +4401,7 @@ HISTORY_TIMELINE = ("query($owner:String!,$name:String!,$number:Int!,$after:Stri
                     "... on ProjectV2ItemStatusChangedEvent{createdAt status} "
                     "... on LabeledEvent{createdAt label{name}} ... on UnlabeledEvent{createdAt label{name}} "
                     "... on ClosedEvent{createdAt} ... on ReopenedEvent{createdAt} "
-                    "... on AddedToProjectV2Event{createdAt} ... on RemovedFromProjectV2Event{createdAt} "
+                    "... on AddedToProjectV2Event{createdAt project{number}} ... on RemovedFromProjectV2Event{createdAt project{number}} "
                     "... on ParentIssueAddedEvent{createdAt parent{... on Issue{number}}} ... on ParentIssueRemovedEvent{createdAt}}}}}}")
 HISTORY_SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){issueCount "
                   "pageInfo{hasNextPage endCursor} nodes{... on Issue{number}}}}")
@@ -4365,7 +4459,8 @@ def _read_timeline(n, prior, keys, read_issue, path, recs, now):
         issue = (data.get("repository") or {}).get("issue")
         if issue is None: return True
         facts = _hist.item_facts(issue, int(PROJECT_NO))
-        _hist.record_page(work, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"])
+        _hist.record_page(work, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"],
+                         project=int(PROJECT_NO))
     rec = work.get(n)
     if rec and (prior is None or not prior.get("complete") or rec["complete"]):
         recs.append(_hist.record_issue(path, n, rec["issue_updated"], rec["status_updated"], rec["events"], rec["complete"], now,
@@ -4438,6 +4533,8 @@ def drawn_column(i, moves, window):
         return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}   # a move with no dispatch context stands aside for a read that began after it
     # The writer proved the move the hub sent (#1300): the column stands with no mark, and the entry stays as the column's
     # guard against a lagging read until a read agrees or the window passes.
+    if closed and recorded not in (COLUMN["issue_closed"], COLUMN["abandoned"]) and read_carried(at, read_at):   # the latest read closed the card after the move: the closure wins (#1661)
+        return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}
     state = "settled" if proof_confirmed(i["i"], recorded, entry) else "pending"
     # Draw the move at once and keep the mark until a read that began after it agrees (#650). A move with a dispatch
     # context keeps the mark through a contradicting read too, for the whole window. A column that matches by coincidence is no proof.
@@ -4468,6 +4565,7 @@ def board(moves=None):
     ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}   # history by role: a closed status is never a column on any page (#969)
     flying, refused = flight_snapshot()   # the writes in flight draw in Todo, pending; a refusal names its reason on its card (#1300)
     flying = set(flying)
+    taken = taken_map()   # the takeovers a card wears, read once per serve beside the holders it names
     for i in board_cache["items"]:
         d = flight_draw(i) if i["n"] in flying else drawn_column(i, moves, window)   # the one overlay rule the promote route asks too (#829)
         st, fz = d["st"], d["fz"]
@@ -4494,8 +4592,10 @@ def board(moves=None):
             row["gchip"] = f"Gating · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
-        ho = holder_text(i)                      # the run that holds the card, read from the seam (#241)
-        if ho: row["ho"] = ho
+        ho, hs = holder_fact(i)                  # the run that holds the card, read from the seam (#241); `hs` says whether its process lives (#1661)
+        if ho: row["ho"], row["hs"] = ho, hs
+        hc = holder_chip(i, taken, hs)           # the short text the chip wears: the holder, its live state, or a takeover's time
+        if hc: row["hc"] = hc
         if (i.get("h") or {}).get("run"): row["hr"] = i["h"]["run"]   # the run id the sheet selects its cards by (#919)
         drawn.append((i["n"], st, row.get("pa"), label_wave(i.get("l") or []), _columns_module.SPEC_LABEL in row["l"]))
         if st in ends: tally[st] = tally.get(st, 0) + 1   # a closed row is never served: its count and the summaries carry it (#972)
@@ -4554,7 +4654,7 @@ def board(moves=None):
                 for item in dropped: PROVED.pop(item, None)   # the entry is gone: its proof goes with it (#1300)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
+    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -4568,7 +4668,8 @@ def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
     overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
     moves = read_moves() if overlay_on() else {}
-    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot()], sort_keys=True, default=str).encode()).hexdigest()
+    holders = [(i["n"], holder_fact(i)[1]) for i in board_cache["items"] if (i.get("h") or {}).get("run")]   # a holder's process moves with no board read (#1661)
+    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
     try: body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
     except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
@@ -5296,7 +5397,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    test fails when the switch rules of the two places drift apart (#1234). */
 #lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}
 #lopb .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
-#lopb .lsw[aria-checked=true]{background:var(--ok)}
+#lopb .lsw[aria-checked=true]{background:var(--ok)}#lopb .lsw.dra[aria-checked=true]{background:var(--warn)}
 #lopb .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}
 #lopb .lsw[aria-checked=true] i{transform:translateX(20px)}
 #lopb .lsw:disabled{opacity:.6;cursor:default}#lopb .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
@@ -5386,7 +5487,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
    the test fails when the two lists drift apart. */
 #inst .ls.draining,#inst .ls.starting{color:var(--warn)}#inst .ls{font-weight:600}
 #inst .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
-#inst .lsw[aria-checked=true]{background:var(--ok)}
+#inst .lsw[aria-checked=true]{background:var(--ok)}#inst .lsw.dra[aria-checked=true]{background:var(--warn)}
 #inst .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}
 #inst .lsw[aria-checked=true] i{transform:translateX(20px)}
 #inst .lsw:disabled{opacity:.6;cursor:default}#inst .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
@@ -5428,7 +5529,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbbody>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=iloop></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
-<details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
+<details id=lrd class=sp open><summary>Live work<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </div></aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
@@ -5557,17 +5658,18 @@ function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
   +(sp.median==null?"":`<i class=spmed style="left:${at(sp.median)}%" title="median ${sp.median}"></i>`)+`<i class="spt ${tag[2]}" style="width:${at(sp.window)}%"></i></div>`
   +`<div class=spl><span>median ${med}</span><span>max ${sp.max}</span></div>`;
  const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
- const win=`title="last ${hrs} h: in counts every card created in the window, closed ones too"`;   // #1424: the window and what `in` means
- const row=(cls,name,r)=>{const n=(r||{}).in||0,o=(r||{}).out||0,k=(r||{}).open||0,t=n?cls:"mute";
-  const v=n?`${n} in \u00b7 ${o} out \u00b7 ${k} open`:"0 in", w=n?Math.max(0,Math.min(100,100*o/n)):0,
-   pb=n?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
-  return `<div class="spw ${t}" role=img aria-label="${name}: ${v}" ${win}><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
+ const row=(cls,name,r)=>{const n=(r||{}).closed||0,of=(r||{}).total||0,t=of?cls:"mute",   // the Tasks rule: how many of the kind are closed, never arrivals (#1424)
+  v=of?`${n} of ${of} closed`:"none", w=of?Math.max(0,Math.min(100,100*n/of)):0,
+  pb=of?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
+  return `<div class="spw ${t}" role=img aria-label="${name}: ${v}"><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
  const tasks=(()=>{const n=(sp.tasks||{}).n||0,of=(sp.tasks||{}).of||0,t=of?"ok":"mute";
   return `<div class="spw ${t}" role=img aria-label="Tasks: ${n} of ${of} closed"><span class=spwl>Tasks</span><span class=spwv>${n} of ${of} closed</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`})();
- const arr=sp.arrivals||{}, stale=sp.stale?`<div class=spage>\u00b7 read ${Math.floor(sp.age_secs/60)} m ago</div>`:"";
- const lab=sp.labels||{}, lnote=lab.stale?`<div class=spage>\u00b7 labels ${Math.floor(lab.age_secs/60)} min old</div>`:"";
+ const arr=sp.arrivals||{}, bd=sp.board||{}, hst=sp.history||{};   // each age names its read (#1661): the board item read, the history read, the labels off the item read
+ const stale=bd.stale?`<div class=spage>\u00b7 board items read ${Math.floor(bd.age_secs/60)} m ago${bd.overdue?" (overdue)":""}</div>`:"";
+ const hist=hst.stale?`<div class=spage>\u00b7 history read ${Math.floor(hst.age_secs/60)} m ago</div>`:"";
+ const lab=sp.labels||{}, lnote=lab.stale?`<div class=spage>\u00b7 labels from the board read ${Math.floor(lab.age_secs/60)} min old</div>`:"";
  return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`+hero+bar
-  +tasks+row("warn","Bugs",arr.bugs)+row("err","Loop-bugs",arr.loop_bugs)+spec+stale+lnote+`</div>`}
+  +tasks+row("warn","Bugs",arr.bugs)+row("err","Loop-bugs",arr.loop_bugs)+spec+stale+hist+lnote+`</div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
 let instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
@@ -5592,7 +5694,7 @@ const saveGroups=()=>{ls.groups=[...openGroups];save()};
 const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
 const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
 const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":h<=24?"24h":"d"};
-// The Monitor's live-runs card (#1276): a bounded glance, never a second full list. Its summary states the whole truth --
+// The Monitor's Live work card (#1276): a bounded glance, never a second full list. Its summary states the whole truth --
 // the live count and the oldest live run's age -- even when the rows are capped. It draws at most LIVE_ROWS rows, oldest
 // first, and one control that opens the Runs tab. Each row is two lines -- the label and its stage, then the issue title -- and
 // keeps its `data-id`, so the card's own handler still opens the run sheet. Its liveness slot says whether the run is moving.
@@ -5602,7 +5704,7 @@ function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.ag
  const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
  const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
- return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")||"<div class=m>no live runs</div>")+more}}
+ return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")||"<div class=m>no live work</div>")+more}}
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
@@ -5621,7 +5723,8 @@ function liveRow(r,shown){
  const st=r.cpu?"":liveStage(r),dot=`<i class="dot${s.k?" "+s.k:""}"></i>`,stg=st?`<span class=stg title="the node the run is at">· ${esc(st)}</span>`:"";
  const bid=(r.issues||[])[0],lc=bid==null?"":((typeof SPECLC!=="undefined"&&SPECLC&&SPECLC.get(String(bid)))||"");   // the number wears its spec colour, as the board card does (#1429)
  const lab=`<b title="${iq(labelTip(r))}">${esc(name(r).replace(/^implement /,""))}</b>`,slot=`<span class="slot${s.k?" "+s.k:""}">${esc(s.text)}</span>`;
- return `<div class="r${on}${s.k?" "+s.k:""}" data-id="${esc(r.id)}" tabindex=0 role=button${lc?` style="--lc:${lc}"`:""}><div class=r1>${dot}${lab}${stg}${loadMark(r)}${slot}</div>${t?`<div class=r2 title="${iq(t)}">${esc(t)}</div>`:""}${r.model?`<div class=r3 title="the model this run is on now">${esc(r.model_label||r.model)}</div>`:""}<span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`
+ const act=r.kind==="hold"?"":` data-id="${esc(r.id)}" tabindex=0 role=button`;   // a hand hold opens no run sheet: it has no run
+ return `<div class="r${on}${s.k?" "+s.k:""}"${act}${lc?` style="--lc:${lc}"`:""}><div class=r1>${dot}${lab}${stg}${loadMark(r)}${slot}</div>${t?`<div class=r2 title="${iq(t)}">${esc(t)}</div>`:""}${r.model?`<div class=r3 title="the model this run is on now">${esc(r.model_label||r.model)}</div>`:""}<span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`
 }
 function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
@@ -6157,7 +6260,7 @@ const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   
 const CFD_TYPES=[["all","All"],["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the cumulative flow's Type: All is every card (#1356)
 const flowFilter=()=>{try{const s=JSON.parse(localStorage.getItem("squad-flow")||"{}")||{};return {ty:CFD_TYPES.some(([k])=>k===s.ty)?s.ty:"task",hidden:Array.isArray(s.hidden)?s.hidden.filter(n=>typeof n==="string"):[]}}catch(e){return {ty:"task",hidden:[]}}};   // a filter the page cannot read is its default, never an error; the Type opens on the tasks default the route always sent (#1356)
 const flowSave=()=>{try{localStorage.setItem("squad-flow",JSON.stringify({ty:CF.ty,hidden:CF.hidden}))}catch(e){}};   // the two filters live in the page's own key, apart from the Board record (#1356)
-let CF={r:"30",...flowFilter()};   // the cumulative flow's range (30 days at first, #901), its Type and the states the reader hid, restored from the page key (#1356)
+let CF={r:"all",...flowFilter()};   // the cumulative flow's range (the whole history at first: the chart opens on zero), its Type and the states the reader hid, restored from the page key (#1356)
 
 const cfdShown=c=>{const keep=c.bands.filter(b=>!CF.hidden.includes(b.name)),stacked=c.bands.every(b=>b.lower&&b.upper);
   if(keep.length===c.bands.length&&stacked)return c.bands;   // every band shows, with the hub's own stack: the page reads no count (#1149)
@@ -6197,13 +6300,13 @@ const ltEx=(exc,cards,total,words,reasons)=>{const R=reasons||{},named=exc.map(e
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total,c.excluded_text,c.excluded_reasons);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
-let LT={tf:"2",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); only the average reference shows at first, and the median and p85 are toggles (#1332)
+let LT={tf:"7",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:true,p85:true,win:"full"};   // a fresh page opens on the past week, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); the average, the median and p85 all show at first, and each is a toggle (#1332)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
 const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
-const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
+const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Last week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe and the Type stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltGap=16;   // the least vertical space between two gutter tag baselines, one body line (#1332)
@@ -6316,7 +6419,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
+lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;readStale=!!b.err||lastBoardOver;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -6340,7 +6443,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${waveChip(x)}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${waveChip(x)}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">${esc(x.hc||(x.hs==="running"?"Squad · running":"Squad"))}</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -6414,7 +6517,7 @@ function paintHL(){
 // highlight:end
 
 // A tab only shows one pane; every pane keeps its own poll (#889).
-let TAB="board",lastRead=0,readStale=false;
+let TAB="board",lastRead=0,readStale=false,lastBoardT=0,lastBoardOver=false;
 const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
 const HASH={board:"#kanban",runs:"#runs",flow:"#flow",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
 function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||(/^#set-[a-z]+$/.test(location.hash)?"set":null)}   // a card link opens Kanban, where the card is (#1274); a themed Settings link opens Settings (#1286)
@@ -6440,8 +6543,8 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
 {const pn=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";$("#pjn").textContent=pn?decodeURIComponent(pn):"hub";
  const pj=$("#pj"),psw=$("#psw");pj.onclick=e=>{e.stopPropagation();const on=!psw.classList.contains("on");psw.classList.toggle("on",on);pj.setAttribute("aria-expanded",on)};
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
-// "board read N s ago": the stamp of the last board answer
-setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
+// "board items read N s ago": the item read's own stamp (#1661), never the browser's fetch time
+setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale)":""}`:"board items not read yet"):""},1000);
 // loop-switch:start
 // The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
 // a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
@@ -6475,7 +6578,7 @@ function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&roo
 // }SETT
 const loopLast=v=>{const e=(v.log||[])[0];return e?[e.action,e.who,e.from,moment(e.at)].filter(Boolean).join(" · "):"none recorded"};   // no log entry names no action or source, so the tile never shows a partial who and when
 const loopTip=v=>!v.write?v.reason:v.state==="on"||v.state==="draining"?"turn off":v.state==="off"?"turn on":v.state==="starting"?"the loop is starting":"";
-const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;
+const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class="lsw${v.state==="draining"?" dra":""}"${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;   // a draining loop reads the warn colour on the switch itself, not only on the word beside it
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
 const loopStateLine=v=>`<div class="lstate ${esc(v.state)}">Loop ${esc(v.state)}</div>`;   // the theme's first line, the state before any other fact (#1280)

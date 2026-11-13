@@ -82,8 +82,12 @@ rm -f "$wmark"; unset SERIAL_TRY; export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_S
 # (exit 75). Without this the cap lives only in the waiter's head, where an orphaned holder can never read it.
 set -m   # each background job leads its own process group, so the watchdog stops the command and its children together
 "$@" & c=$!
-( sleep "$hold"
-  [ "$(cat "$L/pid" 2>/dev/null)" = "$hpid" ] || exit 0   # the lock moved on: this watchdog has no command left to stop
+( left=$hold
+  while [ "$left" -gt 0 ]; do
+    step=$(( left < 5 ? left : 5 )); sleep "$step"; left=$(( left - step ))
+    [ "$(cat "$L/pid" 2>/dev/null)" = "$hpid" ] || exit 0   # the lock moved on: this watchdog has no command left to stop
+    kill -0 "$hpid" 2>/dev/null || exit 0                   # the holder died without its traps (SIGKILL, a killed worker, a killed run tree): nothing is left to stop or release, and a sleep held for the rest of the bound is the orphan this bound was written against (#1660)
+  done
   [ "$(date +%s)" -ge "$due" ] || exit 0                  # its sleep was cut short: the deadline has not come
   printf '%s\n' "$hpid" > "$L/timed-out"; kill -TERM -- -"$c" 2>/dev/null; sleep 5; kill -KILL -- -"$c" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
 set +m   # job control only gave the two jobs their groups: left on, bash 5 prints "[2]+ Terminated ( sleep ... )" when the

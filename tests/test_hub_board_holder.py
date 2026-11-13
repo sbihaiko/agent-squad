@@ -68,7 +68,8 @@ def _row(data, n):
 def test_a_held_card_names_its_run_from_the_seam(hub, monkeypatch):
     _pass(hub, monkeypatch, lambda: {"241": dict(HELD)})
     data = hub.board()
-    assert _row(data, 241)["ho"] == "held by run-20261013-080000-abc123 since 2026-10-13 08:00 UTC"
+    assert _row(data, 241)["ho"] == "held · run run-20261013-080000-abc123, no record", "no record of the run is no live process (#1661)"
+    assert _row(data, 241)["hs"] == "ended"
     assert "ho" not in _row(data, 242), "a card no run holds names no holder"
 
 
@@ -79,7 +80,7 @@ def test_a_failed_holder_read_keeps_the_last_holder(hub, monkeypatch):
     def refused():
         raise RuntimeError("HTTP 502")
     _pass(hub, monkeypatch, refused, cache=last)
-    assert _row(hub.board(), 241)["ho"].startswith("held by run-20261013-080000-abc123")
+    assert _row(hub.board(), 241)["ho"].startswith("held · run run-20261013-080000-abc123")
 
 
 def test_the_card_paints_the_holder_the_row_carries(hub):
@@ -87,11 +88,12 @@ def test_the_card_paints_the_holder_the_row_carries(hub):
     script = (Path(__file__).resolve().parent.parent.joinpath("contrib", "squad-goal", "scripts", "board-lanes.js").read_text() + "const SLOTS=specSlots([]);\n" +   # the lane rules the page inlines (#917)
               'const esc=s=>String(s);const isPR=n=>false;const colOf=()=>"#000000";const tint=()=>"";'
               'const lbc=()=>"";const gstrip=()=>"";const age=()=>"";const ageC=()=>"";const bo={labels:[]};const CN=["Todo"];\n'
-              + line + '\nconst I=[{n:241,t:"held",l:[],ho:"held by run-x since then"}];console.log(cards({name:"Todo"},I,I));\n')
+              + line + '\nconst I=[{n:241,t:"held",l:[],ho:"held by run-x since then",hs:"running"}];console.log(cards({name:"Todo"},I,I));\n')
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
-    # Re-anchored to the owner-approved mock (#889): the card head wears a short "running"; the full holder text is its tooltip
-    assert '<span class=hld title="held by run-x since then">running</span>' in out.stdout
+    # The chip names the holder (#1664): "Squad" now, "Squad · taken over <time>" once a takeover marker names it;
+    # the full holder text is its tooltip.
+    assert '<span class=hld title="held by run-x since then">Squad · running</span>' in out.stdout   # a live run says so (#1661)
 
 
 def test_an_epoch_start_is_shown_as_a_utc_date(hub):

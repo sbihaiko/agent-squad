@@ -19,7 +19,7 @@ file="$SG_CHECKOUT/docs/squad/defaults.yaml"
 py=${SG_CAP_EDIT_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 snap=""; had=0; stopped=0
 
-stop_dispatch() { if [ -n "${SG_CAP_EDIT_STOP:-}" ]; then "$SG_CAP_EDIT_STOP"; else bash "$here/watchd.sh" stop; fi; }
+stop_dispatch() { if [ -n "${SG_CAP_EDIT_STOP:-}" ]; then "$SG_CAP_EDIT_STOP"; else bash "$here/watchd.sh" stop --force; fi; }   # the hard stop, as before #1662: an edit does not wait for live runs
 start_dispatch() { if [ -n "${SG_CAP_EDIT_START:-}" ]; then "$SG_CAP_EDIT_START"; else (cd "$SG_CHECKOUT" && bash "$here/watchd.sh" start); fi; }
 check_settings() { if [ -n "${SG_CAP_EDIT_CHECK:-}" ]; then "$SG_CAP_EDIT_CHECK"; else PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.cli config --target "$SG_CHECKOUT" check; fi; }
 edit_settings() { PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.cli config --target "$SG_CHECKOUT" "$@" >/dev/null; }

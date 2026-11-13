@@ -16,12 +16,26 @@ tip() { git -C "$R" rev-parse "refs/heads/$1" 2>/dev/null || echo missing; }
 adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --allow-empty -m "$2"; $W push -q origin "$1"; }
 # The CI seam: green, and it logs the read so a test proves the promotion reached the proof.
 printf '#!/bin/bash\necho "ci read" >> "%s/ci.log"\necho green\n' "$T" > "$T/ci"; chmod +x "$T/ci"; export SG_CI_STATE_CMD=$T/ci
-# The stub GitHub: one open pull request whose head and base the pass names, and a merge that moves `staging`.
+# The check-run read (#1644): a green CI word is half the proof, so the pass also asks for the complete tier's jobs on the
+# tip. The answer names every job the workflow starts on the `promote` label, each completed and successful, read from the
+# same workflow file the pass reads: a fixture that answers only the seam leaves the suite reading the real GitHub.
+cat > "$T/ciruns" <<'RUN'
+#!/bin/bash
+n=$(bash "$DF/promote-pass.sh" --ci-complete-job-names "$WF" 2>/dev/null); first=1
+printf '{"check_runs":['
+while IFS= read -r j; do [ -n "$j" ] || continue; [ "$first" = 1 ] || printf ','; first=0
+  printf '{"name":"%s","status":"completed","conclusion":"success","id":1}' "$j"; done <<<"$n"
+printf ']}\n'
+RUN
+chmod +x "$T/ciruns"; export DF="$d" WF="$d/../../../.github/workflows/ci.yml"
+# The stub GitHub: one open pull request whose head and base the pass names, a merge that moves `staging`, and the tip's
+# check runs.
 mkdir -p "$T/bin"
 cat > "$T/bin/gh" <<EOF
 #!/bin/bash
 echo "\$*" >> "$T/gh.log"
 case "\$*" in
+  *check-runs*) "$T/ciruns";;
   *graphql*) if [ -e "$T/pr" ]; then printf '{"data":{"repository":{"pullRequests":{"nodes":[{"number":%s,"headRefName":"dev","baseRefName":"staging","isDraft":false,"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false}}}}}\n' "\$(cat "$T/pr")"; else echo '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'; fi;;
   *"-X POST repos/x/emu/pulls"*) echo 9 > "$T/pr"; echo '{"number":9}';;
   *"-X PUT repos/x/emu/pulls/"*"/merge"*) if git -C "$T/w" fetch -q origin && git -C "$T/w" push -q origin origin/dev:refs/heads/staging; then rm -f "$T/pr"; echo '{"merged":true,"message":"Pull Request successfully merged"}'; else echo '{"merged":false,"message":"Pull Request is not mergeable"}'; fi;;

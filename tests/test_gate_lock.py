@@ -37,6 +37,15 @@ def _env(state):
     return e
 
 
+
+def _watchdog(state, lock):
+    """The pid of the lock's live watchdog, as the holder recorded it in `<lock>/wd`; empty while none is written."""
+    try:
+        pid = (Path(state) / "locks" / lock / "wd").read_text().strip()
+    except OSError:
+        return ""
+    return pid if pid and _alive(pid) else ""
+
 def _alive(pid):
     """True while a process with this pid lives. A case that reads the pids it started needs no process table."""
     try:
@@ -394,14 +403,10 @@ def test_a_cut_short_watchdog_sleep_is_not_a_deadline_in_short(tmp_path):
                          env=_env(tmp_path / "st") | {"SERIAL_HOLD_SECONDS": "4242"},
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     cut = False
-    for _ in range(40):
-        rows = [r.split(None, 2) for r in subprocess.run(["/bin/ps", "-ww", "-o", "pid=,ppid=,command=", "-ax"],
-                                                         capture_output=True, text=True).stdout.splitlines()]
-        parent = {r[0]: r[1] for r in rows if len(r) > 2}
-        sleeps = [r[0] for r in rows if len(r) > 2 and r[2].split()[0].endswith("sleep") and r[2].split()[-1] == "4242"
-                  and parent.get(parent.get(r[0], ""), "") == str(p.pid)]
-        if sleeps:
-            subprocess.run(["kill", "-TERM", sleeps[0]], check=False)
+    for _ in range(40):   # the watchdog is named by the pid the holder records, never by a sleep's argument (#1660)
+        wd = _watchdog(tmp_path / "st", "gate")
+        if wd:
+            subprocess.run(["kill", "-TERM", wd], check=False)
             cut = True
             break
         time.sleep(0.02)
@@ -422,10 +427,9 @@ def test_a_cut_short_watchdog_sleep_is_not_a_deadline(tmp_path):
         p = subprocess.Popen(["bash", str(d / "gate.sh"), "sh", "-c", "sleep 3; exit 7"],
                              env=_env(tmp_path / "st") | {"SERIAL_HOLD_SECONDS": "4242"},
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        watchdog_sleep = ""
+        watchdog_sleep = ""   # the pid the holder writes for its watchdog (#1660): its sleeps are short steps, so no argument names it
         for _ in range(30):
-            ps = subprocess.run(["/bin/ps", "-o", "pid=,command=", "-ax"], capture_output=True, text=True).stdout.splitlines()
-            watchdog_sleep = next((w[0] for w in map(str.split, ps) if len(w) > 1 and w[1] == "sleep" and w[-1] == "4242"), "")
+            watchdog_sleep = _watchdog(tmp_path / "st", "gate")
             if watchdog_sleep:
                 break
             time.sleep(0.1)

@@ -145,6 +145,25 @@ def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, s
     return done
 
 
+def run_live(folder, now=None):
+    """True while the run in `folder` has a live process: the engine its last invocation names (`caps.alive`, the pid-reuse
+    rule the pass above reads), or, when it names none, a record that moved inside `NO_PID_IDLE_S` (it may still be
+    starting). A run with a final verdict is never live, and a folder with no record is not a run, so it is not live. This is
+    the one predicate the hub's holder chip reads (#1661): a card says `running` only while this holds."""
+    rec = Path(folder) / "record.jsonl"
+    try:
+        text, moved = rec.read_text(), rec.stat().st_mtime
+    except OSError:
+        return False
+    if C.final_verdict(text) is not None:
+        return False
+    now = time.time() if now is None else now
+    proc = RL.engine_process(RL.invocation(text))
+    if proc is not None:
+        return bool(C.alive(proc[0], proc[1]))
+    return now - moved < NO_PID_IDLE_S
+
+
 def stale_slot_holders(active_runs, checkout, ceiling=None, procs=None, now=None, bound=STALE_SLOT_S):
     """The listed runs that hold a `caps.runs` slot while no slot is free, and that have had no live lease and no live process
     for `bound` seconds: [(run name, seconds since its record moved)], in the list's order. A ceiling with a free slot names

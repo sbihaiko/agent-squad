@@ -100,6 +100,26 @@ def test_a_short_timeline_resumes_from_its_stored_cursor():
     assert bh.timeline_after(store[7]) is None
 
 
+def test_a_project_event_of_another_project_is_not_this_cards_move():
+    """#1663: an issue can sit on several projects, and the timeline carries one added/removed event per project. The card's
+    board is this project's: an event naming another project is never its move, so a card moved off another board never
+    leaves this one and no valley opens where it was moved."""
+    page = {"totalCount": 3, "nodes": [
+        {"__typename": "AddedToProjectV2Event", "createdAt": "2026-10-01T00:00:01Z", "project": {"number": 3}},
+        {"__typename": "AddedToProjectV2Event", "createdAt": "2026-10-01T00:00:02Z", "project": {"number": 2}},
+        {"__typename": "RemovedFromProjectV2Event", "createdAt": "2026-10-01T00:00:03Z", "project": {"number": 2}},
+    ], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+    store = {}
+    bh.record_page(store, 7, page, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", project=3)
+    assert [e["type"] for e in store[7]["events"]] == ["added"], "only this project's own events are the card's moves"
+    assert bh.intervals(store[7]["events"])[-1]["on_board"] is True
+    # A page read for another board keeps that board's events and drops these.
+    other = {}
+    bh.record_page(other, 7, page, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", project=2)
+    assert [e["type"] for e in other[7]["events"]] == ["added", "removed"]
+    assert bh.intervals(other[7]["events"])[-1]["on_board"] is False
+
+
 def test_hourly_search_runs_once_an_hour_and_never_as_a_sweep():
     assert bh.search_due([], T0) is True
     records = [{"k": "search", "t": T0}]

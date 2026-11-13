@@ -166,6 +166,15 @@ def _procs_module():
     spec.loader.exec_module(mod)
     return mod
 PR = _procs_module()
+def _handhold_module():
+    """squad/handhold.py, the one reader and writer of a hand hold (loop-bug #1664), imported from the repository this script sits in
+    first, then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. The janitor carries no second copy of the hold's format."""
+    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
+    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "handhold.py").is_file()), roots[-1])
+    if root not in sys.path: sys.path.insert(0, root)
+    from squad import handhold
+    return handhold
 try: _table = PR.snapshot()
 except PR.ReadError: _table = {}   # no read: no process is judged gone or alive on it
 procs = {pid: (p.ppid, p.command) for pid, p in _table.items()}
@@ -181,6 +190,12 @@ def tree(root):
     for q, (pp, _) in procs.items():
         if pp == root: out += tree(q)
     return out
+def wip_snapshot(folder, run_id, dry=False):   # #1662: the one writer of a run's WIP refs, loaded by path (a bare file under -I, as squad_procs is)
+    name = "squad_wip_snapshot"
+    if not hasattr(sys.modules.get(name), "snapshot_run"):
+        spec = importlib.util.spec_from_file_location(name, pathlib.Path(__file__).resolve().parent / "wip_snapshot.py")
+        mod = importlib.util.module_from_spec(spec); sys.modules[name] = mod; spec.loader.exec_module(mod)
+    return sys.modules[name].snapshot_run(folder, run_id, dry=dry)
 def kill(pidv, why):
     if pidv in me: return
     for q in reversed(tree(pidv)):
@@ -451,6 +466,13 @@ for r in names:
     if age is None: age = run_age(i)
     if age is not None and age > TAKEOVER_SECONDS and not gate_wait:   # T: past the bound with no progress the run is stuck; it is ended and handed over, never requeued (ADR-0166)
         nums = sorted(req_issues(f) | i["acc"], key=int)
+        # #1662: the work the run left uncommitted is saved before any teardown, one WIP line per tree. A tree that could not be
+        # saved holds the run for this pass: nothing is killed, and the next pass tries the snapshot again.
+        saved, saved_ok = wip_snapshot(f, i["run_id"], dry=dry)
+        for line in saved: say(line)
+        if not saved_ok:
+            say(f"TAKEN-OVER HELD run {n}: a tree could not be saved (WIP failed), so the run is not ended this pass")
+            held |= set(nums); continue
         msg = f"TAKEN-OVER run {n} ({int(age // 60)} min without progress) ended by the takeover bound; its issues stay claimed for a hand fix"
         say(msg)
         if not dry:
@@ -1147,6 +1169,24 @@ def reconcile_board():
             set_expected(n, "Closed" if shipped else "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
+    # The hand hold (#1664): an issue a takeover marker or a hand hold names is somebody's, so its Todo card goes to Doing once and
+    # no lower rule moves it back while the marker or hold lives. A release record names the column the card moves to, once: the
+    # card moves through the same loop below, and the record goes when the card carries the column. No marker, no hold and no
+    # release: this block writes nothing. The format and the reader are squad/handhold.py's.
+    HH = _handhold_module()
+    hand_columns = {doing, "Code Complete"} | ({CODE_REVIEW, GATING} if shipped else set())
+    released = {}
+    for n, col in HH.releases(state=st).items():
+        want = col if shipped else {"Closed": "Done"}.get(col, col)
+        set_expected(n, want, f"a hand hold was released to {col}", rank=120)
+        released[n] = want
+    for n, c in sorted(HH.holders(state=st).items(), key=lambda kv: int(kv[0])):
+        if n in released: continue
+        have = have_all.get(n)
+        if not have or issue_info(n)[0] == "closed": continue
+        who = f"taken over from run {c['who']}" if c["kind"] == "taken" else f"held by {c['who']}"
+        if have == os.environ.get("SG_TODO", "Todo"): set_expected(n, doing, f"the issue is {who}: somebody works it", rank=45)
+        elif have in hand_columns: set_expected(n, have, f"the issue is {who}: its card is not moved back", rank=45)
     for n, (_, want, why) in sorted(held_owner.items(), key=lambda kv: int(kv[0])):   # frozen:owner holds the card: R names the write it held back, and writes nothing
         have = have_all.get(str(n))
         if have is not None and have != want:
@@ -1188,6 +1228,10 @@ def reconcile_board():
                 if board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}") and holders(proj) is not None: holders(proj)[str(n)] = {"run": run_id, "started": run_ts or ""}   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
         elif have in ("In Progress", "Doing", "Code Review") and have != want:
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
+    for n, want in sorted(released.items(), key=lambda kv: int(kv[0])):   # a release applies once: its record goes when the card carries the column
+        if cards(proj)[1].get(str(n)) == want and not dry:
+            HH.clear_release(n, state=st)
+            say(f"HAND-RELEASE #{n}: the card carries {want}; the release record is applied and removed")
     for n in sorted(frozen, key=int):   # the owner freeze is a label on the issue, written once; the owner removes it, the pass never does
         if expected.get(n, (0, ""))[1] in ("Closed", "Abandoned") or FREEZE_LABEL["owner"] in issue_labels(n): continue
         say(f"BOARD-FREEZE #{n}: {FREEZE_LABEL['owner']} (an owner label or a run needing a human holds it)")

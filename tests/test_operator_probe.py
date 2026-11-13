@@ -33,7 +33,7 @@ def test_a_session_starts_with_its_tool_set_restricted(tmp_path, monkeypatch):
     operators = load("operators")
     argvs = []
 
-    def fake_call(argv, cwd=None, timeout=None):
+    def fake_call(argv, cwd=None, timeout=None, env=None):
         argvs.append(argv)
         return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
 
@@ -95,8 +95,7 @@ def test_a_denial_that_does_not_happen_fails_the_probe(denial, kwargs):
 
 
 def test_the_profile_allows_network_out_to_loopback_only():
-    probe = load("operator_probe")
-    text = probe.profile_text("/work/state/outboxes", "/work/state/inboxes/proj-other.jsonl")
+    text = load("operators").profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes", "/work/state/inboxes/dm.jsonl")
     assert '(allow network-outbound (remote ip "localhost:*"))' in text.splitlines()
     assert "*:443" not in text
 
@@ -116,7 +115,9 @@ def test_the_kernel_refuses_a_foreign_host_on_443_and_passes_loopback(tmp_path):
     pass, since the model call reaches its host only through the loopback proxy."""
     probe = load("operator_probe")
     (tmp_path / "outbox").mkdir()
-    profile = probe.profile_text(str(tmp_path / "outbox"), str(tmp_path / "inbox.jsonl"))
+    inboxes = tmp_path / "inboxes"
+    inboxes.mkdir()   # a sibling of the session's cwd: denials of the inbox folder must never swallow the cwd
+    profile = load("operators").profile_text(str(tmp_path / "outbox"), str(inboxes), str(inboxes / "dm.jsonl"))
     listener = socket.create_server(("127.0.0.1", 0))
     try:
         def connect(host, port):
@@ -163,7 +164,7 @@ def test_the_model_proxy_relays_its_target_and_refuses_every_other(tmp_path):
             assert proxy.refusals == ["93.184.216.34:443", "127.0.0.1:80"]
     finally:
         echo.close()
-    assert "refused CONNECT 93.184.216.34:443" in log.read_text()
+    assert '"target": "93.184.216.34:443"' in log.read_text()
 
 
 def test_the_model_endpoint_is_read_from_the_base_url(monkeypatch):
@@ -235,8 +236,7 @@ def test_one_command_repeats_the_probe(tmp_path):
 
 
 def test_the_profile_opens_no_write_root_beyond_the_outbox_and_the_claude_home():
-    probe = load("operator_probe")
-    text = probe.profile_text("/work/state/outboxes", "/work/state/inboxes/proj-other.jsonl")
+    text = load("operators").profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes", "/work/state/inboxes/dm.jsonl")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     for root in ("/private/tmp", "/private/var/folders", '"/dev"', '"/tmp"'):
         assert root not in write
@@ -247,9 +247,7 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
     probe = load("operator_probe")
     outbox = tmp_path / "outbox"
     outbox.mkdir()
-    inbox = tmp_path / "other-inbox.jsonl"
-    inbox.write_text("")
-    profile = probe.profile_text(str(outbox), str(inbox))
+    profile = load("operators").profile_text(str(outbox), str(tmp_path), str(tmp_path / "dm.jsonl"))
     leak = Path(tempfile.gettempdir()) / f"operator-probe-leak-{os.getpid()}.txt"
     try:
         done = probe.sandboxed(profile, "/bin/sh", ["-c", f'echo leaked > "{leak}"'], tmp_path, 30)

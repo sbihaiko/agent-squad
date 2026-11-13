@@ -121,7 +121,7 @@ mkdir -p "$T/nostop"
 python3 - "$T/watchd.sh" "$T/nostop/watchd.sh" <<'PY'
 import pathlib, sys
 t = pathlib.Path(sys.argv[1]).read_text()
-t = t.replace('  stop) alive ||', '  stop) echo "watchd did not stop" >&2; exit 1; alive ||', 1)
+t = t.replace('  halt) hard_stop; exit $?;;', '  halt) echo "watchd did not stop" >&2; exit 1;;', 1)   # the waiter's end is halt (#1662)
 pathlib.Path(sys.argv[2]).write_text(t)
 PY
 chmod +x "$T/nostop/watchd.sh"
