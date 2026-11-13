@@ -199,8 +199,18 @@ def test_cfd_bands_follow_the_hub_order(hub, board):
     _seed(hub, {1: _todo(1), 2: _done(2, "2026-10-02T09:00:00Z")})
     cfd = _flow(hub)["cfd"]
     assert [b["name"] for b in cfd["bands"]] == list(hub.ORDER), "the drawn bands name every column, in the hub's order"
-    assert cfd["start"] == "2026-10-01"
+    assert cfd["start"] == "2026-09-30", "the history opens on the empty day before the first card"
     assert "history from " in hub.PAGE
+
+
+def test_a_card_labelled_moved_is_drawn_in_no_band(hub, board):
+    """#1663: a card moved to another board is marked `moved` and is no part of this board's flow, so no band counts it."""
+    moved = _card(2, st="Todo", labels=("moved",))
+    _seed(hub, {1: _todo(1), 2: (moved, _life(OPENED) + [{"t": OPENED, "type": "label", "name": "moved"}])})
+    cfd = _flow(hub)["cfd"]
+    day = cfd["days"][-1]
+    assert sum(cfd["ranges"]["all"]["reads"][-1]["counts"][k]["count"] for k in range(len(cfd["bands"]))) == 1, day
+    assert _count(cfd, hub.COLUMN["issue_todo"], day) == 1
 
 
 def test_cfd_counts_per_day_are_the_cards_in_each_column(hub, board):
@@ -395,7 +405,7 @@ def test_the_cfd_serves_numbered_y_ticks_and_dated_x_ticks(hub, board):
     assert ticks == sorted(set(ticks)), f"the y ticks rise: {ticks}"
     assert len(ticks) >= 3, f"a numbered y axis carries more than its foot and top: {ticks}"
     assert ticks[-1] == cfd["ymax"] >= 8, f"the axis reaches past the tallest stack of 8: {ticks}"
-    assert cfd["xticks"][0] == {"i": 0, "day": "2026-10-01"}
+    assert cfd["xticks"][0] == {"i": 0, "day": cfd["days"][0]} and cfd["days"][0] == "2026-09-30"   # the empty day before the first card
     assert cfd["xticks"][-1] == {"i": len(cfd["days"]) - 1, "day": cfd["days"][-1]}
 
 
@@ -649,7 +659,7 @@ def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     right = 64 + chart["plot_frame"]["width"]
     gutter = [attrs for attrs, _ in _svg_texts(plot) if _has_class(attrs, "lttg")]
-    assert len(gutter) == 1, "only the average reference tag is drawn by default"
+    assert len(gutter) == 3, "the three reference tags are drawn by default"
     assert all(float(_svg_attr(attrs, "x")) > right for attrs in gutter), \
         "a reference tag sits inside the plot instead of the reserved right gutter"
     assert not [body for attrs, body in _svg_texts(plot)
@@ -993,8 +1003,8 @@ def test_every_chart_token_the_lead_chart_paints_is_declared(hub, board, tmp_pat
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_only_the_average_line_shows_by_default_and_the_three_patterns_differ(hub, board, tmp_path):
-    """#1332: only the average reference draws at first; the median and p85 are one toggle each. All three are 1px and
+def test_the_three_reference_lines_show_by_default_and_their_patterns_differ(hub, board, tmp_path):
+    """#1332: the average, the median and p85 all draw at first; each is a toggle. All three are 1px and
     carry distinct patterns (solid, dashed, dotted), and the rolling mean is the stronger 3px line."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z"),
                 3: _done(3, "2026-10-05T09:00:00Z")})
@@ -1006,11 +1016,11 @@ def test_only_the_average_line_shows_by_default_and_the_three_patterns_differ(hu
 
     out = _lt_chart(hub, tmp_path, "lt-reference-default.js", chart)
     default = refs(out)
-    assert list(default) == ["Average"], "a reference other than the average draws by default"
+    assert list(default) == ["Average", "Median", "p85"], "the average, the median and p85 draw at first"
     first = out.partition("<details class=ltmore>")[0]
     assert "id=ltmd" in first and "id=ltp85" in first, "the median and p85 toggles are not on the first screen"
     for toggle in ("ltmd", "ltp85"):
-        assert not re.search(rf"<input[^>]*id={toggle}[^>]*checked", first), f"the {toggle} toggle opens checked"
+        assert re.search(rf"<input[^>]*id={toggle}[^>]*checked", first), f"the {toggle} toggle opens checked"
 
     on = _render(hub, tmp_path, "lt-reference-on.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
     shown = refs(on)
@@ -1424,7 +1434,7 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     assert {float(_svg_attr(attrs, "y")) for attrs, _ in x_labels} == {base + 17}
     # Re-anchored (#1332): only the average is drawn by default, and its value sits in the right gutter, never in the plot.
     tags = [(attrs, body) for attrs, body in others if _has_class(attrs, "lttg")]
-    assert len(tags) == 1, "the average's gutter tag is not the one reference tag drawn by default"
+    assert len(tags) == 3, "the average, the median and p85 each draw their gutter tag at first"
     assert all(_svg_attr(attrs, "text-anchor") == "start" for attrs, _ in tags), "a gutter tag is not left-aligned"
     right = max(float(x) for x in re.findall(r'<line x1=\S+ y1=\S+ x2=(\S+) y2=\S+ stroke=var\(--chart-grid\)>', svg))
     assert all(float(_svg_attr(attrs, "x")) > right for attrs, _ in tags), "a reference tag sits inside the plot"
@@ -1501,7 +1511,8 @@ def test_the_flow_page_prints_the_served_last_day_and_reads_no_series(hub, board
     assert "WIP <b>417</b>" in notes[0] and "throughput <b>23</b>" in notes[0], notes[0]
     assert view["last"]["day"] in notes[0], "the line names the day the hub chose"
     titles = [t for t in re.findall(r"<title>([^<]*)</title>", out) if t.startswith("2026-10-02")]
-    assert titles and f"WIP {view['reads'][1]['wip']}" in titles[0], "the day hover reads the hub's record for that day"
+    read = next(r for r in view["reads"] if r["day"] == "2026-10-02")
+    assert titles and f"WIP {read['wip']}" in titles[0], "the day hover reads the hub's record for that day"
     view["last"] = {"day": view["last"]["day"], "wip": 0, "throughput": None}
     assert "throughput <b>none</b>" in _render(hub, tmp_path, "flow-cfd-none.js", _trapped(view))
 

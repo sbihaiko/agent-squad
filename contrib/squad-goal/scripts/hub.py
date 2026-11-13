@@ -2502,7 +2502,8 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
     if moves is None: moves = read_moves() if overlay_on() else {}
     if window is None: window = pending_window()
     since, ends = now_ts - window_secs, (COLUMN["issue_closed"], COLUMN["abandoned"])
-    rows = {"bugs": {"in": 0, "out": 0, "open": 0}, "loop_bugs": {"in": 0, "out": 0, "open": 0}}
+    rows = {"bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0},
+            "loop_bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0}}
     def loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
     def open_now(i): return cache_row_column(i, moves, window) not in ends   # the kanban's own column, never a second rule
     for i in items or []:
@@ -2513,10 +2514,13 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
         came = o is not None and since <= o <= now_ts
         went = c is not None and since <= c <= now_ts   # the close stamp alone, so a lagging state never hides a close
         still = open_now(i)
+        closed_now = cache_row_column(i, moves, window) == COLUMN["issue_closed"]
         for k in kinds:
             rows[k]["in"] += 1 if came else 0
             rows[k]["out"] += 1 if went else 0
             rows[k]["open"] += 1 if still else 0
+            rows[k]["total"] += 1
+            rows[k]["closed"] += 1 if closed_now else 0
     return rows
 
 def tasks_fact(items, now_ts, window_secs, closed_n):
@@ -4076,6 +4080,7 @@ def _x_ticks(days):
     return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
 
 
+FLOW_MOVED = "moved"   # the label a card carries once it left for another board: no band of this board counts it (#1663)
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
 LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)
 LEAD_START = COLUMN["issue_todo"]   # the Lead Time view opens measured from Todo (#1247): the payload the page reads carries it
@@ -4239,7 +4244,8 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     cards = [_hist.intervals(rec.get("events") or []) for rec in store.values()
-             if rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty)]
+             if (rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty))
+             and FLOW_MOVED not in _hist.labels_now(rec.get("events") or [])]   # a moved card is another board's work (#1663)
     zone = day_zone()
     cfd = _cfd.cfd(cards, ORDER, zone=zone, now=dt.datetime.now(dt.UTC))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
@@ -4307,7 +4313,7 @@ HISTORY_TIMELINE = ("query($owner:String!,$name:String!,$number:Int!,$after:Stri
                     "... on ProjectV2ItemStatusChangedEvent{createdAt status} "
                     "... on LabeledEvent{createdAt label{name}} ... on UnlabeledEvent{createdAt label{name}} "
                     "... on ClosedEvent{createdAt} ... on ReopenedEvent{createdAt} "
-                    "... on AddedToProjectV2Event{createdAt} ... on RemovedFromProjectV2Event{createdAt} "
+                    "... on AddedToProjectV2Event{createdAt project{number}} ... on RemovedFromProjectV2Event{createdAt project{number}} "
                     "... on ParentIssueAddedEvent{createdAt parent{... on Issue{number}}} ... on ParentIssueRemovedEvent{createdAt}}}}}}")
 HISTORY_SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){issueCount "
                   "pageInfo{hasNextPage endCursor} nodes{... on Issue{number}}}}")
@@ -4365,7 +4371,8 @@ def _read_timeline(n, prior, keys, read_issue, path, recs, now):
         issue = (data.get("repository") or {}).get("issue")
         if issue is None: return True
         facts = _hist.item_facts(issue, int(PROJECT_NO))
-        _hist.record_page(work, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"])
+        _hist.record_page(work, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"],
+                         project=int(PROJECT_NO))
     rec = work.get(n)
     if rec and (prior is None or not prior.get("complete") or rec["complete"]):
         recs.append(_hist.record_issue(path, n, rec["issue_updated"], rec["status_updated"], rec["events"], rec["complete"], now,
@@ -5557,11 +5564,10 @@ function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
   +(sp.median==null?"":`<i class=spmed style="left:${at(sp.median)}%" title="median ${sp.median}"></i>`)+`<i class="spt ${tag[2]}" style="width:${at(sp.window)}%"></i></div>`
   +`<div class=spl><span>median ${med}</span><span>max ${sp.max}</span></div>`;
  const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
- const win=`title="last ${hrs} h: in counts every card created in the window, closed ones too"`;   // #1424: the window and what `in` means
- const row=(cls,name,r)=>{const n=(r||{}).in||0,o=(r||{}).out||0,k=(r||{}).open||0,t=n?cls:"mute";
-  const v=n?`${n} in \u00b7 ${o} out \u00b7 ${k} open`:"0 in", w=n?Math.max(0,Math.min(100,100*o/n)):0,
-   pb=n?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
-  return `<div class="spw ${t}" role=img aria-label="${name}: ${v}" ${win}><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
+ const row=(cls,name,r)=>{const n=(r||{}).closed||0,of=(r||{}).total||0,t=of?cls:"mute",   // the Tasks rule: how many of the kind are closed, never arrivals (#1424)
+  v=of?`${n} of ${of} closed`:"none", w=of?Math.max(0,Math.min(100,100*n/of)):0,
+  pb=of?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
+  return `<div class="spw ${t}" role=img aria-label="${name}: ${v}"><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
  const tasks=(()=>{const n=(sp.tasks||{}).n||0,of=(sp.tasks||{}).of||0,t=of?"ok":"mute";
   return `<div class="spw ${t}" role=img aria-label="Tasks: ${n} of ${of} closed"><span class=spwl>Tasks</span><span class=spwv>${n} of ${of} closed</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`})();
  const arr=sp.arrivals||{}, stale=sp.stale?`<div class=spage>\u00b7 read ${Math.floor(sp.age_secs/60)} m ago</div>`:"";
@@ -6157,7 +6163,7 @@ const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   
 const CFD_TYPES=[["all","All"],["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the cumulative flow's Type: All is every card (#1356)
 const flowFilter=()=>{try{const s=JSON.parse(localStorage.getItem("squad-flow")||"{}")||{};return {ty:CFD_TYPES.some(([k])=>k===s.ty)?s.ty:"task",hidden:Array.isArray(s.hidden)?s.hidden.filter(n=>typeof n==="string"):[]}}catch(e){return {ty:"task",hidden:[]}}};   // a filter the page cannot read is its default, never an error; the Type opens on the tasks default the route always sent (#1356)
 const flowSave=()=>{try{localStorage.setItem("squad-flow",JSON.stringify({ty:CF.ty,hidden:CF.hidden}))}catch(e){}};   // the two filters live in the page's own key, apart from the Board record (#1356)
-let CF={r:"30",...flowFilter()};   // the cumulative flow's range (30 days at first, #901), its Type and the states the reader hid, restored from the page key (#1356)
+let CF={r:"all",...flowFilter()};   // the cumulative flow's range (the whole history at first: the chart opens on zero), its Type and the states the reader hid, restored from the page key (#1356)
 
 const cfdShown=c=>{const keep=c.bands.filter(b=>!CF.hidden.includes(b.name)),stacked=c.bands.every(b=>b.lower&&b.upper);
   if(keep.length===c.bands.length&&stacked)return c.bands;   // every band shows, with the hub's own stack: the page reads no count (#1149)
@@ -6197,7 +6203,7 @@ const ltEx=(exc,cards,total,words,reasons)=>{const R=reasons||{},named=exc.map(e
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total,c.excluded_text,c.excluded_reasons);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
-let LT={tf:"7",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:false,p85:false,win:"full"};   // a fresh page opens on the past week, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); only the average reference shows at first, and the median and p85 are toggles (#1332)
+let LT={tf:"7",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:true,p85:true,win:"full"};   // a fresh page opens on the past week, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); the average, the median and p85 all show at first, and each is a toggle (#1332)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)

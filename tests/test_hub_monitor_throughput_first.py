@@ -62,7 +62,8 @@ def _section(page, sid):
 SPEED = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
          "stale": False, "age_secs": 60, "labels": {"age_secs": 60, "stale": False},
          "tasks": {"n": 4, "of": 10, "share": 0.4},
-         "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3}, "loop_bugs": {"in": 4, "out": 2, "open": 2}},
+         "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3, "closed": 3, "total": 7},
+                      "loop_bugs": {"in": 4, "out": 2, "open": 2, "closed": 2, "total": 4}},
          "specs": {"open": 3, "so": "3 open", "done": 5, "total": 9, "pct": 55, "frac": 5 / 9,
                    "value": "5/9 tickets · 55%", "state": "info", "bar": True, "tip": "", "none": {"closed": 0, "total": 0}}}
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "write": True, "reason": "", "tailnet": False,
@@ -126,7 +127,7 @@ def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
     monitor = _section(page, "inst")
     assert monitor.index("id=igs") < monitor.index("id=ispeed")
     card = _run(page, f"speedRow({json.dumps(SPEED)})", _monitor_blocks(page))
-    sentences = ["Tasks: 4 of 10 closed", "Bugs: 7 in · 4 out · 3 open", "Loop-bugs: 4 in · 2 out · 2 open",
+    sentences = ["Tasks: 4 of 10 closed", "Bugs: 3 of 7 closed", "Loop-bugs: 2 of 4 closed",
                  "Specs: 5/9 tickets · 55%, 3 open"]
     positions = [card.index(f'aria-label="{s}"') for s in sentences]
     assert positions == sorted(positions), "the three rows are out of order"

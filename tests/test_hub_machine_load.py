@@ -1049,8 +1049,8 @@ def _speed(**kw):
     fact = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
             "stale": False, "age_secs": 60, "labels": {"age_secs": 60, "stale": False},
             "tasks": {"n": 4, "of": 10, "share": 0.4},
-            "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3},
-                         "loop_bugs": {"in": 4, "out": 2, "open": 2}},
+            "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3, "closed": 3, "total": 7},
+                         "loop_bugs": {"in": 4, "out": 2, "open": 2, "closed": 2, "total": 4}},
             "specs": _specs()}
     fact.update(kw)
     return fact
@@ -1076,40 +1076,39 @@ def test_the_throughput_row_names_the_trend_it_compared(hub):
 def test_the_card_reads_the_rows_in_their_tones(hub):
     html = _speed_html(hub, _speed())
     assert 'class="spw ok" role=img aria-label="Tasks: 4 of 10 closed"' in html, html
-    assert 'class="spw warn" role=img aria-label="Bugs: 7 in · 4 out · 3 open"' in html, html
-    assert 'class="spw err" role=img aria-label="Loop-bugs: 4 in · 2 out · 2 open"' in html, html
+    assert 'class="spw warn" role=img aria-label="Bugs: 3 of 7 closed"' in html, html
+    assert 'class="spw err" role=img aria-label="Loop-bugs: 2 of 4 closed"' in html, html
     assert 'class="spw spec" role=img aria-label="Specs: 5/9 tickets · 55%, 3 open"' in html, html
 
 
-def test_the_bug_rows_never_read_opened_and_carry_the_three_counts(hub):
-    """#1424: the rows never say "opened", which read as "still open", and each names what came in, went out and is open."""
+def test_the_bug_rows_read_the_tasks_rule_of_closed_over_total(hub):
+    """The owner, 2026-11-13: the Bugs and Loop-bugs rows read the same rule as Tasks, how many of the kind are closed."""
     text = _speed_text(hub, _speed())
     assert "opened" not in text, text
-    assert re.search(r"Bugs\s+7 in · 4 out · 3 open", text), text
-    assert re.search(r"Loop-bugs\s+4 in · 2 out · 2 open", text), text
+    assert re.search(r"Bugs\s+3 of 7 closed", text), text
+    assert re.search(r"Loop-bugs\s+2 of 4 closed", text), text
 
 
 def test_the_row_bar_draws_out_over_in(hub):
     html = _speed_html(hub, _speed())
     row = re.search(r'class="spw warn".*?</div>', html, re.S).group(0)
-    assert '<span class=spwv>7 in · 4 out · 3 open</span>' in row, row
-    assert re.search(r'<i style="width:57\.14\d*%"></i>', row), row
-    zero = _speed_html(hub, _speed(arrivals={"bugs": {"in": 0, "out": 0, "open": 3},
-                                            "loop_bugs": {"in": 0, "out": 0, "open": 1}}))
+    assert '<span class=spwv>3 of 7 closed</span>' in row, row
+    assert re.search(r'<i style="width:42\.85\d*%"></i>', row), row
+    zero = _speed_html(hub, _speed(arrivals={"bugs": {"in": 0, "out": 0, "open": 3, "closed": 0, "total": 0},
+                                            "loop_bugs": {"in": 0, "out": 0, "open": 1, "closed": 0, "total": 0}}))
     start = zero.index('class="spw mute"')
     end = zero.find('class="spw ', start + 1)
     zero_row = zero[start:end if end != -1 else len(zero)]   # the row's own markup, up to the next row
-    assert '<span class=spwv>0 in</span>' in zero_row, zero_row   # the visible text, not only the aria-label
-    assert "spwt" not in zero_row, zero_row   # 0 in draws no bar
+    assert '<span class=spwv>none</span>' in zero_row, zero_row   # the visible text, not only the aria-label
+    assert "spwt" not in zero_row, zero_row   # a kind with no card draws no bar
 
 
-def test_an_out_over_in_bar_is_capped_at_full(hub):
-    """#1424: cards closed in the window may outnumber the ones created in it, so the track never overflows."""
-    html = _speed_html(hub, _speed(arrivals={"bugs": {"in": 2, "out": 5, "open": 0},
-                                            "loop_bugs": {"in": 0, "out": 0, "open": 0}}))
+def test_a_row_of_every_card_closed_fills_its_track(hub):
+    """The track is closed over the kind's whole count, so every card closed fills it and nothing overflows."""
+    html = _speed_html(hub, _speed(arrivals={"bugs": {"in": 2, "out": 5, "open": 0, "closed": 5, "total": 5},
+                                            "loop_bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0}}))
     row = re.search(r'class="spw warn".*?</div>', html, re.S).group(0)
     assert '<i style="width:100%"></i>' in row, row
-    assert "width:250%" not in row, row
 
 
 def test_the_specs_row_carries_the_per_spec_tip(hub):
@@ -1120,9 +1119,10 @@ def test_the_specs_row_carries_the_per_spec_tip(hub):
     assert 'title="#1 Spec 1 — 2/5\nNo spec — 1/2"' in html, html
 
 
-def test_the_window_rows_name_the_window_and_that_in_counts_closed_arrivals(hub):
+def test_the_bug_rows_carry_no_window(hub):
+    """The rows count the board, never a window: the hero line already names the window's closures."""
     html = _speed_html(hub, _speed())
-    assert re.search(r'title="last 4 h: in counts every card created in the window, closed ones too"', html), html
+    assert 'title="last 4 h' not in html, html
 
 
 def test_the_specs_row_reads_the_cumulative_counts_with_its_second_line(hub):
@@ -1155,11 +1155,11 @@ def test_closes_before_the_window_draw_the_bar_at_zero_fill(hub):
 
 
 def test_nothing_opened_in_the_window_reads_zero_in_in_the_muted_tone(hub):
-    empty = {"in": 0, "out": 0, "open": 0}
+    empty = {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0}
     html = _speed_html(hub, _speed(window=0, day=6, trend="down",
                                    arrivals={"bugs": empty, "loop_bugs": empty}))
-    assert 'class="spw mute" role=img aria-label="Bugs: 0 in"' in html, html
-    assert 'class="spw mute" role=img aria-label="Loop-bugs: 0 in"' in html, html
+    assert 'class="spw mute" role=img aria-label="Bugs: none"' in html, html
+    assert 'class="spw mute" role=img aria-label="Loop-bugs: none"' in html, html
 
 
 def test_the_last_line_names_the_age_only_once_the_oldest_source_is_stale(hub):
@@ -1243,9 +1243,9 @@ def test_the_arrival_rows_count_in_out_and_open_over_one_window(hub, tmp_path, m
              _arrival_card(7, ["loop-bug:dispatch"], now_ts - 8 * 3600)]                         # open, opened before
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert arrivals["bugs"] == {"in": 2, "out": 2, "open": 3}, arrivals
-    assert arrivals["loop_bugs"] == {"in": 1, "out": 1, "open": 1}, arrivals
-    assert arrivals["loop_bugs"]["in"] <= arrivals["bugs"]["in"], "the loop-bugs row is never above its Bugs superset"
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 2, "out": 2, "open": 3}, arrivals
+    assert {k: arrivals["loop_bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 1, "open": 1}, arrivals
+    assert arrivals["loop_bugs"]["in"] <= arrivals["bugs"]["in"] and arrivals["loop_bugs"]["total"] <= arrivals["bugs"]["total"], "the loop-bugs row is never above its Bugs superset"
 
 
 def test_the_open_count_matches_the_kanban_for_the_same_fixture(hub, tmp_path, monkeypatch):
@@ -1276,7 +1276,7 @@ def test_a_defect_opened_and_closed_inside_the_window_counts_in_and_out(hub, tmp
     items = [_arrival_card(1, ["bug"], now_ts - 2 * 3600, closed=now_ts - 1 * 3600)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert arrivals["bugs"] == {"in": 1, "out": 1, "open": 0}, arrivals
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 1, "open": 0}, arrivals
 
 
 def test_a_loop_defect_labelled_only_landing_counts_in_both_arrival_rows(hub, tmp_path, monkeypatch):
@@ -1285,8 +1285,8 @@ def test_a_loop_defect_labelled_only_landing_counts_in_both_arrival_rows(hub, tm
     items = [_arrival_card(1, ["loop-bug:landing"], now_ts - 2 * 3600)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert arrivals["bugs"] == {"in": 1, "out": 0, "open": 1}, arrivals
-    assert arrivals["loop_bugs"] == {"in": 1, "out": 0, "open": 1}, arrivals
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 0, "open": 1}, arrivals
+    assert {k: arrivals["loop_bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 0, "open": 1}, arrivals
 
 
 def test_no_card_opened_in_the_window_reads_zero_in_both_arrival_rows(hub, tmp_path, monkeypatch):
@@ -1295,8 +1295,8 @@ def test_no_card_opened_in_the_window_reads_zero_in_both_arrival_rows(hub, tmp_p
     items = [_arrival_card(1, ["bug"], now_ts - 8 * 3600)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert arrivals["bugs"] == {"in": 0, "out": 0, "open": 1}, arrivals
-    assert arrivals["loop_bugs"] == {"in": 0, "out": 0, "open": 0}, arrivals
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 0, "open": 1}, arrivals
+    assert {k: arrivals["loop_bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 0, "open": 0}, arrivals
 
 
 def test_the_arrival_rows_read_the_creation_stamp_never_the_close_stamp(hub, tmp_path, monkeypatch):
@@ -1307,7 +1307,7 @@ def test_the_arrival_rows_read_the_creation_stamp_never_the_close_stamp(hub, tmp
              {**_arrival_card(2, ["bug"], 0), "o": "not a stamp"}]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert arrivals["bugs"] == {"in": 0, "out": 1, "open": 1}, arrivals
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 1, "open": 1}, arrivals
 
 
 def test_the_arrival_rows_follow_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
@@ -1318,7 +1318,7 @@ def test_the_arrival_rows_follow_the_same_window_override_as_the_hero(hub, tmp_p
     _arrival_items(hub, tmp_path, monkeypatch, items)
     monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert arrivals["bugs"] == {"in": 1, "out": 0, "open": 2}, arrivals
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 0, "open": 2}, arrivals
 
 
 def test_a_closed_card_the_board_draws_open_counts_out_by_its_stamp_and_open_by_its_column(hub, tmp_path, monkeypatch):
@@ -1329,7 +1329,8 @@ def test_a_closed_card_the_board_draws_open_counts_out_by_its_stamp_and_open_by_
     item.update(i="PVTI_1", ot=now_ts - 3600)   # the read began an hour ago, as the cache writes it
     moves = {"PVTI_1": {"column": "Todo", "at": "2099-01-01T00:00:00Z", "by": "owner"}}
     _arrival_items(hub, tmp_path, monkeypatch, [item])
-    assert hub.arrivals_fact([item], now_ts, 4 * 3600, moves, 120.0)["bugs"] == {"in": 1, "out": 1, "open": 1}
+    row = hub.arrivals_fact([item], now_ts, 4 * 3600, moves, 120.0)["bugs"]
+    assert {k: row[k] for k in ("in", "out", "open")} == {"in": 1, "out": 1, "open": 1}
 
 
 def test_the_specs_row_is_cumulative_while_the_bug_rows_keep_the_window(hub, tmp_path, monkeypatch):

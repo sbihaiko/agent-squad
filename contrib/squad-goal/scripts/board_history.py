@@ -103,8 +103,8 @@ def _event(node):
     if kind == "UnlabeledEvent": return {"t": t, "type": "unlabel", "name": node["label"]["name"]}
     if kind == "ClosedEvent": return {"t": t, "type": "closed"}
     if kind == "ReopenedEvent": return {"t": t, "type": "reopened"}
-    if kind == "AddedToProjectV2Event": return {"t": t, "type": "added"}
-    if kind == "RemovedFromProjectV2Event": return {"t": t, "type": "removed"}
+    if kind == "AddedToProjectV2Event": return {"t": t, "type": "added", "project": (node.get("project") or {}).get("number")}
+    if kind == "RemovedFromProjectV2Event": return {"t": t, "type": "removed", "project": (node.get("project") or {}).get("number")}
     if kind == "ParentIssueAddedEvent": return {"t": t, "type": "spec", "spec": (node.get("parent") or {}).get("number")}
     if kind == "ParentIssueRemovedEvent": return {"t": t, "type": "spec", "spec": None}
     return None
@@ -115,10 +115,13 @@ def events_of(issue):
     return [e for e in map(_event, issue["timelineItems"]["nodes"]) if e]
 
 
-def record_page(store, number, page, issue_updated, status_updated):
-    """Merge one timeline page into the in-memory store: its events follow the stored ones, and its end cursor resumes the next read."""
+def record_page(store, number, page, issue_updated, status_updated, project=None):
+    """Merge one timeline page into the in-memory store: its events follow the stored ones, and its end cursor resumes the
+    next read. `project` names the board this record is kept for: an add or a removal that names another project is that
+    board's move, never this card's, so a card taken off another board never leaves this one (#1663)."""
     prev = store.get(number, {})
-    events = list(prev.get("events", [])) + [e for e in map(_event, page["nodes"]) if e]
+    events = list(prev.get("events", [])) + [e for e in map(_event, page["nodes"])
+                                             if e and not (project is not None and e.get("project") not in (None, project))]
     complete = timeline_complete(page)
     cursor = None if complete else (page.get("pageInfo") or {}).get("endCursor")
     store[number] = {"issue_updated": issue_updated, "status_updated": status_updated, "events": events,
@@ -164,6 +167,16 @@ def intervals(events):
         out.append({"from": e["t"], "to": None, **snap, "approx": e["type"] == "gone",
                     "unknown": e["type"] == "added" and bool(state["status"]) and state["status_t"] < _instant(e["t"])})
     return out
+
+
+def labels_now(events):
+    """The labels the card carries after its last event: a label added and never removed is one it holds now. The flow
+    charts read the mark a card carries, such as `moved` (#1663)."""
+    held = set()
+    for e in sorted((e for e in events if e.get("type") in ("label", "unlabel")), key=lambda e: _instant(e["t"])):
+        if e["type"] == "label": held.add(e.get("name"))
+        else: held.discard(e.get("name"))
+    return held
 
 
 ROLE = _columns.ROLE
