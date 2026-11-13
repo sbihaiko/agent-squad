@@ -96,7 +96,7 @@ def test_claim_refused_for_another_carrier_claim(env):
 
 
 def test_claim_refused_when_a_taken_marker_names_the_issue(env, capsys):
-    (env / "auto" / "taken-run-x").write_text(f"run run-x\nissues 1664 1663\n")
+    (env / "auto" / "taken-run-x").write_text("run run-x\nissues 1664 1663\n")
     rc = H.claim([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
     assert rc == 1
     assert not (env / "auto" / "hand-1664").exists()
