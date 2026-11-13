@@ -154,4 +154,61 @@ n=$(cut -f4 "$T/st/live-check-result" 2>/dev/null)
 [ "$(/usr/bin/grep -c 'LIVE_CHECK_WINDOW_SECONDS:-3600' "$d/live-check.sh" 2>/dev/null)" = 1 ] \
   && ok "one hour is the live check's own default window" || ko "the default window is not one hour"
 
+# 7) One live check per state directory: the lease (#1660). A start is a no-op while a live lease names a check, the check
+# takes the lease before it measures and drops it on every exit, and a dead owner's lease is taken over. The fake reading
+# holds for FAKE_HOLD seconds and logs one line per start; the door and the lock are the repository's own copies.
+fake=$T/fake; mkdir -p "$fake/squad" "$fake/contrib/squad-goal/scripts"; : > "$fake/squad/__init__.py"
+cp "$d/live-check.sh" "$d/serial.sh" "$d/caps.sh" "$fake/contrib/squad-goal/scripts/"
+cat > "$fake/squad/livecheck.py" <<'PY'
+import os, time
+if __name__ == "__main__":
+    with open(os.environ["FAKE_RUNS"], "a") as f: f.write("start\n")
+    time.sleep(float(os.environ.get("FAKE_HOLD", "0.3")))
+PY
+fls=$fake/contrib/squad-goal/scripts/live-check.sh
+cd "$fake"   # python -m puts the working directory first: a run from the repository would import the real reading
+rl() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+# settle <state> <runs file> <count>: at most 2 s for <count> starts and for the lease to be gone, then a short grace for a second start.
+settle() { local i=0; while { [ "$(rl "$2")" -lt "$3" ] || [ -e "$1/live-check.lease" ]; } && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done; sleep 0.2; }
+mkdir -p "$T/la"; : > "$T/ra"
+# a) Concurrent triggers start one check: three starts at once, one reading.
+for i in 1 2 3; do SG_STATE=$T/la FAKE_RUNS=$T/ra bash "$fls" --start >/dev/null 2>&1 & done; wait
+settle "$T/la" "$T/ra" 1
+[ "$(rl "$T/ra")" = 1 ] && ok "concurrent triggers start one check" || ko "concurrent triggers: $(rl "$T/ra") starts"
+# b) A supervisor restart is a trigger too: a start while the check runs adds no second one.
+: > "$T/ra"; SG_STATE=$T/la FAKE_RUNS=$T/ra bash "$fls" --start >/dev/null 2>&1 & first=$!
+i=0; while [ "$(rl "$T/ra")" = 0 ] && [ $i -lt 40 ]; do sleep 0.02; i=$((i+1)); done
+SG_STATE=$T/la FAKE_RUNS=$T/ra bash "$fls" --start >/dev/null 2>&1
+wait "$first"; settle "$T/la" "$T/ra" 1
+[ "$(rl "$T/ra")" = 1 ] && ok "a supervisor restart adds no second check" || ko "restart: $(rl "$T/ra") starts"
+# c) A live lease makes the start a silent no-op that logs one line.
+mkdir -p "$T/lc/live-check.lease"; sleep 300 >/dev/null 2>&1 & h=$!; pids+=("$h"); echo "$h" > "$T/lc/live-check.lease/pid"; : > "$T/rc"
+SG_STATE=$T/lc FAKE_RUNS=$T/rc bash "$fls" --start >/dev/null 2>&1; sleep 0.3
+[ "$(rl "$T/rc")" = 0 ] && [ "$(rl "$T/lc/live-check.log")" = 1 ] && [ -d "$T/lc/live-check.lease" ] \
+  && ok "a live lease makes a start a no-op that logs one line" \
+  || ko "live lease: $(rl "$T/rc") starts, $(rl "$T/lc/live-check.log") log lines"
+# d) A dead owner's lease is taken over, and the check releases it when it ends.
+mkdir -p "$T/ld/live-check.lease"; echo 99999999 > "$T/ld/live-check.lease/pid"; : > "$T/rd"
+SG_STATE=$T/ld FAKE_RUNS=$T/rd bash "$fls" --start >/dev/null 2>&1
+settle "$T/ld" "$T/rd" 1
+[ "$(rl "$T/rd")" = 1 ] && [ ! -e "$T/ld/live-check.lease" ] \
+  && ok "a dead owner's lease is taken over and released" || ko "dead owner: $(rl "$T/rd") starts, lease left: $(ls "$T/ld" 2>&1)"
+# e) Two state directories run independently: a live lease in one never blocks the other.
+mkdir -p "$T/le/live-check.lease"; sleep 300 >/dev/null 2>&1 & h2=$!; pids+=("$h2"); echo "$h2" > "$T/le/live-check.lease/pid"; : > "$T/re1"; : > "$T/re2"
+mkdir -p "$T/lf"
+SG_STATE=$T/le FAKE_RUNS=$T/re1 bash "$fls" --start >/dev/null 2>&1
+SG_STATE=$T/lf FAKE_RUNS=$T/re2 bash "$fls" --start >/dev/null 2>&1
+settle "$T/lf" "$T/re2" 1
+[ "$(rl "$T/re1")" = 0 ] && [ "$(rl "$T/re2")" = 1 ] \
+  && ok "two state directories run independently" || ko "two dirs: blocked $(rl "$T/re1"), free $(rl "$T/re2")"
+# f) The next check starts after the previous one released.
+: > "$T/rf"; SG_STATE=$T/lf FAKE_RUNS=$T/rf bash "$fls" --start >/dev/null 2>&1
+settle "$T/lf" "$T/rf" 1
+SG_STATE=$T/lf FAKE_RUNS=$T/rf bash "$fls" --start >/dev/null 2>&1
+settle "$T/lf" "$T/rf" 2
+[ "$(rl "$T/rf")" = 2 ] && ok "the next check starts after the previous released" || ko "next check: $(rl "$T/rf") starts"
+# g) The nightly starts the check through the lease door, never by a bare detached start.
+/usr/bin/grep -q 'live-check.sh" --start' "$d/nightly.sh" && ! /usr/bin/grep -q 'nohup bash "$here/live-check.sh"' "$d/nightly.sh" \
+  && ok "the nightly starts the check through the lease door" || ko "nightly.sh starts the check without the lease door"
+
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
