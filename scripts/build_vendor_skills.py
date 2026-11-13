@@ -2,9 +2,11 @@
 
 Usage: python3 scripts/build_vendor_skills.py [--check] [--key] [--config FILE] [--out DIR]
 Copies each skill in config/vendor-skills.yaml (a `skill:NAME` source is found by name) into <out>/skills/<name>/, writes the plugin manifest, and writes
-VERSIONS.json with a tree hash per skill. `--check` builds nothing: it exits 1 if a source differs from the copy, or
+VERSIONS.json with a tree hash per skill. After copying a skill, it appends config/vendor-skills-patches/<name>.md to
+the copy's SKILL.md when that patch file exists, so the repository's own rules survive `npx skills update`; the tree
+hash covers the appended text. `--check` builds nothing: it exits 1 if a source differs from the copy, or
 the copy differs from VERSIONS.json. `--key` builds nothing: it prints one digest of everything the build reads (the
-config, the personal skills, the vendor tree and VERSIONS.json), so a guard can skip the build when nothing changed.
+config, the patches, the personal skills, the vendor tree and VERSIONS.json), so a guard can skip the build when nothing changed.
 Update the copy when a skill changes, and commit the result.
 """
 import hashlib
@@ -21,6 +23,7 @@ from squad import skillpath  # noqa: E402
 
 SKIP_DIRS = skillpath.SKIP_DIRS
 SKIP_FILES = skillpath.SKIP_FILES
+PATCH_DIR = ROOT / "config" / "vendor-skills-patches"
 
 
 def files(src):
@@ -40,6 +43,28 @@ def tree_hash(base, rels):
     return h.hexdigest()
 
 
+def patch_for(name, patches=None):
+    """The repository's rules for one skill, appended to its vendored SKILL.md; empty when there is no patch file."""
+    p = Path(patches) / f"{name}.md" if patches is not None else PATCH_DIR / f"{name}.md"
+    return p.read_text() if p.exists() else ""
+
+
+def with_patch(data, patch):
+    """The bytes a copy holds: the source file, then the patch after one blank line."""
+    return data + b"\n" + patch.encode() if patch else data
+
+
+def patched_tree_hash(src, rels, patch):
+    """The tree hash of the copy the build writes: every source file, with the patch appended to SKILL.md."""
+    h = hashlib.sha256()
+    for r in rels:
+        data = (Path(src) / r).read_bytes()
+        if Path(r) == Path("SKILL.md"):
+            data = with_patch(data, patch)
+        h.update(str(r).encode() + b"\0" + data + b"\0")
+    return h.hexdigest()
+
+
 def resolve(src):
     """A `skill:NAME` source is found by name; anything else is a path."""
     if str(src).startswith("skill:"):
@@ -49,7 +74,7 @@ def resolve(src):
     return p if p.is_absolute() else ROOT / p
 
 
-def build(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "skills", check=False):
+def build(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "skills", check=False, patches=None):
     """Return (problems, versions). With check, nothing is written."""
     out, problems, versions = Path(out), [], {}
     skills = yaml.safe_load(Path(config).read_text())["skills"]
@@ -59,17 +84,22 @@ def build(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "
             problems.append(f"{s['name']}: no SKILL.md at {src}")
             continue
         rels = files(src)
-        versions[s["name"]] = {"source": s["source"], "sha256": tree_hash(src, rels), "files": len(rels)}
+        patch = patch_for(s["name"], patches)
+        sha = patched_tree_hash(src, rels, patch)
+        versions[s["name"]] = {"source": s["source"], "sha256": sha, "files": len(rels)}
         dest = out / "skills" / s["name"]
         if check:
             have = files(dest) if dest.exists() else []
-            if have != rels or (have and tree_hash(dest, have) != versions[s["name"]]["sha256"]):
+            if have != rels or (have and tree_hash(dest, have) != sha):
                 problems.append(f"{s['name']}: the copy differs from its source")
             continue
         shutil.rmtree(dest, ignore_errors=True)
         for r in rels:
             (dest / r).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src / r, dest / r)
+            if Path(r) == Path("SKILL.md"):
+                (dest / r).write_bytes(with_patch((src / r).read_bytes(), patch))
+            else:
+                shutil.copyfile(src / r, dest / r)
     if check:
         recorded = json.loads((out / "VERSIONS.json").read_text()) if (out / "VERSIONS.json").exists() else {}
         problems += [f"{n}: VERSIONS.json is out of date" for n in versions if recorded.get(n, {}).get("sha256") != versions[n]["sha256"]]
@@ -82,8 +112,8 @@ def build(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "
     return [], versions
 
 
-def guard_key(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "skills"):
-    """One digest of everything the build reads: the config, the personal skills' sources, the vendor tree and VERSIONS.json.
+def guard_key(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "skills", patches=None):
+    """One digest of everything the build reads: the config, the patches, the personal skills' sources, the vendor tree and VERSIONS.json.
 
     vendor-guard.sh runs this every cycle and skips the build when the digest equals the one it kept in $SG_STATE.
     """
@@ -97,6 +127,7 @@ def guard_key(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor"
     for s in yaml.safe_load(Path(config).read_text())["skills"]:
         src = resolve(s["source"])
         rels = files(src) if src.exists() else None
+        feed("patch:" + s["name"], patch_for(s["name"], patches).encode())
         feed("source:" + s["name"], tree_hash(src, rels).encode() if rels is not None else b"missing")
     rels = [p.relative_to(out) for p in sorted(out.rglob("*"))
             if p.is_file() and p.relative_to(out).as_posix() != "VERSIONS.json"]
