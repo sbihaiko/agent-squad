@@ -148,7 +148,7 @@ test-model-recover.sh 0.72
 test-nightly.sh 27.75
 test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
-test-probe-gemini-transcribe.sh 0.27
+test-probe-gemini-transcribe.sh 25.72
 test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
 test-promote-branch.sh 1.94
