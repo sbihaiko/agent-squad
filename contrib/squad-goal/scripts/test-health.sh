@@ -77,7 +77,7 @@ o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qE 'defect-without
 printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH defect-without-bug: open defect(s) that carry no bug label: #505 #506' && ok "an enhancement that names a real defect is reported" || ko "a real defect filed as enhancement was not reported: $o"
 rm -f "$T/pages/"*.json
 # ---- #1795: runs-board-drift, the loop against its own board ----
-bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; *"issues?state=open"*) "$(dirname "$0")/issues" "$@";; esac\n' "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
+bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; *"issues?state=open"*) "$(dirname "$0")/issues" "$@";; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 alerts() { local n; n=$(/usr/bin/grep -c 'HEALTH runs-board-drift' "$T/st/alerts.log" 2>/dev/null); echo "${n:-0}"; }
 notif() { local n; n=$(/usr/bin/grep -c . "$T/notify.calls" 2>/dev/null); echo "${n:-0}"; }
 liverun() { mkdir -p "$T/co/runs/$1"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #%s"}\n' "$2" > "$T/co/runs/$1/record.jsonl"
