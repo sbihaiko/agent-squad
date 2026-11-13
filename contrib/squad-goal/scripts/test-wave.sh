@@ -630,6 +630,16 @@ case "$r" in *"WAVE-LOOP-CAUSED #160:"*"no child's own suite names the cause; no
 [ -e "$T/st/auto/wave-run-16" ] && ok "K4: the run keeps its wave marker" || ko "K4: the wave marker is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K4: dev does not move on a loop-caused failure" || ko "K4: dev moved"
 
+# K5 (#1684): the words a full gate budget really carries are the loop's cause. The capacity answer names "caps.gates is full",
+# and read as the child's defect it counted a failed dispatch and froze the issue after three, though the child did its work.
+k5=0; for why in "fast-gate.sh exited 73 on two runs: caps.gates is full (6 slots), held by gate-88923 (live)" \
+                "fast_gate_not_run: fast-gate.sh exited 73 (caps.gates full, 6 slots, held by gate-88923)"; do
+  r=$((cd "$T/co" && bash "$T/s/wave.sh" fail "$((170+k5))" "run-caps$k5" "$why") 2>&1); k5=$((k5+1))
+  case "$r" in *"loop-caused"*) ok "K5: a full gate budget is the loop's cause, not the issue's";; *) ko "K5: capacity read as the issue's own failure: '$r'";; esac
+done
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 180 run-realred "pytest the base battery failed at tests/test_caps.py::test_limit - wrong limit for caps.gates") 2>&1)
+case "$r" in *"loop-caused"*) ko "K5: a real red that names the budget read as the loop's: '$r'";; *) ok "K5: a real red that names caps.gates stays the issue's own";; esac
+
 # L (#378): a wave has an age cap (SG_WAVE_MAX_AGE_SECONDS, 2 h by default, ADR-0145 rule 13). A wave that reaches it
 # lands the children it holds and sends the children still running back to the queue; it takes no new child. The age is
 # read from the run's own wave start marker (auto/wave-start-<run>), written once when the run cuts its wave.

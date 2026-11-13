@@ -94,7 +94,13 @@ fi
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
   *) SG_GATE_CALLER=${SG_GATE_CALLER:-child}
      if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2}; fi
-     SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
+     SG_GATE_KIND=fast bash "$here/gate.sh" bash "$0" "$@"; fgrc=$?
+     # (#1684) Exit 73 is the machine's budget, never this tree's: the gate took no slot, so it proved nothing and it broke
+     # nothing. It answers unproven (exit 4), the answer every caller already reads as the machine's: branchland's
+     # inconclusive path opens no fix round and gates the tip again on a later cycle, so a child keeps the work it committed
+     # instead of losing it to a budget another gate held.
+     [ "$fgrc" = 73 ] && { echo "fast-gate: unproven: the machine's gate budget is full, so no battery ran and nothing is red; the gate does not pass and the landing holds (exit 4)"; exit 4; }
+     exit "$fgrc";; esac
 # The base the gate read the tree against goes out beside the scope (GATE_BASE_FILE), so an unproven entry's obligation
 # names it (gate.sh, spec 1163): the commit when the base resolves, else the ref as it was named.
 gbase=$(git rev-parse --verify -q "$base^{commit}" 2>/dev/null)

@@ -570,6 +570,18 @@ out=$(slowgate); rc=$?
 if /usr/bin/grep -q "line for an unmarked call" "$T/sc-logs"/fast-gate-*.log 2>/dev/null; then ok "the log names the unmarked call over the line"
 else ko "slow log: '$(cat "$T/sc-logs"/fast-gate-*.log 2>&1 | tail -n 5)'"; fi
 
+# (#1684) A gate that cannot take its slots proved nothing and broke nothing: the machine's budget is full, so the fast gate
+# answers unproven (exit 4) on one line that names the budget. Called out as 73, it read as a red of the branch, and three
+# waves on 2026-11-13 threw a whole child's work away for a budget another gate held.
+rm -rf "$T/caps"; mkdir -p "$T/caps"
+sleep 120 >/dev/null 2>&1 & capslive=$!
+PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps take gates other --count 11 --pid "$capslive" >/dev/null 2>&1
+out=$(fg); rc=$?
+[ $rc = 4 ] && ok "a gate with no slot to take answers unproven (exit 4), never 73" || ko "capacity answer: rc $rc, '$(last "$out")'"
+case "$(last "$out")" in *"budget is full"*) ok "the capacity answer names the machine's budget on its last line";; *) ko "capacity line: '$(last "$out")'";; esac
+PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps release gates other >/dev/null 2>&1
+kill "$capslive" 2>/dev/null; wait "$capslive" 2>/dev/null   # reaped here, so the kill prints no job line of its own
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail
