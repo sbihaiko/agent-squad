@@ -24,15 +24,21 @@ PRS_PAYLOAD = json.dumps({"data": {"repository": {"pullRequests": {"nodes": [PR_
 
 @pytest.fixture(scope="module")
 def hub():
-    os.environ.setdefault("SG_REPO", "x/y")
-    os.environ.setdefault("SG_OWNER", "x")
-    os.environ.setdefault("SG_PROJECT", "4")
-    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
-    os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    # Pinned, not `setdefault`: in one pytest process another module may already have named another repository, and the
+    # fast read keeps only this repository's rows, so an inherited SG_REPO would empty the snapshot (#985).
+    pinned = {"SG_REPO": "x/y", "SG_OWNER": "x", "SG_PROJECT": "4",
+              "SG_CHECKOUT": tempfile.mkdtemp(), "SG_HUB_DIR": tempfile.mkdtemp()}
+    previous = {k: os.environ.get(k) for k in pinned}
+    os.environ.update(pinned)
     spec = importlib.util.spec_from_file_location("hub_board_refresh_button", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    yield mod
+    for k, v in previous.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
 
 def _fake_gh(calls, fail=False):
@@ -82,6 +88,146 @@ def test_a_pass_reads_the_project_the_blockers_and_the_prs(hub, monkeypatch):
     assert hub.board_cache["t"] > 1.0                                        # fresh data, not another read of the cache
     assert [i["n"] for i in hub.board_cache["items"]] == [11]
     assert isinstance(hub.board_cache["prs"], list)
+
+
+def _node(n, status="Todo"):
+    """One open item of the fast read's snapshot for the repository this hub reads."""
+    return {"updatedAt": "2026-11-01T10:00:00Z", "isArchived": False,
+            "fieldValueByName": {"name": status, "updatedAt": "2026-11-01T10:00:00Z"},
+            "content": {"id": f"I_{n}", "number": n, "fullDatabaseId": str(900000 + n), "state": "OPEN", "stateReason": None,
+                        "updatedAt": "2026-11-01T10:00:00Z", "repository": {"nameWithOwner": "x/y"},
+                        "labels": {"totalCount": 0, "nodes": []}}}
+
+
+def _snapshot(*nodes):
+    """One whole fast-read answer for the user root: a page no further page follows."""
+    return {"data": {"rateLimit": {"cost": 1},
+                     "user": {"projectV2": {"items": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": list(nodes)}}}}}
+
+
+def _row(n):
+    """One open card as the full read stores it, joined to the snapshot by its database id."""
+    return {"n": n, "t": f"card {n}", "s": "open", "st": "Todo", "l": [], "i": f"ITEM{n}", "fd": 900000 + n, "ot": 1}
+
+
+def _fast_pass_ready(hub, monkeypatch, state, *answers):
+    """The fast read wired to recorded answers: its own state directory, a fresh hour and the cache of one held card."""
+    queue = list(answers)
+
+    def gql(query, variables, timeout=None):
+        answer = queue.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(hub, "STATE", state)
+    monkeypatch.setattr(hub, "_fast_root", lambda: "user")
+    monkeypatch.setattr(hub, "FAST_BUDGET", hub.board_fast.Budget(600))
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [_row(11)], "prs": [], "lc": {}, "err": None, "parts": {}})
+    monkeypatch.setattr(hub, "_graphql", gql)
+
+
+def test_a_card_the_cache_does_not_hold_asks_for_the_full_read(hub, monkeypatch):
+    """A card added to the project is in the fast snapshot and not in the cache: the pass touches the dirty flag, and the
+    full read leaves its wait after one 2 s beat, never the whole period (#985)."""
+    state = Path(tempfile.mkdtemp())
+    _fast_pass_ready(hub, monkeypatch, state, _snapshot(_node(11), _node(12)))
+    hub.fast_board_pass()
+    assert (state / "board-dirty").exists(), "a card the fast read saw and the cache does not hold asks for a full read"
+
+    passes, sleeps = [], []
+
+    def fake_pass():
+        passes.append(1)
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        if len(sleeps) > 1:
+            raise StopIteration
+
+    monkeypatch.setattr(hub, "board_pass", fake_pass)
+    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    with pytest.raises(StopIteration):
+        hub.refresh_board()
+    assert len(passes) == 2, "the full read runs again at the flag, not at its period"
+    assert sleeps == [2, 2], "the flag is read after one 2 s beat, so the new card never waits the full period"
+
+
+def test_the_same_unread_card_asks_for_one_full_read_only(hub, monkeypatch):
+    """The anti-storm rule: a card the cache still lacks is asked for once per database id, so a fast pass every 15 s
+    never becomes a full read every 15 s."""
+    state = Path(tempfile.mkdtemp())
+    _fast_pass_ready(hub, monkeypatch, state, _snapshot(_node(11), _node(12)), _snapshot(_node(11), _node(12)))
+    hub.fast_board_pass()
+    flag = state / "board-dirty"
+    assert flag.exists(), "the first pass asks for the card"
+    os.utime(flag, (1, 1))   # a stamp a second touch would move
+    hub.fast_board_pass()
+    assert flag.stat().st_mtime == 1, "a card already asked for is never asked for again"
+    assert 900012 in {int(x) for x in hub.board_cache.get("fast_asked") or []}, "the cache remembers the card it asked for"
+
+
+def test_an_ask_a_full_read_outran_is_asked_again(hub, monkeypatch):
+    """A full read already in flight stamps its own end after the touch the fast pass just made, so that first ask
+    bought nothing. The same card under the next read is asked again, once: an ask the read outran must not leave the
+    card waiting the whole period (#985)."""
+    state = Path(tempfile.mkdtemp())
+    _fast_pass_ready(hub, monkeypatch, state, _snapshot(_node(11), _node(12)), _snapshot(_node(11), _node(12)))
+    hub.fast_board_pass()
+    flag = state / "board-dirty"
+    os.utime(flag, (1, 1))
+    hub.board_cache["t"] = 2.0   # a full read ended after the ask and still holds no card 12
+    hub.fast_board_pass()
+    assert flag.stat().st_mtime != 1, "a card the read outran is asked for again under the new read"
+    os.utime(flag, (1, 1))
+    hub.fast_board_pass()
+    assert flag.stat().st_mtime == 1, "that second ask is spent too: one ask per (database id, full read)"
+
+
+def test_another_repositorys_cache_keeps_no_ask_and_no_pending_card(hub, monkeypatch, tmp_path):
+    """The cache file is one per owner and project, so two repositories share it. Its rows are dropped when the hub
+    reads another repository's cache; the ask and the pending card go with them, or the page names a count from a board
+    this hub never read (#985, #1015)."""
+    cache = {"repo": "another/repo", "t": 5.0, "items": [_row(11)], "prs": [], "lc": {}, "err": None,
+             "fast_asked": {"900012": 0.0}, "fast_pending": [900012]}
+    fresh = _load_hub_with_cache("fresh", cache, tmp_path, monkeypatch)
+    assert fresh.board_cache.get("fast_asked") == {}, "another repository's ask is no ask of this board"
+    assert fresh.board_cache.get("fast_pending") == [], "another repository's card is no card of this board"
+    assert fresh.board()["pending_new"] == 0, "the served count names no card from another repository's cache"
+
+
+def test_a_failed_snapshot_asks_for_no_full_read(hub, monkeypatch):
+    """A read that discarded its whole snapshot has seen no card, so it asks for no full read either."""
+    state = Path(tempfile.mkdtemp())
+    _fast_pass_ready(hub, monkeypatch, state, RuntimeError("HTTP 502"))
+    hub.fast_board_pass()
+    assert not (state / "board-dirty").exists(), "a failed read has seen no card"
+    assert hub.board_cache["parts"]["status"]["err"], "the failure is still named on the status part"
+
+
+def _profile_hub(tag, base, monkeypatch):
+    """One profile's hub in this process, as hubmux loads it: its own state and board cache around the shared board_fast."""
+    for name in ("checkout", "hub", "state"):
+        (base / name).mkdir(parents=True)
+    for key, value in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"),
+                       ("SG_CHECKOUT", str(base / "checkout")), ("SG_HUB_DIR", str(base / "hub")),
+                       ("SG_STATE", str(base / "state")), ("SG_BOARD_CACHE", str(base / "hub-board.json"))):
+        monkeypatch.setenv(key, value)
+    spec = importlib.util.spec_from_file_location(f"hub_profile_{tag}", HUB_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_two_profiles_in_one_process_each_ask_for_the_same_card(tmp_path, monkeypatch):
+    """hubmux loads one hub per profile into one process: the memory of what was asked is the cache's, never a module's,
+    or the first profile's fast read would silence the second profile's new card (#985)."""
+    a, b = _profile_hub("a", tmp_path / "a", monkeypatch), _profile_hub("b", tmp_path / "b", monkeypatch)
+    for mod in (a, b):
+        _fast_pass_ready(mod, monkeypatch, mod.STATE, _snapshot(_node(11), _node(12)))
+        mod.fast_board_pass()
+    assert (a.STATE / "board-dirty").exists() and (b.STATE / "board-dirty").exists(), \
+        "each profile's own cache names the card it has not read"
 
 
 def _load_hub_with_cache(tag, cache, tmp_path, monkeypatch):

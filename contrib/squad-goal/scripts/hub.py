@@ -3189,13 +3189,20 @@ if board_cache.get("repo") not in (None, REPO):
     # The cache file is one per owner and project (address.sh), so two repositories on one project share it, and the
     # file holds the rows of the hub that wrote last (#1015). Another repository's rows are never this board: they are
     # dropped, and this hub's first pass reads its own. A board with no row is safer than another repository's.
-    board_cache.update(items=[], cases=[], prs=[], landed=[], errs=[], lc={}, lt=0, t=0, repo=REPO)
+    board_cache.update(items=[], cases=[], prs=[], landed=[], errs=[], lc={}, lt=0, t=0, repo=REPO, fast_asked={}, fast_pending=[], fast_seen={})
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
 # the profile repository's, which is the only one that pass read.
 for _k in ("prs", "landed"):
     for _x in board_cache.get(_k) or []: _x.setdefault("r", REPO)
 board_cache.setdefault("errs", [])
 board_cache.setdefault("parts", {})
+board_cache.setdefault("fast_asked", {})   # database id -> the full read it was asked under (#985): an ask a later read outran is asked again
+board_cache.setdefault("fast_pending", [])   # the cards the fast read has seen and the cache does not hold (#985)
+def fd_int(v):
+    """A database id as an int, or None: a cache row may carry a spelling that is no number (a hand fixture, a corrupt
+    file), and that row joins no card instead of blanking the whole board (#985)."""
+    try: return int(v)
+    except (TypeError, ValueError): return None
 def apply_open_blockers(items, nodes):
     """Attach open native blockers (`Issue.blockedBy`) onto each item as `b`. A closed blocker drops off by itself."""
     by = {n.get("number"): n for n in nodes or []}
@@ -3625,7 +3632,10 @@ def _graphql(query, variables, timeout):
     return out.answer
 def fast_board_pass():
     """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A card the last
-    whole snapshot held and this one lacks is checked in one batched read (#976). A failed read moves nothing."""
+    whole snapshot held and this one lacks is checked in one batched read (#976). A card this snapshot carries and the
+    cache does not hold touches the board-dirty flag once per full read, so the read runs within 2 s (#985). A failed
+    read moves nothing. Known limit, stated rather than hidden: the snapshot drops a card already in a terminal column,
+    so such a card is neither asked for nor counted, and it waits for the full period."""
     observed = time.time()
     deadline = observed + FAST_DEADLINE
     try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, deadline)
@@ -3638,6 +3648,20 @@ def fast_board_pass():
         lost = board_fast.missing(board_cache.get("fast_seen") or {}, rows, board_cache.get("items") or [])
     verdicts = board_fast.check(_graphql, OWNER, PROJECT_NO, lost, FAST_BUDGET, deadline)
     with _board_lock:
+        unread = board_fast.unknown(rows, board_cache.get("items") or [])
+        asked = dict(board_cache.get("fast_asked") or {}) if isinstance(board_cache.get("fast_asked"), dict) else {}
+        read_t = board_cache.get("t") or 0
+        # One ask per (database id, full read): a pass every 15 s never becomes a read every 15 s, and an ask a full read
+        # has outrun (it was in flight and stamped its own end after the touch) is spent without effect, so a later pass
+        # asks again under the new read (#985).
+        fresh = [r for r in unread if r["fd"] is not None and not (asked.get(str(r["fd"])) is not None and asked[str(r["fd"])] >= read_t)]
+        if fresh:
+            try:
+                (STATE / "board-dirty").touch()   # the full read runs within 2 s, never the whole period (#985)
+                for r in fresh: asked[str(r["fd"])] = read_t
+                board_cache["fast_asked"] = asked
+            except OSError: pass
+        board_cache["fast_pending"] = [r["fd"] for r in unread if r["fd"] is not None]
         items = board_fast.apply(board_cache.get("items") or [], rows, int(observed))
         board_cache["items"] = board_fast.settle(items, verdicts, int(observed))
         board_cache["fast_seen"] = board_fast.seen_of(rows, verdicts)
@@ -4732,7 +4756,11 @@ def board(moves=None):
                 for item in dropped: PROVED.pop(item, None)   # the entry is gone: its proof goes with it (#1300)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
+    # A card the fast read has seen and the full read has not written yet is not drawn (#985): the count names it, so the
+    # page never shows a board that silently lacks a card just added to the project.
+    pending_new = {fd_int(fd) for fd in board_cache.get("fast_pending") or []} - {fd_int(i.get("fd")) for i in board_cache["items"]}
+    pending_new.discard(None)
+    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "pending_new": len(pending_new), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -6492,7 +6520,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;readStale=!!b.err||lastBoardOver;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
+lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pending_new||0;readStale=!!b.err||lastBoardOver;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -6590,7 +6618,7 @@ function paintHL(){
 // highlight:end
 
 // A tab only shows one pane; every pane keeps its own poll (#889).
-let TAB="board",lastRead=0,readStale=false,lastBoardT=0,lastBoardOver=false;
+let TAB="board",lastRead=0,readStale=false,lastBoardT=0,lastBoardOver=false,lastPending=0;
 const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
 const HASH={board:"#kanban",runs:"#runs",flow:"#flow",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
 function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||(/^#set-[a-z]+$/.test(location.hash)?"set":null)}   // a card link opens Kanban, where the card is (#1274); a themed Settings link opens Settings (#1286)
@@ -6617,7 +6645,7 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  const pj=$("#pj"),psw=$("#psw");pj.onclick=e=>{e.stopPropagation();const on=!psw.classList.contains("on");psw.classList.toggle("on",on);pj.setAttribute("aria-expanded",on)};
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board items read N s ago": the item read's own stamp (#1661), never the browser's fetch time
-setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale)":""}`:"board items not read yet"):""},1000);
+setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale||!!lastPending);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale)":""}${lastPending?` · ${lastPending} card(s) seen, not read yet`:""}`:"board items not read yet"):""},1000);   // the stale class names a card the fast read has seen and the full read has not written (#985)
 // loop-switch:start
 // The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
 // a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
