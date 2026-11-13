@@ -9,16 +9,23 @@ A card never moves backwards: the column it carries is the furthest the work rea
 column lower in the shipped flow is refused, reported by name, and no new ledger is kept. A merge taken back is a tag plus a new
 issue, never a move back, so a card the facts pull back out of a terminal column keeps its column and carries the tag."""
 import json, os, re, subprocess, sys
+os.environ.setdefault("SG_GH_PASS", "reconcile")   # the call log names this pass (ADR-0277): unattributed spend cannot be pinned on its spender (#1648)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 from board_columns import BY_FACT, COLUMNS, SHIPPED_NAME
 from issue_state import board_state
-import ghread, ghthrottle   # the door's reader and log, and the core quota the floor reads (#847)
+import ghread, ghthrottle   # the door's reader and log, the shared throttle, and the quota floors (#847, #1648)
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
 if not (REPO and OWNER and BOARD): sys.exit("reconcile: set SG_REPO, SG_OWNER and SG_PROJECT (env.sh exports them)")
-FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, the pass skips its read for the cycle (#847)
-_low = ghthrottle.core_below(FLOOR)
-if _low is not None:
-    print(f"RECONCILE: skipped this pass: core quota {_low} is under SG_GH_FLOOR {FLOOR}; the next pass reads again")
+FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many requests left in a pool, the pass skips its read for the cycle (#847)
+for _pool in ("core", "graphql"):   # GraphQL is its own quota: a pass that floors on core alone walks into a refusal with 3,000 core requests left (#1648)
+    _low = ghthrottle.pool_below(_pool, FLOOR)
+    if _low is not None:
+        print(f"RECONCILE: skipped this pass: {_pool} quota {_low} is under SG_GH_FLOOR {FLOOR}; the next pass reads again")
+        sys.exit(0)
+THROTTLE = ghthrottle.Throttle()   # the one shared bucket and cooldown: a read sent under a cooldown renews the limit it waits on (#1648)
+_held = THROTTLE.holding()
+if _held:
+    print(f"RECONCILE: skipped this pass: a cooldown holds for {_held.get('pass') or 'another pass'} until {int(float(_held.get('until') or 0))}")
     sys.exit(0)
 MIN = int(os.environ.get("RECONCILE_MIN", "1102")); APPLY = os.environ.get("RECONCILE") == "apply"
 VOCAB = os.environ.get("SG_BOARD_VOCAB")   # the vocabulary the carrier holds, the switch the janitor reads too: `shipped` writes the shipped names
@@ -28,8 +35,8 @@ FLOW = {column["name"]: column["flow"] for column in COLUMNS}   # the shipped co
 TERMINAL = {column["name"] for column in COLUMNS if column["terminal"]}   # the columns the work is delivered at, each entered once
 TAG = "reverted"   # what a card carries when its merge was taken back (#246): the tag and the new issue decide what happens next, never a silent move back
 def gh(*a):
-    if a[:1] == ("api",) and not set(a) & {"--method", "-X", "-f", "-F", "--input"}:   # a read: through the door, logged to api.log (#847)
-        out = ghread.read(a[1]); ghread.log_call(None, a[1], ghread.MISS, out.kind)
+    if a[:1] == ("api",) and not set(a) & {"--method", "-X", "-f", "-F", "--input"}:   # a read: through the throttle, which holds the pass back under a cooldown and logs the line (#847, #1648)
+        out = THROTTLE.read(a[1])
         if out.is_answer: return out.body
         why = out.line()
     else:
@@ -44,6 +51,14 @@ try: items = board_state(owner=OWNER, project=BOARD, repo=REPO, kind=None).read_
 except RuntimeError: sys.exit("board unreadable")
 LAND = os.environ.get("SG_LAND_BRANCH") or "dev"   # the branch a work branch lands in: a card is Done when its branch is in it
 OPEN = {int(i["number"]): i for i in js("api", f"repos/{REPO}/issues?state=open") or []}   # the open issues, one read: a card it covers is open and needs no read of its own (#853)
+# The cards the open list lacks are asked in one batched route, 100 aliases per request (#1648): a closed card used to cost
+# its own read on every pass, and that walk emptied the GraphQL quota while the core quota stayed untouched.
+EXTRA = {}
+_missing = sorted(i for i in (int(k) for k in items) if i not in OPEN)
+for _at in range(0, len(_missing), 100):
+    _rows = js("api", f"repos/{REPO}/issues?numbers={','.join(map(str, _missing[_at:_at + 100]))}")
+    if _rows is None: break   # a refused or failed batch ends the walk: the cooldown holds the next pass back
+    for _it in _rows: EXTRA[int(_it["number"])] = _it
 refs = {}   # issue -> its work branch, for a branch that holds commits the landing branch lacks (the branch read, never a pull request, #358)
 compared = {}   # branch tip -> its compare: branches on one tip cost one compare
 for b in js("api", f"repos/{REPO}/branches?per_page=100") or []:
@@ -87,6 +102,7 @@ def write(n, name, add=False):
         REFUSED.append(n)
         print(f"WRITE REFUSED #{n} -> {name}: {(r.stderr or r.stdout).strip().replace(chr(10), ' ')[:200] or 'the writer said nothing'}")
 _state = {n: True for n in OPEN}
+_state.update({n: (v.get("state") != "closed") for n, v in EXTRA.items()})   # the batched answer settles the cards it covers (#1648)
 def is_open(d):
     if d not in _state:
         o = js("api", f"repos/{REPO}/issues/{d}"); _state[d] = (o or {}).get("state") != "closed"
@@ -108,7 +124,7 @@ def has_freetext_blocker(body):
 for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[0]):
     n = str(i); cur = cur or None
     if i in OPEN and i < MIN: continue   # an open card below RECONCILE_MIN is out of scope, and the aggregate already says it is open
-    st = OPEN.get(i) or js("api", f"repos/{REPO}/issues/{n}")
+    st = OPEN.get(i) or EXTRA.get(i) or js("api", f"repos/{REPO}/issues/{n}")   # the batch answers first; a card the batch missed costs one read (#1648)
     if not st: continue
     if st["state"] != "closed" and i < MIN: continue
     deps = blockers(st.get("body"))

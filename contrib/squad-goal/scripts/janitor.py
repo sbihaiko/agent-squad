@@ -1491,9 +1491,9 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     import ghthrottle
     floor = int(os.environ.get("SG_GH_FLOOR") or 300)
-    low = ghthrottle.core_below(floor)
+    low = next(((pool, left) for pool in ("core", "graphql") if (left := ghthrottle.pool_below(pool, floor)) is not None), None)   # GraphQL has a quota of its own (#1648)
     if low is not None:
-        say(f"skipped comment pass: core quota {low} is under SG_GH_FLOOR {floor}; the next pass reads again")
+        say(f"skipped comment pass: {low[0]} quota {low[1]} is under SG_GH_FLOOR {floor}; the next pass reads again")
     elif not dry: hm.touch()
     try: items = json.loads(hb.read_text()).get("items", [])
     except Exception: items = []

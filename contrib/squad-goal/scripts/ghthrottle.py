@@ -180,17 +180,24 @@ def default_state_dir() -> Path:
     return Path(os.environ.get(STATE_ENV) or Path.home() / ".cache" / "squad-goal")
 
 
-def core_below(floor: float, state_dir: Path | None = None) -> int | None:
-    """The core requests left when that is under `floor` and the hour that reading describes is still running; `None`
-    otherwise. A missing reading or a rolled-over hour is no floor (#847): the pass runs, as it did before the reading."""
-    core = _read_json((state_dir or default_state_dir()) / RATELIMIT_FILE).get("core")
-    if not isinstance(core, dict): return None
+def pool_below(pool: str, floor: float, state_dir: Path | None = None) -> int | None:
+    """The requests left in `pool` when that is under `floor` and the hour that reading describes is still running;
+    `None` otherwise. A missing reading or a rolled-over hour is no floor (#847): the pass runs, as it did before the
+    reading. GraphQL is a pool of its own (#1648): a pass that floors on core alone reads into a refusal with thousands
+    of core requests left, and that refusal renews the limit."""
+    entry = _read_json((state_dir or default_state_dir()) / RATELIMIT_FILE).get(pool)
+    if not isinstance(entry, dict): return None
     try:
-        remaining, reset = int(core["remaining"]), float(core.get("reset") or 0)
+        remaining, reset = int(entry["remaining"]), float(entry.get("reset") or 0)
     except (KeyError, TypeError, ValueError):
         return None
     if reset and reset <= time.time(): return None
     return remaining if remaining < floor else None
+
+
+def core_below(floor: float, state_dir: Path | None = None) -> int | None:
+    """The core requests left when that is under `floor`, on its own pool (#847)."""
+    return pool_below("core", floor, state_dir)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

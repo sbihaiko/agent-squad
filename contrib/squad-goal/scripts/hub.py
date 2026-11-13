@@ -3226,15 +3226,18 @@ REST_TIMEOUT = 120   # a REST page that stalls is abandoned at this deadline (AD
 _etags = {}   # route -> (the ETag GitHub answered it with, the answer it carried); a 304 keeps that answer
 _SKIPPING = set()   # the reads whose current floor episode has already been logged (#855)
 def _under_floor(what):
-    """True when the core quota is under SG_GH_FLOOR: the pass is skipped, and one line says so per episode (#855)."""
-    low = ghthrottle.core_below(GH_FLOOR)
-    if low is None:
-        _SKIPPING.discard(what)
-        return False
-    if what not in _SKIPPING:
-        _SKIPPING.add(what)
-        print(f"hub: skipped {what}: core quota {low} is under SG_GH_FLOOR {GH_FLOOR}; the next pass reads again", file=sys.stderr, flush=True)
-    return True
+    """True when a quota pool is under SG_GH_FLOOR: the pass is skipped, and one line says so per episode (#855). GraphQL
+    is a pool of its own (#1648): a hub that floors on core alone keeps reading into a GraphQL refusal."""
+    for pool in ("core", "graphql"):
+        low = ghthrottle.pool_below(pool, GH_FLOOR)
+        if low is None:
+            continue
+        if what not in _SKIPPING:
+            _SKIPPING.add(what)
+            print(f"hub: skipped {what}: {pool} quota {low} is under SG_GH_FLOOR {GH_FLOOR}; the next pass reads again", file=sys.stderr, flush=True)
+        return True
+    _SKIPPING.discard(what)
+    return False
 def _rest_page(route):
     """One REST page through the door, conditional: the ETag it was answered with rides as If-None-Match, and a 304 keeps
     the answer that ETag named. A page that does not answer raises, and the caller keeps what it had."""
