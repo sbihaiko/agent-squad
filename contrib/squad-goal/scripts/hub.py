@@ -5891,7 +5891,6 @@ const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"
 // first, and one control that opens the Runs tab. Each row is two lines -- the label and its stage, then the issue title -- and
 // keeps its `data-id`, so the card's own handler still opens the run sheet. Its liveness slot says whether the run is moving.
 const LIVE_ROWS=4;
-let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the ready-for-human issues
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
 function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0),total=live.reduce((s,r)=>s+(+r.spend||0),0);   // a reduce, never a spread: the live list is unbounded
  const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
@@ -6815,6 +6814,7 @@ function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=
  setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
+let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the ready-for-human issues
 async function livePoll(){try{liveWork=await (await fetch("/api/live")).json();refresh()}catch(e){}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
