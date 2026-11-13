@@ -115,7 +115,9 @@ def test_the_kernel_refuses_a_foreign_host_on_443_and_passes_loopback(tmp_path):
     pass, since the model call reaches its host only through the loopback proxy."""
     probe = load("operator_probe")
     (tmp_path / "outbox").mkdir()
-    profile = load("operators").profile_text(str(tmp_path / "outbox"), str(tmp_path), str(tmp_path / "dm.jsonl"))
+    inboxes = tmp_path / "inboxes"
+    inboxes.mkdir()   # a sibling of the session's cwd: denials of the inbox folder must never swallow the cwd
+    profile = load("operators").profile_text(str(tmp_path / "outbox"), str(inboxes), str(inboxes / "dm.jsonl"))
     listener = socket.create_server(("127.0.0.1", 0))
     try:
         def connect(host, port):
