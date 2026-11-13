@@ -132,9 +132,9 @@ def test_the_served_board_carries_the_overdue_mark_over_http(hub, monkeypatch):
 # --- AC3: the closure wins over a stale recorded move -----------------------------------------------------------
 
 def test_a_closed_card_is_never_drawn_in_a_live_lane_from_a_stale_move(hub, monkeypatch):
-    items = [card(837, s="closed", c=iso(NOW - 60), ot=int(NOW) - 1000, i="ITEM837")]
-    # The move is newer than the read: the overlay would draw the card in In Progress.
-    moves = {"ITEM837": {"column": "In Progress", "at": iso(NOW - 500)}}
+    # The latest read (began at NOW-100) closed the card; the loop's move to In Progress (NOW-500) is older than that read.
+    items = [card(837, s="closed", c=iso(NOW - 60), ot=int(NOW) - 100, i="ITEM837")]
+    moves = {"ITEM837": {"column": "In Progress", "at": iso(NOW - 500), "by": "loop"}}
     _cache(hub, monkeypatch, items, moves=moves)
     data = hub.board(dict(moves))
     live = [x["n"] for g in data["groups"] if not g["end"] for x in g["items"]]
@@ -146,9 +146,9 @@ def test_a_closed_card_is_never_drawn_in_a_live_lane_from_a_stale_move(hub, monk
 # --- AC4: the sidebar count and the lane count come from one read ------------------------------------------------
 
 def test_the_sidebar_count_and_the_lane_count_agree_after_a_closure(hub, monkeypatch):
-    items = [card(837, s="closed", c=iso(NOW - 60), l=["bug"], ot=int(NOW) - 1000, i="ITEM837"),
-             card(892, l=["bug"], ot=int(NOW) - 1000, i="ITEM892")]
-    moves = {"ITEM837": {"column": "Todo", "at": iso(NOW - 500)}}
+    items = [card(837, s="closed", c=iso(NOW - 60), l=["bug"], ot=int(NOW) - 100, i="ITEM837"),
+             card(892, l=["bug"], ot=int(NOW) - 100, i="ITEM892")]
+    moves = {"ITEM837": {"column": "Todo", "at": iso(NOW - 500), "by": "loop"}}
     _cache(hub, monkeypatch, items, moves=moves)
     sidebar_open = hub.arrivals_fact(items, NOW, 4 * 3600, dict(moves))["bugs"]["open"]
     data = hub.board(dict(moves))
