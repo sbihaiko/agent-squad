@@ -1,6 +1,6 @@
 """A run opens in a side sheet, as the approved mock draws it (SPEC 889, #984).
 
-A click on a run in Live runs or Last ended opens the sheet; the in-page run pane (an embedded dashboard frame) is gone.
+A click on a run in Live work or Last ended opens the sheet; the in-page run pane (an embedded dashboard frame) is gone.
 The sheet reads only what the hub already serves for a run: the run row, and the record through the `/dash/` proxy.
 Its one write is the pause request, through the run dashboard's own control route.
 

@@ -604,7 +604,7 @@ def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
 def test_the_left_pane_carries_only_what_a_reader_watches(hub):
     """The removal is the rule: an accordion named here is a defect, and one that came back would be read by name.
     Re-anchored (#1028): the two configuration cards left the sidebar for the Settings tab. Re-anchored again (owner,
-    2026-11-01): Last ended is gone and Live runs sits under the Monitor, so the pane reads cost, machine, live work."""
+    2026-11-01): Last ended is gone and Live work sits under the Monitor, so the pane reads cost, machine, live work."""
     side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
     assert re.findall(r"<details id=(\w+)", side) == ["inst", "usage", "stats", "lrd"]
     for gone in ("id=wts", "id=wtsr", "id=wtb", "id=wtcl", "id=wtmsg", "wtDraw", "wtClean", "wtSay", "wtBusy"):
