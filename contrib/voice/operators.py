@@ -35,7 +35,7 @@ LOCK_WAIT = 5.0                          # seconds, a pass waits for the lock th
 ADOPT_PASSES = 2                         # a marked session no record names is adopted after this many consecutive passes
 MISSING_PASSES = 2                       # a recorded session the CLI no longer lists is replaced after this many passes
 BACKOFF_MAX = 300.0                      # seconds, the ceiling of a failed stop's retry wait
-TOOLS = "Read,Write,Edit,Bash,Monitor,TaskStop"
+TOOLS = "Read,Monitor,TaskStop,Bash"
 
 
 class Refused(Exception):
@@ -146,7 +146,7 @@ def start(scope, state, repo):
     folder = os.path.join(root(state), scope)
     os.makedirs(folder, exist_ok=True)
     done = call([CLI, "--bg", prompt_for(scope, state, repo), "--permission-mode", "dontAsk",
-                 "--allowedTools", TOOLS, "--add-dir", repo], cwd=folder)
+                 "--tools", TOOLS, "--allowedTools", TOOLS, "--strict-mcp-config", "--add-dir", repo], cwd=folder)
     for word in (done.stdout + done.stderr).split():
         if len(word) >= 8 and all(c in "0123456789abcdef-" for c in word) and any(c.isdigit() for c in word):
             return word.strip()

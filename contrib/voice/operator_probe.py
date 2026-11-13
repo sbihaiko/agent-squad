@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619).
+
+Two phases, one command. The denials run under `sandbox-exec` with the profile this probe writes: a write outside the
+scope's outbox, a read of another scope's inbox and a network call past the model endpoint must each fail. Then one
+bounded `claude -p` call runs under the same profile with the operator's tool set and `dontAsk`. A denial that does not
+happen, or a session that starts with another tool set, fails the probe.
+
+usage: operator_probe.py [--work DIR]
+Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from operators import TOOLS  # noqa: E402
+
+SANDBOX = "/usr/bin/sandbox-exec"
+MODEL = "haiku"
+SPEND = "0.50"                         # USD, the one CLI call's cap
+DEADLINE = 180.0                       # seconds, the one CLI call
+DENIAL_DEADLINE = 30.0                 # seconds, one denial command
+SENTINEL = "PROBE-OTHER-INBOX-LINE"
+PROMPT = "Reply with the single word ok. Use no tool."
+NETWORK_CALL = "curl -sS -m 8 -o /dev/null http://example.com/"
+
+
+class ProbeFailed(Exception):
+    """A denial did not hold, or the session did not start with the tool set."""
+
+
+def check_denials(write_landed, read_leaked, network_reached):
+    if write_landed:
+        raise ProbeFailed("a denial did not happen: write outside the outbox landed")
+    if read_leaked:
+        raise ProbeFailed("a denial did not happen: read of another scope's inbox returned its lines")
+    if network_reached:
+        raise ProbeFailed("a denial did not happen: network beyond the model endpoint was reached")
+
+
+def profile_text(outbox_dir, other_inbox):
+    home = os.path.realpath(os.path.expanduser("~"))
+    writable = [outbox_dir, os.path.join(home, ".claude"), "/private/tmp", "/private/var/folders", "/dev"]
+    subpaths = " ".join(f'(subpath "{p}")' for p in writable)
+    return "\n".join([
+        "(version 1)",
+        "(allow default)",
+        "(deny file-write*)",
+        f"(allow file-write* {subpaths} (literal \"{home}/.claude.json\"))",
+        f'(deny file-read* (subpath "{other_inbox}"))',
+        "(deny network-outbound)",
+        '(allow network-outbound (remote ip "localhost:*") (remote tcp "*:443") (remote udp "*:53"))',
+    ]) + "\n"
+
+
+def denials(work, profile_path, leak, other_inbox):
+    """Run each denial under the profile, with no model in the loop, and return what got through.
+
+    A denial counts only when the profile applied (the control echo ran) and the command refused with its own
+    `Operation not permitted`; a failure of any other kind is unproven, so the probe fails rather than passes.
+    """
+    def run(command):
+        return subprocess.run([SANDBOX, "-f", profile_path, "/bin/sh", "-c", command], cwd=work,
+                              capture_output=True, text=True, timeout=DENIAL_DEADLINE, check=False)
+    control = run("echo control")
+    if control.returncode != 0 or "control" not in control.stdout:
+        raise ProbeFailed(f"sandbox-exec did not apply the profile: {control.stderr.strip() or 'no output'}")
+    write = run(f'echo leaked > "{leak}"')
+    read = run(f'cat "{other_inbox}"')
+    network = run(NETWORK_CALL)
+    for name, res in (("write", write), ("read", read), ("network", network)):
+        if res.returncode != 0 and "Operation not permitted" not in res.stderr:
+            raise ProbeFailed(f"the {name} denial is unproven: {res.stderr.strip() or 'no reason'}")
+    return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
+
+
+def session(work, profile_path):
+    """One bounded `claude -p` call under the profile; return its init event and its result event."""
+    argv = [SANDBOX, "-f", profile_path, "claude", "-p", PROMPT, "--tools", TOOLS, "--allowedTools", TOOLS,
+            "--permission-mode", "dontAsk", "--strict-mcp-config", "--output-format", "stream-json", "--verbose",
+            "--max-budget-usd", SPEND, "--model", MODEL]
+    try:
+        done = subprocess.run(argv, cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
+    except subprocess.TimeoutExpired:
+        raise ProbeFailed(f"the CLI call passed its {DEADLINE:.0f}s deadline") from None
+    events = []
+    for line in done.stdout.splitlines():
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    init = next((e for e in events if e.get("type") == "system" and e.get("subtype") == "init"), None)
+    result = next((e for e in events if e.get("type") == "result"), None)
+    if init is None or result is None:
+        reason = (done.stderr or done.stdout).strip().splitlines()
+        raise ProbeFailed(f"the CLI call ended with no init or result event (exit {done.returncode}): "
+                          f"{reason[-1] if reason else 'no output'}")
+    return init, result
+
+
+def check_session(init, result):
+    builtin = sorted(t for t in init.get("tools", []) if not t.startswith("mcp__"))
+    if builtin != sorted(TOOLS.split(",")):
+        raise ProbeFailed(f"the session started with tools {builtin}, not {TOOLS}")
+    if init.get("permissionMode") != "dontAsk":
+        raise ProbeFailed(f"the session started in {init.get('permissionMode')}, not dontAsk")
+    if result.get("is_error") or result.get("subtype") != "success":
+        raise ProbeFailed(f"the CLI call did not succeed: {result.get('subtype')}")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--work", help="a folder for the probe's files (default: a fresh temporary folder)")
+    args = ap.parse_args(argv)
+    if shutil.which("claude") is None:
+        print("operator-probe: no claude CLI on the path", file=sys.stderr)
+        return 1
+    work = Path(args.work or tempfile.mkdtemp(prefix="operator-probe-")).resolve()
+    outbox = work / "state" / "outboxes" / "dm.jsonl"
+    other_inbox = work / "state" / "inboxes" / "proj-other.jsonl"
+    leak = work / "elsewhere" / "leak.txt"
+    for folder in (outbox.parent, other_inbox.parent, leak.parent):
+        folder.mkdir(parents=True, exist_ok=True)
+    outbox.write_text("")
+    other_inbox.write_text(SENTINEL + "\n")
+    profile_path = work / "operator.sb"
+    profile_path.write_text(profile_text(str(outbox.parent), str(other_inbox)))
+    try:
+        check_denials(*denials(work, str(profile_path), leak, other_inbox))
+        init, result = session(work, str(profile_path))
+        check_session(init, result)
+    except ProbeFailed as e:
+        print(f"operator-probe: fail: {e}", file=sys.stderr)
+        return 1
+    print(f"operator-probe: pass: denials held (write, read, network); session tools {TOOLS}, dontAsk, cap ${SPEND}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

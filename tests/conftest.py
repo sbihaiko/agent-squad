@@ -160,6 +160,9 @@ SDK_ABSENT_REASON = "the hosted interpreter cannot import claude_agent_sdk on th
 CC_BOUND_MARKER = "cc_bound"
 CC_ABSENT_REASON = "no C compiler and no macOS process table on this runner: the compiled reader (#1511) is not built here (ADR-0139)"
 CI_RUNNER_SWITCH = "SQUAD_CI_RUNNER"
+CLAUDE_BOUND_MARKER = "claude_bound"
+CLAUDE_ABSENT_REASON = ("no claude CLI, or sandbox-exec cannot apply a profile on this runner: the real session probe "
+                        "(#1619) needs both (ADR-0139)")
 MACOS_BOUND_MARKER = "macos_bound"
 MACOS_ABSENT_REASON = ("a loop script suite needs the macOS userland the loop runs on (BSD date and stat, sandbox-exec, a set "
                        "TMPDIR); this runner is not macOS (ADR-0139)")
@@ -231,6 +234,19 @@ def process_table_present():
         return False
 
 
+def sandbox_applies():
+    """True when sandbox-exec applies a profile here. A session nested in another sandbox is refused the apply (ADR-0139)."""
+    if not sandbox_present():
+        return False
+    return subprocess.run(["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"],
+                          capture_output=True).returncode == 0
+
+
+def claude_present():
+    """True when the real `claude` CLI is on the path and sandbox-exec applies a profile for it to run under (#1619)."""
+    return not ci_runner_simulated() and shutil.which("claude") is not None and sandbox_applies()
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -253,6 +269,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "macos_bound: runs a loop script suite; deselected, never skipped, on a runner that is not macOS (ADR-0139)")
+    config.addinivalue_line(
+        "markers",
+        "claude_bound: runs the real claude CLI under sandbox-exec; deselected, never skipped, where either is absent (ADR-0139)")
     config._absent_deselected = []
 
 
@@ -311,6 +330,8 @@ def pytest_collection_modifyitems(config, items):
     # A hosted session needs the SDK in its interpreter; a runner installed without the `sdk` extra refuses the start.
     if any(it.get_closest_marker(SDK_BOUND_MARKER) for it in items) and not sdk_present():
         _deselect_absent(config, items, SDK_BOUND_MARKER, SDK_ABSENT_REASON)
+    if any(it.get_closest_marker(CLAUDE_BOUND_MARKER) for it in items) and not claude_present():
+        _deselect_absent(config, items, CLAUDE_BOUND_MARKER, CLAUDE_ABSENT_REASON)
 
 
 def _deselect_absent(config, items, marker_name, absent_reason):
