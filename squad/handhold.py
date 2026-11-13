@@ -320,6 +320,55 @@ def holds(state=None, closed=None, now=None):
     return sorted(out, key=lambda r: r["issue"])
 
 
+def holders(state=None):
+    """{issue: {"kind", "who"}} for every issue a takeover marker or a hand hold names: the holders the board pass reads so a
+    card with a holder is never queued work. A takeover marker wins over a hold on the same issue. A hold stays held past
+    its `until`: the marker never moves a card, so it never frees one. An unreadable or malformed file names no holder, and
+    the pass then writes nothing for that issue."""
+    st = _state(state)
+    out = {}
+    try:
+        for n, run in _taken(st).items():
+            if n.isdigit():
+                out[n] = {"kind": "taken", "who": run}
+    except HandError:
+        pass
+    d = st / "auto"
+    for p in sorted(d.glob("hold-*")) if d.is_dir() else []:
+        n = p.name[len("hold-"):]
+        if not n.isdigit() or n in out:
+            continue
+        try:
+            c = _read(st, int(n))
+        except HandError:
+            continue
+        if c:
+            out[n] = {"kind": "hold", "who": c["by"]}
+    return out
+
+
+def releases(state=None):
+    """{issue: column} for every release record the board pass has not applied yet. A record that is unreadable or names
+    a column a release may not name is skipped."""
+    st = _state(state)
+    out = {}
+    d = st / "auto"
+    for p in sorted(d.glob("release-*")) if d.is_dir() else []:
+        n = p.name[len("release-"):]
+        try:
+            lines = dict(line.partition(" ")[::2] for line in p.read_text().splitlines())
+        except OSError:
+            continue
+        if n.isdigit() and lines.get("to") in COLUMNS:
+            out[n] = lines["to"]
+    return out
+
+
+def clear_release(n, state=None):
+    """Remove the release record of issue n: the board pass calls it once the move is on the card, so a release applies once."""
+    _release_path(_state(state), n).unlink(missing_ok=True)
+
+
 def alerts(state=None, closed=None, now=None, path=None):
     """One alerts.log line for each stale hold and each orphan hold the last pass did not name: one alert per episode,
     like a taken-over run. A hold on a closed or abandoned issue is an orphan; it is named here and never drawn as work."""
