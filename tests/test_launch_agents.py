@@ -18,6 +18,7 @@ def test_each_agent_script_is_named_and_has_its_test_beside_it():
         assert (VOICE / f"test-{name}.sh").is_file(), f"test-{name}.sh is missing beside {name}.sh"
 
 
+@pytest.mark.macos_bound   # launchctl and plists: the suites need the macOS userland the loop runs on (ADR-0139)
 @pytest.mark.heavy
 def test_the_launch_job_suites_pass_against_a_fake_launchctl():
     for name in AGENTS:
