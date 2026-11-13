@@ -307,7 +307,8 @@ def plan(state, sessions, record, stopped, now=None):
         record[scope] = {**held, "adopt": adopt}
         if adopt >= ADOPT_PASSES:
             adopts.append((scope, only))
-            record[scope] = {"id": only["id"], "pid": only["pid"], "started": only["started"], "missing": 0, "adopt": 0}
+            kept = {k: held[k] for k in ("profile", "proxy") if k in held}
+            record[scope] = {**kept, "id": only["id"], "pid": only["pid"], "started": only["started"], "missing": 0, "adopt": 0}
     for scope in sorted(set(record) - set(wanted)):    # a scope the registry dropped loses its session
         for s in owned.get(scope, []):
             stops.append((s["id"], scope))
@@ -369,7 +370,6 @@ def run_pass(state, repo, check=False):
         if json.dumps(record, sort_keys=True) != before:   # a counter the pass moved is a fact, and it is kept
             write_json(rec_path, record)
         for scope, session in adopts:
-            record[scope] = {"id": session["id"], "pid": session["pid"], "started": session["started"], "missing": 0, "adopt": 0}
             write_json(rec_path, record)
             print(f"operators: adopted {scope} as {session['id']}")
         for scope in starts:

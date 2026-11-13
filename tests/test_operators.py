@@ -146,6 +146,24 @@ def test_a_marked_session_outside_the_record_is_adopted_after_two_passes(tmp_pat
     assert not [c for c in calls(tmp_path) if c.startswith("--bg")], "an adopted scope was started again"
 
 
+def test_an_adopted_scope_keeps_the_profile_and_proxy_it_ran_under(tmp_path, monkeypatch):
+    """#1658: adoption replaces the session id, never the profile or the proxy the record holds for the scope."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [])
+    live = session(tmp_path, "dm", "dddddddd-0000-0000-0000-000000000001")
+    scenario(tmp_path, [live])
+    profile = {"path": "/state/operators/profiles/dm.sb", "sha256": "ab" * 32}
+    proxy = {"pid": 999999, "port": 1}
+    held = {"id": "eeeeeeee-0000-0000-0000-00000000000a", "pid": 1, "started": 100, "profile": profile, "proxy": proxy}
+    (tmp_path / "state" / "operators.json").write_text(json.dumps({"dm": held}))
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    entry = record(tmp_path)["dm"]
+    assert entry["id"] == live["sessionId"]
+    assert entry["profile"] == profile
+    assert entry["proxy"] == proxy
+
+
 def test_two_sessions_on_one_scope_keep_the_older(tmp_path, monkeypatch):
     """Criterion 5: two sessions on one scope keep the older and stop the newer."""
     op = operators(tmp_path, monkeypatch)
