@@ -77,8 +77,9 @@ fi
 oi=$(gh_pages "repos/$SG_REPO/issues?state=open&per_page=100" 2>/dev/null)
 untyped=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_request|not)|select(($l|index("bug")|not) and ($l|index("enhancement")|not) and ($l|index("spec")|not))|.number' 2>/dev/null | tr '\n' ' ')"
 [ -n "${untyped// /}" ] && add untyped-issues "open issue(s) without a type label:$(for n in $untyped; do printf ' #%s' "$n"; done)"
-# a defect reads as one in its title or body; typed enhancement (an untyped one is named above) and no bug label
-undef=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_request|not)|select(($l|index("enhancement")) and ($l|index("bug")|not) and ($l|index("spec")|not))|select((.title+" "+(.body//""))|test("\\b(bug|defect|regression|crash(es|ed)?|broken|fails|failing|wrong|incorrect)\\b";"i"))|.number' 2>/dev/null | tr '\n' ' ')"
+# a defect reads as one in its title or body; typed enhancement (an untyped one is named above) and no bug label.
+# "bug lane", "bug pass" and the other board words name a board part, not a defect, so they are cut before the match (#1681)
+undef=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_request|not)|select(($l|index("enhancement")) and ($l|index("bug")|not) and ($l|index("spec")|not))|select((.title+" "+(.body//""))|gsub("\\bbug (lane|pass|board|label|card|project)s?\\b";"";"i")|test("\\b(bug|defect|regression|crash(es|ed)?|broken|fails|failing|wrong|incorrect)\\b";"i"))|.number' 2>/dev/null | tr '\n' ' ')"
 [ -n "${undef// /}" ] && add defect-without-bug "open defect(s) that carry no bug label:$(for n in $undef; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
 # A ready issue with no run or work branch for one pass must remain visible even when it has only a wave label.
