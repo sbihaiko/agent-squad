@@ -278,6 +278,23 @@ class Ceiling:
         with self._lock():
             return list(dict.fromkeys(lease.get("holder", "?") for lease in self._live(kind)))
 
+    def holding(self, kind):
+        """The live leases of `kind`, each named once with the facts the lease carries, in the order of its leases.
+
+        A name alone sends a reader to the wrong process: a gate names its holder `gate-$$`, the inner shell's pid, and
+        writes the lease under the lock holder's pid (#1653). So a refusal names the pid it counted and when it started."""
+        with self._lock():
+            out, seen = [], set()
+            for lease in self._live(kind):
+                holder = lease.get("holder", "?")
+                if holder in seen:
+                    continue
+                seen.add(holder)
+                since = lease.get("since")
+                at = time.strftime("%H:%M:%S", time.localtime(since)) if isinstance(since, (int, float)) else "?"
+                out.append(f"{holder} (lease pid {lease.get('pid', '?')}, live, since {at})")
+            return out
+
     def try_take_many(self, kind, holder, n, pid=None):
         """Take `n` slots of `kind` for `holder` in one locked step, or none. Return the lease paths, or None when the ceiling
         gives no slot.
@@ -369,7 +386,7 @@ def _take(args):
     t0, said = time.monotonic(), False
     leases = c.try_take_many(args.kind, args.holder, n, args.pid)
     while leases is None:
-        held = ", ".join(c.holders(args.kind)) or "?"
+        held = ", ".join(c.holding(args.kind)) or "?"
         full = f"caps.{args.kind} is full ({cap} slots), held by {held}"
         if args.try_mode:
             print(f"caps: {full}: {args.holder} skipped, not queued (try)", file=sys.stderr)

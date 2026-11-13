@@ -39,6 +39,7 @@ This file and the ADRs are never ledgers: no dates, counts, statuses, issue numb
   `run_start` records its path and hash, and a resume refuses when it changed. Guard: `tests/test_project_settings.py`.
 - **Browser work goes through ego-browser, never headless Chrome:** one private task space per goal, never the owner's default profile. ego-browser runs several goals at once, so no lock bounds it. Guard: `tests/test_browser_bounds.py`.
 - **Setup writes rules and pointers into `CLAUDE.md`; facts that change go to memory.** Guard: `tests/test_setup.py`.
+- **The operator session's tool set and kernel bound are proven by one real-CLI probe, `contrib/voice/operator_probe.py`, which runs every call through `contrib/squad-goal/scripts/claude-sandboxed.sh`; a denial that does not hold fails it.** Guard: `tests/test_operator_probe.py`.
 - **Every rule names its guard.** A rule with no guard is a draft ([ADR-0018](docs/adr/0018-failing-gate-is-a-defect.md)). Guard: `tests/test_setup.py` runs `squad setup --check` on this file.
 
 ## Design rules

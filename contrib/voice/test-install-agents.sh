@@ -21,7 +21,7 @@ mkfix; trap 'rm -rf "$T"' EXIT
 V="$T/LaunchAgents/com.squad.voiced.plist"; O="$T/LaunchAgents/com.squad.operators.plist"
 key() { plutil -extract "$2" raw -o - "$1"; }
 
-bash "$here/install-agents.sh" "$B" >/dev/null 2>&1 || fail "install of the promoted commit exited non-zero"
+out=$(bash "$here/install-agents.sh" "$B" 2>&1) || fail "install of the promoted commit exited non-zero: $(printf '%s' "$out" | tail -3)"
 [ "$(git -C "$T/deploy" rev-parse HEAD)" = "$B" ] || fail "deployment checkout is not pinned to the promoted commit"
 [ -f "$V" ] && [ -f "$O" ] || fail "both plists must be written to the LaunchAgents folder"
 plutil -lint "$V" "$O" >/dev/null || fail "a plist does not lint"
