@@ -2713,6 +2713,22 @@ def _held_now(kids):
     now = [c for c in kids if c.get("step") in ("review", "enter")] or kids
     return next((str(c["run"]) for c in now if c.get("run")), None)
 
+def active_entries():
+    """The runs the loop registered this pass, in the file's order, each once: what the Runs tab lists beside a run with a
+    server and a run the childcc pass holds (#1649)."""
+    try: rows = [r.strip() for r in (STATE / "active-runs.txt").read_text().splitlines() if r.strip()]
+    except OSError: return []
+    return list(dict.fromkeys(rows))
+
+
+def active_folder(entry):
+    """The folder of one active-runs entry: an absolute run folder, or a name under the checkout's runs (the one reader's
+    rule, squad/run_liveness.py record_path). None when the entry does not resolve to a record."""
+    try: folder = pathlib.Path(liveness().record_path(entry, CHECKOUT).parent)
+    except Exception: return None
+    return str(folder) if (folder / "record.jsonl").is_file() else None
+
+
 def held_runs():
     """The run names the childcc pass holds, in the file's order, each once."""
     d = _json(STATE / "auto" / "childcc-now.json")
@@ -2752,8 +2768,13 @@ def ended_today():
     return [row for _, row in ended_folders()]
 
 def open_ended(name, start=None):
-    """The port of a dashboard server for a run that ended today, or None. dashboard_server.start reuses a server that runs (ADR-0118)."""
-    return _open_run(name, next((folder for folder, row in ended_folders() if row["id"] == name), None), start)
+    """The port of a dashboard server for a run that ended today, or for a registered run with no server of its own, or None:
+    the page opens a serverless row through this route, and a live run is registered long before it ends (#1649).
+    dashboard_server.start reuses a server that runs (ADR-0118)."""
+    folder = next((folder for folder, row in ended_folders() if row["id"] == name), None)
+    if folder is None and re.fullmatch(r"run-[\w-]+", name or ""):
+        folder = next((folder for folder in map(active_folder, active_entries()) if folder and pathlib.Path(folder).name == name), None)   # a registered run has no history row until tomorrow (#1649)
+    return _open_run(name, folder, start)
 
 def _open_run(name, folder, start):
     if folder is None: return None
@@ -2796,7 +2817,8 @@ def run_row(d, port, procs):
     rank = run_rank(st, live=not gone)
     if unreadable: st, b = "unreadable", {**badge_of("unreadable"), "title": UNREADABLE_TIP}
     t1 = r["t1"] or time.time()
-    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "started": r["t0"], "ended": None if r["verdict"] is None and not gone else r["t1"], "verdict": r["verdict"], "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share"), "stage": r.get("node"), "model": r.get("model"), "model_label": (model_labels({r["model"]}).get(r["model"]) if r.get("model") else None)}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
+    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": r["verdict"] is None and not gone, "running": r["verdict"] is None and not gone,   # a finished run is not live, however present its row is (#1649)
+            "started": r["t0"], "ended": None if r["verdict"] is None and not gone else r["t1"], "verdict": r["verdict"], "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share"), "stage": r.get("node"), "model": r.get("model"), "model_label": (model_labels({r["model"]}).get(r["model"]) if r.get("model") else None)}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
 def runs():
     _titles()
@@ -2817,6 +2839,15 @@ def runs():
         out.append(row)
         if load: load_rows.append(load)
     listed = {r["id"] for r in out}
+    for entry in active_entries():   # a registered run has no dashboard server until someone opens it: it is listed all the same (#1649)
+        folder = active_folder(entry)
+        if not folder: continue
+        name = pathlib.Path(folder).name
+        if name in listed: continue
+        row, load = run_row(folder, "", procs)
+        out.append({**row, "url": "/ended/" + name})
+        listed.add(name)
+        if load: load_rows.append(load)
     for name in held_runs():   # a run the childcc pass holds, orphaned from active-runs, has no dashboard server: it is listed all the same (#689)
         folder = None if name in listed else held_folder(name)
         if not folder or not (pathlib.Path(folder) / "record.jsonl").is_file(): continue

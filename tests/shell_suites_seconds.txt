@@ -150,6 +150,7 @@ test-prepush.sh 1.28
 test-probe-gemini-transcribe.sh 0.27
 test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
+test-promote-branch.sh 1.94
 test-promote-delta.sh 19.00
 test-promote-pass.sh 120.00
 test-promote.sh 16.53
@@ -170,6 +171,7 @@ test-review.sh 266.80
 test-run-state-table.sh 0.03
 test-runreview.sh 4.06
 test-serial.sh 36.68
+test-sg-ps-fallback.sh 0.24
 test-shell-suites-gate.sh 4.22
 test-shell-suites-hermetic.sh 0.05
 test-single-owner.sh 0.70
