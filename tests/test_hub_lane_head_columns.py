@@ -20,8 +20,9 @@ HUB_PY = SCRIPTS / "hub.py"
 LANES_JS = SCRIPTS / "board-lanes.js"
 LANES_CSS = SCRIPTS / "board-lanes.css"
 NODE = shutil.which("node")
-ROWS = [["id", "title"], ["bar", "frac", "chip", "gh"], ["counts"]]
-FIXED = {"bar": "120px", "frac": "4em", "chip": "6.5em", "gh": "16px"}
+ROWS = [["id", "title"], ["bar", "frac", "chip", "gh", "sync"], ["counts"]]
+FIXED = {"bar": "120px", "frac": "4em", "chip": "6.5em", "gh": "16px", "sync": "6em"}
+SYNC_TITLE = "re-read only SPEC"
 
 LANE_A = {"kind": "s", "num": 12, "title": "Short title", "closed": 2, "total": 3, "doing": 0, "review": 0,
           "st": "Todo", "counts": {"Todo": 5, "Doing": 1, "Code Review": 1}}
@@ -122,7 +123,7 @@ def test_the_fixed_facts_share_one_width_list_and_the_bar_is_fixed():
     assert widths["bar"] == "120px", widths
     for header in out["headers"]:
         for row in header["rows"][1:2]:
-            assert {c["k"]: c["w"] for c in row} == {k: widths[k] for k in ("bar", "frac", "chip", "gh")}
+            assert {c["k"]: c["w"] for c in row} == {k: widths[k] for k in ("bar", "frac", "chip", "gh", "sync")}
 
 
 def test_a_wave_lane_name_spans_the_whole_header_and_is_never_clipped(page):
@@ -139,7 +140,7 @@ def test_two_lanes_draw_each_fact_at_one_track_of_one_shared_grid(page):
     assert grid, "the lanes are not drawn on a grid"
     assert "--lh-cols:7em minmax(0,1fr)" in grid.group(1), grid.group(1)
     assert len(headers) == 2, headers
-    assert [_layout(h) for h in headers] == [[["id", "title"], ["bar", "frac", "chip", "gh"], ["counts"]]] * 2
+    assert [_layout(h) for h in headers] == [[["id", "title"], ["bar", "frac", "chip", "gh", "sync"], ["counts"]]] * 2
     assert _widths(headers[0]) == _widths(headers[1]) == FIXED
 
 
@@ -172,3 +173,23 @@ def test_the_page_draws_every_header_from_the_rule_layer_on_one_grid(page):
     assert "laneHead(l," in page, "the header no longer takes its facts from the rule layer"
     assert "--lh-cols:${laneHeadGrid}" in page, "the lanes do not share one grid template"
     assert "${cl?m.cols.filter" not in page, "the counts are still drawn only for a collapsed lane"
+
+
+def test_a_spec_lane_header_carries_its_own_sync_press(page):
+    """#1667: a spec is an issue on the same board, so its header takes the same Sync press its tickets do -- re-reading
+    one card from GitHub never means opening the spec's sheet first."""
+    out = _header_rule([LANE_A, LANE_WAVE])
+    cells = [{c["k"]: c for row in h["rows"] for c in row} for h in out["headers"]]
+    assert cells[0]["sync"]["on"] is True and cells[0]["sync"]["n"] == 12, cells[0]["sync"]
+    assert cells[1]["sync"]["on"] is False, "a wave lane names no one issue to re-read"
+    _, headers = _drawn_headers(page, [LANE_A, LANE_WAVE])
+    assert '<button class=syncb data-n="12"' in headers[0], headers[0]
+    assert SYNC_TITLE in headers[0], headers[0]
+    assert "syncb" not in headers[1], headers[1]
+
+
+def test_the_spec_sync_press_repaints_the_board_because_a_spec_is_no_row(page):
+    """The press rewrites the row it began on; a spec header is not a row, so the handler must repaint the board rather
+    than reach for a `.it` element that is not there."""
+    handler = re.search(r'document\.addEventListener\("click",async e=>\{const b=e\.target\.closest\("#bbody \.syncb"\).*?\}\);', page).group(0)
+    assert 'card=b.closest(".it")' in handler and "if(!card)pollBoard()" in handler, handler

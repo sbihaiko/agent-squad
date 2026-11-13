@@ -107,8 +107,11 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
 // progress bar, fraction, chip and GitHub mark on fixed widths; row 3 holds the counts on one line. Every lane takes the
 // same widths, so two specs compare down the page. A wave lane's name spans the whole header, so it is never clipped.
 const laneHeadCols=[{k:"id",w:"7em",al:"flex-end"},{k:"title",w:"minmax(0,1fr)",al:"flex-start"},{k:"bar",w:"120px",al:"flex-start"},
-  {k:"frac",w:"4em",al:"flex-end"},{k:"chip",w:"6.5em",al:"center"},{k:"gh",w:"16px",al:"flex-end"},{k:"counts",w:"auto",al:"flex-end"}];
-const laneHeadRows=[["id","title"],["bar","frac","chip","gh"],["counts"]];
+  {k:"frac",w:"4em",al:"flex-end"},{k:"chip",w:"6.5em",al:"center"},{k:"gh",w:"16px",al:"flex-end"},{k:"sync",w:"6em",al:"flex-end"},
+  {k:"counts",w:"auto",al:"flex-end"}];
+// A spec's header carries the same Sync press its tickets do (#1667): the spec is an issue on the same board, and its
+// title, column, sub-issue count and tree come from the same read.
+const laneHeadRows=[["id","title"],["bar","frac","chip","gh","sync"],["counts"]];
 const laneHeadGrid=laneHeadRows[0].map(k=>laneHeadCols.find(c=>c.k===k).w).join(" ");
 // v names the three counted columns: { todo, doing, review }. A zero count is an en dash, so its row still stands.
 // Every lane keeps its counts row: a collapsed lane's only summary, and a zero dash keeps the row from moving.
@@ -125,6 +128,7 @@ function laneHead(l,v){
     frac:{...fact("frac"),text:counted?l.closed+"/"+l.total:""},
     chip:{...fact("chip"),text:l.st||""},
     gh:{...fact("gh"),on:l.kind==="s"},
+    sync:{...fact("sync"),on:l.kind==="s",n:l.num},
     counts:{...fact("counts"),items:[v.todo,v.doing,v.review].map(n=>[n,count(n)])}};
   return{rows:laneHeadRows.map(r=>r.map(k=>cell[k]))};
 }
