@@ -6,7 +6,7 @@
   },
   "codebase-design": {
     "files": 4,
-    "sha256": "e91e18258598832efe27af7e3c423ab262c6f8b8ecb6262d8fbb80d626ef0e19",
+    "sha256": "61f4936a45f334e894fe4c7e9b1bbaf509c1b451c2f8bddf91e563ac6ae82422",
     "source": "skill:codebase-design"
   },
   "diagnosing-bugs": {
@@ -36,7 +36,7 @@
   },
   "to-tickets": {
     "files": 2,
-    "sha256": "9b16e31be8eead372a65d11bb88a87f7d5b870169a97f3b7a8b7306ca1caf90c",
+    "sha256": "6eccfac132d92b949821d154679adc7f597bfc3e8c929f3c03786b92f91b961f",
     "source": "skill:to-tickets"
   }
 }
