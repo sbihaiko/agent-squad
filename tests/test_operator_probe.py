@@ -3,9 +3,11 @@ bound. A fake CLI never stands in for the permission boundary, so the denial cas
 """
 import importlib.util
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -83,7 +85,7 @@ def test_the_default_work_root_is_outside_every_writable_root():
 @pytest.mark.parametrize("denial,kwargs", [
     ("write outside the outbox", {"write_landed": True}),
     ("read of another scope's inbox", {"read_leaked": True}),
-    ("a port the network rule denies", {"network_reached": True}),
+    ("a foreign host on port 443", {"network_reached": True}),
 ])
 def test_a_denial_that_does_not_happen_fails_the_probe(denial, kwargs):
     probe = load("operator_probe")
@@ -92,33 +94,122 @@ def test_a_denial_that_does_not_happen_fails_the_probe(denial, kwargs):
         probe.check_denials(**flags)
 
 
-def test_the_network_bound_is_a_port_pair_on_one_literal_address():
-    """The denial names a port, not a host, so it is measured as a pair: port 80 refused, port 443 to the same literal
-    address open. A refused 443 fails the probe, and so does a non-kernel reason for the refusal."""
+def test_the_profile_allows_network_out_to_loopback_only():
     probe = load("operator_probe")
-    assert (probe.NETWORK_DENIED, probe.NETWORK_OPEN) == (80, 443)
-    assert probe.NETWORK_HOST.replace(".", "").isdigit()           # name resolution never decides the answer
-    refused = subprocess.CompletedProcess([], 1, "", "PermissionError: [Errno 1] Operation not permitted")
-    with pytest.raises(probe.ProbeFailed, match="refuses port 443"):
-        probe.check_port_bound(refused)
-    probe.check_port_bound(subprocess.CompletedProcess([], 1, "", "TimeoutError: timed out"))
-    probe.check_port_bound(subprocess.CompletedProcess([], 0, "", ""))
+    text = probe.profile_text("/work/state/outboxes", "/work/state/inboxes/proj-other.jsonl")
+    assert '(allow network-outbound (remote ip "localhost:*"))' in text.splitlines()
+    assert "*:443" not in text
+
+
+def test_a_loopback_refusal_fails_the_probe():
+    probe = load("operator_probe")
+    refused = subprocess.CompletedProcess([], 1, "", "ConnectionRefusedError: [Errno 61] Connection refused")
+    with pytest.raises(probe.ProbeFailed, match="loopback"):
+        probe.check_loopback_open(refused)
+    probe.check_loopback_open(subprocess.CompletedProcess([], 0, "", ""))
 
 
 @pytest.mark.sandbox_bound
-@pytest.mark.heavy     # the open port's control waits out a 2 s connect timeout
-def test_the_kernel_refuses_port_80_and_lets_port_443_through(tmp_path):
-    """The real profile, the real kernel: the denial must be the kernel's own refusal of port 80, and port 443 must pass
-    it. The address is literal, so an offline machine still answers this test, with a timeout at the network."""
+@pytest.mark.heavy     # a foreign connect the kernel lets through waits out its 2 s timeout
+def test_the_kernel_refuses_a_foreign_host_on_443_and_passes_loopback(tmp_path):
+    """The real profile, the real kernel: a foreign host on 443 must fail with the kernel's own refusal, and loopback must
+    pass, since the model call reaches its host only through the loopback proxy."""
     probe = load("operator_probe")
     (tmp_path / "outbox").mkdir()
     profile = probe.profile_text(str(tmp_path / "outbox"), str(tmp_path / "inbox.jsonl"))
-    def connect(port):
-        return probe.sandboxed(profile, sys.executable, ["-c", probe.CONNECT, probe.NETWORK_HOST, str(port)],
-                               tmp_path, 30)
-    denied, opened = connect(probe.NETWORK_DENIED), connect(probe.NETWORK_OPEN)
-    assert denied.returncode != 0 and probe.DENIED in denied.stderr, denied.stderr
-    assert probe.DENIED not in opened.stderr, opened.stderr
+    listener = socket.create_server(("127.0.0.1", 0))
+    try:
+        def connect(host, port):
+            return probe.sandboxed(profile, sys.executable, ["-c", probe.CONNECT, host, str(port)], tmp_path, 30)
+        foreign = connect(probe.NETWORK_HOST, probe.NETWORK_DENIED)
+        loopback = connect("127.0.0.1", listener.getsockname()[1])
+    finally:
+        listener.close()
+    assert foreign.returncode != 0 and probe.DENIED in foreign.stderr, foreign.stderr
+    assert loopback.returncode == 0, loopback.stderr
+
+
+def echo_once():
+    """A loopback server that echoes the bytes of one connection; returns its listening socket."""
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def serve():
+        conn, _ = server.accept()
+        with conn:
+            while data := conn.recv(4096):
+                conn.sendall(data)
+    threading.Thread(target=serve, daemon=True).start()
+    return server
+
+
+def test_the_model_proxy_relays_its_target_and_refuses_every_other(tmp_path):
+    proxy_module = load("model_proxy")
+    echo = echo_once()
+    target = echo.getsockname()[1]
+    log = tmp_path / "proxy.log"
+    try:
+        with proxy_module.ModelProxy(("127.0.0.1", target), log) as proxy:
+            with socket.create_connection(("127.0.0.1", proxy.port), 5) as s:
+                s.sendall(f"CONNECT 127.0.0.1:{target} HTTP/1.1\r\n\r\n".encode())
+                reader = s.makefile("rb")
+                assert reader.readline().startswith(b"HTTP/1.1 200")
+                assert reader.readline() == b"\r\n"
+                s.sendall(b"ping")
+                assert s.recv(4) == b"ping"
+            for refused in ("93.184.216.34:443", "127.0.0.1:80"):
+                with socket.create_connection(("127.0.0.1", proxy.port), 5) as s:
+                    s.sendall(f"CONNECT {refused} HTTP/1.1\r\n\r\n".encode())
+                    assert s.makefile("rb").readline().startswith(b"HTTP/1.1 403")
+            assert proxy.refusals == ["93.184.216.34:443", "127.0.0.1:80"]
+    finally:
+        echo.close()
+    assert "refused CONNECT 93.184.216.34:443" in log.read_text()
+
+
+def test_the_model_endpoint_is_read_from_the_base_url(monkeypatch):
+    """The CLI may send its model calls to a loopback gateway instead of the API host, so the probe reads the endpoint it
+    must keep open and must not assume the public one (#1656)."""
+    probe = load("operator_probe")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    assert probe.model_endpoint() == ("127.0.0.1", 8016, True)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL")
+    assert probe.model_endpoint() == ("api.anthropic.com", 443, False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://model.example:8080")
+    assert probe.model_endpoint() == ("model.example", 8080, False)
+
+
+def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatch):
+    """A loopback gateway is reached under the profile's own loopback rule, so a proxy in front of it would prove nothing
+    and break the call (#1656)."""
+    probe = load("operator_probe")
+    seen = {}
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    monkeypatch.setattr(probe, "denials", lambda *a: (False, False, False))
+    monkeypatch.setattr(probe, "check_denials", lambda *a: None)
+
+    def fake_session(work, profile, cli, proxy_url=None):
+        seen["proxy_url"] = proxy_url
+        return ({"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False})
+
+    monkeypatch.setattr(probe, "session", fake_session)
+    probe.run_probe(tmp_path, "/bin/true")
+    assert seen["proxy_url"] is None
+
+
+def test_the_session_reaches_the_model_only_through_the_proxy(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["env"] = kwargs["env"]
+        out = '{"type": "system", "subtype": "init"}\n{"type": "result", "subtype": "success"}\n'
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.session(tmp_path, "(version 1)(allow default)", "claude", "http://127.0.0.1:4242")
+    assert seen["env"]["HTTPS_PROXY"] == "http://127.0.0.1:4242"
+    assert seen["env"]["https_proxy"] == "http://127.0.0.1:4242"
+    assert seen["env"]["NO_PROXY"] == ""
 
 
 def test_a_session_with_a_write_tool_fails_the_probe():
