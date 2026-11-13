@@ -2516,6 +2516,7 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
         kinds = [k for k, hit in (("bugs", "bug" in labels or loop_defect(i)), ("loop_bugs", loop_defect(i))) if hit]
         if not kinds: continue
         o, c = _close_instant(i.get("o")), _close_instant(i.get("c"))
+        if o is None or o < now_ts - BUG_ROW_SECONDS: continue   # the row counts the past week, never the whole backlog
         came = o is not None and since <= o <= now_ts
         went = c is not None and since <= c <= now_ts   # the close stamp alone, so a lagging state never hides a close
         still = open_now(i)
@@ -2528,26 +2529,26 @@ def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
             rows[k]["closed"] += 1 if closed_now else 0
     return rows
 
-def tasks_fact(items, now_ts, window_secs, closed_n):
-    """The Tasks row under the hero figure: planned delivery closed inside the window (#1362). A task is a closed card with
-    no `spec` label, no `bug` label and no label beginning with `loop-bug` — a spec is a document and never work, and a
-    closed defect is a fix — and with a close reason that is not the carrier's not-delivered one (#921, one copy of the
-    vocabulary in board_columns). The share runs over `closed_n`, every card the hero figure counts closed in the window
-    whatever its kind, so a spec and an abandoned card sit in the denominator and never in the numerator.
+def tasks_fact(items, now_ts):
+    """The Tasks row under the hero figure: the week's planned delivery (#1362). The row covers the past week, like the two
+    bug rows, and counts a card opened inside it by its creation stamp: a spec is a document and never work, and a defect is
+    a fix, so a card carrying `spec`, `bug` or a label beginning with `loop-bug` is in neither count. The share runs over
+    every task opened in the week whatever became of it, so an abandoned task sits in the denominator and never in the
+    numerator, and a task not yet closed does the same.
 
-    The row reads the close stamps from the same two sources as the hero: the board cache's `c` stamps, and the store's
-    `closed` events when the cache holds nothing, whose rows carry no label and no reason and so are closures without a
-    task. A share over a zero denominator is None, as on the arrival rows."""
-    since, n = now_ts - window_secs, 0
-    for i in items or []:
-        if i.get("s") != "closed": continue
-        ts = _close_instant(i.get("c"))
-        if ts is None or not since <= ts <= now_ts: continue
+    A task counts closed when it carries the closed state and a close reason that is not the carrier's not-delivered one
+    (#921, one copy of the vocabulary in board_columns). The store's `closed` events carry no label and no creation stamp,
+    so a closure read from them enters no count. A share over a zero denominator is None, as on the arrival rows."""
+    n, of = 0, 0
+    for i in items or []:   # the owner, 2026-11-13: the row covers the past week, like the two bug rows
+        opened = _close_instant(i.get("o"))
+        if opened is None or opened < now_ts - BUG_ROW_SECONDS: continue
         labels = [str(x) for x in (i.get("l") or [])]
         if "spec" in labels or "bug" in labels or any(x.startswith("loop-bug") for x in labels): continue
+        of += 1
+        if i.get("s") != "closed": continue
         if _columns_module.not_planned(i.get("cr")): continue
         n += 1
-    of = int(closed_n or 0)
     return {"n": n, "of": of, "share": round(n / of, 3) if of else None}
 
 def throughput_fact(now=None):
@@ -2593,7 +2594,7 @@ def throughput_fact(now=None):
     window = pending_window()
     return {"window_secs": w, "window": window_n, "day": sum(s["n"] for s in slots),   # closes in the whole day: none means no history
             "arrivals": arrivals_fact(items, now_ts, w, moves, window),   # the Bugs and Loop-bugs rows, off the cache's stamps
-            "tasks": tasks_fact(items, now_ts, w, window_n),   # planned delivery over the same window as the hero figure
+            "tasks": tasks_fact(items, now_ts),   # planned delivery over the past week, like the two bug rows
             "labels": {"age_secs": board_age, "stale": board_age is not None and board_age > LABELS_STALE_SECS},   # the card labels ride the item read
             "board": {"as_of": board_t or None, "age_secs": board_age, "stale": board_age is not None and board_age > bound,
                       "overdue": board_read_overdue(board_t, now_ts)},
@@ -4113,6 +4114,7 @@ def _x_ticks(days):
     return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
 
 
+BUG_ROW_SECONDS = 7 * 86400   # the Bugs and Loop-bugs rows count the cards opened in the past week (owner, 2026-11-13)
 FLOW_MOVED = "moved"   # the label a card carries once it left for another board: no band of this board counts it (#1663)
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
 LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)

@@ -932,11 +932,11 @@ def _speed_store(hub, tmp_path, monkeypatch, counts, now=THROUGHPUT_NOW, slot_se
 def test_the_fact_counts_the_day_and_flags_the_oldest_source_once_it_passes_the_bound(hub, tmp_path, monkeypatch):
     _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 6], store_now=int(THROUGHPUT_NOW.timestamp()) - 60)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["day"] == 6 and got["stale"] is False, got
+    assert got["day"] == 6 and got["history"]["stale"] is False, got   # each age names its own read (#1661)
     assert "today" not in got
     _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 6], store_now=int(THROUGHPUT_NOW.timestamp()) - 3600, name="stale")
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["stale"] is True and got["age_secs"] == 3600, got
+    assert got["history"]["stale"] is True and got["history"]["age_secs"] == 3600, got
 
 
 def test_the_speed_window_is_the_last_four_hours_never_the_calendar_day(hub, tmp_path, monkeypatch):
@@ -1005,9 +1005,9 @@ def test_the_speed_age_is_the_oldest_of_the_two_sources(hub, tmp_path, monkeypat
     monkeypatch.setattr(hub, "board_cache", {"t": now_ts - 3600,
                                              "items": [{"n": 9, "s": "closed", "c": "2026-10-20T17:00:00Z"}]})
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["as_of"] == now_ts - 7200 and got["age_secs"] == 7200, (got, "the newer cache hid the stalled store")
+    assert got["history"]["as_of"] == now_ts - 7200 and got["history"]["age_secs"] == 7200, (got, "the newer cache hid the stalled store")
     monkeypatch.setattr(hub, "board_cache", {"t": now_ts, "items": [{"n": 9, "s": "closed", "c": "2026-10-20T17:00:00Z"}]})
-    assert hub.throughput_fact(now=THROUGHPUT_NOW)["age_secs"] == 7200, "a fresh cache hid the stalled store"
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["history"]["age_secs"] == 7200, "a fresh cache hid the stalled store"
 
 
 def test_the_speed_window_follows_the_environment_override(hub, tmp_path, monkeypatch):
@@ -1047,7 +1047,8 @@ def _specs(done=5, total=9, open_n=3, so="3 open", bar=True, state="info", value
 def _speed(**kw):
     """A throughput fact as the hub returns it: four hours, median 9, maximum 21, the rows, overridden per case."""
     fact = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
-            "stale": False, "age_secs": 60, "labels": {"age_secs": 60, "stale": False},
+            "board": {"age_secs": 60, "stale": False, "as_of": 0},
+            "history": {"age_secs": 60, "stale": False}, "labels": {"age_secs": 60, "stale": False},
             "tasks": {"n": 4, "of": 10, "share": 0.4},
             "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3, "closed": 3, "total": 7},
                          "loop_bugs": {"in": 4, "out": 2, "open": 2, "closed": 2, "total": 4}},
@@ -1163,8 +1164,8 @@ def test_nothing_opened_in_the_window_reads_zero_in_in_the_muted_tone(hub):
 
 
 def test_the_last_line_names_the_age_only_once_the_oldest_source_is_stale(hub):
-    assert "· read 16 m ago" in _speed_text(hub, _speed(stale=True, age_secs=16 * 60 + 30))
-    assert "· read" not in _speed_text(hub, _speed())
+    assert "· history read 16 m ago" in _speed_text(hub, _speed(history={"age_secs": 16 * 60 + 30, "stale": True}))
+    assert "· history read" not in _speed_text(hub, _speed())
 
 
 def test_the_stale_label_note_appears_past_two_minutes_and_not_before(hub):
@@ -1172,7 +1173,7 @@ def test_the_stale_label_note_appears_past_two_minutes_and_not_before(hub):
     fresh = _speed_text(hub, _speed(labels={"age_secs": 120, "stale": False}))
     assert "labels" not in fresh, fresh
     old = _speed_text(hub, _speed(labels={"age_secs": 130, "stale": True}))
-    assert re.search(r"labels 2 min old", old), old
+    assert re.search(r"labels from the board read 2 min old", old), old
 
 
 def test_the_label_stale_bound_is_the_hub_side_120_seconds(hub, tmp_path, monkeypatch):
@@ -1299,6 +1300,19 @@ def test_no_card_opened_in_the_window_reads_zero_in_both_arrival_rows(hub, tmp_p
     assert {k: arrivals["loop_bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 0, "open": 0}, arrivals
 
 
+def test_the_bug_rows_cover_only_the_past_week(hub, tmp_path, monkeypatch):
+    """The owner, 2026-11-13: the Bugs and Loop-bugs rows count the cards opened in the past week, so an old backlog
+    no longer drowns the row: a defect opened eight days ago is in neither its closed nor its total count."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [_arrival_card(1, ["bug"], now_ts - 2 * 3600),
+             _arrival_card(2, ["bug"], now_ts - 9 * 86400, closed=now_ts - 8 * 86400),
+             _arrival_card(3, ["loop-bug:dispatch"], now_ts - 10 * 86400)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert (arrivals["bugs"]["closed"], arrivals["bugs"]["total"]) == (0, 1), arrivals
+    assert (arrivals["loop_bugs"]["closed"], arrivals["loop_bugs"]["total"]) == (0, 0), arrivals
+
+
 def test_the_arrival_rows_read_the_creation_stamp_never_the_close_stamp(hub, tmp_path, monkeypatch):
     """#1361: `in` counts by `o`, the stamp the snapshot already carries. A card closed inside the window but opened
     before it is no arrival, and a card with no readable creation stamp is never invented as one."""
@@ -1307,7 +1321,7 @@ def test_the_arrival_rows_read_the_creation_stamp_never_the_close_stamp(hub, tmp
              {**_arrival_card(2, ["bug"], 0), "o": "not a stamp"}]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 1, "open": 1}, arrivals
+    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 1, "open": 0}, arrivals
 
 
 def test_the_arrival_rows_follow_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
@@ -1387,7 +1401,7 @@ def test_the_tasks_row_counts_planned_delivery_closed_in_the_window(hub, tmp_pat
              _task_card(8, None, state="open")]                                  # still open
     _arrival_items(hub, tmp_path, monkeypatch, items)
     tasks = hub.throughput_fact(now=THROUGHPUT_NOW)["tasks"]
-    assert tasks == {"n": 2, "of": 6, "share": round(2 / 6, 3)}, tasks
+    assert tasks == {"n": 3, "of": 5, "share": round(3 / 5, 3)}, tasks   # opened in the past week: the closed-before-window card counts too
 
 
 def test_a_closed_spec_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_path, monkeypatch):
@@ -1399,7 +1413,7 @@ def test_a_closed_spec_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_pat
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 2, "the hero figure counts a closed spec"
-    assert got["tasks"] == {"n": 0, "of": 2, "share": 0.0}, got["tasks"]
+    assert got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]   # a spec is no task at all
 
 
 def test_a_card_closed_not_planned_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_path, monkeypatch):
@@ -1423,7 +1437,7 @@ def test_a_closed_defect_is_never_a_task_whatever_its_bug_spelling(hub, tmp_path
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 5, "the hero figure counts closed defects"
-    assert got["tasks"] == {"n": 0, "of": 5, "share": 0.0}, got["tasks"]
+    assert got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]   # a defect is no task at all
 
 
 def test_the_tasks_share_denominator_is_every_card_closed_in_the_window(hub, tmp_path, monkeypatch):
@@ -1436,8 +1450,7 @@ def test_the_tasks_share_denominator_is_every_card_closed_in_the_window(hub, tmp
              _task_card(4, now_ts - 4 * 60, reason="not_planned")]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["tasks"]["of"] == got["window"] == 4, "the denominator is not the hero figure"
-    assert got["tasks"] == {"n": 1, "of": 4, "share": 0.25}, got["tasks"]
+    assert got["tasks"] == {"n": 1, "of": 2, "share": 0.5}, got["tasks"]   # the task and the abandoned card are the week's
 
 
 def test_the_tasks_row_reads_the_close_stamps_the_hero_reads_from_the_store_too(hub, tmp_path, monkeypatch):
@@ -1447,7 +1460,7 @@ def test_the_tasks_row_reads_the_close_stamps_the_hero_reads_from_the_store_too(
     _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 3])
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 3, "the hero figure's store fallback moved"
-    assert got["tasks"] == {"n": 0, "of": 3, "share": 0.0}, got["tasks"]
+    assert got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]   # a store event carries no label
 
 
 def test_the_tasks_row_follows_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
@@ -1459,7 +1472,7 @@ def test_the_tasks_row_follows_the_same_window_override_as_the_hero(hub, tmp_pat
     monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 1, "the hero figure did not follow the override"
-    assert got["tasks"] == {"n": 1, "of": 1, "share": 1.0}, got["tasks"]
+    assert got["tasks"] == {"n": 2, "of": 2, "share": 1.0}, got["tasks"]   # the week, not the hero's window
 
 
 def test_no_card_closed_in_the_window_reads_a_task_share_over_zero(hub, tmp_path, monkeypatch):
@@ -1469,7 +1482,7 @@ def test_no_card_closed_in_the_window_reads_a_task_share_over_zero(hub, tmp_path
     items = [_task_card(1, now_ts - 8 * 3600)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["window"] == 0 and got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]
+    assert got["window"] == 0 and got["tasks"] == {"n": 1, "of": 1, "share": 1.0}, got["tasks"]
 
 
 def test_a_card_closed_as_a_duplicate_is_not_planned_delivery(hub, tmp_path, monkeypatch):
@@ -1501,8 +1514,8 @@ def test_the_tasks_row_reads_the_reason_and_labels_the_snapshot_already_carries(
     out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
     rows = [json.loads(line) for line in out.splitlines() if "_page" not in line]
     assert rows[0]["cr"] == "completed" and rows[2]["cr"] == "not_planned", "the snapshot drops the close reason"
-    assert hub.tasks_fact([dict(r, s="closed") for r in rows], now_ts, 4 * 3600, 3) == {"n": 1, "of": 3, "share": 0.333}, \
-        "the snapshot's own row is not a Tasks row input"
+    assert hub.tasks_fact([dict(r, s="closed") for r in rows], now_ts) == {"n": 1, "of": 1, "share": 1.0}, \
+        "the snapshot's own row is not a Tasks row input, and a defect and a spec are no task either"
 
 
 def test_a_cancelled_subscription_leaves_the_usage_panel_and_the_subscriptions_list(hub):
