@@ -24,8 +24,12 @@ adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --a
 # #1644: the complete tier is the jobs the workflow starts on the `promote` label alone, and the proof reads them beside the
 # class. This fixture names two of them, and every ci() answer writes the check runs of the tip: the complete tier green on a
 # green answer, so the two halves of the proof agree.
-printf "jobs:\n  ruff:\n    name: ruff\n  fast-battery:\n    name: fast-battery\n  full-xdist:\n    name: full-xdist\n    if: github.head_ref == 'dev' && github.event.label.name == 'promote'\n  gui-e2e:\n    name: gui-e2e\n    if: github.head_ref == 'dev' && github.event.label.name == 'promote'\n" > "$T/ci.yml"
+printf "jobs:\n  ruff:\n    name: ruff\n  fast-battery:\n    name: fast-battery\n  complete-guard:\n    name: complete-guard\n    if: github.head_ref == 'dev' && github.event.label.name == 'promote'\n  full-xdist:\n    name: full-xdist\n    if: github.head_ref == 'dev' && github.event.label.name == 'promote'\n    needs: [complete-guard]\n  gui-e2e:\n    name: gui-e2e\n    if: github.head_ref == 'dev' && github.event.label.name == 'promote'\n    needs: [complete-guard]\n" > "$T/ci.yml"
 export SG_CI_WORKFLOW=$T/ci.yml
+case "$(bash "$d/promote-pass.sh" --ci-complete-job-names "$T/ci.yml" | tr '\n' ' ')" in
+  "full-xdist gui-e2e ") ok "the complete tier names the jobs that wait on the guard, never the guard itself (#1644)";;
+  *) ko "complete tier names the guard or misses a job: '$(bash "$d/promote-pass.sh" --ci-complete-job-names "$T/ci.yml" | tr '\n' ' ')'";;
+esac
 checks() {  # <fast> <complete>: the check runs of the tip. A half is a conclusion, `running` or `none` (no run at all).
   local f=$1 c=$2 n out=""
   for n in ruff fast-battery; do
