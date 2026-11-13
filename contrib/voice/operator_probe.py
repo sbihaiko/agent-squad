@@ -5,7 +5,11 @@ Two phases, one command. Every call runs through contrib/squad-goal/scripts/clau
 probe writes. The denials come first: a write outside the scope's outbox, a read of another scope's inbox and a network
 call on a port the model call does not use must each fail. Then one bounded `claude -p` call runs with the operator's
 tool set and `dontAsk`. A denial that does not happen, or a session that starts with another tool set, fails the probe.
-The kernel cannot name a host in a network rule, so the model endpoint is bounded by port 443, not by host.
+
+Network bound: proven at port level only. The profile allows outbound TCP port 443 to every host, and loopback. It denies
+port 80 to foreign hosts. Seatbelt accepts only `*` or `localhost` as a network host, so the profile cannot name the model
+endpoint. UNPROVEN: host-level isolation. An operator session can reach any host on port 443. This probe does not claim
+otherwise. The stronger bound, a loopback proxy that allows only the model host, is a follow-up.
 
 usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
@@ -30,7 +34,11 @@ DEADLINE = 180.0                       # seconds, the one CLI call
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
 PROMPT = "Reply with the single word ok. Use no tool."
-NETWORK_CALL = "curl -sS -m 8 -o /dev/null http://example.com/"
+DENIED = "Operation not permitted"      # the kernel's own refusal, the only reason a denial counts
+NETWORK_HOST = "93.184.216.34"          # a literal address: the rule is a port rule, never a name-resolution result
+NETWORK_DENIED = 80                     # a port the profile denies to a foreign host
+NETWORK_OPEN = 443                      # the port the model call uses, open to every host
+CONNECT = "import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 2)"
 
 
 class ProbeFailed(Exception):
@@ -48,7 +56,17 @@ def check_denials(write_landed, read_leaked, network_reached):
     if read_leaked:
         raise ProbeFailed("a denial did not happen: read of another scope's inbox returned its lines")
     if network_reached:
-        raise ProbeFailed("a denial did not happen: network beyond the model endpoint was reached")
+        raise ProbeFailed("a denial did not happen: a port the network rule denies was reached")
+
+
+def check_port_bound(open_port):
+    """The control for the network denial: the port the model call uses must pass the kernel, or the rule bounds nothing.
+
+    A refusal of port 443 is unproven as well as useless, since a session that cannot open it cannot reach the model.
+    A timeout or a refused connection is the network's answer and passes: the kernel let the connect through.
+    """
+    if open_port.returncode != 0 and DENIED in open_port.stderr:
+        raise ProbeFailed(f"the network rule refuses port {NETWORK_OPEN}, so no port bound is proven")
 
 
 def profile_text(outbox_dir, other_inbox):
@@ -82,18 +100,25 @@ def denials(work, profile, leak, other_inbox):
 
     A denial counts only when the profile applied (the control echo ran) and the command refused with its own
     `Operation not permitted`; a failure of any other kind is unproven, so the probe fails rather than passes.
+    The network denial is a port rule, so it is measured as a pair on one literal address: port 80 refused, port 443
+    open. The open port is the control: without it a refused port 80 says nothing about the bound.
     """
     def run(command):
         return sandboxed(profile, "/bin/sh", ["-c", command], work, DENIAL_DEADLINE)
+
+    def connect(port):
+        return sandboxed(profile, sys.executable, ["-c", CONNECT, NETWORK_HOST, str(port)], work, DENIAL_DEADLINE)
+
     control = run("echo control")
     if control.returncode != 0 or "control" not in control.stdout:
         raise ProbeFailed(f"sandbox-exec did not apply the profile: {control.stderr.strip() or 'no output'}")
     write = run(f'echo leaked > "{leak}"')
     read = run(f'cat "{other_inbox}"')
-    network = run(NETWORK_CALL)
+    network = connect(NETWORK_DENIED)
     for name, res in (("write", write), ("read", read), ("network", network)):
-        if res.returncode != 0 and "Operation not permitted" not in res.stderr:
+        if res.returncode != 0 and DENIED not in res.stderr:
             raise ProbeFailed(f"the {name} denial is unproven: {res.stderr.strip() or 'no reason'}")
+    check_port_bound(connect(NETWORK_OPEN))
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
@@ -158,7 +183,8 @@ def main(argv=None):
         return 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print(f"operator-probe: pass: denials held (write, read, network); session tools {TOOLS}, dontAsk, cap ${SPEND}")
+    print(f"operator-probe: pass: denials held (write, read, port {NETWORK_DENIED} refused, "
+          f"port {NETWORK_OPEN} open); session tools {TOOLS}, dontAsk, cap ${SPEND}")
     return 0
 
 

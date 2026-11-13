@@ -83,13 +83,42 @@ def test_the_default_work_root_is_outside_every_writable_root():
 @pytest.mark.parametrize("denial,kwargs", [
     ("write outside the outbox", {"write_landed": True}),
     ("read of another scope's inbox", {"read_leaked": True}),
-    ("network beyond the model endpoint", {"network_reached": True}),
+    ("a port the network rule denies", {"network_reached": True}),
 ])
 def test_a_denial_that_does_not_happen_fails_the_probe(denial, kwargs):
     probe = load("operator_probe")
     flags = {"write_landed": False, "read_leaked": False, "network_reached": False, **kwargs}
     with pytest.raises(probe.ProbeFailed, match=denial):
         probe.check_denials(**flags)
+
+
+def test_the_network_bound_is_a_port_pair_on_one_literal_address():
+    """The denial names a port, not a host, so it is measured as a pair: port 80 refused, port 443 to the same literal
+    address open. A refused 443 fails the probe, and so does a non-kernel reason for the refusal."""
+    probe = load("operator_probe")
+    assert (probe.NETWORK_DENIED, probe.NETWORK_OPEN) == (80, 443)
+    assert probe.NETWORK_HOST.replace(".", "").isdigit()           # name resolution never decides the answer
+    refused = subprocess.CompletedProcess([], 1, "", "PermissionError: [Errno 1] Operation not permitted")
+    with pytest.raises(probe.ProbeFailed, match="refuses port 443"):
+        probe.check_port_bound(refused)
+    probe.check_port_bound(subprocess.CompletedProcess([], 1, "", "TimeoutError: timed out"))
+    probe.check_port_bound(subprocess.CompletedProcess([], 0, "", ""))
+
+
+@pytest.mark.sandbox_bound
+@pytest.mark.heavy     # the open port's control waits out a 2 s connect timeout
+def test_the_kernel_refuses_port_80_and_lets_port_443_through(tmp_path):
+    """The real profile, the real kernel: the denial must be the kernel's own refusal of port 80, and port 443 must pass
+    it. The address is literal, so an offline machine still answers this test, with a timeout at the network."""
+    probe = load("operator_probe")
+    (tmp_path / "outbox").mkdir()
+    profile = probe.profile_text(str(tmp_path / "outbox"), str(tmp_path / "inbox.jsonl"))
+    def connect(port):
+        return probe.sandboxed(profile, sys.executable, ["-c", probe.CONNECT, probe.NETWORK_HOST, str(port)],
+                               tmp_path, 30)
+    denied, opened = connect(probe.NETWORK_DENIED), connect(probe.NETWORK_OPEN)
+    assert denied.returncode != 0 and probe.DENIED in denied.stderr, denied.stderr
+    assert probe.DENIED not in opened.stderr, opened.stderr
 
 
 def test_a_session_with_a_write_tool_fails_the_probe():
