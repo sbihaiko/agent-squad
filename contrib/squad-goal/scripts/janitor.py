@@ -181,6 +181,12 @@ def tree(root):
     for q, (pp, _) in procs.items():
         if pp == root: out += tree(q)
     return out
+def wip_snapshot(folder, run_id, dry=False):   # #1662: the one writer of a run's WIP refs, loaded by path (a bare file under -I, as squad_procs is)
+    name = "squad_wip_snapshot"
+    if not hasattr(sys.modules.get(name), "snapshot_run"):
+        spec = importlib.util.spec_from_file_location(name, pathlib.Path(__file__).resolve().parent / "wip_snapshot.py")
+        mod = importlib.util.module_from_spec(spec); sys.modules[name] = mod; spec.loader.exec_module(mod)
+    return sys.modules[name].snapshot_run(folder, run_id, dry=dry)
 def kill(pidv, why):
     if pidv in me: return
     for q in reversed(tree(pidv)):
@@ -451,6 +457,13 @@ for r in names:
     if age is None: age = run_age(i)
     if age is not None and age > TAKEOVER_SECONDS and not gate_wait:   # T: past the bound with no progress the run is stuck; it is ended and handed over, never requeued (ADR-0166)
         nums = sorted(req_issues(f) | i["acc"], key=int)
+        # #1662: the work the run left uncommitted is saved before any teardown, one WIP line per tree. A tree that could not be
+        # saved holds the run for this pass: nothing is killed, and the next pass tries the snapshot again.
+        saved, saved_ok = wip_snapshot(f, i["run_id"], dry=dry)
+        for line in saved: say(line)
+        if not saved_ok:
+            say(f"TAKEN-OVER HELD run {n}: a tree could not be saved (WIP failed), so the run is not ended this pass")
+            held |= set(nums); continue
         msg = f"TAKEN-OVER run {n} ({int(age // 60)} min without progress) ended by the takeover bound; its issues stay claimed for a hand fix"
         say(msg)
         if not dry:

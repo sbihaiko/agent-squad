@@ -15,7 +15,7 @@ never delegated to the loop (ADR-0146).
 
 1. Open an issue with the evidence: the run, the log lines, the markers, the timestamps. Label it `loop-bug` plus the one label that names the defect: `loop-bug:dispatch` for the dispatch path, `loop-bug:landing` for the landing path, `loop-bug:infra` for the loop's infrastructure — the wave lifecycle, a gate, the engine. The second label is what stops dispatch; a bare `loop-bug` stops nothing. Card to Doing.
 2. Run the adversarial review with Fable before the first edit (Agent tool, model `fable`, stance challenger). It must name what else explains the evidence and which test separates the two. Record the ruling on the issue; a fix it refutes is not started.
-3. Stop the loop: `scripts/watchd.sh stop`, after checking for live work. Land first any finished run whose children entered its wave (`wave.sh land <run>`).
+3. Stop the loop: `scripts/watchd.sh stop`, after checking for live work. It drains: a live run finishes before the loop stops, and `stop --force` is the hard stop that snapshots the live runs' work first (#1662). Land first any finished run whose children entered its wave (`wave.sh land <run>`).
 4. Fix it yourself or with your own agents, test-first, in a worktree. Fast gate, not the full one. Land in `dev` with `Closes #n`.
 5. Promote `dev` into `stg` by one pull request, then publish the live copy from a tree on `stg` (`SKILL.md` §8 steps 4 and 5). The publish closes the issue — never close it by hand.
 6. Restart the loop (`scripts/watchd.sh restart`, which drains the live runs first; with the loop already stopped by step 3 it only starts it), and confirm the first cycle prints no `LOOP STOP` and no `DISPATCH HOLD` for that issue.

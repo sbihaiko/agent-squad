@@ -20,7 +20,7 @@ calls = []
 def watchd(*args):   # the marks watchd.sh leaves: a drain pauses dispatch and marks it, a stop clears the mark
     calls.append(list(args))
     if args == ("drain",): (STATE / "auto" / "drain").write_text(""); (STATE / "auto" / "off").write_text("")
-    if args == ("stop",): (STATE / "auto" / "drain").unlink(missing_ok=True)
+    if args in (("stop",), ("stop", "--force")): (STATE / "auto" / "drain").unlink(missing_ok=True)
     return 0
 hub.loop_watchd = watchd
 tn = {"host": "box.tail1.ts.net", "allow": ["alice@example.com"]}
@@ -99,7 +99,7 @@ check("stop-now without its confirm is refused and kills nothing", code == 400 a
 
 reset()
 code, got = hub.loop_switch(LOOP["loopback"], {"action": "stop-now", "confirm": True}, origin_ok=True)
-check("stop-now runs the watchd stop", code == 200 and calls == [["stop"]], (code, calls))
+check("stop-now runs the watchd hard stop, not the drain", code == 200 and calls == [["stop", "--force"]], (code, calls))
 check("stop-now answers what it killed and names a live run it found no process for as survived",
       got.get("killed") == {"runs": [], "gates": []} and got.get("survived", {}).get("runs") == [str(live_run)], got)
 check("stop-now writes one audit line, and it claims no kill that did not happen",

@@ -2316,9 +2316,9 @@ def loop_switch(a, body, origin_ok, row=None):
         return 409, {"err": "the loop is not running" if state == "off" else f"the loop is {state}: {action} does not apply"}
     who, frm = a.login or "owner", "tailnet" if a.tailnet else "loopback"
     client = body.get("client") if body.get("client") in LOOP_CLIENTS else None   # the page that asked, stated, never guessed
-    def watchd(verb):   # the hub's own supervisor takes no target; another project's names its own files (#1599)
-        if t["profile"] is None and t["state"] == STATE: return loop_watchd(verb)
-        return loop_watchd(verb, state=t["state"], checkout=t["checkout"] or None, profile=t["profile"])
+    def watchd(*verbs):   # the hub's own supervisor takes no target; another project's names its own files (#1599)
+        if t["profile"] is None and t["state"] == STATE: return loop_watchd(*verbs)
+        return loop_watchd(*verbs, state=t["state"], checkout=t["checkout"] or None, profile=t["profile"])
     if action == "start":
         for f in ("off", "drain", "drain-pause"): (t["state"] / "auto" / f).unlink(missing_ok=True)
         t["starting"].parent.mkdir(parents=True, exist_ok=True); t["starting"].write_text(f"{time.time()}\n")
@@ -2338,7 +2338,7 @@ def loop_switch(a, body, origin_ok, row=None):
         return 200, {"ok": True, "action": action}
     if body.get("confirm") is not True: return 400, {"err": "confirm the stop: it kills the live runs and gates listed"}
     live = loop_live(state=t["state"], checkout=t["checkout"] or None)
-    if watchd("stop"): return 500, {"err": "watchd did not stop"}
+    if watchd("stop", "--force"): return 500, {"err": "watchd did not stop"}   # stop-now is the hard stop: the snapshot runs first (#1662)
     killed, survived = loop_stop_now(live, t["checkout"] or None)
     extra = {"survived": survived} if survived["runs"] or survived["gates"] else {}
     loop_audit_add(who, frm, action, killed, client=client, path=t["audit"], **extra)
