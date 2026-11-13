@@ -51,6 +51,30 @@ def timed_stub(tmp_path, sleep=REVIEW_S):
     return str(p)
 
 
+def overlap_stub(tmp_path, wait_s=8):
+    """A review command that proves overlap by a rendezvous, never by a sleep.
+
+    Each invocation records its start, then waits a bounded time for the sibling's start line. Two live reviews proceed
+    at once, so the guard holds on a loaded runner whose tasks start seconds apart; a sequential engine makes each
+    invocation wait the whole bound, and the two windows still do not intersect (#1645).
+    """
+    p = tmp_path / "review.sh"
+    ticks = int(wait_s / 0.1)
+    p.write_text(
+        "#!/bin/sh\n"
+        'now() { python3 -c \'import time; print("%.6f" % time.time())\'; }\n'
+        f'echo "start $2 $(now)" >> "{tmp_path}/review.log"\n'
+        "i=0\n"
+        f'while [ "$(grep -c \'^start\' "{tmp_path}/review.log" || true)" -lt 2 ] && [ "$i" -lt {ticks} ]; do\n'
+        "  sleep 0.1; i=$((i + 1))\n"
+        "done\n"
+        f'echo "end $2 $(now)" >> "{tmp_path}/review.log"\n'
+        "exit 0\n"
+    )
+    p.chmod(0o755)
+    return str(p)
+
+
 def code_stub(tmp_path, codes, sleep=0, fix_child=None):
     """A review command that sleeps, prints a two-line review, and exits with `codes[round - 1]` (4 asks for a fix).
     `fix_child` limits the exit codes to one child: every other child's review approves."""
@@ -97,7 +121,7 @@ def stamped(step, marks):
 async def test_two_passing_children_are_reviewed_at_the_same_time(tmp_path):
     """The reviews of two passing children overlap: each starts when its child passes, not when the earlier review ends."""
     repo = sibling_repo(tmp_path / "t")
-    eng = make(tmp_path, two_children(), tweak=gated(timed_stub(tmp_path)), target=repo)
+    eng = make(tmp_path, two_children(), tweak=gated(overlap_stub(tmp_path)), target=repo)
     assert (await eng.run()).verdict == "completed"
     log = spans(tmp_path)
     assert set(log) == {A, B}, log
