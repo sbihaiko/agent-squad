@@ -3531,6 +3531,12 @@ def sync_instant(now=None):
     return dt.datetime.fromtimestamp(time.time() if now is None else now, dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def label_names(labels):
+    """One read's labels as the names the board carries: `ghread` answers REST-shaped `[{"name": ...}]`, and the cache
+    holds strings, as every other reader of the same answer (#1682)."""
+    return [x.get("name") if isinstance(x, dict) else x for x in (labels or []) if (x.get("name") if isinstance(x, dict) else x)]
+
+
 def read_one_card(n):
     """One card re-read from GitHub now, as a cache item (#1668).
 
@@ -3547,7 +3553,7 @@ def read_one_card(n):
     old = next((i for i in board_cache.get("items") or [] if i.get("n") == n), None) or {}
     item = dict(old)                          # fields the press does not read (item id, Kind, Gate Tries) stay
     item.update(n=n, r=old.get("r") or REPO, t=d.get("title"), s=d.get("state"), o=d.get("created_at"),
-                l=list(d.get("labels") or []))
+                l=label_names(d.get("labels")))   # names, never the read's own objects (#1682)
     if st is not None: item["st"] = st or None
     si = d.get("sub_issues_summary")
     if isinstance(si, dict): item["si"] = si
