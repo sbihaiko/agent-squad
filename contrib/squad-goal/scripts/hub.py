@@ -5296,7 +5296,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    test fails when the switch rules of the two places drift apart (#1234). */
 #lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}
 #lopb .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
-#lopb .lsw[aria-checked=true]{background:var(--ok)}
+#lopb .lsw[aria-checked=true]{background:var(--ok)}#lopb .lsw.dra[aria-checked=true]{background:var(--warn)}
 #lopb .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}
 #lopb .lsw[aria-checked=true] i{transform:translateX(20px)}
 #lopb .lsw:disabled{opacity:.6;cursor:default}#lopb .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
@@ -5386,7 +5386,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
    the test fails when the two lists drift apart. */
 #inst .ls.draining,#inst .ls.starting{color:var(--warn)}#inst .ls{font-weight:600}
 #inst .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
-#inst .lsw[aria-checked=true]{background:var(--ok)}
+#inst .lsw[aria-checked=true]{background:var(--ok)}#inst .lsw.dra[aria-checked=true]{background:var(--warn)}
 #inst .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}
 #inst .lsw[aria-checked=true] i{transform:translateX(20px)}
 #inst .lsw:disabled{opacity:.6;cursor:default}#inst .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
@@ -6475,7 +6475,7 @@ function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&roo
 // }SETT
 const loopLast=v=>{const e=(v.log||[])[0];return e?[e.action,e.who,e.from,moment(e.at)].filter(Boolean).join(" · "):"none recorded"};   // no log entry names no action or source, so the tile never shows a partial who and when
 const loopTip=v=>!v.write?v.reason:v.state==="on"||v.state==="draining"?"turn off":v.state==="off"?"turn on":v.state==="starting"?"the loop is starting":"";
-const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;
+const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class="lsw${v.state==="draining"?" dra":""}"${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;   // a draining loop reads the warn colour on the switch itself, not only on the word beside it
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
 const loopStateLine=v=>`<div class="lstate ${esc(v.state)}">Loop ${esc(v.state)}</div>`;   // the theme's first line, the state before any other fact (#1280)

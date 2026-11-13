@@ -312,6 +312,17 @@ def test_the_theme_opens_on_its_state_line():
         assert m and m.group(1) == state, out[:140]
 
 
+def test_a_draining_loop_turns_the_switch_itself_warn_coloured():
+    """While the supervisor winds down the switch reads the warn colour, not the green of a loop that still dispatches."""
+    for state in ("on", "off", "draining", "starting"):
+        out = run_js(f"loopSw({js_view(state=state)})")
+        assert (" dra" in out) is (state == "draining"), f"{state}: {out}"
+    src = page()
+    for panel in ("#lopb", "#inst"):
+        rule = re.search(rf"{panel} \.lsw\.dra\[aria-checked=true\]\{{([^}}]*)\}}", src)
+        assert rule and "var(--warn)" in rule.group(1), f"{panel} paints a draining switch warn"
+
+
 def test_the_live_tile_states_the_run_and_gate_counts_in_every_state():
     """A stop never touches work the owner could not see: the counts show in every state, not only while draining (#1280)."""
     for state in ("on", "off", "draining", "starting"):
