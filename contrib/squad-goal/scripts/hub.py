@@ -3577,31 +3577,86 @@ def synced_rows(n, at):
     return out
 
 
+SYNC_TREE_DEPTH = 3          # the levels below a spec one press descends into (#1670)
+SYNC_TREE_NODES = 50         # the cards one press reads, the spec included (#1670)
+SYNC_TREE_SECONDS = 20.0     # one press's deadline: a read already begun finishes, none begins past it (#1670)
+_sync_frontier = {}          # a capped spec's unread numbers, which its next press continues from (#1670)
+
+
+def _has_subs(item):
+    return bool((item.get("si") or {}).get("total"))
+
+
+def sync_tree(root):
+    """The root and, when it is a spec, every sub-issue under it, read to the depth, node and time bounds (#1670).
+
+    Answers (items read, the cap that stopped the walk or None, a note). A press past a bound keeps the numbers it did not
+    read, and the next press continues from them as fresh roots, so a wide tree is read across presses, never in one."""
+    n = root["n"]
+    if _columns_module.SPEC_LABEL not in (root.get("l") or []): return [root], None, ""
+    started = time.monotonic()
+    if n in _sync_frontier: pending = [(x, 0) for x in _sync_frontier.pop(n)]
+    else:
+        subs, err = sub_issues(n, root.get("r") or REPO)
+        if err: return [root], None, err
+        pending = [(s["number"], 1) for s in subs if isinstance(s.get("number"), int)]
+    items, seen, deferred, rest = [root], {n}, [], []
+    capped, failed = None, 0
+    while pending:
+        num, depth = pending.pop(0)
+        if num in seen: continue
+        if len(items) >= SYNC_TREE_NODES:
+            capped, rest = "nodes", [num] + [x for x, _ in pending]
+            break
+        if time.monotonic() - started >= SYNC_TREE_SECONDS:
+            capped, rest = "deadline", [num] + [x for x, _ in pending]
+            break
+        seen.add(num)
+        try: child = read_one_card(num)
+        except Exception: failed += 1; continue
+        items.append(child)
+        if not _has_subs(child): continue
+        if depth >= SYNC_TREE_DEPTH:
+            capped = capped or "depth"
+            deferred.append(num)
+            continue
+        subs, err = sub_issues(num, child.get("r") or REPO)
+        if err: failed += 1; continue
+        pending += [(s["number"], depth + 1) for s in subs if isinstance(s.get("number"), int)]
+    frontier = deferred + rest
+    if frontier: _sync_frontier[n] = frontier
+    else: _sync_frontier.pop(n, None)
+    note = f"{failed} sub-issue read(s) did not answer" if failed else ""
+    return items, capped, note
+
+
 def sync_card(n):
-    """POST /api/sync: re-read one card from GitHub now and answer the row refreshed (#1668).
+    """POST /api/sync: re-read one card from GitHub now, and a spec's sub-issues with it, and answer the rows refreshed (#1668, #1670).
 
     A press is a read. It sends no move, no close and no edit to GitHub, and it never touches the board cache's own read
-    instant: the row it refreshes, and only that row, carries the instant of this read as `ri`. A failed read answers its
-    error, empties nothing and keeps the row the page already had. A card GitHub no longer carries keeps its last good row
-    and is named. The answer is {n, rows, count, at, err, missing, note}."""
+    instant: each row it refreshes carries the instant of this read as `ri`. A failed read answers its error, empties
+    nothing and keeps the row the page already had. A card GitHub no longer carries keeps its last good row and is named.
+    The answer is {n, rows, count, at, err, missing, capped, note}; `capped` names the bound a spec's tree passed."""
     if isinstance(n, bool) or not isinstance(n, int) or n <= 0: return {"err": "n: a card number"}
     at = sync_instant()
     held = next((i for i in board_cache.get("items") or [] if i.get("n") == n), None)
     try:
-        item = read_one_card(n)
+        root = read_one_card(n)
     except SyncMissing as e:
         rows = synced_rows(n, at)
         if not rows and held is not None: rows = [{"n": n, "t": held.get("t"), "c": held.get("c"), "l": held.get("l") or [], "st": held.get("st"), "ri": at}]
-        return {"n": n, "rows": rows, "count": 0, "at": at, "err": None, "missing": True, "note": str(e)}
+        return {"n": n, "rows": rows, "count": 0, "at": at, "err": None, "missing": True, "capped": None, "note": str(e)}
     except Exception as e:
-        return {"n": n, "rows": [], "count": 0, "at": at, "err": str(e)[:200] or "the read did not answer"}
+        return {"n": n, "rows": [], "count": 0, "at": at, "err": str(e)[:200] or "the read did not answer", "capped": None}
+    items, capped, note = sync_tree(root)
+    ids = {i["n"] for i in items}
     with _board_lock:
-        board_cache["items"] = [i for i in board_cache.get("items") or [] if i.get("n") != n] + [item]
-    rows = synced_rows(n, at)
+        board_cache["items"] = [i for i in board_cache.get("items") or [] if i.get("n") not in ids] + items
+    rows = [r for i in items for r in synced_rows(i["n"], at)]
     if not rows:
-        note = f"#{n} is closed: it is no longer an open card" if str(item.get("s") or "").lower() == "closed" else f"#{n} has no open column"
-        return {"n": n, "rows": [], "count": 0, "at": at, "err": None, "note": note}
-    return {"n": n, "rows": rows, "count": len(rows), "at": at, "err": None}
+        closed = str(root.get("s") or "").lower() == "closed"
+        note = note or (f"#{n} is closed: it is no longer an open card" if closed else f"#{n} has no open column")
+    return {"n": n, "rows": rows, "count": len(rows), "at": at, "err": None, "capped": capped, "note": note}
 
 
 def set_part(name, err):
@@ -6782,7 +6837,7 @@ const syncMove=(el,col)=>{if(!col)return;const lane=el.closest(".lane"),cell=lan
 // hub did not answer", because the throw lands after the read answered.
 const syncRow=(el,f)=>{if(!el)return;const set=(sel,html)=>{let x=el.querySelector(sel);if(x)x.innerHTML=html;else if(html){x=document.createElement("span");x.className=sel.slice(1);x.innerHTML=html;el.appendChild(x)}};el.dataset.col=encodeURIComponent(f.col||"");el.dataset.b=encodeURIComponent(JSON.stringify(f.b));el.dataset.bl=encodeURIComponent(JSON.stringify(f.bl));el.dataset.ho=encodeURIComponent(f.ho);el.dataset.prf=encodeURIComponent(JSON.stringify(f.prf));const t=el.querySelector(".tt");if(t&&f.t)t.textContent=String(f.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");set(".lbs",(f.labels||[]).map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}">${esc(l)}</span>`).join(""));set(".blk",(f.b||[]).length?"blocked by "+f.b.map(m=>`<a target=_blank rel=noopener href="https://github.com/${esc(el.dataset.r||"__REPO__")}/issues/${m}">#${m}</a>`).join(", "):"");let hd=el.querySelector(".hld");if(f.ho){if(!hd){hd=document.createElement("span");hd.className="hld";el.appendChild(hd)}hd.title=f.ho;hd.textContent=f.hc||(f.hs==="running"?"Squad · running":"Squad")}else if(hd)hd.remove();syncMove(el,f.col)};
 const syncApply=d=>{if(d.err||d.missing||!(d.count>0))return false;for(const r of d.rows||[]){const f=syncFacts(r);syncRow(document.querySelector(`#bbody .it[data-n="${f.n}"]`),f);const box=$("#tkfacts");if(box&&$("#tk").classList.contains("on")&&+cur===f.n)box.innerHTML=syncFactsHtml(f)}return true};
-const syncNote=d=>{const s=$("#bsync");if(!s)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:d.count?`${d.count} row refreshed at ${at}`:`0 rows refreshed at ${at}${d.note?": "+d.note:""}`};
+const syncNote=d=>{const s=$("#bsync");if(!s)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:d.count?`${d.count} row refreshed at ${at}${d.capped?` · capped at the ${d.capped} bound: press again to continue`:""}`:`0 rows refreshed at ${at}${d.note?": "+d.note:""}`};
 const syncSheetNote=d=>{const s=$("#tksyncnote");if(!s||!$("#tk").classList.contains("on")||+cur!==+d.n)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:`${d.count||0} row${d.count===1?"":"s"} refreshed at ${at}`+((d.count||0)===0&&d.note?": "+d.note:"")};
 const syncMark=(n,at,missing,note)=>{const el=document.querySelector(`#bbody .it[data-n="${n}"]`);if(!el)return;el.dataset.ri=at;el.insertAdjacentHTML("beforeend",`<span class=syncage data-ri="${esc(at)}" title="this row was read at ${esc(at)}">${esc("read "+age(at))}</span>`+(missing?`<div class=perr title="the last good row this page holds; GitHub no longer carries the card">${esc(note||"GitHub no longer carries #"+n)}</div>`:""))};
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .syncb");if(!b||b.disabled)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it"),label=b.textContent,say=m=>{if(card)card.insertAdjacentHTML("beforeend",m)};b.disabled=true;b.textContent="syncing…";try{const d=await syncOne(n);syncNote(d);syncSheetNote(d);if(d.err)say(`<div class=perr>sync failed: ${esc(d.err)}</div>`);else{syncApply(d);syncMark(n,d.at,d.missing,d.note);if(!card)pollBoard()}b.disabled=false;b.textContent=label}catch(x){say(`<div class=perr>sync failed: ${esc(x&&x.message?"the row could not be drawn: "+x.message:"the hub did not answer")}</div>`);b.disabled=false;b.textContent=label}});   // (#1685) a throw after the read answered is the page's, never the hub's: the message says which
