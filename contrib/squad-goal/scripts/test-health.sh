@@ -70,6 +70,11 @@ page 1 "$(iss 501 'Health guard fails on a long list' enhancement)" "$(iss 502 '
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH defect-without-bug: open defect(s) that carry no bug label: #501' && ok "a defect filed as enhancement is reported" || ko "defect without bug was not reported: $o"
 printf '%s' "$o" | /usr/bin/grep -qE 'defect-without-bug.*#(502|503)' && ko "a bug or a plain enhancement was named: $o" || ok "a bug and a plain enhancement are not named"
 printf '%s' "$o" | /usr/bin/grep -q 'HEALTH untyped-issues:' && ko "typed issues reported untyped: $o" || ok "typed issues are not untyped"
+# #1681: "bug lane" and "bug pass" name a board part, not a defect; a real crash next to them still flags
+ib() { jq -nc --argjson n "$1" --arg t "$2" --arg b "$3" '{number:$n,title:$t,body:$b,labels:[{name:"enhancement"}]}'; }
+page 1 "$(ib 504 'Group the board by lane' 'Cards group by the bug lane, and the bug pass sorts them.')" "$(ib 505 'Export the list' 'The export crashes on an empty list.')" "$(ib 506 'Show the bug lane count' 'The bug lane count fails to refresh.')"; rm -f "$T/pages/2.json" "$T/st/auto/health-defect-without-bug"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qE 'defect-without-bug.*#504' && ko "an enhancement that names the bug lane was named a defect: $o" || ok "an enhancement that names the bug lane is not a defect"
+printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH defect-without-bug: open defect(s) that carry no bug label: #505 #506' && ok "an enhancement that names a real defect is reported" || ko "a real defect filed as enhancement was not reported: $o"
 rm -f "$T/pages/"*.json
 # ---- #1795: runs-board-drift, the loop against its own board ----
 bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; *"issues?state=open"*) "$(dirname "$0")/issues" "$@";; esac\n' "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
