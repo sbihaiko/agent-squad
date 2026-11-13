@@ -167,6 +167,19 @@ def test_the_fast_read_never_adds_a_new_card(board, monkeypatch):
     assert [i["n"] for i in board.board_cache["items"]] == [11]
 
 
+def test_unknown_returns_the_snapshot_row_the_cache_does_not_hold():
+    """A card the snapshot carries and the cache does not is the one fact that asks for a full read (#985)."""
+    rows = board_fast.rows_of([node(11, status="Doing"), node(12, status="Todo")], REPO)
+    held = [card(11)]
+    assert board_fast.unknown(rows, held) == [rows[1]], "the card the cache lacks is unknown; the held one is not"
+
+
+def test_unknown_never_counts_another_repository_or_an_archived_item():
+    """Another repository's card and an archived item are not cards this board lost, so neither asks for a full read."""
+    rows = board_fast.rows_of([node(12, repo="other/repo"), node(13, archived=True)], REPO)
+    assert board_fast.unknown(rows, [card(11)]) == [], "a row of another repository or an archived item is unknown to no board"
+
+
 def test_the_join_is_by_full_database_id_never_by_number_alone(board, monkeypatch):
     monkeypatch.setattr(board, "_graphql", recorded(page([node(11, status="Doing", fd=555)])))
     board.fast_board_pass()

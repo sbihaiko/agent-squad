@@ -34,20 +34,49 @@ def iso(epoch):
 
 @pytest.fixture(scope="module")
 def hub():
-    os.environ.setdefault("SG_REPO", "x/y")
-    os.environ.setdefault("SG_OWNER", "x")
-    os.environ.setdefault("SG_PROJECT", "4")
-    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
-    os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    # Pinned, not `setdefault`: in one pytest process another module may already have named another repository, and the
+    # fast read keeps only this repository's rows, so an inherited SG_REPO would empty the snapshot (#985).
+    pinned = {"SG_REPO": "x/y", "SG_OWNER": "x", "SG_PROJECT": "4",
+              "SG_CHECKOUT": tempfile.mkdtemp(), "SG_HUB_DIR": tempfile.mkdtemp()}
+    previous = {k: os.environ.get(k) for k in pinned}
+    os.environ.update(pinned)
     spec = importlib.util.spec_from_file_location("hub_board_freshness", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    yield mod
+    for k, v in previous.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
 
 def card(n, status="Todo", **extra):
     """One board row as the pass stores it: `ot` is the instant the read that observed it began."""
     return {"n": n, "t": f"card {n}", "s": "open", "st": status, "l": [], "i": f"ITEM{n}", "ot": int(NOW) - 1000, **extra}
+
+
+def _node(n, status="Todo"):
+    """One open item of the fast read's snapshot for the repository this hub reads."""
+    return {"updatedAt": "2026-11-01T10:00:00Z", "isArchived": False,
+            "fieldValueByName": {"name": status, "updatedAt": "2026-11-01T10:00:00Z"},
+            "content": {"id": f"I_{n}", "number": n, "fullDatabaseId": str(900000 + n), "state": "OPEN", "stateReason": None,
+                        "updatedAt": "2026-11-01T10:00:00Z", "repository": {"nameWithOwner": "x/y"},
+                        "labels": {"totalCount": 0, "nodes": []}}}
+
+
+def _snapshot(*nodes):
+    """One whole fast-read answer for the user root: a page no further page follows."""
+    return {"data": {"rateLimit": {"cost": 1},
+                     "user": {"projectV2": {"items": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": list(nodes)}}}}}
+
+
+def _fast_read(hub, monkeypatch, *answers):
+    """The fast pass wired to recorded snapshots, with its own fresh hour."""
+    queue = list(answers)
+    monkeypatch.setattr(hub, "_fast_root", lambda: "user")
+    monkeypatch.setattr(hub, "FAST_BUDGET", hub.board_fast.Budget(600))
+    monkeypatch.setattr(hub, "_graphql", lambda query, variables, timeout=None: queue.pop(0))
 
 
 def _cache(hub, monkeypatch, items, t=None, moves=None):
@@ -191,3 +220,36 @@ def test_the_card_chip_says_running_only_for_a_live_holder(hub):
     # the full holder text is its tooltip.
     assert '<span class=hld title="held · run r ended 2026-11-13 08:59 UTC">Squad</span>' in out.stdout
     assert '<span class=hld title="held by r since then">Squad · running</span>' in out.stdout
+
+
+# --- AC6: a card the cache has seen but not read is named, never silently missing ---------------------------------
+
+def test_the_board_counts_a_card_it_has_seen_but_not_read(hub, monkeypatch):
+    """The fast read sees a card the cache does not hold: the served board counts it, so the page never shows a board
+    that silently lacks a card just added to the project (#985)."""
+    _cache(hub, monkeypatch, [card(11, fd=900011)])
+    _fast_read(hub, monkeypatch, _snapshot(_node(11), _node(12)))
+    hub.fast_board_pass()
+    assert hub.board()["pending_new"] == 1, "a card the fast read saw and the cache does not hold is counted"
+
+
+def test_the_count_falls_to_zero_once_the_cache_holds_the_card(hub, monkeypatch):
+    _cache(hub, monkeypatch, [card(11, fd=900011)])
+    _fast_read(hub, monkeypatch, _snapshot(_node(11), _node(12)), _snapshot(_node(11), _node(12)))
+    hub.fast_board_pass()
+    assert hub.board()["pending_new"] == 1
+    hub.board_cache["items"].append(card(12, fd=900012))   # the full read writes the card the fast read saw
+    hub.fast_board_pass()
+    assert hub.board()["pending_new"] == 0, "a card the cache now holds waits for no read"
+
+
+def test_the_bread_line_names_the_cards_seen_but_not_read_in_the_stale_style(hub):
+    """The honest bound is on the page: a card the fast snapshot carries and the cache does not hold is not drawn, and
+    the header says so in the stale style, as an old read does."""
+    assert "seen, not read yet" in hub.PAGE, "the bread line names the cards the fast read has seen but the cache has not read"
+    # The interval runs with `b` bound to the #bread element, so the count must be kept in its own variable by the poll
+    # handler: a read of `b.pending_new` there is always undefined and the line would never name a card (#985).
+    assert "lastPending=b.pending_new||0" in hub.PAGE, "the poll keeps the served count for the bread line"
+    line = next(ln for ln in hub.PAGE.splitlines() if "seen, not read yet" in ln)
+    assert "lastPending" in line and "b.pending_new" not in line, \
+        "the bread line reads the kept count, never the DOM element, and marks the bread stale as an old read does"

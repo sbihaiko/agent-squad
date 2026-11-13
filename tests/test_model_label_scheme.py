@@ -22,7 +22,7 @@ SCHEME = re.compile(
     r"^(?:Claude (?:Opus|Sonnet|Haiku|Fable) \d+(?:\.\d+)?"
     r"|GPT-\d+(?:\.\d+)?(?: [A-Z][a-z]+)?"
     r"|GPT-OSS \d+B"
-    r"|Gemini \d+(?:\.\d+)? (?:Flash|Pro)"
+    r"|Gemini \d+(?:\.\d+)? (?:Flash|Pro|Carbon)"
     r"|DeepSeek V\d+(?:\.\d+)? (?:Flash|Pro)"
     r"|Grok \d+(?:\.\d+)?"
     r"|NVIDIA Nemotron \d+(?:\.\d+)? (?:Nano|Super)"

@@ -100,6 +100,7 @@ def engine(tmp_path, script, **kw):
     return Engine(from_doc(d), ScriptedAdapter(script, **kw.pop("adapter", {})), tmp_path, **kw)
 
 
+@pytest.mark.heavy  # one engine run over a real sibling repository: 1.8 s here, and the runner's load only adds to it
 async def test_a_child_entry_under_the_prompt_is_skipped_with_its_size_and_the_next_entry_answers(tmp_path):
     eng = engine(tmp_path, {"router": SPAWNS, "route.router.1": CHILD}, options={"model_ctx": {CHILD_CHAIN[0]: "1"}})
     v = await eng.run()
@@ -110,6 +111,7 @@ async def test_a_child_entry_under_the_prompt_is_skipped_with_its_size_and_the_n
     assert v.verdict == "completed"
 
 
+@pytest.mark.heavy  # one engine run over a real sibling repository: 1.4 s here, 2.6 s on a loaded serial worker
 async def test_a_child_entry_with_no_ctx_behaves_as_today(tmp_path):
     eng = engine(tmp_path, {"router": SPAWNS, "route.router.1": CHILD}, options={"model_ctx": {}})
     v = await eng.run()

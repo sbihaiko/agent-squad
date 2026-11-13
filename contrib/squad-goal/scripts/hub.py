@@ -3189,13 +3189,20 @@ if board_cache.get("repo") not in (None, REPO):
     # The cache file is one per owner and project (address.sh), so two repositories on one project share it, and the
     # file holds the rows of the hub that wrote last (#1015). Another repository's rows are never this board: they are
     # dropped, and this hub's first pass reads its own. A board with no row is safer than another repository's.
-    board_cache.update(items=[], cases=[], prs=[], landed=[], errs=[], lc={}, lt=0, t=0, repo=REPO)
+    board_cache.update(items=[], cases=[], prs=[], landed=[], errs=[], lc={}, lt=0, t=0, repo=REPO, fast_asked={}, fast_pending=[], fast_seen={})
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
 # the profile repository's, which is the only one that pass read.
 for _k in ("prs", "landed"):
     for _x in board_cache.get(_k) or []: _x.setdefault("r", REPO)
 board_cache.setdefault("errs", [])
 board_cache.setdefault("parts", {})
+board_cache.setdefault("fast_asked", {})   # database id -> the full read it was asked under (#985): an ask a later read outran is asked again
+board_cache.setdefault("fast_pending", [])   # the cards the fast read has seen and the cache does not hold (#985)
+def fd_int(v):
+    """A database id as an int, or None: a cache row may carry a spelling that is no number (a hand fixture, a corrupt
+    file), and that row joins no card instead of blanking the whole board (#985)."""
+    try: return int(v)
+    except (TypeError, ValueError): return None
 def apply_open_blockers(items, nodes):
     """Attach open native blockers (`Issue.blockedBy`) onto each item as `b`. A closed blocker drops off by itself."""
     by = {n.get("number"): n for n in nodes or []}
@@ -3513,6 +3520,84 @@ def merge_items(held, fresh, observed):
             merged["ot"] = old["ot"]
         out.append(merged)
     return out
+
+
+class SyncMissing(Exception):
+    """The card GitHub no longer carries: a press keeps the row it held and names the absence (#1668)."""
+
+
+def sync_instant(now=None):
+    """The instant of one press's read, in the same ISO shape the board's rows carry (#1668)."""
+    return dt.datetime.fromtimestamp(time.time() if now is None else now, dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def read_one_card(n):
+    """One card re-read from GitHub now, as a cache item (#1668).
+
+    One aggregate issue read carries the title, state, labels, the open blocking edges and the sub-issue count (ghread);
+    the seam answers the card's own Status and holder by its item id, one call each. A read that does not answer raises,
+    and the caller keeps the row it held; a card GitHub no longer carries raises SyncMissing. The read sends no write."""
+    r = ghread.read(f"repos/{REPO}/issues/{n}")
+    if not r.is_answer: raise RuntimeError(r.line()[:200] or "the read did not answer")
+    d = r.answer
+    if not isinstance(d, dict) or d.get("number") != n: raise SyncMissing(f"GitHub no longer carries #{n}")
+    seam = board_seam()
+    st = seam.read_one(n)                     # the column, one item read
+    h = seam.holder_one(n)                    # the holder, one item read
+    old = next((i for i in board_cache.get("items") or [] if i.get("n") == n), None) or {}
+    item = dict(old)                          # fields the press does not read (item id, Kind, Gate Tries) stay
+    item.update(n=n, r=old.get("r") or REPO, t=d.get("title"), s=d.get("state"), o=d.get("created_at"),
+                l=list(d.get("labels") or []))
+    if st is not None: item["st"] = st or None
+    si = d.get("sub_issues_summary")
+    if isinstance(si, dict): item["si"] = si
+    if d.get("blocked_by_read") is not False:      # a read that carried no relation proves no edge, so the old one stays
+        open_ns = sorted({b["number"] for b in d.get("blockers") or []
+                          if isinstance(b, dict) and str(b.get("state") or "").lower() == "open" and isinstance(b.get("number"), int)})
+        if open_ns: item["b"] = open_ns
+        else: item.pop("b", None)
+    if h is not None:
+        if h.get("run"): item["h"] = h
+        else: item.pop("h", None)
+    return item
+
+
+def synced_rows(n, at):
+    """The board rows for one card, each naming the column it draws as `st` and this read's instant as `ri` (#1668)."""
+    out = []
+    for g in board().get("groups") or []:
+        for r in g.get("items") or []:
+            if r.get("n") == n: out.append({**r, "st": g.get("name"), "ri": at})
+    return out
+
+
+def sync_card(n):
+    """POST /api/sync: re-read one card from GitHub now and answer the row refreshed (#1668).
+
+    A press is a read. It sends no move, no close and no edit to GitHub, and it never touches the board cache's own read
+    instant: the row it refreshes, and only that row, carries the instant of this read as `ri`. A failed read answers its
+    error, empties nothing and keeps the row the page already had. A card GitHub no longer carries keeps its last good row
+    and is named. The answer is {n, rows, count, at, err, missing, note}."""
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0: return {"err": "n: a card number"}
+    at = sync_instant()
+    held = next((i for i in board_cache.get("items") or [] if i.get("n") == n), None)
+    try:
+        item = read_one_card(n)
+    except SyncMissing as e:
+        rows = synced_rows(n, at)
+        if not rows and held is not None: rows = [{"n": n, "t": held.get("t"), "c": held.get("c"), "l": held.get("l") or [], "st": held.get("st"), "ri": at}]
+        return {"n": n, "rows": rows, "count": 0, "at": at, "err": None, "missing": True, "note": str(e)}
+    except Exception as e:
+        return {"n": n, "rows": [], "count": 0, "at": at, "err": str(e)[:200] or "the read did not answer"}
+    with _board_lock:
+        board_cache["items"] = [i for i in board_cache.get("items") or [] if i.get("n") != n] + [item]
+    rows = synced_rows(n, at)
+    if not rows:
+        note = f"#{n} is closed: it is no longer an open card" if str(item.get("s") or "").lower() == "closed" else f"#{n} has no open column"
+        return {"n": n, "rows": [], "count": 0, "at": at, "err": None, "note": note}
+    return {"n": n, "rows": rows, "count": len(rows), "at": at, "err": None}
+
+
 def set_part(name, err):
     """Stamp one part of the cache (status, structure, prs) with its read's instant and error: a failed read keeps the
     part's last good timestamp and names its error (#974)."""
@@ -3547,7 +3632,10 @@ def _graphql(query, variables, timeout):
     return out.answer
 def fast_board_pass():
     """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A card the last
-    whole snapshot held and this one lacks is checked in one batched read (#976). A failed read moves nothing."""
+    whole snapshot held and this one lacks is checked in one batched read (#976). A card this snapshot carries and the
+    cache does not hold touches the board-dirty flag once per full read, so the read runs within 2 s (#985). A failed
+    read moves nothing. Known limit, stated rather than hidden: the snapshot drops a card already in a terminal column,
+    so such a card is neither asked for nor counted, and it waits for the full period."""
     observed = time.time()
     deadline = observed + FAST_DEADLINE
     try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, deadline)
@@ -3560,6 +3648,20 @@ def fast_board_pass():
         lost = board_fast.missing(board_cache.get("fast_seen") or {}, rows, board_cache.get("items") or [])
     verdicts = board_fast.check(_graphql, OWNER, PROJECT_NO, lost, FAST_BUDGET, deadline)
     with _board_lock:
+        unread = board_fast.unknown(rows, board_cache.get("items") or [])
+        asked = dict(board_cache.get("fast_asked") or {}) if isinstance(board_cache.get("fast_asked"), dict) else {}
+        read_t = board_cache.get("t") or 0
+        # One ask per (database id, full read): a pass every 15 s never becomes a read every 15 s, and an ask a full read
+        # has outrun (it was in flight and stamped its own end after the touch) is spent without effect, so a later pass
+        # asks again under the new read (#985).
+        fresh = [r for r in unread if r["fd"] is not None and not (asked.get(str(r["fd"])) is not None and asked[str(r["fd"])] >= read_t)]
+        if fresh:
+            try:
+                (STATE / "board-dirty").touch()   # the full read runs within 2 s, never the whole period (#985)
+                for r in fresh: asked[str(r["fd"])] = read_t
+                board_cache["fast_asked"] = asked
+            except OSError: pass
+        board_cache["fast_pending"] = [r["fd"] for r in unread if r["fd"] is not None]
         items = board_fast.apply(board_cache.get("items") or [], rows, int(observed))
         board_cache["items"] = board_fast.settle(items, verdicts, int(observed))
         board_cache["fast_seen"] = board_fast.seen_of(rows, verdicts)
@@ -4654,7 +4756,11 @@ def board(moves=None):
                 for item in dropped: PROVED.pop(item, None)   # the entry is gone: its proof goes with it (#1300)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
+    # A card the fast read has seen and the full read has not written yet is not drawn (#985): the count names it, so the
+    # page never shows a board that silently lacks a card just added to the project.
+    pending_new = {fd_int(fd) for fd in board_cache.get("fast_pending") or []} - {fd_int(i.get("fd")) for i in board_cache["items"]}
+    pending_new.discard(None)
+    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "pending_new": len(pending_new), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -5270,7 +5376,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,var(--line));border:1px solid transparent;border-radius:var(--radius-lg);padding:0 6px;margin:0 3px 2px 0;font-size:var(--fs-caption);color:var(--ink-body)}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{color:var(--acc)}#bbody .it .tt{order:2;flex:1 1 100%;font-size:var(--fs-body);color:var(--fg)}#bbody .it>*{order:3}#bbody .it>.id{order:-2}#bbody .it>.fz{order:-1}#bbody .it>.lchip[data-k=spec]{order:1;margin-left:auto}#bbody .it>.tt{order:2}#bbody .it>.lchip,#bbody .it>.bugc,#bbody .it>.rpo,#bbody .it>.pbg,#bbody .it>.cir,#bbody .it>.fz,#bbody .it>.pnd,#bbody .it>.pst{order:0;margin:0}#bbody .it>.dt{float:none}#bbody .it>.gstrip,#bbody .it>.blk,#bbody .it>.clos,#bbody .it>.prr,#bbody .it>.perr,#bbody .it>.ft{flex:1 1 100%;margin-top:2px}#bbody .it .hld{flex:1 1 100%;font-size:var(--fs-caption);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#bbody .it .hld::before{content:"\25CF ";color:var(--s5)}#bbody .cell .it .lbs{display:none}
 #bbody .lchip{border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-caption);font-weight:600;border:1px solid var(--line-strong);line-height:20px;white-space:nowrap;color:var(--mute)}#bbody .lchip[data-k=spec]{color:var(--mute);border-color:var(--line);font-weight:400}#bbody .it>.fz{order:-1}
-#bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}#bbody .bmv{display:inline-block;margin-left:8px;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .bmv:disabled{opacity:.5;cursor:default}#bbody .it .spb{display:inline-block;margin-top:4px;margin-left:6px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .spb:hover{border-color:var(--acc)}#spdlg{margin:6px 0;padding:8px 10px;border-radius:var(--radius-md);border:1px solid var(--acc);background:var(--inset);font-size:var(--fs-body)}#spdlg button{margin:6px 6px 0 0;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#spnote{margin:4px 0;font-size:var(--fs-caption);color:var(--ok)}   /* the owner's move, on a Backlog card only (#560) */
+#bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}#bbody .bmv{display:inline-block;margin-left:8px;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .bmv:disabled{opacity:.5;cursor:default}#bbody .it .spb{display:inline-block;margin-top:4px;margin-left:6px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .spb:hover{border-color:var(--acc)}#bbody .it .syncb{display:inline-block;margin-top:4px;margin-left:6px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--mute);background:var(--inset);border:1px solid var(--line)}#bbody .it .syncb:hover{border-color:var(--acc);color:var(--acc)}#bbody .it .syncb:disabled{opacity:.5;cursor:default}#bbody .syncage{display:inline-block;margin-top:4px;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);font-variant-numeric:tabular-nums;color:var(--acc);border:1px solid var(--tint-acc-line);background:var(--tint-acc)}#spdlg{margin:6px 0;padding:8px 10px;border-radius:var(--radius-md);border:1px solid var(--acc);background:var(--inset);font-size:var(--fs-body)}#spdlg button{margin:6px 6px 0 0;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#spnote{margin:4px 0;font-size:var(--fs-caption);color:var(--ok)}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:var(--fs-caption);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--acc);text-decoration:none}
 #bbody .prs .it .cir{display:inline-block;margin-left:6px;font-size:var(--fs-caption);letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:var(--radius-xl);padding:0 5px;white-space:nowrap}   /* the pull request's own CI rollup (#440) */#bbody .prs .it .cir.pass{color:var(--on-tint);background:color-mix(in srgb,var(--ok) var(--tint-alpha),var(--card));border-color:var(--tint-ok-line)}#bbody .prs .it .cir.fail{color:var(--on-tint);background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card));border-color:var(--tint-err-line)}#bbody .prs .it .cir.pending{color:var(--on-tint);background:color-mix(in srgb,var(--run) var(--tint-alpha),var(--card));border-color:var(--tint-run-line)}
@@ -5533,7 +5639,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 </div></aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
-<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span><span id=bsync class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-runs class=pane aria-label=Runs><div id=main></div><div id=list></div></section>
 <section id=tab-flow class=pane aria-label="Flow charts">
@@ -5558,7 +5664,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 </section>
 </main>
 </div>
-<div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
+<div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tksync title="re-read this card from GitHub now: the sheet and the row behind it draw from the same answer">Sync</button><button id=tkrel>Highlight related</button><span id=tksyncnote class=m></span></footer></div>
 <div id=rk role=dialog aria-label=Run><header><span id=rkchips></span><span class=sp></span><button id=rkx aria-label=Close>✕</button></header><div id=rkb></div><footer><a class=btn id=rkgh target=_blank rel=noopener>Open full log ↗</a><button id=rkpause>Pause run</button></footer></div>
 <script>/*SWITCHER_JS*/
 {const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
@@ -6151,21 +6257,16 @@ async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";hl={n:+n,r:irepo,kin
  // A card a run holds steps through that run's cards; any other card steps through its column (the selection the board shows).
  if(el){const c=cardOf(el),set=c.hr?boardCards().filter(x=>(x.dataset.hr||"")===c.hr):[...el.closest(".sc").querySelectorAll(".it[data-n]")];nav=set.map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"])}
  if(!nav.length)nav=[[cur,irepo]];
- tsheet.classList.add("on");document.body.classList.add("tkopen");$("#tkb").innerHTML="<span class=m>Loading issue #"+n+".</span>";
+ tsheet.classList.add("on");document.body.classList.add("tkopen");$("#tksyncnote").textContent="";$("#tkb").innerHTML="<span class=m>Loading issue #"+n+".</span>";
 try{const d=await (await fetch("/api/issue?n="+n+(r?"&r="+encodeURIComponent(r):""))).json();if(d.err){$("#tkb").textContent=d.err;return}
 const c=cardOf(el)||cardOf(boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===irepo))||{n:+n,r:irepo,col:"",pm:false,b:[],bl:[],ho:"",hr:"",prf:[]};
 const wave=(d.labels||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(Boolean)[0];
 $("#tkchips").innerHTML=`${(d.labels||[]).includes("spec")?'<span class="chip spec">SPEC</span>':""}${wave?`<span class="chip wave">W${wave}</span>`:""}<span class=m>#${d.n}${d.r&&d.r!=="__REPO__"?" · "+esc(d.r):""}</span>`;
-const link=m=>`<a href="#" data-o="${m}">#${m}</a>`,k=ni();
+const k=ni();
 $("#tknav").innerHTML=nav.length>1?`<button id=tkp aria-label="previous card" ${k>0?"":"disabled"}>‹</button><span class=m>${k+1} of ${nav.length}</span><button id=tkn aria-label="next card" ${k<nav.length-1?"":"disabled"}>›</button>`:"";
 $("#tkset").innerHTML=nav.length>1?nav.map(([m,rr])=>`<button data-o="${m}" data-r="${rr}" class="${m===cur&&rr===irepo?"on":""}">#${m}</button>`).join(""):"";
 $("#tkb").innerHTML=`<h2>${esc(d.title)}</h2>
-<div class=row><b>Column</b><span>${esc(c.col||"—")}</span></div>
-<div class=row><b>Labels</b><span>${(d.labels||[]).length?d.labels.map(l=>`<span class=lab>${esc(l)}</span>`).join(""):"none"}</span></div>
-<div class=row><b>Blocked by</b><span>${c.b.length?c.b.map(link).join(", "):"none"}</span></div>
-<div class=row><b>Blocks</b><span>${c.bl.length?c.bl.map(link).join(", "):"none"}</span></div>
-<div class=row><b>Runs</b><span>${c.ho?esc(c.ho):"none yet"}</span></div>
-<div class=row><b>PR · CI</b><span>${c.prf.length?c.prf.map(x=>`PR #${x.n} · ${esc(x.st||"")}${x.ci?` · CI ${esc(x.ci)}`:""}`).join("<br>"):"none"}</span></div>
+<div id=tkfacts>${syncFactsHtml({r:irepo,col:c.col,labels:d.labels||[],b:c.b,bl:c.bl,prf:c.prf,ho:c.ho})}</div>
 <div class=row><b>Opened</b><span>${when(d.created)} by ${esc(d.by)}</span></div>
 <div class=sec>Issue</div>${d.html?`<div class="md tkbody">${d.html}</div>`:`<div class="md tkbody">${d.body?md(d.body):"<span class=m>(no description)</span>"}</div>`}
 <div class=sec>Last comment</div>${d.last?`<div class="cm md"><div class=meta>${esc(d.last.by)} · ${when(d.last.at)}</div><div class=md>${d.last.html||(d.last.by?"":"")}</div></div>`:"<span class=m>no comments</span>"}`;
@@ -6175,7 +6276,7 @@ $("#tkb").scrollTop=0;
 const shown=boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===irepo);if(shown)shown.scrollIntoView({block:"nearest",inline:"nearest",behavior:"smooth"});
 }catch(e){$("#tkb").textContent="failed to load"}}
 tsheet.addEventListener("click",e=>{if(e.target.id==="tkp")step(-1);else if(e.target.id==="tkn")step(1);const b=e.target.closest("#tkset button");if(b)openCard(+b.dataset.o,b.dataset.r)});
-$("#tkb").addEventListener("click",e=>{const a=e.target.closest("a[data-o]");if(a){e.preventDefault();openCard(+a.dataset.o,irepo)}});
+$("#tkb").addEventListener("click",e=>{const a=e.target.closest("a[data-o]");if(a){e.preventDefault();openCard(+a.dataset.o,a.dataset.r||irepo)}});
 $("#tkx").onclick=closeSheet;
 $("#tkrel").onclick=()=>{const on=!nav.every(([m,rr])=>boardCards().some(x=>+x.dataset.n===m&&(x.dataset.r||"__REPO__")===rr&&x.classList.contains("hit")));nav.forEach(([m,rr])=>boardCards().forEach(x=>{if(+x.dataset.n===m&&(x.dataset.r||"__REPO__")===rr)x.classList.toggle("hit",on)}))};
 $("#tktodo").onclick=()=>{const b=boardCards().find(x=>+x.dataset.n===cur&&(x.dataset.r||"__REPO__")===irepo),p=b&&b.querySelector(".pmp");if(p)p.click()};   // the one write the sheet makes is the card's own move
@@ -6419,7 +6520,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;readStale=!!b.err||lastBoardOver;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
+lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pending_new||0;readStale=!!b.err||lastBoardOver;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -6443,7 +6544,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${waveChip(x)}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">${esc(x.hc||(x.hs==="running"?"Squad · running":"Squad"))}</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${waveChip(x)}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${pr?"":`<button class=syncb data-n="${x.n}" title="re-read only this card from GitHub now: its column, labels, holder, blockers and sub-issue count">Sync</button>`}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">${esc(x.hc||(x.hs==="running"?"Squad · running":"Squad"))}</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -6517,7 +6618,7 @@ function paintHL(){
 // highlight:end
 
 // A tab only shows one pane; every pane keeps its own poll (#889).
-let TAB="board",lastRead=0,readStale=false,lastBoardT=0,lastBoardOver=false;
+let TAB="board",lastRead=0,readStale=false,lastBoardT=0,lastBoardOver=false,lastPending=0;
 const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
 const HASH={board:"#kanban",runs:"#runs",flow:"#flow",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
 function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||(/^#set-[a-z]+$/.test(location.hash)?"set":null)}   // a card link opens Kanban, where the card is (#1274); a themed Settings link opens Settings (#1286)
@@ -6544,7 +6645,7 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  const pj=$("#pj"),psw=$("#psw");pj.onclick=e=>{e.stopPropagation();const on=!psw.classList.contains("on");psw.classList.toggle("on",on);pj.setAttribute("aria-expanded",on)};
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board items read N s ago": the item read's own stamp (#1661), never the browser's fetch time
-setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale)":""}`:"board items not read yet"):""},1000);
+setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale||!!lastPending);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale)":""}${lastPending?` · ${lastPending} card(s) seen, not read yet`:""}`:"board items not read yet"):""},1000);   // the stale class names a card the fast read has seen and the full read has not written (#985)
 // loop-switch:start
 // The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
 // a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
@@ -6660,6 +6761,23 @@ document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pm
 try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
  if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.textContent=label;b.disabled=false}
  else{b.textContent="sent to Todo";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.textContent=label;b.disabled=false}});
+// Sync one card (#1668, #1669): one read serves the card's Sync control and the sheet's. The answer names the rows it
+// refreshed, their count and the instant of that read, never the whole board's. A failed read leaves the rows the page
+// already had and names the error where the press began; a card GitHub no longer carries keeps its last good row and is
+// named. The sheet and the card draw from that one answer, so they never disagree about a column, a label or a holder.
+const syncInstant=d=>String(d.at||"").replace("T"," ").replace("Z"," UTC");
+const syncOne=n=>fetch("/api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({n})}).then(r=>r.json());
+const syncFacts=r=>({n:+r.n,r:r.r||"",col:r.st==null?"":String(r.st),labels:r.l||[],ho:r.ho||"",hc:r.hc||"",hs:r.hs||"",b:r.b||[],bl:r.bl||[],prf:r.prf||[],t:r.t||""});
+const syncFactsHtml=f=>{const link=m=>`<a href="#" data-o="${m}" data-r="${esc(f.r||irepo)}">#${m}</a>`;return `<div class=row><b>Column</b><span>${esc(f.col||"—")}</span></div><div class=row><b>Labels</b><span>${(f.labels||[]).length?f.labels.map(l=>`<span class=lab>${esc(l)}</span>`).join(""):"none"}</span></div><div class=row><b>Blocked by</b><span>${(f.b||[]).length?f.b.map(link).join(", "):"none"}</span></div><div class=row><b>Blocks</b><span>${(f.bl||[]).length?f.bl.map(link).join(", "):"none"}</span></div><div class=row><b>Runs</b><span>${f.ho?esc(f.ho):"none yet"}</span></div><div class=row><b>PR · CI</b><span>${(f.prf||[]).length?f.prf.map(x=>`PR #${x.n} · ${esc(x.st||"")}${x.ci?` · CI ${esc(x.ci)}`:""}`).join("<br>"):"none"}</span></div>`};
+const syncMove=(el,col)=>{if(!col)return;const lane=el.closest(".lane"),cell=lane&&lane.querySelector(`.cell[data-col="${CSS.escape(col)}"]`),box=cell||document.querySelector(`#bbody .col[data-g="${CSS.escape(col)}"]>.sc`)||document.querySelector(`#bbody .acc[data-g="${CSS.escape(col)}"]>.sc`);if(box&&el.parentElement!==box)box.appendChild(el)};
+const syncRow=(el,f)=>{if(!el)return;const set=(sel,html)=>{let x=el.querySelector(sel);if(x)x.innerHTML=html;else if(html){x=document.createElement("span");x.className=sel.slice(1);x.innerHTML=html;el.appendChild(x)}};el.dataset.col=encodeURIComponent(f.col||"");el.dataset.b=encodeURIComponent(JSON.stringify(f.b));el.dataset.bl=encodeURIComponent(JSON.stringify(f.bl));el.dataset.ho=encodeURIComponent(f.ho);el.dataset.prf=encodeURIComponent(JSON.stringify(f.prf));const t=el.querySelector(".tt");if(t&&f.t)t.textContent=String(f.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");set(".lbs",(f.labels||[]).map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join(""));set(".blk",(f.b||[]).length?"blocked by "+f.b.map(m=>`<a target=_blank rel=noopener href="https://github.com/${esc(el.dataset.r||"__REPO__")}/issues/${m}">#${m}</a>`).join(", "):"");let hd=el.querySelector(".hld");if(f.ho){if(!hd){hd=document.createElement("span");hd.className="hld";el.appendChild(hd)}hd.title=f.ho;hd.textContent=f.hc||(f.hs==="running"?"Squad · running":"Squad")}else if(hd)hd.remove();syncMove(el,f.col)};
+const syncApply=d=>{if(d.err||d.missing||!(d.count>0))return false;for(const r of d.rows||[]){const f=syncFacts(r);syncRow(document.querySelector(`#bbody .it[data-n="${f.n}"]`),f);const box=$("#tkfacts");if(box&&$("#tk").classList.contains("on")&&+cur===f.n)box.innerHTML=syncFactsHtml(f)}return true};
+const syncNote=d=>{const s=$("#bsync");if(!s)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:d.count?`${d.count} row refreshed at ${at}`:`0 rows refreshed at ${at}${d.note?": "+d.note:""}`};
+const syncSheetNote=d=>{const s=$("#tksyncnote");if(!s||!$("#tk").classList.contains("on")||+cur!==+d.n)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:`${d.count||0} row${d.count===1?"":"s"} refreshed at ${at}`+((d.count||0)===0&&d.note?": "+d.note:"")};
+const syncMark=(n,at,missing,note)=>{const el=document.querySelector(`#bbody .it[data-n="${n}"]`);if(!el)return;el.dataset.ri=at;el.insertAdjacentHTML("beforeend",`<span class=syncage data-ri="${esc(at)}" title="this row was read at ${esc(at)}">${esc("read "+age(at))}</span>`+(missing?`<div class=perr title="the last good row this page holds; GitHub no longer carries the card">${esc(note||"GitHub no longer carries #"+n)}</div>`:""))};
+document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .syncb");if(!b||b.disabled)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it"),label=b.textContent;b.disabled=true;b.textContent="syncing…";try{const d=await syncOne(n);syncNote(d);syncSheetNote(d);if(d.err)card.insertAdjacentHTML("beforeend",`<div class=perr>sync failed: ${esc(d.err)}</div>`);else{syncApply(d);syncMark(n,d.at,d.missing,d.note)}b.disabled=false;b.textContent=label}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>sync failed: the hub did not answer</div>");b.disabled=false;b.textContent=label}});
+$("#tksync").onclick=async()=>{const b=$("#tksync");if(b.disabled||!cur)return;const n=cur,label=b.textContent;b.disabled=true;b.textContent="syncing…";try{const d=await syncOne(n);syncNote(d);syncSheetNote(d);if(!d.err){syncApply(d);syncMark(n,d.at,d.missing,d.note)}}catch(x){const d={n,err:"the hub did not answer"};syncNote(d);syncSheetNote(d)}b.disabled=false;b.textContent=label};   // the sheet's press draws the sheet and the row from that one answer (#1669)
+setInterval(()=>document.querySelectorAll("#bbody .syncage").forEach(e=>{e.textContent="read "+age(e.dataset.ri)}),30000);   // the row's own read age, never the board's
 // The batch move (#1098): the hub names how many cards it would move, the owner confirms that count, and one write moves them.
 const batchPost=body=>fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({batch:true,...body})}).then(r=>r.json());
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .bmv");if(!b)return;e.preventDefault();e.stopPropagation();
@@ -8633,20 +8751,22 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        read_only = self.path == "/api/sync"   # a press is a read: its failed read answers an error in a 200, never a request defect (#1668)
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
             else:
                 body = json.loads(raw or b"{}")
-                if self.path == "/api/promote" and isinstance(body, dict) and body.get("batch") is True: out = promote_batch(body, a.login or "owner")   # the owner's batch move (#1098)
+                if self.path == "/api/sync": out = sync_card(body.get("n") if isinstance(body, dict) else None)   # one card from GitHub, now (#1668)
+                elif self.path == "/api/promote" and isinstance(body, dict) and body.get("batch") is True: out = promote_batch(body, a.login or "owner")   # the owner's batch move (#1098)
                 elif self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         if not a.allowed and a.tailnet: return self.refuse(a.reason)
-        body = json.dumps(out).encode(); self.send_response(400 if "err" in out else 200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+        body = json.dumps(out).encode(); self.send_response(200 if read_only else (400 if "err" in out else 200)); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 
 SELF = pathlib.Path(__file__).resolve(); LOADED = SELF.stat().st_mtime_ns
 def _build_fact(path):

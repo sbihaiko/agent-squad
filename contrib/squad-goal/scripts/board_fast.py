@@ -2,8 +2,9 @@
 
 A snapshot is whole or nothing: a page that fails, a GraphQL error, a card whose labels are cut short, a spent hourly
 budget or a passed deadline raises SnapshotError, and the caller moves no card. The read writes column inputs onto the
-cards the cache already holds; a card the snapshot does not carry keeps its row, and a new card comes from the full read
-or a board-dirty flag.
+cards the cache already holds; a card the snapshot does not carry keeps its row, and a card the snapshot carries and the
+cache does not hold asks for a full read through the board-dirty flag. The snapshot drops a card already in a terminal
+column, so such a card is not seen here and waits for the full read.
 
 A held card the last whole snapshot carried and this one lacks is checked once more in a batched nodes(ids:) read and
 classified: closed, abandoned, archived, removed from the project, or unreadable (kept, and retried in the pass).
@@ -151,6 +152,13 @@ def missing(seen, rows, held):
     now = {r["fd"] for r in rows if r.get("fd") is not None}
     cached = {_key(i.get("fd")) for i in held}
     return {_key(fd): nid for fd, nid in seen.items() if nid and _key(fd) in cached and _key(fd) not in now}
+
+
+def unknown(rows, held):
+    """The snapshot's rows the cache does not hold: a card the fast read saw and the full read never wrote, so the board
+    never draws it until a full read runs (#985). A row with no database id joins no card and is no card of this board."""
+    cached = {_key(i.get("fd")) for i in held}
+    return [r for r in rows if r.get("fd") is not None and _key(r["fd"]) not in cached]
 
 
 def _on_board(item, owner, number):

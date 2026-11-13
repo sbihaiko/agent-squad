@@ -43,7 +43,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_autonomy_fragment.py", "tests/test_board_columns.py", "tests/test_child_issues.py", "tests/test_dashboard_graph_read.py", "tests/test_dashboard_totals.py",
         "tests/test_delta_guards.py", "tests/test_dispatch_mutex.py", "tests/test_envelope.py", "tests/test_gate_evidence.py", "tests/test_gate_reuse.py",
         "tests/test_gate_scope.py", "tests/test_gh_spend.py", "tests/test_gui_test_subset.py", "tests/test_gui_test_vision.py", "tests/test_hub_adapter_errors.py",
-        "tests/test_hub_attach.py", "tests/test_hub_board_card_number.py", "tests/test_hub_board_flow_charts.py", "tests/test_hub_board_pass.py", "tests/test_hub_board_title_builder.py",
+        "tests/test_hub_attach.py", "tests/test_hub_board_card_number.py", "tests/test_hub_board_flow_charts.py", "tests/test_hub_board_pass.py", "tests/test_hub_board_title_builder.py", "tests/test_hub_card_sync.py", "tests/test_hub_sheet_sync.py",
         "tests/test_hub_cycle_countdown.py", "tests/test_hub_dash_forward.py", "tests/test_hub_gate_fact.py", "tests/test_hub_loop_log_stamp.py", "tests/test_hub_mobile_action_row.py",
         "tests/test_hub_mobile_grab_handle.py", "tests/test_hub_mobile_list_states.py",
         "tests/test_hub_mobile_filters_search.py", "tests/test_hub_mobile_move.py", "tests/test_hub_mobile_overlay_clearance.py", "tests/test_hub_mobile_page_fills.py",
