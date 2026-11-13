@@ -36,8 +36,8 @@ dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promo
 ci_job_names() {
   awk -v want="${2:-}" '
     function flush() {
-      if (cur != "" && (want == "" || (want == "gated" && gated) || (want == "complete" && complete))) print cur
-      cur = ""; gated = 0; complete = 0
+      if (cur != "" && (want == "" || (want == "gated" && gated) || (want == "complete" && complete && waits))) print cur
+      cur = ""; gated = 0; complete = 0; waits = 0
     }
     /^jobs:[[:space:]]*$/ { injobs = 1; next }
     /^[^[:space:]#]/ { if (injobs) flush(); injobs = 0 }
@@ -46,6 +46,7 @@ ci_job_names() {
     /^    name:[[:space:]]+/ { if (!job) next; cur = $0; sub(/^    name:[[:space:]]+/, "", cur); next }
     /^    if:[[:space:]]/ && /base_ref/ { gated = 1 }
     /^    if:[[:space:]]/ && /label[.]name == .promote./ { complete = 1 }
+    /^    needs:[[:space:]]/ { waits = 1 }
     END { flush() }
   ' "$1" 2>/dev/null
 }

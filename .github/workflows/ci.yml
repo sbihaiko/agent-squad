@@ -107,6 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      contents: read
       checks: read
     outputs:
       run: ${{ steps.once.outputs.run }}
