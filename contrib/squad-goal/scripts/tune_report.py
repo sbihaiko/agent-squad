@@ -15,6 +15,9 @@ UTC = dt.timezone.utc
 STAMP = r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"
 IDLE = re.compile(rf"^{STAMP} FRONTIER idle: ")
 NO_SLOT = re.compile(r"(\d+) no slot")
+# A card the pass took and could not label: the writing of ready-for-agent was refused, so the card waits with its own
+# reason (#1676). The frontier's idle line names it "triage failed", one count per pass.
+TRIAGE_FAILED = re.compile(r"(\d+) triage failed")
 HOLD = re.compile(rf"^{STAMP} DISPATCH HOLD: ")
 GATE_HOLD = re.compile(r"promotion proof|nightly")
 # The gate-history caller field (14th): who asked for the gate. A row without it, or with another word, is unknown.
@@ -103,7 +106,7 @@ def main():
     print(f"live-run hours: {hours:.2f}")
     print(f"landings per live-run hour: {ratio(landings, hours):.2f}")
 
-    passes = held_slot = held_gate = 0
+    passes = held_slot = held_gate = held_triage = 0
     for line in lines(st / "cycle.log"):
         m = IDLE.match(line)
         if m and inside(stamp(m.group(1))):
@@ -111,6 +114,9 @@ def main():
             n = NO_SLOT.search(line)
             if n and int(n.group(1)) > 0:
                 held_slot += 1
+            t = TRIAGE_FAILED.search(line)
+            if t and int(t.group(1)) > 0:
+                held_triage += 1
             continue
         m = HOLD.match(line)
         if m and inside(stamp(m.group(1))) and GATE_HOLD.search(line):
@@ -120,6 +126,7 @@ def main():
     print(f"passes held for a run slot: {held_slot}")
     print(f"share held for a run slot: {ratio(held_slot, passes):.2f}")
     print(f"passes held for the gate: {held_gate}")
+    print(f"passes held for a triage write: {held_triage}")
 
     durations = []
     by_caller = {c: 0.0 for c in CALLERS}

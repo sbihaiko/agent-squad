@@ -886,11 +886,14 @@ commit_refs() {
   done
 }
 
-# netfail <what> <stderr>: a fetch or a push that failed on the network (DNS, connect, timeout, a 5xx answer, a TLS
-# handshake) is no cause a repeat does not change: the next cycle can land (#656). It prints one WAVE-NETWORK line with the
-# last line that names the network error and returns 0; the caller then exits 2 with no call to stuck, so no try is counted
-# and nothing is frozen. Any other failure returns 1, and the caller calls stuck as before.
-WAVE_NET_RE='Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Operation timed out|Network is unreachable|The requested URL returned error: 5[0-9][0-9]|SSL_|SSL connect|TLS handshake|gnutls_handshake'
+# netfail <what> <stderr>: a fetch or a push that failed on the transport -- the network (DNS, connect, timeout, a 5xx
+# answer, a TLS handshake) or a machine that could not start the process doing it (a full process table, no memory, no file
+# handles, no disk) -- is no cause a repeat does not change: the next cycle can land (#656, #1710). A local fetch forks
+# git-upload-pack, so a loaded machine fails one exactly as a network failure does, and the fixture holds its own repository
+# already: no retry here, only no blame on the run. It prints one WAVE-NETWORK line with the last line that names the cause
+# and returns 0; the caller then exits 2 with no call to stuck, so no try is counted and nothing is frozen. Any other
+# failure returns 1, and the caller calls stuck as before, which now carries git's own line.
+WAVE_NET_RE='Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Operation timed out|Network is unreachable|The requested URL returned error: 5[0-9][0-9]|SSL_|SSL connect|TLS handshake|gnutls_handshake|cannot fork|unable to fork|fork failed|Resource temporarily unavailable|Cannot allocate memory|Too many open files|No space left on device'
 netfail() {
   local l; l=$(printf '%s\n' "$2" | /usr/bin/grep -E "$WAVE_NET_RE" | tail -1)
   [ -n "$l" ] || return 1
@@ -1178,10 +1181,13 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # that failed: it counts toward the same cap as a conflict (#477), so its marker never holds the run's trees for good.
   # A fetch that failed on the network is not counted (netfail, #656): it exits 2 and the wave lands on a later cycle.
   local fo
+  # A fetch that failed for a cause no class names still names git's own line (#1710): the landing's words are the only
+  # record of a failure on a machine whose processes were gone by the time anyone read it.
+  gitwhy() { printf '%s\n' "$1" | /usr/bin/grep -v '^[[:space:]]*$' | head -1; }
   fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || {
-    netfail "the fetch of $base from $remote" "$fo" || stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
+    netfail "the fetch of $base from $remote" "$fo" || stuck "$run" "$w" "$S" "the fetch of $base from $remote failed: $(gitwhy "$fo")"; rm -rf "$S"; return 2; }
   fo=$(sc fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>&1) || {
-    netfail "the fetch of $w from $remote" "$fo" || absent_wave "$run" "$w" "$S" "$rd" "$fo" || stuck "$run" "$w" "$S" "the fetch of $w from $remote failed"; rm -rf "$S"; return 2; }
+    netfail "the fetch of $w from $remote" "$fo" || absent_wave "$run" "$w" "$S" "$rd" "$fo" || stuck "$run" "$w" "$S" "the fetch of $w from $remote failed: $(gitwhy "$fo")"; rm -rf "$S"; return 2; }
   sc checkout -q -B land "origin/$w" 2>/dev/null || { stuck "$run" "$w" "$S" "the checkout of $w failed"; rm -rf "$S"; return 2; }
   # The rebase on the base happens here and nowhere else (ADR-0145 rule 14): between entries the tip moves only by a child that
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
@@ -1302,7 +1308,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     [ "$try" = 1 ] || { stuck "$run" "$w" "$S" "the push of $w to $base was refused: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
     try=2
     fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || {
-      netfail "the fetch of $base from $remote" "$fo" || stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
+      netfail "the fetch of $base from $remote" "$fo" || stuck "$run" "$w" "$S" "the fetch of $base from $remote failed: $(gitwhy "$fo")"; rm -rf "$S"; return 2; }
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"

@@ -34,6 +34,10 @@ case "$p" in
   */issues/*)             f=$GH_ISSUE1; [ -f "$GH_ISSUEDIR/${p##*/}.json" ] && f=$GH_ISSUEDIR/${p##*/}.json;;   # one fixture per issue when a case wrote it
   *) exit 1;;
 esac
+if [ -n "$GH_LABEL_FAIL" ]; then   # GH_LABEL_FAIL=<n>: the label write on issue n is refused (#1676)
+  n=$(printf '%s' "$p" | sed -n 's#.*/issues/\([0-9]*\)/labels.*#\1#p')
+  [ "$n" = "$GH_LABEL_FAIL" ] && { echo '{"message":"the label write was refused","status":500}'; exit 1; }
+fi
 if [ -n "$q" ]; then jq -r "$q" "$f"; else cat "$f"; fi
 GH
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
@@ -359,24 +363,76 @@ r=$(SG_BOARD_VOCAB=shipped run)
 $G -qE "^(--add )?o 1 Doing( [0-9]+)* 61( |\$)" "$BOARDLOG" && ok "V: a dispatch on the shipped vocabulary writes Doing" || ko "V: the dispatch wrote $(cat "$BOARDLOG")"
 $G -q "In Progress" "$BOARDLOG" && ko "V: the dispatch still writes In Progress on the shipped vocabulary" || ok "V: no In Progress write on the shipped vocabulary"
 
-# W (#485): the frontier takes only an issue that carries its label. #482 (an enhancement kept in the Backlog, no
-# ready-for-agent) went out on the first pass after a loop start, because the list read selected on no label at all.
+# W (#485, re-anchored by #1676): the label is no longer the permission (#485's rule is superseded). A Todo card with
+# no triage label is taken and labelled by the pass; the column still decides, so the same card in the Backlog is never
+# taken, and the pass writes no label for it.
 scene label
-issues '[{"number":71,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":72,"title":"a","body":"b","labels":[{"name":"enhancement"}]}]'
+export GHLOG=$d/gh.log
+issues '[{"number":71,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":72,"title":"a","body":"b","card":"Backlog","unready":true,"labels":[{"name":"enhancement"}]},{"number":73,"title":"a","body":"b","labels":[{"name":"enhancement"}]}]'
 r=$(run)
-[ "$(marked 71)" = 0 ] && ok "W: an issue without the frontier label is never dispatched" || ko "W: the unlabelled #71 went out: '$r'"
-[ "$(marked 72)" = 1 ] && ok "W: an issue with the label still goes out" || ko "W: the labelled #72 did not go out: '$r'"
+[ "$(marked 71)" = 1 ] && ok "W: an untriaged Todo card is taken" || ko "W: the untriaged #71 stayed: '$r'"
+[ "$($G -c 'issues/71/labels' "$GHLOG")" = 1 ] && ok "W: the pass writes its label once" || ko "W: label writes for #71: '$($G 'issues/71/labels' "$GHLOG")'"
+[ "$(marked 72)" = 0 ] && ok "W: an untriaged card outside Todo is never taken" || ko "W: the Backlog #72 went out: '$r'"
+[ "$($G -c 'issues/72/labels' "$GHLOG")" = 0 ] && ok "W: a card outside Todo costs no label write" || ko "W: the Backlog #72 was labelled"
+[ "$(marked 73)" = 1 ] && [ "$($G -c 'issues/73/labels' "$GHLOG")" = 0 ] && ok "W: a card that already carries the label costs no write" || ko "W: the labelled #73: $(marked 73) marker(s), '$($G 'issues/73/labels' "$GHLOG")'"
+unset GHLOG
 
-# X (#550): the column Todo is the owner's go signal. The frontier takes an issue only when its card sits in Todo AND it
-# carries the frontier label: a labelled issue in Backlog, or one with no card, waits for the owner. The cards come from
-# one board read a pass, never one per issue; a board that does not answer dispatches nothing.
+# T (#1676): the frontier takes a Todo card with no triage label, writes the label once in the same act and writes the
+#    request for it. The write lands after the claim and after every gate, and the pass prints one line for the card.
+scene triage
+export GHLOG=$d/gh.log
+issues '[{"number":501,"title":"a","body":"b","unready":true,"labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 501)" = 1 ] && ok "T: the untriaged Todo card is claimed and dispatched" || ko "T: #501: $(marked 501) marker(s): '$r'"
+[ "$($G -c 'issues/501/labels' "$GHLOG")" = 1 ] && ok "T: the pass writes the label exactly once" || ko "T: label writes for #501: '$($G 'issues/501/labels' "$GHLOG")'"
+$G -q 'labels\[\]=frontier' "$GHLOG" && ok "T: the write carries the pass's own label" || ko "T: the label write: '$(cat "$GHLOG")'"
+$G -q '^FRONTIER triaged #501: ' <<<"$r" && ok "T: the pass prints one line for the card it triaged" || ko "T: no triage line: '$r'"
+$G -q '^CHILD — GitHub issue(s) 501 ' "$MKLOG.body" && ok "T: the request is written for the triaged card" || ko "T: no CHILD block: '$(cat "$MKLOG.body")'"
+unset GHLOG
+
+# T2 (#1676): a card carrying a holder label dispatches nothing and costs no label write; neither does a card outside Todo.
+scene triagehold
+export GHLOG=$d/gh.log
+issues '[{"number":521,"title":"a","body":"b","unready":true,"labels":[{"name":"ready-for-human"},{"name":"wave:01"}]},{"number":522,"title":"a","body":"b","unready":true,"labels":[{"name":"ready-for-HAL9K"},{"name":"wave:01"}]},{"number":523,"title":"a","body":"b","unready":true,"card":"Backlog","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 521 522 523)" = 0 ] && [ "$($G -c '/labels' "$GHLOG")" = 0 ] && ok "T2: a holder card or a card outside Todo is never taken and costs no write" || ko "T2: $(marked 521 522 523) marker(s), writes: '$(cat "$GHLOG")'"
+unset GHLOG
+
+# T3 (#1676): a refused label write drops that card from the request and frees its claim; the other cards still go out,
+#    and the next pass retries the card.
+scene triagepartial
+export GHLOG=$d/gh.log GH_LABEL_FAIL=531
+issues '[{"number":531,"title":"a","body":"b","unready":true,"labels":[{"name":"wave:01"}]},{"number":532,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 531)" = 0 ] && ok "T3: the card whose write failed keeps no claim" || ko "T3: #531 kept $(marked 531) marker(s)"
+[ "$(marked 532)" = 1 ] && $G -q '^CHILD — GitHub issue(s) 532 ' "$MKLOG.body" && ok "T3: the other card still enters the request" || ko "T3: #532: $(marked 532) marker(s), body: '$(cat "$MKLOG.body")'"
+$G -q ' 531' "$MKLOG.body" && ko "T3: the card whose write failed is named in the request" || ok "T3: the request names no failed card"
+case "$r" in *"FRONTIER triage failed #531:"*) ok "T3: the pass says the write failed and the card waits";; *) ko "T3: no failure line: '$r'";; esac
+unset GH_LABEL_FAIL
+r=$(run)
+[ "$(marked 531)" = 1 ] && [ "$(lines "$LAUNCHLOG")" = 2 ] && ok "T3: the next pass retries the card and dispatches it" || ko "T3: retry: $(marked 531) marker(s), $(lines "$LAUNCHLOG") launch(es): '$r'"
+unset GHLOG
+
+# T4 (#1676): when every label write of the burst fails, the pass writes no request and releases its claims; the idle
+#    line gives the card its own reason, the one the tuning report reads.
+scene triageburst
+export GH_LABEL_FAIL=541
+issues '[{"number":541,"title":"a","body":"b","unready":true,"labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(lines "$MKLOG")" = 0 ] && [ "$(marked 541)" = 0 ] && ok "T4: a failed burst writes no request and releases its claim" || ko "T4: $(lines "$LAUNCHLOG") launch(es), $(lines "$MKLOG") request(s), $(marked 541) marker(s): '$r'"
+case "$r" in *"FRONTIER idle: 1 todo, 0 startable (1 triage failed, "*) ok "T4: the idle line gives the card its own reason";; *) ko "T4: no idle line with the triage reason: '$r'";; esac
+unset GH_LABEL_FAIL
+
+# X (#550, #1676): the column Todo is the owner's go signal, and it is the only one. A labelled issue in Backlog, or one
+# with no card, waits for the owner; a card in Todo goes out with the label or without it (the pass writes it then).
+# The cards come from one board read a pass, never one per issue; a board that does not answer dispatches nothing.
 scene todo
 issues '[{"number":81,"title":"a","body":"b","card":"Backlog","labels":[{"name":"wave:01"}]},{"number":82,"title":"a","body":"b","card":"","labels":[{"name":"wave:01"}]},{"number":83,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":84,"title":"a","body":"b","unready":true,"labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 81)" = 0 ] && ok "X: a labelled issue whose card is in Backlog is not dispatched" || ko "X: #81 in Backlog went out: '$r'"
 [ "$(marked 82)" = 0 ] && ok "X: a labelled issue with no card is not dispatched" || ko "X: #82 with no card went out: '$r'"
 [ "$(marked 83)" = 1 ] && ok "X: a labelled issue whose card is in Todo goes out" || ko "X: #83 in Todo did not go out: '$r'"
-[ "$(marked 84)" = 0 ] && ok "X: a card in Todo without the frontier label is not dispatched" || ko "X: the unlabelled #84 went out: '$r'"
+[ "$(marked 84)" = 1 ] && ok "X: a card in Todo without the frontier label goes out too" || ko "X: the untriaged #84 stayed: '$r'"
 scene todo-down
 issues '[{"number":85,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(CARDS_DOWN=1 run)
@@ -541,13 +597,14 @@ unset GHLOG; rm -f "$T/scripts/acpaths.py"
 #     waits; the per-card detail follows only when the reasons changed since the previous pass (a hash in auto/frontier-why),
 #     so a quiet loop costs one line a beat and a changed one explains itself.
 scene idle
-issues '[{"number":301,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":302,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":303,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+export GH_LABEL_FAIL=304   # #304's triage write is refused, so it waits with that reason (#1676)
+issues '[{"number":301,"title":"a","body":"b","unready":true,"labels":[{"name":"ready-for-human"}]},{"number":302,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":303,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":304,"title":"a","body":"b","unready":true,"labels":[{"name":"wave:01"}]}]'
 mkdir -p "$SG_STATE/state"; printf '{"own": {' > "$SG_STATE/state/o__r__302.json"   # a corrupt ledger holds #302 (ADR-0149)
 printf '#!/bin/bash\ncase "$1" in 303) echo "WAIT #1 open";; *) echo READY;; esac\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"   # #303 waits on its blocker
 r=$(run)
-case "$r" in *"FRONTIER idle: 3 todo, 0 startable (1 no go label, 1 held, 0 sibling, 0 no slot, 1 blocked, "*) ok "I1: the idle line names the count of every reason";; *) ko "I1: no idle line: '$r'";; esac
+case "$r" in *"FRONTIER idle: 4 todo, 0 startable (1 triage failed, 1 held, 0 sibling, 0 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 1 skip label, "*) ok "I1: the idle line names the count of every reason";; *) ko "I1: no idle line: '$r'";; esac
 [ "$($G -c '^FRONTIER idle:' <<<"$r")" = 1 ] && ok "I1: one idle line a pass" || ko "I1: $($G -c '^FRONTIER idle:' <<<"$r") idle line(s): '$r'"
-$G -q '^FRONTIER why #301: no go label' <<<"$r" && $G -q '^FRONTIER why #302: held' <<<"$r" && $G -q '^FRONTIER why #303: blocked' <<<"$r" \
+$G -q '^FRONTIER why #301: skip label (ready-for-human)' <<<"$r" && $G -q '^FRONTIER why #302: held' <<<"$r" && $G -q '^FRONTIER why #303: blocked' <<<"$r" && $G -q '^FRONTIER why #304: triage failed' <<<"$r" \
   && ok "I1: the first idle pass names every card, with its own reason" || ko "I1: detail: '$($G '^FRONTIER why #' <<<"$r")'"
 stamped=$($G -m1 '^[0-9-]* [0-9:]* FRONTIER idle:' "$d/st/cycle.log")
 [ "${stamped:20}" = "$($G -m1 '^FRONTIER idle:' <<<"$r")" ] && $G -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} FRONTIER idle:' <<<"$stamped" && ok "I1: the line is published to the loop log, timed" || ko "I1: cycle.log: $(cat "$d/st/cycle.log" 2>/dev/null)"
@@ -555,12 +612,13 @@ r=$(run)
 [ "$($G -c '^FRONTIER idle:' <<<"$r")" = 1 ] && [ "$($G -c '^FRONTIER why #' <<<"$r")" = 0 ] \
   && ok "I1: the same reasons write the line again and the detail once" || ko "I1: the second pass: '$r'"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"
-issues '[{"number":301,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":302,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":303,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]}]'
+issues '[{"number":301,"title":"a","body":"b","unready":true,"labels":[{"name":"ready-for-human"}]},{"number":302,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":303,"title":"a","body":"b","unready":true,"labels":[{"name":"wontfix"}]},{"number":304,"title":"a","body":"b","unready":true,"labels":[{"name":"wave:01"}]}]'
 r=$(run)
-case "$r" in *"FRONTIER idle: 3 todo, 0 startable (2 no go label, 1 held, "*)
-  [ "$($G -c '^FRONTIER why #' <<<"$r")" = 3 ] && ok "I1: a changed reason set explains itself again" \
+case "$r" in *"FRONTIER idle: 4 todo, 0 startable (1 triage failed, 1 held, 0 sibling, 0 no slot, 0 blocked, "*"2 skip label, "*)
+  [ "$($G -c '^FRONTIER why #' <<<"$r")" = 4 ] && ok "I1: a changed reason set explains itself again" \
     || ko "I1: a changed reason set wrote $($G -c '^FRONTIER why #' <<<"$r") detail line(s)";;
   *) ko "I1: a changed reason set wrote no line: '$r'";; esac
+unset GH_LABEL_FAIL
 
 # I2 (#733): a pass that dispatches writes no idle line.
 scene idlego
@@ -586,12 +644,12 @@ r=$(run)
 #     so the janitor can raise one alert when the frontier holds Todo work and starts none past a bound. A pass that
 #     dispatches drops the file, so the next idle starts the clock again without any other writer.
 scene idlestreak
-issues '[{"number":341,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":342,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]}]'
+issues '[{"number":341,"title":"a","body":"b","unready":true,"labels":[{"name":"ready-for-human"}]},{"number":342,"title":"a","body":"b","unready":true,"labels":[{"name":"ready-for-human"}]}]'   # held by a person: no pass takes either (#1676)
 r=$(run); m=$SG_STATE/frontier-idle
 [ -s "$m" ] && $G -q 'FRONTIER idle: 2 todo, 0 startable' "$m" && ok "I5: an idle pass records the streak and its own line" || ko "I5: no streak marker: '$(cat "$m" 2>/dev/null)'"
 first=$(cut -f1 "$m"); sleep 1; r=$(run)
 [ -s "$m" ] && [ "$(cut -f1 "$m")" = "$first" ] && ok "I5: a later idle pass keeps the streak's start" || ko "I5: the streak restarted ($first -> '$(cat "$m" 2>/dev/null)')"
-issues '[{"number":341,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":342,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]}]'
+issues '[{"number":341,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":342,"title":"a","body":"b","unready":true,"labels":[{"name":"ready-for-human"}]}]'
 r=$(run)
 [ "$(marked 341)" = 1 ] && [ ! -e "$m" ] && ok "I5: a pass that dispatches drops the streak, so the clock starts again" || ko "I5: marker after a dispatch: '$(cat "$m" 2>/dev/null)'"
 

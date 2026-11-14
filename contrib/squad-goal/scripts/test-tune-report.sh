@@ -32,11 +32,11 @@ printf '%s\tfix/1-a\tsha1\t1\n%s\tfix/2-b\tsha2\t2\n%s\tfix/0-old\tsha0\t0\n%s\t
 
 # dispatch passes: timed FRONTIER idle lines; one untimed (written before the timestamp) and one outside the window
 {
-  echo "$(hms $((S + 1000))) FRONTIER idle: 3 todo, 0 startable (0 no go label, 0 held, 0 sibling, 2 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
-  echo "$(hms $((S + 2000))) FRONTIER idle: 1 todo, 0 startable (0 no go label, 0 held, 0 sibling, 0 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
-  echo "$(hms $((S + 3000))) FRONTIER idle: 2 todo, 0 startable (0 no go label, 0 held, 0 sibling, 1 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
-  echo "FRONTIER idle: 1 todo, 0 startable (0 no go label, 0 held, 0 sibling, 1 no slot, 0 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
-  echo "$(hms $((S - 300))) FRONTIER idle: 1 todo, 0 startable (0 no go label, 0 held, 0 sibling, 1 no slot, 0 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
+  echo "$(hms $((S + 1000))) FRONTIER idle: 3 todo, 0 startable (0 triage failed, 0 held, 0 sibling, 2 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
+  echo "$(hms $((S + 2000))) FRONTIER idle: 1 todo, 0 startable (1 triage failed, 0 held, 0 sibling, 0 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
+  echo "$(hms $((S + 3000))) FRONTIER idle: 2 todo, 0 startable (0 triage failed, 0 held, 0 sibling, 1 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
+  echo "FRONTIER idle: 1 todo, 0 startable (0 triage failed, 0 held, 0 sibling, 1 no slot, 0 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
+  echo "$(hms $((S - 300))) FRONTIER idle: 1 todo, 0 startable (0 triage failed, 0 held, 0 sibling, 1 no slot, 0 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)"
   # gate holds: the promotion proof and the nightly red hold the gate; a childcc hold is not the gate; one lies before the window
   echo "$(hms $((S + 4000))) DISPATCH HOLD: the promotion proof holds the machine (since 00:00:00); no new run this pass"
   echo "$(hms $((S + 4100))) DISPATCH HOLD: the nightly full suite is red (test_x); no new run until one green nightly"
@@ -71,6 +71,7 @@ has "live-run hours: 2.50" && ok "live-run hours: 2 h of run 1 and 30 min of run
 has "landings per live-run hour: 0.80" && ok "landings per live-run hour: 2 over 2.5 h" || ko "per hour: $out"
 has "dispatch passes: 3" && ok "dispatch passes: the three timed idle lines; the untimed and the old one are skipped" || ko "dispatch passes: $out"
 has "passes held for a run slot: 2" && ok "passes held for a run slot: the idle lines with a no-slot card" || ko "held for slot: $out"
+has "passes held for a triage write: 1" && ok "passes held for a triage write: the one idle line whose reason is a refused label write" || ko "held for triage: $out"
 has "share held for a run slot: 0.67" && ok "share held for a run slot: 2 of 3 passes" || ko "share held: $out"
 has "passes held for the gate: 2" && ok "passes held for the gate: the promotion and nightly holds; a childcc hold is not the gate" || ko "held for gate: $out"
 has "gate runs: 3" && ok "gate runs: three finished rows; the row with no finish time is skipped" || ko "gate runs: $out"
@@ -91,7 +92,7 @@ printf '%s\n' "$one" | grep -qxF -- "live-run hours: 1.00" && ok "a window cuts 
 empty=$(bash "$TR" 2001-01-01 2001-01-02 2>&1); erc=$?
 [ "$erc" = 0 ] && ok "an empty window exits 0" || ko "empty window exit $erc: $empty"
 for line in "landings: 0" "live-run hours: 0.00" "landings per live-run hour: 0.00" "dispatch passes: 0" "passes held for a run slot: 0" \
-  "share held for a run slot: 0.00" "passes held for the gate: 0" "gate runs: 0" "gate total seconds: 0" "gate median seconds: 0" \
+  "share held for a run slot: 0.00" "passes held for the gate: 0" "passes held for a triage write: 0" "gate runs: 0" "gate total seconds: 0" "gate median seconds: 0" \
   "cooldown seconds: 0" "share of five-minute load samples at or above the core count: 0.00" "caps in force: none" "settings hashes seen: none"; do
   printf '%s\n' "$empty" | grep -qxF -- "$line" && ok "empty window: $line" || ko "empty window: missing '$line': $empty"
 done

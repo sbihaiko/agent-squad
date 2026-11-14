@@ -99,7 +99,9 @@ case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
      # nothing. It answers unproven (exit 4), the answer every caller already reads as the machine's: branchland's
      # inconclusive path opens no fix round and gates the tip again on a later cycle, so a child keeps the work it committed
      # instead of losing it to a budget another gate held.
-     [ "$fgrc" = 73 ] && { echo "fast-gate: unproven: the machine's gate budget is full, so no battery ran and nothing is red; the gate does not pass and the landing holds (exit 4)"; exit 4; }
+     # (#1715) The line carries what the child does next: a line that said the gate does not pass read as a failed run, and
+     # the loop started a new run that repeated the work.
+     [ "$fgrc" = 73 ] && { echo "fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)"; exit 4; }
      exit "$fgrc";; esac
 # The base the gate read the tree against goes out beside the scope (GATE_BASE_FILE), so an unproven entry's obligation
 # names it (gate.sh, spec 1163): the commit when the base resolves, else the ref as it was named.

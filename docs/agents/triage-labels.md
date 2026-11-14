@@ -8,7 +8,9 @@ The triage vocabulary is three label strings on this repository's issue tracker.
 | `ready-for-human` | Holder | A person implements the card. No dispatch pass takes it. |
 | `ready-for-HAL9K` | Holder | The HAL9K agent implements the card. No dispatch pass takes it. |
 
-A permission authorizes when present. A holder holds when present, whatever else the card carries, even beside `ready-for-agent`. An absent label authorizes: a card that carries no holder and no hold is the agent's to take in Todo.
+A permission authorizes when present. A holder holds when present, whatever else the card carries, even beside `ready-for-agent`. An absent label authorizes: a card that carries no holder and no hold is the agent's to take in Todo, and the dispatch pass writes `ready-for-agent` on it in the same act.
+
+Parking a card used to be the removal of `ready-for-agent`. The loop now writes that label back on a Todo card, so that control is gone: park a card with a holder label, `ready-for-human`, and the loop takes nothing from it.
 
 `needs-triage` holds an issue that nobody has triaged. It is a hold on its own, so an untriaged issue is never read as an unlabelled one. Removing it is the triage.
 

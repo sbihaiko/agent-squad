@@ -1,7 +1,10 @@
 #!/bin/bash
 # usage: autofrontier.sh   (watch.sh, every ~3 min; AF_DRY=1 prints what it would dispatch)
 # Dispatches the startable frontier as soon as a blocker falls: every open non-bug issue with no open work branch naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
-# which stack.sh says READY or STACK, wave label first. A pass starts one run per free run slot, never more runs than children (#728):
+# which stack.sh says READY or STACK, wave label first. The column Todo is the one go signal (#1672, #1676): a card in Todo
+# with no triage label is taken, and the pass writes $SG_FRONTIER_LABEL on its issue once, after the claim and every gate,
+# beside the request. A holder label (ready-for-human, ready-for-HAL9K) or any other hold still wins and costs no write.
+# A pass starts one run per free run slot, never more runs than children (#728):
 # the children are dealt over the runs in turn, so with fewer slots than children a run holds several.
 # One run takes no more children than its envelope allows: the dispatch node's max_children and what one run can fund
 # (fundroom.py). The pass takes no more children than run.max_children and caps.children less the children the live runs
@@ -18,7 +21,7 @@ export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, name
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 [ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
 F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'release_pending; rm -rf "$F"' EXIT   # the pass's scratch: the issue list, a card's entry, and the reasons a card waits (#733)
-pick=(); notes=(); ready=(); kids=(); full=""; broke=; claimed=(); cutp=(); cutb=()   # the walk's facts, declared here so the idle line can read them at any exit
+pick=(); notes=(); ready=(); kids=(); full=""; broke=; claimed=(); cutp=(); cutb=(); triaged=()   # the walk's facts, declared here so the idle line can read them at any exit
 # claim_issue <n> <token>: the dispatch marker as one atomic create (#865). The walk's check of the marker is only a hint: the walk
 # reads an issue's facts for seconds before it picks it, and a second pass in that window used to see no marker and launch the same
 # issue. The claim is the create itself (noclobber), so exactly one pass takes an issue, however the passes overlapped.
@@ -31,7 +34,7 @@ release_pending() { local n; for n in ${claimed[@]+"${claimed[@]}"}; do [ "$(cat
 # waits, in this fixed order; a reason no card carries still prints as 0, so the shape of the line never changes. The per-card
 # detail follows only when the reasons differ from the previous pass (a hash in $A/frontier-why), so a quiet loop costs one
 # line a beat and a changed one explains itself.
-WHY_REASONS=("no go label" "held" "sibling" "no slot" "blocked" "claimed" "busy" "not startable" "skip label" "ac paths" "not listed")
+WHY_REASONS=("triage failed" "held" "sibling" "no slot" "blocked" "claimed" "busy" "not startable" "skip label" "ac paths" "not listed")
 why_card() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$F/why"; }   # <issue> <reason> [note]: a Todo card this walk left behind
 idle() {   # <reasons file> [reason for a card the file does not name]: the summary line, and the detail when the reasons changed
   local f=$1 def=${2:-"not listed"} n r c line parts="" total h cards="$F/why.cards"
@@ -214,9 +217,9 @@ joins() {   # one when issue $2 joins a child the picks of its own group already
 # cuts a shared-file slice in two, which is what bounding the picks alone did (#1521, #57).
 cands=()
 # Read every open issue once, through the door: one GraphQL request whose entries carry the labels, the blockers with
-# their states and the not-startable marker. `stack.sh` owns the blocker gate. Only an issue that carries SG_FRONTIER_LABEL is a
-# candidate (#485): the label says an agent may take it. The column Todo is the owner's go signal (#550): a candidate's card
-# sits in Todo too, read once a pass below.
+# their states and the not-startable marker. `stack.sh` owns the blocker gate. The column Todo is the one go signal
+# (#550, #1676): the walk reads the pass's whole issue list, so a card with no triage label is seen. Such a card is taken,
+# and the pass writes SG_FRONTIER_LABEL on its issue once, in the same act; a holder or another hold still wins.
 gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || exit 0   # no list, no frontier this pass
 # A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): the pass already holds the open issues,
 # so the stop costs no second read, and it has no marker -- closing the issue resumes dispatch with no other action.
@@ -246,7 +249,7 @@ while [ $i -lt ${#cands[@]} ]; do
   # A run parent rolls a run's children up and is never work (#340).
   skip=; bad=; for s in ${skipcsv//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
   [ -n "$skip" ] && { [ -z "$card" ] || why_card "$n" "skip label" "$bad"; continue; }
-  case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) [ -z "$card" ] || why_card "$n" "no go label"; continue;; esac   # no go label, no dispatch (#485)
+  tri=; case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) tri=1;; esac   # no triage label: the card is still taken, and its label is written after the claim (#1676)
   # ADR-0171 (#1358): a loop defect is built only after a plan review approved its current body, whichever pass dispatches it.
   if lb_is_loop_bug "$labels"; then
     lbb=$(gh_api "repos/$SG_REPO/issues/$n" -q '.body // ""') || { [ -z "$card" ] || why_card "$n" "loop-bug" "its body is not readable, so its plan review cannot be checked"; continue; }
@@ -301,12 +304,33 @@ while [ $i -lt ${#cands[@]} ]; do
       echo "FRONTIER hold #$n: $hf is held by $hp, which is $hr (ADR-0150); it waits for a later run" >&2; continue;;
     *) [ "$src" = 0 ] || echo "FRONTIER NOTE slicecut.py failed ($src): no cross-run slice check for #$n" >&2;;
   esac
-  pick+=("$n"); notes+=("$nt"); ready+=("$n")
+  pick+=("$n"); notes+=("$nt"); ready+=("$n"); [ -n "$tri" ] && triaged+=("$n")
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
 done
 if [ -n "$broke" ]; then   # the walk ended at the envelope: the cards past it wait for a slot, not for a reason of their own
   while [ $i -lt ${#cands[@]} ]; do IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
     case "$todo" in *" $n "*) why_card "$n" "no slot" "past the pass's envelope";; esac; done
+fi
+# The auto-triage (#1672, #1676): a card the walk took with no triage label gets the go label written here, once -- after
+# the claim, so an overlapping pass cannot take the same card, and after every gate, so a card left behind is never
+# labelled. It is the only label this pass writes, and no pass removes one. A refused write drops that card from the
+# request and frees its claim, so the next pass retries it; when no card is left the pass writes no request and the idle
+# line gives each dropped card its own reason.
+if [ ${#triaged[@]} -gt 0 ]; then
+  dropped=(); kept=()
+  for n in "${triaged[@]}"; do
+    if o=$(gh_send --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=$SG_FRONTIER_LABEL"); then
+      echo "FRONTIER triaged #$n: wrote $SG_FRONTIER_LABEL"
+    else
+      dropped+=("$n"); why_card "$n" "triage failed" "the $SG_FRONTIER_LABEL write was refused"
+      echo "FRONTIER triage failed #$n: ${o:-the label write reached no verdict}; the card waits for the next pass" >&2
+    fi
+  done
+  if [ ${#dropped[@]} -gt 0 ]; then
+    pick=(); for n in "${ready[@]}"; do case " ${dropped[*]} " in *" $n "*) ;; *) pick+=("$n");; esac; done
+    ready=("${pick[@]}")
+    for n in "${dropped[@]}"; do rm -f "$A/disp-$n"; done   # no request names it: free its claim now, not at EXIT
+  fi
 fi
 [ ${#pick[@]} -gt 0 ] || { idle "$F/why"; exit 0; }
 rm -f "$A/frontier-why"   # this pass dispatched: the next idle pass explains itself afresh

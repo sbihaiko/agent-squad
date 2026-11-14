@@ -617,6 +617,35 @@ r=$(netland run-gone8); rc=$?
 [ $rc = 2 ] && [ "$(tries 96 run-gone8)" = 1 ] && ok "K3: a fetch that lacks the ref still counts a try" || ko "K3: exit $rc, tries '$(tries 96 run-gone8)': '$r'"
 rm -f "$T/st/auto/wave-run-gone8"
 
+# K6 (#1710): a local fetch fails when the machine cannot start git's transport helper, and git prints its own cause:
+# `error: cannot fork() for git-upload-pack '<remote>': Resource temporarily unavailable` then `fatal: unable to fork`.
+# A loaded machine produces it (a full process table, no memory); the fixture owns its repository and cannot avoid the
+# fork, because a local fetch always starts git-upload-pack. It is the network class of #656: a repeat does not change it
+# on this pass, so it names git's line, counts no landing try, freezes nothing, keeps the wave, and exits 2. The transport
+# is stubbed the way K3 stubs ssh: the stub answers with the two lines git printed on a real fork failure.
+W17=wave/run-17; start2 run-17 >/dev/null; child 170 nf17 "origin/$W17"; en2 run-17 170 >/dev/null
+mkdir -p "$T/co/runs/run-17"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #170 work"}}' > "$T/co/runs/run-17/record.jsonl"
+mkdir -p "$T/bin/stubexec"
+printf '#!/bin/bash\necho "error: cannot fork() for git-upload-pack '"'"'$1'"'"': Resource temporarily unavailable" >&2\necho "fatal: unable to fork" >&2\nexit 128\n' > "$T/bin/stubexec/git-upload-pack"
+chmod +x "$T/bin/stubexec/git-upload-pack"
+noexec() { (cd "$T/co" && GIT_EXEC_PATH="$T/bin/stubexec" bash "$T/s/wave.sh" land "$1" 2>&1); }
+: > "$T/gh.log"; before=$($O rev-parse dev); tr=""; nrc=""
+for i in 1 2 3; do r=$(noexec run-17); nrc="$nrc$? "; tr="$tr$(tries 170 run-17)"; done
+[ "$nrc" = "2 2 2 " ] && ok "K6: a landing whose fetch cannot start its transport exits 2" || ko "K6: exits $nrc: '$r'"
+case "$r" in *"WAVE-NETWORK"*"fork"*"lands on a later cycle"*) ok "K6: the untransportable fetch is named on one WAVE-NETWORK line";; *) ko "K6: git's cause is not named: '$r'";; esac
+case "$r" in *"WAVE-ERROR"*|*"NEEDS-HUMAN"*) ko "K6: a machine-caused fetch is read as a stuck landing: '$r'";; *) ok "K6: a machine-caused fetch is no stuck landing";; esac
+[ -z "$tr" ] && ok "K6: three machine-caused fetches count no landing try" || ko "K6: tries counted: '$tr'"
+/usr/bin/grep -q 'frozen:owner' "$T/gh.log" && ko "K6: a machine-caused fetch froze the issue" || ok "K6: a machine-caused fetch freezes nothing"
+[ -e "$T/st/auto/wave-run-17" ] && ok "K6: the run keeps its wave marker" || ko "K6: the wave marker is gone"
+[ "$($O rev-parse dev)" = "$before" ] && ok "K6: dev does not move while the machine cannot fork" || ko "K6: dev moved"
+# A fetch failure no class names still carries git's own line, so the next one is diagnosable from the landing's own words.
+printf '#!/bin/bash\necho "fatal: an unnamed transport defect" >&2\nexit 128\n' > "$T/bin/stubexec/git-upload-pack"
+r=$(noexec run-17)
+case "$r" in *"WAVE-ERROR the fetch of"*"an unnamed transport defect"*) ok "K6: an unnamed fetch failure carries git's own line";; *) ko "K6: git's line is dropped: '$r'";; esac
+r=$(land2 run-17); rc=$?
+[ $rc = 0 ] && [ "$($O cat-file -e dev:nf17 2>/dev/null && echo yes)" = yes ] && ok "K6: the next landing on a machine that can fork lands the wave" || ko "K6: exit $rc: '$r'"
+
 # K4 (#663): a landing that failed on a cause the loop itself caused -- here the base battery is red and no child's own
 # suite names the cause -- counts no landing try and freezes nothing: it is named once per issue it carries as
 # WAVE-LOOP-CAUSED, and the wave stays to land on a later cycle. A real work failure still counts and freezes at the cap (K).
