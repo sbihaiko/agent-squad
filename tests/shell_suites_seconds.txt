@@ -115,6 +115,7 @@ test-janitor-gone-issue.sh 1.31
 test-janitor-h.sh 0.59
 test-janitor-held-by-wave.sh 1.73
 test-janitor-i.sh 1.13
+test-janitor-issue-facts.sh 7.05
 test-janitor-k.sh 1.57
 test-janitor-killed.sh 0.85
 test-janitor-live-mtime.sh 2.68

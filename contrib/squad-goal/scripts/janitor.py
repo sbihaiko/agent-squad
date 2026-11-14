@@ -340,10 +340,55 @@ repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null;
 GONE = re.compile(r"\bHTTP(?:/[\d.]+)? 410\b|could not resolve to an issue|this issue was deleted", re.I)   # the 410 status or GitHub's stable message, never a bare 410: an issue number, a header or a delay may carry one (#466)
 def gone_msg(s): return bool(GONE.search(s or ""))
 _is = {}
+# The issue facts file (#1744): $SG_STATE/issue-facts.json holds the five facts of every issue a pass read, and the time of the
+# last sync. A pass asks GitHub once for the issues that changed since that sync (the door's paged list read, `since` is the
+# issue's update time), so an issue the file holds and the list did not name is unchanged and is not read again. The pass
+# read each issue of each run folder by itself on every pass: 155 reads and 96 s of a 181 s pass. A list that does not
+# answer trusts nothing from the file, and the pass reads each issue itself, as it did. An entry older than FACTS_MAX_AGE
+# is read again: a deleted issue never shows in a list of changes. A dry pass writes nothing.
+FACTS = st / "issue-facts.json"; FACTS_MAX_AGE = 86400; FACTS_OVERLAP = 300   # the overlap covers a clock that differs from GitHub's
+_facts = None   # None: not asked yet; False: the list did not answer this pass; else the file's content, synced
+_facts_dirty = False
+def _facts_iso(t): return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+def _facts_sync():
+    global _facts, _facts_dirty
+    if _facts is not None: return
+    _facts = False
+    try: c = json.loads(FACTS.read_text())
+    except (OSError, ValueError): c = None
+    if not (isinstance(c, dict) and c.get("repo") == repo0 and isinstance(c.get("issues"), dict) and isinstance(c.get("synced"), str)):
+        c = {"repo": repo0, "synced": "", "issues": {}}
+    start = time.time()
+    since = c["synced"] or _facts_iso(start)   # no sync yet: the file holds nothing, so nothing older can be stale
+    r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_pages", f"repos/{repo0}/issues?state=all&since={since}&per_page=100"])
+    try: items = json.loads(out) if r == 0 else None
+    except ValueError: items = None
+    if not isinstance(items, list): return
+    for i in items:
+        if not (isinstance(i, dict) and isinstance(i.get("number"), int) and i.get("state") in ("open", "closed")): continue
+        labels = ",".join(l.get("name", "") for l in i.get("labels") or [] if isinstance(l, dict))
+        c["issues"][str(i["number"])] = {"f": [i["state"], i.get("state_reason") or "", i.get("title") or "", labels, i.get("closed_at") or ""], "at": start}
+    c["synced"] = _facts_iso(start - FACTS_OVERLAP); _facts = c; _facts_dirty = True
+def _facts_save():   # atomic (ADR-0030): a pass that dies in the write leaves the last whole file
+    if dry or not _facts or not _facts_dirty: return
+    tmp = FACTS.with_name(FACTS.name + f".{os.getpid()}")
+    try: tmp.write_text(json.dumps(_facts)); os.replace(tmp, FACTS)
+    except OSError as e: say(f"issue facts not written: {e}")
+import atexit; atexit.register(_facts_save)
 def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title, its labels and its close time (#1571)
+    global _facts_dirty
     if x not in _is:
-        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title, ([.labels[].name] | join(",")), (.closed_at // "")] | @tsv').strip().split("\t")
-        _is[x] = (o + ["", "", "", "", ""])[:5]
+        _facts_sync()
+        e = _facts["issues"].get(str(x)) if _facts else None
+        if isinstance(e, dict) and isinstance(e.get("f"), list) and len(e["f"]) == 5 and time.time() - float(e.get("at") or 0) < FACTS_MAX_AGE:
+            _is[x] = list(e["f"])
+        else:
+            o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title, ([.labels[].name] | join(",")), (.closed_at // "")] | @tsv').strip("\n").split("\t")
+            _is[x] = (o + ["", "", "", "", ""])[:5]
+            if _facts:
+                if _is[x][0] in ("open", "closed"): _facts["issues"][str(x)] = {"f": _is[x], "at": time.time()}   # an answer about the issue; a refusal or GitHub's deleted message is never kept
+                else: _facts["issues"].pop(str(x), None)
+                _facts_dirty = True
     return _is[x]
 def issue_is_gone(x):   # a missing issue is not a transient read failure. The pass's one cached read of the issue says it: `gh api`
     # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
