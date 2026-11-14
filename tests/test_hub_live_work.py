@@ -508,6 +508,24 @@ def test_the_card_draws_the_board_cache_age(hub):
     assert "board read 12m ago" in html, html
 
 
+def test_the_card_owns_no_empty_state_beside_the_hub_s_own(hub):
+    """#1697: the hub answers the empty state as its own tagged `empty` row and a failed read as a `notice` row, so the page
+    draws no `no live work` of its own while it holds an answer: a stopped loop with a live run, and an answer whose only
+    row the card deduped away, each keep the reader's two cases apart. The fallback stands only before the first read."""
+    if NODE is None:
+        pytest.skip("node is required")
+    holding = _card_run(hub, 'let liveWork={loop:"on",boardAge:null,lines:[]};')
+    assert "no live work" not in holding, holding   # no answer row, no empty state of the page's own
+    once = _card_run(hub, 'let liveWork={loop:"on",boardAge:null,lines:[{kind:"empty",id:"",text:"no live work"}]};')
+    assert once.count("no live work") == 1, once    # the hub's own empty row is the one the reader sees
+    drained = _card_run(hub,
+                        'let liveWork={loop:"off",boardAge:null,lines:['
+                        '{kind:"loop",id:"loop",text:"loop off"},'
+                        '{kind:"run",id:"run-b",text:"run run-b · #1674 · node wave.landing · age 3 min"}]};',
+                        '[{id:"run-b",age:5,spend:0}]')
+    assert "no live work" not in drained, drained   # a loop off while a run still lives is not an empty tile
+
+
 def test_a_failed_live_read_reads_live_work_unreadable(hub):
     """#1697: a /api/live that fails is named in the panel, never drawn as an empty tile."""
     if NODE is None:

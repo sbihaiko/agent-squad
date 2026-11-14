@@ -5978,7 +5978,8 @@ function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.ag
  const own=r=>rows.filter(t=>t.kind==="gate"&&t.run===r.id).map(line).join("");   // a gate is drawn beside the row of the run it checks (#1713): by the run id its row carries, never a substring of its text (#1697)
  const extra=rows.filter(t=>!(t.kind==="run"&&live.some(r=>r.id===t.id))&&!(t.kind==="gate"&&drawn.some(r=>r.id===t.run))).map(line).join("");   // every other row is drawn once: a run row already drawn is not drawn twice, by identity (#1697)
  const board=(liveWork&&liveWork.boardAge!=null)?`<div class=m>board read ${age(liveWork.boardAge)} ago</div>`:"";   // the age of the board read the hand-work rows came from (#1697)
- return{head,html:(drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra||"<div class=m>no live work</div>")+board+more}}
+ const body=drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra;   // the page's own run rows, each with its gate, and the hub's other tagged rows, each drawn once
+ return{head,html:(body||(liveWork?"":"<div class=m>no live work</div>"))+board+more}}   // the empty state is the hub's own tagged row, never the page's: it names one only before the first read (#1697)
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
