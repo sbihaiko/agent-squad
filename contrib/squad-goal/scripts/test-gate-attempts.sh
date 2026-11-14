@@ -1,4 +1,8 @@
 #!/bin/bash
+# (#1735) The hang a deadline case starts sleeps a length only this run names, so the survivor probe and the cleanup
+# below read this suite's own processes: `pgrep -f "sleep 2718"` read every suite on the machine, and two gates side
+# by side then read each other's hang as a survivor, or ended it.
+export HANG_NAP=$(( 271800000 + $$ ))
 # Regression test for the gate-attempt journal (#1255, ADR-0170): every gate invocation that draws a verdict appends one
 # `gate_attempt` record to the flow-sample journal -- the card, the wave tip, the ordinal, the verdict and the instant --
 # and a memoized green verdict (ADR-0168) is a `gate_reuse` marker, never an attempt. A deadline stop is an `unproven`
@@ -48,7 +52,7 @@ run true; rc=$?
   && ok "an attempt on a new tip is its own record, ordinal 1" || ko "new tip: rc $rc, $(cat "$J" 2>&1)"
 
 # --- a deadline stop counts as unproven ---
-BOUND=1 run sh -c "echo \$\$ > '$T/sleeper.pid'; exec sleep 2718"; rc=$?
+BOUND=1 run sh -c "echo \$\$ > '$T/sleeper.pid'; exec sleep $HANG_NAP"; rc=$?
 [ $rc = 4 ] && [ "$(count)" = 4 ] && [ "$(q "$J" field 4 v)" = unproven ] \
   && ok "a deadline stop is journaled as an unproven attempt" || ko "deadline attempt: rc $rc, $(cat "$J" 2>&1)"
 # The gate's stop kills the command's tree at the deadline; this backstop names the one recorded pid,

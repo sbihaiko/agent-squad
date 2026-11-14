@@ -1,4 +1,8 @@
 #!/bin/bash
+# (#1735) The hang a deadline case starts sleeps a length only this run names, so the survivor probe and the cleanup
+# below read this suite's own processes: `pgrep -f "sleep 2718"` read every suite on the machine, and two gates side
+# by side then read each other's hang as a survivor, or ended it.
+export HANG_NAP=$(( 271800000 + $$ ))
 # Regression test for gate.sh: a gate runs under the machine lock, passes the exit code through, and leaves the hub's latest
 # status in $SG_STATE/gate-status. A full result also stays in $SG_STATE/gate-status-full after a later fast gate.
 # Both lines are `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`.
@@ -197,12 +201,12 @@ DB=$T/deadline; mkdir -p "$DB"
 cat > "$T/defect-hang.sh" <<'S'
 #!/bin/bash
 printf 'fail\tpytest tests/test_h.py::test_hang\truff mypy pytest\t-\n' > "$GATE_OUTCOME_FILE"
-sleep 2718 &
-sleep 2718
+sleep $HANG_NAP &
+sleep $HANG_NAP
 S
 cat > "$T/plain-hang.sh" <<'S'
 #!/bin/bash
-sleep 2718
+sleep $HANG_NAP
 S
 # The case itself must end even when the code under test never does: a hard bound kills the gate it started, so a red run
 # reports FAIL lines instead of hanging the suite.
@@ -222,7 +226,7 @@ s0=$(date +%s); drun defect-hang; el=$(( $(date +%s) - s0 ))
 dh=$(tail -n 1 "$DB/gate-history")
 [ "$(printf '%s' "$dh" | cut -f8)" = fail ] && [ "$(printf '%s' "$dh" | cut -f9)" = "pytest tests/test_h.py::test_hang" ] \
   && ok "a failing test followed by a hang at the deadline ends fail, with the defect's reason" || ko "defect at the deadline: rc $rc, '$dh'"
-pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "a descendant process survived the deadline" || ok "no descendant process survives the deadline"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "a descendant process survived the deadline" || ok "no descendant process survives the deadline"
 # A red that stands is not cleared by a bounded attempt on the same tree: it ends fail, and the record says so.
 drun plain-hang
 bh=$(tail -n 1 "$DB/gate-history")
@@ -237,7 +241,7 @@ bh=$(tail -n 1 "$DB2/gate-history")
   && ok "a bounded attempt is recorded as bounded, never as a pass, and exits unproven" || ko "bounded plain: rc $rc, '$bh'"
 IFS=$'\t' read -r _ _ bres _ < "$DB2/gate-status" 2>/dev/null
 [ "$bres" = fail ] && ok "a bounded attempt's status line is no pass" || ko "bounded status: '$(cat "$DB2/gate-status" 2>&1)'"
-pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "a descendant process survived the second deadline" || ok "the second bounded attempt leaves no descendant"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "a descendant process survived the second deadline" || ok "the second bounded attempt leaves no descendant"
 
 # --- the watchdog's forked sleep dies with the gate, through --inner and through --run (#1441, #1510) ---
 # A short command ends long before the watchdog's bound, so its forked sleep can go only when the gate reaps it. The pid
@@ -266,5 +270,5 @@ for wmode in --inner --run; do
 done
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
-pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
+pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail
