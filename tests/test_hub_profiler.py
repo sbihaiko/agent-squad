@@ -727,3 +727,39 @@ def test_the_many_repository_hub_starts_the_sampler_of_a_profile_whose_switch_is
     assert mod.profiler_running()
     main = (SCRIPTS / "hubmux.py").read_text().split('\nif __name__ == "__main__":\n', 1)[1]
     assert "start_profile(a)" in main and "profiler_ensure" not in main, "the hub's start does not go through start_profile"
+
+
+# ---------------------------------------------------------------- the second review's findings
+def test_the_supervisor_above_the_pid_file_s_process_is_this_loop(prof):
+    """watchd.pid names the `run` child; its `supervise` parent is the same loop, never another one."""
+    a = rd({10: (1, 0.0, f"bash {S}/watchd.sh supervise"), 11: (10, 0.0, f"bash {S}/watchd.sh run")})
+    b = rd({10: (1, 1.0, f"bash {S}/watchd.sh supervise"), 11: (10, 2.0, f"bash {S}/watchd.sh run")})
+    acc = prof.fold(a, b, prof.Scope(11, (f"{S}/",)))
+    assert prof.context(acc)["total_s"] == 0
+    assert names(prof.tree(acc)) == ["watchd.sh"]
+
+
+def test_a_script_inside_a_quoted_argument_of_shell_code_names_nothing(prof):
+    assert prof.label('bash -c echo "hello; bash /x/watch.sh"') is None
+    assert prof.label("bash -c cd /x && bash /x/watch.sh") == ("watch.sh", "driver")
+
+
+def test_a_second_off_returns_only_when_the_sampler_has_ended(hub, monkeypatch):
+    mod = hub[0]
+    release = threading.Event()
+    old = threading.Thread(target=lambda: release.wait(5), daemon=True)
+    old.start()
+    monkeypatch.setitem(mod.PROFILER, "thread", old)
+    monkeypatch.setitem(mod.PROFILER, "stop", threading.Event())
+    first = threading.Thread(target=lambda: mod.profiler_set(False, "test", "loopback"), daemon=True)
+    first.start()
+    time.sleep(0.1)
+    second = threading.Thread(target=lambda: mod.profiler_set(False, "test", "loopback"), daemon=True)
+    second.start()
+    second.join(0.5)
+    waited = second.is_alive()
+    release.set()
+    first.join(3)
+    second.join(3)
+    assert waited, "the second off returned while the sampler still ran"
+    assert not first.is_alive() and not second.is_alive() and not mod.profiler_running()
