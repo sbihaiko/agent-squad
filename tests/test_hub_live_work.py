@@ -147,6 +147,27 @@ def test_a_ready_for_human_issue_is_listed_with_its_label(hub):
     assert any("#1681" in x and "ready-for-human" in x for x in lines)
 
 
+def test_a_closed_ready_for_human_issue_is_not_live_work(hub):
+    """#1692: the label stays on an issue after it closes, and a closed issue waits on nobody."""
+    items = [{"n": 447, "t": "An old defect", "s": "closed", "l": ["ready-for-human", "bug"]},
+             {"n": 1681, "t": "Health rule", "s": "open", "l": ["ready-for-human"]}]
+    lines = _lines(hub, items)
+    assert not any("#447" in x for x in lines), lines
+    assert any("#1681" in x for x in lines)
+
+
+def test_a_lock_that_names_no_command_claims_no_child(hub):
+    """#1692: the loop driver's `watch` lock holds a pid and no command; it serves no child."""
+    lock = Path(hub.STATE) / "locks" / "watch"
+    lock.mkdir(parents=True, exist_ok=True)
+    (lock / "pid").write_text(f"{os.getpid()}\n")
+    try:
+        lines = _lines(hub)
+    finally:
+        shutil.rmtree(lock)
+    assert f"lock watch: pid {os.getpid()}" in lines, lines
+
+
 def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
     run = tmp_path / "run-20261113-200000-abcd"
     run.mkdir()
