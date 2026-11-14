@@ -5,6 +5,7 @@ tapped in node against one box, through the shared controller itself.
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -73,6 +74,10 @@ def test_the_layer_opens_and_loads_the_profiler_route(hub):
       return { open: !$("profpage").hidden, on: profV.on, tree: profV.tree.name };
     """, routes=routes())
     assert out == {"open": True, "on": True, "tree": "loop"}
+
+
+def test_the_phone_defines_every_name_the_shared_render_function_calls(hub):
+    assert re.search(r"^const esc\s*=", hub.MOBILE_PAGE, re.M), "the phone draws the shared render function without its esc"
 
 
 def test_the_phone_and_the_desktop_inline_the_same_render_function(hub):

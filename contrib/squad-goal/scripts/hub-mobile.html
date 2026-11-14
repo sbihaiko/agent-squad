@@ -1495,7 +1495,7 @@ function renderBoard() {
 // The sheet draws the card data the board read already holds (#919): the row carries the blockers, the cards it blocks,
 // the run that holds it and the pull request that closes it, so the view holds no rule of its own (ADR-0137).
 const escHTML = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const chipOf = (n, r) => `<a class="shb" data-n="${escHTML(n)}" data-r="${escHTML(r || "")}" title="open #${escHTML(n)} in this sheet">#${escHTML(n)}</a>`;
+const esc = escHTML;const chipOf = (n, r) => `<a class="shb" data-n="${escHTML(n)}" data-r="${escHTML(r || "")}" title="open #${escHTML(n)} in this sheet">#${escHTML(n)}</a>`;
 const rowHTML = (label, html) => '<div class="mrow"><b>' + label + '</b><span>' + html + "</span></div>";
 const ROWS = ["Column", "Labels", "Blocked by", "Blocks", "Runs", "PR · CI", "Opened"];
 function sheetChips(x) {
