@@ -1,15 +1,15 @@
-# One issue through the autonomous loop
+# One issue through the autonomous loop: sequence and profile
 
-The trip of one issue from a Todo card to Closed in `dev`: every actor, what each reads and writes, and the failure paths. The doc describes what the code does, defects included, in neutral words. A defect is tracked as an issue, never here. References name a file and a function or step; the code is the source of truth.
+The trip of one issue from a Todo card to Closed in `dev`: every actor, what each reads and writes, and the failure paths. The doc describes what the code does, defects included, in neutral words. Section 0 is the profile: the measured time of each step and the hot spots, each with the issue that tracks it. A defect is tracked as an issue, never here. References name a file and a function or step; the code is the source of truth.
 
 Source: `contrib/squad-goal/scripts/*` (live copy `~/.claude/skills/squad-goal/scripts`) and the engine `squad/`. State: `$SG_STATE` (`~/.cache/squad-goal/agent-squad`).
-Profile for this repository: `SG_BASE=dev`, `SG_FORK_DIR=$SG_CHECKOUT`, `SG_FORK_BRANCH=gui/%n`, `SG_PROMOTE_PROOF=local`, `SG_BOARD_VOCAB=shipped`.
+Profile for this repository: `SG_BASE=dev`, `SG_FORK_DIR=$SG_CHECKOUT`, `SG_FORK_BRANCH=gui/%n`, `SG_PROMOTE_PROOF=ci`, `SG_BOARD_VOCAB=shipped`.
 Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Review, Code Complete, Closed, Abandoned. Blocked is no column: it is the `frozen:owner` label over the column the work reached (`board_columns.py`).
 
 `watchd.sh` supervises two lanes:
 
 - **Fast lane** (`fastloop.sh`, every `SG_FAST_INTERVAL` s, 120 by default). Each beat: start one `childcc.py` pass in the background under the `single.sh childcc` lock, unless the pass this lane started still lives; then start `autobug.sh` and, after it ends, `autofrontier.sh`, detached. A new Todo card in the hub's board cache ends the wait early. A lane whose supervisor died exits.
-- **Slow lane** (`watch.sh`, about 90 s a cycle). Order: token guard; verdicts and wave landings; stall watchdog; `reconcile.py` (every eighth cycle, detached); `branchland.sh`, `branchreviewpass.sh`, `branchfixpass.sh` (detached, each under its own lock, skipped when `SG_LAND_PAUSED` is set); `promote-pass.sh` (detached under `single.sh promote`, with `SG_PROMOTE_PROOF=ci`, past the quiet window since the latest landing); `childcc.py`, `autobug.sh`, `autofrontier.sh` only when the fast lane is down; `autohunt.sh`; `heartbeat.sh`; `wtclean.sh` (every third cycle); `janitor.sh`; `live-guard.sh`; `vendor-guard.sh`.
+- **Slow lane** (`watch.sh`; the steps of one cycle run in order, and the measured cycle is in section 0). Order: token guard; verdicts and wave landings; stall watchdog; `reconcile.py` (every eighth cycle, detached); `branchland.sh`, `branchreviewpass.sh`, `branchfixpass.sh` (detached, each under its own lock, skipped when `SG_LAND_PAUSED` is set); `promote-pass.sh` (detached under `single.sh promote`, with `SG_PROMOTE_PROOF=ci`, past the quiet window since the latest landing); `childcc.py`, `autobug.sh`, `autofrontier.sh` only when the fast lane is down; `autohunt.sh`; `heartbeat.sh`; `wtclean.sh` (every third cycle); `janitor.sh`; `live-guard.sh`; `vendor-guard.sh`.
 
 Each dispatch pass first runs the stops in `ghcall.sh`, in order. Each stop prints one line, writes it to cycle.log, and the pass dispatches nothing:
 
@@ -23,6 +23,53 @@ The landing has one stop, `gh_land_stop`: an open issue carries `loop-bug:landin
 No cycle step promotes `dev` to `stg`: the proof's full suite would hold the gate lock. The loop promotes on the proof of the tip, and moves `main` to the `stg` sha whose complete CI tier is green (ADR-0145 rule 3, ADR-0173).
 
 An arrow to `GitHub` is a fetch, a push or an API call. A review, a rebase, a gate and a scratch clone run on the local machine.
+
+## 0. Profile: where the time goes
+
+Read this section as a profiler's hot-spot list. The step numbers are those of the step table in section 2. Each number is a measure of this repository's loop on one machine (8 cores, 16 GB), over the window its row names. The numbers change with each fix: measure again before a decision (see "How to measure").
+
+### The trip of one issue
+
+| stage | steps | median | p90 | what the time is |
+|---|---|---|---|---|
+| Wait for a dispatch | 2, 3 | one fast-lane beat (120 s) | a run slot (`no slot`) | the run cap is the owner's lever; a full machine is healthy backpressure |
+| Router | 6 | 31 s | - | one model call |
+| Child coding | 7 | 2140 s | 7200 s | model turns, and the child's own test runs. The largest stage of a trip |
+| Review round | 7b, 11 | 42 s | - | one model call per round; a fix round adds one child entry |
+| Engine gates | 9 | 78 s | 756 s | the run's final gate; the p90 is a wait for a gate slot or a loaded machine |
+| Wave entry gate | 12 | 469 s (pass) | 924 s | `fast-gate.sh` on the rebased tree, a delta selection |
+| Wait for the slow lane | 13 | 271 s | 489 s | the verdict is read once a `watch.sh` cycle |
+| Wave landing | 14 | one tip gate | - | the same gate again on the wave tip |
+| Promotion to `stg` | 15, 18, 19 | CI fast tier | - | starts past the quiet window since the last landing |
+
+### Hot spots
+
+Sorted by the time each one costs the loop. "Fix" names the issue that tracks it.
+
+| # | hot spot | measure | cause | fix |
+|---|---|---|---|---|
+| 1 | Runs that deliver nothing | 28 of 35 runs failed in 48 h; child coding totals 110689 s | A failed run's coding time is lost and the issue starts again. Reasons: killed with no process (8), deadline (5), child ended early (2), review fix failed (2), red final gate (2), no gate slot | each reason has its own issue; the largest cost in the loop |
+| 2 | Gates that end unproven | 34 of 110 gates in 24 h, 27978 s of 60451 s; median 901 s, the deadline | The suite did not finish inside the bound. The whole fast battery takes 114 to 198 s alone, so the rest is machine load. Two orphan loops from one shell suite caused the load of the measured day (hot spot 3) | #1742; the load labels of #1691 tell a loaded gate from a slow one |
+| 3 | Orphan processes of a test suite | 113 to 130 new processes a second; load 50 to 84 with 3.4 cores busy; 7 h 45 min | A shell suite started the real `watch.sh` from a fixture copy and ended only its subshell | #1742 |
+| 4 | The janitor pass | 291 s mean, 70 % of the slow lane (108598 s of 153944 s over 371 cycles) | One GitHub read per issue of every run folder: 155 reads, 96 s of a 181 s profiled pass, with 11 issues open | #1744 |
+| 5 | The board read, twice a janitor pass | 32 s of the 181 s pass | `read_all` and `holders` each read the board | #1747 |
+| 6 | The hub under load | 44 % of a core (mean), peaks of 80 % | One process-table scan every 5 s for each profile while the machine is warned, and a ledger read for the footer | #1746 |
+| 7 | File indexing | about 0.7 core (`mds`, `fseventsd`) | The file churn of worktrees and run folders | none; it falls with hot spot 3 |
+| 8 | The cycle log cannot name a step | every step reads `bash` | `tm` logs the first word of the command | #1745; a wall-time view in the hub (#1748) needs it |
+
+Three rules follow from the list:
+
+- A slow gate is first a loaded machine. Read the load at the gate's start and finish (fields 15 and 16 of `gate-history`) before the bound or the selection is changed.
+- The slow lane's cycle is the floor of every verdict read, wave landing and promotion step. A step that waits on GitHub costs wall time and no CPU, so a CPU profile does not show it; `cycle.log` does.
+- A failed run costs more than every gate and cycle together. A fix that removes one failure reason is worth more than a faster step.
+
+### How to measure
+
+- **Slow lane, by wall time:** `$SG_STATE/cycle.log`. A line `HH:MM:SS <step> <secs>s` is a step of 5 s or more; `CYCLE <secs>s` ends each cycle.
+- **Gates:** `$SG_STATE/gate-history`, one line a gate run: kind, scope, outcome, seconds, and the machine load at its start and finish. `gate_load_set.py` prints the labeled rows.
+- **Runs:** each `record.jsonl` under `worktrees/*/*/runs/run-*/`: the time between `run_start`, `spawn_accepted`, the child's outcome, each `review_round`, each `gate_start` and `gate_result`, and the verdict.
+- **One pass of one script:** `JANITOR_DRY=1 python3 -m cProfile -s cumtime janitor.py`. A dry pass writes nothing.
+- **Process churn:** count new pids a second by parent tree. A process table read every second misses a process that lives for less, and such processes were the cause of hot spot 3.
 
 ## 1. Happy path
 
@@ -125,12 +172,12 @@ The column is the one the writer asks for. A board write that the API refuses le
 | 10 | childcc.py | open `loop-bug` issues; active runs, or the run watch.sh hands it; spawn_accepted, the last passing outcome per child, land events (outcome and review verdict); in a live run, the dispatch node's `review` key in the run's `graph.json` and the child's `review_*` events: a run that reviews its own children keeps the child out of the pending list until its land event or the run's verdict (#696); issue state (gh); wave-/waved- markers; card column for a backfill; the issue's `requeue` fact (the head the run requeued it on); rvd-, apphold-, holds-, ccfix- markers; auto/childcc-cursor, childcc-round | rvd-RUN-CHILD (head and pid); crv-RUN-CHILD and card Doing to Code Review when a review starts or a child waits; cc-RUN-CHILD; one fix run on CHANGES (childfix.sh: ccfix-RUN-CHILD, ccfixrun-FIXRUN, ccfix stall markers, a line in wave-pause-RUN); cursor and round; childcc-waiting; childcc-now.json; cq comment; card Code Complete only for a run with no wave; exit 3 when children wait | Code Review; Code Complete (no wave) |
 | 11 | childreview.sh | child HEAD; origin/wave/RUN; origin/dev (the diff base is the newer merge-base, #655); review chain (step 11b) | review-KEY.md, .sha (review.sh), .base; cq status comment. Exit 1 when no verdict: childcc drops its rvd- claim | - |
 | 11b | review.sh | `review_models` of the `models.json` beside the script (the live copy is machine config), in config order (`review_order: config`); review-KEY.lock | the first model that answers with a verdict wins (see Review of one branch). Skipped: codex while `$SG_SHARED/codex-limited` holds a future time; gemini (agy) while `agy-limited` does; grok while `grok-limited` exists; an `anthropic_models` entry while `quota-guard` exists; a model switched off in the hub; a model outside its `hours` window | - |
-| 12 | wave.sh enter | the run's last verdict after its last start or resume: failed with an `ac-verify:` reason refuses the child (`gate_failed`, #694; `ac-verify:no_ac_commands` enters); wave-start-RUN age less its pause (`wavepause.py`: review rounds and fix entries in the run record, and the fix runs wave-pause-RUN names; an expired wave takes only a head the review approved against it); review-KEY.{md,base,sha}; origin/wave/RUN, rebased on before the gates; `SG_WAVE_GATES` | gate-status fast line (gate.sh); remote wave/RUN tip; card Code Complete, a refused write named (`board_write`); the ledger fact `entered`, which every later event of the run keeps. A hold or a refusal writes the ledger fact `held` or `refused` with its cause; a refusal requeues the issue, counted | Code Complete |
+| 12 | wave.sh enter | the run's last verdict after its last start or resume: failed with an `ac-verify:` reason refuses the child (`gate_failed`, #694; `ac-verify:no_ac_commands` enters); wave-start-RUN age less its pause (`wavepause.py`: review rounds and fix entries in the run record, and the fix runs wave-pause-RUN names; an expired wave takes only a head the review approved against it); review-KEY.{md,base,sha}; origin/wave/RUN, rebased on before the gates; `SG_WAVE_GATES` | gate-status fast line and one `gate-history` line with the load at the gate's start and finish (gate.sh); remote wave/RUN tip; card Code Complete, a refused write named (`board_write`); the ledger fact `entered`, which every later event of the run keeps. A hold or a refusal writes the ledger fact `held` or `refused` with its cause; a refusal requeues the issue, counted | Code Complete |
 | 13 | watch.sh | verdict in the record; wave-RUN marker; wave age less its pause (`wave.sh expired`) | wland-RUN and its `.pass`/`.left` marks, transient; watch-seen.txt | - |
 | 14 | wave.sh land | origin/dev, origin/wave/RUN; `Refs #N` in commits ahead of dev; the run record (`run_issues`) and the ledger's `entered` facts for a capped or empty wave; the ledger's `owed` facts of the run (`issue_ledger.py owed`) | remote dev tip; wave/RUN deleted; wave-start-, wave-pause- removed; issues closed; landed.tsv; the ledger facts `landed` (the issue's work is in the base) and `delivered`; cq delivery; card Closed; wave-RUN removed once every issue closed. A landing that fails on a cause a repeat does not change writes the ledger fact `stuck` for each issue the wave carries; a close that fails twice writes `owed` | Closed |
 | 15 | GitHub CI | pull request dev to stg (`ci.yml`) | check runs on the pull request | - |
 | 16 | wtclean.sh (every third cycle) | child trees under `*/runs/RUN/ws/*`; verdict or zombie; wave hold (`wave-RUN`, capped at `SG_WAVE_HOLD_MAX_SECONDS`); clean tree; HEAD in the base or on a remote or other branch; issue trees under `worktrees/child/*`; run trees `worktrees/run/KEY` whose every run ended for good (`completed`, or `failed` with no remains); active-runs.txt lines | removes those trees and throwaway branches, `squad/run/KEY` after its tree; wt tally; drops the active-runs.txt line of an ended run (a verdict after its last `run_start` or `resume`) whose wave is not open (no `wave-RUN`) after `SG_RUN_LINE_SECONDS` (3600) idle with no process in its folder, whatever keeps its tree; the tree stays for a resume or the owner (#693, #708). No resume adds the line back | - |
-| 17 | janitor.py R | run records (active runs and run folders under the checkout, `worktrees/run/*` and `worktrees/child/*`); the ledger's `entered` and `landed` facts; issue state and labels; board cards, read once; remote branches; review files | board PATCH only on a mismatch. An issue follows the newest run that holds it; rank orders the signals of that run only. A child done and not in the run's open wave ranks Code Review (35). A landing is delivered work only when a landing pass wrote the issue's ledger fact `landed` (`wave.sh`, `branchland.sh`, ADR-0149); rule R reads that fact, never a run's land heads, so a local land commit that reached no base delivers nothing (#691). A run that cut no wave delivers by its own land event. Run fields; frozen:owner for a Blocked want; cycle.log | Code Review; Closed |
+| 17 | janitor.py R | run records (active runs and run folders under the checkout, `worktrees/run/*` and `worktrees/child/*`); the ledger's `entered` and `landed` facts; issue state and labels, from `issue-facts.json` and one list read of the issues that changed since the last pass (an issue the file does not hold, or holds for over a day, is read by itself); board cards, read once; remote branches; review files | board PATCH only on a mismatch. An issue follows the newest run that holds it; rank orders the signals of that run only. A child done and not in the run's open wave ranks Code Review (35). A landing is delivered work only when a landing pass wrote the issue's ledger fact `landed` (`wave.sh`, `branchland.sh`, ADR-0149); rule R reads that fact, never a run's land heads, so a local land commit that reached no base delivers nothing (#691). A run that cut no wave delivers by its own land event. Run fields; frozen:owner for a Blocked want; cycle.log; `issue-facts.json`, atomic, never in a dry pass | Code Review; Closed |
 | 18 | watch.sh (`single.sh promote`, past the quiet window, bounded by `SG_PROMOTE_MAX_DEFER`) | the dev tip; its CI check-runs on the cycle path (`SG_PROMOTE_PROOF=ci`) | `promote-pass.sh`: the CI proof, then `promote-stg.sh`, which takes the gate lock for the one pull-request merge. The local path only (`SG_PROMOTE_PROOF=local`) runs the full suite in a clean clone under the proof lock, writes gate-status-full and the `squad/full-proof` commit status | - |
 | 19 | promote-stg.sh | gate-status-full (`SG_PROMOTE_PROOF=local`) or the dev tip's CI (`ci`), under the gate lock | the open dev → stg pull request, merged; no push to stg; promote.log once per tip and reason | - |
 | 20 | live-guard.sh | main tree branch is stg and clean; fetch origin/stg; `publish-live.sh --check`; live `PUBLISHED`, `scripts/models.json` digest and `scripts/*.bak-*`; `driver.sha` (written by `watchd.sh start`) | ff of the main tree; the file list and `PUBLISHED` (source HEAD sha) into `~/.claude/skills/squad-goal`; each issue a published `Closes #n` names, closed with one comment (sha, publish time) (#732); `live-guard.models`, `.clutter`, `.restart` (each note named once) | - |
