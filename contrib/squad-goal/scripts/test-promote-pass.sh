@@ -330,45 +330,36 @@ shards "$ta" none none none none; SG_CI_WORKFLOW="$T/ci-no-shards.yml" SG_GHREAD
   || ko "check-alone record: $(/usr/bin/grep "$ta" "$SG_STATE/promote.log")"
 export SG_CI_WORKFLOW="$T/ci-shards.yml"
 
-# ADR-0164 (#1461): the complete tier is part of the CI proof, because it runs on the pull request the pass reads. A red
-# complete-tier job holds the tip and names it; seven green checks, the complete tier included, promote with no suite, and
-# the record names every job it read.
-printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n  full-xdist:\n    name: full-xdist\n  full-serial:\n    name: full-serial\n  fast-battery-311:\n    name: fast-battery-311\n  gui-e2e:\n    name: gui-e2e\n' > "$T/ci-complete.yml"
-tierchecks() {  # <sha> <conclusion of full-serial>: every job green except that one
-  local s=$1 c=$2 j out=""
-  for j in ruff mypy fast-battery full-xdist fast-battery-311 gui-e2e; do
-    out="$out{\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"success\"},"
-  done
-  echo "{\"check_runs\":[${out}{\"name\":\"full-serial\",\"status\":\"completed\",\"conclusion\":\"$c\"}]}" > "$T/checks-$s"
+# #1723: the dev -> stg pass waits on the fast tier alone: the jobs whose `if:` does not ask for the `promote` label. A tip
+# whose three fast jobs are green is promoted with no suite and no complete-tier run; the record names the fast tier, and no
+# full pass line and no squad/full-proof status is written, because no full suite ran.
+LBL="github.head_ref == 'stg' && github.event.label.name == 'promote'"
+printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n  complete-guard:\n    name: complete-guard\n    if: %s\n  full-xdist:\n    name: full-xdist\n    if: %s\n    needs: [complete-guard]\n  full-serial:\n    name: full-serial\n    if: %s\n    needs: [complete-guard]\n' "$LBL" "$LBL" "$LBL" > "$T/ci-complete.yml"
+case "$(bash "$d/promote-pass.sh" --ci-fast-job-names "$T/ci-complete.yml" | tr '\n' ' ')" in
+  "ruff mypy fast-battery ") ok "the fast tier is the jobs that do not ask for the promote label (#1723)";;
+  *) ko "fast tier names: '$(bash "$d/promote-pass.sh" --ci-fast-job-names "$T/ci-complete.yml" 2>&1 | tr '\n' ' ')'";;
+esac
+fastchecks() {  # <sha> <conclusion of fast-battery>: the fast tier alone reported; the complete tier never ran
+  echo "{\"check_runs\":[{\"name\":\"ruff\",\"status\":\"completed\",\"conclusion\":\"success\"},{\"name\":\"mypy\",\"status\":\"completed\",\"conclusion\":\"success\"},{\"name\":\"fast-battery\",\"status\":\"completed\",\"conclusion\":\"$2\"}]}" > "$T/checks-$1"
 }
-adv dev complete-red; tcr=$(tip dev); before=$(tip stg); n=$(runs)
-tierchecks "$tcr" failure; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
-[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red complete-tier job holds the tip and runs no suite" \
-  || ko "red complete tier: rc $rc, stg $(tip stg), runs $(runs) was $n"
-/usr/bin/grep "promote-pass: $tcr" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI full-serial is red" && ok "the refusal names the red complete-tier job" \
-  || ko "red complete-tier line: $(/usr/bin/grep "$tcr" "$SG_STATE/promote.log")"
-adv dev complete-green; tcn=$(tip dev); n=$(runs)
-tierchecks "$tcn" success; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$tcn" ] && [ "$(runs)" = "$n" ] && ok "seven green checks, the complete tier included, promote the tip" \
-  || ko "green complete tier: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
-/usr/bin/grep -q -- "description=full suite, both modes, every CI job: ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e" "$T/gh.log" \
-  && ok "the record names every job of both tiers" || ko "record: $(/usr/bin/grep "statuses/$tcn" "$T/gh.log")"
-/usr/bin/grep "promote-pass: $tcn CI checks green:" "$SG_STATE/promote.log" | tail -n 1 | /usr/bin/grep -q "ruff, mypy, fast-battery, full-xdist, full-serial, fast-battery-311, gui-e2e" \
-  && ok "the log names every CI job the status reads" || ko "job log: $(/usr/bin/grep "CI checks green" "$SG_STATE/promote.log" | tail -n 1)"
-
-# #1644: the complete tier runs only when the promotion is requested, so the pass asks for it: the `promote` label on the
-# open dev -> stg pull request. The request is recorded for its tip, so a later pass on the same tip asks for nothing.
-adv dev promote-request; tpq=$(tip dev); : > "$T/gh.log"; touch "$T/pr-open"
-shards "$tpq" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$tpq" ] || ko "promote request: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
-/usr/bin/grep -q -- "-X POST repos/x/emu/issues/11/labels" "$T/gh.log" && ok "the pass requests the complete tier with the promote label" \
-  || ko "no promote label: $(cat "$T/gh.log")"
-[ "$(cat "$SG_STATE/promote-requested" 2>/dev/null)" = "$tpq" ] && ok "the request is recorded for the tip it asks for" \
-  || ko "request record: $(cat "$SG_STATE/promote-requested" 2>/dev/null)"
-adv dev promote-next; tpn=$(tip dev); : > "$T/gh.log"
-shards "$tpn" success success success success; SG_GHREAD="$T/bin/ghread" pass
-/usr/bin/grep -q -- "-X POST repos/x/emu/issues/11/labels" "$T/gh.log" && ok "a new tip asks for its own complete tier" \
-  || ko "no label for the new tip: $(cat "$T/gh.log")"
+adv dev fast-red; tfr=$(tip dev); before=$(tip stg); n=$(runs)
+fastchecks "$tfr" failure; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red fast-tier job holds the tip and runs no suite" \
+  || ko "red fast tier: rc $rc, stg $(tip stg), runs $(runs) was $n"
+adv dev fast-green; tfg=$(tip dev); n=$(runs); : > "$T/gh.log"; touch "$T/pr-open"
+fastchecks "$tfg" success; SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tfg" ] && [ "$(runs)" = "$n" ] && ok "a green fast tier promotes the tip with no complete-tier run and no suite (#1723)" \
+  || ko "green fast tier: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
+/usr/bin/grep -q "promote-pass: $tfg promoted: the CI fast tier carried the pass" "$SG_STATE/promote.log" && ok "the record names the fast tier as the proof" \
+  || ko "fast record: $(/usr/bin/grep "$tfg" "$SG_STATE/promote.log")"
+/usr/bin/grep "promote-pass: $tfg CI fast tier green:" "$SG_STATE/promote.log" | tail -n 1 | /usr/bin/grep -q "ruff, mypy, fast-battery$" \
+  && ok "the log names the fast jobs it read and no other" || ko "fast job log: $(/usr/bin/grep "$tfg" "$SG_STATE/promote.log")"
+/usr/bin/grep -q -- "statuses/$tfg .*context=squad/full-proof" "$T/gh.log" && ko "a fast-tier pass wrote the squad/full-proof status" \
+  || ok "a fast-tier pass writes no squad/full-proof status"
+IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
+[ "$sha" = "$tfg" ] && ko "a fast-tier pass wrote the full pass line" || ok "a fast-tier pass writes no full pass line"
+/usr/bin/grep -q -- "/labels" "$T/gh.log" && ko "the pass asked for the complete tier on the dev -> stg pull request: $(/usr/bin/grep labels "$T/gh.log")" \
+  || ok "the pass never labels the dev -> stg pull request (#1723)"
 rm -f "$T/pr-open"
 
 # The Statuses API rejects a description past 140 characters with a 422, so a green set whose names do not fit would never
