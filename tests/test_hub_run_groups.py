@@ -183,6 +183,7 @@ def _pieces():
         _fn(SRC, "selectNew"),
         _fn(SRC, "applyFilter"),
         _fn(SRC, "poll"),
+        _fn(SRC, "livePoll"),   # the poll is one statement followed by its own live read (#1697): the harness carries both
         acc,
     ]
 
@@ -385,7 +386,7 @@ def test_the_poll_answers_both_wire_shapes_without_blanking_the_list(hub):
       a.setFetch({{"/api/runs?groups=1": {json.dumps(rows)}}}); await a.wire();   // the old hub's array
       return {{ shape, array: a.listHtml(), fetched: a.fetched(), count: a.count() }};
     """)
-    assert set(out["fetched"]) == {"/api/runs?groups=1"}, "the page asks for the answer that carries the groups"
+    assert set(out["fetched"]) == {"/api/runs?groups=1", "/api/live"}, "the page asks for the answer that carries the groups, then its own live work (#1697)"
     assert f'data-id="{LIVE["id"]}"' in out["shape"], "the opted-in answer draws the live run"
     assert out["count"] == 2, "an old hub's array is read as the runs, never as an object with no `runs`"
     assert "no live dashboards" in out["array"], "an old hub leaves the history honestly empty, never stale"
