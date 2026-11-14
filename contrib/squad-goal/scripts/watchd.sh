@@ -231,8 +231,11 @@ case "${1:-status}" in
       [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"
       exit 0
     fi
-    bash "$(dirname "$me")/triage-labels.sh" >> "$SG_STATE/cycle.log" 2>&1 || echo "watchd run: the triage labels were not refreshed, see cycle.log" >> "$L"   # #1673: an idempotent label write, never a refusal of the run
     mkdir -p "$RU" && printf '%s\n' "$$" > "$RU/$$"
+    # #1673: an idempotent label write, never a refusal of the run. It runs once the driver holds the slot and has written its
+    # run record, and a failure is a warning on stderr as a refused start's is, as well as in watch.log (#1696).
+    bash "$(dirname "$me")/triage-labels.sh" >> "$SG_STATE/cycle.log" 2>&1 \
+      || printf 'watchd run: the triage labels were not refreshed, see cycle.log\n' | tee -a "$L" >&2
     # The driver's own end, shared by the stop, a deleted script and the exit path (#1587): the lanes go with the group,
     # and only the slot holder removes the files it owns. The stop reaches every pass of both lanes, not the two lanes
     # alone: a stop from inside the group signals this supervisor only (#489), and a lane's foreground pass (childcc and
