@@ -24,6 +24,12 @@ set_=$(skip frontier -); has "$set_" spec && has "$set_" needs-ratification && o
 has "$set_" no-auto && ko "the frontier skips the bug lane's no-auto: $set_" || ok "the frontier does not skip no-auto"
 has "$set_" question && ko "the frontier skips the bug lane's question: $set_" || ok "the frontier does not skip question"
 set_=$(skip bug -); has "$set_" no-auto && has "$set_" question && has "$set_" needs-info && ok "the bug lane still skips no-auto, question and needs-info" || ko "the bug lane lost one of its own labels: $set_"
+for lane in frontier bug; do
+  for list in - "wontfix,needs-info"; do
+    dups=$(skip $lane "$list" | tr , '\n' | sort | uniq -d)
+    [ -z "$dups" ] && ok "the $lane lane lists no label twice (profile list '$list')" || ko "the $lane lane lists $(echo $dups) twice (profile list '$list')"
+  done
+done
 # A profile is sourced after this file, so a profile that sets a name this file uses must not lift a floor.
 for lane in frontier bug; do
   set_=$( . "$d/skiplabels.sh"; _sg_floor=; sg_skip_labels "$lane" )
