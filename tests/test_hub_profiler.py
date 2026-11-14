@@ -622,12 +622,12 @@ def tree_part(out):
 
 def test_the_view_draws_one_row_per_node_with_its_bar_and_columns():
     out = tree_part(run_js(f"profHtml({json.dumps(VIEW)},new Set())"))
-    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Hot spot", "Self time", "Total time", "Starts"]
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Hot spot", "Self time", "Total time", "Starts/s (lower bound)"]
     rows = re.findall(r"<tr data-p=\"([^\"]*)\"", out)
     assert rows == ["loop", "loop/watchd.sh", "loop/orphan watch.sh (temp folder)"], "a closed node shows no child"
     assert re.search(r'data-p="loop/watchd\.sh".*?<i class=pbar style="width:75\.0%">', out, re.S)
     row = re.search(r'<tr data-p="loop/watchd\.sh".*?</tr>', out, re.S).group(0)
-    assert re.findall(r"<td>([^<]*)</td>", row) == ["0 ms", "6.00 s", "0"], "self time, total time and starts"
+    assert re.findall(r"<td>([^<]*)</td>", row) == ["0 ms", "6.00 s", "0.00/s"], "self time, total time and starts a second"
 
 
 def test_a_node_opens_to_its_children_and_closes_again():
@@ -776,3 +776,62 @@ def test_a_reused_pid_in_the_pid_file_gives_this_loop_no_supervisor(prof):
     b = rd({30: (1, 1.0, f"bash {S}/watchd.sh run"), 31: (30, 0.0, "sleep 9")})
     acc = prof.fold(a, b, prof.Scope(31, (f"{S}/",)))
     assert names(prof.tree(acc)) == []
+
+
+def test_a_node_carries_the_starts_observed_under_it_a_second_over_the_window(prof, scope):
+    """Observed starts a second: the sampler's own lower bound, so the page never reads a count as the whole truth."""
+    cmd = f"bash {S}/watch.sh"
+    w = prof.Window(span=10)
+    w.reset(100.0)
+    w.add(100.0, rd({9: (1, 0.0, cmd)}), scope)
+    w.add(102.0, rd({9: (1, 0.0, cmd), 50: (9, 0.0, "true"), 51: (9, 0.0, "true")}), scope)
+    t = w.tree()
+    watch = node(t, "watch.sh")
+    assert watch["starts_s"] == pytest.approx(1.0)            # its own two starts over the two-second window
+    assert watch["total_starts_s"] == pytest.approx(1.0)      # with its children, none here
+    assert t["starts_s"] == 0 and t["total_starts_s"] == pytest.approx(1.0)
+    assert prof.tree(prof.fold(FIRST, SECOND, scope))["total_starts_s"] == 0, "no window, no rate: never a guessed one"
+
+
+def test_the_estimate_counts_the_pid_values_between_readings_that_no_reading_saw(prof):
+    """A pure function of the two readings' pid sequences: the arc between the pids that started in between, minus the
+    pids the second reading still holds. A reused pid is no anchor: the allocator gave that value in an older epoch."""
+    a = rd({10: (1, 0.0, "x")})
+    assert prof.estimate(a, rd({10: (1, 0.0, "x"), 12: (1, 0.0, "y"), 13: (1, 0.0, "z")})) == 0, \
+        "no gap: both pids that started in between are still alive"
+    assert prof.estimate(a, rd({10: (1, 0.0, "x"), 12: (1, 0.0, "y"), 15: (1, 0.0, "z")})) == 2, \
+        "pids 13 and 14 started and ended unseen"
+    reused = {(7, 2.0): (1, 0.0, "reused"), (12, 1.0): (1, 0.0, "y")}
+    assert prof.estimate(rd({7: (1, 0.0, "x")}), reused) == 0, "a reused pid is no anchor of the sequence"
+    assert prof.estimate(None, rd({12: (1, 0.0, "y")})) is None, "a reading that failed is no estimate"
+    assert prof.estimate(a, {}) is None and prof.estimate(a, a) is None, "no new pid, nothing bounds the gap"
+
+
+def test_the_estimate_wraps_at_the_pid_space(prof):
+    """The allocator gives pids again from the bottom: the arc runs from the oldest fresh start to the newest, and pids
+    of an older epoch that sit between their values are no allocation of this interval."""
+    x = (17, 1.0)
+    old, new = (19, 2.0), (2, 4.0)                       # pid 19 started before pid 2: the bound wrapped between them
+    a = {x: (1, 0.0, "x")}
+    whole = {x: (1, 0.0, "x"), old: (1, 0.0, "y"), (1, 3.0): (1, 0.0, "z"), new: (1, 0.0, "w")}
+    assert prof.estimate(a, whole, pid_max=20) == 0, "the wrapped arc 19, 1, 2 is whole"
+    assert prof.estimate(a, {x: (1, 0.0, "x"), old: (1, 0.0, "y"), new: (1, 0.0, "w")}, pid_max=20) == 1, \
+        "pid 1 is on the wrapped arc and no reading saw it"
+
+
+def test_no_node_carries_a_count_of_unseen_processes(prof, scope):
+    """The estimate is one machine-wide number: a pid gap carries no parent and no command, so it names no node."""
+    t = prof.tree(prof.fold(FIRST, SECOND, scope), window_s=10)
+
+    def walk(n):
+        yield n
+        for k in n["children"]:
+            yield from walk(k)
+    assert all("unseen" not in n for n in walk(t)), "an unseen start has no node to sit under"
+
+
+def test_the_starts_column_is_marked_a_lower_bound():
+    """A process that lives between two readings is never seen, so the column is a floor, never a measure."""
+    out = tree_part(run_js(f"profHtml({json.dumps(VIEW)},new Set())"))
+    head = re.search(r"<th[^>]*>Starts/s \(lower bound\)</th>", out)
+    assert head and "lower bound" in head.group(0)
