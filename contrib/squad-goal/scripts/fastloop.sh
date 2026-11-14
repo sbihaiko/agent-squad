@@ -20,11 +20,24 @@ load_sample() {
   local a b c l; l=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}'); [ -n "$l" ] || l=$(cat /proc/loadavg 2>/dev/null)
   read -r a b c _ <<<"$l"; [ -n "$a" ] && printf '%s LOAD %s %s %s\n' "$(date -u '+%F %T')" "$a" "$b" "$c" >> "$SG_STATE/load.log"
 }
-[ -n "${SG_FASTLOOP_ONCE:-}" ] || { echo $$ > "$P"; trap 'mine; exit 0' TERM INT; }; cc=
+# parent_gone: true only when the supervisor is proven gone: pid 1 holds the lane, or the reader names another parent (#1781).
+# An empty answer is no proof: the reader is asked once more, and two empty answers keep the lane up. Before, an empty answer
+# read as a changed parent, and the lane exited in silence. So an orphaned lane whose $SG_PS always answers empty never exits
+# here: janitor rule W names it.
+parent_gone() {
+  local q; [ "$PPID" = 1 ] && { why="its supervisor is gone (pid 1 holds it)"; return 0; }
+  q=$($SG_PS -o ppid= -p $$ 2>/dev/null | tr -d ' '); [ -n "$q" ] || { sleep 0.2; q=$($SG_PS -o ppid= -p $$ 2>/dev/null | tr -d ' '); }
+  [ -n "$q" ] && [ "$q" != "$PPID" ] && { why="its supervisor is gone (parent $q, was $PPID)"; return 0; }
+  return 1
+}
+# One EXIT trap writes one dated line with the reason, so a dead lane is never a silent one (#1781).
+why="an error or the end of its loop"
+[ -n "${SG_FASTLOOP_ONCE:-}" ] || { echo $$ > "$P"; trap 'why="a TERM or INT signal"; exit 0' TERM INT
+  trap 'printf "%s FASTLOOP %s exits: %s\n" "$(date "+%F %T")" "$$" "$why"; mine' EXIT; }; cc=
 while :; do
   t0=$(todos)   # the cards in Todo at the start of the beat: a card that arrives while the passes run still ends the wait at once
   # A lane whose supervisor died exits: else it runs beside the lane of the next watchd start, two of each pass a beat (#527).
-  [ -n "${SG_FASTLOOP_ONCE:-}" ] || { [ "$PPID" != 1 ] && [ "$($SG_PS -o ppid= -p $$ | tr -d ' ')" = "$PPID" ]; } || { mine; exit 0; }
+  [ -n "${SG_FASTLOOP_ONCE:-}" ] || ! parent_gone || exit 0
   [ -n "${SG_FASTLOOP_ONCE:-}" ] || echo $$ > "$P"   # every beat: watch.sh reads this file to know the lane is up, and a missing one sent the cycle to run childcc inline (#513)
   load_sample
   # $cc is the pass this lane started: a later beat starts none while it lives, and the childcc lock still bars every other pass.

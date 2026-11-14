@@ -4,7 +4,7 @@
   "adapter": "mesen_gui_adapter:MesenGuiAdapter",
   "adapter_name": "mesen-gui",
   "script": {
-    "path": "/Users/bihaiko/wt-e2e/docs/validation/process/play-pad-only.gui-test.json",
+    "path": "/Users/owner/wt-e2e/docs/validation/process/play-pad-only.gui-test.json",
     "sha256": "5f204da3164c1e4bcd56128308fdf8a8459b7a87ef325fb84295ea4652f661fe"
   },
   "platform": "darwin-arm64",

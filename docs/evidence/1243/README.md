@@ -59,7 +59,7 @@ cd ~/wt-as-1243 && uv run --extra dev pytest tests/test_gui_test_e2e.py -k "1243
 
 ```
 gui_test_run_script.py: error: unrecognized arguments: --variant fullscreen
-/Users/bihaiko/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
+/Users/owner/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
 E   SystemExit: 2
 ```
 

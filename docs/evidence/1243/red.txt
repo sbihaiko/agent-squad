@@ -8,7 +8,7 @@ usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
                               --case CASE] [--file-bug]
                               script
 gui_test_run_script.py: error: unrecognized arguments: --variant window.mode=fullscreen
-/Users/bihaiko/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
+/Users/owner/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
 E   SystemExit: 2
 ----------------------------- Captured stderr call -----------------------------
 usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
@@ -17,7 +17,7 @@ usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
                               --case CASE] [--file-bug]
                               script
 gui_test_run_script.py: error: unrecognized arguments: --variant window.mode=windowed
-/Users/bihaiko/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
+/Users/owner/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
 E   SystemExit: 2
 ----------------------------- Captured stderr call -----------------------------
 usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
@@ -26,7 +26,7 @@ usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
                               --case CASE] [--file-bug]
                               script
 gui_test_run_script.py: error: unrecognized arguments: --variant window.mode=huge
-/Users/bihaiko/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
+/Users/owner/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
 E   SystemExit: 2
 ----------------------------- Captured stderr call -----------------------------
 usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
@@ -35,7 +35,7 @@ usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
                               --case CASE] [--file-bug]
                               script
 gui_test_run_script.py: error: unrecognized arguments: --variant fullscreen
-/Users/bihaiko/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
+/Users/owner/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
 E   SystemExit: 2
 ----------------------------- Captured stderr call -----------------------------
 usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
@@ -44,7 +44,7 @@ usage: gui_test_run_script.py [-h] [--adapter ADAPTER] [--out OUT]
                               --case CASE] [--file-bug]
                               script
 gui_test_run_script.py: error: unrecognized arguments: --variant window.mode=fullscreen
-/Users/bihaiko/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
+/Users/owner/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/argparse.py:2758: SystemExit: 2
 ============================= slowest 15 durations =============================
 0.03s setup    tests/test_gui_test_e2e.py::test_1243_a_variant_selection_runs_that_variant_only_and_records_it
 0.02s teardown tests/test_gui_test_e2e.py::test_1243_the_three_selectors_stay_mutually_exclusive

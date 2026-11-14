@@ -19,10 +19,17 @@ class FakeBinding:
         self.facts = facts
         self.asked = []
         self.reads = 0
+        self.source = []   # the cards one card's own read asked the source for (#1758)
 
     def read_all(self):
         self.reads += 1
         return dict(self.carried)
+
+    def read(self, issue):
+        """One card's state at the source, as the binding's own read answers it: the cache path asks the card itself
+        before a pass claims it, so a card that moved after the cache read is never dispatched (#1758)."""
+        self.source.append(str(issue))
+        return self.carried.get(str(issue), "")
 
     def node_status(self, issue):
         self.asked.append(str(issue))
@@ -130,16 +137,18 @@ def test_a_node_id_seen_in_one_read_is_kept_for_the_next(tmp_path):
 def test_fresh_cache_go_read_rescues_missing_requested_issue_without_board_read(tmp_path, monkeypatch, capsys):
     cache = tmp_path / "hub-board.json"
     cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
-                                 "items": [{"n": 801, "st": "Todo", "r": "owner/ariel"}]}))
+                                 "items": [{"n": 801, "st": "Todo", "r": "owner/ariel"},
+                                           {"n": 806, "st": "Todo", "r": "owner/ariel"}]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
     monkeypatch.setenv("SG_REPO", "owner/ariel")
-    binding = FakeBinding({"801": "Todo"}, nodes={"800": "Todo"})
+    binding = FakeBinding({"801": "Todo", "806": "Backlog"}, nodes={"800": "Todo"})
     monkeypatch.setattr(issue_state, "board_state", lambda repo="": issue_state.State(binding))
 
-    assert issue_state.main(["issue_state.py", "--go", "800,801"]) == 0
+    assert issue_state.main(["issue_state.py", "--go", "800,801,806"]) == 0
 
-    assert capsys.readouterr().out.splitlines() == ["800\tTodo", "801\tTodo"]
+    assert capsys.readouterr().out.splitlines() == ["800\tTodo", "801\tTodo", "806\tBacklog"]
     assert binding.reads == 0
+    assert binding.source == ["801", "806"], "each cached Todo card's column is asked at the source before the pass claims it (#1758)"
     assert binding.asked == ["800"]
 
 

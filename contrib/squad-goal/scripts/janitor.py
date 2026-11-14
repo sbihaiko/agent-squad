@@ -1135,6 +1135,7 @@ def reconcile_board():
         if not cs or x in expected or holding(x) or base_landed(x, {run}) or run_landed(x, {run}): continue
         say(f"STALE-CARD #{x}: card {doing} behind run {run}, which ended without a verdict and landed nothing; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
         if not dry:
+            (st / "cq").mkdir(exist_ok=True)
             (st / "cq" / f"{CQ}#{x}-stalecard-{os.getpid()}.md").write_text(
                 f"Its card was {doing} behind run {run}, which ended without a verdict and landed nothing. The card is back in {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again.\n")
         set_expected(x, os.environ.get("SG_TODO", "Todo"), f"run {run} ended without a verdict (no process, or its folder is gone) with nothing landed", run, "", 20)
@@ -1471,6 +1472,7 @@ if owner and proj and repo0:
                 for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"bug card back in {s} after run {f.name} ended {i['name']}")
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink(missing_ok=True)
                 if kept: (st / "auto" / f"salvage-{n}").write_text("".join(k + "\n" for k in kept))   # the next dispatch names it (startability.sh)
+                (st / "cq").mkdir(exist_ok=True)
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again." + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
         if not again and not dry: mk.touch()
@@ -1541,6 +1543,7 @@ if owner and proj and repo0:
             for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"stale card back in {s}")
             for m in ms.values():
                 if m is not None: m.unlink(missing_ok=True)
+            (st / "cq").mkdir(exist_ok=True)
             (st / "cq" / f"{CQ}#{n}-stalecard-{os.getpid()}.md").write_text(
                 f"Its card was In Progress behind {mks}, and no run works this issue (no live run, none in its launch window; the run that took it ended without releasing it). The card is back in {moves[-1][1]} and the marker is dropped, so the next cycle dispatches the issue again.\n")
 # Q has read them: what Q left alone (no card, a card past In Progress, a definite no about the issue) is dropped now, so
@@ -1594,6 +1597,7 @@ if fd and fb:
                 for k in marks:
                     f2 = st / "auto" / k
                     if f2.exists(): f2.unlink()
+                (st / "cq").mkdir(exist_ok=True)
                 (st / "cq" / f"{CQ}#{n}-unwound-{os.getpid()}.md").write_text(
                     f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
 repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Regression test for stack.sh's native blocked-by relation: a body is a person-facing mirror, not a dispatch edge.
+# Regression test for stack.sh's blocker gate: the native blocked-by relation is the fact, and a blocker named only in the
+# body's "## Blocked by" section still holds a ticket while it reads open (#1758), with the note naming the missing relation.
 # The answer is READY or WAIT: a work branch is the unit of work, so an open blocker whose work has not landed waits (#361).
 # usage: bash test-stack.sh [path/to/stack.sh]
 src=${1:-$(dirname "$0")/stack.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -18,7 +19,12 @@ case "$*" in
   *"i1802: issue(number: 1802)"*) echo '{"data":{"repository":{"i1802":{"number":1802,"state":"OPEN","body":"Work.\n\n## Blocked by\n\n- #1797\n- #1798","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1797,"state":"OPEN"},{"number":1798,"state":"OPEN"}]}}}}}';;
   *"i1803: issue(number: 1803)"*) echo '{"data":{"repository":{"i1803":{"number":1803,"state":"OPEN","body":"Work.","labels":{"nodes":[]}}}}}';;
   *"i1804: issue(number: 1804)"*) echo '{"data":{"repository":{"i1804":null}}}';;
+  *"i1807: issue(number: 1807)"*) echo '{"data":{"repository":{"i1807":{"number":1807,"state":"OPEN","body":"Work.\n\n## Blocked by\n\n- #1799","labels":{"nodes":[]},"blockedBy":{"nodes":[]}}}}}';;   # a body-only blocker whose state cannot be read
   *"i1805: issue(number: 1805)"*) echo '{"data":{"repository":{"i1805":{"number":1805,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1799}]}}}}}';;   # no state beside the edge: it is read alone
+  *"i1808: issue(number: 1808)"*) echo '{"data":{"repository":{"i1808":{"number":1808,"state":"OPEN","body":"Work.\n\n## Blocked by\n\n- #1791","labels":{"nodes":[]},"blockedBy":{"nodes":[]}}}}}';;
+  *"i1791: issue(number: 1791)"*) echo '{"data":{"repository":{"i1791":{"number":1791,"state":"CLOSED"}}}}';;   # a body-only blocker that reads closed (#1808)
+  *"i1797: issue(number: 1797)"*) echo '{"data":{"repository":{"i1797":{"number":1797,"state":"OPEN"}}}}';;
+  *"i1799: issue(number: 1799)"*) echo 'gh: API rate limit exceeded' >&2; exit 1;;
   *"issues/1799 -q .state"*) echo 'gh: API rate limit exceeded' >&2; exit 1;;
   *"i1806: issue(number: 1806)"*) echo '{"data":{"repository":{"i1806":{"number":1806,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1796,"state":"OPEN"}]}}}}}';;
   *"issues/1796 -q .state"*) echo open;;
@@ -38,7 +44,12 @@ case "$r" in READY*) ok "#1793: every native blocker closed is ready";; *) ko "#
 r=$(run 1800)
 case "$r" in *"2 open blockers: #1797 #1798"*) ok "#1800: every open native blocker gates dispatch";; *) ko "#1800 did not read its native blockers: '$r'";; esac
 r=$(run 1801)
-case "$r" in *READY*) ok "#1801: a body-only blocker does not override the native relation";; *) ko "#1801 did not read READY: '$r'";; esac
+case "$r" in *"WAIT blocker #1797 is open"*) ok "#1801: a body-only open blocker holds dispatch";; *) ko "#1801 did not WAIT on its body-only blocker #1797: '$r'";; esac
+case "$r" in *"without a native blocked-by relation"*) ok "#1801: the note names the missing native relation";; *) ko "#1801 did not name the missing relation: '$r'";; esac
+r=$(run 1807)
+case "$r" in *"WAIT blocker #1799"*"not readable"*) ok "#1807: a body-only blocker whose state cannot be read holds dispatch";; *) ko "#1807 did not WAIT on #1799: '$r'";; esac
+r=$(run 1808)
+case "$r" in *WAIT*) ko "#1808: a body-only blocker that reads closed held dispatch: '$r'";; *READY*) ok "#1808: a body-only blocker that reads closed does not hold dispatch";; *) ko "#1808 did not read READY: '$r'";; esac
 r=$(run 1802)
 case "$r" in *"STACK NOTE"*) ko "#1802: a body blocker that is also native was reported as body-only: '$r'";; *) ok "#1802: a body blocker the native relation carries is not reported";; esac
 r=$(run 1803)
