@@ -67,7 +67,7 @@ test-health.sh 141.70
 test-heartbeat.sh 0.86
 test-hub-adapter-errors.sh 0.14
 test-hub-attachment.sh 0.61
-test-hub-caps.sh 3.33
+test-hub-caps.sh 7.33
 test-hub-ci.sh 0.08
 test-hub-demote.sh 0.07
 test-hub-ended.sh 0.20
