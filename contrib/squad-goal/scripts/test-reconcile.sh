@@ -15,13 +15,14 @@ case "$*" in
   *"/fields"*) echo '[{"id":7,"name":"Status"}]';;
   *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n1170\tClosed\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
   *"--method POST"*"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
+  *"--method DELETE"*"/labels"*) echo "$*" >> "TMPDIR/deletes"; echo '{}';;   # a holder-label clear: the reconciler sends none (#1678)
   *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
   *"issue(number:"*) b=''; sep=''
     for n in $(echo "$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+'); do r=$("$0" api "repos/x/y/issues/$n" 2>/dev/null)
-      b="$b$sep\"i$n\":$(jq -c --argjson n "$n" --argjson r "$r" '{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),createdAt:null,labels:{nodes:[]},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}' <<<"{}")"; sep=','; done
-    echo "{\"data\":{\"repository\":{$b}}}" ;;   # the GraphQL fact: one alias per issue asked, whether the route named one issue or a numbers= list (#1648)   # the single-issue read is the GraphQL fact: its state and body are the REST answer below
-  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1093,"title":"t","body":"","state":"OPEN"},{"number":1095,"title":"t","body":"","state":"OPEN"},{"number":1120,"title":"t","body":"## Blocked by\n\n- #1093\n","state":"OPEN"},{"number":1140,"title":"t","body":"","state":"OPEN"},{"number":1150,"title":"t","body":"","state":"OPEN"},{"number":1160,"title":"t","body":"","state":"OPEN"}]}}}}';;   # the open-issue aggregate, one GraphQL request (#853)
-  *"issues/1090") echo '{"state":"closed","body":""}';;
+      b="$b$sep\"i$n\":$(jq -c --argjson n "$n" --argjson r "$r" '{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),createdAt:null,labels:{nodes:($r.labels//[])},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}' <<<"{}")"; sep=','; done
+    echo "{\"data\":{\"repository\":{$b}}}" ;;   # the GraphQL fact: one alias per issue asked, whether the route named one issue or a numbers= list (#1648)   # the single-issue read is the GraphQL fact: its state, body and labels are the REST answer below
+  *"issues(states: OPEN"*) if [ -n "$OPEN_GRAPHQL" ]; then cat "$OPEN_GRAPHQL"; else echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1093,"title":"t","body":"","state":"OPEN"},{"number":1095,"title":"t","body":"","state":"OPEN"},{"number":1120,"title":"t","body":"## Blocked by\n\n- #1093\n","state":"OPEN"},{"number":1140,"title":"t","body":"","state":"OPEN"},{"number":1150,"title":"t","body":"","state":"OPEN"},{"number":1160,"title":"t","body":"","state":"OPEN"}]}}}}'; fi;;   # the open-issue aggregate, one GraphQL request (#853); a case overrides it to carry labels (#1678)
+  *"issues/1090") if [ -n "$ISSUE_1090" ]; then cat "$ISSUE_1090"; else echo '{"state":"closed","body":""}'; fi;;
   *"issues/1092") echo '{"state":"closed","body":""}';;
   *"issues/1093") echo '{"state":"open","body":""}';;
   *"issues/1095") echo '{"state":"open","body":""}';;
@@ -36,6 +37,7 @@ case "$*" in
   *"issues/1160") echo '{"state":"open","body":""}';;
   *"issues/1170") echo '{"state":"closed","body":""}';;
   *"issues?state=open&labels=bug"*) echo '[]';;
+  *"issues?state=open"*) echo "${OPEN_ISSUES:-[]}";;
 esac
 J
 unset SG_BOARD_VOCAB; sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_STATE="$T/st" RECONCILE_MIN=1102
@@ -129,5 +131,27 @@ rm -f "$T/ghcalls"; r=$(SG_BOARD_VOCAB=shipped python3 "$T/s/reconcile.py" 2>&1)
 if [ -s "$T/ghcalls" ] && /usr/bin/grep -q 'repos/x/y' "$T/ghcalls"; then ko "a cooling pass still read the repository: $(/usr/bin/grep 'repos/x/y' "$T/ghcalls" | head -2)"; else ok "a pass under a cooldown sends no repository request"; fi
 case "$r" in *cooldown*) ok "the cooling pass names the cooldown" ;; *) ko "the cooling pass did not name it: '$r'";; esac
 [ "$rc" = 0 ] && ok "a cooling pass ends clean" || ko "a cooling pass ended $rc"
+# The two faces of a hold (#1678): the hold file is the janitor's read, the holder label is the pass's read. The hold
+# module writes both in one act; the reconciler reports a disagreement as a defect and rewrites neither face.
+rm -f "$T/st/gh-cooldown.json"   # the case above leaves a cooldown that would skip this pass before its first read
+mkdir -p "$T/st/auto"
+printf 'by manual\nsince 2026-01-01T00:00:00Z\nuntil 2026-02-01T00:00:00Z\n' > "$T/st/auto/hold-1090"
+rm -f "$T/deletes" "$T/issue-1090"
+r=$(python3 "$T/s/reconcile.py" 2>&1)
+case "$r" in *"HOLD DISAGREEMENT #1090"*"ready-for-human"*) ok "a hold file with no holder label is reported as a defect";; *) ko "the missing label of #1090 is not reported: '$r'";; esac
+[ ! -s "$T/deletes" ] && ok "the reconciler removes no holder label on a disagreement" || ko "a label clear was sent: '$(cat "$T/deletes")'"
+printf '{"state":"open","body":"","labels":[{"name":"ready-for-human"}]}' > "$T/issue-1090"
+r=$(ISSUE_1090=$T/issue-1090 python3 "$T/s/reconcile.py" 2>&1)
+case "$r" in *"HOLD DISAGREEMENT #1090"*) ko "an agreeing file and label were reported: '$r'";; *) ok "a file and its label that agree are no defect";; esac
+rm -f "$T/st/auto/hold-1090" "$T/issue-1090"
+printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1095,"title":"t","body":"","state":"OPEN","labels":{"nodes":[{"name":"ready-for-HAL9K"}]}}]}}}}' > "$T/open-graphql"
+r=$(OPEN_GRAPHQL=$T/open-graphql python3 "$T/s/reconcile.py" 2>&1)
+case "$r" in *"HOLD DISAGREEMENT #1095"*"ready-for-HAL9K"*) ok "a holder label with no hold file is reported as a defect";; *) ko "the holder label of #1095 with no file is not reported: '$r'";; esac
+[ ! -s "$T/deletes" ] && ok "the reconciler leaves a label without its file in place" || ko "a label clear was sent: '$(cat "$T/deletes")'"
+printf 'by hal9k\nsince 2026-01-01T00:00:00Z\nuntil 2026-02-01T00:00:00Z\n' > "$T/st/auto/hold-1090"
+printf '{"state":"open","body":"","labels":[{"name":"ready-for-HAL9K"}]}' > "$T/issue-1090"
+r=$(ISSUE_1090=$T/issue-1090 OPEN_GRAPHQL=$T/open-graphql python3 "$T/s/reconcile.py" 2>&1)
+case "$r" in *"HOLD DISAGREEMENT #1090"*) ko "an agreeing hal9k file and label were reported: '$r'";; *) ok "a hal9k file and its label that agree are no defect";; esac
+rm -f "$T/st/auto/hold-1090" "$T/issue-1090" "$T/open-graphql"
 [ $fail = 0 ] && echo "PASS" || echo "TDD RED"
 rm -rf "$T"; exit $fail

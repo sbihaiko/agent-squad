@@ -1,18 +1,27 @@
 """The hand hold: a person's or an operator session's own work on a card, kept outside the loop (loop-bug #1664).
 
-One file per issue, `$SG_STATE/auto/hold-<n>`, holds three lines: `by <carrier>`, `since <ISO 8601 UTC>` and
-`until <ISO 8601 UTC>`. Presence is the hold. `until` is the moment the hold stops being trusted; the board pass reports
-a hold past it as stale and never moves a card (ADR-0170). The marker's own write time is the folder-activity read the
-Live work tile uses, measured against the same one bound.
+A hold has two faces, and this module is the one writer of both (#1678). The file face is one file per issue,
+`$SG_STATE/auto/hold-<n>`, with three lines: `by <carrier>`, `since <ISO 8601 UTC>` and `until <ISO 8601 UTC>`.
+Presence is the hold. The label face is the holder label on the issue: `ready-for-human` for `manual` and
+`ready-for-HAL9K` for `hal9k`. A hold, a renew and a release write both faces in one act. A pass reads only the label;
+the janitor reads only the file; the reconciler reports a disagreement between them as a defect and rewrites neither.
+
+`until` is the moment the hold stops being trusted; the board pass reports a hold past it as stale and never moves a
+card (ADR-0170). The marker's own write time is the folder-activity read the Live work tile uses, measured against the
+same one bound.
 
 The carriers are the three the glossary names: `manual` and `hal9k` write a hold; a run (`squad`) never does.
 Only the carrier that wrote a hold renews or releases it. A batch is all or nothing: every issue is checked before any
 file is written. A hold is refused when a live run holds the issue (the liveness rule of `squad/run_liveness.py`, the
 gate and session rule of `squad/reap.py`), when another carrier holds it, or when an `auto/taken-<run>` marker names it.
 
+The label is written before the file: a label write that fails leaves no file that says the issue is held, and names the
+failure. A clear that GitHub answers 'Label does not exist' is already clear.
+
 The verbs are hold, renew and release. A release names the next column and records that decision in
 `$SG_STATE/auto/release-<n>`, so the board pass is the one writer of the column fact (ADR-0149) and applies it once.
-There is no release without a column: a card is never left in a ghost state.
+There is no release without a column: a card is never left in a ghost state. There is no automatic release: a stale
+`ready-for-HAL9K` is cleared by the release verb, never by a pass.
 
 Every write verb touches `$SG_STATE/board-dirty`, so the board pass re-reads at once.
 
@@ -21,13 +30,15 @@ usage: python3 -m squad.handhold hold <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold release <n>... --to Todo|"Code Complete"|Closed [--by manual|hal9k]
        python3 -m squad.handhold holds
 
-The bound defaults to `SG_HAND_HOLD_MINUTES` (240). Exit 0 when every write lands, 1 on a refusal (one stderr line each).
+The bound defaults to `SG_HAND_HOLD_MINUTES` (240). The label writes name the repository `SG_REPO` names (owner/name).
+Exit 0 when every write lands, 1 on a refusal (one stderr line each).
 """
 from __future__ import annotations
 
 import argparse
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
@@ -38,9 +49,11 @@ from squad import reap, record
 from squad import run_liveness as RL
 
 CARRIERS = ("manual", "hal9k")
+LABELS = {"manual": "ready-for-human", "hal9k": "ready-for-HAL9K"}   # the holder label each carrier writes on the issue
 COLUMNS = ("Todo", "Code Complete", "Closed")   # the columns a release may name: work is done or it goes back to Todo
 DEFAULT_MINUTES = 240
 ENV_MINUTES = "SG_HAND_HOLD_MINUTES"
+ENV_REPO = "SG_REPO"
 ISO = "%Y-%m-%dT%H:%M:%SZ"
 CHILD_LINE_ISSUES = re.compile(r"GitHub issue(?:\(s\))? #?([0-9][0-9, ]*)")   # as janitor.issues_named reads a request
 ANY_ISSUE = re.compile(r"GitHub issue #(\d+)")
@@ -72,6 +85,50 @@ def _state(state):
 
 def _checkout(checkout):
     return Path(checkout or os.environ.get("SG_CHECKOUT") or ".")
+
+
+def _repo(repo):
+    """The repository the holder label is written on: `SG_REPO`, or the repository a caller names."""
+    r = repo or os.environ.get(ENV_REPO) or ""
+    if not re.fullmatch(r"[^/\s]+/[^/\s]+", r):
+        raise HandError(f"{ENV_REPO} names no repository (owner/name), so the holder label has nowhere to go")
+    return r
+
+
+def _gh_label(repo, n, label, add):
+    """One holder label on the issue, through the REST door: an add is a POST and a clear is a DELETE. A clear that
+    GitHub answers 'Label does not exist' is already clear. Any other refusal raises HandError, and the file is not
+    written: a file that says the issue is held and a label that says nothing would be the disagreement this act removes."""
+    route = f"repos/{repo}/issues/{n}/labels"
+    argv = (["gh", "api", "--method", "POST", route, "-f", f"labels[]={label}"] if add
+            else ["gh", "api", "--method", "DELETE", f"{route}/{label}"])
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True)
+    except OSError as e:
+        raise HandError(f"cannot reach GitHub to write {label} on #{n}: {e}") from e
+    if r.returncode:
+        body = f"{r.stdout or ''}{r.stderr or ''}"
+        if not add and "Label does not exist" in body:
+            return
+        raise HandError(f"the write of {label} on #{n} was refused: {' '.join(body.split())[:200] or 'no answer'}")
+
+
+def _labels_in_one_act(writer, repo, issues, by, add):
+    """Every holder label of one batch, or none: a failed write undoes the labels this act already wrote and raises, so a
+    file is never written beside a label that never landed."""
+    label = LABELS[by]
+    done = []
+    for n in issues:
+        try:
+            writer(repo, n, label, add)
+        except HandError:
+            for m in reversed(done):
+                try:
+                    writer(repo, m, label, not add)
+                except HandError:
+                    pass
+            raise
+        done.append(n)
 
 
 def _minutes(minutes):
@@ -237,7 +294,7 @@ def _refusals(verb, issues, by, state, checkout, now, procs, cwd_procs):
     return lines
 
 
-def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=None):
+def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=None, label_write=None, repo=None):
     st = _state(state)
     ck = _checkout(checkout)
     now = time.time() if now is None else now
@@ -249,12 +306,20 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=
         if to not in COLUMNS:
             raise ValueError(f"--to names one of {', '.join(COLUMNS)}, not {to!r}")
     nums = _numbers(issues)
+    m = _minutes(minutes) if verb != "release" else None   # the one bound is validated before any face is written
     snap = RL.read_processes if procs is None else procs
     cwd = reap._procs if cwd_procs is None else cwd_procs
     refusals = _refusals(verb, nums, by, st, ck, now, snap, cwd)
     if refusals:
         for line in refusals:
             print(line, file=sys.stderr)
+        return 1
+    writer = _gh_label if label_write is None else label_write
+    try:
+        _labels_in_one_act(writer, _repo(repo), nums, by, verb != "release")
+    except HandError as e:
+        what = "clear" if verb == "release" else "write"
+        print(f"handhold: cannot {what} the holder label, so no hold file changed: {e}", file=sys.stderr)
         return 1
     (st / "auto").mkdir(parents=True, exist_ok=True)
     if verb == "release":
@@ -263,7 +328,6 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=
             _path(st, n).unlink(missing_ok=True)
             print(f"released #{n}: the card moves to {to}")
     else:
-        m = _minutes(minutes)
         for n in nums:
             c = _read(st, n)
             since = c["since"] if c else iso(now)
@@ -277,19 +341,26 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=
     return 0
 
 
-def hold(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None):
-    """Write the hold on every issue, or none. Return 0 when all are written, 1 on a refusal."""
-    return _verb("hold", issues, by, minutes, state, checkout, now, procs, cwd_procs)
+def hold(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None,
+         label_write=None, repo=None):
+    """Write the hold file and the holder label on every issue, or neither on any. Return 0 when all are written, 1 on a
+    refusal."""
+    return _verb("hold", issues, by, minutes, state, checkout, now, procs, cwd_procs, label_write=label_write, repo=repo)
 
 
-def renew(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None):
-    """Push `until` forward on holds the same carrier wrote. Return 0 when all renew, 1 on a refusal."""
-    return _verb("renew", issues, by, minutes, state, checkout, now, procs, cwd_procs)
+def renew(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None,
+          label_write=None, repo=None):
+    """Push `until` forward on holds the same carrier wrote, keeping the file and the label consistent. Return 0 when all
+    renew, 1 on a refusal."""
+    return _verb("renew", issues, by, minutes, state, checkout, now, procs, cwd_procs, label_write=label_write, repo=repo)
 
 
-def release(issues, by="manual", to=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None):
-    """Remove the holds the same carrier wrote and record the column the card moves to. Return 0 or 1."""
-    return _verb("release", issues, by, None, state, checkout, now, procs, cwd_procs, to=to)
+def release(issues, by="manual", to=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None,
+            label_write=None, repo=None):
+    """Clear the hold file and the holder label the same carrier wrote, and record the column the card moves to. Return 0
+    or 1: a label the clear does not reach keeps the hold."""
+    return _verb("release", issues, by, None, state, checkout, now, procs, cwd_procs, to=to, label_write=label_write,
+                 repo=repo)
 
 
 def holds(state=None, closed=None, now=None):

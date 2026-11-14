@@ -35,7 +35,13 @@ def bare(tmp_path: Path, card: str) -> Path:
 
 
 def hand(tmp_path: Path, *argv: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "SG_STATE": str(tmp_path / "st"), "SG_CHECKOUT": str(tmp_path / "co"), "PYTHONPATH": str(ROOT)}
+    """The hold CLI in the sandbox: the stub `gh` on PATH answers the holder label write and records it in `calls`, and no
+    live SG_* setting leaks in."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
+    env.update({
+        "SG_STATE": str(tmp_path / "st"), "SG_CHECKOUT": str(tmp_path / "co"), "SG_REPO": "x/y", "PYTHONPATH": str(ROOT),
+        "PATH": f"{tmp_path / 'bin'}:{env.get('PATH', '')}",
+    })
     return subprocess.run([sys.executable, "-m", "squad.handhold", *argv], capture_output=True, text=True, env=env, cwd=ROOT, check=False)
 
 
@@ -123,3 +129,25 @@ def test_a_hold_on_an_issue_a_live_run_holds_is_refused_and_the_run_moves_its_ca
     assert not (tmp_path / f"st/auto/hold-{N}").exists()
     janitor(tmp_path, **SHIPPED)
     assert moves(tmp_path) == [f"STATUS o 4 Doing {N}"], writes(tmp_path)
+
+
+@pytest.mark.heavy
+def test_the_hold_cli_writes_the_holder_label_and_the_pass_never_removes_it(tmp_path):
+    """#1678: one act writes the file and the label, and no pass or janitor rule removes a holder label."""
+    bare(tmp_path, "Todo")
+    assert hand(tmp_path, "hold", str(N), "--by", "hal9k").returncode == 0
+    log = writes(tmp_path)
+    assert f"POST repos/x/y/issues/{N}/labels" in log and "ready-for-HAL9K" in log, log
+    janitor(tmp_path, **SHIPPED)
+    clears = [line for line in writes(tmp_path).splitlines() if "DELETE" in line and "/labels" in line]
+    assert clears == [], f"a pass removed a holder label: {clears}"
+
+
+@pytest.mark.heavy
+def test_the_release_cli_clears_the_holder_label_and_the_file(tmp_path):
+    st = bare(tmp_path, "Closed")
+    assert hand(tmp_path, "hold", str(N)).returncode == 0
+    assert hand(tmp_path, "release", str(N), "--to", "Closed").returncode == 0
+    log = writes(tmp_path)
+    assert f"DELETE repos/x/y/issues/{N}/labels/ready-for-human" in log, log
+    assert not (st / f"auto/hold-{N}").exists()

@@ -54,7 +54,7 @@ def clean(hub):
 def _hold(hub, n, by="manual", minutes=60, now=None):
     from squad import handhold
     rc = handhold.hold([n], by=by, minutes=minutes, state=hub.STATE, now=now or time.time(), procs={},
-                       cwd_procs=lambda: [])
+                       cwd_procs=lambda: [], label_write=lambda repo, issue, label, add: None)   # no case writes a label
     assert rc == 0
 
 

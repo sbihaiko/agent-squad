@@ -8,7 +8,7 @@ Scope: issues already on board 4 (open ones only from number >= RECONCILE_MIN, d
 A card never moves backwards: the column it carries is the furthest the work reached and is its own watermark, so a recomputed
 column lower in the shipped flow is refused, reported by name, and no new ledger is kept. A merge taken back is a tag plus a new
 issue, never a move back, so a card the facts pull back out of a terminal column keeps its column and carries the tag."""
-import json, os, re, subprocess, sys
+import json, os, pathlib, re, subprocess, sys
 os.environ.setdefault("SG_GH_PASS", "reconcile")   # the call log names this pass (ADR-0277): unattributed spend cannot be pinned on its spender (#1648)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 from board_columns import BY_FACT, COLUMNS, SHIPPED_NAME
@@ -68,6 +68,52 @@ for b in js("api", f"repos/{REPO}/branches?per_page=100") or []:
     if sha not in compared: compared[sha] = js("api", f"repos/{REPO}/compare/{LAND}...{sha}") or {}
     if compared[sha].get("status") in ("ahead", "diverged"): refs.setdefault(int(m.group(1)), b["name"])
 def labels_of(n): return [x.get("name") for x in js("api", f"repos/{REPO}/issues/{n}/labels") or []]
+HOLDER_LABEL = {"manual": "ready-for-human", "hal9k": "ready-for-HAL9K"}   # the label face of a hold, one per carrier (#1678)
+def _handhold():
+    """squad/handhold.py, the one reader of the hold file (#1678): from the repository this script sits in, then SG_SQUAD,
+    SG_CHECKOUT, else the tree it runs in. The reconciler carries no second copy of the hold format."""
+    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
+    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "handhold.py").is_file()), None)
+    if root is None: return None
+    if root not in sys.path: sys.path.insert(0, root)
+    try: from squad import handhold
+    except Exception: return None
+    return handhold
+def hold_files():
+    """{issue: carrier} for each hold file the module reads: the face the janitor reads. No state folder, no hold file or a
+    module the tree cannot find names no hold."""
+    HH = _handhold()
+    if HH is None: return {}
+    try: return {int(n): c["who"] for n, c in HH.holders(state=os.environ.get("SG_STATE")).items() if c.get("kind") == "hold"}
+    except Exception: return {}
+def label_names(issue):
+    return {x.get("name") for x in (issue or {}).get("labels") or [] if isinstance(x, dict)}
+def hold_parity():
+    """The two faces of a hold must agree (#1678): the hold file, which the janitor reads, and the holder label, which a
+    dispatch pass reads. A disagreement is a defect reported by name, and neither face is rewritten here: the hold module
+    is the one writer of both, by its hold, renew and release verbs."""
+    holds = hold_files()
+    for n, by in sorted(holds.items()):
+        want = HOLDER_LABEL.get(by)
+        if want is None: continue
+        row = OPEN.get(n) or EXTRA.get(n) or js("api", f"repos/{REPO}/issues/{n}")
+        if not row: continue
+        names = label_names(row)
+        other = next((name for name in HOLDER_LABEL.values() if name != want and name in names), None)
+        if other:
+            print(f"HOLD DISAGREEMENT #{n}: the hold file says {by}, the issue carries {other}")
+        elif want not in names:
+            print(f"HOLD DISAGREEMENT #{n}: the hold file says {by}, the issue carries no {want}")
+    for n in sorted(set(OPEN) | set(EXTRA)):
+        if n in holds: continue
+        row = OPEN.get(n) or EXTRA.get(n)
+        if not row or "pull_request" in row: continue   # a pull request is no card, and it carries no hold
+        names = label_names(row)
+        named = next((name for name in HOLDER_LABEL.values() if name in names), None)
+        if named:
+            print(f"HOLD DISAGREEMENT #{n}: the issue carries {named}, no hold file names it")
+hold_parity()
 def shipped_name(to):
     """The name the carrier holds for a column: this module's own until the board carries the shipped vocabulary, and the
     shipped name after (the janitor reads the same switch, #249). The shipped board has no name for Blocked, which is the
