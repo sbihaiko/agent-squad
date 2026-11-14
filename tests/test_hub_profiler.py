@@ -465,13 +465,21 @@ def test_a_write_that_changes_nothing_writes_no_audit_line(hub):
     assert audit(state) == []
 
 
+def quiet_boot(mod, monkeypatch):
+    """Stub every read `boot` starts but the sampler: the names are read from `boot` itself, so a new one is stubbed too."""
+    src = HUB_PY.read_text()
+    body = src[src.index("\ndef boot():"):src.index('\nif __name__ == "__main__":')]
+    reads = re.findall(r"target=(\w+)", body)
+    assert "refresh_board" in reads
+    for name in ("refresh_runs", "warm", *reads):
+        monkeypatch.setattr(mod, name, lambda: None)
+
+
 def test_a_hub_started_with_the_switch_on_runs_the_sampler(hub, monkeypatch):
     """The start path is `boot`, the one call of the hub's `__main__` before it serves. Its other reads are stubbed."""
     mod, port, _, state, table = hub
     (state / "profiler.json").write_text(json.dumps({"on": True}))
-    monkeypatch.setattr(mod, "refresh_runs", lambda: None)
-    monkeypatch.setattr(mod, "warm", lambda: None)
-    monkeypatch.setattr(mod, "BOOT_READS", ())
+    quiet_boot(mod, monkeypatch)
     assert not mod.profiler_running()
     mod.boot()
     wait(lambda: table.reads >= 2)
@@ -482,9 +490,7 @@ def test_a_hub_started_with_the_switch_on_runs_the_sampler(hub, monkeypatch):
 
 def test_a_hub_started_with_the_switch_off_starts_no_sampler(hub, monkeypatch):
     mod, _, _, _, table = hub
-    monkeypatch.setattr(mod, "refresh_runs", lambda: None)
-    monkeypatch.setattr(mod, "warm", lambda: None)
-    monkeypatch.setattr(mod, "BOOT_READS", ())
+    quiet_boot(mod, monkeypatch)
     mod.boot()
     time.sleep(0.05)
     assert samplers() == [] and table.reads == 0
@@ -638,7 +644,7 @@ def test_the_context_row_stands_apart_from_the_tree_and_opens_to_its_application
     out = run_js(f"profHtml({json.dumps(VIEW)},new Set())")
     assert out.index("</table>") < out.index("<table id=profc"), "the context row is a row of the tree"
     ctx = out[out.index("<table id=profc"):]
-    assert re.findall(r"<tr data-p=\"([^\"]*)\"", ctx) == ["context"] and "40.0 s" in ctx and "outside the loop" in ctx
+    assert re.findall(r"<tr data-p=\"([^\"]*)\"", ctx) == ["context"] and "40.00 s" in ctx and "outside the loop" in ctx
     opened = run_js(f"profHtml({json.dumps(VIEW)},new Set(['context']))")
     ctx = opened[opened.index("<table id=profc"):]
     assert re.findall(r"<tr data-p=\"([^\"]*)\"", ctx) == ["context", "context/Foo Bar", "context/another loop"]

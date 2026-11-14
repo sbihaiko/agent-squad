@@ -499,7 +499,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="more-menu">
 <button data-more="cost" type="button">Cost and usage</button>
 <button data-more="lead" type="button">Lead time</button>
-<a class="more-link" id="more-profiler" href="./#profiler">Profiler</a>
+<a class="more-link" id="more-loop" href="./#loop">Loop</a>
 <a class="more-link" id="more-settings" href="./#set">Settings</a>
 </div>
 <p class="msg" role="status">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
@@ -736,8 +736,8 @@ $("more-settings").href = "./#set-" + lastSetTheme;
 // #1446: the entry names the desktop view, so the desktop page's narrow-screen redirect does not return the owner
 $("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
 // settings-handoff:end
-// #1743: the Profiler is a desktop tab; its entry names the desktop view first, as the Settings entry does
-$("more-profiler").onclick = () => localStorage.setItem("squad-view","desktop");
+// #1743: Loop is a desktop tab; its entry names the desktop view first, as the Settings entry does
+$("more-loop").onclick = () => localStorage.setItem("squad-view","desktop");
 
 // The phone's navigation shell (SPEC 1596, #1597): five tabs, one stack of screens per tab, and one history entry per
 // screen that names its tab and the address the location mirrors. A screen opens inside the tab whose list it came from,

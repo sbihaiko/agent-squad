@@ -1,15 +1,23 @@
-"""The hub Profiler's rule layer (#1743, ADR-0137): process-table readings in, a hot-spot tree out. No I/O and no clock.
+"""The hub Loop tab's rule layer (#1743, ADR-0137): process-table readings in, a hot-spot tree out. No I/O and no clock.
 
-A reading is {pid: (ppid, cpu seconds, command)}. `fold` turns two readings into what happened between them: the CPU
-seconds each process used and one event for each process the second reading saw first. Each process is filed under the
-loop parts its ancestry names, outermost first, so the tree reads like a call tree: a driver, the run it started, the gate
-below it. A process that names no part of its own counts as its nearest named ancestor's own time.
+A reading is {(pid, start time): (ppid, cpu seconds, command)}: a pid alone does not name a process, the system gives it
+again. `fold` turns two readings into what happened between them: the CPU seconds each process used and one event for each
+process the second reading saw first.
+
+A `Scope` names the loop of one profile: the supervisor's pid and the folders only that profile's work names. The loop is
+the supervisor and its descendants, each process whose command names one of those folders, with its descendants, and each
+orphan from a temp folder. Each is filed under the loop parts its ancestry names, outermost first, so the tree reads like
+a call tree: a driver, the run it started, the gate below it. A process that names no part of its own counts as its
+nearest named ancestor's own time. Every other process counts in one context row, apart from the tree.
+
+A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim.
 
 A process that started and ended between two readings is never seen, so the event count is a floor.
 """
 import collections
 import functools
 import re
+import shlex
 
 SPAN_S = 600   # the window a profile covers: long enough to see a slow cycle, short enough that an old storm leaves it
 
@@ -19,116 +27,245 @@ DRIVERS = frozenset((
     "watchd.sh", "watch.sh", "fastloop.sh", "janitor.py", "childcc.py", "autofrontier.sh", "autobug.sh", "cqflush.sh",
     "reconcile.sh", "branchland.sh", "live-guard.sh", "promote.sh", "board.sh", "board.py", "review.sh", "caps.sh"))
 GATES = frozenset(("gate.sh", "fast-gate.sh"))
-_SCRIPT = re.compile(r"(?:^|[\s/'\"=])([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py))(?=$|[\s'\";])")
-_SCRIPTS_DIR = re.compile(r"squad-goal/scripts/([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py))(?=$|[\s'\";])")
+SUPERVISOR = "watchd.sh"
+_SCRIPT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py)$")
 _SUITE = re.compile(r"test-[A-Za-z0-9_.-]+\.sh$")
-_PYTEST = re.compile(r"(?:^|[\s/])(?:pytest|py\.test)(?=$|\s)|-m pytest\b|\bxdist\b")
-_ENGINE = re.compile(r"(?:^|[\s/])squad (?:start|resume|work|task)\b|-m squad(?:\.cli)?(?=$|\s)")
-_TEMP_SCRIPT = re.compile(r"(?:/T/tmp\.[^/\s]+/|/tmp/)\S*?([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py))(?=$|[\s'\";])")
+_TEMP = re.compile(r"/T/tmp\.[^/]+/|/tmp/")
 _APP = re.compile(r"/Applications/(?:[^/]+/)*?([^/]+)\.app/")
-OTHER = ("other", "other")
+_PYTHON = re.compile(r"[Pp]ython[\d.]*$")
+_SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
+_SHELL_CODE = re.compile(r"-[A-Za-z]*c[A-Za-z]*$")
+_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_SPLIT = re.compile(r"&&|\|\||[;|&\n(){}]")
+_PYTESTS = frozenset(("pytest", "py.test"))
+_ENGINE_VERBS = frozenset(("start", "resume", "work", "task"))
+_ENGINE_MODULES = frozenset(("squad", "squad.cli"))
+# A wrapper runs another program: (the options that take a value, the words that may follow the options). `timeout` is
+# apart: one duration follows its options.
+_WRAPPERS = {
+    "env": (frozenset(("-u", "-C", "-P", "-S")), ()),
+    "uv": (frozenset(("--with", "--python", "-p", "--project", "--directory", "--extra", "--group", "--env-file",
+                      "--with-requirements", "--index")), ("run",)),
+    "timeout": (frozenset(("-s", "-k", "--signal", "--kill-after")), ()),
+    "gtimeout": (frozenset(("-s", "-k", "--signal", "--kill-after")), ()),
+    "nohup": (frozenset(), ()),
+    "sandbox-exec": (frozenset(("-f", "-p", "-D", "-n")), ()),
+    "rtk": (frozenset(), ("proxy",)),
+}
+OTHER = ("other", "other")       # the head of every path outside the loop: the context row
+UNKNOWN = ("unknown", "unknown")  # a process of the loop whose program cannot be told, and no ancestor names one
+FOREIGN = "another loop"         # a supervisor that is not this profile's, with its descendants
+CONTEXT = "outside the loop"
 _HEAD = 400    # a command's head names what it runs; its tail is arguments, and some run to kilobytes
+_IN, _OUT, _OTHER_LOOP = "in", "out", "foreign"
+
+Scope = collections.namedtuple("Scope", "supervisor marks")   # the supervisor's pid or None; the folders of the profile
 
 
-@functools.lru_cache(maxsize=8192)
-def label(command):
-    """(name, kind) for the loop part a command runs, or None when it names none."""
-    head = command[:_HEAD]
-    if "_bundled/claude" in head:
-        return ("child session", "run")
-    if _PYTEST.search(head):
-        return ("pytest", "gate")
-    for name in _SCRIPT.findall(head):
-        if _SUITE.match(name):
-            return (name, "suite")
-        if name in GATES:
-            return (name, "gate")
-        if name in DRIVERS:
-            return (name, "driver")
-    m = _SCRIPTS_DIR.search(head)
-    if m:
-        return (m.group(1), "driver")
-    if _ENGINE.search(head):
-        return ("engine", "run")
+def _base(path):
+    return path.rsplit("/", 1)[-1]
+
+
+def _options(t, i, takes, assigns=False):
+    """The index after the options at t[i:]: an option in `takes` carries one value."""
+    while i < len(t):
+        if t[i] in takes:
+            i += 2
+        elif t[i].startswith("-") or (assigns and _ASSIGN.match(t[i])):
+            i += 1
+        else:
+            break
+    return i
+
+
+def _unwrap(t):
+    """The tokens from the program on, with every leading wrapper and shell assignment taken off."""
+    i = _options(t, 0, (), assigns=True)
+    while i < len(t) and _base(t[i]) in _WRAPPERS:
+        name = _base(t[i])
+        takes, words = _WRAPPERS[name]
+        i = _options(t, i + 1, takes, assigns=name == "env")
+        if name in ("timeout", "gtimeout"):
+            i += 1
+        while i < len(t) and t[i] in words:
+            i = _options(t, i + 1, takes)
+    return t[i:]
+
+
+def _classify(script):
+    """(name, kind) for a script the loop knows, by its file name or by the scripts folder it sits in."""
+    name = _base(script)
+    if not _SCRIPT.match(name):
+        return None
+    if _SUITE.match(name):
+        return (name, "suite")
+    if name in GATES:
+        return (name, "gate")
+    if name in DRIVERS or "squad-goal/scripts/" in script:
+        return (name, "driver")
     return None
 
 
+def _run(t, depth=0):
+    """((name, kind) or None, the script the tokens run or None), read from the program position alone."""
+    t = _unwrap(t)
+    if not t:
+        return None, None
+    prog, name = t[0], _base(t[0])
+    if prog.endswith("_bundled/claude"):
+        return ("child session", "run"), None
+    if name in _PYTESTS:
+        return ("pytest", "gate"), None
+    if name == "squad":
+        return (("engine", "run") if len(t) > 1 and t[1] in _ENGINE_VERBS else None), None
+    if name in _SHELLS:
+        i = 1
+        while i < len(t) and t[i].startswith("-"):
+            if _SHELL_CODE.match(t[i]):   # the process table joins the arguments, so the code is the rest of the line
+                return _code(" ".join(t[i + 1:]), depth)
+            i += 2 if t[i] in ("-o", "+o") else 1
+        return (_classify(t[i]), t[i]) if i < len(t) else (None, None)
+    if _PYTHON.match(name):
+        i = 1
+        while i < len(t) and t[i].startswith("-"):
+            if t[i] == "-m":
+                module = t[i + 1] if i + 1 < len(t) else ""
+                return (("pytest", "gate") if module in _PYTESTS else ("engine", "run") if module in _ENGINE_MODULES else None), None
+            if t[i] == "-c":
+                return None, None
+            i += 2 if t[i] in ("-W", "-X") else 1
+        if i >= len(t):
+            return None, None
+        return _run(t[i:], depth) if _base(t[i]) in _PYTESTS or _base(t[i]) == "squad" else (_classify(t[i]), t[i])
+    return (_classify(prog), prog) if _SCRIPT.match(name) else (None, None)
+
+
+def _code(code, depth):
+    """A shell's code string, command by command: the first command that runs a loop part names the process."""
+    if depth >= 2:
+        return None, None
+    for part in _SPLIT.split(code):
+        t = part.replace("'", " ").replace('"', " ").split()
+        while t and t[0] in ("exec", "time", "if", "then", "else", "do", "while", "!"):
+            t = t[1:]
+        found = _run(t, depth + 1)
+        if found[0]:
+            return found
+    return None, None
+
+
 @functools.lru_cache(maxsize=8192)
-def _orphan(command):
-    """The orphan's node for a parentless command whose script sits in a temp folder, or None."""
-    m = _TEMP_SCRIPT.search(command[:_HEAD])
-    return (f"orphan {m.group(1)} (temp folder)", "orphan") if m else None
+def _parse(command):
+    head = command[:_HEAD]
+    try:
+        tokens = shlex.split(head)
+    except ValueError:   # a quote the cut left open
+        tokens = head.split()
+    return _run(tokens)
+
+
+def label(command):
+    """(name, kind) for the loop part a command runs, or None when its program is none: an argument never names it."""
+    return _parse(command)[0]
+
+
+def _orphan(command, marks):
+    """The orphan's node for a parentless command whose script sits in a temp folder, or None. A script in a folder of
+    the profile is no orphan, wherever that folder is."""
+    script = _parse(command)[1]
+    if not script or not _TEMP.search(script) or any(m in script for m in marks):
+        return None
+    return (f"orphan {_base(script)} (temp folder)", "orphan")
 
 
 @functools.lru_cache(maxsize=8192)
 def _plain(command):
-    """The name `other` files a command under: the application, else the program's file name."""
+    """The name the context row files a command under: the application, else the program's file name."""
     m = _APP.search(command[:_HEAD])
     if m:
         return m.group(1)
     return (command.split(None, 1) or ["?"])[0].rsplit("/", 1)[-1] or "?"
 
 
-def _paths(table):
-    """A function pid -> the node path of that process in `table`, memoized over one reading."""
-    memo = {}
+@functools.lru_cache(maxsize=8192)
+def _names(command, marks):
+    return any(m in command[:4 * _HEAD] for m in marks)
 
-    def named(pid):
-        """(path of named parts, the top ancestor's command) with no `other` fallback."""
+
+def _paths(rows, scope):
+    """A function pid -> the node path of that process in `rows` ({pid: (ppid, cpu, command)}), memoized over one reading."""
+    memo = {}
+    marks = tuple(scope.marks)
+
+    def place(pid):
+        """(in the loop, in another loop, or outside; the named parts; the top ancestor's command)."""
         if pid in memo:
             return memo[pid]
         chain, base = [], None
-        while pid in table and len(chain) < 64:   # the cap ends a parent cycle a torn read can show
+        while pid in rows and len(chain) < 64:   # the cap ends a parent cycle a torn read can show
             chain.append(pid)
-            pid = table[pid][0]
+            pid = rows[pid][0]
             if pid <= 1 or pid == chain[-1]:   # pid 1 adopts every orphan: it is no ancestor that names a tree
                 break
             if pid in memo:
                 base = memo[pid]
                 break
         for p in reversed(chain):
-            ppid, _, command = table[p]
-            if base is None:   # the top of its tree: pid 1 adopts an orphan, so a temp-folder script here is one
-                own = (_orphan(command) if ppid == 1 else None) or label(command)
-                base = ((own,) if own else (), command)
-            else:
-                own = label(command)
-                if own and (not base[0] or base[0][-1] != own):
-                    base = (base[0] + (own,), base[1])
-            memo[p] = base
+            ppid, _, command = rows[p]
+            own = label(command)
+            state, parts, top = base or (_OUT, (), command)
+            if p == scope.supervisor and own and own[0] == SUPERVISOR:   # a stale pid file can name another program
+                state, parts = _IN, (own,)
+            elif state == _IN:
+                if own and (not parts or parts[-1] != own):
+                    parts = parts + (own,)
+            elif state == _OUT:
+                orphan = _orphan(command, marks) if ppid == 1 else None
+                if orphan:
+                    state, parts = _IN, (orphan,)
+                elif own and own[0] == SUPERVISOR:   # the same scripts run another profile's loop: its pid tells it apart
+                    state = _OTHER_LOOP
+                elif _names(command, marks):
+                    state, parts = _IN, ((own,) if own else ())
+            base = memo[p] = (state, parts, top)
         return base
 
     def path(pid):
-        parts, top = named(pid)
-        return parts or (OTHER, (_plain(top), "other"))
+        state, parts, top = place(pid)
+        if state == _IN:
+            return parts or (UNKNOWN,)
+        return (OTHER, (FOREIGN if state == _OTHER_LOOP else _plain(top), "other"))
     return path
 
 
-def fold(prev, cur):
+def fold(prev, cur, scope):
     """{node path: [cpu seconds, events]} for what happened between two readings.
-    A pid the first reading does not hold is one event, and all its CPU time is new. A pid whose CPU time went back is
-    another process on a reused pid, counted the same way."""
+    A (pid, start time) the first reading does not hold is one event, and all its CPU time is new. So is one whose CPU
+    time went back, where the system gives no start time."""
     out = {}
-    path = _paths(cur)
-    for pid, (_, cpu, _) in cur.items():
-        was = prev.get(pid)
+    path = _paths({pid: row for (pid, _), row in cur.items()}, scope)
+    for key, (_, cpu, _) in cur.items():
+        was = prev.get(key)
         new = was is None or cpu < was[1]
         used = cpu if new else cpu - was[1]
         if not new and used <= 0:
             continue
-        cell = out.setdefault(path(pid), [0.0, 0])
+        cell = out.setdefault(path(key[0]), [0.0, 0])
         cell[0] += used
         cell[1] += 1 if new else 0
     return out
 
 
 def tree(acc, root="loop"):
-    """The hot-spot tree of a fold: each node's own seconds and events, its total with its children, and its share of the
-    whole. The children sort by self time, the largest first, as a method profiler's hot spots do."""
+    """The hot-spot tree of the loop in a fold: each node's own seconds and events, its total with its children, and its
+    share of the loop's total. The children sort by inclusive cost, the largest first: an idle driver whose children are
+    costly stands above a cheap leaf. The context row is not in it."""
     def blank(name, kind):
         return {"name": name, "kind": kind, "self_s": 0.0, "events": 0, "kids": {}}
     top = blank(root, "root")
     for parts, (cpu, events) in acc.items():
+        if parts[0] == OTHER:
+            continue
         n = top
         for name, kind in parts:
             n = n["kids"].setdefault(name, blank(name, kind))
@@ -142,13 +279,25 @@ def tree(acc, root="loop"):
     whole = total(top)
 
     def out(n):
-        kids = sorted(n["kids"].values(), key=lambda k: (-k["self_s"], -k["total_s"], k["name"]))
+        kids = sorted(n["kids"].values(), key=lambda k: (-k["total_s"], -k["self_s"], k["name"]))
         return {"name": n["name"], "kind": n["kind"], "self_s": round(n["self_s"], 3), "total_s": round(n["total_s"], 3),
                 "share": round(n["total_s"] / whole, 4) if whole > 0 else (1 if n is top else 0),
                 "events": n["events"], "total_events": n["total_events"],
-                "mean_s": round(n["self_s"] / n["events"], 4) if n["events"] else 0,
                 "children": [out(k) for k in kids]}
     return out(top)
+
+
+def context(acc):
+    """The one context row of a fold: the CPU seconds of every process outside the loop, by application, largest first."""
+    apps = {}
+    for parts, (cpu, events) in acc.items():
+        if parts[0] == OTHER:
+            cell = apps.setdefault(parts[1][0], [0.0, 0])
+            cell[0] += cpu
+            cell[1] += events
+    rows = sorted(apps.items(), key=lambda kv: (-kv[1][0], kv[0]))
+    return {"name": CONTEXT, "total_s": round(sum(c for c, _ in apps.values()), 3), "events": sum(e for _, e in apps.values()),
+            "children": [{"name": name, "total_s": round(cpu, 3), "events": events} for name, (cpu, events) in rows]}
 
 
 class Window:
@@ -159,17 +308,30 @@ class Window:
         self.span, self.since, self.prev = span, None, None
         self.steps = collections.deque()   # (time, delta) per reading, oldest first
         self.acc = {}
+        self.last, self.interval, self.failed = None, None, 0
 
     def reset(self, now):
         self.since, self.prev, self.acc = now, None, {}
+        self.last, self.interval, self.failed = None, None, 0
         self.steps.clear()
 
-    def add(self, now, reading):
+    def fail(self):
+        """Count a reading that failed. It is not folded: the next good one is measured from the last good one."""
+        self.failed += 1
+
+    def stats(self):
+        """The time of the last good reading, the measured interval between the last two, and the failed readings."""
+        return {"last_reading": self.last, "interval_s": self.interval, "failed_readings": self.failed}
+
+    def add(self, now, reading, scope):
         """Take one reading. The first is the baseline: it holds every process and says nothing about the window."""
         if self.since is None:
             self.since = now
+        if self.last is not None:
+            self.interval = round(now - self.last, 3)
+        self.last = now
         if self.prev is not None:
-            delta = fold(self.prev, reading)
+            delta = fold(self.prev, reading, scope)
             self.steps.append((now, delta))
             for parts, (cpu, events) in delta.items():
                 cell = self.acc.setdefault(parts, [0.0, 0])
@@ -189,3 +351,6 @@ class Window:
 
     def tree(self, root="loop"):
         return tree(self.acc, root)
+
+    def context(self):
+        return context(self.acc)
