@@ -47,6 +47,28 @@ mark() { rm -f "$ST/auto/nightly-$(date +%F)"; }
 # The live check starts detached, so it may still sample when ng returns. lc_wait waits for its record and the release of its
 # own lock, so a case that reads the result never reads a stale or half-written state.
 lc_wait() { local i=0; while [ $i -lt 400 ] && { [ ! -e "$ST/live-check-result" ] || [ -d "$ST/locks/live-check" ]; }; do sleep 0.05; i=$((i+1)); done; }
+# The live check is detached, so the suite owns its end (#1722): the check's serial lock and lease name its pid, and the suite
+# ends it and the reading it leads, by process group, before it exits, a red run included. The guard at the end fails when
+# one is still alive.
+ckpid() { local f p; for f in "$ST/locks/live-check/pid" "$ST/live-check.lease/pid"; do
+    [ -f "$f" ] && { p=$(cat "$f" 2>/dev/null); case $p in ''|*[!0-9]*) ;; *) printf '%s\n' "$p";; esac; }; done; }
+# A pid that is alive and not a zombie: a killed check the suite's own subshell has not reaped yet is gone. Linux's /proc
+# names the state; where it is absent a live pid is the reading.
+alive_pid() { kill -0 "$1" 2>/dev/null || return 1
+  if [ -r "/proc/$1/stat" ]; then [ "$(cut -d' ' -f3 "/proc/$1/stat")" = Z ] && return 1; fi; return 0; }
+# end_one signals the pid's group first: a door's own pid leads the group its reading runs in, so the group kill reaches the
+# `squad.livecheck` child too. A pid that leads no group (the serial holder) gets the TERM its own trap answers by stopping
+# the group. No ps is needed to tell them apart: a group kill that finds no group falls back to the pid.
+end_one() { kill -TERM -- "-$1" 2>/dev/null || kill -TERM "$1" 2>/dev/null; }
+end_check() { local p pass i
+  for pass in 1 2 3 4; do
+    for p in $(ckpid); do alive_pid "$p" && end_one "$p"; done
+    i=0; while [ -n "$(ckpid)" ] && [ $i -lt 20 ]; do sleep 0.05; i=$((i+1)); done
+    [ -z "$(ckpid)" ] && return 0
+    sleep 0.2   # re-scan after a short settle: a check that took its lease while the scan above ran
+  done
+  for p in $(ckpid); do kill -KILL -- "-$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null; done; }
+trap end_check EXIT
 # json_ids <field>: 0 when the field is ONE JSON array of strings, the one encoding both readers parse (#704)
 json_ids() { printf '%s' "$1" | python3 -c 'import json,sys
 try: v=json.load(sys.stdin)
@@ -592,5 +614,22 @@ mark; rm -f "$T/ran.log"; out=$(ng SG_CHECKOUT="$T/src"); rc=$?
 rm -f "$ST/locks/gate/pid"
 nrun "a gate lock with no live pid is stale and never holds"
 rm -rf "$ST/locks/gate"
+
+# 28) (#1722) the nightly starts the live check detached, so the suite owns its end. A check that keeps a window longer than
+#     this case is still alive when the nightly body returns: a suite that does not end it leaks `live-check.sh --run` and
+#     its `squad.livecheck` reading for that whole window, orphaned to pid 1. The case waits for the check to name its pid,
+#     proves it is alive after a short wait, then the suite ends it by pid and group and proves it is gone, so a green guard
+#     cannot pass by the check's own timer.
+mark; rm -f "$T/ran.log"; out=$(ng SG_LIVE_CHECK_WINDOW_SECONDS=60); rc=$?
+[ $rc = 0 ] && ok "a nightly whose live check keeps a long window ends" || ko "long-window nightly rc $rc: '$out'"
+i=0; while [ -z "$(ckpid)" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done   # bounded: the check takes its lease a moment after the body returns
+p=$(ckpid | awk 'NR==1')
+[ -n "$p" ] && alive_pid "$p" && ok "a detached long-window check outlives the nightly body" \
+  || ko "no live check was alive to end: '$p', log '$(cat "$ST/live-check.log" 2>/dev/null)'"
+sleep 0.3   # a short fixed wait, far below the check's own window: a check left here would leak for its whole window
+alive_pid "$p" && ok "the check is still alive, so the suite must end it" || ko "the check ended on its own, so the guard proves nothing"
+end_check
+i=0; while [ -n "$(ckpid)" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done
+[ -z "$(ckpid)" ] && ok "the suite ends the check it started by pid" || ko "the check the suite started is still alive: $(ckpid)"
 
 rm -rf "$T"; exit $fail
