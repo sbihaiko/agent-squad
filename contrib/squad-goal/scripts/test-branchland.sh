@@ -121,6 +121,23 @@ reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_INC" SG_
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && [ ! -e "$T/rerun.log" ] && ok "an inconclusive gate: nothing lands and no rerun runs" || ko "inconclusive gate: rerun '$(cat "$T/rerun.log" 2>&1)': '$r'"
 case "$r" in *"BRANCHLAND WAIT gui/7-x"*inconclusive*) ok "an inconclusive gate says so";; *) ko "inconclusive gate line: '$r'";; esac
 /usr/bin/grep -qh "inconclusive" "$T/st/cq/"x__y#7-status~* 2>/dev/null && ok "the status comment names the inconclusive result" || ko "inconclusive status: $(cat "$T/st/cq/"* 2>&1)"
+# (#1684) A gate the machine's full budget kept from running (exit 73) read the tree not at all: nothing lands, no rerun runs,
+# and no fix round is opened for a tree no battery saw. One line says the budget was full, and so does the status comment.
+GATE_CAP="echo gate >> $T/gate.log; echo 'caps: caps.gates is full (6 slots), held by gate-1: gate-2 skipped, not queued (try)'; exit 73"
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_CAP" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && [ ! -e "$T/rerun.log" ] && ok "a gate with no slot to take: nothing lands and no rerun runs" || ko "capacity gate: rerun '$(cat "$T/rerun.log" 2>&1)': '$r'"
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*"budget was full"*) ok "a gate with no slot says the machine's budget was full";; *) ko "capacity line: '$r'";; esac
+ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ko "a gate that never ran opened a fix round" || ok "a gate that never ran opens no fix round"
+/usr/bin/grep -qh "budget was full" "$T/st/cq/"x__y#7-status~* 2>/dev/null && ok "the status comment names the full budget" || ko "capacity status: $(cat "$T/st/cq/"* 2>&1)"
+# A full budget is transient, so it writes no wait marker: the marker is one line per head and base, and the branch would stay
+# out of the gate until the base moved. The next pass gates it again.
+reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_CAP" CHECKS='{"check_runs":[]}' bl); r2=$(SG_LOCAL_GATE_CMD="$GATE_CAP" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "a full budget writes no wait marker: the next pass gates the branch again" || ko "the branch waited on a marker a full budget wrote: '$(cat "$T/gate.log" 2>&1)'"
+# A measured red is never cleared by a retry that never ran: the rerun meets the full budget, and the red keeps its fix round.
+RERUN_CAP="echo 'caps: caps.gates is full (6 slots), held by gate-1: gate-2 skipped, not queued (try)'; exit 73"
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_CAP" CHECKS='{"check_runs":[]}' bl)
+ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ok "a red whose rerun met a full budget keeps its fix round" || ko "a rerun that never ran cleared the red: '$r'"
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*failed*) ok "the line still names the red, never the budget";; *) ko "the red's line: '$r'";; esac
 # The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and with the
 # 2 s line off: that line is the CI speed rule, and this machine's load is not a defect of the branch; the 20 s cap stays.
 printf '#!/bin/bash\necho "SG_STATE=${SG_STATE:-unset} $*" >> %s/py.log\ncase "$*" in *squad.testselect*) echo "all: stub";; esac\n' "$T" > "$T/py"; chmod +x "$T/py"
