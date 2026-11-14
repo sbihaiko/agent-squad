@@ -763,3 +763,16 @@ def test_a_second_off_returns_only_when_the_sampler_has_ended(hub, monkeypatch):
     second.join(3)
     assert waited, "the second off returned while the sampler still ran"
     assert not first.is_alive() and not second.is_alive() and not mod.profiler_running()
+
+
+def test_a_quoted_argument_of_a_nested_shell_names_nothing(prof):
+    assert prof.label("bash -c cd /x && bash -c echo \"z; bash /x/watch.sh\"") is None
+    assert prof.label("bash -c cd /x && bash -c \"cd /y && bash /x/watch.sh\"") == ("watch.sh", "driver")
+
+
+def test_a_reused_pid_in_the_pid_file_gives_this_loop_no_supervisor(prof):
+    """A stale pid file whose pid another program took names no parent: the loop above it is another loop."""
+    a = rd({30: (1, 0.0, f"bash {S}/watchd.sh run"), 31: (30, 0.0, "sleep 9")})
+    b = rd({30: (1, 1.0, f"bash {S}/watchd.sh run"), 31: (30, 0.0, "sleep 9")})
+    acc = prof.fold(a, b, prof.Scope(31, (f"{S}/",)))
+    assert names(prof.tree(acc)) == []
