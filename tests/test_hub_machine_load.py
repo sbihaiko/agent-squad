@@ -856,6 +856,9 @@ def test_a_provider_with_no_weekly_window_shows_its_monthly_share(hub, monkeypat
     assert rows["grok"]["pct"] == 7.7 and rows["grok"]["window"] == "month"
 
 
+# The case reads the live machine's subscription stores through the hub's own SUBS and plan reader, which runs past the
+# 1 s line here (CLAUDE.md; test_slow_cap.py).
+@pytest.mark.heavy
 def test_a_retired_subscription_in_the_stores_surfaces_nowhere(hub, monkeypatch, tmp_path):
     """A subscription the owner cancelled can still sit in the quota cache and the plans file. The Usage panel, the
     Subscriptions list, the plan reader, the preset catalog and the footer read SUBS only, so it never shows."""
