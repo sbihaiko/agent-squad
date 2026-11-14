@@ -2666,7 +2666,7 @@ def status_payload():
     items = board_cache.get("items") or []
     return {"loop": loop_status(),
             "live": sum(1 for r in run_list() if r.get("live")),
-            "spend_today": stats("day")["totals"]["today"],
+            "spend_today": spend_today(),
             "open_bugs": sum(1 for i in items if str(i.get("s")).upper() == "OPEN" and "bug" in (i.get("l") or [])),
             "warnings": [{"text": f["text"], "tip": f.get("tip")} for f in (LOAD_STATE.get("facts") or []) if f.get("bad")],
             "load": load_payload(), "build": HUB_BUILD}
@@ -3102,6 +3102,23 @@ def stats(period, src="both"):
                     key=lambda x: -(x["in"] + x["out"]))
     pace = spend_pace(allr, calls, time.time(), src)
     return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
+
+def spend_today(now=None):
+    """Today's spend for the status tab, read without the history `stats` parses: a run's bucket is its start, and a run
+    folder is named for that local date, so only today's and yesterday's folders are read (a run that starts before
+    midnight and answers after it keeps yesterday's folder). The bucket rule is the day bucket of `stats`, and the two
+    are asserted equal so the meter and the chart never disagree (#1696)."""
+    at = time.time() if now is None else now
+    today = time.localtime(at)[:3]
+    days = [time.strftime("%Y%m%d", time.localtime(at - n * 86400)) for n in (0, 1)]
+    spend = 0.0
+    for d in project_dirs():
+        for day in days:
+            for rd in d.glob(f"run-{day}-*"):
+                r = scan(rd / "record.jsonl")
+                if r and r["t0"] and time.localtime(r["t0"])[:3] == today: spend += r["spend"]
+    spend += sum(_billed("both", c["model"], c["spend"]) for c in ledger_calls() if time.localtime(c["t0"])[:3] == today)
+    return round(spend, 2)
 
 def adapter_errors():
     """Every `adapter_error` run verdict of the run folders still on disk, counted by (model, backend, cause) (#698).
