@@ -340,8 +340,10 @@ def test_a_dynamic_test_that_declares_the_changed_path_answers_its_list_not_all(
     assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_dyn.py"]
 
 
-def test_a_dynamic_test_that_declares_another_path_still_answers_all_on_an_undeclared_edge(tmp_path):
-    """A declaration for one path proves nothing about another: the import edge to the changed module still answers `all`."""
+def test_a_dynamic_test_on_an_undeclared_edge_is_selected_and_never_asks_for_the_battery(tmp_path):
+    """A test on the edge is reached, so it is selected; its own dynamic load hides no importer whose selection a wider answer
+    would protect. A declaration for another path therefore costs this one test nothing: the edge answers the tests, never the
+    full battery (ADR-0169)."""
     loader = (
         "import importlib\n"
         "from squad import beta\n"
@@ -352,5 +354,29 @@ def test_a_dynamic_test_that_declares_another_path_still_answers_all_on_an_undec
         "    return importlib.import_module('squad.' + name)\n"
     )
     repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"}, extra={"tests/test_dyn.py": loader})
-    lines = select(repo)
-    assert len(lines) == 1 and lines[0].startswith("all: ") and "tests/test_dyn.py" in lines[0]
+    assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_dyn.py"]
+
+
+def test_the_measured_seconds_file_selects_its_readers_though_one_loads_a_script_by_path(tmp_path):
+    """The shape a hand gate meets: a script change edits the measured line of its suite, the selector maps that data file to
+    its reader, and a test importing the reader also loads a script by a computed path. The reader's tests are the delta; their
+    own dynamic load never widens the answer to the full battery (ADR-0169)."""
+    reader = "def run(p):\n    return None\n"
+    dynamic_reader = (
+        "import importlib.util\n"
+        "from tests import shell_suites\n"
+        "\n"
+        "SCRIPTS = 'contrib/squad-goal/scripts'\n"
+        "SPEC = importlib.util.spec_from_file_location('m', SCRIPTS + '/watchd.sh')\n"
+    )
+    repo = tip(
+        tmp_path,
+        {"tests/shell_suites_seconds.txt": "suite 1\nsuite 2\n"},
+        extra={
+            "tests/shell_suites_seconds.txt": "suite 1\n",
+            "tests/shell_suites.py": reader,
+            "tests/test_reader.py": "from tests import shell_suites\n",
+            "tests/test_dynamic.py": dynamic_reader,
+        },
+    )
+    assert select(repo) == ["tests/test_dynamic.py", "tests/test_reader.py"]

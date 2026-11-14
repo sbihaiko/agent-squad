@@ -2,8 +2,8 @@
 # usage: fast-gate.sh      the fast gate of a work-branch tip or of a child that enters a wave (ADR-0145), run in that tip's worktree.
 #
 # It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD) at the `fast` stage, so the pytest runs the delta the
-# tip reaches and then once more serially at the same files and the project's 2 s line (the line the CI serial tier enforces,
-# which the parallel run only names), then the shell suite test-<script>.sh of every .sh or .py
+# tip reaches in one pass: the parallel run records every unmarked call at or over the project's 2 s line (the line the CI
+# serial tier enforces), and only those calls run once more, serially, against it (#1726), then the shell suite test-<script>.sh of every .sh or .py
 # script under contrib/squad-goal/scripts that the tip changes, and every fixture suite whose `# mirrors:` line names a changed
 # file; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
 # against its merge-base with SG_FAST_BASE (default origin/$SG_BASE, else origin/dev), so work that landed on the base after the

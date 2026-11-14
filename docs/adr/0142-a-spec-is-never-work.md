@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Accepted. Rewritten in place on the owner decision, verbatim: "ADR-0142's decision that a dispatcher takes an issue
+only when its card sits in Todo and it carries the go label becomes the column plus no holder label."
 
 ## Context
 
@@ -29,16 +30,15 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
 4. **A child of a spec carries the spec's number in its title**, `[SPEC <n>] <title>`. The prefix is
    a reading aid for a person; the sub-issue link is the fact, and it is the relation the tracker
    carries.
-5. **The column Todo is the owner's go signal.** A dispatcher (`autofrontier`, `autobug`) takes an
-   issue only when its card sits in Todo and it carries the go label (`ready-for-agent`). The label
-   says only that an agent may take the issue; the owner starts it by moving its card to Todo. A card
-   with no column is not in Todo. A spec and its tickets are created with their card in Backlog; a
-   bug is created in Todo. The loop never moves a card into Backlog or Todo on its own; only the
-   owner's move starts that. A spec's card stays in Todo while any of its tickets is in flight,
-   and it never follows a ticket into Doing: the spec is a document, and its lane reports how many
-   tickets sit in each column. The spec closes when all its tickets close. The column
-   carries no blocking edge — a ticket whose blocker is still open waits on the dispatch's reading of
-   that edge, not on a column of its own.
+5. **The column Todo is the owner's go signal.** A dispatcher (`autofrontier`, `autobug`) takes an issue when its card
+   sits in Todo and the issue carries no holder label (`ready-for-human`, `ready-for-HAL9K`) and no hold. An absent
+   triage label authorizes: the pass writes `ready-for-agent` on the issue in the same act, as the record that the loop
+   took it. The owner starts an issue by moving its card to Todo. A card with no column is not in Todo. A spec and its
+   tickets are created with their card in Backlog; a bug is created in Todo. The loop never moves a card into Backlog or
+   Todo on its own; only the owner's move starts that. A spec's card stays in Todo while any of its tickets is in flight,
+   and it never follows a ticket into Doing: the spec is a document, and its lane reports how many tickets sit in each
+   column. The spec closes when all its tickets close. The column carries no blocking edge — a ticket whose blocker is
+   still open waits on the dispatch's reading of that edge, not on a column of its own.
 6. **The owner starts a spec by moving its card to Todo, and its tickets follow.** When a spec's card
    sits in Todo, each open ticket of it whose card is in Backlog, or has no column, moves to Todo.
    The move is forward only (ADR-0143): a ticket past Backlog keeps its column. The spec's column is
@@ -49,9 +49,9 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
    tracker's count: at least one sub-issue, and every one closed. A spec with no sub-issue proves
    nothing and stays open. The close carries a comment that names the count, and the card follows
    the issue to Done.
-8. **Every ticket that is not a spec gets the go label at creation; a spec never carries it.** The
-   skill that cuts tickets does not hold the label back until the blockers close; the repository's
-   `stack.sh` holds a blocked ticket. The spec needs no label: its card is the signal.
+8. **A ticket needs no triage label to be taken, and a spec never carries one.** The dispatch takes a ticket from its
+   column and writes `ready-for-agent` in Todo. The label waits for no blocker; the repository's `stack.sh` holds a
+   blocked ticket. The spec needs no label: its card is the signal.
 9. **Only the owner approves a spec's breakdown.** The autonomy panel never approves one unless the
    owner asked for it in the session. With the owner away, the breakdown waits.
 
@@ -75,5 +75,6 @@ child in the skill that cuts the tickets. `contrib/squad-goal/scripts/test-janit
 proves the column: a spec with no card is added in Backlog, and a child of it with an open
 blocker is added in Backlog, each in one write; a spec whose every sub-issue is closed is closed,
 and one with an open sub-issue or none stays open; a spec in Todo moves its Backlog tickets to Todo,
-and a spec in Backlog moves none. The autofrontier and autobug suites prove the go
-signal: a labelled issue whose card is not in Todo is not dispatched.
+and a spec in Backlog moves none. The autofrontier and autobug suites prove the
+signal: a card in Todo whose issue carries no holder is dispatched, and an issue that carries a holder, or whose card
+is not in Todo, is not.

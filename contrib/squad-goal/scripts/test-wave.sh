@@ -1050,7 +1050,7 @@ tipcmd=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" "$T/selpy" wave-tip 2>/dev/
 rm -rf "$T/tipclone"; $G clone -q "$T/origin.git" "$T/tipclone" 2>/dev/null
 printf 'tests/test_a.py\n' > "$T/select.out"; rm -f "$T/argv.log"
 r=$(cd "$T/tipclone" && SG_GATE_WORKERS=3 SG_STATE="$T/st" bash -c "$tipcmd" 2>&1); rc=$?
-[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy tests/test_a.py" "$T/argv.log" && ok "the wave tip check passes the selection to pytest" || ko "tip check argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $r"
+[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -n 3 -m not heavy tests/test_a.py" "$T/argv.log" && ok "the wave tip check passes the selection to pytest" || ko "tip check argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $r"
 /usr/bin/grep -q -- "squad.testselect --stage wave-tip --base origin/dev" "$T/argv.log" && ok "the wave tip check selects the delta at the wave-tip stage" || ko "wave-tip stage: '$(cat "$T/argv.log" 2>&1)'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass selected 1 files delta" ] && ok "the wave tip check's status line states the selected file count and the delta scope" || ko "tip check status: '$(cat "$T/st/gate-status" 2>&1)'"

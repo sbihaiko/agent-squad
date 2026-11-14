@@ -138,15 +138,16 @@ RERUN_CAP="echo 'caps: caps.gates is full (6 slots), held by gate-1: gate-2 skip
 reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_CAP" CHECKS='{"check_runs":[]}' bl)
 ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ok "a red whose rerun met a full budget keeps its fix round" || ko "a rerun that never ran cleared the red: '$r'"
 case "$r" in *"BRANCHLAND WAIT gui/7-x"*failed*) ok "the line still names the red, never the budget";; *) ko "the red's line: '$r'";; esac
-# The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and with the
-# 2 s line off: that line is the CI speed rule, and this machine's load is not a defect of the branch; the 20 s cap stays.
+# The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and at the
+# project's own line: the parallel pass lifts no cap, so it records every unmarked call at or over 2 s and only those run
+# again, serially (#1726).
 printf '#!/bin/bash\necho "SG_STATE=${SG_STATE:-unset} $*" >> %s/py.log\ncase "$*" in *squad.testselect*) echo "all: stub";; esac\n' "$T" > "$T/py"; chmod +x "$T/py"
 reset; rm -f "$T/py.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/py" CHECKS='{"check_runs":[]}' bl)
 # The gate lock's process read (serial.sh's incarnation check) runs in the loop env and needs SG_STATE (#1508); only the gate
 # command inside gate.sh is stripped, so the proof reads every line but that reader's. It is read by shape, not by caller: the
 # interpreter is the gate's own (#1086), so the stub logs the reader's call beside the tools'.
 /usr/bin/grep -q 'pytest' "$T/py.log" 2>/dev/null && ! /usr/bin/grep -v -- ' -m squad.procs ' "$T/py.log" | /usr/bin/grep -q 'SG_STATE=/' && ok "the default gate runs with no SG_* variable" || ko "the gate saw the loop env: $(cat "$T/py.log" 2>&1)"
-/usr/bin/grep 'pytest' "$T/py.log" 2>/dev/null | /usr/bin/grep -q -- '-o heavy_cap_seconds=20' && ok "the default gate lifts the 2 s line to the 20 s cap" || ko "the gate keeps the 2 s line: $(grep pytest "$T/py.log" 2>&1)"
+/usr/bin/grep 'pytest' "$T/py.log" 2>/dev/null | /usr/bin/grep -q -- '-o heavy_cap_seconds' && ko "the default gate lifts the project line: $(grep pytest "$T/py.log" 2>&1)" || ok "the default gate runs at the project line and lifts no cap (#1726)"
 # The gate proves what lands: the tip rebased onto dev, never the bare tip. A red the branch inherited from an old base is fixed
 # on dev, so the branch lands once dev carries the fix, and a failed gate runs again when dev moves.
 GATE_FIXED="echo \"\$PWD \$(/usr/bin/git rev-parse HEAD)\" >> $T/gate.log; test -f fixed || { echo 'inherited red'; exit 1; }"
@@ -354,7 +355,7 @@ printf '#!/bin/bash\necho "$*" >> "%s/selpy.log"\ncase "$*" in *squad.testselect
 printf 'tests/test_a.py\n' > "$T/select.out"
 reset; rm -f "$T/selpy.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/selpy" SG_GATE_WORKERS=3 CHECKS='{"check_runs":[]}' bl)
 /usr/bin/grep -q -- "squad.testselect --stage landing --base refs/sg-gate/dev" "$T/selpy.log" 2>/dev/null && ok "the landing check asks the selector at the landing stage" || ko "landing stage: '$(cat "$T/selpy.log" 2>&1)' $r"
-/usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy" "$T/selpy.log" 2>/dev/null && ok "the landing check runs the full battery, never the selection" || ko "landing check argv: '$(cat "$T/selpy.log" 2>&1)' $r"
+/usr/bin/grep -qx -- "-m pytest -p no:deepeval -n 3 -m not heavy" "$T/selpy.log" 2>/dev/null && ok "the landing check runs the full battery, never the selection" || ko "landing check argv: '$(cat "$T/selpy.log" 2>&1)' $r"
 ! /usr/bin/grep -q "tests/test_a.py" "$T/selpy.log" && ok "the landing check narrows nothing a delta would have selected" || ko "landing check selected: '$(cat "$T/selpy.log" 2>&1)'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass all: landing runs the full battery full" ] && ok "the landing check's status line states the full scope and its reason" || ko "landing status: '$(cat "$T/st/gate-status" 2>&1)'"

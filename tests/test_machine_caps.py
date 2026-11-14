@@ -637,6 +637,7 @@ def childcc_fixture(tmp_path):
     return scripts / "childcc.py", tmp_path / "co", env
 
 
+@pytest.mark.heavy   # four CLI calls and a childcc subprocess: 2.9 s here, over the 2 s line
 def test_a_review_in_childcc_never_waits_for_a_slot_while_it_holds_the_childcc_lock(tmp_path):
     script, co, env = childcc_fixture(tmp_path)
     alive = str(os.getpid())

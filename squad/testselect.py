@@ -122,14 +122,16 @@ def _reach(start, start_rel, importers, dynamic):
             continue
         seen.add(name)
         for rel in importers.get(name, ()):
-            # A test that declared the changed path is answered by that declaration; one that declared another path only
-            # proves nothing about this edge, so the edge still answers `all` rather than drop it.
-            if rel in dynamic and start_rel not in dynamic[rel]:
-                _all(f"{rel} imports dynamically and reaches {start_rel}")
+            # A test reached by this edge is selected, and nothing else rests on it: no importer's selection can be hidden
+            # behind its own dynamic load, so it never answers `all` (ADR-0169).
             if _is_test(rel):
                 reached.add(rel)
-            else:
-                queue.append(_module(rel))
+                continue
+            # A module that declared the changed path is answered by that declaration; one that declared another path only
+            # proves nothing about this edge, so the edge still answers `all` rather than drop the importers it hides.
+            if rel in dynamic and start_rel not in dynamic[rel]:
+                _all(f"{rel} imports dynamically and reaches {start_rel}")
+            queue.append(_module(rel))
     return reached
 
 

@@ -1126,6 +1126,16 @@ r=$(bash "$T/s/autobug.sh" 2>&1)
 [ -z "$(L1 pending 'x/y#1228')" ] && ok "30 the landed event is marked written" || ko "30 landed still pending: '$(L1 pending 'x/y#1228')'"
 [ "$(L1 read 'x/y#1228' board | python3 -c 'import json,sys; print(json.load(sys.stdin).get("by",""))')" = "autobug resume" ] \
   && ok "30 the resume pass names itself as the actor of the landed write" || ko "30 landed write actor: '$(L1 read 'x/y#1228' board)'"
+# The column plus no holder is the candidate rule (#1679, ADR-0142, ADR-0165): a pending Doing event whose Todo card
+# carries no triage label and no holder still launches its stored request. The go label is the pass's record, never a
+# gate the resume reads.
+ab_fresh; pending_doing autobug-untriaged
+jq '.[0].labels -= ["ready-for-agent"]' "$T/issues.json" > "$T/issues.tmp" && mv "$T/issues.tmp" "$T/issues.json"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ "$(cat "$T/launches" 2>/dev/null)" = "$T/st/req/autobug-untriaged.json" ] \
+  && ok "30 a pending Doing event on a Todo card with no holder launches, with no go label" \
+  || ko "30 an untriaged Todo card did not launch: '$(cat "$T/launches" 2>/dev/null)' / $r"
+[ -z "$(L1 pending 'x/y#1228')" ] && ok "30 the untriaged event is marked written" || ko "30 untriaged still pending: '$(L1 pending 'x/y#1228')'"
 
 # 31) (#1021, review) a pick whose ledger records fail partway records nothing: the events already recorded are dropped, so
 # no later resume launches part of the pick. The ledger refuses the second issue's event only (a flag file arms it).

@@ -155,20 +155,23 @@ case "$retryline" in *heavy_cap_seconds*) ko "the serial retry lifts the 2 s lin
 /usr/bin/grep -qE 'SG_GATE_WORKERS:=[0-9]+' "$d/env.sh" && ok "env.sh holds the default worker count" || ko "env.sh: no numeric SG_GATE_WORKERS default"
 # (#646) The base battery's pytest runs over the selection the selector answers for the base. A stub python logs each call's argv
 # on one line and answers squad.testselect from $T/select.out, so each pytest line is compared exactly, never by one word.
-printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in\n  *squad.testselect*) cat "%s/select.out" 2>/dev/null;;\n  *pytest*) [ "$PY_FAIL" = 1 ] && { echo "FAILED tests/test_a.py::test_one - boom"; exit 1; };;\nesac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
+printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in\n  *squad.testselect*) cat "%s/select.out" 2>/dev/null;;\n  *pytest*)\n    case "$*" in *" -n "*) for s in $SLOW_IDS; do echo "SLOW-UNMARKED (deferred to the serial run): $s took 9.0 s, at or over the heavy line; the serial run enforces it"; done;; esac\n    [ "$PY_FAIL" = 1 ] && { echo "FAILED tests/test_a.py::test_one - boom"; exit 1; };;\nesac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
 printf '#!/bin/bash\necho "$*" >> "%s/retry.log"\n' "$T" > "$T/retry.sh"
 selrun() { rm -f "$T/argv.log" "$T/retry.log" "$SG_STATE/gate-status"; (cd "$R" && env -u SG_TEST_SELECT -u SG_FAST_CMD SG_FAST_BASE=dev SG_GATE_PY="$T/selpy" SG_GATE_WORKERS=3 SG_FAST_RETRY_CMD="bash $T/retry.sh" "$@" bash "$d/fast-gate.sh" 2>&1); }
-PYTEST_OPTS='-p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy'
+PYTEST_OPTS='-p no:deepeval -n 3 -m not heavy'
 printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS tests/test_a.py tests/test_b.py" "$T/argv.log" && ok "the battery passes the selection to pytest, after the unchanged options" || ko "selection argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
 /usr/bin/grep -q -- "squad.testselect --stage fast --base dev" "$T/argv.log" && ok "the fast gate asks the selector at the fast stage" || ko "fast stage: '$(cat "$T/argv.log" 2>&1)'"
-# (#1557) The delta runs once more serially over the same files, at the project's own cap: the 2 s line CI's serial shards
-# enforce, which the parallel run lifts to 20 s. A full selection is not repeated: the whole battery serially is the
-# promotion proof's run, and it outgrows the gate's budget.
+# (#1726, #1557) The parallel pass runs at the project's own line: an unmarked call over it is recorded there, and only the
+# recorded calls run once more, serially, against that line. A selection with no recorded call ends the gate there, with no
+# second pytest run.
 SERIAL_OPTS='-p no:deepeval -p no:xdist -m not heavy'
-/usr/bin/grep -qx -- "-m pytest $SERIAL_OPTS tests/test_a.py tests/test_b.py" "$T/argv.log" && ok "the delta runs a second, serial pass over the same files at the 2 s line" || ko "serial pass: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
-[ "$(/usr/bin/grep -c -- '-m pytest' "$T/argv.log")" = 2 ] && ok "the delta runs exactly two pytest passes, one parallel and one serial" || ko "delta pytest passes: '$(/usr/bin/grep -- '-m pytest' "$T/argv.log" 2>&1)'"
+[ "$(/usr/bin/grep -c -- '-m pytest' "$T/argv.log")" = 1 ] && ok "1726 no call over the project line: the gate runs no second pytest" || ko "1726 second pytest: '$(/usr/bin/grep -- '-m pytest' "$T/argv.log" 2>&1)'"
+out=$(SLOW_IDS="tests/test_a.py::test_one" selrun); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -- '-m pytest' "$T/argv.log" | tail -n 1)" = "-m pytest $SERIAL_OPTS tests/test_a.py::test_one" ] \
+  && [ "$(/usr/bin/grep -c -- '-m pytest' "$T/argv.log")" = 2 ] \
+  && ok "1726 only the recorded call runs once more, serially, at the line" || ko "1726 serial rerun: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass selected 2 files delta" ] && ok "the status line states the selected file count and the delta scope" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 echo "all: no test imports squad/x.py" > "$T/select.out"
@@ -560,24 +563,40 @@ w=$(wcase SG_GATE_CALLER=entry); [ "$w" = 6 ] && ok "an entry gate keeps the ful
 w=$(wcase SG_GATE_CALLER=entry SG_GATE_WORKERS=3); [ "$w" = 3 ] && ok "a count named by the caller wins over the kind's default" || ko "named count: '$w', want 3"
 w=$(wcase SG_GATE_CALLER=child SG_GATE_WORKERS=5); [ "$w" = 5 ] && ok "a child gate named a count of its own: it wins" || ko "child named count: '$w', want 5"
 
-# (#1557) The gate proves the serial 2 s line end to end: a test whose unmarked call sits over the project's heavy line is
-# green in the parallel pass, which lifts the line to 20 s, and red in the serial pass the gate now runs. The retry keeps the
-# line, so it never clears the finding as saturation. The trial repo sets its own line at 0.05 s, so a 0.3 s call fails
-# whatever the machine load and the case stays inside the gate's budget.
+# (#1557, #1726) The gate proves the serial 2 s line end to end: a test whose unmarked call sits over the project's heavy
+# line is recorded by the parallel pass, at that line, and red when only it runs again serially. The retry keeps the line, so
+# it never clears the finding as saturation. The trial repo sets its own line at 0.05 s, so a 0.3 s call fails whatever the
+# machine load and the case stays inside the gate's budget.
 sc=$T/slowcap-repo; mkdir -p "$sc/tests"
 cp "$d/../../../tests/slowcap.py" "$sc/slowcap.py"
 printf 'pytest_plugins = ["slowcap"]\n' > "$sc/conftest.py"
 printf '[tool.pytest.ini_options]\naddopts = "-p no:cacheprovider"\nheavy_cap_seconds = "0.05"\n' > "$sc/pyproject.toml"
 printf 'import time\n\ndef test_unmarked_slow():\n    time.sleep(0.3)\n' > "$sc/tests/test_slow.py"
 pyreal=$(cd "$d/../../.." && env -u SG_GATE_PY -u SG_CHECKOUT bash -c '. contrib/squad-goal/scripts/caps.sh; sg_gate_python')
-printf '#!/bin/bash\ncase "$*" in\n  *squad.testselect*) echo tests/test_slow.py;;\n  *"-m pytest"*) exec %q "$@";;\nesac\nexit 0\n' "$pyreal" > "$sc/py"; chmod +x "$sc/py"
+printf '#!/bin/bash\necho "$*" >> "%s/sc-argv.log"\ncase "$*" in\n  *squad.testselect*) echo tests/test_slow.py;;\n  *"-m pytest"*) exec %q "$@";;\nesac\nexit 0\n' "$T" "$pyreal" > "$sc/py"; chmod +x "$sc/py"
 git init -q -b dev "$sc"; $G -C "$sc" add -A; $G -C "$sc" commit -q -m base
 slowgate() { (cd "$sc" && env -u SG_FAST_CMD -u SG_TEST_SELECT -u SG_FAST_RETRY_CMD SG_STATE="$T/sc-st" SG_FAST_LOG_DIR="$T/sc-logs" SG_FAST_BASE=dev SG_FAST_MEMO=0 SG_GATE_PY="$sc/py" bash "$d/fast-gate.sh" 2>&1); }
 out=$(slowgate); rc=$?
 [ $rc = 1 ] && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_slow.py::test_unmarked_slow"*) true;; *) false;; esac \
-  && ok "a slow unmarked call over the serial line fails the local gate, by name" || ko "slow unmarked call: rc $rc, last '$(last "$out")'"
+  && ok "1726 a slow unmarked call over the line is recorded, run again serially, and fails the gate by name" || ko "slow unmarked call: rc $rc, last '$(last "$out")'"
+/usr/bin/grep -qx -- "-m pytest -p no:deepeval -p no:xdist -m not heavy tests/test_slow.py::test_unmarked_slow" "$T/sc-argv.log" \
+  && ! /usr/bin/grep -qx -- "-m pytest -p no:deepeval -p no:xdist -m not heavy tests/test_slow.py" "$T/sc-argv.log" \
+  && ok "1726 the serial pass covers only the recorded call, never the whole selection" || ko "1726 serial scope: '$(cat "$T/sc-argv.log" 2>&1)'"
 if /usr/bin/grep -q "line for an unmarked call" "$T/sc-logs"/fast-gate-*.log 2>/dev/null; then ok "the log names the unmarked call over the line"
 else ko "slow log: '$(cat "$T/sc-logs"/fast-gate-*.log 2>&1 | tail -n 5)'"; fi
+# (#1726) A call that is slow only under parallel load is cleared by its serial run: the trial test sleeps 0.3 s inside an
+# xdist worker alone, so the parallel pass records it and the serial run passes it, and the gate passes.
+sl=$T/load-repo; mkdir -p "$sl/tests"
+cp "$d/../../../tests/slowcap.py" "$sl/slowcap.py"
+printf 'pytest_plugins = ["slowcap"]\n' > "$sl/conftest.py"
+printf '[tool.pytest.ini_options]\naddopts = "-p no:cacheprovider"\nheavy_cap_seconds = "0.05"\n' > "$sl/pyproject.toml"
+printf 'import os, time\n\ndef test_slow_under_load_only():\n    if os.environ.get("PYTEST_XDIST_WORKER"):\n        time.sleep(0.3)\n' > "$sl/tests/test_load.py"
+printf '#!/bin/bash\necho "$*" >> "%s/sl-argv.log"\ncase "$*" in\n  *squad.testselect*) echo tests/test_load.py;;\n  *"-m pytest"*) exec %q "$@";;\nesac\nexit 0\n' "$T" "$pyreal" > "$sl/py"; chmod +x "$sl/py"
+git init -q -b dev "$sl"; $G -C "$sl" add -A; $G -C "$sl" commit -q -m base
+loadgate() { (cd "$sl" && env -u SG_FAST_CMD -u SG_TEST_SELECT -u SG_FAST_RETRY_CMD SG_STATE="$T/sl-st" SG_FAST_LOG_DIR="$T/sl-logs" SG_FAST_BASE=dev SG_FAST_MEMO=0 SG_GATE_PY="$sl/py" bash "$d/fast-gate.sh" 2>&1); }
+out=$(loadgate); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -- '-m pytest' "$T/sl-argv.log" | tail -n 1)" = "-m pytest -p no:deepeval -p no:xdist -m not heavy tests/test_load.py::test_slow_under_load_only" ] \
+  && ok "1726 a call slow only under parallel load passes its own serial run, and the gate passes" || ko "1726 load-only call: rc $rc: '$(cat "$T/sl-argv.log" 2>&1)' '$(last "$out")'"
 
 # (#1684) A gate that cannot take its slots proved nothing and broke nothing: the machine's budget is full, so the fast gate
 # answers unproven (exit 4) on one line that names the budget. Called out as 73, it read as a red of the branch, and three

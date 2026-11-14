@@ -4,7 +4,7 @@ The triage vocabulary is three label strings on this repository's issue tracker.
 
 | Label | Kind | Meaning |
 | --- | --- | --- |
-| `ready-for-agent` | Permission | The agent may take the card once it is in Todo. |
+| `ready-for-agent` | Permission | The agent may take the card in Todo. An absent label authorizes when no holder and no hold is present; the dispatch pass writes this label in the same act. |
 | `ready-for-human` | Holder | A person implements the card. No dispatch pass takes it. |
 | `ready-for-HAL9K` | Holder | The HAL9K agent implements the card. No dispatch pass takes it. |
 
@@ -18,7 +18,7 @@ Every issue an agent creates also carries one product type label: `bug` for a de
 
 The holds are a floor of both dispatch lanes, the frontier pass and the bug pass. A card that carries a floor label is never a candidate, with or without `ready-for-agent`. A profile's own skip list adds labels and never removes one.
 
-The floor and lane tables below are the dispatch vocabulary, beside the triage vocabulary above: an operator applies and removes those labels by hand, as they apply a triage label, a floor label to hold a card and its removal to release the card. The dispatch passes read these labels by name; `triage-labels.sh` and `profile-check.sh` read the three triage labels alone.
+The floor and lane tables below are the dispatch vocabulary, beside the triage vocabulary above: an operator applies a floor or lane label by hand to hold a card, and removes it to release the card. The permission label is the pass's to write, never a step a person performs: the column is the go signal. The dispatch passes read these labels by name; `triage-labels.sh` and `profile-check.sh` read the three triage labels alone.
 
 | Floor label | Meaning |
 | --- | --- |

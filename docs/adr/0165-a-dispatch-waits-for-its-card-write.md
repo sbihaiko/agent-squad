@@ -1,5 +1,10 @@
 # A dispatch's card write is an event, and no run starts while it is pending
 
+## Status
+
+Accepted. Rewritten in place on the owner decision, verbatim: "ADR-0165's resume row, whose candidate gates include the
+go label, takes the same change."
+
 A dispatch moves its cards on the board before it launches a run. Each move is an event in the issue ledger, recorded
 pending before it is written, and it carries the instant it happened. The launch waits for the write to land. A write
 that did not land stays pending until a later pass writes it, so a crash between the event and the write loses nothing.
@@ -14,7 +19,7 @@ its run and column. An older instant never replaces a newer one, and the same ev
 | autobug dispatch | the card write lands | the event's own instant | Doing | the event is marked written, then the run launches |
 | autobug dispatch | a pick whose events do not all record | the recorded events, dropped | the event's column | the events already recorded are dropped unwritten, the claims are freed, nothing launches |
 | autobug dispatch | launch.py refuses the request | a new Todo event, instant after the Doing one | Todo | the claim is freed and the cards go back to Todo through the same door; the Todo event stays pending until written |
-| autobug resume | a pass finds a pending Doing event whose issues pass the candidate gates (open, no skip label, go label, card in Todo or Doing, not marked not startable, ledger not held) | the recorded instant | Doing | the card is written again (idempotent), then the stored request launches once; a refusal follows the launch-refusal row |
+| autobug resume | a pass finds a pending Doing event whose issues pass the candidate gates (open, no skip label, no holder label, card in Todo or Doing, not marked not startable, ledger not held) | the recorded instant | Doing | the card is written again (idempotent), then the stored request launches once; a refusal follows the launch-refusal row |
 | autobug resume | a pass finds a pending Doing event whose issues fail a gate | the recorded instant | none | the event is dropped unwritten, the claims are freed, nothing launches; the card stays where its owner left it |
 | autobug resume | a pass finds a pending Doing event whose request file is gone | the recorded instant | Todo | a Todo event is recorded and written; nothing launches |
 | autobug resume | a pass finds a pending Todo event | the recorded instant | Todo | the card is written again; nothing launches |

@@ -18,7 +18,27 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SG_STATE=$T/st SG_REPO=o/r SQUAD_CAPS
 export SG_LIVE_CHECK_WINDOW_SECONDS=3600
 pids=()
 hold() { sleep 300 >/dev/null 2>&1 & pids+=("$!"); printf '%s\n' "$!"; }
-cleanup() { local p; for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; [ ${#pids[@]} -gt 0 ] && wait "${pids[@]}" 2>/dev/null; rm -rf "$T"; }
+# The check a case starts is detached, so the suite ends every one of them, by pid and process group, before it exits, a red
+# run included: each fake reading records its own pid and its process group in its runs file. A check runs under serial.sh's
+# `set -m`, so its reading leads a group of its own, never the group the suite shares with its caller; the suite signals that
+# group, so the reading ends with the door. A lease in lc or le is the suite's own sleep holder, not a check.
+runs=("$T"/ra "$T"/rc "$T"/rd "$T"/re1 "$T"/re2 "$T"/rf "$T"/rh)
+ck_pids() { local f; for f in "${runs[@]}"; do [ -f "$f" ] && awk '/^start /{print $2}' "$f"; done; }
+ck_groups() { local f; for f in "${runs[@]}"; do [ -f "$f" ] && awk '/^start /{print $3}' "$f"; done; }
+alive() { kill -0 "$1" 2>/dev/null; }
+alive_group() { [ -n "$1" ] && kill -0 -- "-$1" 2>/dev/null; }
+left_of() { local p g; for p in $(awk '/^start /{print $2}' "$1" 2>/dev/null); do alive "$p" && printf '%s ' "$p"; done
+  for g in $(awk '/^start /{print $3}' "$1" 2>/dev/null); do alive_group "$g" && printf 'g%s ' "$g"; done; }
+left_checks() { local p g; for g in $(ck_groups | sort -u); do alive_group "$g" && printf 'g%s ' "$g"; done
+  for p in $(ck_pids | sort -u); do alive "$p" && printf '%s ' "$p"; done; }
+end_checks() { local g p i
+  for g in $(ck_groups | sort -u); do alive_group "$g" && kill -TERM -- "-$g" 2>/dev/null; done
+  for p in $(ck_pids | sort -u); do alive "$p" && kill -TERM "$p" 2>/dev/null; done
+  i=0; while [ -n "$(left_checks)" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done
+  for g in $(ck_groups | sort -u); do alive_group "$g" && kill -KILL -- "-$g" 2>/dev/null; done
+  for p in $(ck_pids | sort -u); do alive "$p" && kill -KILL "$p" 2>/dev/null; done; }
+cleanup() { local p; for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; [ ${#pids[@]} -gt 0 ] && wait "${pids[@]}" 2>/dev/null
+  end_checks; rm -rf "$T"; }
 trap cleanup EXIT
 fresh() { rm -rf "$T/st" "$T/caps"; mkdir -p "$T/st/locks/waiting" "$T/caps/waiting" "$T/caps/gates"; : > "$T/st/gate-history"; }
 age() { python3 -c 'import os,sys,time; t=time.time()-float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
@@ -162,7 +182,7 @@ cp "$d/live-check.sh" "$d/serial.sh" "$d/caps.sh" "$fake/contrib/squad-goal/scri
 cat > "$fake/squad/livecheck.py" <<'PY'
 import os, time
 if __name__ == "__main__":
-    with open(os.environ["FAKE_RUNS"], "a") as f: f.write("start\n")
+    with open(os.environ["FAKE_RUNS"], "a") as f: f.write("start %d %d\n" % (os.getpid(), os.getpgrp()))
     time.sleep(float(os.environ.get("FAKE_HOLD", "0.3")))
 PY
 fls=$fake/contrib/squad-goal/scripts/live-check.sh
@@ -210,5 +230,26 @@ settle "$T/lf" "$T/rf" 2
 # g) The nightly starts the check through the lease door, never by a bare detached start.
 /usr/bin/grep -q 'live-check.sh" --start' "$d/nightly.sh" && ! /usr/bin/grep -q 'nohup bash "$here/live-check.sh"' "$d/nightly.sh" \
   && ok "the nightly starts the check through the lease door" || ko "nightly.sh starts the check without the lease door"
+
+# h) A detached check outlives its case, so the suite ends it by pid (#1722). The check keeps the live default window (an
+# hour, far past the guard's wait) and a hold of a minute: no timer of its own can end it inside this suite, so a green
+# guard proves the suite ended it, never that the check ran out. This case is the suite's own evidence that end_checks acts.
+: > "$T/rh"; mkdir -p "$T/lh"
+FAKE_HOLD=60 SG_LIVE_CHECK_WINDOW_SECONDS=3600 SG_STATE=$T/lh FAKE_RUNS=$T/rh bash "$fls" --start >/dev/null 2>&1
+i=0; while [ "$(rl "$T/rh")" -lt 1 ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done
+sleep 0.5   # a short fixed wait, far below the window and the hold: a check left here leaks for its whole hour
+left=$(left_of "$T/rh")
+[ -n "$left" ] && ok "a detached check outlives its case" || ko "no detached check was alive to end: '$(cat "$T/rh" 2>&1)'"
+end_checks
+[ -z "$(left_of "$T/rh")" ] && ok "the suite ends a detached check by pid" || ko "the suite left a check alive: $(left_of "$T/rh")"
+
+# i) No check the suite started is alive when it exits (#1722): a short fixed wait for one a case above left, then the guard
+# names every pid or group still alive. The EXIT trap ends them, red or green.
+i=0; while [ -n "$(left_checks)" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done
+alive_checks=$(left_checks)
+[ -z "$alive_checks" ] && ok "no check the suite started is alive when it exits" || ko "the suite left a check alive: $alive_checks"
+held="$T/la/live-check.lease $T/ld/live-check.lease $T/lf/live-check.lease $T/lh/live-check.lease"
+left_leases=""; for f in $held; do [ -e "$f" ] && left_leases="$left_leases $f"; done
+[ -z "$left_leases" ] && ok "the door of every check the suite started is released" || ko "a check the suite started still holds its door:$left_leases"
 
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

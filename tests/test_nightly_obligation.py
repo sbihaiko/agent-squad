@@ -7,6 +7,7 @@ writes its result before it settles anything, a red settlement is never turned g
 run already made, a default check over a tree without this repository's layout is reported unmeasured, and a stale red is
 pruned and holds only while it is current."""
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -33,6 +34,71 @@ def _script(path, body):
     return path
 
 
+STATES = []   # every state directory a case in this file ran the nightly against
+
+
+def _alive(pid):
+    """Whether this pid still names a live process."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _named_pids(st):
+    """The pids the live check this state directory started leaves: its serial lock names the door first (its TERM trap
+    stops the reading's whole group), then its lease names the reading's group leader."""
+    pids = []
+    for rel in (("locks", "live-check", "pid"), ("live-check.lease", "pid")):
+        try:
+            raw = st.joinpath(*rel).read_text().strip()
+        except OSError:
+            continue
+        if raw.isdigit():
+            pids.append(int(raw))
+    return pids
+
+
+def _end_check(pid):
+    """End a check by pid, and the reading it leads by its own process group: serial.sh runs the door in a group of its
+    own, never this suite's, so the group is signalled only when it is not this process's group."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            group = os.getpgid(pid)
+        except ProcessLookupError:
+            return
+        try:
+            if group != os.getpgid(0):
+                os.killpg(group, sig)
+            else:
+                os.kill(pid, sig)
+        except ProcessLookupError:
+            return
+        for _ in range(20):
+            if not _alive(pid):
+                return
+            time.sleep(0.02)
+
+
+def _end_checks(st):
+    """End every check this state directory still names; bounded, and a check that survives the bound raises, so a leak
+    is loud instead of a silent loop."""
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        pids = [pid for pid in _named_pids(st) if _alive(pid)]
+        if not pids:
+            return
+        for pid in pids:
+            _end_check(pid)
+        time.sleep(0.05)
+    left = [pid for pid in _named_pids(st) if _alive(pid)]
+    if left:
+        raise RuntimeError(f"the live check this case started is still alive: {left}")
+
+
 @pytest.fixture()
 def nightly(tmp_path):
     """A throwaway bare remote with one commit on dev, a state directory, and stubs for the two modes and the checks."""
@@ -50,6 +116,7 @@ def nightly(tmp_path):
     sha = _run(["git", "rev-parse", "dev"], cwd=src).stdout.strip()
     st = tmp_path / "st"
     st.mkdir()
+    STATES.append(st)
     mode = _script(tmp_path / "mode.sh", "exit 0\n")
     log = tmp_path / "settle.log"
     settle = _script(
@@ -64,6 +131,9 @@ def nightly(tmp_path):
             "SG_NIGHTLY_REMOTE": str(origin), "SG_NIGHTLY_TREE": str(tmp_path / "tree"),
             "SG_NIGHTLY_PARALLEL": str(mode), "SG_NIGHTLY_SERIAL": str(mode),
             "HEALTH_NOTIFY": "true",
+            # nightly.sh starts its live check detached; the live default window is one hour, so a case gives it seconds
+            # of its own and ends it by pid (the fixture's finalizer), instead of leaving it to sample past the suite.
+            "SG_LIVE_CHECK_WINDOW_SECONDS": "0", "SG_LIVE_CHECK_INTERVAL_SECONDS": "0.1",
             "SG_SETTLE_RUFF": f"{settle} ruff", "SG_SETTLE_MYPY": f"{settle} mypy",
             "SG_SETTLE_PYTEST": f"{settle} pytest",
             **extra,
@@ -92,8 +162,11 @@ def nightly(tmp_path):
         assert len(files) == 1, f"settlements: {files}"
         return files[0].read_text().rstrip("\n").split("\t")
 
-    return {"sha": sha, "old": old, "st": st, "log": log, "run": run, "again": again,
-            "oblige": oblige, "settled": settled}
+    try:
+        yield {"sha": sha, "old": old, "st": st, "log": log, "run": run, "again": again,
+               "oblige": oblige, "settled": settled}
+    finally:
+        _end_checks(st)   # the case ends every check it started, by pid, also when it failed
 
 
 def test_a_green_settlement_clears_the_obligation_and_names_the_run(nightly):
@@ -241,3 +314,33 @@ def test_a_stale_settled_red_is_pruned_and_holds_only_while_current(nightly):
     write(nightly["sha"], 0, f"now@{nightly['sha']}")
     current = hold()
     assert current.returncode == 0 and "obligation" in current.stdout
+
+
+def test_a_check_the_nightly_starts_is_ended_by_pid(nightly):
+    """nightly.sh starts the live check detached, so the case that ran it owes its end (#1722). This case keeps the
+    production window (one hour), so the check is still alive when the nightly returns: a suite that does not end it leaks
+    a `live-check.sh --run` and its `squad.livecheck` reading for that whole hour, orphaned to pid 1. The case proves the
+    check is alive, ends it by pid and group, and proves it is gone, so a green run cannot pass on the check's own timer."""
+    assert nightly["run"](SG_LIVE_CHECK_WINDOW_SECONDS="3600").returncode == 0
+    state = nightly["st"]
+    pid = None
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and pid is None:   # the check takes its lease a moment after the nightly body returns
+        pids = _named_pids(state)
+        pid = pids[0] if pids else None
+        if pid is None:
+            time.sleep(0.02)
+    assert pid is not None, "the nightly started no live check for this case to end"
+    time.sleep(0.2)                       # a short fixed wait, far below the hour-long window
+    assert _alive(pid), "the default-window check ended on its own, so this case would not prove an end by pid"
+    _end_checks(state)
+    assert not [p for p in _named_pids(state) if _alive(p)], "the check the nightly started is still alive"
+
+
+def test_no_check_a_nightly_case_started_is_alive_when_the_file_ends():
+    """nightly.sh starts its live check detached, so the case that ran it owes its end (#1722). The live window is one
+    hour, and a case that leaves the check to that timer keeps a `live-check.sh --run` and its `squad.livecheck` reading
+    alive for the whole hour after the suite is gone, orphaned to pid 1: a promotion proof leaves one such tree per case.
+    Every case that ran a nightly is checked here, by the pid its state directory still names."""
+    left = [(st, pid) for st in STATES for pid in _named_pids(st) if _alive(pid)]
+    assert not left, f"a live check a night case started is still alive after its case: {left}"

@@ -45,7 +45,7 @@ sequenceDiagram
     participant J as janitor.py
     participant GH as GitHub (issues, board, dev and wave branches)
 
-    O->>GH: move the card to Todo#59; the issue carries ready-for-agent
+    O->>GH: move the card to Todo#59; the pass writes ready-for-agent in the same act
     O->>WD: watchd.sh start: clears token-guard.since, token-over and token-pause
     WD->>FL: spawn#59; fastloop writes fastloop.pid each beat
     WD->>W: spawn, restart 5 s after an exit
@@ -113,8 +113,8 @@ The column is the one the writer asks for. A board write that the API refuses le
 |---|---|---|---|---|
 | 1 | owner | - | card to Todo; `watchd.sh start` (watchd.pid, watch.log) | Todo |
 | 2 | fastloop.sh | `SG_FAST_INTERVAL` (`env.sh`); its own childcc pid; Todo cards in the board cache | fastloop.pid every beat; one background childcc pass; autobug then autofrontier, detached | - |
-| 3 | autofrontier.sh | the four stops (`ghcall.sh`); open issues (ghcall, one aggregate read); Todo cards; labels: needs `SG_FRONTIER_LABEL`, skips the bug label and `SG_FRONTIER_SKIP_LABELS` (spec, needs-owner, needs-ratification, needs-info, frozen:owner, frozen:dependency, wontfix); disp-/bug- markers; live issues in active runs (`startability.sh`); remote work branches; `stack.sh`; spec links and bodies (`siblings.py`, `cluster.py`, ADR-0150), over every pick of the pass; acceptance commands (`acpaths.py`); caps, envelope and `fundroom.py`. One run per free run slot, never more runs than children; the children are dealt over the runs in turn, and no run takes more than its envelope | auto/disp-N; req/NAME.body and one mkreq.sh request per run; cq comment; card Doing | Doing |
-| 3b | autobug.sh | the same, over bug issues (go label and Todo card too; `needs-info` is a skip floor), with no `gh_bug_first` stop | auto/bug-N; bugs-waiting (startable bugs left with no run); card Doing, and the bug board when `SG_BUG_PROJECT` is set | Doing |
+| 3 | autofrontier.sh | the four stops (`ghcall.sh`); open issues (ghcall, one aggregate read); Todo cards; labels: a Todo card with no holder, writes `SG_FRONTIER_LABEL`; skips the bug label and `SG_FRONTIER_SKIP_LABELS` (spec, needs-owner, needs-ratification, needs-info, frozen:owner, frozen:dependency, wontfix); disp-/bug- markers; live issues in active runs (`startability.sh`); remote work branches; `stack.sh`; spec links and bodies (`siblings.py`, `cluster.py`, ADR-0150), over every pick of the pass; acceptance commands (`acpaths.py`); caps, envelope and `fundroom.py`. One run per free run slot, never more runs than children; the children are dealt over the runs in turn, and no run takes more than its envelope | auto/disp-N; req/NAME.body and one mkreq.sh request per run; cq comment; card Doing | Doing |
+| 3b | autobug.sh | the same, over bug issues (a Todo card with no holder too; `needs-info` is a skip floor), with no `gh_bug_first` stop | auto/bug-N; bugs-waiting (startable bugs left with no run); card Doing, and the bug board when `SG_BUG_PROJECT` is set | Doing |
 | 4 | launch.py | `origin/$SG_BASE`, fetched now (`_landing_base`); the request's issues (`_issue_named`) | target: the issue worktree `worktrees/child/gui-N` when the request names one issue (`_issue_worktree`; a reused tree is reset to the base, extra commits kept on `refs/squad/leftover/*`, a dirty tree falls back), else its own `worktrees/run/KEY` on `squad/run/KEY` (`_run_worktree`); the engine process with `--keep-children`; `TARGET/runs/RUN/request.txt`, `launch.log`; one active-runs.txt line, absolute | Doing |
 | 5 | wave.sh start | origin/dev, origin/wave/RUN (scratch clone) | remote wave/RUN; auto/wave-RUN, waved-RUN, wave-start-RUN | Doing |
 | 6 | engine router | request text | record: spawn_requested, spawn_accepted | Doing |

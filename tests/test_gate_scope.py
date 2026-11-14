@@ -58,6 +58,31 @@ def test_an_intermediate_stage_runs_the_delta_and_records_it(tmp_path):
     assert pytest_line(argv).endswith("tests/test_alpha.py tests/test_beta.py")
 
 
+def test_a_change_to_one_script_runs_the_tests_the_delta_reaches(tmp_path):
+    """(a') The hand gate and the child final gate share this battery at the `fast` stage. A change to one loop script also
+    edits the measured line of its suite, and a test that imports that line's reader also loads a script by a computed path:
+    the delta still names the reached tests, and the record says `delta` (ADR-0169)."""
+    extra = {
+        "contrib/squad-goal/scripts/watchd.sh": "old\n",
+        "tests/shell_suites.py": "def run(p):\n    return None\n",
+        "tests/shell_suites_seconds.txt": "suite 1\n",
+        "tests/test_names.py": 'SCRIPTS = "contrib/squad-goal/scripts"\n',
+        "tests/test_reader.py": "from tests import shell_suites\n",
+        "tests/test_loader.py": (
+            "import importlib.util\n"
+            "from tests import shell_suites\n"
+            "\n"
+            "SCRIPTS = 'contrib/squad-goal/scripts'\n"
+            "SPEC = importlib.util.spec_from_file_location('m', SCRIPTS + '/watchd.sh')\n"
+        ),
+    }
+    repo = tip(tmp_path, {"contrib/squad-goal/scripts/watchd.sh": "new\n",
+                          "tests/shell_suites_seconds.txt": "suite 1\nsuite 2\n"}, extra=extra)
+    sel, scope, argv = battery(tmp_path, repo, "fast")
+    assert sel == "selected 3 files" and scope == "delta"
+    assert pytest_line(argv).endswith("tests/test_loader.py tests/test_names.py tests/test_reader.py")
+
+
 def test_an_uncovered_path_falls_back_to_the_full_battery_and_the_record_says_why(tmp_path):
     """(b) A delta that cannot cover the change is never a pass: the whole battery runs and the record names the path."""
     repo = tip(tmp_path, {"docs/notes.md": "notes\n"})
