@@ -137,7 +137,6 @@ case "${1:-status}" in
       "$(printf '%s\n' $x | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), "pid " $1 }')" >&2; exit 1; }
     alive && { drain_cancel; echo "watchd already running pid=$pid"; exit 0; }
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
-    bash "$(dirname "$me")/triage-labels.sh" >> "$SG_STATE/cycle.log" 2>&1 || echo "watchd start: the triage labels were not refreshed, see cycle.log" >&2   # #1673: an idempotent label write, never a start refusal
     # The live scripts call squad.caps.free_runs. A plugin cache older than the live copy lacks it, and every beat then prints
     # a traceback and dispatches nothing (#1422): one probe refuses the start and names the recovery.
     if [ -n "${SG_SQUAD:-}" ] && ! ( cd / && PYTHONPATH="$SG_SQUAD" python3 -c 'import squad.caps as C; C.free_runs' ) >/dev/null 2>&1; then
@@ -183,6 +182,7 @@ case "${1:-status}" in
       [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"
       exit 0
     fi
+    bash "$(dirname "$me")/triage-labels.sh" >> "$SG_STATE/cycle.log" 2>&1 || echo "watchd run: the triage labels were not refreshed, see cycle.log" >> "$L"   # #1673: an idempotent label write, never a refusal of the run
     mkdir -p "$RU" && printf '%s\n' "$$" > "$RU/$$"
     # The driver's own end, shared by the stop, a deleted script and the exit path (#1587): the lanes go with the group,
     # and only the slot holder removes the files it owns. The stop reaches every pass of both lanes, not the two lanes

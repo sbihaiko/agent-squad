@@ -51,5 +51,6 @@ docnames=$(awk '/^\| Label \| Kind \|/{t=1} t && /^\|/{print; next} t{exit}' "$d
 required=$(/usr/bin/grep -o 'SG_LABELS_REQUIRED:=[^"]*' "$d/profile-check.sh" | sed 's/SG_LABELS_REQUIRED:=//')
 missing=; for n in $docnames; do case " $required " in *" $n "*) ;; *) missing="$missing $n";; esac; done
 [ -z "$missing" ] && ok "profile-check requires each label the doc names" || ko "profile-check does not require:$missing"
-/usr/bin/grep -q 'triage-labels\.sh' "$d/watchd.sh" && ok "the watchd start runs the label bootstrap" || ko "the watchd start does not run the label bootstrap, so the loop creates none of the triage labels"
+run_arm=$(awk '/^  run\)/{t=1; next} t && /^  [a-z-]+\)/{exit} t' "$d/watchd.sh")
+printf '%s\n' "$run_arm" | /usr/bin/grep -q 'triage-labels\.sh' && ok "the watchd run, the path every loop driver takes, runs the label bootstrap" || ko "the watchd run does not run the label bootstrap, so a loop started through it creates none of the triage labels"
 exit $fail
