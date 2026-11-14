@@ -27,7 +27,7 @@ W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
 seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes).
 # The step's own exit code comes back unchanged, so a caller tells a held lock (single.sh exits 76, #1290) from a step that failed.
-tm() { orphaned && exit 0; local s=$(date +%s) r; "$@"; r=$?; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return $r; }
+tm() { orphaned && exit 0; local s=$(date +%s) r n; "$@"; r=$?; local e=$(( $(date +%s) - s )); n=${1##*/}; [ "$n" = bash ] && { n=${2##*/}; [ "$n" = single.sh ] && n=$3; }; [ "$e" -ge 5 ] && echo "$(date +%T) ${n##*/} ${e}s" >> "$SG_STATE/cycle.log"; return $r; }
 # verdicts: the runs of active-runs.txt whose record carries a verdict, one a line. The closing wait reads local files only (#569).
 verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
   grep -q '"event": *"verdict"' "$f" 2>/dev/null && echo "$r"; done | sort; }
