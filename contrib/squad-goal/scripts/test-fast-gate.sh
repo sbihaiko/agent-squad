@@ -534,6 +534,15 @@ out=$(pycase_nc "$T/wt-novenv"); rc=$?
 /usr/bin/grep -qF "$R/.venv/bin/python " "$T/co-py.log" && /usr/bin/grep -q "quality-reading.py" "$T/co-py.log" \
   && ok "a gate with no SG_CHECKOUT reads its own tree through git and reaches the venv beside the common git directory" \
   || ko "no SG_CHECKOUT: rc $rc, log '$(cat "$T/co-py.log" 2>/dev/null)' $out"
+# (#1724) The answer is read by a caller in another directory, as the slow-cap case reads it: a relative answer is resolved
+# against that caller's cwd, so its exec fails with 126. Whenever sg_gate_python names a file it prints an absolute path.
+ab=$T/abs-venv; mkdir -p "$ab/.venv/bin"
+printf '#!/bin/bash\nexit 0\n' > "$ab/.venv/bin/python"; chmod +x "$ab/.venv/bin/python"
+got=$(cd "$ab" && env -u SG_CHECKOUT -u SG_GATE_PY bash -c '. "$1/caps.sh"; sg_gate_python' _ "$d")
+case "$got" in
+  /*) ok "with no SG_CHECKOUT sg_gate_python prints an absolute path for the venv in the caller's directory";;
+  *) ko "relative interpreter: '$got' from $ab";;
+esac
 /usr/bin/grep -q 'sg_gate_python' "$d/fast-gate.sh" && ok "fast-gate names sg_gate_python" || ko "fast-gate keeps its own interpreter lookup"
 /usr/bin/grep -q 'py=python3' "$d/fast-gate.sh" && ko "fast-gate keeps a hand-rolled interpreter fallback" || ok "fast-gate keeps no hand-rolled interpreter fallback"
 
@@ -560,7 +569,7 @@ cp "$d/../../../tests/slowcap.py" "$sc/slowcap.py"
 printf 'pytest_plugins = ["slowcap"]\n' > "$sc/conftest.py"
 printf '[tool.pytest.ini_options]\naddopts = "-p no:cacheprovider"\nheavy_cap_seconds = "0.05"\n' > "$sc/pyproject.toml"
 printf 'import time\n\ndef test_unmarked_slow():\n    time.sleep(0.3)\n' > "$sc/tests/test_slow.py"
-pyreal=$(cd "$d/../../.." && env -u SG_GATE_PY bash -c '. contrib/squad-goal/scripts/caps.sh; sg_gate_python')
+pyreal=$(cd "$d/../../.." && env -u SG_GATE_PY -u SG_CHECKOUT bash -c '. contrib/squad-goal/scripts/caps.sh; sg_gate_python')
 printf '#!/bin/bash\ncase "$*" in\n  *squad.testselect*) echo tests/test_slow.py;;\n  *"-m pytest"*) exec %q "$@";;\nesac\nexit 0\n' "$pyreal" > "$sc/py"; chmod +x "$sc/py"
 git init -q -b dev "$sc"; $G -C "$sc" add -A; $G -C "$sc" commit -q -m base
 slowgate() { (cd "$sc" && env -u SG_FAST_CMD -u SG_TEST_SELECT -u SG_FAST_RETRY_CMD SG_STATE="$T/sc-st" SG_FAST_LOG_DIR="$T/sc-logs" SG_FAST_BASE=dev SG_FAST_MEMO=0 SG_GATE_PY="$sc/py" bash "$d/fast-gate.sh" 2>&1); }
