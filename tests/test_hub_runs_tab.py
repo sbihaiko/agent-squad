@@ -100,3 +100,13 @@ def test_the_groups_come_from_the_answer_and_no_caps_are_substituted(hub):
     assert "GROUPS=d.runs||[]" not in src
     assert "function groupHeader(" not in src, "the page builds a group header again"
     assert "const CAPS=" not in src and "__CAPS__" not in src, "the caps are substituted into the page again"
+
+
+def test_the_two_lists_of_the_runs_tab_share_one_layout():
+    """#1698: the bottom list (Workers and the age bands) follows the top list (Live, Ended today): no width cap of its
+    own, the same card rule and the same caption heading rule."""
+    css = HUB_PY.read_text()
+    assert "#list{max-width:900px}" not in css, "the bottom list still carries its own width cap"
+    assert "#main .r,#tab-runs #list .r{" in css, "the two lists do not share one card rule"
+    assert "#main h3,#tab-runs #list .gh{" in css, "the two lists do not share one heading rule"
+
