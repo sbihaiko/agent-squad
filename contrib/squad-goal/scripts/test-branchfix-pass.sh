@@ -155,6 +155,16 @@ printf '#!/bin/bash\necho 22\n' > "$T/lbcmd"; chmod +x "$T/lbcmd"
 r=$(OPEN="22 24" LABELED="22=loop-bug" SG_LOOPBUG_CMD="$T/lbcmd" fp)
 [ "$(n gui/24-pd)" = 0 ] && ok "1708 an open loop-bug holds the fix pass for a plain bug" || ko "1708 a fix run started under a loop-bug drain: '$r'"
 case "$r" in *"LOOP STOP: #22"*) ok "1708 the fix pass names the loop-bug";; *) ko "1708 no LOOP STOP line: '$r'";; esac
+# 17c) (#1789) while the loop is paused (auto/off: an owner pause or a drain), no fix run starts, the skip is said once per tip,
+#      and the tip is dispatched on the first pass after the pause lifts.
+: > "$T/launch.log"; push gui/25-off; rev gui/25-off CHANGES "t.sh:1 fix"
+: > "$T/st/auto/off"
+r=$(OPEN="25" fp); r="$r"$'\n'"$(OPEN="25" fp)"
+[ "$(n gui/25-off)" = 0 ] && ok "1789 a paused loop starts no fix run" || ko "1789 a fix run started under auto/off: '$r'"
+[ "$(printf '%s' "$r" | /usr/bin/grep -c '^BRANCHFIX SKIP gui/25-off: the loop is paused (auto/off), no run starts$')" = 1 ] && ok "1789 the pause skip is said once per tip" || ko "1789 skip lines: '$r'"
+rm -f "$T/st/auto/off"
+r=$(OPEN="25" fp)
+[ "$(n gui/25-off)" = 1 ] && ok "1789 the tip is dispatched once the pause lifts" || ko "1789 after the pause: $(n gui/25-off) dispatch(es): '$r'"
 # 18) (#841) a plain bug alone: one launch, no skip line
 : > "$T/launch.log"; push gui/24-pb; rev gui/24-pb CHANGES "r.sh:1 fix"
 r=$(OPEN="24" LABELED="24=bug" fp)
