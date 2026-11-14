@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-Every gate the loop runs is bounded by time. The fast battery that a work-branch tip and a wave entry run deselects `heavy`, runs one mode and runs only the test files its diff reaches, so the calls it skips, the two-mode difference and the files it does not reach go unchecked until the owner promotes; its result line says which files it ran, or that it ran all. The promotion proof runs the full suite in both modes, but only when the owner starts it, and it holds the landing lock while it runs, so no wave lands meanwhile ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) rule 3). A declared, covered change on top of a full pass may be carried by a delta proof instead of a new full run ([ADR-0156](0156-a-full-proof-carries-across-a-covered-delta.md)); the nightly is never replaced by it.
+Every gate the loop runs is bounded by time. The fast battery that a work-branch tip and a wave entry run deselects `heavy`, runs one mode and runs only the test files its diff reaches, so the calls it skips, the two-mode difference and the files it does not reach go unchecked until the complete CI tier runs on the `stg` tip ([ADR-0173](0173-the-complete-tier-runs-on-the-promotion-request.md)); its result line says which files it ran, or that it ran all. The promotion proof runs the full suite in both modes, but only when the owner starts it, and it holds the landing lock while it runs, so no wave lands meanwhile ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) rule 3). A declared, covered change on top of a full pass may be carried by a delta proof instead of a new full run ([ADR-0156](0156-a-full-proof-carries-across-a-covered-delta.md)); the nightly is never replaced by it.
 
 A defect that only a heavy call or a serial run shows can therefore sit in the landing branch for days, and the reader of the hub has no reading of it at all.
 
@@ -22,7 +22,7 @@ A defect that only a heavy call or a serial run shows can therefore sit in the l
 
 ## Consequences
 
-A defect that only the heavy or serial mode shows now surfaces within a day, before the owner's promotion, and the hub names the tests that failed.
+A defect that only the heavy or serial mode shows now surfaces within a day, whatever the promotion to `main` waits for, and the hub names the tests that failed.
 
 A full suite no longer runs beside a busy loop, so a child's gate keeps its bound. The cost: on a loop that is busy all day, the nightly waits for an idle window and a day can pass with no nightly.
 

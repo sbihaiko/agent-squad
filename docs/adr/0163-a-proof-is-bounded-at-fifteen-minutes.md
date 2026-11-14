@@ -20,5 +20,7 @@ start the fallback, so the attempt could run past the rule it was written for.
 - Past its share the suite and every child it started are killed, and `delta-pass.sh` answers for the tip under what is left of the bound.
 - A delta pass promotes with a marker that says the full suite was killed by the bound, never that it was green.
 - The nightly keeps the full suite in both modes, heavy included, off the delivery path (ADR-0153).
+- The bound is the local proof's. A proof read from CI runs no suite here: the fast tier answers for `stg`, and the complete tier for `main`, on the runner ([ADR-0173](0173-the-complete-tier-runs-on-the-promotion-request.md)).
+- A local proof reads `stg` before a battery starts and when it ends. A tip `stg` already holds runs no battery and writes no verdict.
 
 Guard: `contrib/squad-goal/scripts/test-promote-pass.sh`, `tests/test_adr_index.py`.

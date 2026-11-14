@@ -215,9 +215,31 @@ adv main main-only; before=$(tip main)
 out=$(bash "$d/promote-main.sh" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ "$(tip main)" = "$before" ] && case "$out" in *ancestor*) true;; *) false;; esac && ok "the owner command refuses when main is not an ancestor of stg" || ko "owner divergence: rc $rc, out '$out'"
 
-# No loop script pushes to main: only promote-main.sh names it, and a test fixture is no loop script.
-bad=$(cd "$d" && grep -lE 'push[^#]*(refs/heads/main|origin main|HEAD:main)' *.sh *.py 2>/dev/null | grep -v -e '^test-' -e '^promote-main.sh$')
+# (ADR-0173) promote-main.sh <sha>: the stg-to-main pass moves main to the sha whose complete tier is green, which may be behind
+# the stg tip. The sha must be on the first-parent chain of stg, and main must be an ancestor of it.
+keep=$(tip stg); git -C "$R" update-ref refs/heads/stg "$(tip main)"   # fixture: stg takes main again
+adv stg sha-a; sa=$(tip stg); adv stg sha-b
+out=$(bash "$d/promote-main.sh" "$sa" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$sa" ] && [ "$(tip stg)" != "$sa" ] && ok "promote-main.sh <sha> moves main to that sha, not to the stg tip" || ko "sha: rc $rc, main $(tip main), want $sa, out '$out'"
+$W fetch -q origin; $W checkout -q -B side origin/stg; $W commit -q --allow-empty -m side-work; sp=$($W rev-parse HEAD)
+$W checkout -q -B stg origin/stg; $W merge -q --no-ff -m "merge side" side; $W push -q origin stg
+before=$(tip main); out=$(bash "$d/promote-main.sh" "$sp" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip main)" = "$before" ] && case "$out" in *first-parent*) true;; *) false;; esac \
+  && ok "promote-main.sh refuses a sha that is not on the first-parent chain of stg" || ko "off chain: rc $rc, main $(tip main), out '$out'"
+out=$(bash "$d/promote-main.sh" "$base" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip main)" = "$before" ] && case "$out" in *ancestor*) true;; *) false;; esac \
+  && ok "promote-main.sh refuses a sha main is not an ancestor of" || ko "behind main: rc $rc, main $(tip main), out '$out'"
+# The merge route never serves main: promote-stg.sh refuses its merge path when the base is the main branch.
+: > "$T/gh.log"; before=$(tip main); out=$(SG_STG_BRANCH=main SG_PROMOTE_PROOF=ci bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip main)" = "$before" ] && ! /usr/bin/grep -q -- "/merge" "$T/gh.log" && case "$out" in *"never by a merge"*) true;; *) false;; esac \
+  && ok "promote-stg.sh refuses any merge when the base is main" || ko "merge into main: rc $rc, out '$out', gh '$(cat "$T/gh.log")'"
+git -C "$R" update-ref refs/heads/stg "$keep"   # fixture: stg is where the cases below expect it
+
+# No loop script pushes to main but the stg-to-main pass, through promote-main.sh: only promote-main.sh names the push, and a
+# test fixture is no loop script.
+bad=$(cd "$d" && grep -lE 'push[^#]*(refs/heads/(main|\$main)|origin main|HEAD:main)' *.sh *.py 2>/dev/null | grep -v -e '^test-' -e '^promote-main.sh$')
 [ -z "$bad" ] && ok "no loop script pushes to main" || ko "pushes to main: $bad"
+/usr/bin/grep -q 'refs/heads/\$main' "$d/promote-main.sh" && ok "promote-main.sh is the one script that pushes the main branch" || ko "promote-main.sh does not push the named main branch"
 # The owner's consolidation rule (#743): stg moves by a pull request merge, never by a push from a loop script.
 bad=$(cd "$d" && grep -lE '^[^#]*push[^#]*(refs/heads/stg|origin stg|HEAD:stg)' *.sh 2>/dev/null | grep -v -e '^test-')
 [ -z "$bad" ] && ok "no loop script pushes stg: the consolidation is a pull request" || ko "pushes to stg: $bad"

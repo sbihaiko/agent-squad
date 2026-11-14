@@ -21,6 +21,8 @@
 # delta. SG_PROMOTE_FALLBACK_SECONDS is reserved for the delta before the suite starts and is never taken by the suite, and the
 # clock never restarts. Past the deadline every descendant is stopped, TERM then KILL. A defect a check reported before the
 # deadline is a fail the bound never turns into a pass (#1170); an attempt that reported nothing is recorded bounded.
+# The pass reads stg again before a local battery starts and when it ends (#1723): another pass, or the owner, may have moved
+# stg while this one waited. A tip stg already holds runs no battery and gets no verdict: no line, no status, no marker.
 d=$(cd "$(dirname "$0")" && pwd)
 dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promotion branch, both named by the profile (#1646)
 [ "${SG_PROMOTE:-on}" = off ] && exit 0         # a profile that delivers by another path promotes nothing: no fetch, no line
@@ -83,6 +85,10 @@ if [ "${1:-}" = --ci-fast-job-names ]; then   # the jobs the dev-to-stg promotio
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-fast-job-names needs a workflow file" >&2; exit 2; }
   ci_job_names "$2" fast; exit 0
 fi
+# The conclusions of a completed check run that measured nothing (ADR-0164, #1517): an unfinished proof, never a red and
+# never a pass. One set, two readers: the workflow's guard starts the complete tier again over such a run, and
+# promote-main-pass.sh calls the requested sha unproven on it, so an unproven tip can always be proven again.
+if [ "${1:-}" = --ci-unproven-conclusions ]; then printf '%s\n' cancelled timed_out; exit 0; fi
 if [ "${1:-}" = --ci-description ]; then   # the bounded status description a workflow's job list produces
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-description needs a workflow file" >&2; exit 2; }
   ns=(); while IFS= read -r j; do [ -n "$j" ] && ns+=("$j"); done < <(ci_job_names "$2")
@@ -147,9 +153,16 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # defected <log>: a check already reported a defect before the deadline, so the bound never turns it into a pass.
   defected() { /usr/bin/grep -qE '^(FAILED|ERROR) |errors? during collection|^[^ ]+:[0-9]+: error: |^[A-Z][A-Z]*[0-9]+ ' "$1"; }
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
-  # ADR-0164 (#1051, #1322, #1461, #1518): every job of ci.yml on the tip is the full pass when all are green, the full
-  # suite's twelve shard jobs included. Both tiers run on the dev-to-stg pull request, so the complete tier is one of the
-  # checks this pass reads; a job the file gates to another pull request is refused by name, never skipped. Green writes the
+  # stood_down <when>: stg already holds the tip (#1723), read from the remote now, never from the fetch the pass started
+  # with. The battery would prove nothing the promotion needs, so the pass ends with no battery and no verdict. A read that
+  # fails proves nothing and stands nothing down.
+  stood_down() {
+    g fetch -q origin "+refs/heads/$stg:refs/remotes/origin/$stg" 2>/dev/null || return 1
+    g merge-base --is-ancestor "$tip" "origin/$stg" 2>/dev/null || return 1
+    kill "$mon" 2>/dev/null
+    refused "$tip" "$stg already holds the tip ($1): no battery and no verdict"; exit 0; }
+  # ADR-0164, ADR-0173 (#1051, #1322, #1461, #1518): the fast tier of ci.yml on the tip is the proof when its jobs are all
+  # green. The complete tier runs on the stg-to-main pull request, so this pass reads none of it. Green writes the
   # full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job that
   # is missing, running or timed out holds nothing, and the proof below answers as before.
   # SG_CI_WORKFLOW names the workflow file the check names are read from: the repository's own by default, a fixture in a test.
@@ -255,8 +268,10 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # ADR-0156: a full pass carries across a covered delta. When one is on record and the tip moved only by covered paths, the
   # delta proof runs instead of the full suite and the promotion reads its record. Any refusal (an uncovered path, a bound, no
   # full pass) or a held delta lock falls through to the full suite below: the cheaper proof is an optimization, never a weaker gate.
+  stood_down "read before the battery"
   dleft=$(( due - $(date +%s) )); [ "$dleft" -lt 1 ] && dleft=1
   if bounded "$dleft" bash "$d/delta-pass.sh" > "$state/delta-pass.log" 2>&1; then
+    stood_down "read when the delta battery ended"
     o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
     { [ $rc = 75 ] || [ $rc = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
     [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
@@ -279,6 +294,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # the tip instead. What the delta does not cover is proven hot: by the nightly and by the running system.
   # The suite is bounded at what the attempt has left once the delta's reserved slice is kept; the delta answers on what is
   # left then. Neither bound is ever rounded up: the whole attempt stays inside the one budget.
+  stood_down "read before the full battery"
   rbound=$reserve_s; dline=$(( t0 + bound - keep - $(date +%s) )); [ "$dline" -lt 1 ] && dline=1
   s0=$(date +%s); (cd "$tree" && bash -c "$suite") > "$out" 2>&1 & spid=$!
   rc=0; relieved=
@@ -292,6 +308,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     sleep 5
   done
   if [ "$rc" = 124 ]; then wait "$spid" 2>/dev/null; else wait "$spid"; rc=$?; fi
+  stood_down "read when the battery ended"
   if [ "$rc" = 124 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
     # ADR-0164 (#1170): a defect a check reported before the deadline is a measured red, and the bound never turns it into
@@ -353,8 +370,8 @@ o=$(g fetch -q origin "+refs/heads/$dev:refs/remotes/origin/$dev" "+refs/heads/$
 [ "$(g rev-parse "origin/$dev")" = "$tip" ] || exit 0   # the work branch moved under the read: a later pass takes the new tip
 g merge-base --is-ancestor "$tip" "origin/$stg" && exit 0   # the tip is already in the promotion branch
 # ADR-0164 (#1051, #1461): the work-to-promotion pull request carries the CI of the tip, so promote-stg.sh opens it before the
-# quiet window passes and the checks run while it does. #1644: opening it also asks for the complete tier, the `promote` label,
-# once per tip. Best effort: a failure there leaves the proof below to answer.
+# quiet window passes and the fast tier runs while it does. It asks for nothing else: the complete tier belongs to the
+# stg-to-main pull request (ADR-0173). Best effort: a failure there leaves the proof below to answer.
 SG_PROMOTE_OPEN_ONLY=1 SG_PROMOTE_TIP=$tip bash "$d/promote-stg.sh" >/dev/null 2>&1
 last=$(awk -F'\t' '$1 > m {m = $1} END {print m + 0}' "$state/landed.tsv" 2>/dev/null); last=${last:-0}
 # ADR-0164: the guards below protect a local suite from a loaded box. When SG_PROMOTE_PROOF=ci names the dev-to-stg check as

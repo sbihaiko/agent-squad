@@ -1,5 +1,6 @@
 """Tooling guards. Guard for the mypy rule: `mypy squad` finds no error."""
 
+import json
 import os
 import re
 import subprocess
@@ -72,15 +73,20 @@ FULL_SHARDS = 6
 SHARD_JOBS = tuple(f"full-xdist-{k}" for k in range(1, FULL_SHARDS + 1)) + tuple(
     f"full-serial-{k}" for k in range(1, FULL_SHARDS + 1))
 COMPLETE_TIER_JOBS = SHARD_JOBS + ("fast-battery-311", "gui-e2e")
-# #1644: the complete tier starts on the `promote` label alone, and the guard job starts it once per tip. The fast tier runs
-# on every other event of the dev-to-stg pull request, a push included.
+# The fast tier runs on every event of the dev-to-stg pull request but the label, a push included. The complete tier runs on
+# the stg-to-main pull request alone, on the `promote` label, and the guard job starts it once per tip (ADR-0173).
 GUARD_JOB = "complete-guard"
 TIER_JOBS = FAST_TIER_JOBS + (GUARD_JOB,) + COMPLETE_TIER_JOBS
 DEV_TO_STG = "github.head_ref == 'dev'"
+STG_TO_MAIN = "github.head_ref == 'stg'"
 FAST_TIER_IF = f"{DEV_TO_STG} && github.event.action != 'labeled'"
-GUARD_IF = f"{DEV_TO_STG} && github.event.action == 'labeled' && github.event.label.name == 'promote'"
+GUARD_IF = f"{STG_TO_MAIN} && github.event.action == 'labeled' && github.event.label.name == 'promote'"
 COMPLETE_TIER_IF = f"{GUARD_IF} && needs.{GUARD_JOB}.outputs.run == 'true'"
 PULL_REQUEST_TYPES = ["opened", "synchronize", "reopened", "labeled"]
+PULL_REQUEST_BRANCHES = ["stg", "main"]
+# The sentence the workflow states for its two pull requests.
+TWO_PULL_REQUESTS_RULE = "The fast tier runs on the dev-to-stg pull request, and the complete tier on the stg-to-main pull request"
+PROMOTE_PASS = ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh"
 
 
 def _ci_workflow() -> dict:
@@ -143,13 +149,14 @@ def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
     assert 'python3 -m pytest -n auto -m "not heavy"' in [s.get("run") for s in wf["jobs"]["fast-battery"]["steps"]]
 
 
-def test_every_complete_tier_job_runs_on_the_pull_request_whose_head_is_dev():
-    """Guard for #1461: every complete-tier job starts on the dev-to-stg pull request, and no job is gated on a base branch.
+def test_every_complete_tier_job_runs_on_the_pull_request_whose_head_is_stg():
+    """Guard for ADR-0173: every complete-tier job starts on the stg-to-main pull request, and no job is gated on a base
+    branch.
 
-    The promotion of a dev tip reads the checks of that pull request. The complete tier ran on a stg-to-main pull request
-    alone, and promote-main.sh fast-forwards main from stg, so that pull request never existed: the complete tier never ran
-    on the path that reaches main, and the promotion recorded a full pass over the fast tier alone. Each complete-tier job
-    now starts on the dev-to-stg pull request, and promote-pass.sh reads it as one of the checks the dev tip waits on.
+    The dev-to-stg promotion reads the fast tier alone, so a promotion to stg never pays for the full suite. The complete
+    tier proves the work stg gathered, on the pull request the loop opens from stg to main, and main moves only when it is
+    green. A tier is told from the other by the head branch of its pull request: promote-pass.sh refuses a workflow whose
+    job names `base_ref`, because such a job never runs on the pull request the dev tip is read on.
     """
     wf = _ci_workflow()
     gated_on_base = tuple(name for name, job in wf["jobs"].items() if "base_ref" in str(job.get("if", "")))
@@ -158,13 +165,18 @@ def test_every_complete_tier_job_runs_on_the_pull_request_whose_head_is_dev():
     for name in COMPLETE_TIER_JOBS:
         job = wf["jobs"][name]
         assert job.get("if") == COMPLETE_TIER_IF, (
-            f"{name} starts on the dev-to-stg pull request whose `promote` label asks for it; found {job.get('if')!r}")
+            f"{name} starts on the stg-to-main pull request whose `promote` label asks for it; found {job.get('if')!r}")
         assert job.get("needs") == [GUARD_JOB], f"{name} waits on the guard that starts the tier once per tip"
         for key in ("strategy", "environment", "concurrency"):
             assert key not in job, f"{name} carries `{key}:`, which can hold it behind another job or a gate"
         assert job.get("continue-on-error") in (None, False), f"{name} would report green on a red"
     on = wf.get("on", wf.get(True))
-    assert on["pull_request"]["branches"] == ["stg"], "the workflow runs on the dev-to-stg pull request, the one promotion carries"
+    assert on["pull_request"]["branches"] == PULL_REQUEST_BRANCHES, (
+        "the workflow runs on the two promotion pull requests, dev to stg and stg to main")
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    stated = " ".join(
+        line.lstrip("#").strip() for line in text.split("concurrency:", 1)[0].splitlines() if line.startswith("#"))
+    assert TWO_PULL_REQUESTS_RULE in stated, f"the workflow states which pull request carries each tier: {TWO_PULL_REQUESTS_RULE}"
 
 
 def test_complete_tier_runs_both_full_suite_modes_the_311_battery_and_the_gui_e2e():
@@ -218,6 +230,7 @@ def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job()
     claude = (ROOT / "CLAUDE.md").read_text().splitlines()
     rule = next(line for line in claude if line.startswith("- **CI "))
     assert "fast tier" in rule and "complete tier" in rule and "tests/test_tooling.py" in rule, rule
+    assert "`dev` to `stg`" in rule and "`stg` to `main`" in rule, f"the rule names the pull request of each tier: {rule}"
     # `promote` is the label the complete tier starts on, never a job of the workflow (#1644).
     named = {n for n in re.findall(r"`([a-z0-9-]+)`", rule) if n not in ("dev", "stg", "main", "promote")}
     jobs = set(_ci_workflow()["jobs"])
@@ -282,18 +295,18 @@ def test_every_process_table_read_of_a_command_asks_for_the_full_one():
 
 
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
-    """Guard for the CI rule: the one pull request that carries dev to stg starts the run, and nothing else.
+    """Guard for the CI rule: the two promotion pull requests start the run, and nothing else.
 
-    Both tiers run on that pull request, so the complete tier proves the tip the promotion carries. The jobs run with a
-    read-only token. No branch push starts a run: a work branch is proven by the local fast gate, and the landing by the
-    promotion proof. A pull request to any other branch starts none, and neither does a pull request to stg from a branch
-    other than dev.
+    The dev-to-stg pull request carries the fast tier, and the stg-to-main pull request carries the complete tier. The jobs
+    run with a read-only token. No branch push starts a run: a work branch is proven by the local fast gate, and the landing
+    by the promotion proof. A pull request to any other branch starts none, and a pull request whose head is neither dev nor
+    stg starts no job, because each job's own condition names its head.
     """
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
-    assert on["pull_request"]["branches"] == ["stg"], "CI runs on the dev-to-stg pull request, and no other"
+    assert on["pull_request"]["branches"] == PULL_REQUEST_BRANCHES, "CI runs on the two promotion pull requests, and no other"
     assert set(on) == {"pull_request"}, f"only a pull request starts the run; found {sorted(on)}"
     assert "push" not in on and "pull_request_target" not in on, "a branch push starts no run"
     assert wf["permissions"] == {"contents": "read"}
@@ -367,14 +380,14 @@ def test_the_full_suite_runs_in_shard_jobs_of_both_modes():
 
     A shard job is a sibling by test path with its own check-run name, never a matrix leg (ADR-0163), and it carries no
     `--ignore` or `--deselect`: a path it excludes is a test the full proof would never run (ADR-0139). Each job starts on
-    the dev-to-stg pull request, sets SQUAD_CI_RUNNER=1, and gives itself no more than the twenty minutes of every job.
+    the stg-to-main pull request, sets SQUAD_CI_RUNNER=1, and gives itself no more than the twenty minutes of every job.
     """
     wf = _ci_workflow()
     assert tuple(n for n in wf["jobs"] if n in SHARD_JOBS) == SHARD_JOBS, \
         f"the full suite's shard jobs are {SHARD_JOBS}; found {list(wf['jobs'])}"
     for name in SHARD_JOBS:
         job = wf["jobs"][name]
-        assert job.get("if") == COMPLETE_TIER_IF, f"{name} starts on the promote request of the dev-to-stg pull request; found {job.get('if')!r}"
+        assert job.get("if") == COMPLETE_TIER_IF, f"{name} starts on the promote request of the stg-to-main pull request; found {job.get('if')!r}"
         assert "matrix" not in (job.get("strategy") or {}), f"{name} splits by matrix, never by test path"
         assert job.get("needs") == [GUARD_JOB], f"{name} waits on the once-per-tip guard, never behind a sibling"
         assert (job.get("env") or {}).get("SQUAD_CI_RUNNER") == "1", f"{name} does not set SQUAD_CI_RUNNER=1 (#1323)"
@@ -426,8 +439,9 @@ def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
 
 
 def test_the_complete_tier_starts_on_the_promote_label_alone():
-    """Guard for #1644: a push to the dev-to-stg pull request starts the fast tier alone, and the complete tier starts when
-    the pull request carries the `promote` label, once per tip.
+    """Guard for ADR-0173: a push to the dev-to-stg pull request starts the fast tier alone, and the complete tier starts
+    when the stg-to-main pull request carries the `promote` label, once per tip. The label on the dev-to-stg pull request
+    starts nothing.
 
     The label event is the promotion request. A second label event on the same tip starts nothing: the guard job reads the
     tip's own check runs and answers once, so the twelve shard jobs, the 3.11 battery and the GUI e2e suite run once on a
@@ -454,6 +468,48 @@ def test_the_complete_tier_starts_on_the_promote_label_alone():
         job = wf["jobs"][name]
         assert job.get("if") == COMPLETE_TIER_IF, f"{name} starts on the promote request alone; found {job.get('if')!r}"
         assert job.get("needs") == [GUARD_JOB], f"{name} reads the guard's answer, so a second label starts it not"
+
+
+def _guard_answer(tmp_path, conclusion: str | None, status: str = "completed") -> str:
+    """The guard step's own script, run on one check run of the first complete-tier job: the `run=` line it answers."""
+    wf = _ci_workflow()
+    script = next(s["run"] for s in wf["jobs"][GUARD_JOB]["steps"] if s.get("id") == "once")
+    run = {"id": 1, "name": COMPLETE_TIER_JOBS[0], "status": status, "conclusion": conclusion}
+    box = tmp_path / f"{status}-{conclusion}"
+    (box / "bin").mkdir(parents=True)
+    gh = box / "bin" / "gh"
+    gh.write_text("#!/bin/bash\ncat <<'JSON'\n" + json.dumps({"check_runs": [run]}) + "\nJSON\n")
+    gh.chmod(0o755)
+    out = box / "out"
+    env = {**os.environ, "PATH": f"{box / 'bin'}{os.pathsep}{os.environ['PATH']}", "SHA": "abc", "REPO": "o/r",
+           "GITHUB_OUTPUT": str(out)}
+    r = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return out.read_text().strip()
+
+
+@pytest.mark.heavy
+def test_the_guard_and_the_pass_read_the_same_unproven_set(tmp_path):
+    """Guard for ADR-0173: a complete-tier run that ended `cancelled` or `timed_out` measured nothing, so the guard starts
+    the tier again on that tip and the stg-to-main pass calls the tip unproven. Both read the one set, the answer of
+    `promote-pass.sh --ci-unproven-conclusions`, so a conclusion the pass calls unproven is never one the guard reads as
+    "the tier already ran": an unproven tip can always be proven again.
+    """
+    r = subprocess.run(["bash", str(PROMOTE_PASS), "--ci-unproven-conclusions"], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    unproven = r.stdout.split()
+    assert unproven == ["cancelled", "timed_out"], f"the unproven set: {unproven}"
+    guard = "\n".join(str(s.get("run", "")) for s in _ci_workflow()["jobs"][GUARD_JOB]["steps"])
+    main_pass = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-main-pass.sh").read_text()
+    for name, text in (("the guard", guard), ("promote-main-pass.sh", main_pass)):
+        assert "--ci-unproven-conclusions" in text, f"{name} does not read the one unproven set"
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for c in unproven:
+            assert c not in code, f"{name} keeps its own copy of the unproven set: {c}"
+    for c in unproven:
+        assert _guard_answer(tmp_path, c) == "run=true", f"a {c} run stops the guard, so the tip is never proven again"
+    assert _guard_answer(tmp_path, "success") == "run=false", "a tip that carries a finished run starts the tier again"
+    assert _guard_answer(tmp_path, None, "in_progress") == "run=false", "a tip whose tier is in flight starts it again"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

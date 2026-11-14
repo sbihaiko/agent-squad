@@ -153,6 +153,7 @@ test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
 test-promote-branch.sh 1.94
 test-promote-delta.sh 19.00
+test-promote-main-pass.sh 42.40
 test-promote-pass.sh 120.00
 test-promote.sh 16.53
 test-publish-live.sh 2.50

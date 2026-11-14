@@ -199,6 +199,13 @@ if v:
   promote_quiet && ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?
     if [ "$rc" = 76 ]; then echo "$(date +%T) PROMOTE waits: a pass in flight holds the promote lock (pid $(cat "$SG_STATE/locks/single-promote/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
     else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null &
+  # The stg-to-main step (ADR-0173): every cycle, detached under its own single-flight lock, and outside the quiet window
+  # above. It asks for the complete CI tier on the stg tip once stg is quiet or its oldest unpromoted commit is old, reads
+  # the request it left, and moves main by a fast-forward when the tier is green. A landing costs a job on the runner
+  # nothing, so no burst postpones the read. The pass says nothing on a cycle with nothing to do; its outcome goes to this
+  # cycle log, its reasons to promote.log and alerts.log. SG_PROMOTE=off makes the pass exit 0 at once.
+  ( o=$(bash "$(dirname "$0")/single.sh" promote-main bash "$(dirname "$0")/promote-main-pass.sh" 2>&1); rc=$?
+    [ "$rc" = 76 ] || { [ "$rc" = 0 ] && [ -z "$o" ]; } || echo "$(date +%T) PROMOTE-MAIN pass rc=$rc: $(printf '%s' "$o" | tail -n 1)" >> "$SG_STATE/cycle.log" ) 2>/dev/null &
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up
