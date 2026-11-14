@@ -212,7 +212,8 @@ def test_the_rows_sort_by_inclusive_cost_and_carry_their_share(prof, scope):
     totals = [c["total_s"] for c in tree["children"]]
     assert totals == sorted(totals, reverse=True)
     assert tree["children"][0]["share"] == pytest.approx(2.0 / 3.75, abs=1e-3)
-    assert set(tree) == {"name", "kind", "self_s", "total_s", "share", "events", "total_events", "children"}
+    assert set(tree) == {"name", "kind", "self_s", "total_s", "share", "events", "total_events",
+                         "starts_s", "total_starts_s", "children"}
 
 
 def test_a_process_is_keyed_by_pid_and_start_time(prof, scope):
@@ -622,12 +623,12 @@ def tree_part(out):
 
 def test_the_view_draws_one_row_per_node_with_its_bar_and_columns():
     out = tree_part(run_js(f"profHtml({json.dumps(VIEW)},new Set())"))
-    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Hot spot", "Self time", "Total time", "Starts"]
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Hot spot", "Self time", "Total time", "Starts/s (lower bound)"]
     rows = re.findall(r"<tr data-p=\"([^\"]*)\"", out)
     assert rows == ["loop", "loop/watchd.sh", "loop/orphan watch.sh (temp folder)"], "a closed node shows no child"
     assert re.search(r'data-p="loop/watchd\.sh".*?<i class=pbar style="width:75\.0%">', out, re.S)
     row = re.search(r'<tr data-p="loop/watchd\.sh".*?</tr>', out, re.S).group(0)
-    assert re.findall(r"<td>([^<]*)</td>", row) == ["0 ms", "6.00 s", "0"], "self time, total time and starts"
+    assert re.findall(r"<td>([^<]*)</td>", row) == ["0 ms", "6.00 s", "0.00/s"], "self time, total time and starts a second"
 
 
 def test_a_node_opens_to_its_children_and_closes_again():
@@ -776,3 +777,36 @@ def test_a_reused_pid_in_the_pid_file_gives_this_loop_no_supervisor(prof):
     b = rd({30: (1, 1.0, f"bash {S}/watchd.sh run"), 31: (30, 0.0, "sleep 9")})
     acc = prof.fold(a, b, prof.Scope(31, (f"{S}/",)))
     assert names(prof.tree(acc)) == []
+
+
+def test_a_node_carries_the_starts_observed_under_it_a_second_over_the_window(prof, scope):
+    """Observed starts a second: the sampler's own lower bound, so the page never reads a count as the whole truth."""
+    cmd = f"bash {S}/watch.sh"
+    w = prof.Window(span=10)
+    w.reset(100.0)
+    w.add(100.0, rd({9: (1, 0.0, cmd)}), scope)
+    w.add(102.0, rd({9: (1, 0.0, cmd), 50: (9, 0.0, "true"), 51: (9, 0.0, "true")}), scope)
+    t = w.tree()
+    watch = node(t, "watch.sh")
+    assert watch["starts_s"] == pytest.approx(1.0)            # its own two starts over the two-second window
+    assert watch["total_starts_s"] == pytest.approx(1.0)      # with its children, none here
+    assert t["starts_s"] == 0 and t["total_starts_s"] == pytest.approx(1.0)
+    assert prof.tree(prof.fold(FIRST, SECOND, scope))["total_starts_s"] == 0, "no window, no rate: never a guessed one"
+
+
+def test_no_node_carries_a_count_of_unseen_processes(prof, scope):
+    """A pid gap carries no parent and no command, so the page never draws an unseen count under a node."""
+    t = prof.tree(prof.fold(FIRST, SECOND, scope), window_s=10)
+
+    def walk(n):
+        yield n
+        for k in n["children"]:
+            yield from walk(k)
+    assert all("unseen" not in n for n in walk(t)), "an unseen start has no node to sit under"
+
+
+def test_the_starts_column_is_marked_a_lower_bound():
+    """A process that lives between two readings is never seen, so the column is a floor, never a measure."""
+    out = tree_part(run_js(f"profHtml({json.dumps(VIEW)},new Set())"))
+    head = re.search(r"<th[^>]*>Starts/s \(lower bound\)</th>", out)
+    assert head and "lower bound" in head.group(0)
