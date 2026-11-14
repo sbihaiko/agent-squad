@@ -62,7 +62,7 @@ permissions:
 jobs:
   ruff:
     name: ruff
-    if: github.head_ref == 'dev' && github.event.action != 'labeled'   # every event but the promotion request: a push starts the fast tier alone
+    if: github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'labeled'   # every event but the promotion request: a push starts the fast tier alone
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -77,7 +77,7 @@ jobs:
 
   mypy:
     name: mypy
-    if: github.head_ref == 'dev' && github.event.action != 'labeled'
+    if: github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'labeled'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -92,7 +92,7 @@ jobs:
 
   fast-battery:
     name: fast-battery
-    if: github.head_ref == 'dev' && github.event.action != 'labeled'
+    if: github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'labeled'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -112,7 +112,7 @@ jobs:
 
   complete-guard:
     name: complete-guard
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -150,7 +150,7 @@ jobs:
 
   full-xdist-1:
     name: full-xdist-1
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -170,7 +170,7 @@ jobs:
 
   full-xdist-2:
     name: full-xdist-2
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -190,7 +190,7 @@ jobs:
 
   full-xdist-3:
     name: full-xdist-3
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -210,7 +210,7 @@ jobs:
 
   full-xdist-4:
     name: full-xdist-4
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -230,7 +230,7 @@ jobs:
 
   full-xdist-5:
     name: full-xdist-5
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -250,7 +250,7 @@ jobs:
 
   full-xdist-6:
     name: full-xdist-6
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -270,7 +270,7 @@ jobs:
 
   full-serial-1:
     name: full-serial-1
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -290,7 +290,7 @@ jobs:
 
   full-serial-2:
     name: full-serial-2
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -310,7 +310,7 @@ jobs:
 
   full-serial-3:
     name: full-serial-3
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -330,7 +330,7 @@ jobs:
 
   full-serial-4:
     name: full-serial-4
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -350,7 +350,7 @@ jobs:
 
   full-serial-5:
     name: full-serial-5
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -370,7 +370,7 @@ jobs:
 
   full-serial-6:
     name: full-serial-6
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -390,7 +390,7 @@ jobs:
 
   fast-battery-311:
     name: fast-battery-311
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -408,7 +408,7 @@ jobs:
 
   gui-e2e:
     name: gui-e2e
-    if: github.head_ref == 'stg' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
+    if: github.head_ref == 'stg' && github.event.pull_request.head.repo.full_name == github.repository && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
