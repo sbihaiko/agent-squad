@@ -77,8 +77,11 @@ COMPLETE_TIER_JOBS = SHARD_JOBS + ("fast-battery-311", "gui-e2e")
 # the stg-to-main pull request alone, on the `promote` label, and the guard job starts it once per tip (ADR-0173).
 GUARD_JOB = "complete-guard"
 TIER_JOBS = FAST_TIER_JOBS + (GUARD_JOB,) + COMPLETE_TIER_JOBS
-DEV_TO_STG = "github.head_ref == 'dev'"
-STG_TO_MAIN = "github.head_ref == 'stg'"
+# A job runs only for a pull request whose head is a branch of this repository: in a public repository a fork can name
+# its branch dev or stg, and its request must start no job.
+SAME_REPO = "github.event.pull_request.head.repo.full_name == github.repository"
+DEV_TO_STG = f"github.head_ref == 'dev' && {SAME_REPO}"
+STG_TO_MAIN = f"github.head_ref == 'stg' && {SAME_REPO}"
 FAST_TIER_IF = f"{DEV_TO_STG} && github.event.action != 'labeled'"
 GUARD_IF = f"{STG_TO_MAIN} && github.event.action == 'labeled' && github.event.label.name == 'promote'"
 COMPLETE_TIER_IF = f"{GUARD_IF} && needs.{GUARD_JOB}.outputs.run == 'true'"
@@ -674,3 +677,10 @@ def test_every_job_names_a_fixed_runner_image():
     wf = _ci_workflow()
     moving = {name: job.get("runs-on") for name, job in wf["jobs"].items() if str(job.get("runs-on")).endswith("-latest")}
     assert not moving, f"a job runs on a label that moves: {moving}"
+
+
+def test_no_job_runs_for_a_pull_request_from_a_fork():
+    """A fork that names its branch dev or stg starts no job: every job reads that the head is this repository."""
+    jobs = _ci_workflow()["jobs"]
+    missing = [name for name, job in jobs.items() if SAME_REPO not in str(job.get("if", ""))]
+    assert missing == [], f"these jobs run for a fork's pull request: {missing}"
