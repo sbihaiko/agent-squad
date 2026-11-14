@@ -191,7 +191,7 @@ def test_the_driver_locks_fold_into_one_line_with_no_pid(hub):
     finally:
         for lock in locks:
             shutil.rmtree(lock)
-    assert "loop drivers running: single-autobug, watch" in lines, lines
+    assert "🔒 loop drivers running: single-autobug, watch" in lines, lines
     assert not any(str(os.getpid()) in x for x in lines), lines
 
 

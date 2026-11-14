@@ -3363,7 +3363,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
             if _read(d / "cmd").strip(): lines.append(gate_lock_line(pid, (argv or _holder_argv)(int(pid)), issues_of))
             else: drivers.append(d.name)   # a lock that names no command is a loop driver's own: no live work (#1692)
-    if drivers: lines.append("loop drivers running: " + ", ".join(drivers))
+    if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
     for i in items:
         if "ready-for-human" in (i.get("l") or []) and i.get("s") != "closed":   # the label outlives the issue (#1692)
             lines.append(f"ready-for-human #{i['n']} {i.get('t') or ''} · label ready-for-human")
