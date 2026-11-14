@@ -12,7 +12,8 @@ nearest named ancestor's own time. Every other process counts in one context row
 
 A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim.
 
-A process that started and ended between two readings is never seen, so the event count is a floor.
+A process that started and ended between two readings is never seen, so each node's event count, and the starts a second
+it answers, is a lower bound.
 """
 import collections
 import functools
@@ -300,12 +301,16 @@ def fold(prev, cur, scope):
     return out
 
 
-def tree(acc, root="loop"):
+def tree(acc, root="loop", window_s=None):
     """The hot-spot tree of the loop in a fold: each node's own seconds and events, its total with its children, and its
-    share of the loop's total. The children sort by inclusive cost, the largest first: an idle driver whose children are
-    costly stands above a cheap leaf. The context row is not in it."""
+    share of the loop's total. With a window, each node also answers the starts observed under it a second: a lower
+    bound, because a process that lives between two readings is never seen. The children sort by inclusive cost, the
+    largest first: an idle driver whose children are costly stands above a cheap leaf. The context row is not in it."""
     def blank(name, kind):
         return {"name": name, "kind": kind, "self_s": 0.0, "events": 0, "kids": {}}
+
+    def rate(n):
+        return round(n / window_s, 3) if window_s and window_s > 0 else 0.0
     top = blank(root, "root")
     for parts, (cpu, events) in acc.items():
         if parts[0] == OTHER:
@@ -327,6 +332,7 @@ def tree(acc, root="loop"):
         return {"name": n["name"], "kind": n["kind"], "self_s": round(n["self_s"], 3), "total_s": round(n["total_s"], 3),
                 "share": round(n["total_s"] / whole, 4) if whole > 0 else (1 if n is top else 0),
                 "events": n["events"], "total_events": n["total_events"],
+                "starts_s": rate(n["events"]), "total_starts_s": rate(n["total_events"]),
                 "children": [out(k) for k in kids]}
     return out(top)
 
@@ -391,10 +397,11 @@ class Window:
                     del self.acc[parts]
 
     def window_s(self, now):
-        return 0 if self.since is None else max(0.0, min(now - self.since, self.span))
+        return 0 if self.since is None or now is None else max(0.0, min(now - self.since, self.span))
 
-    def tree(self, root="loop"):
-        return tree(self.acc, root)
+    def tree(self, root="loop", now=None):
+        """The tree of the window, its starts a second measured over the window's own end: the last good reading."""
+        return tree(self.acc, root, self.window_s(self.last if now is None else now))
 
     def context(self):
         return context(self.acc)

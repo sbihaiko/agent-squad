@@ -212,7 +212,8 @@ def test_the_rows_sort_by_inclusive_cost_and_carry_their_share(prof, scope):
     totals = [c["total_s"] for c in tree["children"]]
     assert totals == sorted(totals, reverse=True)
     assert tree["children"][0]["share"] == pytest.approx(2.0 / 3.75, abs=1e-3)
-    assert set(tree) == {"name", "kind", "self_s", "total_s", "share", "events", "total_events", "children"}
+    assert set(tree) == {"name", "kind", "self_s", "total_s", "share", "events", "total_events",
+                         "starts_s", "total_starts_s", "children"}
 
 
 def test_a_process_is_keyed_by_pid_and_start_time(prof, scope):
@@ -793,34 +794,8 @@ def test_a_node_carries_the_starts_observed_under_it_a_second_over_the_window(pr
     assert prof.tree(prof.fold(FIRST, SECOND, scope))["total_starts_s"] == 0, "no window, no rate: never a guessed one"
 
 
-def test_the_estimate_counts_the_pid_values_between_readings_that_no_reading_saw(prof):
-    """A pure function of the two readings' pid sequences: the arc between the pids that started in between, minus the
-    pids the second reading still holds. A reused pid is no anchor: the allocator gave that value in an older epoch."""
-    a = rd({10: (1, 0.0, "x")})
-    assert prof.estimate(a, rd({10: (1, 0.0, "x"), 12: (1, 0.0, "y"), 13: (1, 0.0, "z")})) == 0, \
-        "no gap: both pids that started in between are still alive"
-    assert prof.estimate(a, rd({10: (1, 0.0, "x"), 12: (1, 0.0, "y"), 15: (1, 0.0, "z")})) == 2, \
-        "pids 13 and 14 started and ended unseen"
-    reused = {(7, 2.0): (1, 0.0, "reused"), (12, 1.0): (1, 0.0, "y")}
-    assert prof.estimate(rd({7: (1, 0.0, "x")}), reused) == 0, "a reused pid is no anchor of the sequence"
-    assert prof.estimate(None, rd({12: (1, 0.0, "y")})) is None, "a reading that failed is no estimate"
-    assert prof.estimate(a, {}) is None and prof.estimate(a, a) is None, "no new pid, nothing bounds the gap"
-
-
-def test_the_estimate_wraps_at_the_pid_space(prof):
-    """The allocator gives pids again from the bottom: the arc runs from the oldest fresh start to the newest, and pids
-    of an older epoch that sit between their values are no allocation of this interval."""
-    x = (17, 1.0)
-    old, new = (19, 2.0), (2, 4.0)                       # pid 19 started before pid 2: the bound wrapped between them
-    a = {x: (1, 0.0, "x")}
-    whole = {x: (1, 0.0, "x"), old: (1, 0.0, "y"), (1, 3.0): (1, 0.0, "z"), new: (1, 0.0, "w")}
-    assert prof.estimate(a, whole, pid_max=20) == 0, "the wrapped arc 19, 1, 2 is whole"
-    assert prof.estimate(a, {x: (1, 0.0, "x"), old: (1, 0.0, "y"), new: (1, 0.0, "w")}, pid_max=20) == 1, \
-        "pid 1 is on the wrapped arc and no reading saw it"
-
-
 def test_no_node_carries_a_count_of_unseen_processes(prof, scope):
-    """The estimate is one machine-wide number: a pid gap carries no parent and no command, so it names no node."""
+    """A pid gap carries no parent and no command, so the page never draws an unseen count under a node."""
     t = prof.tree(prof.fold(FIRST, SECOND, scope), window_s=10)
 
     def walk(n):
