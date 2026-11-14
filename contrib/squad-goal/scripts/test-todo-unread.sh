@@ -14,7 +14,7 @@ for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 export SG_STATE=$T/state SG_OWNER=o SG_PROJECT=7 SG_REPO=o/r SG_TODO=Todo SG_FRONTIER_LABEL=go
 mkdir -p "$T/bin" "$SG_STATE"
 cat > "$T/items.json" <<'J'
-[{"id":"PVTI_801","content":{"number":801,"repository_url":"https://api.github.com/repos/o/r"},"fields":[{"name":"Status","value":{"name":"Todo"}}]}]
+[{"id":"PVTI_801","content":{"number":801,"repository_url":"https://api.github.com/repos/o/r"},"fields":[{"name":"Status","value":{"name":"Todo"}}]},{"id":"PVTI_806","content":{"number":806,"repository_url":"https://api.github.com/repos/o/r"},"fields":[{"name":"Status","value":{"name":"Backlog"}}]}]
 J
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
@@ -27,6 +27,7 @@ case "$all" in
       *"/issues/803"*) echo '{"number":803,"state":"closed","labels":[{"name":"go"}]}'; exit 0;;
       *"/issues/804"*) echo '{"number":804,"state":"open","labels":[{"name":"bug"}]}'; exit 0;;
       *"/issues/805"*) echo '{"number":805,"state":"open","labels":[{"name":"bug"},{"name":"go"}]}'; exit 0;;
+      *"/issues/806"*) echo '{"number":806,"state":"open","labels":[{"name":"go"}]}'; exit 0;;
     esac; exit 1;;
   *"/items/PVTI_800"*) echo '{"isArchived":false,"content":{"number":800},"fields":[{"name":"Status","value":{"name":"Todo"}}]}'; exit 0;;   # the one-card read (#1300, #1303)
   *"/items/PVTI_"*) exit 1;;   # a card the fixture does not carry
@@ -69,5 +70,12 @@ cached=$(SG_BOARD_CACHE="$T/hub.json" sg_todo_cards "801,803" 2>"$T/err3")
 echo "$cached" | /usr/bin/grep -qx 801 && ok "an open go-labelled issue the cache rows carry stays in the go set" || ko "an open go-labelled issue the cache rows carry stays in the go set (rows: $(echo $cached))"
 echo "$cached" | /usr/bin/grep -qx 803 && ko "a closed issue the cache rows still carry drops out of the go set" || ok "a closed issue the cache rows still carry drops out of the go set"
 /usr/bin/grep -q "#803 is closed" "$T/err3" && ok "the dropped issue is said once on stderr from the cache path" || ko "the dropped issue is said once on stderr from the cache path (stderr: $(tr '\n' ' ' < "$T/err3"))"
+# #1758: a card added to the board reads the board's default Todo until the add's own column write lands, and a hub cache
+# read inside that window carries it as Todo. The card's column at the source decides: #806 sits in Backlog there, so the
+# pass claims no card for it, and #801, whose source column is still Todo, stays in the go set.
+printf '{"t": %s, "repo": "o/r", "items": [{"n":801,"st":"Todo","r":"o/r"},{"n":806,"st":"Todo","r":"o/r"}]}' "$(date +%s)" > "$T/hub2.json"
+turned=$(SG_BOARD_CACHE="$T/hub2.json" sg_todo_cards "801,806" 2>"$T/err4")
+echo "$turned" | /usr/bin/grep -qx 801 && ok "a card the source still carries in Todo is listed beside the cache" || ko "a card the source still carries in Todo is listed beside the cache (rows: $(echo $turned))"
+echo "$turned" | /usr/bin/grep -qx 806 && ko "a cached Todo card the source reads Backlog is still listed" || ok "a cached Todo card the source reads Backlog is not listed"
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "PASS test-todo-unread" || { echo "FAIL test-todo-unread"; exit 1; }

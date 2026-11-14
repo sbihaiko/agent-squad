@@ -1,7 +1,8 @@
 # usage: stack.sh <issue>   Dispatch readiness for one issue, from its "## Blocked by" section:
 #   READY                    every blocker is closed
-#   WAIT <reason>            anything else: an open blocker, a blocker whose state is not readable, a blocker sitting in Code Review or Code Complete
-#                            whose work has not landed, or a ticket of a spec the owner has not started (below). The loop builds a
+#   WAIT <reason>            anything else: an open blocker, a blocker whose state is not readable, a blocker the body names
+#                            with no native blocked-by relation while it reads open (#1758), a blocker sitting in Code Review or
+#                            Code Complete whose work has not landed, or a ticket of a spec the owner has not started (below). The loop builds a
 #                            child only on the line, so a blocker whose branch is not in $SG_BASE yet waits; optimistic branch
 #                            stacking returns with the wave rules of ADR-0145 (#372).
 # A caller that already holds the facts hands them over and saves the reads (#383): SG_STACK_ISSUE names a file with the
@@ -29,11 +30,20 @@ if [ -n "$parent" ]; then
     "") echo "WAIT ticket of spec #$parent: the spec carries no readable card, so the owner has not started it (ADR-0142)"; exit 0;;
   esac
 fi
-# GitHub's blocked-by relation is the dispatch fact. The body remains a human-facing mirror, so a stale body edge is named
-# once but never gates this decision.
+# GitHub's blocked-by relation is the dispatch fact. A blocker the body names without that relation still holds the ticket
+# while it reads open (#1758): the body's "## Blocked by" section is how a ticket without the native edge states its wait,
+# and reading it as no edge dispatched tickets whose blocker was in flight. Its state is read alone, one call, and the note
+# names the missing relation whichever way it reads; only a blocker that reads closed holds nothing.
 bl=$(printf '%s' "$issue" | jq -r '.blocked_by[]?' | sort -nu)
 body_bl=$(printf '%s\n' "$body" | awk '/^## Blocked by/{f=1;next} f&&/^## /{exit} f&&/^[[:space:]]*$/{next} f&&!/^[[:space:]]*([-*] |[0-9]+\. )/{exit} f' | grep -oE '(^|[^/[:alnum:]])#[0-9]+' | grep -oE '[0-9]+' | sort -nu)
-for b in $body_bl; do case " $(echo $bl) " in *" $b "*) ;; *) echo "STACK NOTE #$iss: body names blocker #$b without a native blocked-by relation" >&2;; esac; done
+for b in $body_bl; do
+  case " $(echo $bl) " in *" $b "*) continue;; esac   # the native relation decides that blocker, and the caller's own loop below
+  echo "STACK NOTE #$iss: body names blocker #$b without a native blocked-by relation" >&2
+  st=$(gh_api repos/$SG_REPO/issues/$b -q .state 2>/dev/null)
+  [ "$st" = closed ] && continue   # a closed blocker named as text holds nothing
+  [ "$st" = open ] || { echo "WAIT blocker #$b, named in the body, is not readable"; exit 0; }   # an unread state never counts as closed
+  echo "WAIT blocker #$b is open: the body names it with no native blocked-by relation, and its work is not in $SG_BASE yet"; exit 0
+done
 hb="${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json"   # hub's board cache
 open=(); for b in $bl; do st=$(printf '%s' "$issue" | jq -r --argjson b "$b" '[.blockers[]?|select(.number==$b)|.state|select(.)][0] // empty' 2>/dev/null)
   [ -n "$st" ] || st=$(gh_api repos/$SG_REPO/issues/$b -q .state 2>/dev/null)

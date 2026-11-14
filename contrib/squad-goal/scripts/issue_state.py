@@ -984,6 +984,14 @@ def main(argv):
         cached = _fresh_hub_items(repo=repo)
         if cached is not None:   # the rows the hub holds, and the same naming rule: an issue they lack is asked for itself (#1031)
             held = {str(i["n"]): i.get("st") or "" for i in cached if i.get("n") is not None}
+            # A cached row is a read of another time, and a card added to the board reads the board's default Todo until the
+            # add's own column write lands (#1758): a pass that read the cache in that window dispatched a card the owner had
+            # put in Backlog. The source decides every Todo row before the pass claims one, and a row the source no longer
+            # carries in Todo keeps the state the source answers, so it is never claimed as a card in Todo.
+            todo = os.environ.get("SG_TODO", "Todo")
+            for n in [k for k, s in held.items() if s == todo]:
+                try: held[n] = state.read_one(n)
+                except (RuntimeError, ValueError): held[n] = ""   # a read that does not answer proves no Todo card
             carried, rescued, missing = state.unread_rows(held, requested, label)
         else:
             carried, rescued, missing = state.unread(requested, label)

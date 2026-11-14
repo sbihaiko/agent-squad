@@ -19,10 +19,17 @@ class FakeBinding:
         self.facts = facts
         self.asked = []
         self.reads = 0
+        self.source = []   # the cards one card's own read asked the source for (#1758)
 
     def read_all(self):
         self.reads += 1
         return dict(self.carried)
+
+    def read(self, issue):
+        """One card's state at the source, as the binding's own read answers it: the cache path asks the card itself
+        before a pass claims it, so a card that moved after the cache read is never dispatched (#1758)."""
+        self.source.append(str(issue))
+        return self.carried.get(str(issue), "")
 
     def node_status(self, issue):
         self.asked.append(str(issue))
@@ -140,6 +147,7 @@ def test_fresh_cache_go_read_rescues_missing_requested_issue_without_board_read(
 
     assert capsys.readouterr().out.splitlines() == ["800\tTodo", "801\tTodo"]
     assert binding.reads == 0
+    assert binding.source == ["801"], "the cached Todo card's column is asked at the source before the pass claims it (#1758)"
     assert binding.asked == ["800"]
 
 
