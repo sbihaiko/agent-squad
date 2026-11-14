@@ -1183,6 +1183,18 @@ printf 'VERDICT: CHANGES\n' > "$T/st/review-x_y#596.md"; printf '%s\n' "$body_h"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"(changes)"*) ok "32 a CHANGES plan review holds the loop-bug";; *) ko "32 a CHANGES review did not hold: '$r'";; esac
 rm -f "$T/st/review-x_y#596."*
+# 32b) (#1708, ADR-0146) with the loop switch beside the pass, any open loop-bug drains the loop: the pass asks for the drain
+# through `watchd.sh loopbug`, names the issue and dispatches nothing, a plan approval included. The approval releases the
+# hand build, never a dispatch.
+cp "$d/watchd.sh" "$T/s/"; printf 'VERDICT: APPROVE\n' > "$T/st/review-x_y#596.md"; printf '%s\n' "$body_h" > "$T/st/review-x_y#596.sha"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"LOOP STOP: #596 is a loop defect; the fix lands outside the loop"*) ok "32b a bare loop-bug stops the bug pass and is named";; *) ko "32b no stop for a bare loop-bug: '$r'";; esac
+case "$r" in *"[596]"*|*"[1228]"*) ko "32b the pass dispatched under an open loop-bug: '$r'";; *) ok "32b an approved loop-bug is not dispatched, and nothing else is";; esac
+printf '#!/bin/bash\necho "$1" >> "%s/loopbug.calls"; exit 2\n' "$T" > "$T/bin/lbcmd"; chmod +x "$T/bin/lbcmd"
+r=$(SG_LOOPBUG_CMD="$T/bin/lbcmd" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+[ -s "$T/loopbug.calls" ] && ok "32b the pass hands its issue list to the drain's one writer" || ko "32b the pass asked for no drain"
+case "$r" in *"LOOP STOP"*) ko "32b an unknown answer stopped the pass: '$r'";; *) ok "32b a list the rule cannot read asks for nothing and stops nothing";; esac
+rm -f "$T/s/watchd.sh" "$T/st/review-x_y#596."* "$T/loopbug.calls"
 
 # 33) (#1516) the rate-limited line names the reset of the resource that IS exhausted, never core's. The read refuses with
 # the rate-limit body, and gh api rate_limit answers a body whose core has thousands left while graphql and search sit at

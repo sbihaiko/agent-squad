@@ -746,3 +746,60 @@ def test_a_write_to_a_project_the_hub_does_not_serve_is_refused(farm):
     code, out = ask(port, "POST", {"action": "start", "client": "phone"}, path="/nope/api/loop")
     assert code == 404 and "nope" in (out.get("reason") or ""), out
     assert not (base / "nope").exists()
+
+
+def test_the_loop_answer_names_the_loop_bug_a_drain_waits_on(hub):
+    """The view carries why the loop is off: the loop-bug the loop drained itself for, or the owner (#1708, ADR-0146)."""
+    _, port, _, _, state = hub
+    assert ask(port, "GET")[1]["cause"] == {}
+    (state / "auto" / "loop-bug-drain").write_text("1699\n")
+    assert ask(port, "GET")[1]["cause"] == {"issue": 1699}
+    (state / "auto" / "owner-stop").write_text("")
+    assert ask(port, "GET")[1]["cause"] == {"owner": True}, "the owner mark wins over a stale drain mark"
+    (state / "auto" / "owner-stop").unlink()
+    (state / "auto" / "loop-bug-drain").write_text("not a number\n")
+    assert ask(port, "GET")[1]["cause"] == {}
+
+
+def test_a_refused_start_lifts_no_pause(hub):
+    """A start watchd refuses, as it does for an open loop-bug, keeps the pause, the drain and the mark: the hub lifts them
+    only after the start was not refused (#1708)."""
+    mod, port, calls, _, state = hub
+    auto = state / "auto"
+    for f in ("off", "drain", "drain-pause"):
+        (auto / f).write_text("")
+    (auto / "loop-bug-drain").write_text("1699\n")
+    mod.loop_watchd = lambda *a, **kw: calls.append(list(a)) or 1
+    code, out = ask(port, "POST", {"action": "start"})
+    assert code == 500 and out["err"] == "watchd did not start", out
+    assert calls == [["start"]]
+    assert all((auto / f).exists() for f in ("off", "drain", "drain-pause", "loop-bug-drain"))
+    assert [a.get("failed") for a in audit(state)] == ["watchd did not start"]
+
+
+def test_a_start_that_holds_lifts_the_pause(hub):
+    _, port, _, _, state = hub
+    auto = state / "auto"
+    for f in ("off", "drain", "drain-pause"):
+        (auto / f).write_text("")
+    assert ask(port, "POST", {"action": "start"})[0] == 200
+    assert not any((auto / f).exists() for f in ("off", "drain", "drain-pause"))
+
+
+def test_the_page_names_the_loop_bug_beside_the_state():
+    """Draining reads "for the loop-bug #N" and off reads "until the loop-bug #N closes", in the state line and the switch
+    line; an owner stop and a loop that is on name no issue (#1708)."""
+    cause = {"issue": 1699}
+    for fn in ("loopLogHtml", "loopSetHtml"):
+        assert "Loop draining for the loop-bug #1699" in run_js(f"{fn}({js_view(state='draining', cause=cause)})"), fn
+        assert "Loop off until the loop-bug #1699 closes" in run_js(f"{fn}({js_view(state='off', cause=cause)})"), fn
+        assert "loop-bug" not in run_js(f"{fn}({js_view(state='off', cause={'owner': True}, log=[])})"), fn
+        assert "loop-bug" not in run_js(f"{fn}({js_view(state='on', cause=cause, log=[])})"), fn
+
+
+def test_the_log_names_the_issue_of_a_loop_written_line():
+    """The loop is the second writer of the audit: its drain and its start name the issue (#1708, ADR-0162)."""
+    log = [{"at": "2026-11-14T03:00:00-03:00", "who": "loop", "from": "autobug", "action": "drain", "issue": 1699},
+           {"at": "2026-11-14T04:00:00-03:00", "who": "loop", "from": "health", "action": "start", "issue": 1699}]
+    out = run_js(f"loopLogHtml({js_view(log=log)})")
+    assert "drain for the loop-bug #1699" in out and "start: no loop-bug is open after #1699" in out
