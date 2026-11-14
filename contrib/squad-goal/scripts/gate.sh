@@ -46,7 +46,7 @@
 # is `-`, `red` for a measured red this gate recorded, `red-stands <sha>` for a red of the same tree that this attempt did not
 # clear, `cleared-green <sha>` or `cleared-fix <red sha>..<sha>` for the two ways a red is cleared (#1170). The caller field (#1410)
 # is SG_GATE_CALLER: child (the child's own last check), entry (the wave entry or a fix branch landing), tip (the wave-tip gate)
-# or other; a row from before the field has 13 fields, and the loop report reads it as an unknown caller. The duration
+# or other; a row from before the field has 13 fields, and the loop report reads it as an unknown caller. Two load fields follow it (#1691, gate_load below); a row from before them has 14. The duration
 # is finish minus start, and start is read inside the lock, after the wait: it is the gate's run time, never its queue time. A gate
 # that sets SG_GATE_STATUS=self writes no history line, as it writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
@@ -212,10 +212,21 @@ status() {  # <kind> <result> <sha> [<test selection>] [<test scope>]
 append_line() {  # <path> <line>: one short write at the end of the file, never a rewrite
   printf '%s\n' "$2" >> "$1"
 }
+# The load (#1691): fields fifteen and sixteen of a history line are the one-minute load average when the command started and
+# when the line is written, so a red can be read beside the load it was measured under (gate_load_set.py). They label a set
+# and decide nothing: no load bound is in this gate (ADR-0012, ADR-0018). GATE_LOAD_READ names a script that prints the
+# number, for a suite that cannot set the machine's load; a reading that is no number is a dash.
+gate_load() {
+  local l
+  if [ -n "${GATE_LOAD_READ:-}" ]; then l=$(bash "$GATE_LOAD_READ" 2>/dev/null)
+  else l=$(LC_ALL=C uptime 2>/dev/null | sed -n 's/.*load average[s]*: *\([0-9.]*\).*/\1/p'); fi
+  case "$l" in ''|*[!0-9.]*) l=-;; esac
+  printf '%s' "$l"
+}
 gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red>
   fin=$(date +%s)   # the finish epoch the line carries, and the epoch the obligation's deadline counts from (note)
   mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}"
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)"
   append_line "$st/gate-history" "$line"
 }
 case "${1:-}" in
@@ -241,7 +252,7 @@ case "${1:-}" in
     GATE_SCOPE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-scope.XXXXXX" 2>/dev/null) || GATE_SCOPE_FILE=
     GATE_OUTCOME_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-outcome.XXXXXX" 2>/dev/null) || GATE_OUTCOME_FILE=
     GATE_BASE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-base.XXXXXX" 2>/dev/null) || GATE_BASE_FILE=
-    start=$(date +%s)
+    start=$(date +%s); gate_load0=$(gate_load)
     # One attempt identity per logical gate invocation (#1255): the aid is a token written to a marker before the
     # gate runs, and a replay for the same card and tip reads that marker instead of drawing a new token. Two runs
     # in one second still differ, because each draws its own token; and a crash-restart answers as the same attempt
