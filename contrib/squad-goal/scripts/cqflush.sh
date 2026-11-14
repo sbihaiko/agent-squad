@@ -47,6 +47,11 @@ cq_unstart() { local repo=$1 n=$2 file=$3 pg page ids=() id k=0 lab=frozen:not-s
   auto=$(dirname "$qdir")/auto
   [ -d "$auto" ] && rm -f "$auto/notstartable-$n-"*
   echo "removed $k comment(s), label $lab $lw" > "$file.did"; }
+# The body of $1 with the home directory written as ~, rewritten in place before it posts (#1791). A body without it is not
+# rewritten, so its mtime holds and a re-queued file keeps its idle age.
+cq_home() { [ -n "${HOME:-}" ] && [ "$HOME" != / ] || return 0
+  local t; t=$(cat "$1"; printf x); t=${t%x}
+  case "$t" in *"$HOME"*) t=${t//"$HOME"/"~"}; printf '%s' "$t" > "$1";; esac; }
 cq_send() { local repo=$1 n=$2 b=$3 file=$4 t mk cid
   t=${b#*#}; t=${t#*-}; case "$t" in status~*) mk=status;; delivery~*) mk=delivery;; unstart~*) cq_unstart "$repo" "$n" "$file"; return;; esac
   if [ -z "${mk:-}" ]; then gh_send "repos/$repo/issues/$n/comments" -F body=@"$file" >/dev/null 2>&1 && echo posted > "$file.did"; return; fi
@@ -86,6 +91,7 @@ while :; do left=0; { [ -n "$stop" ] || orphaned; } && exit 0
       [ "$is" = open ] && { mv "$f" "$f.dropped"; echo "DROPPED $repo#$n $b: the issue is open again; no Closed comment is posted"; continue; };;
     esac
     mv "$f" "$f.posting" 2>/dev/null || continue
+    cq_home "$f.posting"
     if cq_send "$repo" "$n" "$b" "$f.posting"; then echo "$(cat "$f.posting.did") $repo#$n $b"; rm -f "$f.posting.did"; mv "$f.posting" "$f.done"
     else mv "$f.posting" "$f";  c=$(( $(cat "$f.tries" 2>/dev/null || echo 0) + 1 )); echo $c > "$f.tries"; left=1
       [ $c -ge 5 ] && { mv "$f" "$f.dead"; rm -f "$f.tries"; echo "DEAD $repo#$n $b after 5 failures"; }; fi
