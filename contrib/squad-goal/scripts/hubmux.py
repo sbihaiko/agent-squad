@@ -287,6 +287,7 @@ def server(port, apps, on_new=None):
         def send_attach(self, a, kind=None): return self.profile.send_attach(self, a, kind)   # one attach route (#1151)
         def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
+        def profiler_post(self, a): return self.profile.profiler_post(self, a)   # the Profiler switch's write (#1743)
 
         def _route(self, method):
             path, _, query = self.path.partition("?")
@@ -350,6 +351,7 @@ if __name__ == "__main__":
         if m is None: return
         for f in ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler"):
             threading.Thread(target=getattr(m, f), daemon=True).start()
+        m.profiler_ensure()   # a Profiler switch left on survives the restart (#1743); off, this starts nothing
     def added(a):
         threading.Thread(target=supervise, args=(a,), daemon=True).start()
         start(a)
