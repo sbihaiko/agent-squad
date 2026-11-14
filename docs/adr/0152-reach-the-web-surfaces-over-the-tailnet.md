@@ -30,4 +30,4 @@ A listed login reaches what a loopback caller reaches on the hub, limited to the
 
 A run dashboard server also answers a tailnet Host when its project file names `tailnet.host`. Rule 2 keeps it off the tailnet, because the owner's `tailscale serve` publishes only the hub port.
 
-The `tailnet` block is personal: a machine name and logins. `squad config set tailnet.*` writes it to the project's gitignored `.env` (`SQUAD_TAILNET_HOST`, `SQUAD_TAILNET_ALLOW`, `SQUAD_TAILNET_TERMINALS_SEND`, `SQUAD_TAILNET_LOOP_WRITE`) and refuses when git would track that file. A value there wins over one in the project file. Guard: `tests/test_tailnet_env.py`.
+The `tailnet` block is personal: a machine name and logins. `squad config set tailnet.*` writes it to the project's gitignored `.env` (`SQUAD_TAILNET_HOST`, `SQUAD_TAILNET_ALLOW`, `SQUAD_TAILNET_TERMINALS_SEND`, `SQUAD_TAILNET_LOOP_WRITE`, `SQUAD_TAILNET_PROFILER_WRITE`) and refuses when git would track that file. A value there wins over one in the project file. Guard: `tests/test_tailnet_env.py`.

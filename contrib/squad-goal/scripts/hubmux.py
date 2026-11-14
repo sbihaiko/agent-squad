@@ -287,6 +287,7 @@ def server(port, apps, on_new=None):
         def send_attach(self, a, kind=None): return self.profile.send_attach(self, a, kind)   # one attach route (#1151)
         def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
+        def profiler_post(self, a): return self.profile.profiler_post(self, a)   # the Loop tab's switch write (#1743)
 
         def _route(self, method):
             path, _, query = self.path.partition("?")
@@ -340,20 +341,25 @@ def supervise(app):
     m.start_terminal_supervisor()
 
 
+def start_profile(a):
+    """Each profile's own background reads: a profile added later starts its own too (#917). The sampler of a profiler
+    switch left on starts here (#1743); off, that starts nothing."""
+    m = a.get("mod")
+    if m is None: return
+    for f in ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler"):
+        threading.Thread(target=getattr(m, f), daemon=True).start()
+    m.profiler_ensure()
+
+
 if __name__ == "__main__":
     PORT = int(sys.argv[1]) if len(sys.argv) > 1 else LIVE_PORT
     apps = load_apps()
     for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE", "SG_PROJECTS", "SG_FORK_DIR"):   # each page reads its own profile, never the shell's
         os.environ.pop(k, None)
-    def start(a):   # each profile's own background reads: a profile added later starts its own too (#917)
-        m = a.get("mod")
-        if m is None: return
-        for f in ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler"):
-            threading.Thread(target=getattr(m, f), daemon=True).start()
     def added(a):
         threading.Thread(target=supervise, args=(a,), daemon=True).start()
-        start(a)
+        start_profile(a)
     for a in apps.values():
         threading.Thread(target=supervise, args=(a,), daemon=True).start()
-        start(a)
+        start_profile(a)
     server(PORT, apps, on_new=added).serve_forever()

@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, hub_voice, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -2369,6 +2369,116 @@ def loop_switch_project(a, slug, body, origin_ok):
     row = next((r for r in project_contexts() if r.get("slug") == slug), None)
     if row is None: return 404, {"err": "unknown project", "reason": f"this hub serves no project named {slug}"}
     return loop_switch(a, body, origin_ok, row=row)
+
+# ---------------------------------------------------------------- the Loop tab (#1743)
+# The loop of this profile as a hot-spot tree, folded from the process table by hub_profiler (the rule layer, ADR-0137).
+# The tab has its own switch, `CPU sampling`, and off is the default: off, no sampler thread runs and nothing here reads
+# the process table. The switch is a file in the state folder, so it survives a hub restart. Its audit is its own file:
+# the loop reads its state from the last line of the loop audit, so a profiler line there would change what the loop
+# switch shows.
+PROFILER_SWITCH = STATE / "profiler.json"
+PROFILER_AUDIT = STATE / "profiler-audit.jsonl"
+PROFILER_SECS = 1.0   # the cadence of the process-table read, start to start: a second resolves a fork storm, and the read runs only while the switch is on
+PROFILER_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
+PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pass
+PROFILER = {"window": hub_profiler.Window(), "thread": None, "stop": None}
+PROFILER_LOCK = threading.RLock()   # it starts and ends the sampler, and the switch is read and written under it
+
+def profiler_on():
+    v = _json(PROFILER_SWITCH)
+    return isinstance(v, dict) and v.get("on") is True
+
+def profiler_running():
+    t = PROFILER["thread"]
+    return t is not None and t.is_alive()
+
+def profiler_scope():
+    """The loop of this profile for the fold: the supervisor's pid (watchd.sh writes $SG_STATE/watchd.pid) and the folders
+    only this profile's work names, its run folders and the scripts the loop runs."""
+    try: pid = int(_read(STATE / "watchd.pid").split()[0])
+    except (ValueError, IndexError, OSError): pid = None
+    co = pathlib.Path(CHECKOUT)
+    live = pathlib.Path.home() / ".claude" / "skills" / "squad-goal" / "scripts"
+    marks = dict.fromkeys(f"{d}/" for d in (co / "runs", co / "worktrees" / "run", co / "worktrees" / "child", SCRIPTS, live))
+    return hub_profiler.Scope(pid, tuple(marks))
+
+def profiler_sampler(stop):
+    """Read the process table every PROFILER_SECS, start to start, until `stop` is set. A failed or empty read is counted
+    and not folded: folded, it would count every process of the next reading as new."""
+    while not stop.is_set():
+        began = time.monotonic()
+        try: reading = {(pid, p.start): (p.ppid, p.cpu, p.command) for pid, p in process_table().items()}
+        except Exception: reading = None
+        try: scope = profiler_scope() if reading else None
+        except Exception: reading = None
+        with PROFILER_LOCK:
+            if stop.is_set(): break
+            if reading: PROFILER["window"].add(time.time(), reading, scope)
+            else: PROFILER["window"].fail()
+        stop.wait(max(0.0, PROFILER_SECS - (time.monotonic() - began)))
+
+def profiler_ensure():
+    """Start the sampler when the switch is on and none runs. The hub calls this as it starts, and on each read, so a
+    sampler that died is started again by the page that needs it. Off, it does nothing. The switch is read under the lock:
+    an off write and this never interleave, so no sampler starts after the off."""
+    with PROFILER_LOCK:
+        if not profiler_on(): return
+        if profiler_running() and PROFILER["stop"] is not None and not PROFILER["stop"].is_set(): return   # a sampler told to stop is none: it ends by its own event
+        PROFILER["stop"] = threading.Event()
+        PROFILER["window"].reset(time.time())   # a window starts at its switch-on: an older one would mix two profiles
+        PROFILER["thread"] = threading.Thread(target=profiler_sampler, args=(PROFILER["stop"],), daemon=True, name="profiler")
+        PROFILER["thread"].start()
+
+def profiler_set(on, who, frm, client=None):
+    """Write the switch and its audit line; a write that changes nothing writes neither. An off write returns only when
+    the sampler has ended: it is told to stop under the lock and joined outside it, since its last pass takes the lock."""
+    old = None
+    with PROFILER_LOCK:
+        if on and PROFILER["thread"] is not None and PROFILER["stop"] is not None and PROFILER["stop"].is_set() and not PROFILER["thread"].is_alive():
+            PROFILER["thread"] = None
+        if on != profiler_on():
+            PROFILER_SWITCH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _temp_name(PROFILER_SWITCH); tmp.write_text(json.dumps({"on": on, "at": time.time()}) + "\n"); os.replace(tmp, PROFILER_SWITCH)
+            loop_audit_add(who, frm, "on" if on else "off", client=client, path=PROFILER_AUDIT)
+        if not on:
+            old = PROFILER["thread"]   # kept until it has ended: a second off finds it and waits for it too
+            if PROFILER["stop"] is not None: PROFILER["stop"].set()
+    if old is not None and old is not threading.current_thread():
+        old.join(PROFILER_JOIN_S)   # bounded: a read of the process table that never returns must not hold the request for ever
+        with PROFILER_LOCK:
+            if PROFILER["thread"] is old and not old.is_alive(): PROFILER["thread"] = None
+    if on: profiler_ensure()
+
+def profiler_refusal(a, origin_ok, tn):
+    """The reason a profiler switch write is refused, or '' when it may run: the access rule, then the switch's own
+    tailnet grant, then the origin and body. The loop-write grant is not read here (ADR-0162)."""
+    if not a.allowed: return a.reason
+    if a.tailnet and tn.get("profiler_write") is not True: return PROFILER_READ_ONLY
+    return "" if origin_ok else "forbidden"
+
+def profiler_view(a):
+    """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
+    it, and the facts of the reading; no tree while the switch is off."""
+    write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
+    out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
+           "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
+           "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
+    if not out["on"]: return out
+    profiler_ensure()
+    with PROFILER_LOCK:
+        w = PROFILER["window"]
+        out.update(since=w.since, window_s=round(w.window_s(time.time()), 1), tree=w.tree(), context=w.context(), **w.stats())
+    return out
+
+def profiler_switch(a, body, origin_ok):
+    """The profiler switch's write, shaped as the loop switch's (ADR-0162): the access rule, its own tailnet grant, the
+    origin and a JSON body `{"on": true|false}`."""
+    why = profiler_refusal(a, origin_ok, tailnet_block())
+    if why: return 403, {"err": "forbidden", "reason": why}
+    if not isinstance(body, dict) or not isinstance(body.get("on"), bool): return 400, {"err": "bad request"}
+    client = body.get("client") if body.get("client") in LOOP_CLIENTS else None
+    profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
+    return 200, {"ok": True, "on": body["on"]}
 
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
@@ -5508,6 +5618,14 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #board{position:relative;width:auto}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);display:flex;flex-direction:column}#flowov[hidden]{display:none}
+#profb .lph{display:flex;align-items:center;gap:12px;margin:4px 0 12px}#profb .lph h2{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profb .lpn{color:var(--mute);font-size:var(--fs-caption)}#profb .lpl{font-size:var(--fs-caption)}
+#profb .psw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true]{background:var(--ok)}
+#profb .psw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true] i{transform:translateX(20px)}
+#profb .psw:disabled{opacity:.6;cursor:default}#profb .psw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}
+#profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
+#profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}
+#profb table .pbar{display:block;height:100%;background:var(--err)}#profb table .pnm{margin-left:6px}#profb table .pk-orphan .pnm{color:var(--err)}#profb table .pk-other .pnm,#profb table .pk-unknown .pnm{color:var(--mute)}#profb .lerr{color:var(--err)}
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
@@ -5791,7 +5909,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=runs role=tab>Runs</button><button data-t=flow role=tab>Flow</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=runs role=tab>Runs</button><button data-t=flow role=tab>Flow</button><button data-t=prof role=tab>Loop</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <script id=sideRule>function sideState(saved,wide){return saved==="shut"&&!!wide}function sideNext(saved,wide){return sideState(saved,wide)?"open":"shut"}</script>
 <div id=win>
@@ -5811,6 +5929,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <div id=flowchips></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
+<section id=tab-prof class=pane aria-label=Loop><div id=profb></div></section>
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
@@ -6789,8 +6908,8 @@ function paintHL(){
 
 // A tab only shows one pane; every pane keeps its own poll (#889).
 let TAB="board",lastRead=0,readStale=false,lastBoardT=0,lastBoardOver=false,lastPending=0;
-const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
-const HASH={board:"#kanban",runs:"#runs",flow:"#flow",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
+const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",prof:"#tab-prof",set:"#tab-set"};
+const HASH={board:"#kanban",runs:"#runs",flow:"#flow",prof:"#loop",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#loop":"prof","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
 function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||(/^#set-[a-z]+$/.test(location.hash)?"set":null)}   // a card link opens Kanban, where the card is (#1274); a themed Settings link opens Settings (#1286)
 function tabNext(k,i,n){return k==="ArrowRight"?(i+1)%n:k==="ArrowLeft"?(i+n-1)%n:k==="Home"?0:k==="End"?n-1:-1}
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
@@ -6799,6 +6918,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  if(location.hash!==HASH[t]&&!/issue=\d+/.test(location.hash))history.replaceState(null,"",HASH[t]);   // the address bar names the pane shown; a card link keeps its form
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
  if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen(ls.flowk==="lead"?"lead":"cfd");
+ if(t==="prof")profPoll();   // one read on entry states the switch; the timer reads on only while it is on (#1743)
  drawMain()}
 function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
 document.querySelector(".tabs").addEventListener("click",tabClick);
@@ -6909,6 +7029,46 @@ $("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok
  if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
 setInterval(loopPoll,5000);loopPoll();livePoll();   // the live work is read on load, beside the loop's own state (#1697)
 setInterval(accPoll,5000);accPoll();
+// profiler:start
+// The Loop tab (#1743): /api/profiler is the one read and the one write. The hub folds the tree and sorts it; the page
+// draws it and keeps only which rows are open. The root is open until it is closed; every other node opens on a press.
+// The context row, every process outside the loop, is its own table below the tree.
+const profDue=(tab,hidden,v)=>tab==="prof"&&!hidden&&!!v&&v.on;
+const profSecs=s=>s>=100?s.toFixed(0)+" s":s>=1?s.toFixed(2)+" s":(s*1000).toFixed(0)+" ms";
+const profSw=v=>`<button type=button role=switch aria-label="CPU sampling" aria-checked="${!!v.on}" data-prof${v.write?"":" disabled"} class=psw${v.reason?` title="${esc(v.reason)}"`:""}><i aria-hidden="true"></i></button>`;
+const profTw=(name,kids,isOpen)=>kids?`<button type=button class=ptw aria-label="${isOpen?"Close":"Open"} ${esc(name)}">${isOpen?"&#9662;":"&#9656;"}</button>`:`<span class=ptw></span>`;
+function profRows(n,path,level,open,out){const kids=n.children||[],isOpen=kids.length>0&&(level===1)!==open.has(path),pct=(100*(n.share||0)).toFixed(1)+"%";
+ out.push(`<tr data-p="${esc(path)}"${kids.length?` aria-expanded=${isOpen}`:""} aria-level=${level} class="pk-${esc(n.kind)}"><td class=pn style="padding-left:${(level-1)*18+6}px">`
+  +profTw(n.name,kids.length,isOpen)+`<span class=pbw><i class=pbar style="width:${pct}"></i></span><b>${pct}</b><span class=pnm>${esc(n.name)}</span></td>`
+  +`<td>${profSecs(n.self_s||0)}</td><td>${profSecs(n.total_s||0)}</td><td>${n.events||0}</td></tr>`);
+ if(isOpen)for(const k of kids)profRows(k,path+"/"+k.name,level+1,open,out)}
+function profCtx(c,open){const kids=c.children||[],isOpen=kids.length>0&&open.has("context");
+ const row=(p,level,name,n,tw)=>`<tr data-p="${esc(p)}"${tw?` aria-expanded=${isOpen}`:""} aria-level=${level} class="pk-other"><td class=pn style="padding-left:${(level-1)*18+6}px">${tw?profTw(name,1,isOpen):`<span class=ptw></span>`}<span class=pnm>${esc(name)}</span></td><td>${profSecs(n.total_s||0)}</td><td>${n.events||0}</td></tr>`;
+ return `<table id=profc role=treegrid aria-label="Every process outside the loop"><thead><tr><th title="every process that is not the loop of this profile, by application: a loaded machine shows here, a costly loop in the tree">Context</th><th title="CPU seconds in the window">Total time</th><th title="processes first seen in the window">Starts</th></tr></thead><tbody>`
+  +row("context",1,c.name,c,kids.length>0)+(isOpen?kids.map(k=>row("context/"+k.name,2,k.name,k,false)).join(""):"")+`</tbody></table>`}
+function profNote(v){
+ if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
+ const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
+ return `On: the last ${profSecs(v.window_s||0)} of the process table. `
+  +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
+  +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
+function profHtml(v,open){
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`;
+ if(!v.on||!v.tree)return head;
+ const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
+ return head+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="processes of the node first seen in the window; one that lives between two readings is not seen">Starts</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+  +(v.context?profCtx(v.context,open):"")}
+// profiler:end
+let profV=null,profErr="";const profOpen=new Set();
+function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
+ b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
+ const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+async function profPoll(){try{profV=await (await fetch("/api/profiler")).json();profDraw()}catch(e){}}
+async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
+ await profPoll()}
+$("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
+ const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
+setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
@@ -8718,6 +8878,7 @@ class H(BaseHTTPRequestHandler):
             out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
+        elif self.path.split("?", 1)[0] == "/api/profiler": body, ct = json.dumps(profiler_view(a)).encode(), "application/json"   # the Loop tab (#1743)
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/clip"):   # the answer's one Kore clip (#1603)
@@ -8756,6 +8917,17 @@ class H(BaseHTTPRequestHandler):
         except ValueError: body = None
         code, out = (loop_switch_project(a, slug, body, origin_ok) if slug else loop_switch(a, body, origin_ok))
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+    def profiler_post(self, a):
+        """The Loop tab's switch write (#1743), read as the loop switch's write is: the body before any refusal, then the
+        own or tailnet origin and a JSON body. It has its own name so the many-repository hub forwards it by that name."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        tn = tailnet_block()
+        origin_ok = "json" in (self.headers.get("Content-Type") or "") and ((self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self))
+        try: body = json.loads(raw or b"{}")
+        except ValueError: body = None
+        self.answer(*profiler_switch(a, body, origin_ok))
 
     def send_to_session(self, a):
         """A message to a live session (#834, #898): a JSON body, and from loopback the hub's own Origin, from the tailnet an
@@ -8926,6 +9098,7 @@ class H(BaseHTTPRequestHandler):
         if route_path(self.path) == "/api/terminals/start": return self.terminal_start(a)
         if route_path(self.path) in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[route_path(self.path)])
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
+        if self.path.split("?", 1)[0] == "/api/profiler": return self.profiler_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
@@ -8966,9 +9139,15 @@ def watch_self():
             if SELF.stat().st_mtime_ns != LOADED: os.execv(sys.executable, [sys.executable, str(SELF)] + sys.argv[1:])
         except OSError: pass
 
-if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
+def boot():
+    """What the hub starts before it serves: the run list, the warm reads, each background read, and the sampler of a
+    profiler switch left on (#1743); off, that starts nothing."""
     refresh_runs()
     warm()   # the sessions read costs seconds on a large profile, so it starts with the hub, never with the first page (#1217)
-    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    profiler_ensure()
+
+if __name__ == "__main__":
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
+    boot()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
