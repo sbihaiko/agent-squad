@@ -18,7 +18,7 @@ cat > "$T/items.json" <<'J'
 J
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
-jqf=""; prev=""; all="$*"
+jqf=""; prev=""; all="$*"; echo "$all" >> "$T_GHLOG"
 for a in "$@"; do [ "$prev" = "--jq" ] && jqf="$a"; prev="$a"; done
 case "$all" in
   *"/fields"*) echo '[{"id":"F1","name":"Status","options":[{"id":"o1","name":"Todo"},{"id":"o2","name":"Code Review"}]}]'; exit 0;;
@@ -30,12 +30,13 @@ case "$all" in
       *"/issues/806"*) echo '{"number":806,"state":"open","labels":[{"name":"go"}]}'; exit 0;;
     esac; exit 1;;
   *"/items/PVTI_800"*) echo '{"isArchived":false,"content":{"number":800},"fields":[{"name":"Status","value":{"name":"Todo"}}]}'; exit 0;;   # the one-card read (#1300, #1303)
+  *"/items/PVTI_806"*) echo '{"isArchived":false,"content":{"number":806},"fields":[{"name":"Status","value":{"name":"Backlog"}}]}'; exit 0;;   # the card moved after the cache read (#1758)
   *"/items/PVTI_"*) exit 1;;   # a card the fixture does not carry
   *"/items"*) if [ -n "$jqf" ]; then jq -r "$jqf" "$T_ITEMS"; else cat "$T_ITEMS"; fi; exit 0;;
 esac
 exit 1
 GH
-chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" T_ITEMS="$T/items.json"
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" T_ITEMS="$T/items.json" T_GHLOG="$T/gh.log"
 # an earlier read saw #800 with the item id PVTI_800; the current read carries only #801
 echo '{"800":"PVTI_800"}' > "$SG_STATE/rest-known-o-7-o_r.json"
 . "$here/startability.sh" >/dev/null 2>&1
@@ -74,8 +75,10 @@ echo "$cached" | /usr/bin/grep -qx 803 && ko "a closed issue the cache rows stil
 # read inside that window carries it as Todo. The card's column at the source decides: #806 sits in Backlog there, so the
 # pass claims no card for it, and #801, whose source column is still Todo, stays in the go set.
 printf '{"t": %s, "repo": "o/r", "items": [{"n":801,"st":"Todo","r":"o/r"},{"n":806,"st":"Todo","r":"o/r"}]}' "$(date +%s)" > "$T/hub2.json"
+echo '{"800":"PVTI_800","806":"PVTI_806"}' > "$SG_STATE/rest-known-o-7-o_r.json"; : > "$T/gh.log"
 turned=$(SG_BOARD_CACHE="$T/hub2.json" sg_todo_cards "801,806" 2>"$T/err4")
 echo "$turned" | /usr/bin/grep -qx 801 && ok "a card the source still carries in Todo is listed beside the cache" || ko "a card the source still carries in Todo is listed beside the cache (rows: $(echo $turned))"
 echo "$turned" | /usr/bin/grep -qx 806 && ko "a cached Todo card the source reads Backlog is still listed" || ok "a cached Todo card the source reads Backlog is not listed"
+/usr/bin/grep -q "PVTI_806" "$T/gh.log" && ok "the cached Todo card #806 is read at the source before the pass claims it" || ko "the cached Todo card #806 is read at the source before the pass claims it (gh: $(tr '\n' ' ' < "$T/gh.log"))"
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "PASS test-todo-unread" || { echo "FAIL test-todo-unread"; exit 1; }
