@@ -383,6 +383,12 @@ echo probe-dirt >> "$R/docs/x.md"
 out=$(mh "$mp" dev); rc=$?
 [ $rc = 1 ] && ok "an uncommitted change is a different key: the probe answers no pass for it" || ko "probe dirty: rc $rc: '$out'"
 $G -C "$R" checkout -q -- docs/x.md
+# A red is never kept, so it never answers the probe: the caller runs the gate and meets the red itself.
+mpr=$T/memo-probe-red; mkdir -p "$mpr"
+out=$(BASE_FAIL=1 mg "$mpr" dev); rc=$?
+[ $rc = 1 ] && ok "a red gate fails and keeps no pass" || ko "probe red setup: rc $rc: '$out'"
+out=$(mh "$mpr" dev); rc=$?
+[ $rc = 1 ] && [ ! -e "$T/ran.log" ] && ok "the probe answers no pass for a tree whose gate was red, so the suite runs" || ko "probe after red: rc $rc: '$out'"
 
 mq=$T/memo-queued; mkdir -p "$mq"; rm -f "$T/ran.log"
 slow="bash $T/base.sh; sleep 2"

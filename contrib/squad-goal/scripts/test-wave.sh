@@ -1492,24 +1492,31 @@ z9_childgate() { (cd "$1" && SG_STATE=$T/st SG_FAST_CMD="bash $T/z9-batt.sh" SG_
 z9_entry() { (cd "$1" && SG_STATE=$T/st SG_WAVE_GATES="bash $T/s/fast-gate.sh" SG_FAST_CMD="bash $T/z9-batt.sh" SG_FAST_RETRY_CMD=false bash "../s/wave.sh" enter run-23 "$2" 2>&1); }
 child 960 g960 "origin/$W23"; rm -f "$BL"; o=$(z9_childgate "$T/c960")
 [ -s "$BL" ] && ok "Z9: the child's final gate runs the battery and keeps its pass" || ko "Z9: the child's gate ran no battery: '$o'"
+# A child that commits after its gate holds a tree the pass never read. Its setup runs before any hold, so the hold covers only
+# the entry it is meant to prove.
+child 961 g961 "origin/$W23"; rm -f "$BL"; o=$(z9_childgate "$T/c961")
+echo more >> "$T/c961/g961"; $G -C "$T/c961" commit -qam "a change after the gate (Refs #961)"
 if hold; then
   rm -f "$BL"; REV_BASE=$W23 rev 960
   o=$(z9_entry "$T/c960" 960); rc=$?
   case "$o" in *"entered $W23"*) ok "Z9: a green final gate frees the child of the held gate lock: it enters";; *) ko "Z9: the entry did not enter under the held lock: rc $rc '$o'";; esac
   [ -s "$BL" ] && ko "Z9: the entry ran a second battery: $(cat "$BL")" || ok "Z9: the entry runs no second battery for the tree the child proved"
   case "$(wfact 960 run-23)" in *reuse*) ok "Z9: the entry record names the reuse";; *) ko "Z9: the record does not name the reuse: '$(wfact 960 run-23)'";; esac
-  # A child that commits after its gate holds a tree the pass never read: under the same held lock the entry holds it out,
-  # with no battery, as it did before the reuse.
-  child 961 g961 "origin/$W23"; rm -f "$BL"; o=$(z9_childgate "$T/c961")
-  echo more >> "$T/c961/g961"; $G -C "$T/c961" commit -qam "a change after the gate (Refs #961)"
-  rm -f "$BL"; REV_BASE=$W23 rev 961
-  o=$(z9_entry "$T/c961" 961); rc=$?
-  case "$o" in *"WAVE HOLD #961"*) ok "Z9: a tree the pass never read still meets the held gate lock";; *) ko "Z9: the changed tree entered beside the lock or ran a battery: rc $rc '$o'";; esac
-  [ -s "$BL" ] && ko "Z9: the changed tree ran a battery beside the lock: $(cat "$BL")" || ok "Z9: nothing ran beside the held lock"
   wait
-  rm -f "$BL"; r=$(z9_entry "$T/c961" 961); rc=$?
-  [ $rc = 0 ] && [ -s "$BL" ] && ok "Z9: with the lock free, the changed tree runs its own battery and enters" || ko "Z9: the changed tree did not run its battery: rc $rc '$(cat "$BL" 2>/dev/null)' '$r'"
-  case "$(wfact 961 run-23)" in *reuse*) ko "Z9: a fresh battery recorded a reuse it never made: '$(wfact 961 run-23)'";; *) ok "Z9: a fresh battery records no reuse";; esac
+  if hold; then
+    rm -f "$BL"; REV_BASE=$W23 rev 961
+    o=$(z9_entry "$T/c961" 961); rc=$?
+    case "$o" in *"WAVE HOLD #961"*) ok "Z9: a tree the pass never read still meets the held gate lock";; *) ko "Z9: the changed tree entered beside the lock or ran a battery: rc $rc '$o'";; esac
+    [ -s "$BL" ] && ko "Z9: the changed tree ran a battery beside the lock: $(cat "$BL")" || ok "Z9: nothing ran beside the held lock"
+    wait
+    REV_BASE=$W23 rev 961   # the held pass rebased the child on the wave tip before it met the lock: the review reads its new head
+    rm -f "$BL"; r=$(z9_entry "$T/c961" 961); rc=$?
+    [ $rc = 0 ] && [ -s "$BL" ] && ok "Z9: with the lock free, the changed tree runs its own battery and enters" || ko "Z9: the changed tree did not run its battery: rc $rc '$(cat "$BL" 2>/dev/null)' '$r'"
+    case "$(wfact 961 run-23)" in *reuse*) ko "Z9: a fresh battery recorded a reuse it never made: '$(wfact 961 run-23)'";; *) ok "Z9: a fresh battery records no reuse";; esac
+  else
+    wait 2>/dev/null
+    ko "Z9: the second holder never held the gate lock, so the changed tree's hold could not be proved"
+  fi
 else
   wait 2>/dev/null
   ko "Z9: the holder never came to hold the gate lock, so the entry without a lock could not be proved"

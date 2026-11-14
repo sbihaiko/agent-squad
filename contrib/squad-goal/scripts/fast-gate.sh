@@ -17,6 +17,8 @@
 # battery; an entry or tip caller always measures. SG_FAST_MEMO=0 turns both memos off. The verdict, one of pass, fail
 # or unproven with its reason and the checks that ran, goes to the history line through GATE_OUTCOME_FILE.
 # A pass is kept under its key (#955), so a second gate at the same key runs no battery; a red is never kept. SG_FAST_MEMO=0 turns it off.
+# `--memo-hit` asks that key alone, with no lock, no slots and no battery: exit 0 when a pass answers it, else 1 with the reason,
+# so a wave entry whose child finished on its own green gate enters without waiting behind another gate (ADR-0168, #1718).
 # One deadline covers the battery and its retry (#1171): gate.sh hands the clock down, and a direct run starts its own. Past it the
 # battery's tree is stopped and the log decides: a class it already named is the gate's answer, so a failing test printed before
 # the hang ends fail, and an attempt that reported nothing is bounded and unproven, never a pass. A retry spends the same clock,
@@ -59,21 +61,43 @@ memo_store() {  # <key> <log>: a temp file and a mv, so no reader sees half of i
   local f; mkdir -p "$st/gate-memo" 2>/dev/null || return 0
   f=$(memo_file "$1"); printf '%s\t%s\n' "$1" "$2" > "$f.$$" && mv -f "$f.$$" "$f"
 }
+memo_reuse() {  # <key> <sha> <log>: a green pass answers this key; write what a memo hit writes, and nothing else
+  # The hit writes the pass line itself and no history line: a line with no selection and no run time would read as a whole
+  # battery. The line names the current commit, not the tree object: the pass answers for the tip the gate stands on.
+  SG_GATE_STATUS=self bash "$here/gate.sh" --status fast pass "$2"
+  # A memo reuse is no attempt (#1255): it is recorded as a reuse marker, and Gate Tries rises by none.
+  local fgj=${SG_GATE_JOURNAL:-}
+  if [ -n "${SG_GATE_CARD:-}" ]; then
+    if [ -z "$fgj" ] && [ -n "${SG_BOARD_CACHE:-}" ] && [ -n "${SG_REPO:-}" ]; then
+      fgj=$(python3 "$here/gate_attempts.py" journal "$SG_BOARD_CACHE" "$SG_REPO" 2>/dev/null) || fgj=
+    fi
+    [ -z "$fgj" ] || python3 "$here/gate_attempts.py" reuse "$fgj" "$SG_GATE_CARD" "$2" \
+      "memo-${2:0:9}-$(printf '%s' "$1" | cksum | cut -d' ' -f1)" >/dev/null 2>&1 || :
+  fi
+}
+# (ADR-0168, #1718) --memo-hit asks the memo before a caller takes the machine gate lock: a wave entry whose child finished on
+# its own green gate must not wait behind another gate for a battery that already ran. A hit writes the pass line and the reuse
+# marker and exits 0 with no lock, no slots and no battery; a memo turned off, a tree or base the key cannot name, or no stored
+# pass exits 1 with the reason, so the caller runs the gate as before. A red is never stored, so it never answers here.
+if [ "${1:-}" = --memo-hit ]; then
+  [ "${SG_FAST_MEMO:-1}" = 0 ] && { echo "fast-gate: no memo: SG_FAST_MEMO is 0, so no pass answers this tree"; exit 1; }
+  [ -n "$memokey" ] || { echo "fast-gate: no memo key: the base does not resolve or the tree cannot be read, so no pass is kept for it"; exit 1; }
+  phsha=$(git rev-parse --verify -q HEAD 2>/dev/null)
+  if [ -n "$phsha" ] && [ -r "$(memo_file "$memokey")" ]; then
+    IFS=$'\t' read -r mk ml < "$(memo_file "$memokey")"
+    if [ "$mk" = "$memokey" ]; then
+      memo_reuse "$memokey" "$phsha" "$ml"
+      echo "fast-gate: memo hit ${phsha:0:9} (log $ml): the same tree, merge-base and battery passed, so no battery runs"
+      exit 0
+    fi
+  fi
+  echo "fast-gate: memo miss: no pass answers this tree, its uncommitted state, its base, its merge-base and its battery"
+  exit 1
+fi
 if [ -n "$memokey" ] && [ -r "$(memo_file "$memokey")" ]; then
   IFS=$'\t' read -r mk ml < "$(memo_file "$memokey")"
   if [ "$mk" = "$memokey" ]; then
-    # The hit writes the pass line itself and no history line: a line with no selection and no run time would read as a whole
-    # battery. The line names the current commit, not the tree object: the pass answers for the tip the gate stands on.
-    SG_GATE_STATUS=self bash "$here/gate.sh" --status fast pass "$hsha"
-    # A memo reuse is no attempt (#1255): it is recorded as a reuse marker, and Gate Tries rises by none.
-    if [ -n "${SG_GATE_CARD:-}" ]; then
-      fgj=${SG_GATE_JOURNAL:-}
-      if [ -z "$fgj" ] && [ -n "${SG_BOARD_CACHE:-}" ] && [ -n "${SG_REPO:-}" ]; then
-        fgj=$(python3 "$here/gate_attempts.py" journal "$SG_BOARD_CACHE" "$SG_REPO" 2>/dev/null) || fgj=
-      fi
-      [ -z "$fgj" ] || python3 "$here/gate_attempts.py" reuse "$fgj" "$SG_GATE_CARD" "$hsha" \
-        "memo-${hsha:0:9}-$(printf '%s' "$memokey" | cksum | cut -d' ' -f1)" >/dev/null 2>&1 || :
-    fi
+    memo_reuse "$memokey" "$hsha" "$ml"
     echo "fast-gate: pass ${hsha:0:9} (log $ml) memo: the same tree, merge-base and battery passed, so no battery ran"; exit 0
   fi
 fi

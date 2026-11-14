@@ -543,7 +543,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # base is read here, not left to the caller's shell: the sibling check below compares a diff against origin/$base, and an
   # unset base would silently disable it (#1434 review).
   local run=$1 iss=$2 w br sha files out SG_REQUEUE_RUN=$1 base=${SG_BASE:-dev}; w=$(wave_of "$run")
-  local obl="" gwhy="" gnot="" grc=0
+  local obl="" gwhy="" gnot="" grc=0 reuse=""
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
@@ -658,7 +658,18 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     # admits it with its obligation. The word is read from the caller's copy gate.sh writes inside the lock; the exit code alone
     # never admits or refuses. A hold (the lock or its slots are taken, or a bounded wait ran out) is no outcome at all, so the
     # child is held, never requeued: the machine, not the child, gave no answer.
-    local of oc rs ran notran
+    local of oc rs ran notran fgm ph prc
+    reuse=""
+    # (ADR-0168, #1718) Before the machine lock: a green pass already kept for the tree the child enters with -- the same tree,
+    # uncommitted state, base, merge-base and suite its final gate proved -- answers the entry as it stands. The child enters
+    # with no second battery and, above all, with no wait behind another gate: a held lock holds no child whose final gate
+    # proved this tree. Only the shipped fast gate answers the probe, and it answers only a green pass, so a red, a different
+    # tree or suite, a tree the key cannot read, or a memo turned off answers no hit and the gate runs below as before.
+    case "$SG_WAVE_GATES" in *"$here/fast-gate.sh"*) fgm=$here/fast-gate.sh;; *) fgm=;; esac
+    if [ -n "$fgm" ]; then
+      ph=$(SG_GATE_CALLER=entry SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$fgm" --memo-hit 2>&1); prc=$?
+      [ $prc = 0 ] && { reuse=$(printf '%s\n' "$ph" | tail -1); return 0; }
+    fi
     of=$(mktemp "${TMPDIR:-/tmp}/wave-outcome.XXXXXX" 2>/dev/null) || of=
     [ -z "$of" ] || : > "$of"
     # SG_GATE_CARD names the card this gate answers for: its attempt is journaled and projected to Gate Tries (#1255).
@@ -695,6 +706,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       # run's own land. An unproven entry carries its obligation there, so the job that settles it is attached to the run that
       # admitted the child (spec 1163, #1174). A pass carries none; gate.sh is the obligation's one writer.
       local cause="entered $w at $sha"
+      # A reused gate is no silent skip (ADR-0168 rule 5): the entry's own record names the pass it read, so a reader sees the
+      # child entered on its final gate and not on a battery this wave ran.
+      [ -z "$reuse" ] || cause="$cause; the entry gate reused the child's final green verdict (tree, base, merge-base and suite: $reuse), so no battery ran"
       if [ -n "$obl" ]; then
         local oba och osc odl
         IFS=$'\t' read -r _ _ oba och osc odl < "$obl" 2>/dev/null
