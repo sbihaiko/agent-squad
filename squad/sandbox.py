@@ -96,6 +96,25 @@ def bash_needles(env, home):
     return out
 
 
+# #1762: a child ran its suites outside the gates ceiling, three copies at once, and the load reached 67 on 8 cores. A suite
+# named as a command goes through child-gate.sh, which takes a gates slot and refuses a second copy of the same suite.
+_SUITE = re.compile(r"test-[\w.-]+\.sh")
+
+
+def suite_reason(cmd):
+    """Why a Bash command that runs a test-*.sh suite directly is denied, or None (#1762)."""
+    for seg in _SEGMENT.split(cmd):
+        words = _segment_words(seg)
+        if not words:
+            continue
+        verb = os.path.basename(words[0])
+        target = os.path.basename(words[1]) if verb in ("bash", "sh", "zsh", "dash") and len(words) > 1 else verb
+        if _SUITE.fullmatch(target):
+            return ("sandbox: a test suite run directly is denied; run it as "
+                    "`bash <checkout>/contrib/squad-goal/scripts/child-gate.sh <suite>`, which takes the machine's gates slot (caps.gates)")
+    return None
+
+
 def deny_reason(tool, tool_input, root, env=None, home=None):
     """Why the call is denied, or None when it may run. `root` is the session's worktree; a relative path is read from it."""
     env = os.environ if env is None else env
@@ -131,6 +150,8 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
         for needle in bash_needles(env, home):
             if needle in cmd:
                 return f"sandbox: a command that names {needle} is denied; the live skill copy and the loop state are not this session's to touch"
+        if (reason := suite_reason(cmd)) is not None:
+            return reason
         return signal_reason(cmd)
     return None
 
