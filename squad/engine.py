@@ -7,6 +7,7 @@ check. A loop repeats its ordered children under the reserved `next` words. Resu
 `squad/replay.py`. Node outcomes derive from artifacts and go to the run record; only the verdict module folds
 the record into a verdict.
 """
+import functools
 import math
 import subprocess
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 import anyio
 
 from squad import adapt, git, modelreg, node_commit, session, skills
+from squad import killed as K
 from squad import options as opt
 from squad import project_settings as P
 from squad import verdict as V
@@ -43,6 +45,14 @@ from squad.runners.types import Scope as Scope
 # spent ids and the hours windows stay the resuming invocation's: they are facts of the moment, and the record states the
 # chain each call had.
 CHAIN_ORDER = "model_order"
+
+
+def _signals_recorded(fn):
+    @functools.wraps(fn)
+    async def wrapped(self, *args, **kwargs):
+        with K.recording_signals(self.record.path):
+            return await fn(self, *args, **kwargs)
+    return wrapped
 
 
 class Engine:
@@ -363,6 +373,7 @@ class Engine:
         return None
 
     # ------------------------------------------------------------ resume
+    @_signals_recorded
     async def resume(self, *, answer=None, from_node=None, release=False):
         """Continue one run from its record under the same run id. Return the verdict. The replay is `squad/replay.py`.
         `release`: the person who runs the command releases every hold the control file still holds."""
@@ -433,6 +444,7 @@ class Engine:
             self.dispatch.prune()      # a landed child's branch and worktree are clutter once the run passed (a failed run keeps them for resume, and a run the loop started keeps them for its wave entry)
         return v
 
+    @_signals_recorded
     async def run(self):
         self._start()
         if self.preflight["status"] != "ok":
