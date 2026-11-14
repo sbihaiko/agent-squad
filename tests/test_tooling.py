@@ -86,6 +86,9 @@ PULL_REQUEST_TYPES = ["opened", "synchronize", "reopened", "labeled"]
 PULL_REQUEST_BRANCHES = ["stg", "main"]
 # The sentence the workflow states for its two pull requests.
 TWO_PULL_REQUESTS_RULE = "The fast tier runs on the dev-to-stg pull request, and the complete tier on the stg-to-main pull request"
+# The sentence the workflow states for the branch that supplies its file to the stg-to-main pull request.
+TRANSITION_RULE = (
+    "the head branch supplies it: stg carries the complete tier before the first stg-to-main request")
 PROMOTE_PASS = ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh"
 
 
@@ -468,6 +471,29 @@ def test_the_complete_tier_starts_on_the_promote_label_alone():
         job = wf["jobs"][name]
         assert job.get("if") == COMPLETE_TIER_IF, f"{name} starts on the promote request alone; found {job.get('if')!r}"
         assert job.get("needs") == [GUARD_JOB], f"{name} reads the guard's answer, so a second label starts it not"
+
+
+def test_the_head_branch_supplies_the_workflow_file_the_label_starts():
+    """Guard for ADR-0173: which branch supplies the workflow file for the first stg-to-main pull request. A
+    `pull_request` run executes the workflow of the pull request's merge commit, so the head branch supplies it: `stg`
+    carries the complete tier before the first request, the label starts the tier from `stg`'s copy, and `main` takes
+    the same file in the fast-forward. The case beside the statement: the stg-to-main pull request is a `pull_request`
+    event on the `main` base, a push starts nothing, and the promote label starts the complete tier."""
+    wf = _ci_workflow()
+    on = wf.get("on", wf.get(True))
+    triggers = set(on)
+    assert triggers == {"pull_request"}, f"the tier starts on a pull request event alone; found {sorted(triggers)}"
+    assert on["pull_request"]["types"] == PULL_REQUEST_TYPES, (
+        f"the label event is one of the pull request events that start a run; found {on['pull_request'].get('types')!r}")
+    assert "main" in on["pull_request"]["branches"], (
+        "the base branch of the stg-to-main pull request is main, and the trigger reads the base branch")
+    assert wf["jobs"][GUARD_JOB].get("if") == GUARD_IF, (
+        f"the complete tier starts on the promote label of the stg-to-main pull request; found "
+        f"{wf['jobs'][GUARD_JOB].get('if')!r}")
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    stated = " ".join(
+        line.lstrip("#").strip() for line in text.split("concurrency:", 1)[0].splitlines() if line.startswith("#"))
+    assert TRANSITION_RULE in stated, f"the workflow states which branch supplies its file: {TRANSITION_RULE}"
 
 
 def _guard_answer(tmp_path, conclusion: str | None, status: str = "completed") -> str:

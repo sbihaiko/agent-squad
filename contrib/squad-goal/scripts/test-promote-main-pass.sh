@@ -29,12 +29,16 @@ realign() { git -C "$R" update-ref refs/heads/main "$(tip stg)"; rm -f "$ST"/pro
 printf "jobs:\n  ruff:\n    name: ruff\n  complete-guard:\n    name: complete-guard\n    if: github.head_ref == 'stg' && github.event.label.name == 'promote'\n  full-xdist:\n    name: full-xdist\n    if: github.head_ref == 'stg' && github.event.label.name == 'promote'\n    needs: [complete-guard]\n  gui-e2e:\n    name: gui-e2e\n    if: github.head_ref == 'stg' && github.event.label.name == 'promote'\n    needs: [complete-guard]\n" > "$T/ci.yml"
 printf "jobs:\n  ruff:\n    name: ruff\n" > "$T/ci-fast-only.yml"
 export SG_CI_WORKFLOW=$T/ci.yml
+# iso <epoch>: the "YYYY-MM-DDTHH:MM:SSZ" form GitHub writes for a time, whatever date(1) this host ships.
+iso() { date -u -r "$1" +%FT%TZ 2>/dev/null || date -u -d "@$1" +%FT%TZ; }
 # checks <sha> <full-xdist> <gui-e2e>: the check runs of one sha. A word is a conclusion, `queued`, `in_progress` or `none`.
-checks() { local sha=$1 out="" n c i=0; shift
+# CHK_AGE moves the start back that many seconds: a run of an older event on the same sha.
+checks() { local sha=$1 out="" n c i=0 ts; shift
+  ts=$(iso $(( $(date +%s) - ${CHK_AGE:-0} )))
   for n in full-xdist gui-e2e; do c=$1; shift; i=$((i + 1))
     case $c in none) ;;
-      queued|in_progress) out="$out{\"id\":$i,\"name\":\"$n\",\"status\":\"$c\",\"conclusion\":null},";;
-      *) out="$out{\"id\":$i,\"name\":\"$n\",\"status\":\"completed\",\"conclusion\":\"$c\",\"details_url\":\"https://github.com/x/emu/actions/runs/900$i/job/$i\"},";; esac
+      queued|in_progress) out="$out{\"id\":$i,\"name\":\"$n\",\"status\":\"$c\",\"conclusion\":null,\"started_at\":null,\"created_at\":\"$ts\"},";;
+      *) out="$out{\"id\":$i,\"name\":\"$n\",\"status\":\"completed\",\"conclusion\":\"$c\",\"started_at\":\"$ts\",\"created_at\":\"$ts\",\"details_url\":\"https://github.com/x/emu/actions/runs/900$i/job/$i\"},";; esac
   done
   printf '{"check_runs":[{"id":90,"name":"ruff","status":"completed","conclusion":"skipped"},%s]}\n' "${out%,}" | sed 's/,]/]/' > "$T/checks-$sha.json"; }
 # The stub GitHub. The stg -> main pull request lives in $T/pr; its head is $T/prhead when a case names one, else the stg tip.
@@ -196,6 +200,35 @@ request "$nn" 600; SG_CI_WORKFLOW=$T/ci-fast-only.yml pass
 # 19) main already holds the stg tip: nothing is read, and a request left behind is cleared.
 realign; request "$(tip stg)" 600; : > "$T/gh.log"; pass; rc=$?
 [ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "19 a main that holds the stg tip clears the request and reads nothing" || ko "19 record '$(req)', gh '$(cat "$T/gh.log")'"
+
+# 20) A pass killed after it recorded the red sha, and before it cleared the request, answers that red once: the next pass
+# reads the recorded sha, clears the request, and writes no second comment on the bug.
+realign; adv stg killed-red 7200; kr=$(tip stg); request "$kr" 600; checks "$kr" failure success
+printf '77\n' > "$ST/promote-main-bug"; printf 'open\n' > "$T/issue-77.state"; printf '%s\n' "$kr" > "$ST/promote-main-red"; : > "$T/comments"
+pass; rc=$?
+[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/comments" ] && [ "$(cat "$T/issues" 2>/dev/null || echo none)" = none ] \
+  && ok "20 a red sha already recorded is not commented on again, and the request is cleared" \
+  || ko "20 killed red: rc $rc, request '$(req)', comments '$(cat "$T/comments" 2>/dev/null)'"
+
+# 21) A check run of an older label event on the same sha never answers the current request: the pass reads the runs that
+# started after its own request, so a stale red is no evidence, and the tip is unproven instead of filed as a bug. A run
+# that started after the request does answer on that same sha.
+realign; adv stg stale-run 7200; sr=$(tip stg); mk=$(tip main); n0=$(cat "$T/issues" 2>/dev/null || echo none)
+CHK_AGE=1200 checks "$sr" failure success; request "$sr" 600; pass; rc=$?
+[ -z "$(req)" ] && [ "$(tip main)" = "$mk" ] && [ "$(cat "$T/issues" 2>/dev/null || echo none)" = "$n0" ] && [ "$(alerts)" = 1 ] \
+  && /usr/bin/grep -q "started no run" "$ST/alerts.log" && ok "21 a run of an older label event is no evidence of the current request" \
+  || ko "21 stale run: request '$(req)', issues '$(cat "$T/issues" 2>/dev/null || echo none)', alerts '$(cat "$ST/alerts.log" 2>/dev/null)'"
+request "$sr" 600; checks "$sr" failure success; pass
+[ "$(cat "$ST/promote-main-red" 2>/dev/null)" = "$sr" ] && ok "21 a run that started after the request answers on that same sha" \
+  || ko "21 fresh run: red record '$(cat "$ST/promote-main-red" 2>/dev/null)', out '$(cat "$T/out")'"
+
+# 24) The request record holds the head sha GitHub reports for the pull request, never the sha the pass read before it
+# opened one: GitHub answers a head that differs from the stg tip the pass read, and the record holds GitHub's answer.
+realign; adv stg gh-head 7200; gh_s=$(tip stg); other=$(tip main); [ "$other" != "$gh_s" ] || other=$(git -C "$R" rev-parse refs/heads/dev)
+echo "$other" > "$T/prhead"; : > "$T/gh.log"; pass; rc=$?
+[ $rc = 0 ] && [ "$(req)" = "$other" ] && ok "24 the record is the head sha GitHub answered, not the sha read before the open" \
+  || ko "24 head: rc $rc, record '$(req)', GitHub '$other', stg tip '$gh_s'"
+rm -f "$T/prhead"
 
 # 18) SG_PROMOTE=off does nothing: no fetch, no gh call, no line.
 adv stg off 7200; rm -rf "$ST/promote-main-tree" "$ST/promote.log"; : > "$T/gh.log"

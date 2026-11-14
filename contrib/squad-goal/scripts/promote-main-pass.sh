@@ -7,7 +7,10 @@
 # read is of R, never of the stg tip, and by job name: the complete tier is the jobs the workflow starts on the label
 # (promote-pass.sh --ci-complete-job-names). One pass does one thing:
 #   1. main holds the stg tip: nothing, and a request left behind is cleared.
-#   2. R is set: its complete tier answers.
+#   2. R is set: its complete tier answers. Only a run that started at or after the request time answers: a run of an
+#      older label event on the same sha is no evidence of this request.
+#        answered    R is the recorded red sha: that red was answered before a kill took the pass, so the request is
+#                    cleared and nothing is read or written again.
 #        in flight   a name has a run that has not completed, or no run yet inside the grace (300 s): nothing, up to
 #                    SG_PROMOTE_MAIN_FLIGHT_S (3600) from the request; past it R is unproven.
 #        green       every name's newest run ended success: promote-main.sh R. The request is cleared whatever it answers;
@@ -70,6 +73,10 @@ now=$(date +%s)
 if [ -n "${R:-}" ]; then
   # 2. The request answers, on R alone.
   if g merge-base --is-ancestor "$R" "$mtip" 2>/dev/null; then rm -f "$rec"; exit 0; fi   # main already holds R
+  # The red sha is recorded before the request is cleared, so a pass killed between the two leaves both behind. The record
+  # says that red was already answered: the bug was filed or commented on, and the hold written, so this pass clears the
+  # request alone and never comments on the same sha a second time.
+  if [ "$(cat "$redrec" 2>/dev/null)" = "$R" ]; then rm -f "$rec"; say "$R red already answered: the request is cleared"; exit 0; fi
   # The one unproven set (promote-pass.sh --ci-unproven-conclusions): the workflow's guard reads the same one, so a run the
   # pass calls unproven is a run the guard starts the tier over.
   unp=$(bash "$d/promote-pass.sh" --ci-unproven-conclusions | jq -Rnc '[inputs | select(. != "")]')
@@ -77,8 +84,14 @@ if [ -n "${R:-}" ]; then
   cr=
   [ "$names" = "[]" ] || cr=$(gh_api "repos/$SG_REPO/commits/$R/check-runs?per_page=100&filter=all") || cr=
   if [ -n "$cr" ] && printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1; then
+    # Only the runs that started at or after the request answer it: a run an older label event started on the same sha
+    # says nothing of this request. A run GitHub reports no start for keeps its created time; one with neither counts as
+    # before the request, so a silence never reads as a proof.
+    cr2=$(printf '%s' "$cr" | jq -c --argjson at "$at" \
+      '.check_runs |= map(select((((.started_at // .created_at // "") | fromdateiso8601? // 0)) >= $at))' 2>/dev/null) \
+      || cr2='{"check_runs":[]}'
     # One row per name: its state, then the detail. A skipped run is no evidence of the tier (another event's skip).
-    rows=$(printf '%s' "$cr" | jq -r --argjson names "$names" --argjson unp "$unp" '
+    rows=$(printf '%s' "$cr2" | jq -r --argjson names "$names" --argjson unp "$unp" '
       .check_runs as $r | $names[] as $n
       | [$r[] | select(.name == $n) | select(.conclusion != "skipped")] as $mine
       | ($mine | map(select(.status != "completed"))) as $open
@@ -97,7 +110,7 @@ if [ -n "${R:-}" ]; then
       v=flight; why="$ms has no run yet"
     elif [ -n "$rd" ]; then
       # A red is a red only when a job ran a step and failed (#1629): the newest run of each name is what the refinement reads.
-      newest=$(printf '%s' "$cr" | jq -c --argjson names "$names" '{check_runs: [.check_runs as $r | $names[] as $n
+      newest=$(printf '%s' "$cr2" | jq -c --argjson names "$names" '{check_runs: [.check_runs as $r | $names[] as $n
         | [$r[] | select(.name == $n) | select(.status == "completed") | select(.conclusion != "skipped")] | sort_by(.id) | last | select(. != null)]}')
       ref=$(sg_ci_refine "$newest" 2>/dev/null) || ref=
       case "$ref" in
