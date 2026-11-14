@@ -181,6 +181,8 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     st=$(gh_get "repos/$SG_REPO/commits/$1/statuses" | jq -r --arg c "$ctx" '[.[] | select(.context == $c)][0].state // empty' 2>/dev/null)
     [ "$st" = success ] || { echo "the commit status $ctx did not read back as success (${st:-missing})"; return 1; }
   }
+  fast_record() {  # <tip>: the fast proof word for the tip, written whole (#1723); promote-stg.sh reads it under SG_PROMOTE_PROOF=fast
+    printf '%s\tfast\tpass\t%s\n' "$(date +%s)" "$1" > "$state/gate-status-promote.$$" && mv -f "$state/gate-status-promote.$$" "$state/gate-status-promote"; }
   # The check names are read here, in this shell, not inside ci_verdict's command substitution: the record below names
   # the same list the verdict demanded. Every job of the file is a check the dev tip waits on, the complete tier included
   # (#1461). A job the file gates to another pull request never runs on this one, so the tip can never prove it: the pass
@@ -229,6 +231,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       if [ "$ci_tiered" = 1 ]; then
         ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }; carried="the CI fast tier carried the pass"
         echo "$(date -u +%FT%TZ) promote-pass: $tip CI fast tier green: $ci_jobs" >> "$log"
+        fast_record "$tip"
       else
         carried="the CI checks carried the full pass"
         bash "$d/gate.sh" --status full pass "$tip"
@@ -242,7 +245,8 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       # #1495: the CI proof is read on the tip promote-stg.sh promotes, which may be a later one than $tip when a landing moved
       # dev while the pass waited for the gate lock. A refusal is keyed to the tip it evaluated; a tip whose checks have not
       # reported (exit 75) is a wait with no marker, so a later pass retries.
-      o=$(SG_PROMOTE_PROOF=ci bash "$d/promote-stg.sh" 2>&1); rc=$?
+      proof_word=ci; [ "$ci_tiered" = 1 ] && proof_word=fast
+      o=$(SG_PROMOTE_PROOF=$proof_word bash "$d/promote-stg.sh" 2>&1); rc=$?
       etip=$(printf '%s\n' "$o" | sed -n 's/^promote-stg: tip //p' | tail -n 1); etip=${etip:-$tip}
       if [ $rc = 75 ]; then
         echo "$(date -u +%FT%TZ) promote-pass: $etip waiting for CI: the check has not reported on it yet" >> "$log"
@@ -273,6 +277,28 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     echo "$(date -u +%FT%TZ) promote-pass: $tip waiting for CI: the check has not reported on it yet ($age s of ${wait_for}s)" >> "$log"
     echo "promote-pass: $tip waiting for CI"
     exit 0
+  fi
+  # #1723: a tiered workflow whose fast tier never reported is proven by the local fast battery, the checks the fast tier runs,
+  # under the attempt's deadline. Its pass is the fast proof word; the full suite never runs for this tip.
+  if [ "$ci_tiered" = 1 ]; then
+    stood_down "read before the fast battery"
+    fpy=$(sg_gate_python)
+    if [ -z "${SG_PROMOTE_SUITE:-}" ]; then
+      miss=$(sg_missing_tool "$fpy")
+      [ -z "$miss" ] || { echo "promote-pass: $fpy holds no $miss, so the fast battery would answer a red of the tip that is a red of the proof; nothing was proved" >&2; exit 2; }
+    fi
+    fsuite=${SG_PROMOTE_SUITE:-"$fpy -m ruff check squad tests && $fpy -m mypy squad && $fpy -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} -m 'not heavy'"}
+    fout=$state/promote-fast-${tip:0:12}.log; fleft=$(( due - $(date +%s) )); [ "$fleft" -lt 1 ] && fleft=1
+    (cd "$tree" && bounded "$fleft" bash -c "$fsuite") > "$fout" 2>&1; frc=$?
+    kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+    [ "$frc" = 124 ] && { refused "$tip" "not proven: the fast battery passed its ${fleft}s bound, retried later"; exit 0; }
+    [ "$frc" = 0 ] || { mark "$tip" "not promoted: the local fast battery failed ($fout)"; exit 1; }
+    stood_down "read when the fast battery ended"
+    fast_record "$tip"
+    o=$(SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh" 2>&1); rc=$?
+    { [ $rc = 75 ] || [ $rc = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
+    [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+    mark "$tip" "promoted: the local fast battery answered for the tip"; exit 0
   fi
   # ADR-0156: a full pass carries across a covered delta. When one is on record and the tip moved only by covered paths, the
   # delta proof runs instead of the full suite and the promotion reads its record. Any refusal (an uncovered path, a bound, no
