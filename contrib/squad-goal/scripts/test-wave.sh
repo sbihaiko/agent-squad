@@ -1283,6 +1283,26 @@ r=$(SG_WAVE_TIP_GATES="SERIAL_TRY=1 SG_GATE_KIND=fast bash $T/s/gate.sh bash $T/
 case "$r" in *"broke the wave tip"*) ko "W1409: a passing child was named after a tip red: '$r'";; *) ok "W1409: a passing child is not named after a measured tip red";; esac
 [ "$(/usr/bin/grep -c '^o 3 Todo 194[45]$' "$T/board.log")" = 0 ] && ok "W1409: no passing child is requeued after a tip red" || ko "W1409: requeue: '$(cat "$T/board.log")'"
 
+# W1687 (#1687): a tip red on a tree a gate passed before may be the machine's (a timeout under load), so no child is blamed on
+# it: the wave waits and the check runs again on a later pass. A second red on that same tip takes the red path. The tip gate
+# here records a covering pass for its HEAD in the gate history, as a child's own gate did before the wave entered, then fails.
+W98=wave/run-98; start2 run-98 >/dev/null; child 1960 g1960 "origin/$W98"; en2 run-98 1960 >/dev/null
+printf 'run-98\n' > "$T/st/auto/disp-1960"; : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/auto/tipred-wave_run-98"
+printf '%s\n' 'printf "1\tfast\tpass\t%s\t0\t-\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tchild\n" "$(/usr/bin/git rev-parse HEAD)" >> "$SG_STATE/gate-history"; exit 1' > "$T/tipflaky.sh"
+r=$(SG_WAVE_TIP_GATES="bash $T/tipflaky.sh" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
+[ $rc != 0 ] && case "$r" in *"WAVE WAIT $W98"*"passed before"*) true;; *) false;; esac && ok "W1687: a tip red on a tree a gate passed holds the wave for a second look" || ko "W1687: first red: exit $rc: '$r'"
+case "$r" in *"broke the wave tip"*) ko "W1687: a child was blamed on the first red of a passed tree: '$r'";; *) ok "W1687: no child is blamed on the first red of a passed tree";; esac
+[ "$(/usr/bin/grep -c '^o 3 Todo 1960$' "$T/board.log")" = 0 ] && ok "W1687: the child is not requeued on that red" || ko "W1687: requeue: '$(cat "$T/board.log")'"
+r=$(SG_WAVE_TIP_GATES="bash $T/tipflaky.sh" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
+case "$r" in *"WAVE CHECK RED"*"#1960"*) ok "W1687: a second red on the same tip names the child, as before";; *) ko "W1687: second red: exit $rc: '$r'";; esac
+# A child's own pytest that was bounded (gate.sh exit 4) measured no red: the child is not blamed and the wave waits.
+W99=wave/run-99; start2 run-99 >/dev/null; child 1962 g1962 "origin/$W99"; en2 run-99 1962 >/dev/null
+printf 'run-99\n' > "$T/st/auto/disp-1962"; : > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_PYTEST='exit 4' land2 run-99 2>&1); rc=$?
+[ $rc != 0 ] && case "$r" in *"WAVE WAIT $W99"*"no verdict"*) true;; *) false;; esac && ok "W1687: a bounded child check holds the wave with no verdict" || ko "W1687: bounded child: exit $rc: '$r'"
+case "$r" in *"broke the wave tip"*) ko "W1687: a bounded child check blamed the child: '$r'";; *) ok "W1687: a bounded child check blames no child";; esac
+[ "$(/usr/bin/grep -c '^o 3 Todo 1962$' "$T/board.log")" = 0 ] && ok "W1687: the bounded child is not requeued" || ko "W1687: requeue: '$(cat "$T/board.log")'"
+
 # SD (#1434): the sibling filter before dispatch reads the bodies; the entry also reads each child's own diff. Two siblings
 # whose bodies name nothing in common but whose diffs touch one file are a conflict before the wave: the second never
 # enters and its issue goes back to the queue, so the landing never attempts the merge of the pair. A sibling whose diff

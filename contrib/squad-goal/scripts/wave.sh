@@ -741,7 +741,8 @@ waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s f
 # status, history and wave journal: it only passes the command's exit code through. `SG_WAVE_CHILD_PYTEST` replaces the
 # command (SG_WAVE_CHILD, _FROM and _TO are set); the default selects the files the child's commit reaches (squad.testselect, as
 # the fast gate does), read in a detached tree at the child's commit, and runs them in the clone. An empty selection passes: the
-# child changed nothing pytest covers. Exit 0: passed; 1: failed; 9: the gate lock or slots were not free, so nothing ran.
+# child changed nothing pytest covers. Exit 0: passed; 1: failed; 9: no verdict: the gate lock or slots were not free, so nothing
+# ran, or the run was bounded and proved nothing (gate.sh exit 4, #1687). An unproven run is never the child's red.
 child_pytest() {
   local S=$1 from=$2 to=$3 iss=$4 cmd out grc
   if [ -n "${SG_WAVE_CHILD_PYTEST:-}" ]; then cmd=$SG_WAVE_CHILD_PYTEST
@@ -753,6 +754,7 @@ case $sel in none:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;
   out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_STATUS=self SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
   [ $grc = 73 ] && held_by "$out" >/dev/null && return 9
   [ $grc = 75 ] && waited_out "$out" && return 9
+  [ $grc = 4 ] && return 9   # bounded: it measured no red (#1687)
   [ $grc = 0 ] && return 0
   printf '%s\n' "$out" | tail -5 >&2; return 1
 }
@@ -776,9 +778,13 @@ child_gate() {
 # from the tip and its issue goes back to the queue -- and the check runs again, so the wave without it can land. Exit 0:
 # the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before; 3: the gate lock stayed
 # held past its bounded wait; 5: the check is unproven (spec 1163, #1174), so the wave lands with its obligation and no child is
-# blamed. The gate's word decides: pass and unproven admit, fail is the red path.
+# blamed. The gate's word decides: pass and unproven admit, fail is the red path. 6 (#1687): the tip is red on a tree a gate
+# passed before, so the red may be the machine's and no child is blamed on it: the check runs again on a later pass, once per
+# (wave, tip). A second red on that same tip takes the red path.
+# passed_before <sha>: the gate history holds a pass for this tree whose scope covers a tip check (delta or full).
+passed_before() { awk -F'\t' -v s="$1" '$3 == "pass" && $4 == s && $8 == "pass" && ($7 == "delta" || $7 == "full") { f = 1 } END { exit !f }' "$SG_STATE/gate-history" 2>/dev/null; }
 wave_check() {
-  local S=$1 w=$2 rc crc found cx clog oc of
+  local S=$1 w=$2 rc crc found cx clog oc of hsha mk
   [ -n "$tipgate" ] || return 0
   of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
@@ -798,13 +804,17 @@ wave_check() {
     [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null && { rm -f "$clog" "$of"; return 3; }   # 3: the gate lock is held, so the check did not run
     [ $rc = 75 ] && waited_out "$(cat "$clog")" && { rm -f "$clog" "$of"; return 3; }   # the bounded wait ran out: the check did not run either
     case "$oc" in
-      pass) rm -f "$clog" "$of"; return 0;;
+      pass) rm -f "$clog" "$of" "$SG_STATE/auto/tipred-$(printf '%s' "$w" | tr / _)"; return 0;;
       unproven) rm -f "$of"; return 5;;   # the log stays, as it does for a red
       fail) : ;;                          # the red path below
       *) [ $rc = 0 ] && { rm -f "$clog" "$of"; return 0; }
          [ $rc = 4 ] && { rm -f "$of"; return 5; }   # a raw check that names no word keeps the old inconclusive code (#699)
          : ;;                                          # any other exit is the red path below
     esac
+    hsha=$($G -C "$S" rev-parse HEAD 2>/dev/null); mk="$SG_STATE/auto/tipred-$(printf '%s' "$w" | tr / _)"
+    if [ -n "$hsha" ] && [ "$(cat "$mk" 2>/dev/null)" != "$hsha" ] && passed_before "$hsha"; then
+      mkdir -p "$SG_STATE/auto" 2>/dev/null; printf '%s\n' "$hsha" > "$mk"; rm -f "$of"; return 6
+    fi
     found=""; while read -r sha; do
       [ -n "$sha" ] || continue
       touch "$SG_STATE/locks/single-wland/round" 2>/dev/null   # each child's own suite is a gate round too (#1290)
@@ -1262,7 +1272,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # The base's own check (#786): a red completed check on $base holds the landing until its head is green.
     red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     wave_check "$S" "$w"; rc=$?
-    [ $rc = 3 ] && { echo "WAVE WAIT $w: the gate lock or the gate slots are held by another gate, so the tip's check did not run; the wave lands on a later pass"; rm -rf "$S"; return 1; }
+    [ $rc = 3 ] && { echo "WAVE WAIT $w: the tip's check has no verdict (the gate lock or the gate slots are held by another gate, or a child's own check was bounded); the wave lands on a later pass"; rm -rf "$S"; return 1; }
+    [ $rc = 6 ] && { echo "WAVE WAIT $w: the tip's check is red on a tree a gate passed before, so no child is blamed on this red; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
     tipobl=
     [ $rc = 5 ] && { ob=$(obligation_of "$(sc rev-parse HEAD)"); tipobl=$ob; echo "WAVE $w: the tip's check is unproven: the wave lands with its obligation${ob:+ $(basename "$ob")}${ob:- (none: the tip check wrote no obligation record)}"; }
     { [ $rc = 0 ] || [ $rc = 5 ]; } || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
