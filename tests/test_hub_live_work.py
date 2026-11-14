@@ -5,6 +5,7 @@ proven by folder activity (the hold marker's own write time, under the one bound
 abandoned issue is never drawn. The card chip names the holder, and a takeover reads "Squad · taken over <time>".
 """
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -233,6 +234,24 @@ def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
 def test_the_panel_carries_no_line_on_work_it_cannot_see(hub):
     """#1701: hand work is named by its Doing card, so the panel no longer says it cannot see it."""
     assert not any("not visible" in x for x in _lines(hub))
+
+
+def test_a_gate_that_checks_a_live_run_is_drawn_with_its_row(hub):
+    """#1713: the card dropped every line that names a live run, so a gate that checks one was never drawn."""
+    if NODE is None:
+        pytest.skip("node is required")
+    fn = re.search(r"^function liveCard\(.*?^ return\{[^\n]*$", hub.PAGE, re.M | re.S).group(0)
+    gate = "gate: pid 4242 checks run run-b · #1696"
+    script = ('const esc=s=>String(s);const age=s=>s+"s";'
+              'const liveRow=(r,shown)=>"<div class=r data-id=\\""+r.id+"\\">"+r.id+"</div>";const LIVE_ROWS=4;\n'
+              'let liveWork=["loop off",' + json.dumps(gate) + '];\n'
+              + fn + '\nconsole.log(JSON.stringify(liveCard([{id:"run-b",age:5,spend:0}],"").html));\n')
+    out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    html = json.loads(out.stdout)
+    assert gate in html, "the gate that checks a live run is drawn"
+    assert "bash" not in html, "no line shows bash as the thing served"
+    assert html.index(gate) > html.index('data-id="run-b"'), "the gate is drawn beside the run's row"
 
 
 def test_the_card_draws_the_loop_lines_and_no_run_twice(hub):
