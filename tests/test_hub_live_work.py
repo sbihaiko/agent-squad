@@ -133,7 +133,8 @@ def _held(hub, name, cmd=None):
     lock = Path(hub.STATE) / "locks" / name
     lock.mkdir(parents=True, exist_ok=True)
     (lock / "pid").write_text(f"{os.getpid()}\n")
-    if cmd is not None: (lock / "cmd").write_text(cmd + "\n")   # serial.sh writes the command name only: `bash`
+    if cmd is not None:
+        (lock / "cmd").write_text(cmd + "\n")   # serial.sh writes the command name only: `bash`
     return lock
 
 
@@ -188,7 +189,8 @@ def test_the_driver_locks_fold_into_one_line_with_no_pid(hub):
     try:
         lines = _lines(hub)
     finally:
-        for lock in locks: shutil.rmtree(lock)
+        for lock in locks:
+            shutil.rmtree(lock)
     assert "loop drivers running: single-autobug, watch" in lines, lines
     assert not any(str(os.getpid()) in x for x in lines), lines
 

@@ -3330,13 +3330,26 @@ def hold_rows(now=None):
                     "age": int(h["activity"] or 0), "rank": 0, "spend": 0, "dur": 0, "kind": "hold", "live": True,
                     "running": False, "titles": {str(h["issue"]): TITLE.get(h["issue"], "")}})
     return out
-def live_work_lines(items, state=None, checkout=None, procs=None, now=None):
+def _holder_argv(pid):
+    """The command line of one live process, empty when the table cannot be read."""
+    try: return next((p.command for p in process_table().values() if p.pid == pid), "")
+    except Exception: return ""
+
+def gate_lock_line(pid, line, issues_of):
+    """One held gate lock, named by what its holder checks (#1695). The lock file names only `bash`, so the holder's
+    command line answers: the run whose workspace the gate script runs from, else the gate script, else the pid alone."""
+    m = re.search(r"run-\d{8}-\d{6}-[0-9a-f]+", line)
+    if m: return f"gate: pid {pid} checks run {m.group(0)}" + (f" · {issues_of[m.group(0)]}" if issues_of.get(m.group(0)) else "")
+    scripts = [x for x in re.findall(r"([\w-]+\.(?:sh|py))\b", line) if x not in ("serial.sh", "gate.sh")]
+    return f"gate: pid {pid} runs {scripts[0]}" if scripts else f"gate: pid {pid}"
+
+def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
     """The Live work panel's lines, all from local state and the board read the hub already holds: the loop's state,
-    each live run (its issue, node and age), each gate lock (its pid and the child it serves), each hand hold, each issue
+    each live run (its issue, node and age), each gate lock (its pid and the run it checks), the loop drivers, each hand hold, each issue
     labelled ready-for-human, and one line on the work the hub cannot see (a hand gate or a Claude Code fix pass)."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
-    lines = []
+    lines, issues_of, drivers = [], {}, []
     if loop_state({}, now=now, state=base) == "off": lines.append("loop off")
     for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
         folder = active_folder(entry)
@@ -3344,11 +3357,13 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None):
         row, _ = run_row(folder, "", procs or {})
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
         lines.append(f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min")
+        issues_of[row["id"]] = issues
     for d in sorted((base / "locks").glob("*")):
         pid = _read(d / "pid").strip()
         if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
-            cmd = _read(d / "cmd").strip()   # a lock that names no command (the loop driver's own) claims no child (#1692)
-            lines.append(f"lock {d.name}: pid {pid} serves {cmd}" if cmd else f"lock {d.name}: pid {pid}")
+            if _read(d / "cmd").strip(): lines.append(gate_lock_line(pid, (argv or _holder_argv)(int(pid)), issues_of))
+            else: drivers.append(d.name)   # a lock that names no command is a loop driver's own: no live work (#1692)
+    if drivers: lines.append("loop drivers running: " + ", ".join(drivers))
     for i in items:
         if "ready-for-human" in (i.get("l") or []) and i.get("s") != "closed":   # the label outlives the issue (#1692)
             lines.append(f"ready-for-human #{i['n']} {i.get('t') or ''} · label ready-for-human")
