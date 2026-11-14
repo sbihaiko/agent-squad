@@ -49,6 +49,9 @@ after=$(sed -n '/PATCH-RUN/,$p' "$T/events" | /usr/bin/grep -c READ-RUN)
 o=$(cycle)
 [ "$(count PATCH-RUN)" = 0 ] && ok "a cycle over an unchanged Doing card sends no Run-field PATCH" || ko "unchanged cycle: $(count PATCH-RUN) Run PATCH: $o $(cat "$T/events")"
 [ "$(count PATCH-STATUS)" = 0 ] && [ "$(count READ-RUN)" = 1 ] && ok "the unchanged cycle reads the holders once and proves nothing" || ko "unchanged cycle events: $(cat "$T/events")"
+: > "$T/gh.calls"; o=$(cycle)
+b=$(/usr/bin/grep -c 'items?per_page=100&fields' "$T/gh.calls")
+[ "$b" = 1 ] && ok "one pass reads the board once: Status and holders ride one read" || ko "board reads in one pass: $b: $(cat "$T/gh.calls") $o"
 touch "$T/holders-down"; o=$(cycle)
 [ "$(count PATCH-RUN)" = 1 ] && ok "a holder read that fails writes on: nothing is skipped on a guess" || ko "holders down: $(count PATCH-RUN) Run PATCH: $o $(cat "$T/events")"
 [ -n "$DBG" ] && { cat "$T/st/cycle.log" "$T/gh.calls"; }
