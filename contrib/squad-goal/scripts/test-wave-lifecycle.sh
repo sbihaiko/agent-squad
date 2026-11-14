@@ -339,5 +339,14 @@ ls "$SQUAD_CAPS_DIR" 2>/dev/null | /usr/bin/grep -qE '^(gates|reviews)$' && ok "
 occ=$(PYTHONPATH="$T/squad" python3 -m squad.caps 2>&1 | python3 -c 'import json,sys; o=json.load(sys.stdin)["occupancy"]; print(o["gates"]+o["reviews"])' 2>&1)
 [ "$occ" = 0 ] && ok "every slot was given back" || ko "slots still live: $occ"
 
+# (#1742) A cycle the stub never ends is stopped at the helper's bound, and the loop it started goes with it: the helper
+# ended only the subshell around the loop, so the real watch.sh stayed as an orphan and ran a cycle every few seconds for
+# hours, on a machine whose gates then met their deadlines.
+CYCLE_TICKS=20 cycle 99999
+/bin/sleep 0.5
+left=$(pgrep -f "$T/s/watch.sh" | tr '\n' ' ')
+[ -z "$left" ] && ok "L9: a cycle stopped at its bound leaves no watch loop behind" \
+  || { ko "L9: the watch loop outlived its helper: pids $left"; pkill -KILL -f "$T/s/watch.sh"; }
+
 kill "$HUB" 2>/dev/null; wait "$HUB" 2>/dev/null; rm -rf "$T"
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
