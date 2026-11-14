@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.proxystop import track_starts
+
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
 PROBE_SCRIPT = VOICE / "operator_probe.py"
@@ -31,6 +33,7 @@ def test_the_operator_tool_set_is_read_monitor_taskstop_bash():
 
 def test_a_session_starts_with_its_tool_set_restricted(tmp_path, monkeypatch):
     operators = load("operators")
+    track_starts(operators)
     argvs = []
 
     def fake_call(argv, cwd=None, timeout=None, env=None):

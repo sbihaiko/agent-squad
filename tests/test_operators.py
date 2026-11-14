@@ -13,6 +13,8 @@ import socket
 import time
 from pathlib import Path
 
+from tests.proxystop import track_starts
+
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
 
@@ -38,6 +40,7 @@ def operators(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("operators", VOICE / "operators.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    track_starts(module)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "claude"

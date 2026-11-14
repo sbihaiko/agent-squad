@@ -47,6 +47,24 @@ DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
 
 
 @pytest.fixture(autouse=True)
+def _proxies_end_with_their_test():
+    """A model proxy a test starts is ended when that test ends, pass or fail (#1686)."""
+    yield
+    from tests.proxystop import end_started
+    end_started()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_model_proxy_survives():
+    """A model proxy this test process started must be ended by its test; one that outlives the session is a leak (#1686)."""
+    yield
+    from tests.proxystop import live_proxy_pids
+    leaked = live_proxy_pids(os.getpid())
+    if leaked:
+        raise AssertionError(f"model proxy process(es) {', '.join(map(str, leaked))} outlived the test session (#1686)")
+
+
+@pytest.fixture(autouse=True)
 def _no_real_page(monkeypatch):
     """No test opens a page in the Owner's browser: `launch` opens the dashboard by default, so every test that starts a run without its own opener would. A test that checks the opening injects its opener or patches `launch.headless`."""
     monkeypatch.setenv("SQUAD_HEADLESS", "1")
