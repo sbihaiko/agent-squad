@@ -32,6 +32,9 @@ different tree. A silent skip would hide what happened, so the reuse must be on 
    base must resolve. The shipped battery reads the base only through the merge-base; a battery that reads the base
    tip directly must put the base commit back in its key before it uses the memo. A run's
    record-bound stage still reads the `gate_result` events of its own run. An approval binds to the tree it proved.
+   A caller that would otherwise take a machine lock asks the key first: the wave entry reads the memo before the gate
+   lock, so a child whose final gate proved the tree it enters with enters without a second battery and without waiting
+   behind another gate.
 5. **The reuse is a record event.** A reused stage writes `gate_reuse` with the tree and the stage it reused, its
    artifact carries an empty finding list, and its outcome names `reused_from`. A reader sees the reuse; it is never a
    silent skip.
@@ -57,3 +60,10 @@ different tree or a different command runs the review again.
 that an untracked name with a space counts by its contents, so two contents give two keys; that a dirty tree the key
 cannot read skips the reuse; and that a red verdict, a different suite, a different tree and another run's verdict are
 never reused.
+
+`contrib/squad-goal/scripts/test-fast-gate.sh` guards the lock-free probe (`--memo-hit`): it answers a stored pass with
+its reuse line and no battery, and it answers no pass for a red, a different tree, a tree whose dirt changed or a memo
+turned off. `contrib/squad-goal/scripts/test-wave.sh` guards the wave entry that reads the probe before the gate lock: a
+child whose final gate proved the tree it enters with enters under a held gate lock with no second battery and with the
+reuse named in its entry record, while a child that committed after its gate still meets the lock and runs its own
+battery.

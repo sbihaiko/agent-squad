@@ -1,4 +1,8 @@
 #!/bin/bash
+# (#1735) The hang a deadline case starts sleeps a length only this run names, so the survivor probe and the cleanup
+# below read this suite's own processes: `pgrep -f "sleep 2718"` read every suite on the machine, and two gates side
+# by side then read each other's hang as a survivor, or ended it.
+export HANG_NAP=$(( 271800000 + $$ ))
 # The promotion pass (#459, ADR-0145 rule 3): the cycle earns the full proof of the dev tip and promotes it. In one hold of the
 # gate lock it runs the suite in a clean tree at the exact tip, writes the full line, writes a commit status on the sha, reads it
 # back, and fast-forwards stg through promote-stg.sh. A held gate lock skips the tick; a tip already proved or refused, or a
@@ -628,7 +632,7 @@ adead() {  # one bounded attempt: <suite> <bound> <fallback> <delta suite> <tip 
 # only its reserved slice, and the attempt is recorded bounded.
 adv dev deadline-a; ta=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
 printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"; echo 30 > "$T/suite-sleep"
-deltahold 3; adead "$T/suite" 7 3 "trap '' TERM; sleep 2718"; wait "$dh" 2>/dev/null
+deltahold 3; adead "$T/suite" 7 3 "trap '' TERM; sleep $HANG_NAP"; wait "$dh" 2>/dev/null
 [ "$el" -lt 18 ] && ok "gate plus delta cannot exceed one budget (${el}s for a 7s budget)" \
   || ko "the attempt ran past its one budget: ${el}s, out '$(cat "$T/outd")'"
 /usr/bin/grep -q "the delta's 3s slice of the 7s budget is reserved" "$T/outd" \
@@ -636,7 +640,7 @@ deltahold 3; adead "$T/suite" 7 3 "trap '' TERM; sleep 2718"; wait "$dh" 2>/dev/
   || ko "no reserved-slice line: '$(tail -n 3 "$T/outd")'"
 [ -e "$SG_STATE/promote-bound" ] && [ "$(tip stg)" = "$ta" ] && ok "a delta that outran its slice is bounded, and the tip ships as bounded" \
   || ko "bounded attempt: stg $(tip stg), dev $ta, marker $([ -e "$SG_STATE/promote-bound" ] && echo yes || echo no)"
-pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the delta's tree survived the deadline" || ok "no descendant process survives the deadline"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the delta's tree survived the deadline" || ok "no descendant process survives the deadline"
 rm -f "$T/suite-sleep"
 # The delta answers inside its reserved slice even though the gate used the rest, and the attempt promotes.
 adv dev deadline-b; tb=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
@@ -651,7 +655,7 @@ rm -f "$T/suite-sleep"
 # A bounded attempt with a defect the suite reported is a fail, never bounded: the tip is held and no bound marker written.
 adv dev deadline-red; tc=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
 printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"
-printf '#!/bin/bash\necho "FAILED tests/test_x.py::test_one - boom"\ntrap "" TERM\nsleep 2718\n' > "$T/defect-suite"
+printf '#!/bin/bash\necho "FAILED tests/test_x.py::test_one - boom"\ntrap "" TERM\nsleep $HANG_NAP\n' > "$T/defect-suite"
 deltahold 3; adead "$T/defect-suite" 4 1 true; wait "$dh" 2>/dev/null
 [ "$rc" != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$el" -lt 15 ] && ok "a bounded attempt that reported a defect holds the tip (${el}s)" \
   || ko "bounded defect: rc $rc, stg $(tip stg), ${el}s, out '$(cat "$T/outd")'"
@@ -660,7 +664,7 @@ IFS=$'\t' read -r _ kind res dsha < "$SG_STATE/gate-status-full" 2>/dev/null
   || ko "bounded defect record: '$kind $res $dsha'"
 [ ! -e "$SG_STATE/promote-indeterminate" ] && [ ! -e "$SG_STATE/promote-bound" ] && ok "a bounded attempt with a reported defect writes no bound marker" \
   || ko "a red the bound ended was marked bounded"
-pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the defect suite's tree survived the deadline" || ok "the defect suite's tree is stopped at the deadline"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the defect suite's tree survived the deadline" || ok "the defect suite's tree is stopped at the deadline"
 
 # (#1490) A transient failure is unproven, never a refusal: the pass writes no tip marker, and the next pass promotes the tip.
 # (a) the open dev -> stg pull request cannot be read. The read fails for the whole of this pass (the open-only call reads it
@@ -715,5 +719,5 @@ n=$(runs); SG_PROMOTE_SUITE="$T/suite-moves" pass; rc=$?
   && ok "a tip stg took while the battery ran gets no verdict and no marker" || ko "held after wrote a verdict: rc $rc, tips '$(/usr/bin/grep "^$ta " "$SG_STATE/promote-pass.tips")', full '$(cat "$SG_STATE/gate-status-full" 2>/dev/null)'"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
-pkill -KILL -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
+pkill -KILL -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail

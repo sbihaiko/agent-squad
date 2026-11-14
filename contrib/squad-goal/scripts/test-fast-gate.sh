@@ -1,4 +1,8 @@
 #!/bin/bash
+# (#1735) The hang a deadline case starts sleeps a length only this run names, so the survivor probe and the cleanup
+# below read this suite's own processes: `pgrep -f "sleep 2718"` read every suite on the machine, and two gates side
+# by side then read each other's hang as a survivor, or ended it.
+export HANG_NAP=$(( 271800000 + $$ ))
 # Regression test for fast-gate.sh: the fast gate of a work-branch tip or a wave entry is the base battery (ruff, mypy, the fast
 # pytest) and then the shell suites of the scripts the tip changes against the merge-base, all under the machine lock, with one
 # status line for the hub. A throwaway repository, a stub base command, stub suites: nothing here runs a real battery.
@@ -355,6 +359,37 @@ $G -C "$R" rebase -q dev
 out=$(mg "$md" dev); rc=$?
 [ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a moved merge-base misses the memo: the battery runs" || ko "moved merge-base: rc $rc runs $(battery_runs): $out"
 
+# (#1718, ADR-0168) `--memo-hit` asks the memo before any caller takes the machine gate lock: it answers whether a green pass
+# already holds this tree, base, merge-base and suite. A hit prints the reuse line and exits 0 with no battery and no lock; a
+# miss, a tree the key cannot name, or a memo turned off exits 1 with the reason, so the caller runs the gate as before.
+mh() {  # <state dir> <base>: the probe alone
+  local st=$1 base=$2; rm -f "$T/ran.log"
+  (cd "$R" && SG_STATE=$st SG_FAST_MEMO=${memo:-1} SG_FAST_BASE=$base SG_FAST_CMD="bash $T/base.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" --memo-hit 2>&1)
+}
+mp=$T/memo-probe; mkdir -p "$mp"
+out=$(mh "$mp" dev); rc=$?
+[ $rc = 1 ] && [ ! -e "$T/ran.log" ] && ok "the probe at a key with no pass exits 1 and runs no battery" || ko "probe miss: rc $rc: '$out'"
+out1=$(mg "$mp" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the gate at that key runs the battery and keeps its pass" || ko "probe setup: rc $rc runs $(battery_runs): $out1"
+out=$(mh "$mp" dev); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && case "$out" in *memo*) true;; *) false;; esac \
+  && ok "the probe answers a stored pass with one reuse line and runs no battery" || ko "probe hit: rc $rc: '$out'"
+[ "$(lgof "$out")" = "$(lgof "$out1")" ] && ok "the probe names the log of the pass it reuses" || ko "probe log: '$(lgof "$out")' vs '$(lgof "$out1")'"
+IFS=$'\t' read -r _ kind res at < "$mp/gate-status" 2>/dev/null
+[ "$kind $res $at" = "fast pass $(git -C "$R" rev-parse HEAD)" ] && ok "the probe leaves the hub's pass line for the tip" || ko "probe status: '$(cat "$mp/gate-status" 2>&1)'"
+out=$(memo=0 mh "$mp" dev); rc=$?
+[ $rc = 1 ] && case "$out" in *"SG_FAST_MEMO"*) true;; *) false;; esac && ok "a memo turned off is no hit, and the probe names the memo" || ko "probe memo off: rc $rc: '$out'"
+echo probe-dirt >> "$R/docs/x.md"
+out=$(mh "$mp" dev); rc=$?
+[ $rc = 1 ] && ok "an uncommitted change is a different key: the probe answers no pass for it" || ko "probe dirty: rc $rc: '$out'"
+$G -C "$R" checkout -q -- docs/x.md
+# A red is never kept, so it never answers the probe: the caller runs the gate and meets the red itself.
+mpr=$T/memo-probe-red; mkdir -p "$mpr"
+out=$(BASE_FAIL=1 mg "$mpr" dev); rc=$?
+[ $rc = 1 ] && ok "a red gate fails and keeps no pass" || ko "probe red setup: rc $rc: '$out'"
+out=$(mh "$mpr" dev); rc=$?
+[ $rc = 1 ] && [ ! -e "$T/ran.log" ] && ok "the probe answers no pass for a tree whose gate was red, so the suite runs" || ko "probe after red: rc $rc: '$out'"
+
 mq=$T/memo-queued; mkdir -p "$mq"; rm -f "$T/ran.log"
 slow="bash $T/base.sh; sleep 2"
 (cd "$R" && SG_STATE=$mq SG_FAST_MEMO=1 SG_FAST_BASE=dev SG_FAST_CMD="$slow" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" > "$T/q1.out" 2>&1) &
@@ -443,22 +478,22 @@ out=$(vfr leak); rc=$?
 # (spec 1163, #1170, #1171) One deadline covers the battery and its retry, and a defect that was already reported survives
 # the kill. A battery that prints a failing test and then hangs ends fail; a retry that hangs never clears the battery's red;
 # and a battery that reports nothing and hangs is bounded and unproven, never a pass. Nothing of the killed tree survives.
-printf '#!/bin/bash\necho "retry-cmd $*" >> "%s/ran.log"\nsleep 2718\n' "$T" > "$T/retry-hang.sh"
-vstub hangfail 'echo "FAILED tests/test_h.py::test_hang - boom"; sleep 2718'
+printf '#!/bin/bash\necho "retry-cmd $*" >> "%s/ran.log"\nsleep $HANG_NAP\n' "$T" > "$T/retry-hang.sh"
+vstub hangfail 'echo "FAILED tests/test_h.py::test_hang - boom"; sleep $HANG_NAP'
 s0=$(date +%s); out=$(SG_GATE_BOUND_SECONDS=2 vfg hangfail); rc=$?; el=$(( $(date +%s) - s0 ))
 [ $rc = 1 ] && [ "$el" -lt 20 ] && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_h.py::test_hang"*) true;; *) false;; esac \
   && ok "a failing test followed by a hang at the deadline ends fail and names the defect (${el}s)" || ko "hang after a defect: rc $rc, last '$(last "$out")'"
 [ "$(vhist | cut -f8)" = fail ] && ok "the history records the deadline-bound attempt as fail, not bounded" || ko "hang history: '$(vhist)'"
-pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the battery's tree survived the deadline" || ok "the battery's tree is stopped at the deadline"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the battery's tree survived the deadline" || ok "the battery's tree is stopped at the deadline"
 
 vstub fastred 'echo "FAILED tests/test_r.py::test_r - boom"; exit 1'
 s0=$(date +%s); out=$(RETRY="bash $T/retry-hang.sh" SG_GATE_BOUND_SECONDS=3 vfg fastred); rc=$?; el=$(( $(date +%s) - s0 ))
 [ $rc = 1 ] && [ "$el" -lt 20 ] && /usr/bin/grep -qx "retry-cmd tests/test_r.py::test_r" "$T/ran.log" \
   && ok "a retry shares the one budget: a retry that hangs leaves the gate red (${el}s)" || ko "retry budget: rc $rc in ${el}s: '$(cat "$T/ran.log")' '$(last "$out")'"
 [ "$(vhist | cut -f8)" = fail ] && ok "a retry that never answers records the red as fail" || ko "retry hang history: '$(vhist)'"
-pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the retry's tree survived the deadline" || ok "the retry's tree is stopped at the deadline"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the retry's tree survived the deadline" || ok "the retry's tree is stopped at the deadline"
 
-vstub silent 'sleep 2718'
+vstub silent 'sleep $HANG_NAP'
 bs=$T/bounded-gate; mkdir -p "$bs"
 s0=$(date +%s); out=$(cd "$R" && SG_STATE="$bs" SG_FAST_BASE=dev SG_GATE_BOUND_SECONDS=2 SG_FAST_CMD="bash $T/silent.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?; el=$(( $(date +%s) - s0 ))
 bh=$(tail -n 1 "$bs/gate-history")
@@ -466,7 +501,7 @@ bh=$(tail -n 1 "$bs/gate-history")
   && ok "a battery that reports nothing and hangs is bounded, never a pass (${el}s)" || ko "silent hang: rc $rc, last '$(last "$out")'"
 [ "$(printf '%s' "$bh" | cut -f8)" = unproven ] && case "$(printf '%s' "$bh" | cut -f9)" in bounded*) true;; *) false;; esac \
   && ok "the bounded attempt is recorded as bounded and unproven" || ko "bounded history: '$bh'"
-pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the silent battery's tree survived the deadline" || ok "the silent battery's tree is stopped at the deadline"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the silent battery's tree survived the deadline" || ok "the silent battery's tree is stopped at the deadline"
 
 # (#1527) A child re-runs a bounded gate until its deadline, so the bound is kept per head: a child's second gate at a tree the
 # bound already stopped starts no battery. The memo is on here (the suite turns it off above), and each case names its caller.
@@ -478,7 +513,7 @@ bfg >/dev/null   # the first memo-on attempt at this head: bounded, and its boun
 h0=$(hl)
 s0=$(date +%s); out=$(bfg); rc=$?; el=$(( $(date +%s) - s0 ))
 [ $rc = 4 ] && [ "$el" -lt 2 ] && case "$(last "$out")" in "fast-gate: bounded already"*landing*) true;; *) false;; esac \
-  && [ "$(hl)" = "$h0" ] && ! pgrep -f "sleep 2718" >/dev/null 2>&1 \
+  && [ "$(hl)" = "$h0" ] && ! pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 \
   && ok "a child's second gate at a tree the bound already stopped starts no battery: the landing owns the obligation (#1527, ${el}s)" \
   || ko "a child's second gate re-ran the bounded battery: rc $rc in ${el}s, last '$(last "$out")', history $h0 -> $(hl)"
 h0=$(hl)
@@ -615,5 +650,5 @@ PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps release gates othe
 kill "$capslive" 2>/dev/null; wait "$capslive" 2>/dev/null   # reaped here, so the kill prints no job line of its own
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
-pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
+pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail

@@ -629,6 +629,19 @@ def test_every_shell_fixture_that_runs_a_dispatcher_pins_its_disk_floor():
     assert unpinned == [], f"these fixtures run autobug.sh or autofrontier.sh with no SG_MIN_FREE_GB pin: {unpinned}"
 
 
+def test_no_shell_suite_probes_the_machine_for_a_sleep_it_did_not_start():
+    """A suite that hangs a process to prove a deadline finds and ends that process by a name only its own run holds
+    (#1735). `pgrep -f "sleep 2718"` reads every suite on the machine: two gates side by side then read each other's hang
+    as a survivor, and one suite's `pkill` ends the hang another suite is still measuring."""
+    scripts = ROOT / "contrib/squad-goal/scripts"
+    wide = re.compile(r"p(?:grep|kill)\b[^\n]*-f\s+[\"']sleep [0-9]")
+    def code(path):   # a comment may name the old probe: only a line the shell runs counts
+        return "\n".join(ln for ln in path.read_text(errors="replace").splitlines() if not ln.lstrip().startswith("#"))
+
+    found = [p.name for p in sorted(scripts.glob("test-*.sh")) if wide.search(code(p))]
+    assert found == [], f"these suites probe the whole machine for a sleep: {found}"
+
+
 def test_every_job_names_a_fixed_runner_image():
     """A `-latest` label moves to a new image on the vendor's date, so a job would change its system with no commit, and
     GitHub annotates every run with the migration notice. Each job names its image version."""
