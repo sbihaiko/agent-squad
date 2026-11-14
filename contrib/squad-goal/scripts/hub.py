@@ -3347,9 +3347,10 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None):
     for d in sorted((base / "locks").glob("*")):
         pid = _read(d / "pid").strip()
         if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
-            lines.append(f"lock {d.name}: pid {pid} serves {_read(d / 'cmd').strip() or 'an unknown child'}")
+            cmd = _read(d / "cmd").strip()   # a lock that names no command (the loop driver's own) claims no child (#1692)
+            lines.append(f"lock {d.name}: pid {pid} serves {cmd}" if cmd else f"lock {d.name}: pid {pid}")
     for i in items:
-        if "ready-for-human" in (i.get("l") or []):
+        if "ready-for-human" in (i.get("l") or []) and i.get("s") != "closed":   # the label outlives the issue (#1692)
             lines.append(f"ready-for-human #{i['n']} {i.get('t') or ''} · label ready-for-human")
     if not lines: lines.append("no live work")
     lines.append("hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here")
