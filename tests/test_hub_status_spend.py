@@ -54,7 +54,7 @@ def test_the_status_spend_counts_today_alone_and_agrees_with_the_cost_chart(hub,
         f"run-{yday}-120000": _record(now - DAY, 2.0),       # yesterday
         f"run-{week}-120000": _record(now - 7 * DAY, 4.0),   # a week ago: it must never be parsed
     }
-    folders = _folders(tmp_path, runs)
+    _folders(tmp_path, runs)
     seen = []
 
     def fake_scan(p):
