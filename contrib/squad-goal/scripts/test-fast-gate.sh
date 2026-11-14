@@ -597,6 +597,15 @@ w=$(wcase); [ "$w" = 2 ] && ok "a child gate with no count named takes two gate 
 w=$(wcase SG_GATE_CALLER=entry); [ "$w" = 6 ] && ok "an entry gate keeps the full count" || ko "entry gate slots: '$w', want 6"
 w=$(wcase SG_GATE_CALLER=entry SG_GATE_WORKERS=3); [ "$w" = 3 ] && ok "a count named by the caller wins over the kind's default" || ko "named count: '$w', want 3"
 w=$(wcase SG_GATE_CALLER=child SG_GATE_WORKERS=5); [ "$w" = 5 ] && ok "a child gate named a count of its own: it wins" || ko "child named count: '$w', want 5"
+# (#1783) The caller reaches the history row: a gate that names no caller is the child's own check, and gate.sh runs as a new
+# process, so the caller is exported or the row reads `other`.
+ccase() {  # <env assignment>...: field 14 of the one history row a fresh state records
+  local cs; cs=$(mktemp -d "$T/cs.XXXXXX")
+  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_CALLER "$@" SG_FAST_MEMO=0 SG_STATE="$cs" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/wbase.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" >/dev/null 2>&1)
+  tail -1 "$cs/gate-history" 2>/dev/null | cut -f14
+}
+c=$(ccase); [ "$c" = child ] && ok "a gate that names no caller is recorded as the child's" || ko "unnamed caller recorded as '$c', want child"
+c=$(ccase SG_GATE_CALLER=entry); [ "$c" = entry ] && ok "a named caller is recorded as named" || ko "entry caller recorded as '$c', want entry"
 
 # (#1557, #1726) The gate proves the serial 2 s line end to end: a test whose unmarked call sits over the project's heavy
 # line is recorded by the parallel pass, at that line, and red when only it runs again serially. The retry keeps the line, so
