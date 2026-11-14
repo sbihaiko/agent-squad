@@ -8,6 +8,7 @@
 # that waits on the owner or on an answer is no work yet.
 : "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
 : "${SG_BUG_SKIP_LABELS:=needs-owner,no-auto,wontfix,question}"
+_sg_floor=frozen:owner,frozen:dependency,ready-for-human,ready-for-HAL9K,needs-triage   # the floor of both lanes (#1673)
 # No export here: env.sh exports both after the profile (#757), and a sourced library that exports them defeats a
 # profile's := default in any suite that sources this file before it runs env.sh in a child.
 # sg_skip_labels <frontier|bug> [<extra>,...]: the comma list of labels one lane takes no work from. The freeze markers are a
@@ -17,8 +18,8 @@
 # bug lane alone, and the frontier starts a card that carries one (health.sh reads the frontier lane for its idle alert).
 sg_skip_labels() {
   case "${1:-}" in
-    frontier) printf '%s,frozen:owner,frozen:dependency%s\n' "$SG_FRONTIER_SKIP_LABELS" "${2:+,$2}" ;;
-    bug) printf '%s,frozen:owner,frozen:dependency,needs-info\n' "$SG_BUG_SKIP_LABELS" ;;
+    frontier) printf '%s,%s%s\n' "$SG_FRONTIER_SKIP_LABELS" "$_sg_floor" "${2:+,$2}" ;;
+    bug) printf '%s,%s,needs-info\n' "$SG_BUG_SKIP_LABELS" "$_sg_floor" ;;
     *) echo "sg_skip_labels: name a lane, frontier or bug, not '${1:-}'" >&2; return 2 ;;
   esac
 }

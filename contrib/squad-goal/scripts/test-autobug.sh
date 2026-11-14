@@ -741,6 +741,28 @@ r=$(PATH="$F/bin:$PATH" SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question 
 case "$r" in *"[70]"*) ko "15b a profile skip list let a frozen:dependency issue through: '$r'";; *) ok "15b a profile skip list keeps the frozen:dependency floor";; esac
 case "$r" in *"[71]"*) ko "15b a profile skip list let a frozen:owner issue through: '$r'";; *) ok "15b a profile skip list keeps the frozen:owner floor";; esac
 case "$r" in *"[72]"*) ok "15b a plain bug is still a candidate under a profile skip list";; *) ko "15b the plain bug was skipped: '$r'";; esac
+# 15d) (#1673) a holder or needs-triage label holds a Todo bug beside its go label, with or without the go label, and a profile's list never lifts it.
+H=$T/holders; mkdir -p "$H/bin"; todo 77 78 79 80
+cat > "$H/issues.json" <<'JSON'
+[
+  {"number":77,"title":"Bug for a human","body":"a.py","created_at":"2026-10-10T15:04:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"ready-for-human"}]},
+  {"number":78,"title":"Bug for HAL9K","body":"b.py","created_at":"2026-10-10T15:05:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"ready-for-HAL9K"}]},
+  {"number":79,"title":"Bug nobody triaged","body":"c.py","created_at":"2026-10-10T15:06:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"needs-triage"}]},
+  {"number":80,"title":"Bug held without go label","body":"e.py","created_at":"2026-10-10T15:08:00Z","labels":[{"name":"bug"},{"name":"ready-for-human"}]}
+]
+JSON
+sed "s#$R/issues.json#$H/issues.json#g" "$R/bin/gh" > "$H/bin/gh"; chmod +x "$H/bin/gh"
+r=$(SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question PATH="$H/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[77]"*|*"[78]"*|*"[79]"*|*"[80]"*) ko "15d a holder or needs-triage label let a bug through: '$r'";; *) ok "15d a holder or needs-triage label keeps a bug out, beside or without ready-for-agent";; esac
+P=$T/holders-plain; mkdir -p "$P/bin"; todo 81
+cat > "$P/issues.json" <<'JSON'
+[
+  {"number":81,"title":"Plain bug","body":"d.py","created_at":"2026-10-10T15:07:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}
+]
+JSON
+sed "s#$R/issues.json#$P/issues.json#g" "$R/bin/gh" > "$P/bin/gh"; chmod +x "$P/bin/gh"
+r=$(SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question PATH="$P/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[81]"*) ok "15d a plain bug is dispatched under the same profile list";; *) ko "15d the plain bug was skipped: '$r'";; esac
 # 15c) (#729) a bug whose acceptance command names a missing repository script is not dispatched: the pass names the path and
 # the needs-info refusal. A bug with no acceptance command is dispatched as before. needs-info is a skip floor, as frozen is.
 # The stub's aggregate read carries each body, as the real one does.
