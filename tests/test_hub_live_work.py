@@ -191,11 +191,23 @@ def test_a_doing_card_a_live_hold_names_is_one_line_with_its_carrier(hub):
     """#1713: a held card is its hold, with the carrier, and never again a card with no run."""
     _closed(hub)
     _hold(hub, 1713)
-    items = [{"n": 1713, "t": "The live work panel", "s": "open", "st": "Doing", "l": ["bug"]}]
+    items = [{"n": 1713, "i": "ITEM-1713", "t": "The live work panel", "s": "open", "st": "Doing", "l": ["bug"]}]
     lines = _lines(hub, items)
     assert [r["label"] for r in hub.hold_rows()] == ["Manual · #1713"]
+    named = [x for x in lines if "#1713" in x]
+    assert len(named) == 1, lines
+    assert "Manual" in named[0], named
     assert not any("hand work #1713" in x for x in lines), lines
-    assert [x for x in lines if "#1713" in x] == [], lines
+
+
+def test_a_held_card_whose_row_carries_its_item_id_is_named_once(hub):
+    """#1713: the registry keys a hold by the issue (`auto/hold-<n>`), while a board row also carries its Project item id;
+    the panel matches the same card on either identifier, so one hold is one line."""
+    _closed(hub)
+    _hold(hub, 1718)
+    items = [{"n": 1718, "i": "ITEM-1718", "t": "Held beside its run", "s": "open", "st": "Doing", "l": []}]
+    lines = _lines(hub, items)
+    assert len([x for x in lines if "#1718" in x]) == 1, lines
 
 
 def test_a_doing_card_a_live_run_names_is_not_listed_twice(hub, monkeypatch, tmp_path):
@@ -236,13 +248,17 @@ def test_the_panel_carries_no_line_on_work_it_cannot_see(hub):
     assert not any("not visible" in x for x in _lines(hub))
 
 
-def test_the_panel_takes_the_column_the_board_draws(hub):
-    """#1713: the panel reads the column the board draws, so an old Status name and a recorded move both give Doing."""
-    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
+def test_the_panel_takes_the_column_the_board_draws(hub, monkeypatch):
+    """#1713: the panel reads the column the board draws, so an old Status name and a recorded move both give Doing.
+    The overlay is the board's own setting (#651) and it is read on, the default the served board draws with."""
+    monkeypatch.setenv("SG_PENDING_OVERLAY", "on")
+    now = int(time.time())
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 5))
     hub.MOVES.write_text(json.dumps({"ITEM-1711": {"column": "Doing", "at": at, "by": "owner"}}))
     try:
-        items = [{"n": 1711, "i": "ITEM-1711", "t": "Moved by hand", "s": "open", "st": "Todo", "l": ["bug"]},
-                 {"n": 1712, "i": "ITEM-1712", "t": "An old column name", "s": "open", "st": "In Progress", "l": ["bug"]}]
+        # `ot` is the read's own start instant: the production row the overlay compares a proved move against (#651)
+        items = [{"n": 1711, "i": "ITEM-1711", "t": "Moved by hand", "s": "open", "st": "Todo", "l": ["bug"], "ot": now},
+                 {"n": 1712, "i": "ITEM-1712", "t": "An old column name", "s": "open", "st": "In Progress", "l": ["bug"], "ot": now}]
         lines = _lines(hub, items)
     finally:
         hub.MOVES.unlink(missing_ok=True)
@@ -266,6 +282,24 @@ def test_a_gate_that_checks_a_live_run_is_drawn_with_its_row(hub):
     assert gate in html, "the gate that checks a live run is drawn"
     assert "bash" not in html, "no line shows bash as the thing served"
     assert html.index(gate) > html.index('data-id="run-b"'), "the gate is drawn beside the run's row"
+
+
+def test_the_card_draws_a_held_card_once_as_its_hold_line(hub):
+    """#1713: the Live work card draws a held card once: its hold line, never again as a run row of the same hold."""
+    if NODE is None:
+        pytest.skip("node is required")
+    fn = re.search(r"^function liveCard\(.*?^ return\{[^\n]*$", hub.PAGE, re.M | re.S).group(0)
+    hold = "hold: Manual · #1713 The live work panel"
+    row = {"id": "hold-1713", "label": "Manual · #1713", "age": 0, "rank": 0, "kind": "hold", "issues": ["1713"]}
+    script = ('const esc=s=>String(s);const age=s=>s+"s";'
+              'const liveRow=(r,shown)=>"<div class=r data-id=\\""+r.id+"\\">"+r.label+"</div>";const LIVE_ROWS=4;\n'
+              'let liveWork=[' + json.dumps(hold) + '];\n'
+              + fn + '\nconsole.log(JSON.stringify(liveCard([' + json.dumps(row) + '],"").html));\n')
+    out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    html = json.loads(out.stdout)
+    assert html.count("#1713") == 1, html
+    assert "Manual" in html, html
 
 
 def test_the_card_draws_the_loop_lines_and_no_run_twice(hub):
