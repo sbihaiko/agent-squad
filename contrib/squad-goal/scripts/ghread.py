@@ -109,8 +109,8 @@ FAILED = "failed"
 LOOP_STOP_LABELS = ("loop-bug:dispatch", "loop-bug:landing", "loop-bug:infra")
 
 def loop_stop(issues):
-    """The first open issue that marks a defect in the loop's own machinery, or None. A bare `loop-bug` names a defect the
-    loop works beside, so it is not in the list and stops nothing (owner answer B1)."""
+    """The first open issue that marks a defect in the loop's own machinery, or None. This list is the
+    child pass's halt (`childcc.py`); the drain for any loop-bug, bare included, is `watchd.sh loopbug` (#1708, ADR-0146)."""
     for i in issues or []:
         if not isinstance(i, dict): continue
         names = [l.get("name") if isinstance(l, dict) else l for l in (i.get("labels") or [])]

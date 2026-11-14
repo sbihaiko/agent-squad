@@ -13,15 +13,15 @@ Classify the problem before any other action. If it sits in the loop's own machi
 `autofrontier`, `childcc`, `wave.sh`, the age cap, `landing`, the review chain, `janitor`, the hub or the live copy — it is
 never delegated to the loop (ADR-0146).
 
-1. Open an issue with the evidence: the run, the log lines, the markers, the timestamps. Label it `loop-bug` plus the one label that names the defect: `loop-bug:dispatch` for the dispatch path, `loop-bug:landing` for the landing path, `loop-bug:infra` for the loop's infrastructure — the wave lifecycle, a gate, the engine. The second label is what stops dispatch; a bare `loop-bug` stops nothing. Card to Doing.
+1. Open an issue with the evidence: the run, the log lines, the markers, the timestamps. Label it `loop-bug` plus the one label that names the defect: `loop-bug:dispatch` for the dispatch path, `loop-bug:landing` for the landing path, `loop-bug:infra` for the loop's infrastructure — the wave lifecycle, a gate, the engine. Any of them, and a bare `loop-bug`, drains the loop at the next pass. Card to Doing.
 2. Run the adversarial review with Fable before the first edit (Agent tool, model `fable`, stance challenger). It must name what else explains the evidence and which test separates the two. Record the ruling on the issue; a fix it refutes is not started.
-3. Stop the loop: `scripts/watchd.sh stop`, after checking for live work. It drains: a live run finishes before the loop stops, and `stop --force` is the hard stop that snapshots the live runs' work first (#1662). Land first any finished run whose children entered its wave (`wave.sh land <run>`).
+3. The loop stops itself: the label drains it, a live run finishes before the loop stops, and `watchd.sh status` then reads `off until the loop-bug #N closes`. Do not run `watchd.sh stop` for it: an owner stop stays off after the fix. Land first any finished run whose children entered its wave (`wave.sh land <run>`).
 4. Fix it yourself or with your own agents, test-first, in a worktree. Fast gate, not the full one. Land in `dev` with `Closes #n`.
 5. Promote `dev` into `stg` by one pull request, then publish the live copy from a tree on `stg` (`SKILL.md` §8 steps 4 and 5). The publish closes the issue — never close it by hand.
-6. Restart the loop (`scripts/watchd.sh restart`, which drains the live runs first; with the loop already stopped by step 3 it only starts it), and confirm the first cycle prints no `LOOP STOP` and no `DISPATCH HOLD` for that issue.
+6. The loop restarts itself within five minutes of the last loop-bug closing. Confirm the first cycle prints no `LOOP STOP` and no `DISPATCH HOLD` for that issue.
 
-While an issue carrying `loop-bug:dispatch`, `loop-bug:landing` or `loop-bug:infra` is open, the loop stays stopped: no
-dispatch. A bare `loop-bug` label stops nothing; it does not stop landings either, and no label stops the live runs.
+While an issue carrying `loop-bug`, bare or prefixed, is open, the loop drains and stays off. The live runs and the held
+gates finish first; no label kills one.
 
 A product defect — repository code outside the loop's machinery — may go to the loop as usual, and the goal protection
 says to file it at once with the `bug` label and its card in Todo.

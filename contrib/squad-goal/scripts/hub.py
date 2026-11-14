@@ -2058,6 +2058,14 @@ def loop_state(last, now=None, state=None):
     except OSError: pass
     return "off"
 
+def loop_cause(state=None):
+    """Why the loop is off or draining, from the two marks watchd.sh writes (#1708, ADR-0146): the loop-bug the loop drained
+    itself for, or the owner's own stop. Neither mark gives an empty answer."""
+    auto = (pathlib.Path(state) if state else STATE) / "auto"
+    if (auto / "owner-stop").exists(): return {"owner": True}
+    n = _read(auto / "loop-bug-drain").strip()
+    return {"issue": int(n)} if n.isdigit() else {}
+
 LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["start", "stop-now"], "starting": []}   # the hub's rule, so no page holds one
 
 # One project is one profile (SPEC 1596, rule 8; #1599). The loop fact lists every project with its own state, live work,
@@ -2229,6 +2237,7 @@ def loop_view(a):
     live = loop_live(procs=procs)
     rows = [r for r in project_contexts() if r.get("own") or (r.get("state") and pathlib.Path(r["state"]).is_dir())]
     return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": live,
+            "cause": loop_cause(),   # the loop-bug a drain waits on, or the owner's stop (#1708)
             "health": loop_health(live),   # the Loop theme's Now tiles (#1280)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
@@ -2326,11 +2335,14 @@ def loop_switch(a, body, origin_ok, row=None):
         if t["profile"] is None and t["state"] == STATE: return loop_watchd(*verbs)
         return loop_watchd(*verbs, state=t["state"], checkout=t["checkout"] or None, profile=t["profile"])
     if action == "start":
-        for f in ("off", "drain", "drain-pause"): (t["state"] / "auto" / f).unlink(missing_ok=True)
         t["starting"].parent.mkdir(parents=True, exist_ok=True); t["starting"].write_text(f"{time.time()}\n")
         try:
             try: rc = watchd("start")
             except subprocess.TimeoutExpired: rc = -1
+            # The pause lifts only after the start was not refused (#1708): a start refused for an open loop-bug keeps the
+            # drain and its mark, so the loop never runs on beside an open loop defect.
+            if not rc:
+                for f in ("off", "drain", "drain-pause"): (t["state"] / "auto" / f).unlink(missing_ok=True)
             failed = "watchd did not start" if rc else "" if loop_alive(t["state"]) else "the supervisor was not running after its start"
         finally: t["starting"].unlink(missing_ok=True)
         if failed:
@@ -6799,11 +6811,12 @@ function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&roo
 const loopLast=v=>{const e=(v.log||[])[0];return e?[e.action,e.who,e.from,moment(e.at)].filter(Boolean).join(" · "):"none recorded"};   // no log entry names no action or source, so the tile never shows a partial who and when
 const loopTip=v=>!v.write?v.reason:v.state==="on"||v.state==="draining"?"turn off":v.state==="off"?"turn on":v.state==="starting"?"the loop is starting":"";
 const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class="lsw${v.state==="draining"?" dra":""}"${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;   // a draining loop reads the warn colour on the switch itself, not only on the word beside it
-const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
+const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"&&e.issue?`drain for the loop-bug #${e.issue}`:e.action==="start"&&e.issue?`start: no loop-bug is open after #${e.issue}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
-const loopStateLine=v=>`<div class="lstate ${esc(v.state)}">Loop ${esc(v.state)}</div>`;   // the theme's first line, the state before any other fact (#1280)
+const loopCause=v=>{const n=v.cause&&v.cause.issue;return !n?"":v.state==="draining"?` for the loop-bug #${n}`:v.state==="off"?` until the loop-bug #${n} closes`:""};   // why a drained loop is off (#1708)
+const loopStateLine=v=>`<div class="lstate ${esc(v.state)}">Loop ${esc(v.state)}${esc(loopCause(v))}</div>`;   // the theme's first line, the state before any other fact (#1280)
 const loopSetHtml=v=>{const h=v.health||{},left=v.state==="starting"&&h.starting_left!=null?` · ${span(h.starting_left)} left`:"";
- return `<div class=lnow>${loopSw(v)}<span class="ls ${esc(v.state)}">Loop ${esc(v.state)}${left}</span></div>`
+ return `<div class=lnow>${loopSw(v)}<span class="ls ${esc(v.state)}">Loop ${esc(v.state)}${esc(loopCause(v))}${left}</span></div>`
  +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in <a href="#set" data-sp=acc>Access</a>.</div>`)
  +(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)} <button type=button data-loop${v.write?"":" disabled"}>Try again</button></div>`:"")
  +(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")};

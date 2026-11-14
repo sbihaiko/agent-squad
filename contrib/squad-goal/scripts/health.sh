@@ -21,6 +21,7 @@ add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); akeys+=("${4:-$1}");
 # a process check on the slot, so a pid file that is stale or absent beside a live supervisor never reads as down by itself.
 relight() {
   local w
+  [ -e "$SG_STATE/auto/owner-stop" ] && { echo "the owner stopped the loop ($SG_STATE/auto/owner-stop)"; return 1; }
   [ -e "$SG_STATE/auto/off" ] && { echo "the loop switch is off ($SG_STATE/auto/off)"; return 1; }
   w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && kill -0 "$w" 2>/dev/null && { echo "a drain is in progress (waiter $w)"; return 1; }
   bash "$(dirname "$0")/watchd.sh" start 2>&1
@@ -29,6 +30,16 @@ relight() {
 # supervisor that dies and is brought back on every pass does not read as a healthy loop between deaths.
 relights() { [ -s "$SG_STATE/relights" ] && awk -v n="$now" '$1 > n - 3600' "$SG_STATE/relights" 2>/dev/null | wc -l | tr -d ' ' || echo 0; }
 last_relight() { local r; r=$(tail -1 "$SG_STATE/relights" 2>/dev/null); case $r in ''|*[!0-9]*) echo 0 ;; *) echo "$r" ;; esac; }
+# #1708, ADR-0146: a loop that drained itself for a loop-bug starts again when no loop-bug is open. The mark the drain left
+# (auto/loop-bug-drain) is the only state this watcher acts on, so a loop the owner stopped is never started here. The read
+# is the start's own, through the one seam, at most once every SG_LOOPBUG_WATCH_S: an open loop-bug or an unknown read
+# refuses that start and the loop stays as it is. The watcher never writes the mark.
+if [ -e "$A/loop-bug-drain" ] && [ ! -e "$A/owner-stop" ] && [ -z "${HEALTH_DRY:-}" ] && [ $((now - $(mtime "$SG_STATE/loop-bug-watch"))) -ge "${SG_LOOPBUG_WATCH_S:-300}" ]; then
+  : > "$SG_STATE/loop-bug-watch"; lbn=$(cat "$A/loop-bug-drain" 2>/dev/null)
+  if lbo=$(bash "$(dirname "$0")/watchd.sh" start --if-bug-drain 2>&1); then
+    printf '%s WATCHD START no loop-bug is open, the loop drained for #%s starts again: %s\n' "$(date '+%F %T')" "$lbn" "$(printf '%s' "$lbo" | tail -n 1)" >> "$SG_STATE/watch.log"
+  fi
+fi
 if alive "$SG_STATE/watchd.pid" 'watchd.sh run'; then :
 elif ro=$(relight); then
   case "$ro" in *"already running"*) ;;   # a stale or missing pid file beside a live supervisor: it never went down, so nothing is recorded

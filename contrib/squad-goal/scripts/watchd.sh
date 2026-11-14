@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: watchd.sh start|stop [--force]|drain|restart|reload|status   (`stop` drains the live runs first, #1662; run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873; `restart` drains the live runs first, #1471)
+# usage: watchd.sh start [--not-owner|--if-bug-drain]|stop [--force]|cycle-stop|drain|bugdrain <n>|loopbug <issues.json>|restart|reload|status   (`stop` drains the live runs first, #1662; run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873; `restart` drains the live runs first, #1471)
 # Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
@@ -89,16 +89,45 @@ drain_cancel() { w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ]
 # that already ended. The waiter's own state directory is part of its command line, so a waiter serving another state
 # directory is no waiter here (#1471).
 is_waiter() { $SG_PS -p "$1" -ww -o command= 2>/dev/null | grep -qF -- "watchd.sh drain-wait $SG_STATE"; }
-# loop_bug_open   The owner's rule: the loop is never restarted while a loop-bug issue is open, Backlog included (#1386,
-# ADR-0146). The three halt labels stop the passes; a bare `loop-bug` stops nothing there, and no label stops a start. So
-# the start itself reads the open issues, once, through the one seam. Returns 0 and prints the number when one is open,
-# 1 when none is, and 2 when the read failed: a read that proves nothing refuses nothing (ADR-0146 decision 6).
-loop_bug_open() {
+# The one label rule for a loop defect (ADR-0146): an open issue is a loop-bug when a label is `loop-bug` or starts with
+# `loop-bug:`. Any open loop-bug drains the loop, and the loop starts again when none is open (#1708). The reader answers
+# three ways and unknown never reads as none: a body that is no JSON list (an empty body, an error object) is unknown, so a
+# failed read neither drains the loop nor starts it. A pull request is no issue.
+# loop_bug_of   stdin: the open-issue list. 0 and the first number when a loop-bug is open, 1 when none is, 2 when unknown.
+loop_bug_of() {
   local j n
-  j=$(gh_aggregate "repos/$SG_REPO/issues?state=open") || return 2
-  n=$(printf '%s' "$j" | jq -r '[.[]|select(any(.labels[]?; ((.name? // .) as $l | $l == "loop-bug" or ($l | startswith("loop-bug:")))))][0].number // empty' 2>/dev/null) || return 2
+  j=$(cat)
+  printf "%s" "$j" | jq -e "type == \"array\"" >/dev/null 2>&1 || return 2
+  n=$(printf "%s" "$j" | jq -r "[.[]|select(.pull_request|not)|select(any(.labels[]?; ((.name? // .) as \$l | \$l == \"loop-bug\" or (\$l | startswith(\"loop-bug:\")))))][0].number // empty" 2>/dev/null) || return 2
   [ -n "$n" ] || return 1
-  printf '%s\n' "$n"
+  printf "%s\n" "$n"
+}
+# loop_bug_open   The same answer from one read of the open issues through the one seam.
+loop_bug_open() {
+  local j
+  j=$(gh_aggregate "repos/$SG_REPO/issues?state=open") || return 2
+  printf "%s" "$j" | loop_bug_of
+}
+# Two marks say why the loop is off (#1708). auto/owner-stop: the owner stopped or drained it, and nothing but the owner
+# starts it again. auto/loop-bug-drain: the loop drained itself for the loop-bug it names, and it starts again when no
+# loop-bug is open. The owner mark never stays beside a loop that is on, and an owner verb always removes the other mark.
+OS="$SG_STATE/auto/owner-stop"; BD="$SG_STATE/auto/loop-bug-drain"
+owner_mark() { mkdir -p "$SG_STATE/auto"; : > "$OS"; rm -f "$BD"; }
+# loop_audit <action> <issue> <from>   One line in the loop switch audit (ADR-0162), in the shape the hub writes and reads.
+loop_audit() {
+  python3 -I -c "import datetime as d,json,sys
+a,n,f,p=sys.argv[1:5]
+line={\"at\":d.datetime.now().astimezone().isoformat(timespec=\"seconds\"),\"who\":\"loop\",\"from\":f,\"action\":a}
+if n.isdigit(): line[\"issue\"]=int(n)
+open(p,\"a\").write(json.dumps(line)+\"\\n\")" "$1" "${2:-}" "${3:-loop}" "$SG_STATE/loop-audit.jsonl" 2>/dev/null
+}
+# The drain itself, with no owner in it: pause dispatch, mark the drain, and leave a detached waiter that stops the loop once
+# no run and no gate is live (#923). The owner verb `drain` and the loop-bug drain both run it.
+drain_begin() {
+  mkdir -p "$SG_STATE/auto"; [ -e "$SG_STATE/auto/off" ] || { : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; }; : > "$SG_STATE/auto/drain"
+  rm -f "$SG_STATE/auto/restart"
+  w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && is_waiter "$w" && return 0
+  python3 -I -c "import subprocess,sys;subprocess.Popen([\"bash\",sys.argv[1],\"drain-wait\",sys.argv[2]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)" "$me" "$SG_STATE"
 }
 # #1662: the WIP snapshot of every run the loop still lists without a verdict, before a hard stop kills its trees. One line per
 # tree goes to cycle.log. A tree that could not be saved is named there, and the stop goes on: the owner asked for it.
@@ -129,13 +158,31 @@ hard_stop() {
 }
 
 case "${1:-status}" in
-  start) # #1587: a driver that does not hold the slot is never a second loop this start may sit beside: it refuses, and
+  start) # A start that is not the owner (#1708): `--not-owner` is the restart waiter and a cap edit, `--if-bug-drain` is the
+    # watcher that restarts a loop drained for a loop-bug. Neither starts a loop the owner stopped, and the watcher starts
+    # only a loop that carries the loop-bug mark.
+    mode=${2:-}; bdn=$(cat "$BD" 2>/dev/null)
+    # The watcher's start is audited, and names the loop-bug whose close freed the loop (ADR-0162).
+    freed() { [ "$mode" = --if-bug-drain ] && loop_audit start "$bdn" "${SG_GH_PASS:-health}"; return 0; }
+    not_owner() { [ -z "$mode" ] && return 0
+      [ -e "$OS" ] && { echo "watchd start refused: the owner stopped the loop ($OS)" >&2; exit 1; }
+      [ "$mode" = --if-bug-drain ] && [ ! -e "$BD" ] && { echo "watchd start refused: the loop is not drained for a loop-bug" >&2; exit 1; }
+      return 0; }
+    not_owner
+    # #1587: a driver that does not hold the slot is never a second loop this start may sit beside: it refuses, and
     # names the drivers, before it spawns a supervisor.
     ds=$(drivers); h=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$h" ] && is_watchd "$h" || h=
     x=; for p in $ds; do [ "$p" = "$h" ] || x="$x $p"; done
     [ -n "$x" ] && { printf 'watchd start refused: a driver still runs outside the slot: %s\n' \
       "$(printf '%s\n' $x | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), "pid " $1 }')" >&2; exit 1; }
-    alive && { drain_cancel; echo "watchd already running pid=$pid"; exit 0; }
+    if alive; then
+      # A loop drained for a loop-bug is not started while one is open, and an unknown read holds it (#1708).
+      if [ -e "$BD" ]; then lb=$(loop_bug_open); case $? in
+        0) printf 'watchd start refused: the loop drains for #%s, a loop defect; it starts when no loop-bug is open (ADR-0146)\n' "$lb" >&2; exit 1;;
+        2) echo "watchd start refused: the loop drains for a loop-bug and the open issues could not be read" >&2; exit 1;;
+      esac; fi
+      drain_cancel; [ -z "$mode" ] && rm -f "$OS"; rm -f "$BD"; freed; echo "watchd already running pid=$pid"; exit 0
+    fi
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
     # The live scripts call squad.caps.free_runs. A plugin cache older than the live copy lacks it, and every beat then prints
     # a traceback and dispatches nothing (#1422): one probe refuses the start and names the recovery.
@@ -145,17 +192,19 @@ case "${1:-status}" in
     lb=$(loop_bug_open); lb_rc=$?
     case $lb_rc in
       0) printf 'watchd start refused: #%s is a loop defect; the fix lands outside the loop and its publish closes it (ADR-0146)\n' "$lb" >&2; exit 1;;
-      2) echo "watchd start: the open issues could not be read, so the loop-bug check did not run" >&2;;
+      2) [ -e "$BD" ] && { echo "watchd start refused: the loop is drained for a loop-bug and the open issues could not be read" >&2; exit 1; }
+         echo "watchd start: the open issues could not be read, so the loop-bug check did not run" >&2;;
     esac
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"
     rm -f "$SG_STATE/token-guard.since" "$SG_STATE/token-over" "$SG_STATE/token-pause"   # a start is a relight: the token guard measures afresh, never an old burn (#515)
     # A drain's pause is the drain's own (#923): a start lifts it, from the hub or the terminal, so the loop never reads on
     # while it dispatches nothing. A pause the owner set before the drain has no drain-pause mark, and stays.
+    not_owner   # read again just before the pause lifts and the supervisor spawns: an owner stop made meanwhile wins
     rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"
     record_sha
     date +%s > "$SG_STATE/watchd.started"   # the hub drops an older failed start once a later start ran (#923)
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"supervise"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
-    for _ in 1 2 3 4 5 6 7 8 9 10; do alive && { echo "watchd started pid=$pid"; exit 0; }; sleep 1; done
+    for _ in 1 2 3 4 5 6 7 8 9 10; do alive && { [ -z "$mode" ] && rm -f "$OS"; rm -f "$BD" "$SG_STATE"/auto/loop-stop-*; freed; echo "watchd started pid=$pid"; exit 0; }; sleep 1; done
     echo "watchd failed to start" >&2; exit 1;;
   # Logs how the driver ended (#1439): a SIGKILL cannot be trapped, and set -m keeps the driver the group `stop` signals.
   supervise) set -m; bash "$me" run & d=$!; set +m; trap '' TERM INT HUP
@@ -224,18 +273,37 @@ case "${1:-status}" in
     kill -HUP "$pid" || { echo "watchd reload not sent: pid=$pid" >&2; exit 1; }; echo "watchd reload sent pid=$pid";;
   stop) # #1662: a stop drains by default. Under live work it hands off to the drain's waiter and returns, so the run finishes;
     # `stop --force` is the hard stop: it snapshots the live runs' trees (wip_live) before it kills, and it does not wait.
+    # Every stop here is the owner's (#1708): it leaves the owner mark, on a live loop and on one that is not running, so
+    # nothing but an owner start brings the loop back. A stop that fails leaves the loop on, and so leaves no mark.
     if [ "${2:-}" != --force ] && alive && drain_busy; then bash "$me" drain; exit $?; fi
+    owner_mark
     [ "${2:-}" = --force ] && wip_live
-    hard_stop; exit $?;;
-  halt) hard_stop; exit $?;;   # the drained waiter's end: no live work is left, so nothing is snapshotted
-  drain) alive || { echo "watchd not running"; exit 0; }
+    hard_stop; rc=$?; [ "$rc" = 0 ] || rm -f "$OS"; exit "$rc";;
+  # The stop of a procedure that starts the loop again itself (a cap edit): the hard stop with its snapshot and no owner
+  # mark, so the loop-bug mark stays and the health pass may relight the loop (#1708).
+  cycle-stop) wip_live; hard_stop; exit $?;;
+  halt) hard_stop; rc=$?; [ "$rc" = 0 ] || rm -f "$OS"; exit "$rc";;   # the drained waiter's end: no live work is left, so nothing is snapshotted
+  # bugdrain <n>   The loop drains itself for the open loop-bug #n (#1708, ADR-0146). The owner's state wins: a loop the
+  # owner stopped, paused or drains is left alone, and so is a restart in flight, whose waiter takes the mark over when its
+  # start is refused. A mark with no pause beside it is stale and is written again. Only the writer of the mark audits.
+  bugdrain) n=${2:-}; case $n in ''|*[!0-9]*) echo "usage: watchd.sh bugdrain <issue>" >&2; exit 2;; esac
+    [ -e "$OS" ] && exit 0
+    [ -e "$BD" ] && [ -e "$SG_STATE/auto/off" ] && exit 0
+    [ ! -e "$BD" ] && { [ -e "$SG_STATE/auto/off" ] || [ -e "$SG_STATE/auto/drain" ]; } && exit 0
+    alive || exit 0
+    mkdir -p "$SG_STATE/auto"; rm -f "$BD"; ( set -C; printf '%s\n' "$n" > "$BD" ) 2>/dev/null || exit 0
+    drain_begin
+    loop_audit drain "$n" "${SG_GH_PASS:-loop}"
+    printf '%s WATCHD DRAIN #%s is an open loop defect: the loop drains, and starts again when no loop-bug is open\n' "$(date '+%F %T')" "$n" >> "$L";;
+  # loopbug <issues.json>   What a pass asks with the open-issue list it already read (#1708): the one label rule, and the
+  # drain when a loop-bug is open. 0 and the number when one is open, 1 when none is, 2 when the list is unknown.
+  loopbug) n=$(loop_bug_of < "${2:?usage: watchd.sh loopbug <issues.json>}"); rc=$?; [ "$rc" = 0 ] || exit "$rc"
+    bash "$me" bugdrain "$n" >> "$L" 2>&1; printf '%s\n' "$n";;
+  drain) owner_mark; alive || { echo "watchd not running"; exit 0; }
     # A drain pauses dispatch and leaves the lanes running; a detached waiter stops the loop once no run or gate is live (#923).
     # A drain that finds a live waiter joins it and drops the restart mark: a drain means stop, so the stop intent is never
     # silently turned into a restarted loop (#1471).
-    mkdir -p "$SG_STATE/auto"; [ -e "$SG_STATE/auto/off" ] || { : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; }; : > "$SG_STATE/auto/drain"
-    rm -f "$SG_STATE/auto/restart"
-    w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && is_waiter "$w" && { echo "watchd draining pid=$pid"; exit 0; }
-    python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait",sys.argv[2]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me" "$SG_STATE"
+    drain_begin
     echo "watchd draining pid=$pid";;
   # A restart follows a publish (#1471, ADR-0162 decision 3). A publish reaches the drivers only through a restart, and a
   # stop under a live run kills the run and its gate; so the restart pauses dispatch at once, marks its drain, and a
@@ -246,7 +314,8 @@ case "${1:-status}" in
     # names the drain (#1471).
     w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)
     if [ -n "$w" ] && is_waiter "$w" && [ ! -e "$SG_STATE/auto/restart" ]; then
-      echo "watchd restart refused: a drain the owner asked for is in progress, and it stops the loop" >&2; exit 1
+      if [ -e "$BD" ]; then echo "watchd restart refused: the loop drains for the loop-bug #$(cat "$BD"), and it stops the loop" >&2
+      else echo "watchd restart refused: a drain the owner asked for is in progress, and it stops the loop" >&2; fi; exit 1
     fi
     mkdir -p "$SG_STATE/auto"; [ -e "$SG_STATE/auto/off" ] || { : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; }; : > "$SG_STATE/auto/drain"; : > "$SG_STATE/auto/restart"
     [ -n "$w" ] && is_waiter "$w" && { echo "watchd restarting: draining pid=$pid"; exit 0; }
@@ -264,11 +333,16 @@ case "${1:-status}" in
           # The lanes die with the supervisor's group, and a lane still listed under pid 1 is an orphan the start refuses:
           # give the group the moment it needs before the start reads the table.
           for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(orphans)" ] && break; sleep 1; done
-          out=$(bash "$me" start 2>&1); rc=$?; printf '%s\n' "$out" >> "$L"
+          out=$(bash "$me" start --not-owner 2>&1); rc=$?; printf '%s\n' "$out" >> "$L"
           # A refused start (an open loop-bug, an orphan lane, a missing squad.caps) leaves the loop off; one alerts.log
           # line names the reason, so a publish never ends in a silently down loop.
           [ "$rc" = 0 ] || printf '%s WATCHD RESTART the start after the drain was refused, the loop stays off: %s\n' \
             "$(date '+%F %T')" "$(printf '%s' "$out" | tail -n 1)" >> "$SG_STATE/alerts.log"
+          # A restart refused for an open loop-bug becomes a loop-bug drain (#1708): the mark lets the watcher start the
+          # loop when the issue closes, so a publish never ends in a loop that is off for good.
+          if [ "$rc" != 0 ] && [ ! -e "$OS" ] && [ ! -e "$BD" ] && lb=$(loop_bug_open); then
+            ( set -C; printf '%s\n' "$lb" > "$BD" ) 2>/dev/null && loop_audit drain "$lb" restart
+          fi
         fi
       else printf '%s WATCHD RESTART the supervisor did not stop, so the restart is not made\n' "$(date '+%F %T')" >> "$L"
         # This waiter set the drain's pause, and it is the only one that lifts it: a supervisor that survives the stop would
@@ -283,5 +357,8 @@ case "${1:-status}" in
     # The marks are the waiter's own while it holds the waiter file: a later drain or restart that took the file over keeps
     # its own marks, so an old waiter's exit never cancels the restart it was too late to serve.
     if [ "$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)" = "$$" ]; then rm -f "$SG_STATE/auto/drain-waiter" "$SG_STATE/auto/drain" "$SG_STATE/auto/restart"; fi;;
-  status) alive && echo "watchd running pid=$pid" || echo "watchd not running";;
+  status) if alive; then echo "watchd running pid=$pid"
+    elif [ -e "$OS" ]; then echo "watchd not running: off (owner)"
+    elif [ -e "$BD" ]; then echo "watchd not running: off until the loop-bug #$(cat "$BD") closes"
+    else echo "watchd not running"; fi;;
 esac
