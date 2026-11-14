@@ -169,3 +169,39 @@ def test_the_gate_knobs_never_reach_a_suite(tmp_path, monkeypatch):
     monkeypatch.setenv("SERIAL_TRY", "1")
     suite = write_suite(tmp_path, "test-env.sh", 'echo "hold=${SERIAL_HOLD_SECONDS:-unset} try=${SERIAL_TRY:-unset}"\n')
     assert "hold=unset try=unset" in shell_suites.run(suite).stdout
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def test_a_process_a_suite_leaves_in_its_temp_folder_is_ended_with_the_suite(tmp_path):
+    """#1742: a suite started the real watch loop from a fixture copy and left it as an orphan that ran for hours. The
+    runner gives each suite its own process group and ends every process still in it once the suite returns."""
+    pid_file = tmp_path / "pid"
+    suite = tmp_path / "test-leaks.sh"
+    suite.write_text(
+        "#!/bin/bash\n"
+        "T=$(mktemp -d)\n"
+        "printf '#!/bin/bash\\nwhile :; do /bin/sleep 0.1; done\\n' > \"$T/loop.sh\"\n"
+        "( bash \"$T/loop.sh\" ) > /dev/null 2>&1 &\n"
+        "/bin/sleep 0.2\n"
+        "pgrep -f \"$T/loop.sh\" | tail -1 > \"$LEAK_PID_FILE\"\n"
+        "echo 'ok   the suite is green'\n")
+    done = shell_suites.run(suite, extra_env={"LEAK_PID_FILE": str(pid_file)})
+    pid = int(pid_file.read_text().split()[0])
+    try:
+        assert done.returncode == 0
+        assert not _alive(pid), f"the loop the suite started (pid {pid}) outlived the suite"
+    finally:
+        if _alive(pid):
+            os.kill(pid, 9)
+
+
+
+def test_a_group_with_no_process_left_is_no_error():
+    assert shell_suites.end_group(2 ** 22 - 7) is False   # no such group: nothing ended, nothing raised

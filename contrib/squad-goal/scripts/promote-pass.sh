@@ -262,7 +262,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # lands by fast-forward keeps the date of the child's commit, so it is older than the wait the moment it reaches the base,
   # and the suite then starts beside a CI that began seconds ago. The record is `<tip>\t<epoch>`; a new tip replaces it.
   wrec=$state/promote-ci-wait; wnow=$(date +%s); wtip=; wsince=
-  IFS=$'\t' read -r wtip wsince < "$wrec" 2>/dev/null
+  [ ! -r "$wrec" ] || IFS=$'\t' read -r wtip wsince < "$wrec"   # no record yet is no error line in the log
   case "$wsince" in ''|*[!0-9]*) wtip=;; esac
   if [ "$wtip" != "$tip" ]; then
     wsince=$wnow; printf '%s\t%s\n' "$tip" "$wnow" > "$wrec.$$" && mv -f "$wrec.$$" "$wrec"

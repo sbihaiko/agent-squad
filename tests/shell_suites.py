@@ -16,8 +16,10 @@ times the same factor, never below a floor, so a bound tighter than the load it 
 work rather than its own.
 """
 import os
+import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from tests import slowcap
@@ -64,6 +66,23 @@ def timeout_for(suite):
     return max(MIN_TIMEOUT_SECONDS, measured().get(Path(suite).name, 0.0) * LOAD_FACTOR)
 
 
+def end_group(pgid):
+    """End what a suite left in its own process group: TERM, then KILL for a process that traps it. True when a process
+    was still there. A suite started the real watch loop from a fixture copy and left it as an orphan that ran a cycle
+    every few seconds for hours (#1742); the group is the one fact such a leftover keeps, whatever its parent became.
+    A signal the system refuses (a sandboxed session) ends nothing and is no error: the suite's verdict stands."""
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except OSError:
+        return False
+    time.sleep(0.2)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+    return True
+
+
 def _run(suite, timeout=None, extra_env=None):
     timeout = timeout_for(suite) if timeout is None else timeout
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "SERIAL_"))}   # the gate exports its lock bounds (#755)
@@ -71,9 +90,20 @@ def _run(suite, timeout=None, extra_env=None):
         env.update(extra_env)   # a variable a caller sets on purpose, after the clear: the suite must survive it
     with tempfile.TemporaryDirectory() as home:
         env["HOME"] = home
-        return subprocess.run(["bash", str(suite)], cwd=Path(suite).parent, env=env, capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, timeout=timeout)
-
+        # Its own session (#1742): the suite leads a process group no other process is in, so what it leaves behind is
+        # found by that group and ended below, whatever the suite's own cleanup did.
+        proc = subprocess.Popen(["bash", str(suite)], cwd=Path(suite).parent, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            end_group(proc.pid)   # the group first: a child that holds the pipes would keep the read below waiting
+            proc.kill()
+            proc.communicate()
+            raise
+        finally:
+            end_group(proc.pid)
+        return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 def run(suite, timeout=None, extra_env=None):
     """Run one suite the way `problem` does -- every inherited `SG_*` and `SERIAL_*` cleared and `HOME` in its own temp dir -- and hand back

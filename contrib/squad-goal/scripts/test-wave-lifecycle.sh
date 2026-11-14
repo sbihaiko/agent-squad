@@ -122,10 +122,16 @@ c=\$(( \$(cat "$T/cyc" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$T/cyc"
 exit 0
 EOF
 chmod +x "$T/s/vendor-guard.sh"
+tree_of() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_of "$c"; done; printf '%s\n' "$1"; }
+end_tree() { local list; list=$(tree_of "$1"); kill -TERM $list 2>/dev/null; /bin/sleep 0.3; kill -KILL $list 2>/dev/null; return 0; }
 cycle() { local i=0; : > "$T/watch.out"; echo 0 > "$T/cyc"
-  ( cd "$T/co" && env SG_TEST_CYCLES="${1:-1}" bash "$T/s/watch.sh" > "$T/watch.out" 2>&1 ) & local p=$!
-  while kill -0 "$p" 2>/dev/null && [ $i -lt 600 ]; do /bin/sleep 0.1; i=$((i+1)); done
-  kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$T/st/fastloop.pid"
+  # exec: the pid this helper holds is the loop itself, never a subshell around it (#1742). A cycle past the bound
+  # (CYCLE_TICKS tenths of a second) is ended with every process it started, so no loop outlives the suite.
+  ( cd "$T/co" && exec env SG_TEST_CYCLES="${1:-1}" bash "$T/s/watch.sh" > "$T/watch.out" 2>&1 ) & local p=$!
+  while kill -0 "$p" 2>/dev/null && [ $i -lt "${CYCLE_TICKS:-600}" ]; do /bin/sleep 0.1; i=$((i+1)); done
+  end_tree "$p"; wait "$p" 2>/dev/null; rm -f "$T/st/fastloop.pid"
+  # A cycle ended at the bound took its landing pass with it: the busy marker that pass held has no writer left to clear it.
+  [ $i -lt "${CYCLE_TICKS:-600}" ] || rm -f "$T"/st/auto/wland-*.busy
   # The landing is a detached pass (#955): the supervisor returns at once and the pass writes its lines after it. Wait for
   # the pass's own busy marker, as a live loop's next cycle does, so the landing a case reads has happened.
   local j=0; while /bin/ls "$T"/st/auto/wland-*.busy >/dev/null 2>&1 && [ $j -lt 600 ]; do /bin/sleep 0.1; j=$((j+1)); done; return 0; }
@@ -338,6 +344,15 @@ pushed=$($G ls-remote "$T/origin.git" 'refs/heads/gui/*')
 ls "$SQUAD_CAPS_DIR" 2>/dev/null | /usr/bin/grep -qE '^(gates|reviews)$' && ok "the lifecycle drew slots from the machine-wide budget" || ko "no gate or review slot was ever taken: $(ls "$SQUAD_CAPS_DIR" 2>&1)"
 occ=$(PYTHONPATH="$T/squad" python3 -m squad.caps 2>&1 | python3 -c 'import json,sys; o=json.load(sys.stdin)["occupancy"]; print(o["gates"]+o["reviews"])' 2>&1)
 [ "$occ" = 0 ] && ok "every slot was given back" || ko "slots still live: $occ"
+
+# (#1742) A cycle the stub never ends is stopped at the helper's bound, and the loop it started goes with it: the helper
+# ended only the subshell around the loop, so the real watch.sh stayed as an orphan and ran a cycle every few seconds for
+# hours, on a machine whose gates then met their deadlines.
+CYCLE_TICKS=20 cycle 99999
+/bin/sleep 0.5
+left=$(pgrep -f "$T/s/watch.sh" | tr '\n' ' ')
+[ -z "$left" ] && ok "L9: a cycle stopped at its bound leaves no watch loop behind" \
+  || { ko "L9: the watch loop outlived its helper: pids $left"; pkill -KILL -f "$T/s/watch.sh"; }
 
 kill "$HUB" 2>/dev/null; wait "$HUB" 2>/dev/null; rm -rf "$T"
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

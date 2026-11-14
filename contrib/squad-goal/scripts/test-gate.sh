@@ -44,7 +44,7 @@ hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/d
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
 IFS=$'\t' read -r fin kind res at start _ < <(tail -n 1 "$H"); sel=$(tail -n 1 "$H" | cut -f6); scope=$(tail -n 1 "$H" | cut -f7)
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 13 ] && ok "the history line has fourteen fields: the selection and scope, the verdict, the slots, how a red cleared, then the caller" || ko "history fields: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 15 ] && ok "the history line has sixteen fields: the selection and scope, the verdict, the slots, how a red cleared, the caller, then the load at the start and at the finish" || ko "history fields: '$(tail -n 1 "$H")'"
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$S" 2>/dev/null
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the status line carries the selection and the scope" || ko "status selection: '$(cat "$S" 2>&1)'"
@@ -52,7 +52,35 @@ case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$sta
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 
 (cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" sh -c 'exit 7'); rc=$?
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 13 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 15 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+
+# --- the load (#1691): a gate line carries the one-minute load at its start and at its finish, so a set of gate runs can be
+# labeled before any load bound enters a gate (ADR-0012, ADR-0018). The reader is a seam: this suite cannot set the machine's load.
+case "$(tail -n 1 "$H" | cut -f15)" in ''|*[!0-9.]*) ko "the line carries no load at the start: '$(tail -n 1 "$H" | cut -f15)'";; *) ok "the history line carries the machine's load at the start";; esac
+case "$(tail -n 1 "$H" | cut -f16)" in ''|*[!0-9.]*) ko "the line carries no load at the finish: '$(tail -n 1 "$H" | cut -f16)'";; *) ok "the history line carries the machine's load at the finish";; esac
+printf 0 > "$T/ln"
+cat > "$T/loadread" <<LR
+n=\$(( \$(cat "$T/ln") + 1 )); printf '%s' "\$n" > "$T/ln"; echo "\$n.50"
+LR
+(cd "$T/w" && GATE_LOAD_READ=$T/loadread SG_GATE_KIND=fast bash "$d/gate.sh" true)
+[ "$(tail -n 1 "$H" | cut -f15,16)" = "$(printf '1.50\t2.50')" ] && ok "the start load is read before the command and the finish load after it" \
+  || ko "load fields: '$(tail -n 1 "$H" | cut -f15,16)'"
+printf 'echo no-number\n' > "$T/loadbad"
+(cd "$T/w" && GATE_LOAD_READ=$T/loadbad SG_GATE_KIND=fast bash "$d/gate.sh" true); rc=$?
+[ $rc = 0 ] && [ "$(tail -n 1 "$H" | cut -f15,16)" = "$(printf -- '-\t-')" ] && ok "a load no reader can read is a dash, and the gate's verdict stands" \
+  || ko "unreadable load: rc $rc '$(tail -n 1 "$H" | cut -f15,16)'"
+# The labeled set: each gate that carries a load, with its outcome and the outcome of the next gate on the same tree.
+LS=$T/ls; mkdir -p "$LS"
+{ printf '100\tfast\tfail\taaa\t90\t\tall\tfail\texit 1\tpytest\t-\t3\t-\tloop\t52.10\t48.00\n'
+  printf '200\tfast\tpass\tbbb\t190\t\tall\tpass\t-\tpytest\t-\t3\t-\tloop\t4.00\t5.00\n'
+  printf '300\tfast\tpass\taaa\t290\t\tall\tpass\t-\tpytest\t-\t3\t-\tloop\t6.00\t7.25\n'
+  printf '400\tfast\tfail\tccc\t390\t\tall\tfail\texit 1\tpytest\t-\t3\t-\tother\n'; } > "$LS/gate-history"
+set_out=$(python3 "$d/gate_load_set.py" "$LS" 2>&1)
+[ "$(printf '%s\n' "$set_out" | sed -n 2p)" = "$(printf '100\taaa\tfast\tall\tfail\t52.10\t48.00\tpass')" ] \
+  && ok "the labeled set names a red, its load at both ends and the same-tree rerun that passed" || ko "labeled red: '$set_out'"
+[ "$(printf '%s\n' "$set_out" | sed -n 4p)" = "$(printf '300\taaa\tfast\tall\tpass\t6.00\t7.25\t-')" ] \
+  && ok "a gate with no later gate on its tree has no rerun outcome" || ko "labeled last: '$set_out'"
+[ "$(printf '%s\n' "$set_out" | /usr/bin/grep -c .)" = 4 ] && ok "a line from before the load fields is no row of the set" || ko "set rows: '$set_out'"
 
 # --- the verdict (spec 1163): the outcome, its one reason, the checks that ran and the ones that did not, and the slots ---
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'printf "unproven\tmypy is not installed\truff\tmypy pytest\n" > "$GATE_OUTCOME_FILE"; exit 4'); rc=$?

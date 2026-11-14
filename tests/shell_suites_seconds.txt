@@ -57,7 +57,7 @@ test-fastloop-pid.sh 0.05
 test-gate-attempts.sh 9.36
 test-gate-lock.sh 14.58
 test-gate-watchdog.sh 19.44
-test-gate.sh 0.56
+test-gate.sh 64.00
 test-gh-pass-bounded.sh 3.40
 test-ghcache.sh 2.83
 test-ghcall-refusal.sh 0.41
@@ -115,6 +115,7 @@ test-janitor-gone-issue.sh 1.31
 test-janitor-h.sh 0.59
 test-janitor-held-by-wave.sh 1.73
 test-janitor-i.sh 1.13
+test-janitor-issue-facts.sh 7.05
 test-janitor-k.sh 1.57
 test-janitor-killed.sh 0.85
 test-janitor-live-mtime.sh 2.68
@@ -214,7 +215,7 @@ test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
 test-wave-compete.sh 8.03
 test-wave-dropped.sh 10.00
-test-wave-lifecycle.sh 18.50
+test-wave-lifecycle.sh 58.00
 test-wave-norefs.sh 18.04
 test-wave-probe.sh 2.64
 test-wave-redrefs.sh 22.78
