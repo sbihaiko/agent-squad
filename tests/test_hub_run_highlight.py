@@ -119,7 +119,7 @@ const cards = [cardEl(5, "x/y"), cardEl(6, "x/y")];
 const laneEl = id => ({dataset: {lane: id}, appended: null, querySelector(sel) { return sel === ".lh" ? {append: s => { this.appended = s; }} : null; }});
 const lanes = [laneEl("open"), laneEl("coll")];
 const header = {hidden: true, textContent: ""};
-document = {querySelectorAll: sel => ({"#bbody .it[data-n]": cards, "#bbody .lane[data-lane]": lanes, "#list .r[data-id]": []})[sel]};
+document = {querySelectorAll: sel => ({"#bbody .it[data-n]": cards, "#bbody .lane[data-lane]": lanes, "#main .r[data-rid]": []})[sel]};
 document.createElement = () => ({className: "", textContent: ""});
 const $ = () => header;
 let hl = {run: "a"};

@@ -1,4 +1,4 @@
-"""GitHub issue #598: the hub WORKERS panel shows the childcc pass and the children it reviews.
+"""GitHub issue #598: the hub Runs tab (Live, #1770) shows the childcc pass and the children it reviews.
 
 The pass writes `auto/childcc-now.json`: its pid and start, and one entry per child it holds (run, child, issue, step, and
 since when it waits). The hub reads that file, never the pass: a live pass is one row with its pid and age, one line under
@@ -151,39 +151,23 @@ def test_a_run_the_pass_does_not_hold_never_opens(hub, held):
 NODE = shutil.which("node")
 
 
-def _draw_list(hub):
+def _draw_main(hub):
     src = hub.PAGE
-    i = src.index("function drawList(")
-    depth = 0
-    for k in range(src.index("{", i), len(src)):
-        depth += {"{": 1, "}": -1}.get(src[k], 0)
-        if depth == 0:
-            return src[i : k + 1]
-    raise AssertionError("drawList is not closed")
+    return src[src.index("function drawMain(") : src.index("function refresh(")]   # the Runs tab's one list and its row forms (#1770)
 
 
-def _page(hub, all_runs, click=None):
+def _page(hub, all_runs):
     js = """
-const HTML={list:""},CLICK={};
+const HTML={main:""};
 const $=s=>({set innerHTML(v){HTML[s.slice(1)]=v},get innerHTML(){return HTML[s.slice(1)]}});
-const document={querySelectorAll:s=>{if(s===".gh")return [];
-  if(s!=="#list .r[data-id]")throw new Error("selector "+s);
-  return [...HTML.list.matchAll(/<div class="r [^"]*"[^>]*data-id="([^"]+)"/g)].map(m=>{const e={dataset:{id:m[1]}};
-    Object.defineProperty(e,"onclick",{set:f=>{CLICK[m[1]]=f}});return e})}};
 const esc=s=>String(s),iq=s=>String(s),age=s=>s+"s",usd=v=>"$"+v,name=r=>r.id,labelTip=r=>"",loadMark=r=>"",sub=r=>"";
-const GROUPS=[{key:"running",label:"WORKERS",text:"",title:"",empty:false}],groupOf=r=>"running";
-let openGroups=new Set(["running"]);const saveGroups=()=>{},save=()=>{};
-let N=1,focus=null,slots=[],pins=new Set(),allRuns=__RUNS__,runs=allRuns.filter(r=>r.kind!=="childcc");
-const refresh=()=>{};
-const LIVE_ROWS=3, liveCard=()=>({head:"",html:""});   // the card is drawn before drawList and has its own suite (#1276)
-let hl=null,opened=null;const paintHL=()=>{},openRun=id=>{opened=id};
+let TAB="runs",ENDED=[],GROUPS=[],slots=[],pins=new Set(),allRuns=__RUNS__,runs=allRuns.filter(r=>r.kind!=="childcc");
 __DRAW__
-drawList();
-const ids=[...HTML.list.matchAll(/data-id="([^"]+)"/g)].map(m=>m[1]);
-const clicked="__CLICK__";if(clicked&&CLICK[clicked])CLICK[clicked]();
-console.log(JSON.stringify({ids,pins:[...pins],opened,cc:/class="r cc[^>]*>/.exec(HTML.list)[0]}));
-""".replace("__RUNS__", json.dumps(all_runs)).replace("__DRAW__", _draw_list(hub)).replace("__CLICK__", click or "")
-    assert NODE, "node is not installed: the hub page's own drawList is run here"
+drawMain();
+const ids=[...HTML.main.matchAll(/data-rid="([^"]+)"/g)].map(m=>m[1]);
+console.log(JSON.stringify({ids,cc:/<div class="r cc[^>]*>/.exec(HTML.main)[0]}));
+""".replace("__RUNS__", json.dumps(all_runs)).replace("__DRAW__", _draw_main(hub))
+    assert NODE, "node is not installed: the hub page's own drawMain is run here"
     p = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
@@ -198,13 +182,15 @@ def _cc(held):
 
 
 def test_a_click_on_the_childcc_row_selects_the_run_it_holds(hub):
-    out = _page(hub, [_cc(HELD["id"]), HELD], click=HELD["id"])
-    assert f'data-id="{HELD["id"]}"' in out["cc"], "the childcc row carries no id of the run it holds"
-    assert out["opened"] == HELD["id"], "a click on the childcc row opens no run sheet (#984)"
+    """The Runs tab opens a row through its `data-rid` (#984, #1770): the childcc row carries the run it holds."""
+    out = _page(hub, [_cc(HELD["id"]), HELD])
+    assert f'data-rid="{HELD["id"]}"' in out["cc"], "the childcc row carries no id of the run it holds"
+    src = hub.PAGE
+    assert '$("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]")' in src and "openRun(id)" in src
 
 
 def test_the_childcc_row_is_never_a_pane(hub):
     out = _page(hub, [_cc(None), HELD])
-    assert "childcc" not in out["ids"] and "data-id" not in out["cc"]
+    assert "childcc" not in out["ids"] and "data-rid" not in out["cc"]
     out = _page(hub, [_cc("run-not-listed")])
-    assert "data-id" not in out["cc"], "a held run the list does not carry cannot be opened"
+    assert "data-rid" not in out["cc"], "a held run the list does not carry cannot be opened"

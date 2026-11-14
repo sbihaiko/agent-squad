@@ -61,14 +61,14 @@ def test_the_settings_tab_holds_the_plans_and_no_run_history(hub):
     assert "Run history" not in pane, "the Loop theme carries a run history block again"
 
 
-def test_the_history_lives_at_the_bottom_of_the_runs_tab(hub):
-    """Owner, 2026-11-01: Last ended left the sidebar. #1277: the run history is the bottom of the Runs tab."""
+def test_the_history_lives_in_the_runs_tab(hub):
+    """Owner, 2026-11-01: Last ended left the sidebar. #1770: Ended today is the Runs tab's one history, under Live."""
     side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
     assert "Last ended" not in side, "the Last ended card is back on the first screen"
     assert "#ended" not in hub.PAGE and "#enall" not in hub.PAGE, "a script still writes the removed panel"
     assert re.search(r'<details id=lop[^>]*>.*?id=histb', hub.PAGE, re.S) is None, "the run history is back in the Loop theme"
     pane = hub.PAGE[hub.PAGE.index("id=tab-runs"):hub.PAGE.index("</section>", hub.PAGE.index("id=tab-runs"))]
-    assert pane.index("id=main") < pane.index("id=list"), "the run history is not at the bottom of the Runs tab"
+    assert "id=main" in pane and "id=list" not in pane, "the Runs tab has a second list again"
 
 
 def test_the_models_renderer_writes_no_sidebar_card(hub):

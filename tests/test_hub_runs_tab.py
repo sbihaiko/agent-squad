@@ -155,7 +155,7 @@ def test_the_runs_pane_is_one_list_with_no_age_band(hub):
     page = hub.PAGE
     pane = page[page.index("id=tab-runs"):page.index("</section>", page.index("id=tab-runs"))]
     assert "id=main" in pane and "id=list" not in pane, "the pane still has a second list"
-    for gone in ("openGroups", "no runs in ", "data-g=", "groupOf"):
+    for gone in ("openGroups", "no runs in ", "class=\"gh ", "groupOf"):
         assert gone not in page, f"the desktop page still carries {gone!r}"
 
 

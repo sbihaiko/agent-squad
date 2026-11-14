@@ -163,8 +163,7 @@ def _slice(src, start, end):
 
 
 def _pieces():
-    state = SRC[SRC.index("// The open groups belong") : SRC.index("function drawList(")]
-    assert "openGroup" in state, "the open state does not live beside drawList any more"
+    rows = SRC[SRC.index("// runs of one issue share the issue label") : SRC.index("function drawList(")]   # name, short and the Live work card
     acc = SRC[SRC.index("const ACC=") :]
     acc = acc[: acc.index("if(RO){")]   # the accordion state and its boot; the read-only pass is not part of it (#1278)
     return [
@@ -178,8 +177,9 @@ def _pieces():
         _decl(SRC, "sub"),
         _fn(SRC, "loadMark"),
         _fn(SRC, "plan"),
-        state,
+        rows,
         _fn(SRC, "drawList"),
+        SRC[SRC.index("function drawMain(") : SRC.index("function refresh(")],   # the Runs tab's one list and its row forms (#1770)
         _fn(SRC, "selectNew"),
         _fn(SRC, "applyFilter"),
         _fn(SRC, "poll"),
@@ -191,7 +191,7 @@ def _pieces():
 _DOM = """
 const STORE = {};
 function boot(){
-  const Q = []; let GHS = []; const DOM = {};   // the queue is the browser's: a programmatic .open fires toggle as a later task
+  const Q = []; const DOM = {};   // the queue is the browser's: a programmatic .open fires toggle as a later task
   class El {
     constructor(id){ this.id = id; this._o = false; this.dataset = {}; this.L = {}; this._html = ""; this.innerHTML = ""; }
     get open(){ return this._o; }
@@ -201,46 +201,36 @@ function boot(){
     closest(){ return null; }
     set innerHTML(v){
       this._html = String(v);
-      if (this.id !== "list") return;
-      GHS = this._html.split('<div class="gh').slice(1).map((c) => {
-        const m = /^ ([^"]*)" data-g="([^"]+)"/.exec(c);
-        return { k: m ? m[2] : "?", op: !!(m && /(^| )op( |$)/.test(m[1])), rows: (c.match(/<div class="r /g) || []).length, onclick: null };
-      });
     }
     get innerHTML(){ return this._html; }
   }
   const $ = (s) => { const id = String(s).replace(/^#/, ""); return DOM[id] || (DOM[id] = new El(id)); };
   const document = {
     querySelector: $,
-    querySelectorAll: (s) => s === ".gh"
-      ? GHS.map((g) => ({ dataset: { g: g.k }, get onclick(){ return g.onclick; }, set onclick(f){ g.onclick = f; } }))
-      : [],
+    querySelectorAll: () => [],
   };
   const localStorage = STORE;   // the whole process shares it, so a second boot() is a reload
   const CALLS = { mdlLoad: 0, limLoad: 0 };
   function mdlLoad(){ CALLS.mdlLoad++; }
   function limLoad(){ CALLS.limLoad++; }   // Settings > Spend & limits (#926) answers its own header, like squad models
   const ls = JSON.parse(localStorage.hub || "{}");
-  let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null, liveWork = null;
+  let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null, liveWork = null, TAB = "runs", ENDED = [];
   let q = ls.q || "", per = ls.per || "day", src = ls.src || "both";
   let GROUPS = [];   // the answer's group entries, as the runs answer carries them (#1277)
   let FETCH = {}, FETCHED = [];   // what each poll's fetch answers, and the exact url it asked
   async function fetch(u){ FETCHED.push(u); return { json: async () => FETCH[u] }; }
-  function refresh(){ plan(); drawList(); }
+  function refresh(){ plan(); drawList(); drawMain(); }
 @@PIECES@@
   function drain(){ let n = 0; while (Q.length) { if (++n > 100) throw new Error("toggle storm"); Q.shift().fire("toggle"); } }
   return {
     runs: (rows, groups) => { allRuns = rows; runs = rows; GROUPS = groups || []; },
-    draw: () => drawList(),
+    draw: () => { drawList(); drawMain(); },
     poll: () => { selectNew(); refresh(); },
     wire: () => poll(),   // the page's own poll, over the fetch answers setFetch gave
     setFetch: (o) => { FETCH = o },
     fetched: () => FETCHED,
     count: () => allRuns.length,
-    click: (k) => { const g = GHS.find((x) => x.k === k); if (!g) throw new Error("no group header " + k); g.onclick(); },
-    openGroups: () => GHS.filter((g) => g.op).map((g) => g.k),
-    groupRows: () => { const o = {}; GHS.forEach((g) => (o[g.k] = g.rows)); return o; },
-    listHtml: () => $("#list").innerHTML,
+    mainHtml: () => $("#main").innerHTML,
     clickAcc: (id) => { const e = $("#" + id); e.open = !e.open; drain(); },
     accOpen: () => ["stats", "mdl", "lim", "slk"].filter((i) => $("#" + i).open),
     calls: () => CALLS,
@@ -276,103 +266,18 @@ def _run_row(tag, rank, age, **kw):
 LIVE = _run_row("1", 0, 10)             # running
 HOUR_1 = _run_row("2", 1, 600)          # 1h
 HOUR_2 = _run_row("3", 1, 4000)         # 2h
-HOUR_2_GONE = _run_row("3", 1, 40000)   # the same run, now 11 h old: the 2h bucket is empty
-FRESH = _run_row("4", 0, 2)             # a run that just appeared
 
 
 def _js(rows, body, groups=None):
     return f"const R={json.dumps(rows)};const G={json.dumps(groups or [])};" + body
 
 
-def test_page_group_rule_matches_python_edges(hub):
-    rows = [
-        _run_row("a", 1, 3600, id="edge-1h", spend=0.01),
-        _run_row("b", 1, 3601, id="edge-2h", spend=0.02),
-        _run_row("c", 1, 7200, id="edge-2h-top", spend=0.03),
-        _run_row("d", 1, 7201, id="edge-4h", spend=0.04),
-        _run_row("e", 1, 14400, id="edge-4h-top", spend=0.05),
-        _run_row("f", 1, 14401, id="edge-8h", spend=0.06),
-        _run_row("g", 1, 5 * 3600, id="edge-5h", spend=0.07),
-        _run_row("h", 1, 28800, id="edge-8h-top", spend=0.08),
-        _run_row("i", 1, 28801, id="edge-24h", spend=0.09),
-        _run_row("j", 1, 12 * 3600, id="edge-12h", spend=0.10),
-        _run_row("k", 1, 86400, id="edge-24h-top", spend=0.11),
-        _run_row("l", 1, 86401, id="edge-days", spend=0.12),
-        _run_row("m", 1, 30 * 3600, id="edge-30h", spend=0.13),
-    ]
-    out = _run(_js(rows, """
-      const a = boot(); a.runs(R,G); a.draw();
-      for (const k of ["2h", "4h", "8h", "24h", "d"]) a.click(k);
-      return { rows: a.groupRows() };
-    """, hub.run_groups(rows)))
-    assert {k: out["rows"][k] for k in ["1h", "2h", "4h", "8h", "24h", "d"]} == {"1h": 1, "2h": 2, "4h": 2, "8h": 3, "24h": 3, "d": 2}
-
-
-def test_empty_age_bands_fold_into_one_muted_line(hub):
-    """Six bands of 0 · $0.00 never push the live rows down: the hub marks them empty and the page folds them (#1277)."""
-    out = _run(_js([HOUR_1], """
-      const a = boot(); a.runs(R,G); a.draw();
-      return { rows: a.groupRows(), html: a.listHtml() };
-    """, hub.run_groups([HOUR_1])))
-    assert list(out["rows"]) == ["running", "1h"], "only the filled bands draw a header"
-    assert "0 · $0.00" not in out["html"], "an empty band still draws a zero row"
-    assert "no runs in 1–2 h · 2–4 h · 4–8 h · 8–24 h · 24 h+ (days)" in out["html"], "the empty bands are named once"
-
-
-def test_first_filled_age_band_opens_when_nothing_is_stored(hub):
-    out = _run(_js([HOUR_2], """
-      const a = boot(); a.runs(R,G); a.draw();
-      return { open: a.openGroups() };
-    """, hub.run_groups([HOUR_2])))
-    assert out["open"] == ["2h"]
-
-
-def test_a_group_header_click_toggles_it_both_ways(hub):
-    rows = [LIVE, HOUR_1, HOUR_2]
-    out = _run(_js(rows, """
-      const a = boot(); a.runs(R,G); a.draw();
-      const start = a.openGroups();
-      a.click("running"); const closed = a.openGroups();
-      a.click("running"); const reopened = a.openGroups();
-      return { start, closed, reopened };
-    """, hub.run_groups(rows)))
-    assert out["start"] == ["running"], "the first draw opens the newest group once"
-    assert out["closed"] == [], "clicking an open header closes it"
-    assert out["reopened"] == ["running"], "clicking a closed header opens it"
-
-
-def test_two_run_groups_can_stay_open_at_once(hub):
-    rows = [LIVE, HOUR_1, HOUR_2]
-    out = _run(_js(rows, """
-      const a = boot(); a.runs(R,G); a.draw();
-      a.click("1h"); a.click("2h");
-      return { open: a.openGroups() };
-    """, hub.run_groups(rows)))
-    assert set(out["open"]) == {"running", "1h", "2h"}, "any number of groups stay open"
-
-
-def test_a_run_leaving_its_bucket_leaves_the_open_groups_alone(hub):
-    start, later = [LIVE, HOUR_1, HOUR_2], [LIVE, HOUR_1, HOUR_2_GONE]
-    out = _run(_js(start, f"""
-      const a = boot(); a.runs(R,G); a.draw();
-      a.click("2h"); const before = a.openGroups();
-      a.runs({json.dumps(later)},{json.dumps(hub.run_groups(later))}); a.poll();   // the 2h run aged out of the bucket
-      return {{ before, after: a.store().groups, html: a.listHtml(), rows: a.groupRows() }};
-    """, hub.run_groups(start)))
-    assert set(out["before"]) == {"running", "2h"}
-    assert set(out["after"]) == set(out["before"]), "a bucket change never moves the open groups"
-    assert 'data-g="2h"' in out["html"] and out["rows"]["2h"] == 0, "a band the user opened keeps its header, with no rows"
-    muted = out["html"][out["html"].index("<div class=m>no runs in "):]
-    assert "1–2 h" not in muted, "the opened band is not named in the muted line"
-    assert "no runs in 2–4 h · 4–8 h · 24 h+ (days)" in muted, "the bands nobody opened fold into the muted line"
-
-
-def test_a_waiting_childcc_pass_is_drawn_in_workers_and_never_counted(hub):
-    """The pass is a worker, never a run: it never fills an age band, and the header never counts it (#1277)."""
+def test_a_waiting_childcc_pass_is_a_worker_and_never_counted(hub):
+    """The pass is a worker, never a run: it never fills an age band, and the occupancy never counts it (#1277)."""
     cc = {"id": "childcc", "kind": "childcc", "state": "waiting", "live": False, "rank": 0, "age": 4000, "spend": 0, "agents": 0}
     groups = hub.run_groups([LIVE, cc], {"runs": 6, "children": 20})
     assert [g["key"] for g in groups if not g["empty"]] == ["running"], "the pass leaves every age band empty"
-    assert groups[0]["text"] == "RUNS 1/6 · AGENTS 1/20", "the pass is drawn in WORKERS, never counted"
+    assert groups[0]["text"] == "RUNS 1/6 · AGENTS 1/20", "the occupancy counts the pass"
 
 
 def test_the_poll_answers_both_wire_shapes_without_blanking_the_list(hub):
@@ -382,39 +287,16 @@ def test_the_poll_answers_both_wire_shapes_without_blanking_the_list(hub):
       const a = boot();
       const page = {{runs: {json.dumps(rows)}, groups: {json.dumps(hub.run_groups(rows))}}};
       a.setFetch({{"/api/runs?groups=1": page}}); await a.wire();
-      const shape = a.listHtml();
+      const shape = a.mainHtml();
       a.setFetch({{"/api/runs?groups=1": {json.dumps(rows)}}}); await a.wire();   // the old hub's array
-      return {{ shape, array: a.listHtml(), fetched: a.fetched(), count: a.count() }};
+      return {{ shape, array: a.mainHtml(), fetched: a.fetched(), count: a.count() }};
     """)
     assert set(out["fetched"]) == {"/api/runs?groups=1", "/api/live"}, "the page asks for the answer that carries the groups, then its own live work (#1697)"
-    assert f'data-id="{LIVE["id"]}"' in out["shape"], "the opted-in answer draws the live run"
+    assert f'data-rid="{LIVE["id"]}"' in out["shape"], "the opted-in answer draws the live run"
+    assert "class=sr" in out["shape"], "the opted-in answer draws no occupancy beside Live"
     assert out["count"] == 2, "an old hub's array is read as the runs, never as an object with no `runs`"
-    assert "no live dashboards" in out["array"], "an old hub leaves the history honestly empty, never stale"
-
-
-def test_a_run_appearing_does_not_move_the_open_groups(hub):
-    start, later = [LIVE, HOUR_1], [LIVE, HOUR_1, FRESH]
-    out = _run(_js(start, f"""
-      const a = boot(); a.runs(R,G); a.draw(); a.poll();
-      a.click("1h"); const before = a.openGroups();
-      a.runs({json.dumps(later)},{json.dumps(hub.run_groups(later))}); a.poll();   // a new run starts: the list must not re-pick
-      return {{ before, after: a.openGroups() }};
-    """, hub.run_groups(start)))
-    assert set(out["before"]) == {"running", "1h"}
-    assert out["after"] == out["before"], "a run appearing never moves the open groups"
-
-
-def test_the_open_groups_survive_a_reload(hub):
-    rows = [LIVE, HOUR_1, HOUR_2]
-    out = _run(_js(rows, """
-      const a = boot(); a.runs(R,G); a.draw();
-      a.click("1h"); a.click("running");          // the user closes the group the first draw opened
-      const stored = a.store();
-      const b = boot(); b.runs(R,G); b.draw();    // a reload: a fresh page over the same storage
-      return { stored, restored: b.openGroups() };
-    """, hub.run_groups(rows)))
-    assert out["stored"].get("groups") == ["1h"], "the open set is stored beside the pins"
-    assert out["restored"] == ["1h"], "a reload restores exactly the set the user left"
+    assert f'data-rid="{LIVE["id"]}"' in out["array"], "an old hub's array still lists the live run"
+    assert "class=sr" not in out["array"], "an old hub's array draws an occupancy it never sent"
 
 
 def test_opening_one_side_section_leaves_its_siblings_alone():
@@ -516,7 +398,7 @@ def test_the_list_renders_the_label_the_hub_computed(hub):
     row = _run_row("1", 0, 10, id="run-20261013-000010-444444", label="dispatch #31, #25", issues=["31", "25"], kind="code")
     out = _run(_js([row], """
       const a = boot(); a.runs(R,G); a.draw();
-      return { html: a.listHtml() };
+      return { html: a.mainHtml() };
     """, hub.run_groups([row])))
     assert "dispatch #31, #25" in out["html"]
 
@@ -527,7 +409,7 @@ def test_the_headers_come_from_the_answer_and_the_page_builds_none(hub):
     groups = hub.run_groups(rows, {"runs": 6, "children": 20})
     out = _run(_js(rows, """
       const a = boot(); a.runs(R,G); a.draw();
-      return { html: a.listHtml() };
+      return { html: a.mainHtml() };
     """, groups))
     running = next(g for g in groups if g["key"] == "running")
     assert running["text"] in out["html"] and f'title="{running["title"]}"' in out["html"]

@@ -123,7 +123,7 @@ def test_the_page_paints_the_text_and_the_title_the_answer_carries(hub):
     rows = [{"id": f"run-20261011-1010{n}0-abcd", "state": "running", "live": True, "rank": 0, "age": 10,
              "spend": s, "agents": 3, "dur": 1, "port": 1234} for n, s in enumerate((1.1, 2.2, 3.3))]
     groups = hub.run_groups(rows, {"runs": 10, "children": 20})
-    out = _run(_js(rows, "const a=boot();a.runs(R,G);a.draw();return {html:a.listHtml()};", groups))
+    out = _run(_js(rows, "const a=boot();a.runs(R,G);a.draw();return {html:a.mainHtml()};", groups))
     assert '<span class=sr title="$6.60">RUNS 3/10 · AGENTS 9/20</span>' in out["html"]
 
 
