@@ -236,6 +236,20 @@ def test_the_panel_carries_no_line_on_work_it_cannot_see(hub):
     assert not any("not visible" in x for x in _lines(hub))
 
 
+def test_the_panel_takes_the_column_the_board_draws(hub):
+    """#1713: the panel reads the column the board draws, so an old Status name and a recorded move both give Doing."""
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
+    hub.MOVES.write_text(json.dumps({"ITEM-1711": {"column": "Doing", "at": at, "by": "owner"}}))
+    try:
+        items = [{"n": 1711, "i": "ITEM-1711", "t": "Moved by hand", "s": "open", "st": "Todo", "l": ["bug"]},
+                 {"n": 1712, "i": "ITEM-1712", "t": "An old column name", "s": "open", "st": "In Progress", "l": ["bug"]}]
+        lines = _lines(hub, items)
+    finally:
+        hub.MOVES.unlink(missing_ok=True)
+    assert "hand work #1711 Moved by hand · in Doing, no registered run" in lines, lines
+    assert "hand work #1712 An old column name · in Doing, no registered run" in lines, lines
+
+
 def test_a_gate_that_checks_a_live_run_is_drawn_with_its_row(hub):
     """#1713: the card dropped every line that names a live run, so a gate that checks one was never drawn."""
     if NODE is None:
