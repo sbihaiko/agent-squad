@@ -258,7 +258,16 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # for eleven minutes, and the loop's own runs then die at the takeover bound, while the check that would have answered is
   # already in flight on the tip's pull request. Past SG_PROMOTE_CI_WAIT the suite answers as before, so a CI that never
   # reports never holds delivery. No marker is written: a later pass takes the same tip.
-  age=$(( $(date +%s) - $(g show -s --format=%ct "$tip" 2>/dev/null || echo 0) ))
+  # (#1736) The wait runs from the pass that first found this tip's CI pending, never from the commit's own date: a tip that
+  # lands by fast-forward keeps the date of the child's commit, so it is older than the wait the moment it reaches the base,
+  # and the suite then starts beside a CI that began seconds ago. The record is `<tip>\t<epoch>`; a new tip replaces it.
+  wrec=$state/promote-ci-wait; wnow=$(date +%s); wtip=; wsince=
+  IFS=$'\t' read -r wtip wsince < "$wrec" 2>/dev/null
+  case "$wsince" in ''|*[!0-9]*) wtip=;; esac
+  if [ "$wtip" != "$tip" ]; then
+    wsince=$wnow; printf '%s\t%s\n' "$tip" "$wnow" > "$wrec.$$" && mv -f "$wrec.$$" "$wrec"
+  fi
+  age=$(( wnow - wsince ))
   wait_for=${SG_PROMOTE_CI_WAIT:-900}
   if [ "$age" -lt "$wait_for" ]; then
     echo "$(date -u +%FT%TZ) promote-pass: $tip waiting for CI: the check has not reported on it yet ($age s of ${wait_for}s)" >> "$log"
