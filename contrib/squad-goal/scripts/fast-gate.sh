@@ -116,7 +116,7 @@ fi
 # (#1436) A child's own gate asks for two slots and an entry or tip gate for the full count: three children fit a six-slot
 # budget, and a landing is never starved by the children that feed it. A count the caller names always wins.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
-  *) SG_GATE_CALLER=${SG_GATE_CALLER:-child}
+  *) export SG_GATE_CALLER=${SG_GATE_CALLER:-child}
      if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2}; fi
      SG_GATE_KIND=fast bash "$here/gate.sh" bash "$0" "$@"; fgrc=$?
      # (#1684) Exit 73 is the machine's budget, never this tree's: the gate took no slot, so it proved nothing and it broke
