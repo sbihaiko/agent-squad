@@ -8,7 +8,6 @@ import importlib.util
 import json
 import os
 import re
-import sys
 import tempfile
 from pathlib import Path
 
@@ -16,9 +15,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
-sys.path.insert(0, str(ROOT / "tests"))
-
-from test_hub_run_groups import _js, _run  # noqa: E402  the page's own drawList, run in node over the answer
 
 
 @pytest.fixture(scope="module")
@@ -106,13 +102,11 @@ def test_the_running_pill_keeps_its_occupancy_and_its_tooltip(hub):
 
 
 def test_the_group_header_still_carries_the_tooltip(hub):
-    """The answer carries the title, and the served page paints it on the header it draws (#1277)."""
+    """The answer carries the title of an age band; the phone paints it (#1277). The desktop page draws no age band (#1770)."""
     rows = [{"id": "run-20261011-101010-abcd", "state": "completed", "live": False, "rank": 1, "age": 600,
              "spend": 2.5, "agents": 0, "dur": 1, "port": 1234}]
     groups = hub.run_groups(rows, None)
-    assert next(g for g in groups if g["key"] == "1h")["title"] == "$2.50"
-    out = _run(_js(rows, "const a=boot();a.runs(R,G);a.draw();return {html:a.listHtml()};", groups))
-    assert '<span class=sr title="$2.50">1 · $2.50</span>' in out["html"]
+    assert next(g for g in groups if g["key"] == "1h") == {"key": "1h", "label": "≤ 1 h", "text": "1 · $2.50", "title": "$2.50", "empty": False}
 
 
 # --- the rest of the page's text ---

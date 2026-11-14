@@ -185,8 +185,8 @@ def test_the_page_has_the_run_sheet_and_no_run_pane(hub):
 
 def test_live_and_ended_rows_open_the_sheet(hub):
     page = hub.PAGE
-    draw = page[page.index("function drawList("):page.index("function refresh(")]
-    assert "openRun(" in draw, "a live run row does not open the sheet"
+    draw = page[page.index("function drawMain("):page.index("function refresh(")]
+    assert "data-rid=" in draw, "a live run row does not open the sheet"   # the #main handler opens a data-rid row (#1770)
     ended = page[page.index("async function endedPoll("):]
     ended = ended[:ended.index("\n")]
     # the ended rows feed the KPI and the sheet, not a panel: the Last ended card left the sidebar (owner, 2026-11-01)
