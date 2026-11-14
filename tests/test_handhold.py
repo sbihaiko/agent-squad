@@ -30,8 +30,23 @@ def env(tmp_path, monkeypatch):
     checkout.mkdir()
     monkeypatch.setenv("SG_STATE", str(state))
     monkeypatch.setenv("SG_CHECKOUT", str(checkout))
+    monkeypatch.setenv("SG_REPO", "owner/name")
     monkeypatch.delenv("SG_HAND_HOLD_MINUTES", raising=False)
+    monkeypatch.setattr(H, "_gh_label", lambda repo, n, label, add: None)   # the GitHub face is the network seam: no case reaches it
     return state
+
+
+@pytest.fixture
+def labels(env, monkeypatch):
+    """Every holder label the verbs write, as `(repo, issue, label, add)`: add is True on a hold or a renew and False on a
+    release, so a case reads the two faces of one act from the file and from this list."""
+    calls = []
+
+    def record(repo, n, label, add):
+        calls.append((repo, n, label, add))
+
+    monkeypatch.setattr(H, "_gh_label", record)
+    return calls
 
 
 def run_folder(tmp_path: Path, name: str, issue: int, *, live: bool, verdict: bool = False) -> Path:
@@ -70,6 +85,66 @@ def test_hold_writes_the_file_and_its_three_fields(env):
     assert fields["by"] == "manual"
     assert fields["since"] == H.iso(NOW)
     assert fields["until"] == H.iso(NOW + 3600)
+
+
+def test_a_manual_hold_writes_the_file_and_the_holder_label_and_both_faces_read_back(env, labels):
+    """One act, two faces (#1678): the file the janitor reads and the label a dispatch pass reads are written together."""
+    assert H.LABELS == {"manual": "ready-for-human", "hal9k": "ready-for-HAL9K"}
+    rc = H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 0
+    assert labels == [("owner/name", 1664, "ready-for-human", True)]
+    row = H.holds(state=env, now=NOW)[0]
+    assert row["issue"] == 1664 and row["carrier"] == "manual" and row["live"] is True   # the file's own read
+
+
+def test_a_hal9k_hold_writes_the_hal9k_label_on_the_issue(env, labels):
+    rc = H.hold([1664], by="hal9k", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 0
+    assert labels == [("owner/name", 1664, "ready-for-HAL9K", True)]
+    assert H.holds(state=env, now=NOW)[0]["carrier"] == "hal9k"
+
+
+def test_a_refused_hold_writes_no_holder_label(env, labels):
+    (env / "auto" / "taken-run-x").write_text("run run-x\nissues 1664\n")
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 1
+    assert labels == [], "a refused hold names no holder, so it writes no label"
+
+
+def test_a_failed_label_write_leaves_no_file_that_says_held_and_names_the_failure(env, monkeypatch, capsys):
+    def refused(repo, n, label, add):
+        raise H.HandError(f"the write of {label} on #{n} was refused")
+
+    monkeypatch.setattr(H, "_gh_label", refused)
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 1
+    assert not (env / "auto" / "hold-1664").exists(), "the label never landed, so no file may say the issue is held"
+    err = capsys.readouterr().err
+    assert "ready-for-human" in err and "#1664" in err
+
+
+def test_a_batch_whose_later_label_write_fails_writes_no_file_and_undoes_the_labels_it_wrote(env, monkeypatch):
+    calls = []
+
+    def refused_on_two(repo, n, label, add):
+        calls.append((n, add))
+        if n == 2 and add:
+            raise H.HandError("the second write was refused")
+
+    monkeypatch.setattr(H, "_gh_label", refused_on_two)
+    rc = H.hold([1, 2], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 1
+    assert calls == [(1, True), (2, True), (1, False)], "the label the first write added is cleared again"
+    for n in (1, 2):
+        assert not (env / "auto" / f"hold-{n}").exists()
+
+
+def test_a_hold_with_no_repository_is_refused_and_writes_neither_face(env, monkeypatch, capsys):
+    monkeypatch.delenv("SG_REPO")
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 1
+    assert not (env / "auto" / "hold-1664").exists()
+    assert "SG_REPO" in capsys.readouterr().err
 
 
 def test_hold_refused_when_a_live_run_holds_the_issue_and_writes_nothing(env, tmp_path, capsys):
@@ -132,6 +207,32 @@ def test_renew_moves_until_forward_and_keeps_since(env):
     assert fields["until"] == H.iso(NOW + 600 + 7200)
 
 
+def test_a_renew_keeps_the_label_and_the_file_consistent(env, labels):
+    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    labels.clear()
+    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={}, cwd_procs=lambda: [])
+    assert rc == 0
+    assert labels == [("owner/name", 1664, "ready-for-human", True)]
+    fields = dict(line.split(" ", 1) for line in read(env, 1664).splitlines())
+    assert fields["until"] == H.iso(NOW + 600 + 7200)
+    row = H.holds(state=env, now=NOW + 600)[0]
+    assert row["carrier"] == "manual" and row["stale"] is False
+
+
+def test_a_failed_label_write_on_a_renew_leaves_the_hold_file_as_it_was(env, monkeypatch, capsys):
+    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    before = read(env, 1664)
+
+    def refused(repo, n, label, add):
+        raise H.HandError("the write was refused")
+
+    monkeypatch.setattr(H, "_gh_label", refused)
+    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={}, cwd_procs=lambda: [])
+    assert rc == 1
+    assert read(env, 1664) == before
+    assert "refused" in capsys.readouterr().err
+
+
 def test_release_removes_the_hold_and_records_the_column_it_names(env, capsys):
     H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
     assert (env / "auto" / "hold-1664").exists()
@@ -141,6 +242,31 @@ def test_release_removes_the_hold_and_records_the_column_it_names(env, capsys):
     decision = dict(line.split(" ", 1) for line in (env / "auto" / "release-1664").read_text().splitlines())
     assert decision["to"] == "Closed"   # the release records the move; the board pass is its one writer
     assert "Closed" in capsys.readouterr().out
+
+
+def test_a_release_clears_the_file_and_the_holder_label_in_one_act(env, labels):
+    H.hold([1664], by="hal9k", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    labels.clear()
+    rc = H.release([1664], by="hal9k", to="Closed", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 0
+    assert labels == [("owner/name", 1664, "ready-for-HAL9K", False)]
+    assert not (env / "auto" / "hold-1664").exists()
+    assert H.holds(state=env, now=NOW) == []
+
+
+def test_a_failed_label_clear_keeps_the_hold_file_and_names_the_failure(env, monkeypatch, capsys):
+    H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+
+    def refused(repo, n, label, add):
+        raise H.HandError(f"the clear of {label} on #{n} was refused")
+
+    monkeypatch.setattr(H, "_gh_label", refused)
+    rc = H.release([1664], by="manual", to="Closed", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    assert rc == 1
+    assert (env / "auto" / "hold-1664").exists(), "the label still names a holder, so the file keeps the hold"
+    assert not (env / "auto" / "release-1664").exists(), "a release that did not clear both faces records no move"
+    err = capsys.readouterr().err
+    assert "ready-for-human" in err and "#1664" in err
 
 
 def test_release_without_a_column_is_refused_and_keeps_the_hold(env):

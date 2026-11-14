@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -263,6 +264,21 @@ def sandbox_applies():
 def claude_present():
     """True when the real `claude` CLI is on the path and sandbox-exec applies a profile for it to run under (#1619)."""
     return not ci_runner_simulated() and shutil.which("claude") is not None and sandbox_applies()
+
+
+def pytest_sessionstart(session):
+    session.config._reap_since = time.time()
+
+
+def pytest_sessionfinish(session):
+    """The session ends the processes it started and left behind (#1722): a leftover of this tree whose parent is 1. A worker
+    never reaps: the controller does, once, after every worker ended."""
+    if hasattr(session.config, "workerinput"):
+        return
+    from tests import reap_leaks
+    ended = reap_leaks.reap(session.config.rootpath, getattr(session.config, "_reap_since", time.time()))
+    if ended:
+        print(f"\nreap-leaks: ended {len(ended)} leftover process(es) the session left behind: {ended}", file=sys.stderr)
 
 
 def pytest_configure(config):

@@ -6,7 +6,7 @@
 caps:
   runs: 4
   children: 12
-  gates: 4                          # one loop gate of four workers at a time on this 8-core machine (owner): at six slots
+  gates: 3                          # one loop gate of three workers at a time on this 8-core machine (owner): at six slots
                                     # three gates ran at once and the load average passed 140; at two a gate ran slow (#1716)
 limits:
   max_budget_usd: 30
