@@ -3366,50 +3366,69 @@ def _holder_argv(pid):
     try: return next((p.command for p in process_table().values() if p.pid == pid), "")
     except Exception: return ""
 
+def _gate_run(line):
+    """The id of the run whose workspace a gate holder's command line runs from, None when it names no run."""
+    m = re.search(r"run-\d{8}-\d{6}-[0-9a-f]+", line)
+    return m.group(0) if m else None
 def gate_lock_line(pid, line, issues_of):
     """One held gate lock, named by what its holder checks (#1695). The lock file names only `bash`, so the holder's
     command line answers: the run whose workspace the gate script runs from, else the gate script, else the pid alone."""
-    m = re.search(r"run-\d{8}-\d{6}-[0-9a-f]+", line)
-    if m: return f"gate: pid {pid} checks run {m.group(0)}" + (f" · {issues_of[m.group(0)]}" if issues_of.get(m.group(0)) else "")
+    run = _gate_run(line)
+    if run: return f"gate: pid {pid} checks run {run}" + (f" · {issues_of[run]}" if issues_of.get(run) else "")
     scripts = [x for x in re.findall(r"([\w-]+\.(?:sh|py))\b", line) if x not in ("serial.sh", "gate.sh")]
     return f"gate: pid {pid} runs {scripts[0]}" if scripts else f"gate: pid {pid}"
 
 def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
-    """The Live work panel's lines, all from local state and the board read the hub already holds: the loop's state,
-    each live run (its issue, node and age), each gate lock (its pid and the run it checks), the loop drivers, each hand hold, and each open
-    Doing card no live run names (work by hand). A ready-for-human card waits on the owner and is no live work (#1701).
-    Doing is the column the board draws, an old Status name and a recorded move included, never the row's raw Status (#1713)."""
+    """The Live work panel's answer, all from local state and the board read the hub already holds:
+    `{"loop": <on|off|draining|starting>, "lines": [<row>], "boardAge": <seconds or None>}`. A row is
+    `{"kind", "id", "text"}`: the kind names its source and the id names the thing it draws, so the card places a row by
+    identity, never by a substring of its text (#1697). The kinds, in order: `loop` (a stopped loop), `run` (each live
+    run: its issue, node and age), `gate` (each gate lock: its pid and what it checks, with `run` the id of the run it
+    checks or None), `lock` (the loop drivers, one line), `hold` (each hand hold, with its carrier) and `hand` (each open
+    Doing card no live run and no hold names: work by hand). The loop's state rides apart from the rows, so an open loop
+    with nothing to show answers one `empty` row, `no live work`. A ready-for-human card waits on the owner and is no live
+    work (#1701). Doing is the column the board draws, an old Status name and a recorded move included, never the row's
+    raw Status (#1713). `boardAge` is how many seconds old the board read the `hand` rows came from is, so the panel
+    never claims a freshness it does not have."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
     moves, window = (read_moves() if overlay_on() else {}), pending_window()   # the board's own column inputs, read once
-    lines, issues_of, drivers, held = [], {}, [], set()
-    if loop_state({}, now=now, state=base) == "off": lines.append("loop off")
+    st = loop_state({}, now=now, state=base)
+    rows, issues_of, drivers, held = [], {}, [], set()
+    if st == "off": rows.append({"kind": "loop", "id": "loop", "text": "loop off"})
     for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
         folder = active_folder(entry)
         if not folder: continue
         row, _ = run_row(folder, "", procs or {})
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
-        lines.append(f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min")
+        rows.append({"kind": "run", "id": row["id"],
+                     "text": f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min"})
         issues_of[row["id"]] = issues; held.update(str(n) for n in row["issues"])
     for d in sorted((base / "locks").glob("*")):
-        pid = _read(d / "pid").strip()
-        if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
-            if _read(d / "cmd").strip(): lines.append(gate_lock_line(pid, (argv or _holder_argv)(int(pid)), issues_of))
-            else: drivers.append(d.name)   # a lock that names no command is a loop driver's own: no live work (#1692)
-    if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
+        if not d.is_dir(): continue   # a stray file in locks/ is not a lock
+        try:
+            pid = _read(d / "pid").strip()
+            if not (pid.isdigit() and _pid_alive(int(pid))): continue
+            cmd = _read(d / "cmd").strip()
+        except OSError: continue   # one unreadable lock is no lock: it never fails the panel
+        if not cmd: drivers.append(d.name); continue   # a lock that names no command is a loop driver's own: no live work (#1692)
+        line = (argv or _holder_argv)(int(pid))
+        rows.append({"kind": "gate", "id": f"gate-{d.name}", "run": _gate_run(line), "text": gate_lock_line(pid, line, issues_of)})
+    if drivers: rows.append({"kind": "lock", "id": "lock-drivers", "text": "🔒 loop drivers running: " + ", ".join(drivers)})   # a padlock marks a lock, never work
     holds = hold_rows(now=now, state=base)   # each live hand hold is one line, with its carrier (#1713)
     titles = {str(i.get("n")): (i.get("t") or "") for i in items}
     for r in holds:
         title = titles.get(str(r["issues"][0])) or ""
-        lines.append(f"hold: {r['label']}" + (f" {title}" if title else ""))
+        rows.append({"kind": "hold", "id": r["id"], "text": f"hold: {r['label']}" + (f" {title}" if title else "")})   # the id of the hold's own row
     hold_ids = {str(n) for r in holds for n in r["issues"]}   # the registry keys a hold on the issue; a row matches on it or on its item id
     for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
         ids = {str(i.get("n")), str(i.get("i") or "")}
         if (cache_row_column(i, moves, window) == DOING and i.get("s") != "closed" and not (ids & held)
                 and not (ids & hold_ids) and "ready-for-human" not in (i.get("l") or [])):
-            lines.append(f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run")
-    if not lines: lines.append("no live work")
-    return lines
+            rows.append({"kind": "hand", "id": f"hand-{i['n']}", "text": f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run"})
+    if not rows: rows.append({"kind": "empty", "id": "", "text": "no live work"})   # an open loop with nothing to show says so
+    t = board_cache.get("t") or 0
+    return {"loop": st, "lines": rows, "boardAge": int(now - t) if t else None}
 
 def task_count(i):
     """How far a card's own work got, `completed` over `total` (`3/5`), off the sub-issue summary the items route the
@@ -5955,9 +5974,11 @@ function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.ag
  const drawn=live.slice().sort((a,b)=>b.age-a.age).filter(r=>r.kind!=="hold").slice(0,LIVE_ROWS);   // a hand hold is its own line below, never also a row (#1713)
  const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
- const own=r=>(liveWork||[]).filter(t=>t.includes(r.id)&&!t.startsWith("run "+r.id+" ")).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a line that names a live run, but is not the row itself, is drawn beside that row: a gate lock names the run it checks (#1713)
- const extra=(liveWork||[]).filter(t=>!live.some(r=>t.includes(r.id))).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // every other line is drawn once
- return{head,html:(drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra||"<div class=m>no live work</div>")+more}}
+ const rows=(liveWork&&liveWork.lines)||[],line=t=>`<div class=m>${esc(t.text)}</div>`;   // the tagged rows the hub answers, or none before the first read
+ const own=r=>rows.filter(t=>t.kind==="gate"&&t.run===r.id).map(line).join("");   // a gate is drawn beside the row of the run it checks (#1713): by the run id its row carries, never a substring of its text (#1697)
+ const extra=rows.filter(t=>!(t.kind==="run"&&live.some(r=>r.id===t.id))&&!(t.kind==="gate"&&drawn.some(r=>r.id===t.run))).map(line).join("");   // every other row is drawn once: a run row already drawn is not drawn twice, by identity (#1697)
+ const board=(liveWork&&liveWork.boardAge!=null)?`<div class=m>board read ${age(liveWork.boardAge)} ago</div>`:"";   // the age of the board read the hand-work rows came from (#1697)
+ return{head,html:(drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra||"<div class=m>no live work</div>")+board+more}}
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
@@ -6005,7 +6026,7 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   const fresh=allRuns.filter(r=>r.kind!=="childcc"&&!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
-async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh();livePoll()}catch(e){}}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277)
+async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh()}catch(e){}livePoll()}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277); the live read is its own statement, so a failed runs read never skips it (#1697)
 function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
   const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
   const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
@@ -6463,7 +6484,7 @@ $("#rkpause").onclick=async()=>{if(!RK)return;if(!rkLive(RK.row)){window.open($(
  try{const r=await fetch("/dash/"+encodeURIComponent(id)+"/run/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
   if(RK&&RK.id===id){RK.note="";if(r.ok)RK.paused=action==="pause";else RK.note=r.status===409?"the run has ended: there is nothing to pause":"the run refused the request ("+r.status+")"}}
  catch(e){if(RK)RK.note="the run did not answer"}
- p.disabled=false;rkPaint(true)};
+ p.disabled=false;rkPaint(true);livePoll()};   // a pause or a resume changes the run's live row: read it now (#1697)
 addEventListener("keydown",e=>{const w=rkEscape(e.key,rsheet.classList.contains("on"),tsheet.classList.contains("on"));if(w==="run")closeRun();else if(w==="ticket")closeSheet();if(e.key==="Escape")return;
  if(!tsheet.classList.contains("on")||/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))return;
  if(e.key==="ArrowRight"||e.key==="j")step(1);if(e.key==="ArrowLeft"||e.key==="k")step(-1)});
@@ -6875,17 +6896,17 @@ function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=
  setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
-let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the hand-worked Doing cards
-async function livePoll(){try{liveWork=await (await fetch("/api/live")).json();refresh()}catch(e){}}
+let liveWork=null;   // the hub's Live work answer (/api/live): the loop's state, the tagged rows and the board read's age
+async function livePoll(){try{liveWork=await (await fetch("/api/live")).json()}catch(e){liveWork={loop:"unknown",boardAge:null,lines:[{kind:"notice",id:"",text:"live work unreadable"}]}}refresh()}   // a failed read is named in the panel, never drawn as an empty tile (#1697)
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
-async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
+async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"};livePoll()   // a start, a drain or a stop changes the live rows: read them now, never on the next timer (#1697)
  await loopPoll();loopDraw()}
 document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop]");if(!b||b.disabled||!loopV)return;e.preventDefault();
  if(loopV.state==="off"){loopPost({action:"start"});return}
  const d=$("#ldg");$("#ldgb").innerHTML=loopConfirmHtml(loopV);d.showModal()});
 $("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok")return;const m=(d.querySelector('input[name="lm"]:checked')||{}).value;
  if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
-setInterval(loopPoll,5000);loopPoll();
+setInterval(loopPoll,5000);loopPoll();livePoll();   // the live work is read on load, beside the loop's own state (#1697)
 setInterval(accPoll,5000);accPoll();
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
