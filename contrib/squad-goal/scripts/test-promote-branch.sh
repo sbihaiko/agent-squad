@@ -8,7 +8,9 @@
 unset SG_SERIAL_HELD SG_CHILD_SESSION
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
-export SG_STATE=$T/state SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SG_PROMOTE_PROOF=ci; mkdir -p "$SG_STATE"
+# SQUAD_CAPS_DIR is a throwaway: the promotion takes the machine-wide gate budget, and a box whose slots other gates hold would
+# refuse this suite's promotions with no defect to find, as test-promote.sh says (#1171).
+export SG_STATE=$T/state SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SG_PROMOTE_PROOF=ci SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"
 git init -q --bare "$R"; git init -q "$T/w"; W="$G -C $T/w"
 $W checkout -q -b main; $W commit -q --allow-empty -m base; $W remote add origin "$R"
 for b in dev staging; do $W push -q origin "main:refs/heads/$b"; done
@@ -67,11 +69,18 @@ out=$(SG_PROMOTE=off SG_STG_BRANCH=staging bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ "$(tip staging)" = "$before" ] && ok "promotion off moves nothing" || ko "promotion off moved staging"
 [ ! -s "$T/gh.log" ] && [ ! -s "$T/ci.log" ] && ok "promotion off reads no evidence" || ko "promotion off still called gh or the proof"
 
-# Four: no script names the work branch or the promotion branch as a literal.
-for f in promote-stg.sh promote-pass.sh; do
-  bad=$(grep -nE 'refs/heads/(dev|stg)\b|origin/(dev|stg)\b|base=(dev|stg)\b|head=dev\b' "$d/$f" | grep -v '^[0-9]*:#' | head -3)
+# Four: no script names the work branch, the promotion branch or the main branch as a literal.
+for f in promote-stg.sh promote-pass.sh promote-main.sh promote-main-pass.sh; do
+  bad=$(grep -nE 'refs/heads/(dev|stg|main)\b|origin/(dev|stg|main)\b|base=(dev|stg|main)\b|head=(dev|stg)\b' "$d/$f" | grep -v '^[0-9]*:#' | head -3)
   [ -z "$bad" ] && ok "$f names no branch as a literal" || ko "$f still names a branch: $bad"
 done
+
+# Five: the main branch is a profile setting too. SG_MAIN_BRANCH names it, and promote-main.sh moves that branch to the
+# promotion branch the profile names.
+$W push -q origin "main:refs/heads/trunk"; adv staging five
+out=$(SG_MAIN_BRANCH=trunk SG_STG_BRANCH=staging bash "$d/promote-main.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip trunk)" = "$(tip staging)" ] && ok "a main branch that is not main is moved to the named promotion branch" || ko "trunk: rc $rc, trunk $(tip trunk), staging $(tip staging), out '$out'"
+! git -C "$R" show-ref --verify -q refs/heads/main && ok "no branch named main is written when the profile names another" || ko "a main branch appeared: $(tip main)"
 
 [ $fail = 0 ] && echo "PASS" || echo "TDD RED"
 exit $fail

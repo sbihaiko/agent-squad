@@ -26,6 +26,8 @@ adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --a
 cat > "$T/bin/gh" <<EOF
 #!/bin/bash
 echo "\$*" >> "$T/gh.log"
+# \$T/stg-takes-dev: the promotion branch takes the dev tip under the pass, as another pass or the owner would move it.
+[ -e "$T/stg-takes-dev" ] && /usr/bin/git -C "$R" update-ref refs/heads/stg "\$(/usr/bin/git -C "$R" rev-parse refs/heads/dev)"
 case "\$*" in
   *"-X POST repos/x/emu/statuses/"*) a="\$*"; s=\${a##*statuses/}; s=\${s%% *}; echo '{"state":"success","context":"squad/full-proof"}' > "$T/status-\$s"; echo '{"state":"success"}';;
   *"commits/"*"/statuses"*) a="\$*"; s=\${a##*commits/}; s=\${s%%/*}; if [ -e "$T/readback-none" ] || [ ! -e "$T/status-\$s" ]; then echo '[]'; else echo "[\$(cat "$T/status-\$s")]"; fi;;
@@ -673,6 +675,22 @@ bash "$T/scripts/promote-pass.sh" > "$T/out" 2>&1; rc=$?
 pass; rc=$?
 [ "$(tip stg)" = "$tc" ] && ok "the next pass promotes the same tip once the cap is free (rc $rc)" \
   || ko "retry after promote-stg cap: rc $rc, stg $(tip stg), dev $tc, out '$(cat "$T/out")'"
+
+# (#1723) Before a local battery starts, and when it ends, the pass reads stg again: a tip stg already holds runs no battery and
+# writes no verdict. (a) stg takes the tip after the pass's first read: the stub gh moves it when the pass opens the pull request.
+adv dev held-before; th=$(tip dev); rm -f "$T/suite-rc" "$T/suite-out" "$T"/checks-* "$SG_STATE/delta-pass.log"; n=$(runs)
+: > "$T/stg-takes-dev"; pass; rc=$?; rm -f "$T/stg-takes-dev"
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ ! -e "$SG_STATE/delta-pass.log" ] && ok "a tip stg took before the battery runs no battery" || ko "held before: rc $rc, runs $(runs) (was $n), delta log $([ -e "$SG_STATE/delta-pass.log" ] && echo written || echo none), out '$(cat "$T/out")'"
+! /usr/bin/grep -q "^$th " "$SG_STATE/promote-pass.tips" 2>/dev/null && ! /usr/bin/grep -q "$th" "$SG_STATE/gate-status-full" 2>/dev/null \
+  && ok "a tip stg took before the battery gets no verdict and no marker" || ko "held before wrote a verdict: tips '$(/usr/bin/grep "^$th " "$SG_STATE/promote-pass.tips")', full '$(cat "$SG_STATE/gate-status-full" 2>/dev/null)'"
+/usr/bin/grep -q "promote-pass: $th stg already holds the tip" "$SG_STATE/promote.log" && ok "the pass says stg already holds the tip" || ko "held before: no line: $(tail -n 2 "$SG_STATE/promote.log")"
+# (b) stg takes the tip while the battery runs: the battery ends red, the pass reads stg, and no verdict is written.
+adv dev held-after; ta=$(tip dev)
+printf '#!/bin/bash\necho moved >> "%s/suite.log"\n/usr/bin/git -C "%s" update-ref refs/heads/stg "%s"\nexit 1\n' "$T" "$R" "$ta" > "$T/suite-moves"; chmod +x "$T/suite-moves"
+n=$(runs); SG_PROMOTE_SUITE="$T/suite-moves" pass; rc=$?
+[ "$(runs)" = "$((n + 1))" ] && ok "the battery ran on a tip stg did not hold yet" || ko "held after: runs $(runs) (was $n), out '$(cat "$T/out")'"
+[ $rc = 0 ] && ! /usr/bin/grep -q "^$ta " "$SG_STATE/promote-pass.tips" 2>/dev/null && ! /usr/bin/grep -q "$ta" "$SG_STATE/gate-status-full" 2>/dev/null \
+  && ok "a tip stg took while the battery ran gets no verdict and no marker" || ko "held after wrote a verdict: rc $rc, tips '$(/usr/bin/grep "^$ta " "$SG_STATE/promote-pass.tips")', full '$(cat "$SG_STATE/gate-status-full" 2>/dev/null)'"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -KILL -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started

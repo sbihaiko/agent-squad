@@ -33,6 +33,7 @@ exit 0
 EOF
 chmod +x "$S/nightly.sh"
 printf 'open("%s","a").write("childcc\\n")\n' "$STEPS" > "$S/childcc.py"
+printf '#!/bin/bash\nexit 0\n' > "$S/promote-main-pass.sh"; chmod +x "$S/promote-main-pass.sh"   # the stg-to-main pass: nothing to do until case 16
 # reconcile.py blocks for REC_SLEEP: the case times the cycle around it (a detached pass costs the cycle nothing) and reads its own log
 cat > "$S/reconcile.py" <<'PY'
 import os, time
@@ -196,7 +197,7 @@ lane_down; t0=$(date +%s); run_cycles 1 NIGHT_HOLD=3; el=$(( $(date +%s) - t0 ))
 [ "$(count nightly)" = 1 ] && ok "12 the cycle starts the nightly full suite" || ko "12 the cycle started $(count nightly) nightly pass(es)"
 [ "$el" -lt 3 ] && ok "12 the cycle does not wait for the nightly suite (${el}s with a 3 s suite)" || ko "12 the cycle waited for the nightly (${el}s)"
 for _ in $(seq 1 100); do [ -d "$ST/locks/single-nightly" ] || break; /bin/sleep 0.1; done   # the previous case's suite drains
-: > "$STEPS"; run_cycles 2 NIGHT_HOLD=3
+: > "$STEPS"; run_cycles 2 NIGHT_HOLD=15   # the hold outlasts both cycles on a loaded box: the claim is the lock, not the clock
 [ "$(count nightly)" = 1 ] && ok "12 a suite still running is not started again (single.sh lock)" || ko "12 the nightly overlapped itself ($(count nightly) passes)"
 # 13) the stall bound is an integer find can read. A models.json that leaves stall_timeout_minutes out, or sets it null, used to
 # reach the watchdog as the literal string "null": find rejected `-mmin +null` as an illegal value with its stderr dropped, so no
@@ -273,5 +274,31 @@ touch -t 202001010000 "$ST/promote-defer"   # the stamp is older than the bound
 printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"; run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900 SG_PROMOTE_MAX_DEFER=1800; pwait "promote ci"
 [ "$(pcount "promote ci")" = 1 ] && ok "15 past the deferral bound a continuing stream still promotes once" || ko "15 the stream starved the pass ($(pcount 'promote ci'); steps '$(tr '\n' ' ' < "$PROM")'; cycle.log '$(tr '\n' '|' < "$ST/cycle.log" 2>/dev/null)'; stamp '$(cat "$ST/promote-defer" 2>/dev/null)' landed '$(tr '\n' '|' < "$ST/landed.tsv" 2>/dev/null)')"
 rm -f "$ST/landed.tsv" "$ST/promote-defer"
+
+# 16) (ADR-0173) The cycle runs the stg-to-main pass by itself: one step per cycle, detached under its own single-flight lock
+# (`single.sh promote-main`) and outside the promotion's quiet window, so a burst of landings never postpones the read of a
+# complete tier that is already in flight. The pass is a stub; it writes its own file, as the promotion stub does.
+cat > "$S/promote-main-pass.sh" <<EOF
+#!/bin/bash
+echo "main" >> "$T/promote-main.steps"
+exit \${PM_RC:-0}
+EOF
+chmod +x "$S/promote-main-pass.sh"
+MAINP=$T/promote-main.steps; mcount() { local c; c=$(/usr/bin/grep -cx main "$MAINP" 2>/dev/null); echo "${c:-0}"; }
+mwait() { local i=0; while [ $i -lt 100 ]; do [ "$(mcount)" -ge "$1" ] && return 0; /bin/sleep 0.1; i=$((i+1)); done; return 1; }
+lane_down; : > "$MAINP"; : > "$PROM"; : > "$ST/cycle.log"; rm -f "$ST/promote-defer"; rm -rf "$ST/locks/single-promote-main"
+printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"   # a landing inside the quiet window: the dev-to-stg step waits
+run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900; mwait 1
+[ "$(mcount)" = 1 ] && [ "$(pcount "promote ci")" = 0 ] && ok "16 the cycle runs the stg-to-main pass once, inside the quiet window that holds the stg promotion" || ko "16 the stg-to-main pass ran $(mcount)x, the stg promotion $(pcount 'promote ci')x"
+/usr/bin/grep -q "PROMOTE-MAIN" "$ST/cycle.log" 2>/dev/null && ko "16 a quiet pass wrote a cycle.log line: $(/usr/bin/grep PROMOTE-MAIN "$ST/cycle.log")" || ok "16 a pass with nothing to say writes no cycle.log line"
+: > "$MAINP"; : > "$ST/cycle.log"; run_cycles 1 PM_RC=1 SG_PROMOTE_QUIET_SECONDS=900; mwait 1
+for _ in $(seq 1 50); do /usr/bin/grep -q "PROMOTE-MAIN pass rc=1" "$ST/cycle.log" 2>/dev/null && break; /bin/sleep 0.1; done
+/usr/bin/grep -q "PROMOTE-MAIN pass rc=1" "$ST/cycle.log" 2>/dev/null && ok "16 a pass that held main writes its outcome to cycle.log" || ko "16 no PROMOTE-MAIN line: $(cat "$ST/cycle.log" 2>/dev/null)"
+: > "$MAINP"; rm -rf "$ST/locks/single-promote-main"
+SG_STATE=$ST bash "$S/single.sh" promote-main /bin/sleep 5 & hp=$!
+for _ in $(seq 1 50); do [ -s "$ST/locks/single-promote-main/pid" ] && break; /bin/sleep 0.1; done
+run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900; /bin/sleep 0.3
+[ "$(mcount)" = 0 ] && ok "16 a stg-to-main pass in flight is skipped, never doubled" || ko "16 the step ran beside a held pass ($(mcount))"
+kill -TERM "$hp" 2>/dev/null; wait "$hp" 2>/dev/null; rm -rf "$ST/locks/single-promote-main"; rm -f "$ST/landed.tsv" "$ST/promote-defer"
 
 rm -rf "$T"; exit $fail

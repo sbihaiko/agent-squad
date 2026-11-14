@@ -20,7 +20,7 @@ The landing has one stop, `gh_land_stop`: an open issue carries `loop-bug:landin
 - `gh_disk_stop`: the volume of `$SG_STATE` or `$TMPDIR` has less than `SG_MIN_FREE_GB` GiB free (20 by default).
 - `gh_bug_first` (`autofrontier.sh` only): `bugs-waiting`, which `autobug.sh` writes, is over 0 and under 30 min old.
 
-No cycle step promotes `dev` to `stg`: the proof's full suite would hold the gate lock. The loop promotes on the proof of the tip, and the owner promotes `stg` into `main` (ADR-0145 rule 3).
+No cycle step promotes `dev` to `stg`: the proof's full suite would hold the gate lock. The loop promotes on the proof of the tip, and moves `main` to the `stg` sha whose complete CI tier is green (ADR-0145 rule 3, ADR-0173).
 
 An arrow to `GitHub` is a fetch, a push or an API call. A review, a rebase, a gate and a scratch clone run on the local machine.
 

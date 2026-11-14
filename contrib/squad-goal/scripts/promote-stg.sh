@@ -29,25 +29,57 @@
 # A later green tip carries the earlier work with it. The consolidation is one pull request (#743, owner rule for every project):
 # the pass opens or reuses the open `dev` -> `stg` pull request and merges it with a merge commit, so a later tip is measured by
 # ancestry, never by identity. The proof is read before the merge, so a red tip leaves the pull request open and promotes nothing.
-# The loop never writes main: the owner does, with promote-main.sh. The work happens in a throwaway clone.
+# This script never writes main: main moves by promote-main.sh alone, a fast-forward, and the merge path refuses a base that is
+# the main branch (SG_MAIN_BRANCH). The work happens in a throwaway clone.
 # $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red, running, unproven or unknown (the CI seam);
 # SG_PROMOTE_PROOF selects the proof (ci, the default).
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promotion branch, both named by the profile (#1646)
 [ "${SG_PROMOTE:-on}" = off ] && exit 0           # a profile that delivers by another path promotes nothing: no fetch, no line
 export GIT_TERMINAL_PROMPT=0
-# SG_PROMOTE_OPEN_ONLY opens or reuses the dev -> stg pull request and nothing else: no lock, no proof, no merge (ADR-0164,
-# #1051). promote-pass.sh calls it so the full suite's shard jobs start on the tip while the quiet window passes.
+# SG_PROMOTE_OPEN_ONLY opens or reuses one pull request and merges nothing: no lock, no proof, no merge (ADR-0164, #1051).
+# It is the one pull request route of the loop, so both promotions come through it:
+#   dev -> stg (the default pair): promote-pass.sh calls it so the fast tier starts on the tip while the quiet window passes.
+#     It asks for nothing: no label is sent, and the fast tier every event starts is the whole CI proof of the dev tip.
+#   stg -> main: promote-main-pass.sh names the pair (SG_PROMOTE_OPEN_HEAD, SG_PROMOTE_OPEN_BASE), the request label
+#     (SG_PROMOTE_OPEN_LABEL) and the record (SG_PROMOTE_OPEN_RECORD, a file name in $SG_STATE). The label is the request for
+#     the complete tier (ADR-0173). It is removed first (a label that is not there is fine) and then sent, so a second
+#     request on the same pull request is a new label event. The record is `<head sha> TAB <epoch>`, the head the pull
+#     request answered, and it is written only after GitHub accepted the label. A head that is SG_PROMOTE_OPEN_SKIP, the
+#     sha of the last red verdict, is not requested. That pull request is never merged: main moves by a fast-forward.
 if [ -n "${SG_PROMOTE_OPEN_ONLY:-}" ]; then
   . "$d/ghcall.sh"
-  pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "'"$dev"'" and .base.ref == "'"$stg"'")][0].number // empty' 2>/dev/null) || exit 0
+  oh=${SG_PROMOTE_OPEN_HEAD:-$dev}; ob=${SG_PROMOTE_OPEN_BASE:-$stg}; label=${SG_PROMOTE_OPEN_LABEL:-}
+  if [ -n "$label" ]; then say_body="The loop opened this pull request to run the complete CI tier on the $oh tip. It is never merged by hand: the loop moves $ob by a fast-forward when the complete tier is green."
+  else say_body="The $oh tip is under CI. Merge this to move $ob."; fi
+  # The lookup names the head and the base, and answers the number and the head sha in one read.
+  row=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "'"$oh"'" and .base.ref == "'"$ob"'")][0] | "\(.number // "") \(.head.sha // "")"' 2>/dev/null) \
+    || { [ -z "$label" ] && exit 0; echo "promote-stg: the open $oh -> $ob pull request could not be read" >&2; exit 1; }
+  read -r pr hsha <<< "$row"
   if [ -z "$pr" ]; then
-    pr=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head="$dev" -f base="$stg" -f "title=Promote $dev into $stg" \
-      -f "body=The $dev tip is under CI. Merge this to move $stg." -q '.number // empty' 2>/dev/null) || pr=
+    row=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head="$oh" -f base="$ob" -f "title=Promote $oh into $ob" \
+      -f "body=$say_body" -q '"\(.number // "") \(.head.sha // "")"' 2>/dev/null) || row=
+    read -r pr hsha <<< "$row"
   fi
-  # #1723: the open mode asks for nothing. The complete tier is no part of the dev-to-stg promotion, so no `promote` label is
-  # sent here: the fast tier every event starts is the whole CI proof of the dev tip.
+  [ -n "$label" ] || exit 0   # the default pair asks for nothing
+  { [ -n "$pr" ] && [ -n "$hsha" ]; } || { echo "promote-stg: the $oh -> $ob pull request could not be opened, or it names no head" >&2; exit 1; }
+  if [ -n "${SG_PROMOTE_OPEN_SKIP:-}" ] && [ "$hsha" = "$SG_PROMOTE_OPEN_SKIP" ]; then
+    echo "promote-stg: not requested: $hsha is the head of the last red verdict, and a new tip is needed"; exit 0
+  fi
+  gh_send -X DELETE "repos/$SG_REPO/issues/$pr/labels/$label" >/dev/null 2>&1   # a label that is not there answers 404: fine
+  o=$(gh_send -X POST "repos/$SG_REPO/issues/$pr/labels" -f "labels[]=$label" 2>&1) \
+    || { echo "promote-stg: the $label label was refused on pull request #$pr: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
+  if [ -n "${SG_PROMOTE_OPEN_RECORD:-}" ]; then
+    rec=${SG_STATE:-/tmp/sg-state}/$SG_PROMOTE_OPEN_RECORD; mkdir -p "${rec%/*}"
+    printf '%s\t%s\n' "$hsha" "$(date +%s)" > "$rec.$$" && mv -f "$rec.$$" "$rec" || exit 1
+  fi
+  echo "promote-stg: requested $hsha on pull request #$pr"
   exit 0
+fi
+# The merge route never serves main (ADR-0173): main takes no merge commit, so a profile whose promotion branch is the main
+# branch is refused here, before any lock or proof.
+if [ "$stg" = "${SG_MAIN_BRANCH:-main}" ]; then
+  echo "promote-stg: refused: the base is $stg, the main branch; it moves by promote-main.sh, a fast-forward, never by a merge" >&2; exit 1
 fi
 # The promotion reads the machine-wide gate lock (#392), so the proof cannot change under it and two promotions never overlap;
 # a pass already inside the lock just runs.
