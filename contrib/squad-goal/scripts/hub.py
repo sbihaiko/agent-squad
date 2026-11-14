@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, procscan, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -975,9 +975,9 @@ LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {}}
 LOAD_RUNS = []            # the light rows the last /api/runs served: id, folder and worktrees, for owners_of
 _PROC_PREV, _PROC_AT = None, 0.0
 
-def proc_snapshot():
+def read_proc_table():
     """pid -> (ppid, CPU seconds, argv) for the processes this user can see: psutil when it is importable (a read inside
-    this process), else one `ps`. Only the sampler calls this, and only while the machine is warned."""
+    this process), else one `ps`. Only the sampler's scan calls this, and only while the machine is warned."""
     try:
         import psutil
         out = {}
@@ -989,24 +989,34 @@ def proc_snapshot():
     except Exception: pass
     return {pid: (p.ppid, p.cpu, p.command) for pid, p in process_table().items()}
 
-def attribute_pass():
+def proc_snapshot(now=None):
+    """The process table of this tick, read once for every profile's hub in this interpreter (#1746): hubmux loads one
+    hub.py per profile and each runs its own sampler, so an unshared read scanned the machine's table once per profile
+    per tick. `procscan` keeps the scan for one tick, and the tick is `LOAD_SAMPLE_SECS` long."""
+    now = time.time() if now is None else now
+    return procscan.table(read_proc_table, LOAD_SAMPLE_SECS, now)
+
+def attribute_pass(now=None):
     """CPU per run over the last interval, as a share of the machine. The sampler calls it only while the machine is
-    warned: a calm machine never builds a process table."""
+    warned: a calm machine never builds a process table. The window runs from the instant of the snapshot it compares
+    against, because a tick may serve this profile a scan another profile made a moment earlier."""
     global _PROC_PREV, _PROC_AT
-    cur = proc_snapshot()
+    now = time.time() if now is None else now
+    cur, at = proc_snapshot(now)
     prev, _PROC_PREV = _PROC_PREV, cur
-    now = time.time(); window = now - (_PROC_AT or now); _PROC_AT = now
+    window = at - (_PROC_AT or at); _PROC_AT = at
     if not prev or window <= 0: return {}
     ncpu = os.cpu_count() or 1
     return {k: share_pct(v, window, ncpu) for k, v in attribute(prev, cur, owners_of(LOAD_RUNS)).items()}
 
-def load_tick(sample=None):
+def load_tick(sample=None, now=None):
     """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, and — only while the
     machine is warned — work out which run owns that CPU."""
     s = sample if sample is not None else sample_load()
+    now = time.time() if now is None else now
     LOAD_STATE["cpu"] = (LOAD_STATE["cpu"] + [s["cpu"]])[-LOAD_HISTORY:]
-    LOAD_STATE["ram"], LOAD_STATE["gpu"], LOAD_STATE["asof"] = s["ram"], s["gpu"], time.time()
-    LOAD_STATE["runs"] = attribute_pass() if sustained(LOAD_STATE["cpu"]) else {}
+    LOAD_STATE["ram"], LOAD_STATE["gpu"], LOAD_STATE["asof"] = s["ram"], s["gpu"], now
+    LOAD_STATE["runs"] = attribute_pass(now) if sustained(LOAD_STATE["cpu"]) else {}
     return LOAD_STATE
 
 # ---------------------------------------------------------------- the footer's facts (#1797)
