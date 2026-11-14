@@ -571,3 +571,11 @@ def test_every_shell_fixture_that_runs_a_dispatcher_pins_its_disk_floor():
     scripts = ROOT / "contrib/squad-goal/scripts"
     unpinned = [p.name for p in sorted(scripts.glob("test-*.sh")) if _runs_a_dispatcher_without_pin(p.read_text(errors="replace"))]
     assert unpinned == [], f"these fixtures run autobug.sh or autofrontier.sh with no SG_MIN_FREE_GB pin: {unpinned}"
+
+
+def test_every_job_names_a_fixed_runner_image():
+    """A `-latest` label moves to a new image on the vendor's date, so a job would change its system with no commit, and
+    GitHub annotates every run with the migration notice. Each job names its image version."""
+    wf = _ci_workflow()
+    moving = {name: job.get("runs-on") for name, job in wf["jobs"].items() if str(job.get("runs-on")).endswith("-latest")}
+    assert not moving, f"a job runs on a label that moves: {moving}"
