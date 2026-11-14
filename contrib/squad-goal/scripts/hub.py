@@ -2380,6 +2380,7 @@ PROFILER_SWITCH = STATE / "profiler.json"
 PROFILER_AUDIT = STATE / "profiler-audit.jsonl"
 PROFILER_SECS = 1.0   # the cadence of the process-table read, start to start: a second resolves a fork storm, and the read runs only while the switch is on
 PROFILER_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
+PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pass
 PROFILER = {"window": hub_profiler.Window(), "thread": None, "stop": None}
 PROFILER_LOCK = threading.RLock()   # it starts and ends the sampler, and the switch is read and written under it
 
@@ -2421,7 +2422,8 @@ def profiler_ensure():
     sampler that died is started again by the page that needs it. Off, it does nothing. The switch is read under the lock:
     an off write and this never interleave, so no sampler starts after the off."""
     with PROFILER_LOCK:
-        if not profiler_on() or profiler_running(): return
+        if not profiler_on(): return
+        if profiler_running() and PROFILER["stop"] is not None and not PROFILER["stop"].is_set(): return   # a sampler told to stop is none: it ends by its own event
         PROFILER["stop"] = threading.Event()
         PROFILER["window"].reset(time.time())   # a window starts at its switch-on: an older one would mix two profiles
         PROFILER["thread"] = threading.Thread(target=profiler_sampler, args=(PROFILER["stop"],), daemon=True, name="profiler")
@@ -2432,14 +2434,19 @@ def profiler_set(on, who, frm, client=None):
     the sampler has ended: it is told to stop under the lock and joined outside it, since its last pass takes the lock."""
     old = None
     with PROFILER_LOCK:
+        if on and PROFILER["thread"] is not None and PROFILER["stop"] is not None and PROFILER["stop"].is_set() and not PROFILER["thread"].is_alive():
+            PROFILER["thread"] = None
         if on != profiler_on():
             PROFILER_SWITCH.parent.mkdir(parents=True, exist_ok=True)
             tmp = _temp_name(PROFILER_SWITCH); tmp.write_text(json.dumps({"on": on, "at": time.time()}) + "\n"); os.replace(tmp, PROFILER_SWITCH)
             loop_audit_add(who, frm, "on" if on else "off", client=client, path=PROFILER_AUDIT)
         if not on:
-            old, PROFILER["thread"] = PROFILER["thread"], None
+            old = PROFILER["thread"]   # kept until it has ended: a second off finds it and waits for it too
             if PROFILER["stop"] is not None: PROFILER["stop"].set()
-    if old is not None and old is not threading.current_thread(): old.join()
+    if old is not None and old is not threading.current_thread():
+        old.join(PROFILER_JOIN_S)   # bounded: a read of the process table that never returns must not hold the request for ever
+        with PROFILER_LOCK:
+            if PROFILER["thread"] is old and not old.is_alive(): PROFILER["thread"] = None
     if on: profiler_ensure()
 
 def profiler_refusal(a, origin_ok, tn):

@@ -36,7 +36,7 @@ _PYTHON = re.compile(r"[Pp]ython[\d.]*$")
 _SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
 _SHELL_CODE = re.compile(r"-[A-Za-z]*c[A-Za-z]*$")
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-_SPLIT = re.compile(r"&&|\|\||[;|&\n(){}]")
+_BREAK = " \t\n;&|(){}"   # what ends a word in shell code; all but the blanks end a command too
 _PYTESTS = frozenset(("pytest", "py.test"))
 _ENGINE_VERBS = frozenset(("start", "resume", "work", "task"))
 _ENGINE_MODULES = frozenset(("squad", "squad.cli"))
@@ -106,7 +106,13 @@ def _classify(script):
     return None
 
 
-def _run(t, depth=0):
+def _after(raw, flag):
+    """The text of a command line after its shell code flag, quotes kept: the code as the shell reads it."""
+    _, found, rest = raw.partition(f" {flag} ")
+    return rest if found else ""
+
+
+def _run(t, depth=0, raw=None):
     """((name, kind) or None, the script the tokens run or None), read from the program position alone."""
     t = _unwrap(t)
     if not t:
@@ -122,7 +128,8 @@ def _run(t, depth=0):
         i = 1
         while i < len(t) and t[i].startswith("-"):
             if _SHELL_CODE.match(t[i]):   # the process table joins the arguments, so the code is the rest of the line
-                return _code(" ".join(t[i + 1:]), depth)
+                rest = t[i + 1:]   # one word is the code itself, its own quotes kept; more words are a process table line, read raw
+                return _code(rest[0] if len(rest) == 1 else _after(raw, t[i]) if raw else " ".join(rest), depth)
             i += 2 if t[i] in ("-o", "+o") else 1
         return (_classify(t[i]), t[i]) if i < len(t) else (None, None)
     if _PYTHON.match(name):
@@ -140,12 +147,45 @@ def _run(t, depth=0):
     return (_classify(prog), prog) if _SCRIPT.match(name) else (None, None)
 
 
+def _commands(code):
+    """The commands of a shell's code, each a list of words: a quoted word is one word, and a separator inside it splits nothing."""
+    commands, cur, word, quote, open_word, i = [], [], [], None, False, 0
+    while i < len(code):
+        c = code[i]
+        if quote:
+            if c == quote:
+                quote = None
+            elif c == "\\" and quote == '"' and i + 1 < len(code):
+                i += 1
+                word.append(code[i])
+            else:
+                word.append(c)
+        elif c in "'\"":
+            quote, open_word = c, True
+        elif c == "\\" and i + 1 < len(code):
+            i += 1
+            word.append(code[i])
+        elif c in _BREAK:
+            if word or open_word:
+                cur.append("".join(word))
+                word, open_word = [], False
+            if c not in " \t":
+                commands.append(cur)
+                cur = []
+        else:
+            word.append(c)
+        i += 1
+    if word or open_word:   # a quote the cut left open ends its word here
+        cur.append("".join(word))
+    commands.append(cur)
+    return commands
+
+
 def _code(code, depth):
     """A shell's code string, command by command: the first command that runs a loop part names the process."""
     if depth >= 2:
         return None, None
-    for part in _SPLIT.split(code):
-        t = part.replace("'", " ").replace('"', " ").split()
+    for t in _commands(code):
         while t and t[0] in ("exec", "time", "if", "then", "else", "do", "while", "!"):
             t = t[1:]
         found = _run(t, depth + 1)
@@ -161,7 +201,7 @@ def _parse(command):
         tokens = shlex.split(head)
     except ValueError:   # a quote the cut left open
         tokens = head.split()
-    return _run(tokens)
+    return _run(tokens, raw=head)
 
 
 def label(command):
@@ -196,6 +236,7 @@ def _paths(rows, scope):
     """A function pid -> the node path of that process in `rows` ({pid: (ppid, cpu, command)}), memoized over one reading."""
     memo = {}
     marks = tuple(scope.marks)
+    above = rows[scope.supervisor][0] if scope.supervisor in rows else None   # the pid file names the loop the supervisor runs; the supervisor is its parent
 
     def place(pid):
         """(in the loop, in another loop, or outside; the named parts; the top ancestor's command)."""
@@ -214,7 +255,7 @@ def _paths(rows, scope):
             ppid, _, command = rows[p]
             own = label(command)
             state, parts, top = base or (_OUT, (), command)
-            if p == scope.supervisor and own and own[0] == SUPERVISOR:   # a stale pid file can name another program
+            if (p == scope.supervisor or p == above) and own and own[0] == SUPERVISOR:   # a stale pid file can name another program
                 state, parts = _IN, (own,)
             elif state == _IN:
                 if own and (not parts or parts[-1] != own):
