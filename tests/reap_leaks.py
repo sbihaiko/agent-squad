@@ -26,7 +26,10 @@ def _seconds(etime):
 
 
 def _table():
-    out = subprocess.run(["ps", "-eo", "pid=,ppid=,etime=,command="], capture_output=True, text=True).stdout
+    # One -o per column: procps reads the text after `=` as the column's header, to the end of the argument, so a joined
+    # `pid=,ppid=,...` list is one column there and no row has four fields.
+    out = subprocess.run(["ps", "-e", "-o", "pid=", "-o", "ppid=", "-o", "etime=", "-o", "command="],
+                         capture_output=True, text=True).stdout
     rows = []
     for line in out.splitlines():
         cols = line.split(None, 3)

@@ -67,3 +67,8 @@ def test_the_session_reaps_when_it_ends():
     conftest = (Path(__file__).parent / "conftest.py").read_text()
     assert "def pytest_sessionfinish" in conftest and "reap_leaks.reap(" in conftest, \
         "the session calls the reap when it ends"
+
+
+def test_the_process_table_is_read_on_this_system():
+    rows = reap_leaks._table()
+    assert any(pid == os.getpid() for pid, _, _, _ in rows), "the table holds no row for this process: the ps columns were not read"
