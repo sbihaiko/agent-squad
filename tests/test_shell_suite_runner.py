@@ -181,7 +181,7 @@ def _alive(pid):
 
 def test_a_process_a_suite_leaves_in_its_temp_folder_is_ended_with_the_suite(tmp_path):
     """#1742: a suite started the real watch loop from a fixture copy and left it as an orphan that ran for hours. The
-    runner gives each suite its own temp folder and ends every process whose command names it once the suite returns."""
+    runner gives each suite its own process group and ends every process still in it once the suite returns."""
     pid_file = tmp_path / "pid"
     suite = tmp_path / "test-leaks.sh"
     suite.write_text(
@@ -202,7 +202,6 @@ def test_a_process_a_suite_leaves_in_its_temp_folder_is_ended_with_the_suite(tmp
             os.kill(pid, 9)
 
 
-def test_the_leftover_search_names_only_the_processes_of_that_temp_folder():
-    rows = [(10, 1, 5.0, "bash /var/t/tmpabc/tmp.X/s/watch.sh"), (11, 10, 1.0, "sleep 5"),
-            (12, 1, 5.0, "bash /var/t/tmpabcd/s/watch.sh"), (13, 1, 5.0, "bash /private/var/t/tmpabc/x.sh")]
-    assert shell_suites.leftovers("/var/t/tmpabc", rows) == [10, 11, 13]
+
+def test_a_group_with_no_process_left_is_no_error():
+    assert shell_suites.end_group(2 ** 22 - 7) is False   # no such group: nothing ended, nothing raised

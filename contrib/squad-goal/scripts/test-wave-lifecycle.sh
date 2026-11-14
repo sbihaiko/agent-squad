@@ -122,10 +122,16 @@ c=\$(( \$(cat "$T/cyc" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$T/cyc"
 exit 0
 EOF
 chmod +x "$T/s/vendor-guard.sh"
+tree_of() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_of "$c"; done; printf '%s\n' "$1"; }
+end_tree() { local list; list=$(tree_of "$1"); kill -TERM $list 2>/dev/null; /bin/sleep 0.3; kill -KILL $list 2>/dev/null; return 0; }
 cycle() { local i=0; : > "$T/watch.out"; echo 0 > "$T/cyc"
-  ( cd "$T/co" && env SG_TEST_CYCLES="${1:-1}" bash "$T/s/watch.sh" > "$T/watch.out" 2>&1 ) & local p=$!
-  while kill -0 "$p" 2>/dev/null && [ $i -lt 600 ]; do /bin/sleep 0.1; i=$((i+1)); done
-  kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$T/st/fastloop.pid"
+  # exec: the pid this helper holds is the loop itself, never a subshell around it (#1742). A cycle past the bound
+  # (CYCLE_TICKS tenths of a second) is ended with every process it started, so no loop outlives the suite.
+  ( cd "$T/co" && exec env SG_TEST_CYCLES="${1:-1}" bash "$T/s/watch.sh" > "$T/watch.out" 2>&1 ) & local p=$!
+  while kill -0 "$p" 2>/dev/null && [ $i -lt "${CYCLE_TICKS:-600}" ]; do /bin/sleep 0.1; i=$((i+1)); done
+  end_tree "$p"; wait "$p" 2>/dev/null; rm -f "$T/st/fastloop.pid"
+  # A cycle ended at the bound took its landing pass with it: the busy marker that pass held has no writer left to clear it.
+  [ $i -lt "${CYCLE_TICKS:-600}" ] || rm -f "$T"/st/auto/wland-*.busy
   # The landing is a detached pass (#955): the supervisor returns at once and the pass writes its lines after it. Wait for
   # the pass's own busy marker, as a live loop's next cycle does, so the landing a case reads has happened.
   local j=0; while /bin/ls "$T"/st/auto/wland-*.busy >/dev/null 2>&1 && [ $j -lt 600 ]; do /bin/sleep 0.1; j=$((j+1)); done; return 0; }
