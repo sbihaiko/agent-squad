@@ -30,6 +30,7 @@ BOARD_COLUMNS = _columns_module.view_columns()
 BOARD_LANES = _columns_module.LANES
 COLUMN = {**_columns_module.ROLE, **{lane["key"]: lane["name"] for lane in BOARD_LANES}}
 BOARD_NAMES_JSON = json.dumps(COLUMN, separators=(",", ":"))
+DOING = _columns_module.DOING   # the one name of the claimed column: the hub names no column of its own
 BOARD_DOING_JSON = json.dumps(_columns_module.DOING)
 BOARD_REVIEW_JSON = json.dumps(_columns_module.CODE_REVIEW)
 BOARD_CHART_ROLES = {**{f"var(--s{i})": f"--chart-series-{i}" for i in range(1, 9)}, "var(--wait)": "--chart-wait", "var(--acc)": "--chart-bar", "var(--ok)": "--chart-ok", "var(--warn)": "--chart-warn", "var(--err)": "--chart-err", "var(--none)": "--chart-none", "var(--run)": "--chart-run", "var(--drop)": "--chart-drop", "var(--mute)": "--chart-series-other"}
@@ -3308,17 +3309,18 @@ def holder_chip(i, taken=None, state=None):
         t = dt.datetime.fromtimestamp(float(when), dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
         return f"Squad · taken over {t} UTC"
     return "Squad · running" if state == "running" else "Squad"
-def hold_rows(now=None):
+def hold_rows(now=None, state=None):
     """The Live work rows for hand holds: a Manual or HAL9k hold proven by folder activity (the marker's own write time,
     under the one bound `SG_HAND_HOLD_MINUTES`), never stale and never an orphan. A Squad run is a run row, proven by its
     live process. The read and the write are `squad.handhold`'s, so the page holds no rule of its own (ADR-0137)."""
     now = time.time() if now is None else now
+    base = pathlib.Path(state) if state else STATE
     closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
     try:
         (HH,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__),
                            ("handhold",))
-        HH.alerts(state=STATE, closed=closed, now=now)   # one line per stale or orphan episode, never one per poll
-        rows = HH.holds(state=STATE, closed=closed, now=now)
+        HH.alerts(state=base, closed=closed, now=now)   # one line per stale or orphan episode, never one per poll
+        rows = HH.holds(state=base, closed=closed, now=now)
     except Exception as e:
         log_once(f"hub: the hand holds are unknown: {type(e).__name__}: {' '.join(str(e).split())}"); return []
     out = []
@@ -3330,13 +3332,28 @@ def hold_rows(now=None):
                     "age": int(h["activity"] or 0), "rank": 0, "spend": 0, "dur": 0, "kind": "hold", "live": True,
                     "running": False, "titles": {str(h["issue"]): TITLE.get(h["issue"], "")}})
     return out
-def live_work_lines(items, state=None, checkout=None, procs=None, now=None):
+def _holder_argv(pid):
+    """The command line of one live process, empty when the table cannot be read."""
+    try: return next((p.command for p in process_table().values() if p.pid == pid), "")
+    except Exception: return ""
+
+def gate_lock_line(pid, line, issues_of):
+    """One held gate lock, named by what its holder checks (#1695). The lock file names only `bash`, so the holder's
+    command line answers: the run whose workspace the gate script runs from, else the gate script, else the pid alone."""
+    m = re.search(r"run-\d{8}-\d{6}-[0-9a-f]+", line)
+    if m: return f"gate: pid {pid} checks run {m.group(0)}" + (f" · {issues_of[m.group(0)]}" if issues_of.get(m.group(0)) else "")
+    scripts = [x for x in re.findall(r"([\w-]+\.(?:sh|py))\b", line) if x not in ("serial.sh", "gate.sh")]
+    return f"gate: pid {pid} runs {scripts[0]}" if scripts else f"gate: pid {pid}"
+
+def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
     """The Live work panel's lines, all from local state and the board read the hub already holds: the loop's state,
-    each live run (its issue, node and age), each gate lock (its pid and the child it serves), each hand hold, each issue
-    labelled ready-for-human, and one line on the work the hub cannot see (a hand gate or a Claude Code fix pass)."""
+    each live run (its issue, node and age), each gate lock (its pid and the run it checks), the loop drivers, each hand hold, and each open
+    Doing card no live run names (work by hand). A ready-for-human card waits on the owner and is no live work (#1701).
+    Doing is the column the board draws, an old Status name and a recorded move included, never the row's raw Status (#1713)."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
-    lines = []
+    moves, window = (read_moves() if overlay_on() else {}), pending_window()   # the board's own column inputs, read once
+    lines, issues_of, drivers, held = [], {}, [], set()
     if loop_state({}, now=now, state=base) == "off": lines.append("loop off")
     for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
         folder = active_folder(entry)
@@ -3344,16 +3361,25 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None):
         row, _ = run_row(folder, "", procs or {})
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
         lines.append(f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min")
+        issues_of[row["id"]] = issues; held.update(str(n) for n in row["issues"])
     for d in sorted((base / "locks").glob("*")):
         pid = _read(d / "pid").strip()
         if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
-            cmd = _read(d / "cmd").strip()   # a lock that names no command (the loop driver's own) claims no child (#1692)
-            lines.append(f"lock {d.name}: pid {pid} serves {cmd}" if cmd else f"lock {d.name}: pid {pid}")
-    for i in items:
-        if "ready-for-human" in (i.get("l") or []) and i.get("s") != "closed":   # the label outlives the issue (#1692)
-            lines.append(f"ready-for-human #{i['n']} {i.get('t') or ''} · label ready-for-human")
+            if _read(d / "cmd").strip(): lines.append(gate_lock_line(pid, (argv or _holder_argv)(int(pid)), issues_of))
+            else: drivers.append(d.name)   # a lock that names no command is a loop driver's own: no live work (#1692)
+    if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
+    holds = hold_rows(now=now, state=base)   # each live hand hold is one line, with its carrier (#1713)
+    titles = {str(i.get("n")): (i.get("t") or "") for i in items}
+    for r in holds:
+        title = titles.get(str(r["issues"][0])) or ""
+        lines.append(f"hold: {r['label']}" + (f" {title}" if title else ""))
+    hold_ids = {str(n) for r in holds for n in r["issues"]}   # the registry keys a hold on the issue; a row matches on it or on its item id
+    for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
+        ids = {str(i.get("n")), str(i.get("i") or "")}
+        if (cache_row_column(i, moves, window) == DOING and i.get("s") != "closed" and not (ids & held)
+                and not (ids & hold_ids) and "ready-for-human" not in (i.get("l") or [])):
+            lines.append(f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run")
     if not lines: lines.append("no live work")
-    lines.append("hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here")
     return lines
 
 def task_count(i):
@@ -5897,11 +5923,12 @@ const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"
 const LIVE_ROWS=4;
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
 function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0),total=live.reduce((s,r)=>s+(+r.spend||0),0);   // a reduce, never a spread: the live list is unbounded
- const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
+ const drawn=live.slice().sort((a,b)=>b.age-a.age).filter(r=>r.kind!=="hold").slice(0,LIVE_ROWS);   // a hand hold is its own line below, never also a row (#1713)
  const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
- const extra=(liveWork||[]).filter(t=>!live.some(r=>t.includes(r.id))).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a run row already drawn is not drawn twice
- return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")+extra||"<div class=m>no live work</div>")+more}}
+ const own=r=>(liveWork||[]).filter(t=>t.includes(r.id)&&!t.startsWith("run "+r.id+" ")).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a line that names a live run, but is not the row itself, is drawn beside that row: a gate lock names the run it checks (#1713)
+ const extra=(liveWork||[]).filter(t=>!live.some(r=>t.includes(r.id))).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // every other line is drawn once
+ return{head,html:(drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra||"<div class=m>no live work</div>")+more}}
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
@@ -6818,7 +6845,7 @@ function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=
  setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
-let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the ready-for-human issues
+let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the hand-worked Doing cards
 async function livePoll(){try{liveWork=await (await fetch("/api/live")).json();refresh()}catch(e){}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}

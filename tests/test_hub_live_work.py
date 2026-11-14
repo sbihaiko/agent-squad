@@ -5,6 +5,7 @@ proven by folder activity (the hold marker's own write time, under the one bound
 abandoned issue is never drawn. The card chip names the holder, and a takeover reads "Squad · taken over <time>".
 """
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -129,43 +130,105 @@ def test_a_stopped_loop_reads_loop_off_never_no_live_work(hub):
     assert not any("no live work" in x for x in lines)
 
 
-def test_a_live_gate_lock_names_its_pid_and_the_child_it_serves(hub):
-    lock = Path(hub.STATE) / "locks" / "gate"
+def _held(hub, name, cmd=None):
+    lock = Path(hub.STATE) / "locks" / name
     lock.mkdir(parents=True, exist_ok=True)
     (lock / "pid").write_text(f"{os.getpid()}\n")
-    (lock / "cmd").write_text("bash contrib/squad-goal/scripts/fast-gate.sh\n")
+    if cmd is not None:
+        (lock / "cmd").write_text(cmd + "\n")   # serial.sh writes the command name only: `bash`
+    return lock
+
+
+def test_a_live_gate_lock_names_the_run_it_checks_never_bash(hub):
+    """#1695: the lock file names `bash`; the holder command line names the run workspace the gate checks."""
+    lock = _held(hub, "gate", "bash")
+    line = "bash /r/worktrees/child/gui-1673/runs/run-20261113-204951-f6107e/ws/w/contrib/squad-goal/scripts/serial.sh gate bash x/gate.sh --inner bash contrib/squad-goal/scripts/fast-gate.sh"
+    try:
+        lines = _lines(hub, argv=lambda pid: line)
+    finally:
+        shutil.rmtree(lock)
+    assert f"gate: pid {os.getpid()} checks run run-20261113-204951-f6107e" in lines, lines
+    assert not any("serves" in x or x.endswith("bash") for x in lines), lines
+
+
+def test_a_gate_lock_outside_a_run_names_its_gate_script(hub):
+    lock = _held(hub, "gate", "bash")
+    try:
+        lines = _lines(hub, argv=lambda pid: "bash /repo/contrib/squad-goal/scripts/serial.sh gate bash /repo/contrib/squad-goal/scripts/gate.sh --inner bash contrib/squad-goal/scripts/fast-gate.sh")
+    finally:
+        shutil.rmtree(lock)
+    assert f"gate: pid {os.getpid()} runs fast-gate.sh" in lines, lines
+
+
+def test_a_gate_lock_whose_command_line_is_unread_names_its_pid_alone(hub):
+    lock = _held(hub, "gate", "bash")
+    try:
+        lines = _lines(hub, argv=lambda pid: "")
+    finally:
+        shutil.rmtree(lock)
+    assert f"gate: pid {os.getpid()}" in lines, lines
+
+
+def test_a_ready_for_human_issue_is_never_live_work(hub):
+    """#1701: a ready-for-human card waits on the owner; it is no live work, in Doing or elsewhere."""
+    items = [{"n": 1681, "t": "Health rule", "s": "open", "st": "Todo", "l": ["ready-for-human", "bug"]},
+             {"n": 1682, "t": "Held in Doing", "s": "open", "st": "Doing", "l": ["ready-for-human"]}]
+    lines = _lines(hub, items)
+    assert not any("#1681" in x or "#1682" in x or "ready-for-human" in x for x in lines), lines
+
+
+def test_a_doing_card_with_no_live_run_is_hand_work(hub):
+    """#1701: the panel agrees with the Doing column: a card worked by hand is a line, a closed card is not."""
+    items = [{"n": 1695, "t": "The lock line", "s": "open", "st": "Doing", "l": ["bug"]},
+             {"n": 1690, "t": "Done by hand", "s": "closed", "st": "Doing", "l": ["bug"]},
+             {"n": 1691, "t": "Queued", "s": "open", "st": "Todo", "l": ["bug"]}]
+    lines = _lines(hub, items)
+    assert "hand work #1695 The lock line · in Doing, no registered run" in lines, lines
+    assert not any("#1690" in x or "#1691" in x for x in lines), lines
+
+
+def test_a_doing_card_a_live_hold_names_is_one_line_with_its_carrier(hub):
+    """#1713: a held card is its hold, with the carrier, and never again a card with no run."""
+    _closed(hub)
+    _hold(hub, 1713)
+    items = [{"n": 1713, "i": "ITEM-1713", "t": "The live work panel", "s": "open", "st": "Doing", "l": ["bug"]}]
+    lines = _lines(hub, items)
+    assert [r["label"] for r in hub.hold_rows()] == ["Manual · #1713"]
+    named = [x for x in lines if "#1713" in x]
+    assert len(named) == 1, lines
+    assert "Manual" in named[0], named
+    assert not any("hand work #1713" in x for x in lines), lines
+
+
+def test_a_held_card_whose_row_carries_its_item_id_is_named_once(hub):
+    """#1713: the registry keys a hold by the issue (`auto/hold-<n>`), while a board row also carries its Project item id;
+    the panel matches the same card on either identifier, so one hold is one line."""
+    _closed(hub)
+    _hold(hub, 1718)
+    items = [{"n": 1718, "i": "ITEM-1718", "t": "Held beside its run", "s": "open", "st": "Doing", "l": []}]
+    lines = _lines(hub, items)
+    assert len([x for x in lines if "#1718" in x]) == 1, lines
+
+
+def test_a_doing_card_a_live_run_names_is_not_listed_twice(hub, monkeypatch, tmp_path):
+    run = tmp_path / "run-20261113-000000-abcdef"
+    run.mkdir()
+    monkeypatch.setattr(hub, "loop_live", lambda **kw: {"runs": [str(run)], "gates": []})
+    monkeypatch.setattr(hub, "run_row", lambda folder, port, procs: ({"id": run.name, "issues": [1696], "stage": "router", "age": 60}, None))
+    lines = _lines(hub, [{"n": 1696, "t": "Debt", "s": "open", "st": "Doing", "l": []}])
+    assert sum("#1696" in x for x in lines) == 1, lines
+
+
+def test_the_driver_locks_fold_into_one_line_with_no_pid(hub):
+    """#1692, #1695: a loop driver lock holds a pid and no command; it is no live work, so the drivers share one line."""
+    locks = [_held(hub, n) for n in ("watch", "single-autobug")]
     try:
         lines = _lines(hub)
     finally:
-        shutil.rmtree(lock)
-    assert any(f"pid {os.getpid()}" in x and "fast-gate.sh" in x for x in lines)
-
-
-def test_a_ready_for_human_issue_is_listed_with_its_label(hub):
-    items = [{"n": 1681, "t": "Health rule", "s": "open", "l": ["ready-for-human", "bug"]}]
-    lines = _lines(hub, items)
-    assert any("#1681" in x and "ready-for-human" in x for x in lines)
-
-
-def test_a_closed_ready_for_human_issue_is_not_live_work(hub):
-    """#1692: the label stays on an issue after it closes, and a closed issue waits on nobody."""
-    items = [{"n": 447, "t": "An old defect", "s": "closed", "l": ["ready-for-human", "bug"]},
-             {"n": 1681, "t": "Health rule", "s": "open", "l": ["ready-for-human"]}]
-    lines = _lines(hub, items)
-    assert not any("#447" in x for x in lines), lines
-    assert any("#1681" in x for x in lines)
-
-
-def test_a_lock_that_names_no_command_claims_no_child(hub):
-    """#1692: the loop driver's `watch` lock holds a pid and no command; it serves no child."""
-    lock = Path(hub.STATE) / "locks" / "watch"
-    lock.mkdir(parents=True, exist_ok=True)
-    (lock / "pid").write_text(f"{os.getpid()}\n")
-    try:
-        lines = _lines(hub)
-    finally:
-        shutil.rmtree(lock)
-    assert f"lock watch: pid {os.getpid()}" in lines, lines
+        for lock in locks:
+            shutil.rmtree(lock)
+    assert "🔒 loop drivers running: single-autobug, watch" in lines, lines
+    assert not any(str(os.getpid()) in x for x in lines), lines
 
 
 def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
@@ -180,8 +243,63 @@ def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
     assert any("#1674" in x and "wave.landing" in x and "age" in x for x in lines)
 
 
-def test_the_panel_says_it_cannot_see_hand_work(hub):
-    assert any("hand" in x and "not visible" in x for x in _lines(hub))
+def test_the_panel_carries_no_line_on_work_it_cannot_see(hub):
+    """#1701: hand work is named by its Doing card, so the panel no longer says it cannot see it."""
+    assert not any("not visible" in x for x in _lines(hub))
+
+
+def test_the_panel_takes_the_column_the_board_draws(hub, monkeypatch):
+    """#1713: the panel reads the column the board draws, so an old Status name and a recorded move both give Doing.
+    The overlay is the board's own setting (#651) and it is read on, the default the served board draws with."""
+    monkeypatch.setenv("SG_PENDING_OVERLAY", "on")
+    now = int(time.time())
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 5))
+    hub.MOVES.write_text(json.dumps({"ITEM-1711": {"column": "Doing", "at": at, "by": "owner"}}))
+    try:
+        # `ot` is the read's own start instant: the production row the overlay compares a proved move against (#651)
+        items = [{"n": 1711, "i": "ITEM-1711", "t": "Moved by hand", "s": "open", "st": "Todo", "l": ["bug"], "ot": now},
+                 {"n": 1712, "i": "ITEM-1712", "t": "An old column name", "s": "open", "st": "In Progress", "l": ["bug"], "ot": now}]
+        lines = _lines(hub, items)
+    finally:
+        hub.MOVES.unlink(missing_ok=True)
+    assert "hand work #1711 Moved by hand · in Doing, no registered run" in lines, lines
+    assert "hand work #1712 An old column name · in Doing, no registered run" in lines, lines
+
+
+def test_a_gate_that_checks_a_live_run_is_drawn_with_its_row(hub):
+    """#1713: the card dropped every line that names a live run, so a gate that checks one was never drawn."""
+    if NODE is None:
+        pytest.skip("node is required")
+    fn = re.search(r"^function liveCard\(.*?^ return\{[^\n]*$", hub.PAGE, re.M | re.S).group(0)
+    gate = "gate: pid 4242 checks run run-b · #1696"
+    script = ('const esc=s=>String(s);const age=s=>s+"s";'
+              'const liveRow=(r,shown)=>"<div class=r data-id=\\""+r.id+"\\">"+r.id+"</div>";const LIVE_ROWS=4;\n'
+              'let liveWork=["loop off",' + json.dumps(gate) + '];\n'
+              + fn + '\nconsole.log(JSON.stringify(liveCard([{id:"run-b",age:5,spend:0}],"").html));\n')
+    out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    html = json.loads(out.stdout)
+    assert gate in html, "the gate that checks a live run is drawn"
+    assert "bash" not in html, "no line shows bash as the thing served"
+    assert html.index(gate) > html.index('data-id="run-b"'), "the gate is drawn beside the run's row"
+
+
+def test_the_card_draws_a_held_card_once_as_its_hold_line(hub):
+    """#1713: the Live work card draws a held card once: its hold line, never again as a run row of the same hold."""
+    if NODE is None:
+        pytest.skip("node is required")
+    fn = re.search(r"^function liveCard\(.*?^ return\{[^\n]*$", hub.PAGE, re.M | re.S).group(0)
+    hold = "hold: Manual · #1713 The live work panel"
+    row = {"id": "hold-1713", "label": "Manual · #1713", "age": 0, "rank": 0, "kind": "hold", "issues": ["1713"]}
+    script = ('const esc=s=>String(s);const age=s=>s+"s";'
+              'const liveRow=(r,shown)=>"<div class=r data-id=\\""+r.id+"\\">"+r.label+"</div>";const LIVE_ROWS=4;\n'
+              'let liveWork=[' + json.dumps(hold) + '];\n'
+              + fn + '\nconsole.log(JSON.stringify(liveCard([' + json.dumps(row) + '],"").html));\n')
+    out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    html = json.loads(out.stdout)
+    assert html.count("#1713") == 1, html
+    assert "Manual" in html, html
 
 
 def test_the_card_draws_the_loop_lines_and_no_run_twice(hub):
@@ -190,11 +308,11 @@ def test_the_card_draws_the_loop_lines_and_no_run_twice(hub):
     fn = re.search(r"^function liveCard\(.*?^ return\{[^\n]*$", hub.PAGE, re.M | re.S).group(0)
     script = ('const esc=s=>String(s);const age=s=>s+"s";const liveRow=(r,shown)=>"<row "+r.id+">";const LIVE_ROWS=4;\n'
               'let liveWork=["loop off","run run-b · #1674 · node wave.landing · age 3 min","run run-c · #1676 · node wave · age 1 min",'
-              '"hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here"];\n'
+              '"hand work #1695 The lock line · in Doing, no registered run"];\n'
               + fn + '\nconsole.log(JSON.stringify(liveCard([{id:"run-b",age:5,spend:0}],"").html));\n')
     out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     html = out.stdout
-    assert "loop off" in html and "run-c" in html and "not visible" in html
+    assert "loop off" in html and "run-c" in html and "hand work #1695" in html
     assert "no live work" not in html
     assert html.count("run-b") == 1
