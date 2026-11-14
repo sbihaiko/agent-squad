@@ -754,7 +754,7 @@ case $sel in none:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;
   out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_STATUS=self SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
   [ $grc = 73 ] && held_by "$out" >/dev/null && return 9
   [ $grc = 75 ] && waited_out "$out" && return 9
-  [ $grc = 4 ] && return 9   # bounded: it measured no red (#1687)
+  [ $grc = 4 ] && printf '%s\n' "$out" | /usr/bin/grep -q '^gate: bounded: ' && return 9   # bounded: it measured no red (#1687); a bare exit 4 is the command's own red (#1699)
   [ $grc = 0 ] && return 0
   printf '%s\n' "$out" | tail -5 >&2; return 1
 }
@@ -784,7 +784,7 @@ child_gate() {
 # passed_before <sha>: the gate history holds a pass for this tree whose scope covers a tip check (delta or full).
 passed_before() { awk -F'\t' -v s="$1" '$3 == "pass" && $4 == s && $8 == "pass" && ($7 == "delta" || $7 == "full") { f = 1 } END { exit !f }' "$SG_STATE/gate-history" 2>/dev/null; }
 wave_check() {
-  local S=$1 w=$2 rc crc found cx clog oc of hsha mk
+  local S=$1 w=$2 rc crc found cx clog oc of hsha mk look=1
   [ -n "$tipgate" ] || return 0
   of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
@@ -812,7 +812,7 @@ wave_check() {
          : ;;                                          # any other exit is the red path below
     esac
     hsha=$($G -C "$S" rev-parse HEAD 2>/dev/null); mk="$SG_STATE/auto/tipred-$(printf '%s' "$w" | tr / _)"
-    if [ -n "$hsha" ] && [ "$(cat "$mk" 2>/dev/null)" != "$hsha" ] && passed_before "$hsha"; then
+    if [ $look = 1 ] && [ -n "$hsha" ] && [ "$(cat "$mk" 2>/dev/null)" != "$hsha" ] && passed_before "$hsha"; then   # only before a child left in this pass: one marker cannot follow two tips (#1699)
       mkdir -p "$SG_STATE/auto" 2>/dev/null; printf '%s\n' "$hsha" > "$mk"; rm -f "$of"; return 6
     fi
     found=""; while read -r sha; do
@@ -828,7 +828,7 @@ wave_check() {
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
     wave_fact "$run" "$cx" refused "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
     requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
-    dropped="${dropped:+$dropped }$cx"   # land keeps the set: the tree it pushes lacks this child's commits (#1416)
+    dropped="${dropped:+$dropped }$cx"; look=0   # land keeps the set: the tree it pushes lacks this child's commits (#1416)
     echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
   done
 }
