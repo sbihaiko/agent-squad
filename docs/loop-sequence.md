@@ -65,6 +65,7 @@ Three rules follow from the list:
 
 ### How to measure
 
+- **Live, by CPU:** the hub's `Loop` tab. Its `CPU sampling` switch is off by default; on, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree, with every process outside the loop in one context row.
 - **Slow lane, by wall time:** `$SG_STATE/cycle.log`. A line `HH:MM:SS <step> <secs>s` is a step of 5 s or more; `CYCLE <secs>s` ends each cycle.
 - **Gates:** `$SG_STATE/gate-history`, one line a gate run: kind, scope, outcome, seconds, and the machine load at its start and finish. `gate_load_set.py` prints the labeled rows.
 - **Runs:** each `record.jsonl` under `worktrees/*/*/runs/run-*/`: the time between `run_start`, `spawn_accepted`, the child's outcome, each `review_round`, each `gate_start` and `gate_result`, and the verdict.
