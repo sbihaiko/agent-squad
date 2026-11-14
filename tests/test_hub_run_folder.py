@@ -1,0 +1,85 @@
+"""The board answer finds the folder of each holding run without a walk of every run root per card (#1771).
+
+`/api/board` asks `holder_fact` for every held card, and each asked `run_folder`, which globbed every worktree of the
+checkout and statted each root's record. A found folder is now read back with one stat, and the root list is read again
+only after a short bound, so a new worktree still shows up.
+"""
+import importlib.util
+import os
+import tempfile
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+
+
+@pytest.fixture()
+def hub(tmp_path, monkeypatch):
+    os.environ.setdefault("SG_REPO", "x/y")
+    os.environ.setdefault("SG_OWNER", "x")
+    os.environ.setdefault("SG_PROJECT", "4")
+    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
+    os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    spec = importlib.util.spec_from_file_location("hub_run_folder", HUB_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    co = tmp_path / "co"
+    (co / "runs").mkdir(parents=True)
+    monkeypatch.setattr(mod, "CHECKOUT", str(co))
+    monkeypatch.setattr(mod, "PROJECTS", "")
+    monkeypatch.setattr(mod, "FORK_DIR", "")
+    return mod, co
+
+
+def _run(root, name):
+    d = root / name
+    d.mkdir(parents=True)
+    (d / "record.jsonl").write_text("{}\n")
+    return d
+
+
+def _count_walks(mod, monkeypatch):
+    calls = []
+    real = mod.run_roots
+    monkeypatch.setattr(mod, "run_roots", lambda co: calls.append(co) or real(co))
+    return calls
+
+
+def test_a_found_run_folder_is_read_again_without_a_walk_of_the_roots(hub, monkeypatch):
+    mod, co = hub
+    folder = _run(co / "worktrees" / "run" / "a" / "runs", "run-1")
+    walks = _count_walks(mod, monkeypatch)
+    assert mod.run_folder("run-1") == folder
+    first = len(walks)
+    for _ in range(20):
+        assert mod.run_folder("run-1") == folder
+    assert len(walks) == first, "each held card walks every run root again"
+
+
+def test_the_roots_are_walked_once_for_many_cards_inside_the_bound(hub, monkeypatch):
+    mod, co = hub
+    for i in range(5):
+        _run(co / "runs", f"run-{i}")
+    walks = _count_walks(mod, monkeypatch)
+    for i in range(5):
+        mod.run_folder(f"run-{i}")
+        mod.run_folder("run-missing")
+    assert len(walks) <= 1, f"the roots were walked {len(walks)} times for one board answer"
+
+
+def test_a_run_folder_that_is_gone_is_looked_up_again(hub):
+    mod, co = hub
+    old = _run(co / "runs", "run-9")
+    assert mod.run_folder("run-9") == old
+    (old / "record.jsonl").unlink()
+    assert mod.run_folder("run-9") is None, "a folder whose record is gone is still named"
+
+
+def test_a_run_in_a_new_worktree_is_found_after_the_bound(hub, monkeypatch):
+    mod, co = hub
+    assert mod.run_folder("run-new") is None
+    folder = _run(co / "worktrees" / "child" / "b" / "runs", "run-new")
+    monkeypatch.setattr(mod, "ROOTS_TTL", 0.0)
+    assert mod.run_folder("run-new") == folder, "a run in a worktree made after the last walk is never found"
