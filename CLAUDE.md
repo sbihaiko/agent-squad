@@ -181,7 +181,7 @@ GitHub Issues of `sbihaiko/agent-squad` (private), through `gh`. See `docs/agent
 
 ### Triage labels
 
-`ready-for-agent`, `ready-for-human`, `wontfix`. An agent-created issue also carries `bug`, `enhancement`, or `spec`; a defect carries `bug`. Guard: `contrib/squad-goal/scripts/test-health.sh`. See `docs/agents/triage-labels.md`.
+`ready-for-agent`, `ready-for-human`, `ready-for-HAL9K`. Todo plus no holder is the signal; the pass writes `ready-for-agent`. An agent-created issue carries `bug`, `enhancement`, `spec`; a defect carries `bug`. Guard: `contrib/squad-goal/scripts/test-health.sh`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 

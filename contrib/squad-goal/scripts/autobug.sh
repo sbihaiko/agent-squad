@@ -1,8 +1,8 @@
 #!/bin/bash
 # usage: autobug.sh   (called by watch.sh every ~6 min; AB_DRY=1 prints what it would dispatch)
 # Automatic bug/debt fixing: every open issue labeled $SG_BUG_LABEL (then, only when none of those is startable, `debt`) that no open work branch names, no dispatch
-# marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict), none of $SG_BUG_SKIP_LABELS, the go label
-# $SG_FRONTIER_LABEL and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
+# marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict), none of $SG_BUG_SKIP_LABELS
+# (the holder and hold floor) and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
 # per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
 # runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
@@ -143,7 +143,8 @@ ab_resume_startable() {   # <issue> <board read>: 0 when the issue still passes 
   ab_check_open "$n"; [ "${#live[@]}" -eq 1 ] || return 1
   labels=$(jq -r --argjson n "$n" '[.[]|select(.number==$n)][0].labels[]? | (if type=="object" then .name else . end)' "$F/issues.json" 2>/dev/null | paste -sd, -)
   for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ "$s" = 0 ] || return 1
-  case ",$labels," in *",$go,"*) ;; *) return 1;; esac
+  # The column plus no holder is the candidate rule (#1679, ADR-0142): the skip set carries every holder and hold, and the
+  # go label is the pass's record, never a gate the resume reads.
   col=$(printf '%s\n' "$board" | awk -F '\t' -v n="$n" '$1 == n { print $2; exit }')
   case "$col" in "${SG_TODO:-Todo}"|"$doing") ;; *) return 1;; esac
   flab=; case ",$labels," in *",frozen:not-startable,"*) flab=1;; esac
