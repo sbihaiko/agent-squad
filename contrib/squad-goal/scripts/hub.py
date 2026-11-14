@@ -30,6 +30,7 @@ BOARD_COLUMNS = _columns_module.view_columns()
 BOARD_LANES = _columns_module.LANES
 COLUMN = {**_columns_module.ROLE, **{lane["key"]: lane["name"] for lane in BOARD_LANES}}
 BOARD_NAMES_JSON = json.dumps(COLUMN, separators=(",", ":"))
+DOING = _columns_module.DOING   # the one name of the claimed column: the hub names no column of its own
 BOARD_DOING_JSON = json.dumps(_columns_module.DOING)
 BOARD_REVIEW_JSON = json.dumps(_columns_module.CODE_REVIEW)
 BOARD_CHART_ROLES = {**{f"var(--s{i})": f"--chart-series-{i}" for i in range(1, 9)}, "var(--wait)": "--chart-wait", "var(--acc)": "--chart-bar", "var(--ok)": "--chart-ok", "var(--warn)": "--chart-warn", "var(--err)": "--chart-err", "var(--none)": "--chart-none", "var(--run)": "--chart-run", "var(--drop)": "--chart-drop", "var(--mute)": "--chart-series-other"}
@@ -3369,7 +3370,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
     if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
     live_holds = {n for r in hold_rows(now=now, state=base) for n in r["issues"]}   # a held card is its hold, drawn beside the runs (#1713)
     for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
-        if (cache_row_column(i, moves, window) == "Doing" and i.get("s") != "closed" and i.get("n") not in held
+        if (cache_row_column(i, moves, window) == DOING and i.get("s") != "closed" and i.get("n") not in held
                 and str(i.get("n")) not in live_holds and "ready-for-human" not in (i.get("l") or [])):
             lines.append(f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run")
     if not lines: lines.append("no live work")
