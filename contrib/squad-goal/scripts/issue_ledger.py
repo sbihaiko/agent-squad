@@ -54,7 +54,7 @@ cause or any other state of the run closes the episode, and `rearm` closes it an
 A keyed writer passes the episode's `start`; a key that is not the open episode's is `stale` and writes nothing. A writer that
 may not wait for the lock (`wait` false) is `locked`. `read <key> episodes` gives each episode with its age.
 `open_episodes` reads every issue's open episodes in one pass over the state directory, for a reader that needs the whole
-queue and never one read per child.
+queue and never one read per child, and keeps that pass until one of the ledger files changes (#1746).
 
 A `landed` fact is the landing pass's own record (`wave.sh` for a wave, `branchland.sh` for a pushed work branch): the issue's
 work is in the base. It is keyed by the run that landed it (`kind` run) or by the branch a branchland pass landed (`kind`
@@ -105,6 +105,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import threading
 import time
 
 LEDGERS = ("own", "loop")
@@ -257,24 +258,52 @@ def _key_of(name):   # the issue key a ledger file name spells, `<owner>__<repo>
     return key
 
 
+_OPEN_CACHE: dict = {}   # state dir -> (pass token, files' signature, open episodes, read): the queue kept between ticks (#1746)
+_OPEN_LOCK = threading.Lock()
+
+
+def _state_signature(d):
+    """The ledger files' own signature: each file's name, modification time and size, in name order. A reader compares it
+    with the pass it kept, so an unchanged ledger is served from that pass and no file is opened."""
+    sig = []
+    for f in sorted((d / "state").glob("*.json")):
+        try: st = f.stat()
+        except OSError: return None
+        sig.append((f.name, st.st_mtime_ns, st.st_size))
+    return tuple(sig)
+
+
 def open_episodes(state=None, now=None):
     """Every open hold episode in the ledger, in one pass over the state directory (#1173): each issue file is opened
     once, and an episode with no `closed` is a child that still waits. Each episode carries its key beside its run, cause,
     start, count and age, oldest first. `read` is False when a file the ledger owns does not parse as one: the queue is
-    then unknown, never empty, because a missing reading is not a reading of nothing (ADR-0018)."""
+    then unknown, never empty, because a missing reading is not a reading of nothing (ADR-0018).
+    The pass is kept until one of the ledger files changes (#1746): the footer asks once a tick, and an unchanged ledger
+    is one signature of a few stats, never a parse of every issue. An age is measured against the caller's own `now`."""
     d = pathlib.Path(state) if state is not None else state_dir()
     now = time.time() if now is None else now
-    out, read = [], True
-    for f in sorted((d / "state").glob("*.json")):
-        try: rec = json.loads(f.read_text())
-        except (OSError, ValueError): read = False; continue
-        key = _key_of(f.name)
-        if not isinstance(rec, dict) or key is None: read = False; continue
-        try: eps = episodes(rec, now)
-        except (KeyError, TypeError): read = False; continue
-        out += [{"key": key, **{k: e[k] for k in ("run", "cause", "start", "count", "age")}} for e in eps if e["open"]]
-    out.sort(key=lambda e: e["start"])
-    return {"episodes": out, "read": read}
+    token = time.monotonic_ns()
+    sig = _state_signature(d)
+    with _OPEN_LOCK:
+        kept = _OPEN_CACHE.get(str(d)) if sig is not None else None
+    if kept is not None and kept[1] == sig:
+        out, read = kept[2], kept[3]
+    else:
+        out, read = [], True
+        for f in sorted((d / "state").glob("*.json")):
+            try: rec = json.loads(f.read_text())
+            except (OSError, ValueError): read = False; continue
+            key = _key_of(f.name)
+            if not isinstance(rec, dict) or key is None: read = False; continue
+            try: eps = episodes(rec, now)
+            except (KeyError, TypeError): read = False; continue
+            out += [{"key": key, **{k: e[k] for k in ("run", "cause", "start", "count")}} for e in eps if e["open"]]
+        out.sort(key=lambda e: e["start"])
+        if sig is not None:
+            with _OPEN_LOCK:
+                held = _OPEN_CACHE.get(str(d))
+                if held is None or held[0] < token: _OPEN_CACHE[str(d)] = (token, sig, out, read)
+    return {"episodes": [{**e, "age": round(now - e["start"], 3)} for e in out], "read": read}
 
 
 def read(key):   # a corrupt file, or a missing one beside the old counters, reads held with its cause: the reader holds the issue

@@ -865,6 +865,7 @@ def test_a_retired_subscription_in_the_stores_surfaces_nowhere(hub, monkeypatch,
     plans.write_text(json.dumps({gone: {"plan": "code", "amount": 19, "currency": "USD"}}))
     monkeypatch.setattr(hub, "PLANS", plans)
     monkeypatch.setattr(hub, "quota", {gone: {"asof": now - 60, "windows": [{"label": "month", "pct": 99.0, "resets": now + 86400}]}})
+    monkeypatch.setattr(hub, "all_runs", lambda: [])
     assert gone not in hub.SUBS and gone not in hub.PRESETS and gone not in hub.plans_get()
     assert gone not in {r["key"] for r in hub.subs_gauges(now)}
     assert gone not in hub.subs_month()

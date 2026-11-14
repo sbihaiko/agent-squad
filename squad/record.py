@@ -44,6 +44,7 @@ REQUIRED = {
     "diagnostic": ["source", "node", "entry", "payload"],
     "ceiling_wait": ["ceiling", "cap", "live", "holder"],   # a run or a dispatch child waits for a slot of the machine-wide ceiling (squad/caps.py)
     "workspace_commit": ["node", "entry", "workspace", "path", "status"],   # #84: the engine committed a passing node's dirty workspace (`head`), or refused (`reason`)
+    "signal": ["signal", "pid", "ppid", "pgid"],   # a SIGTERM, SIGHUP or SIGINT ended the engine; the time is `ts` (squad/killed.py)
     "verdict": ["verdict", "exit_code", "reasons", "remains", "folded"],
 }
 OUTCOMES = {"pass", "fail", "deadline", "needs-human"}

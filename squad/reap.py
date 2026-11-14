@@ -38,10 +38,12 @@ dispatch (#1270).
 usage: python3 -m squad.reap <active-runs.txt> <checkout> [--dry]
        python3 -m squad.reap --slots <active-runs.txt> <checkout>
 """
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -58,6 +60,31 @@ STALE_SLOT_S = 300    # a holder with no live lease and no live process this lon
 # A run's process: its engine (`squad start` or `squad resume`), a gate or a session. A dashboard server is none of them (#1270).
 # janitor.py carries a copy of this pattern (`LIVE`); test_machine_caps.py holds the two equal.
 LIVE_PROC = re.compile(r"gate\.sh\b|_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad(?!\.dashboard_server)\b|[s]quad (start|resume)( |$)")
+KILL_CMD = re.compile(r"\b(kill|pkill|killall)\b")
+SCRIPT_CMD = re.compile(r"\.(sh|bash|zsh|py)\b")
+TEMP_ROOTS = ("/tmp/", "/private/tmp/", tempfile.gettempdir() + "/")
+
+
+def _table():
+    """The process table as {pid: Proc}, or None when the system does not give it."""
+    try:
+        return PR.snapshot()
+    except PR.ReadError:
+        return None
+
+
+def _keep_evidence(folder, now, table):
+    """Write `reap-evidence.json` beside the record: when the reaper found the run gone, and the live kill commands and the
+    parentless temp-folder scripts of that moment. The verdict stays the one fact; this file is what a reader reads after it."""
+    rows = list(table.values()) if table is not None else []
+    evidence = {
+        "found_gone_at": now,
+        "processes_read": table is not None,
+        "kill_commands": [{"pid": p.pid, "command": p.command} for p in rows if KILL_CMD.search(p.command)],
+        "temp_orphans": [{"pid": p.pid, "ppid": p.ppid, "command": p.command} for p in rows
+                         if p.ppid == 1 and SCRIPT_CMD.search(p.command) and any(t in p.command for t in TEMP_ROOTS)],
+    }
+    record.atomic_write(folder / "reap-evidence.json", json.dumps(evidence, indent=2) + "\n")
 
 
 def _procs():
@@ -96,9 +123,9 @@ def _held(ceiling, name, names=None):
     return any(h == name or str(h).startswith(name + ":") for h in names)
 
 
-def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, say=print):
+def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, say=print, table=None):
     """One maintenance pass. Return the names of the runs given (or, with `dry`, that would get) the killed verdict.
-    `ceiling` and `procs` (a list of (pid, cwd, command)) are injectable; None reads the machine."""
+    `ceiling` and `procs` (a list of (pid, cwd, command)) and `table` (a {pid: Proc} process table) are injectable; None reads the machine."""
     ceiling = ceiling or C.Ceiling({k: 1 for k in C.KINDS})
     ceiling.occupancy()   # free the dead leases of every kind first, whether a run is listed or not
     now = time.time() if now is None else now
@@ -139,7 +166,8 @@ def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, s
                     continue
             except record.RecordError:
                 continue   # a corrupt record is not ours to rewrite
-        why = f"its process {proc[0]} is gone" if proc is not None else "it named no process and none works in its folder"
+            _keep_evidence(folder, now, table if table is not None else _table())
+        why =f"its process {proc[0]} is gone" if proc is not None else "it named no process and none works in its folder"
         say(f"REAPED {folder.name}: no verdict and {why}; killed verdict written, active-runs line kept")
         done.append(folder.name)
     return done
