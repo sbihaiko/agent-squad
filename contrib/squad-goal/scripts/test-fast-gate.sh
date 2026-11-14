@@ -648,7 +648,7 @@ out=$(loadgate); rc=$?
 rm -rf "$T/caps"; mkdir -p "$T/caps"
 sleep 120 >/dev/null 2>&1 & capslive=$!
 PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps take gates other --count 11 --pid "$capslive" >/dev/null 2>&1
-out=$(fg); rc=$?
+out=$(SG_CALL_DEADLINE_SECONDS=2 fg); rc=$?
 [ $rc = 4 ] && ok "a gate with no slot to take answers unproven (exit 4), never 73" || ko "capacity answer: rc $rc, '$(last "$out")'"
 case "$(last "$out")" in *"budget is full"*) ok "the capacity answer names the machine's budget on its last line";; *) ko "capacity line: '$(last "$out")'";; esac
 # (#1715) The line is the one thing the child reads: it carries the word the request names and what the child does next, and it
@@ -657,6 +657,26 @@ case "$(last "$out")" in "fast-gate: inconclusive: "*"commit and report done"*"A
 case "$(last "$out")" in ""|*"does not pass"*) ko "1715 the capacity line is empty or still reads as a failed gate";; *) ok "1715 the capacity line names no failed gate";; esac
 PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps release gates other >/dev/null 2>&1
 kill "$capslive" 2>/dev/null; wait "$capslive" 2>/dev/null   # reaped here, so the kill prints no job line of its own
+
+# (ADR-0166) A child that finds no gate slot waits for one inside its deadline; the wait is gate wait, never run time. A stub
+# gate refuses its first calls with 73 and then runs its command, so each case takes the wait with no real lock or slot.
+sg=$T/sg; mkdir -p "$sg"; cp "$d/fast-gate.sh" "$d/base-battery.sh" "$d/caps.sh" "$sg/"
+printf '#!/bin/bash\nn=$(cat "$GATE_STUB_N" 2>/dev/null || echo 0); echo $((n+1)) > "$GATE_STUB_N"\n[ "$n" -lt "${GATE_STUB_73:-0}" ] && exit 73\nSG_SERIAL_HELD=gate exec "$@"\n' > "$sg/gate.sh"
+printf '#!/bin/bash\nsleep 30\n' > "$T/hang.sh"
+sgfg() { rm -f "$T/gate.n" "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && env -u SG_SERIAL_HELD -u SG_GATE_CALLER -u SG_GATE_WORKERS -u GATE_DEADLINE_EPOCH -u GATE_BOUND_SECONDS -u GATE_START_EPOCH -u GATE_DELTA_RESERVE_SECONDS GATE_STUB_N="$T/gate.n" SG_FAST_BASE=dev SG_FAST_CMD="${SG_FAST_CMD:-bash $T/base.sh}" SG_FAST_RETRY_CMD=false SG_GATE_BOUND_SECONDS="${SG_GATE_BOUND_SECONDS:-60}" SG_CALL_DEADLINE_SECONDS="${SG_CALL_DEADLINE_SECONDS:-60}" bash "$sg/fast-gate.sh" 2>&1); }
+
+out=$(GATE_STUB_73=2 sgfg); rc=$?; calls=$(cat "$T/gate.n" 2>/dev/null)
+[ $rc = 0 ] && [ "$calls" = 3 ] && ok "1760 no slot twice, then a slot: the child waits and its gate passes" || ko "1760 no slot then a slot: rc $rc calls '$calls' '$(last "$out")'"
+case "$out" in *"gate wait"*"not run time"*) ok "1760 the wait is named as gate wait, not run time";; *) ko "1760 no gate-wait line: '$out'";; esac
+
+out=$(GATE_STUB_73=99 SG_CALL_DEADLINE_SECONDS=2 sgfg); rc=$?
+[ $rc = 4 ] && case "$(last "$out")" in *"budget is full"*) ok "1760 no slot to the deadline: unproven (exit 4) on the budget line";; *) ko "1760 deadline budget line: '$(last "$out")'";; esac || ko "1760 no slot to the deadline: rc $rc '$(last "$out")'"
+
+out=$(SG_CALL_DEADLINE_SECONDS=2 SG_GATE_BOUND_SECONDS=2 SG_FAST_CMD="bash $T/hang.sh" GATE_STUB_73=1 sgfg); rc=$?
+[ $rc = 4 ] && case "$(last "$out")" in *"bounded"*) ok "1760 the bound with no defect named is unproven (exit 4), never a red";; *) ko "1760 bound line: '$(last "$out")'";; esac || ko "1760 bound: rc $rc '$(last "$out")'"
+
+out=$(GATE_STUB_73=1 BASE_FAIL=1 sgfg); rc=$?
+[ $rc = 1 ] && case "$out" in *"test_a"*) ok "1760 a measured red after a slot wait still fails the run (exit 1)";; *) ko "1760 real red: '$out'";; esac || ko "1760 real red: rc $rc '$(last "$out")'"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started

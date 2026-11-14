@@ -118,7 +118,15 @@ fi
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
   *) export SG_GATE_CALLER=${SG_GATE_CALLER:-child}
      if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2}; fi
-     SG_GATE_KIND=fast bash "$here/gate.sh" bash "$0" "$@"; fgrc=$?
+     # (ADR-0166) A child waits for a free slot inside its deadline; the wait is gate wait, never run time, because the gate
+     # starts its clock only once it holds the lock and its slots.
+     slot_by=$(( $(date +%s) + ${SG_CALL_DEADLINE_SECONDS:-1800} )); waited=0
+     while :; do
+       SG_GATE_KIND=fast bash "$here/gate.sh" bash "$0" "$@"; fgrc=$?
+       [ "$fgrc" = 73 ] && [ "$SG_GATE_CALLER" = child ] && [ "$(date +%s)" -lt "$slot_by" ] || break
+       [ "$waited" = 1 ] || { waited=1; echo "fast-gate: gate wait: no gate slot is free (caps.gates full); waiting for one, not run time"; }
+       sleep 1
+     done
      # (#1684) Exit 73 is the machine's budget, never this tree's: the gate took no slot, so it proved nothing and it broke
      # nothing. It answers unproven (exit 4), the answer every caller already reads as the machine's: branchland's
      # inconclusive path opens no fix round and gates the tip again on a later cycle, so a child keeps the work it committed
