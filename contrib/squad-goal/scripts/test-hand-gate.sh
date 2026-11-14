@@ -25,12 +25,12 @@ out=$(SG_GATE_WORKERS=6 SG_GATE_REASON="two-file fix" hg); rc=$?
 [ $rc = 2 ] && /usr/bin/grep -q 'takes at most 2 workers' <<<"$out" && [ ! -e "$T/py.log" ] && ok "a two-file delta above the small ceiling is refused" || ko "two files at 6: rc $rc: $out"
 
 out=$(SG_GATE_WORKERS=2 SG_GATE_REASON="two-file fix in a.txt and b.txt" hg); rc=$?
-[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 2 -m not heavy" "$T/py.log" && ok "a two-file hand fix runs its pytest with the low declared count" || ko "two files at 2: rc $rc: '$(cat "$T/py.log" 2>&1)' $out"
+[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -n 2 -m not heavy" "$T/py.log" && ok "a two-file hand fix runs its pytest with the low declared count" || ko "two files at 2: rc $rc: '$(cat "$T/py.log" 2>&1)' $out"
 /usr/bin/grep -q 'hand-gate: 2 workers, 2 files changed, reason: two-file fix in a.txt and b.txt' <<<"$out" && ok "the start line records the count, the file count and the reason" || ko "start line: $out"
 
 $G -C "$R" checkout -q gui/fix; echo 1 > "$R/c.txt"; $G -C "$R" add -A; $G -C "$R" commit -q -m third
 out=$(SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
-[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 6 -m not heavy" "$T/py.log" && ok "a delta above the small ceiling takes the count the hand gate declared" || ko "three files at 6: rc $rc: '$(cat "$T/py.log" 2>&1)' $out"
+[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -n 6 -m not heavy" "$T/py.log" && ok "a delta above the small ceiling takes the count the hand gate declared" || ko "three files at 6: rc $rc: '$(cat "$T/py.log" 2>&1)' $out"
 
 rm -rf "$T"
 [ $fail = 0 ] && echo "test-hand-gate: all ok" || { echo "test-hand-gate: FAILED"; exit 1; }

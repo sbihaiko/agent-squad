@@ -1,6 +1,7 @@
 #!/bin/bash
 # The base battery in one definition: the repository's own rule -- `ruff check squad tests`, `mypy squad` and the fast pytest
-# (and, for a delta, one serial pass over the same files at the project's 2 s line) -- that a local gate runs before the shell
+# (whose parallel pass records every unmarked call at or over the project's 2 s line, and runs only those calls once more,
+# serially, where the line is enforced) -- that a local gate runs before the shell
 # suites of the scripts a tip changes. fast-gate.sh runs it on the tip it is handed,
 # wave.sh builds the wave tip check over it, read against origin/$SG_BASE, and branchland.sh builds the landing check over it,
 # read against refs/sg-gate/<land>. One change here reaches all three, and no script keeps a copy.
@@ -23,7 +24,7 @@
 # `full`, the scope that line names. A delta the selector cannot cover answers `all` with its reason, so the full battery
 # runs and the record says why the delta refused: a cheaper scope never narrows a gate (ADR-0018).
 sg_battery_run() {
-  local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} scope why="the selector named no test file"
+  local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} scope why="the selector named no test file" out= defs=
   "$py" -m ruff check squad tests && "$py" -m mypy squad || return
   if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
@@ -34,13 +35,32 @@ sg_battery_run() {
   [ -z "${GATE_SCOPE_FILE:-}" ] || echo "$scope" > "$GATE_SCOPE_FILE"
   # (#1249) No pytest ran, so nothing is proven: the line names why, and fast-gate.sh reads it as an unproven verdict.
   [ "$line" != "selected 0 files" ] || { echo "no pytest ran: the selection is empty: $why"; return 0; }
-  case $line in all:*) set -- ;; *) set -f; set -- $files ;; esac
-  "$py" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" || rc=$?
-  # (#1557) The serial 2 s line the CI complete tier enforces is proved here too, on the same delta: under xdist the line is
-  # only named, so a slow unmarked call stays green and reaches CI red. A full selection runs no serial pass: the whole
-  # battery serially is the promotion proof's run (ADR-0169), and it outgrows the gate's time budget.
-  case $line in all:*) ;; *) [ -n "$rc" ] || "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$? ;; esac
+  # (#1726) One pass, at the project's own line: the parallel run lifts no cap, so the slow-cap guard records every unmarked
+  # call at or over that line instead of hiding it under a 20 s threshold. The output is kept in a file the record is read
+  # from and tee'd on, so a run the deadline stops still logs what it printed before it.
+  set -f   # one word per file or node id: a parametrized id such as t[a.sh] never globs
+  case $line in all:*) set -- ;; *) set -- $files ;; esac
+  out=$(mktemp "${TMPDIR:-/tmp}/sg-battery.XXXXXX" 2>/dev/null)
+  if [ -n "$out" ]; then
+    "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+  else
+    "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" || rc=$?
+  fi
+  # (#1557, #1726) The serial 2 s line the CI complete tier enforces is proved on the calls that need it and on no others.
+  # Under xdist the guard records an unmarked call at or over the project line and does not fail it; those calls and only
+  # those run once more, serially, where the line is enforced. An empty record ends the battery there, with no second pytest
+  # run, so a green parallel pass costs one pass. A red parallel pass is never followed: the caller's retry names its failed
+  # tests (fast-gate.sh), and a full selection is no exception: only a recorded call is repeated, never the whole battery.
+  if [ "${rc:-0}" = 0 ] && [ -n "$out" ]; then
+    defs=$(sed -n 's/^SLOW-UNMARKED (deferred to the serial run): \(.*\) took [0-9.]* s,.*$/\1/p' "$out" | sort -u)
+    if [ -n "$defs" ]; then
+      set -- $defs
+      echo "serial line: $(printf '%s ' "$@")run once more, serially, at the project line"
+      "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$?
+    fi
+  fi
   set +f
+  [ -z "$out" ] || rm -f "$out"
   return "${rc:-0}"
 }
 

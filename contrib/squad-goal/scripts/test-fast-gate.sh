@@ -579,7 +579,8 @@ slowgate() { (cd "$sc" && env -u SG_FAST_CMD -u SG_TEST_SELECT -u SG_FAST_RETRY_
 out=$(slowgate); rc=$?
 [ $rc = 1 ] && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_slow.py::test_unmarked_slow"*) true;; *) false;; esac \
   && ok "1726 a slow unmarked call over the line is recorded, run again serially, and fails the gate by name" || ko "slow unmarked call: rc $rc, last '$(last "$out")'"
-[ "$(/usr/bin/grep -- '-m pytest' "$T/sc-argv.log" | tail -n 1)" = "-m pytest -p no:deepeval -p no:xdist -m not heavy tests/test_slow.py::test_unmarked_slow" ] \
+/usr/bin/grep -qx -- "-m pytest -p no:deepeval -p no:xdist -m not heavy tests/test_slow.py::test_unmarked_slow" "$T/sc-argv.log" \
+  && ! /usr/bin/grep -qx -- "-m pytest -p no:deepeval -p no:xdist -m not heavy tests/test_slow.py" "$T/sc-argv.log" \
   && ok "1726 the serial pass covers only the recorded call, never the whole selection" || ko "1726 serial scope: '$(cat "$T/sc-argv.log" 2>&1)'"
 if /usr/bin/grep -q "line for an unmarked call" "$T/sc-logs"/fast-gate-*.log 2>/dev/null; then ok "the log names the unmarked call over the line"
 else ko "slow log: '$(cat "$T/sc-logs"/fast-gate-*.log 2>&1 | tail -n 5)'"; fi
