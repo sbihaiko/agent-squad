@@ -129,16 +129,42 @@ def test_a_stopped_loop_reads_loop_off_never_no_live_work(hub):
     assert not any("no live work" in x for x in lines)
 
 
-def test_a_live_gate_lock_names_its_pid_and_the_child_it_serves(hub):
-    lock = Path(hub.STATE) / "locks" / "gate"
+def _held(hub, name, cmd=None):
+    lock = Path(hub.STATE) / "locks" / name
     lock.mkdir(parents=True, exist_ok=True)
     (lock / "pid").write_text(f"{os.getpid()}\n")
-    (lock / "cmd").write_text("bash contrib/squad-goal/scripts/fast-gate.sh\n")
+    if cmd is not None: (lock / "cmd").write_text(cmd + "\n")   # serial.sh writes the command name only: `bash`
+    return lock
+
+
+def test_a_live_gate_lock_names_the_run_it_checks_never_bash(hub):
+    """#1695: the lock file names `bash`; the holder command line names the run workspace the gate checks."""
+    lock = _held(hub, "gate", "bash")
+    line = "bash /r/worktrees/child/gui-1673/runs/run-20261113-204951-f6107e/ws/w/contrib/squad-goal/scripts/serial.sh gate bash x/gate.sh --inner bash contrib/squad-goal/scripts/fast-gate.sh"
     try:
-        lines = _lines(hub)
+        lines = _lines(hub, argv=lambda pid: line)
     finally:
         shutil.rmtree(lock)
-    assert any(f"pid {os.getpid()}" in x and "fast-gate.sh" in x for x in lines)
+    assert f"gate: pid {os.getpid()} checks run run-20261113-204951-f6107e" in lines, lines
+    assert not any("serves" in x or x.endswith("bash") for x in lines), lines
+
+
+def test_a_gate_lock_outside_a_run_names_its_gate_script(hub):
+    lock = _held(hub, "gate", "bash")
+    try:
+        lines = _lines(hub, argv=lambda pid: "bash /repo/contrib/squad-goal/scripts/serial.sh gate bash /repo/contrib/squad-goal/scripts/gate.sh --inner bash contrib/squad-goal/scripts/fast-gate.sh")
+    finally:
+        shutil.rmtree(lock)
+    assert f"gate: pid {os.getpid()} runs fast-gate.sh" in lines, lines
+
+
+def test_a_gate_lock_whose_command_line_is_unread_names_its_pid_alone(hub):
+    lock = _held(hub, "gate", "bash")
+    try:
+        lines = _lines(hub, argv=lambda pid: "")
+    finally:
+        shutil.rmtree(lock)
+    assert f"gate: pid {os.getpid()}" in lines, lines
 
 
 def test_a_ready_for_human_issue_is_listed_with_its_label(hub):
@@ -156,16 +182,15 @@ def test_a_closed_ready_for_human_issue_is_not_live_work(hub):
     assert any("#1681" in x for x in lines)
 
 
-def test_a_lock_that_names_no_command_claims_no_child(hub):
-    """#1692: the loop driver's `watch` lock holds a pid and no command; it serves no child."""
-    lock = Path(hub.STATE) / "locks" / "watch"
-    lock.mkdir(parents=True, exist_ok=True)
-    (lock / "pid").write_text(f"{os.getpid()}\n")
+def test_the_driver_locks_fold_into_one_line_with_no_pid(hub):
+    """#1692, #1695: a loop driver lock holds a pid and no command; it is no live work, so the drivers share one line."""
+    locks = [_held(hub, n) for n in ("watch", "single-autobug")]
     try:
         lines = _lines(hub)
     finally:
-        shutil.rmtree(lock)
-    assert f"lock watch: pid {os.getpid()}" in lines, lines
+        for lock in locks: shutil.rmtree(lock)
+    assert "loop drivers running: single-autobug, watch" in lines, lines
+    assert not any(str(os.getpid()) in x for x in lines), lines
 
 
 def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
