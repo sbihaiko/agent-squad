@@ -3347,9 +3347,11 @@ def gate_lock_line(pid, line, issues_of):
 def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
     """The Live work panel's lines, all from local state and the board read the hub already holds: the loop's state,
     each live run (its issue, node and age), each gate lock (its pid and the run it checks), the loop drivers, each hand hold, and each open
-    Doing card no live run names (work by hand). A ready-for-human card waits on the owner and is no live work (#1701)."""
+    Doing card no live run names (work by hand). A ready-for-human card waits on the owner and is no live work (#1701).
+    Doing is the column the board draws, an old Status name and a recorded move included, never the row's raw Status (#1713)."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
+    moves, window = (read_moves() if overlay_on() else {}), pending_window()   # the board's own column inputs, read once
     lines, issues_of, drivers, held = [], {}, [], set()
     if loop_state({}, now=now, state=base) == "off": lines.append("loop off")
     for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
@@ -3367,7 +3369,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
     if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
     live_holds = {n for r in hold_rows(now=now, state=base) for n in r["issues"]}   # a held card is its hold, drawn beside the runs (#1713)
     for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
-        if (i.get("st") == "Doing" and i.get("s") != "closed" and i.get("n") not in held
+        if (cache_row_column(i, moves, window) == "Doing" and i.get("s") != "closed" and i.get("n") not in held
                 and str(i.get("n")) not in live_holds and "ready-for-human" not in (i.get("l") or [])):
             lines.append(f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run")
     if not lines: lines.append("no live work")
