@@ -27,8 +27,9 @@ def _seconds(etime):
 
 def _table():
     # One -o per column: procps reads the text after `=` as the column's header, to the end of the argument, so a joined
-    # `pid=,ppid=,...` list is one column there and no row has four fields.
-    out = subprocess.run(["ps", "-e", "-o", "pid=", "-o", "ppid=", "-o", "etime=", "-o", "command="],
+    # `pid=,ppid=,...` list is one column there and no row has four fields. -ww keeps the whole command: a cut line
+    # loses the leftover's name.
+    out = subprocess.run(["ps", "-e", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "etime=", "-o", "command="],
                          capture_output=True, text=True).stdout
     rows = []
     for line in out.splitlines():

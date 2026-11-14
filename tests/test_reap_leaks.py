@@ -37,7 +37,8 @@ def _gone(pid):
 def test_a_leftover_the_session_started_is_ended(tmp_path):
     since = time.time()
     pid = _orphan(tmp_path / "tree", tmp_path)
-    assert reap_leaks.reap(tmp_path / "tree", since) == [pid]
+    seen = [r for r in reap_leaks._table() if r[0] == pid or "serial.sh" in r[3]]
+    assert reap_leaks.reap(tmp_path / "tree", since) == [pid], f"the table rows of the leftover: {seen}"
     assert _gone(pid), "the leftover outlived the reap"
 
 
@@ -72,3 +73,10 @@ def test_the_session_reaps_when_it_ends():
 def test_the_process_table_is_read_on_this_system():
     rows = reap_leaks._table()
     assert any(pid == os.getpid() for pid, _, _, _ in rows), "the table holds no row for this process: the ps columns were not read"
+    long = "x" * 300
+    child = subprocess.Popen(["bash", "-c", f"sleep 5; : {long}"])
+    try:
+        time.sleep(0.2)
+        assert any(pid == child.pid and long in cmd for pid, _, _, cmd in reap_leaks._table()), "ps cut a long command line"
+    finally:
+        child.kill()
