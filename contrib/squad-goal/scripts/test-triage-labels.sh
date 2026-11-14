@@ -45,9 +45,21 @@ out=$(run); rc=$?
 out=$(run); rc=$?
 [ "$rc" = 0 ] && [ "$(wc -l < "$T/labels" | tr -d ' ')" = 3 ] && ok "apply creates the one missing label" || ko "apply after a missing label: rc $rc: '$out'"
 
-docnames=$(awk '/^\| Label \| Kind \|/{t=1} t && /^\|/{print; next} t{exit}' "$doc" | /usr/bin/grep -o '`[^`]*`' | tr -d '`' | sort)
+# The doc's triage section, read by its own heading, never the first table the file happens to hold: the floor and lane
+# tables below are the dispatch vocabulary and name labels the bootstrap does not create (#1696).
+docnames=$(awk '/^The triage vocabulary is /{t=1; next} t && /^\|/{f=1; print; next} f{exit}' "$doc" | /usr/bin/grep -o '`[^`]*`' | tr -d '`' | sort)
 : > "$T/labels"; botnames=$(run --check | sed -n 's/^label missing: //p' | sort)
 [ -n "$docnames" ] && [ "$docnames" = "$botnames" ] && ok "the vocabulary doc names the labels the bootstrap creates" || ko "doc and bootstrap disagree: doc '$(echo $docnames)' bootstrap '$(echo $botnames)'"
+# The doc's floor table, read by its own heading, names exactly the labels the one skip-list library adds to a lane whatever
+# the profile says (#1696): the dispatch vocabulary the doc's prose lets an operator apply and remove.
+docfloor=$(awk '/^The holds are a floor/{t=1; next} t && /^\|/{f=1; print; next} f{exit}' "$doc" | /usr/bin/grep -o '`[^`]*`' | tr -d '`' | sort)
+codefloor=$( ( . "$d/skiplabels.sh"; SG_FRONTIER_SKIP_LABELS=; sg_skip_labels frontier ) | tr ',' '\n' | sort -u)
+[ -n "$docfloor" ] && [ "$docfloor" = "$codefloor" ] && ok "the doc's floor table names the floor labels both dispatch lanes add" || ko "doc floor and code floor disagree: doc '$(echo $docfloor)' code '$(echo $codefloor)'"
+# One source for the triage labels: profile-check reads them through the bootstrap's --check, never a list of its own (#1696).
+/usr/bin/grep -q 'triage-labels\.sh" --check' "$d/profile-check.sh" && ok "profile-check reads the triage labels through the bootstrap's --check" || ko "profile-check keeps a triage label list of its own instead of reading the bootstrap"
+required=$(sed -n 's/.*SG_LABELS_REQUIRED:=\([^"}]*\).*/\1/p' "$d/profile-check.sh" | head -1)
+twice=; for n in $docnames; do case " $required " in *" $n "*) twice="$twice $n";; esac; done
+[ -z "$twice" ] && ok "profile-check keeps no second list of the triage labels" || ko "profile-check names the triage labels in SG_LABELS_REQUIRED:$twice"
 run_arm=$(awk '/^  run\)/{t=1; next} t && /^  [a-z-]+\)/{exit} t' "$d/watchd.sh")
 printf '%s\n' "$run_arm" | /usr/bin/grep -q 'triage-labels\.sh' && ok "the watchd run, the path every loop driver takes, runs the label bootstrap" || ko "the watchd run does not run the label bootstrap, so a loop started through it creates none of the triage labels"
 exit $fail

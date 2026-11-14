@@ -96,5 +96,22 @@ fake_squad "$T/derived" "$shim"
 derived_sig=$(sigprobe "$T/derived" | sed -n 2p); shim_sig=$(sigprobe "$shim" | sed -n 2p)
 [ "$derived_sig" = "$shim_sig" ] && ok "the fake derives free_runs from the package it mirrors" || ko "the fake carries $derived_sig, the shim carries $shim_sig"
 
+# 9. #1696: the run arm refreshes the triage labels once it holds the slot and has written its run record, and a refresh
+#    that fails is a warning on stderr and watch.log, never a refusal of the run.
+cat > "$T/triage-labels.sh" <<TL
+#!/bin/bash
+if [ -e "$SG_STATE/watchd.runs/\$PPID" ]; then echo yes >> "$T/run-dir-mark"; else echo no >> "$T/run-dir-mark"; fi
+echo "boom: labels" >&2; exit 1
+TL
+chmod +x "$T/triage-labels.sh"; : > "$SG_STATE/cycle.log"; rm -f "$T/run-dir-mark" "$T/run-stderr"
+bash "$T/watchd.sh" supervise 2>"$T/run-stderr" & sv=$!
+for _ in $(seq 1 20); do [ -s "$T/run-dir-mark" ] && [ -s "$SG_STATE/cycle.log" ] && break; /bin/sleep 0.5; done
+[ "$(cat "$T/run-dir-mark" 2>/dev/null)" = yes ] && ok "the run arm refreshes the triage labels after its run record exists" || ko "the triage labels were refreshed before the run record: '$(cat "$T/run-dir-mark" 2>/dev/null)'"
+case "$(cat "$SG_STATE/cycle.log" 2>/dev/null)" in *"boom: labels"*) ok "the failed refresh keeps its own output in cycle.log";; *) ko "cycle.log does not name the failed refresh: '$(cat "$SG_STATE/cycle.log" 2>/dev/null)'";; esac
+case "$(cat "$T/run-stderr" 2>/dev/null)" in *"triage labels were not refreshed"*) ok "the failed refresh is a warning on stderr";; *) ko "the failed refresh said nothing on stderr: '$(cat "$T/run-stderr" 2>/dev/null)'";; esac
+/usr/bin/grep -q "triage labels were not refreshed" "$SG_STATE/watch.log" 2>/dev/null && ok "the failed refresh is a warning in watch.log" || ko "the failed refresh wrote no watch.log line"
+[ -n "$(ls "$SG_STATE/watchd.runs" 2>/dev/null)" ] && ok "a failed refresh never refuses the run" || ko "a failed refresh stopped the run: no run record"
+bash "$T/watchd.sh" stop >/dev/null 2>&1; kill -9 "$sv" 2>/dev/null; sv=; rm -f "$T/triage-labels.sh"
+
 [ "$fail" = 0 ] && echo "all cases passed" || echo "FAILURES"
 exit "$fail"

@@ -308,6 +308,15 @@ issues '[{"number":55,"title":"a","body":"b","labels":[{"name":"ready-for-human"
 r=$(run)
 [ "$(marked 55 56 57 60)" = 0 ] && [ "$(marked 58)" = 1 ] && ok "a profile list that names no floor still holds the holder cards, and the plain card is dispatched" || ko "a profile list lifted a floor: $(marked 55 56 57 60) holder marker(s), $(marked 58) plain: '$r'"
 
+# 9e) (#1696) needs-triage alone is the hold, under a profile list that names its own labels and no floor: a card that also
+#     carries ready-for-agent stays out, and the plain card beside it still goes out.
+scene triagefloor 24
+sed -i.bak 's/SG_FRONTIER_SKIP_LABELS=[^;]*;/SG_FRONTIER_SKIP_LABELS=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix;/' "$T/scripts/env.sh" && rm -f "$T/scripts/env.sh.bak"
+issues '[{"number":55,"title":"a","body":"b","labels":[{"name":"ready-for-agent"},{"name":"needs-triage"},{"name":"wave:01"}]},{"number":58,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 55)" = 0 ] && ok "needs-triage alone holds a card that also carries ready-for-agent, under the profile's own list" || ko "the frontier dispatched a needs-triage card: $(marked 55) marker(s): '$r'"
+[ "$(marked 58)" = 1 ] && ok "the plain card beside a needs-triage hold is dispatched" || ko "the plain card beside a needs-triage hold was not dispatched: '$r'"
+
 # 10) #340: a run parent issue is a roll-up of a run's children, never work. It carries the run-parent label, and the pass
 #     skips it whatever SG_FRONTIER_SKIP_LABELS says.
 scene parent

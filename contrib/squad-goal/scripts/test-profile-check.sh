@@ -35,6 +35,12 @@ row "a missing ready-for-HAL9K label is named" 1 "label missing: ready-for-HAL9K
 good; printf 'SG_LABELS_REQUIRED=bug\n' >> "$T/p/emu.sh"
 echo '[{"name":"bug"},{"name":"ready-for-agent"},{"name":"ready-for-human"},{"name":"needs-triage"}]' > "$T/labels"
 row "a missing ready-for-HAL9K label is named even when a profile narrows the required list" 1 "label missing: ready-for-HAL9K"
+# #1696: the triage labels are read through the bootstrap, so a profile that narrows SG_LABELS_REQUIRED names a missing
+# ready-for-agent or ready-for-human all the same, with the same 'label missing:' prefix.
+echo '[{"name":"bug"},{"name":"needs-info"},{"name":"wontfix"},{"name":"ready-for-human"},{"name":"ready-for-HAL9K"},{"name":"needs-triage"}]' > "$T/labels"
+row "a missing ready-for-agent label is named through the bootstrap" 1 "label missing: ready-for-agent"
+echo '[{"name":"bug"},{"name":"needs-info"},{"name":"wontfix"},{"name":"ready-for-agent"},{"name":"ready-for-HAL9K"},{"name":"needs-triage"}]' > "$T/labels"
+row "a missing ready-for-human label is named through the bootstrap" 1 "label missing: ready-for-human"
 echo "$all" > "$T/labels"
 printf ': "${SG_REPO:=owner/repo}"\n' > "$T/p/emu.sh"; row "the example placeholder is refused" 1 "SG_REPO"
 good; printf 'SG_PROJECT=\n' >> "$T/p/emu.sh"; row "an unset board is named" 1 "SG_PROJECT"
