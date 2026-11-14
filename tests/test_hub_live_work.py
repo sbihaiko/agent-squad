@@ -186,6 +186,17 @@ def test_a_doing_card_with_no_live_run_is_hand_work(hub):
     assert not any("#1690" in x or "#1691" in x for x in lines), lines
 
 
+def test_a_doing_card_a_live_hold_names_is_one_line_with_its_carrier(hub):
+    """#1713: a held card is its hold, with the carrier, and never again a card with no run."""
+    _closed(hub)
+    _hold(hub, 1713)
+    items = [{"n": 1713, "t": "The live work panel", "s": "open", "st": "Doing", "l": ["bug"]}]
+    lines = _lines(hub, items)
+    assert [r["label"] for r in hub.hold_rows()] == ["Manual · #1713"]
+    assert not any("hand work #1713" in x for x in lines), lines
+    assert [x for x in lines if "#1713" in x] == [], lines
+
+
 def test_a_doing_card_a_live_run_names_is_not_listed_twice(hub, monkeypatch, tmp_path):
     run = tmp_path / "run-20261113-000000-abcdef"
     run.mkdir()
