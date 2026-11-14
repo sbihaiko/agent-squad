@@ -582,7 +582,7 @@ case "$(last "$out")" in *"budget is full"*) ok "the capacity answer names the m
 # (#1715) The line is the one thing the child reads: it carries the word the request names and what the child does next, and it
 # no longer says the gate does not pass, which a child read as a failure of its run.
 case "$(last "$out")" in "fast-gate: inconclusive: "*"commit and report done"*"ADR-0164"*) ok "1715 the capacity line tells the child to commit and report done";; *) ko "1715 capacity line: '$(last "$out")'";; esac
-case "$(last "$out")" in *"does not pass"*) ko "1715 the capacity line still reads as a failed gate";; *) ok "1715 the capacity line names no failed gate";; esac
+case "$(last "$out")" in ""|*"does not pass"*) ko "1715 the capacity line is empty or still reads as a failed gate";; *) ok "1715 the capacity line names no failed gate";; esac
 PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps release gates other >/dev/null 2>&1
 kill "$capslive" 2>/dev/null; wait "$capslive" 2>/dev/null   # reaped here, so the kill prints no job line of its own
 
