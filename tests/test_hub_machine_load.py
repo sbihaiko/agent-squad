@@ -161,11 +161,11 @@ def test_the_record_names_the_worktrees_a_run_works_in(hub):
     p = Path(tempfile.mkdtemp()) / "record.jsonl"
     ev = [{"event": "run_start", "ts": "2026-10-11T10:00:00Z"},
           {"event": "outcome", "node": "route.router.7", "outcome": "pass", "ts": "2026-10-11T10:01:00Z",
-           "workspace": {"name": "child", "path": "/Users/bihaiko/wt-as-1776", "head": "abc123", "state": "clean"}},
+           "workspace": {"name": "child", "path": "/Users/owner/wt-as-1776", "head": "abc123", "state": "clean"}},
           {"event": "outcome", "node": "verify", "outcome": "pass", "ts": "2026-10-11T10:02:00Z",
            "workspace": {"name": ".", "path": "/r/checkout", "head": "def456", "state": "clean"}}]
     p.write_text("".join(json.dumps(e) + "\n" for e in ev))
-    assert hub.scan(str(p))["wts"] == ["/Users/bihaiko/wt-as-1776"]   # the target itself is not a worktree of its own
+    assert hub.scan(str(p))["wts"] == ["/Users/owner/wt-as-1776"]   # the target itself is not a worktree of its own
 
 
 # ---------------------------------------------------------------- the card marker
