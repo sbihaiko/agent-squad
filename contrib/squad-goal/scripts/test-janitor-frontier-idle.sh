@@ -11,14 +11,14 @@ mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/j
 printf '#!/bin/bash\n' > "$T/s/board.sh"; printf '#!/bin/bash\n' > "$T/bin/gh"; printf '#!/bin/bash\n' > "$T/notify"; chmod +x "$T/bin/gh" "$T/notify"; export PATH="$T/bin:$PATH"
 pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" "$@" python3 -I "$T/s/janitor.py" >/dev/null 2>&1; }
 alerts() { cat "$T/st/alerts.log" 2>/dev/null | /usr/bin/grep -c 'FRONTIER-IDLE'; }
-line='FRONTIER idle: 3 todo, 0 startable (2 no go label, 0 held, 0 sibling, 0 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)'
+line='FRONTIER idle: 3 todo, 0 startable (2 triage failed, 0 held, 0 sibling, 0 no slot, 1 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)'
 mark() { printf '%s\t%s\n' "$1" "$line" > "$T/st/frontier-idle"; }   # <epoch>: the streak's start and the frontier's own line
 pass env; [ "$(alerts)" = 0 ] && ok "no streak raises nothing" || ko "a pass with no streak alerted ($(alerts))"
 mark $(( $(date +%s) - 60 ))
 pass env; [ "$(alerts)" = 0 ] && ok "a streak younger than the bound raises nothing" || ko "a short streak alerted ($(alerts))"
 mark $(( $(date +%s) - 3601 ))
 pass env; [ "$(alerts)" = 1 ] && ok "a streak past the bound raises one alert" || ko "no alert past the bound ($(alerts))"
-cat "$T/st/alerts.log" | /usr/bin/grep 'FRONTIER-IDLE' | /usr/bin/grep -q '3 todo, 0 startable (2 no go label' && ok "the alert names the Todo count and the reasons" || ko "the alert does not carry the idle line: $(cat "$T/st/alerts.log")"
+cat "$T/st/alerts.log" | /usr/bin/grep 'FRONTIER-IDLE' | /usr/bin/grep -q '3 todo, 0 startable (2 triage failed' && ok "the alert names the Todo count and the reasons" || ko "the alert does not carry the idle line: $(cat "$T/st/alerts.log")"
 pass env; [ "$(alerts)" = 1 ] && ok "the same streak raises nothing again inside the bound" || ko "the same streak alerted twice ($(alerts))"
 printf '%s\n' $(( $(date +%s) - 3601 )) > "$T/st/frontier-idle-alert"   # a bound after the first alert
 pass env; [ "$(alerts)" = 2 ] && ok "a streak past a second bound raises again" || ko "a second bound raised nothing ($(alerts))"

@@ -38,14 +38,14 @@ if [ -n "$q" ]; then jq -r "$q" "$f"; else cat "$f"; fi
 GH
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
-cp "$(dirname "$src")/skiplabels.sh" "$T/scripts/skiplabels.sh"   # the one skip set (#1593): the stub pass below reads the real list
-printf '#!/bin/bash\n. "$(dirname "$0")/skiplabels.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_ledger_held() { return 1; }\nsg_ac_refused() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\nsg_todo_cards() { jq -r ".[].number" "$GH_ISSUES"; }\n' > "$T/scripts/startability.sh"   # every fixture card sits in Todo (#550)
+cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(dirname "$src")/skiplabels.sh" "$T/scripts/skiplabels.sh"   # the one skip set (#1593) and the shared reads (#428): the stub below keeps the real file's helpers and fixes only what this suite pins
+printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_ledger_held() { return 1; }\nsg_ac_refused() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\nsg_board_rows() { jq -r ".[]|\\"\\(.number)\\tTodo\\"" "$GH_ISSUES"; }\n' > "$T/scripts/startability.sh"   # every fixture card sits in Todo (#550)
 printf '#!/bin/bash\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\necho x >> "$MKLOG"; cp "$2" "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
 cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src")"/{models.json,req-checklist.txt} "$T/scripts/"
 printf '%%s\n' 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\n")' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,siblings.py,cluster.py} "$T/scripts/"   # the pass reads the open-issue list through the door
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,siblings.py,cluster.py,loopbug.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
 scene() { # <name>: fresh state, its own env.sh; no graph written here -- each case writes the one it needs
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
