@@ -211,26 +211,21 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   v=$(ci_verdict "$tip")
   case "$v" in
     pass)
+      # #1723: a tiered workflow promotes on its green fast tier and writes no full pass line and no squad/full-proof status,
+      # because no full suite ran; a workflow with one tier keeps the full record.
       if [ "$ci_tiered" = 1 ]; then
-        ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
+        ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }; carried="the CI fast tier carried the pass"
         echo "$(date -u +%FT%TZ) promote-pass: $tip CI fast tier green: $ci_jobs" >> "$log"
-        o=$(SG_PROMOTE_PROOF=ci bash "$d/promote-stg.sh" 2>&1); rc=$?
-        etip=$(printf '%s\n' "$o" | sed -n 's/^promote-stg: tip //p' | tail -n 1); etip=${etip:-$tip}
-        if [ $rc = 75 ]; then
-          echo "$(date -u +%FT%TZ) promote-pass: $etip waiting for CI: the check has not reported on it yet" >> "$log"
-          echo "promote-pass: $etip waiting for CI"; exit 0
-        fi
-        [ $rc = 73 ] && { refused "$tip" "not proven: the gate cap is full, retried later"; exit 0; }
-        [ $rc = 0 ] || { mark "$etip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-        mark "$etip" "promoted: the CI fast tier carried the pass"; exit 0
+      else
+        carried="the CI checks carried the full pass"
+        bash "$d/gate.sh" --status full pass "$tip"
+        # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
+        # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322). The status line is
+        # bounded by the Statuses API, so the log carries every name and the status counts the ones it leaves out (#1518).
+        ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
+        echo "$(date -u +%FT%TZ) promote-pass: $tip CI checks green: $ci_jobs" >> "$log"
+        why=$(full_status "$tip" "$(full_status_desc "$full_prefix" "${ci_names[@]}")") || { mark "$tip" "not promoted: $why"; exit 1; }
       fi
-      bash "$d/gate.sh" --status full pass "$tip"
-      # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
-      # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322). The status line is
-      # bounded by the Statuses API, so the log carries every name and the status counts the ones it leaves out (#1518).
-      ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
-      echo "$(date -u +%FT%TZ) promote-pass: $tip CI checks green: $ci_jobs" >> "$log"
-      why=$(full_status "$tip" "$(full_status_desc "$full_prefix" "${ci_names[@]}")") || { mark "$tip" "not promoted: $why"; exit 1; }
       # #1495: the CI proof is read on the tip promote-stg.sh promotes, which may be a later one than $tip when a landing moved
       # dev while the pass waited for the gate lock. A refusal is keyed to the tip it evaluated; a tip whose checks have not
       # reported (exit 75) is a wait with no marker, so a later pass retries.
@@ -243,7 +238,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       # (#1490) promote-stg.sh refused by the gate cap (try mode, exit 73) is a wait, never a verdict on the tip: no marker.
       [ $rc = 73 ] && { refused "$tip" "not proven: the gate cap is full, retried later"; exit 0; }
       [ $rc = 0 ] || { mark "$etip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-      mark "$etip" "promoted: the CI checks carried the full pass"; exit 0;;
+      mark "$etip" "promoted: $carried"; exit 0;;
     fail*) mark "$tip" "not promoted: CI ${v#fail } is red"; exit 1;;
   esac
   # (#1192) A tip whose CI has not answered yet is measured by waiting, never by a local suite. The suite saturates the machine
