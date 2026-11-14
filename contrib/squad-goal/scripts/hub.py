@@ -3395,11 +3395,29 @@ def holder_text(i):
     try: t = dt.datetime.fromtimestamp(float(t), dt.timezone.utc).strftime("%Y-%m-%d %H:%M")   # an epoch start
     except (ValueError, OverflowError, OSError): t = t[:16].replace("T", " ")   # an ISO start
     return f"held by {h['run']}" + (f" since {t} UTC" if t else "")
+ROOTS_TTL = 5.0   # seconds a walk of the run roots answers for: a run in a new worktree shows up after this bound (#1771)
+_roots_seen = {"t": None, "roots": ()}
+_run_folders = {}
 def run_folder(run):
-    """The folder of one run the profile's roots hold a record for, or None when no root holds one (#1661)."""
-    for root in sorted(own_roots()):
+    """The folder of one run the profile's roots hold a record for, or None when no root holds one (#1661). A found folder
+    is read again with one stat, and the roots are walked again only after ROOTS_TTL: the board answer asks once for each
+    held card, and a walk globs every worktree (#1771). A miss is never kept, and a change of the roots' sources (the
+    checkout, SG_PROJECTS, SG_FORK_DIR or the reader) drops both caches."""
+    key = (own_roots, CHECKOUT, PROJECTS, FORK_DIR)
+    if _roots_seen.get("key") != key:
+        _run_folders.clear(); _roots_seen.update(key=key, t=None, roots=())
+    known = _run_folders.get(run)
+    if known is not None and (known / "record.jsonl").is_file(): return known
+    _run_folders.pop(run, None)
+    now = time.monotonic()
+    if _roots_seen["t"] is None or now - _roots_seen["t"] >= ROOTS_TTL:
+        _roots_seen.update(t=now, roots=tuple(sorted(own_roots())))
+    for root in _roots_seen["roots"]:
         folder = pathlib.Path(root) / run
-        if (folder / "record.jsonl").is_file(): return folder
+        if (folder / "record.jsonl").is_file():
+            if len(_run_folders) > 512: _run_folders.clear()   # a bound, never a ledger: a cleared entry is found again
+            _run_folders[run] = folder
+            return folder
     return None
 def holder_fact(i, now=None):
     """(text, state) of the run that holds a card (#1661). `running` with `held by <run> since <start>` only while the run's
