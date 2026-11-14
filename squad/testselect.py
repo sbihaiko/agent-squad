@@ -10,6 +10,7 @@ INERT = "squad/testselect_inert.txt"
 SHARED = {"pyproject.toml", "uv.lock", "squad/testselect.py", INERT}
 DYNAMIC = {"import_module", "spec_from_file_location", "__import__"}
 LITERAL = {"import_module", "__import__"}
+LISTERS = {"glob", "rglob", "iterdir", "listdir", "walk", "scandir"}
 # A data file under tests/ is read by one module; its importers are the suites it reaches.
 DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
 # The gate stages that may run the delta: the tests a change reaches. The landing, the promotion proof and the nightly
@@ -54,9 +55,68 @@ def _with_ancestors(name):
     return {".".join(parts[:i]) for i in range(1, len(parts) + 1)}
 
 
+def _norm(text):
+    return text.removeprefix("./").rstrip("/")
+
+
+def _operands(node):
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _operands(node.left) + [node.right]
+    return [node]
+
+
+def _joins(node):
+    """The full text of each run of constants in a path join."""
+    found, run = set(), []
+    for part in _operands(node):
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            run.append(_norm(part.value))
+        elif run:
+            found.add("/".join(run))
+            run = []
+    if run:
+        found.add("/".join(run))
+    return found
+
+
+def _prefixes(text):
+    parts = text.split("/")
+    return {"/".join(parts[:i]) for i in range(1, len(parts) + 1)}
+
+
+def _strings(node):
+    """The strings a subtree names: each constant, and each path join's constant run with every prefix of it."""
+    found = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            found.add(_norm(sub.value))
+        elif isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Div):
+            for run in _joins(sub):
+                found |= _prefixes(run)
+    return found
+
+
+def _listed(call):
+    """The directories a listing call names: its receiver and arguments, each as a whole path."""
+    exprs = list(call.args) + ([call.func.value] if isinstance(call.func, ast.Attribute) else [])
+    found = set()
+    for expr in exprs:
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            found.add(_norm(expr.value))
+        elif isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+            found |= _joins(expr)
+    return found
+
+
+def _callee(call):
+    fn = call.func
+    return fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+
+
 def _scan(rel, text):
-    """The module names a file reaches, whether it imports something dynamically, the paths its string literals name, and its declared DEPENDS."""
-    names, dynamic, literals, declared = set(), False, set(), set()
+    """The module names a file reaches, whether it imports something dynamically, the paths its string literals name, the
+    directories it lists, and its declared DEPENDS."""
+    names, dynamic, declared = set(), False, set()
     name = _module(rel)
     pkg = name if rel.endswith("/__init__.py") else name.rpartition(".")[0]
     tree = ast.parse(text, filename=rel)
@@ -65,10 +125,12 @@ def _scan(rel, text):
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "DEPENDS" for t in node.targets):
             if isinstance(node.value, (ast.Tuple, ast.List)):
                 declared |= {e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+    literals = _strings(tree)
+    lists = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            literals.add(node.value.removeprefix("./").rstrip("/"))
-        elif isinstance(node, ast.Import):
+        if isinstance(node, ast.Call) and _callee(node) in LISTERS:
+            lists |= _listed(node)
+        if isinstance(node, ast.Import):
             for alias in node.names:
                 names |= _with_ancestors(alias.name)
         elif isinstance(node, ast.ImportFrom):
@@ -82,15 +144,14 @@ def _scan(rel, text):
                 for alias in node.names:
                     names |= _with_ancestors(f"{target}.{alias.name}")
         elif isinstance(node, ast.Call):
-            fn = node.func
-            called = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+            called = _callee(node)
             if called in DYNAMIC:
                 arg = node.args[0] if node.args else None
                 if called in LITERAL and isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     names |= _with_ancestors(arg.value)
                 else:
                     dynamic = True
-    return names, dynamic, literals, declared
+    return names, dynamic, literals, lists, declared
 
 
 def _scan_file(job):
@@ -106,11 +167,17 @@ def _inert(root):
     return {line.strip() for line in lines if line.strip() and not line.startswith("#")}
 
 
-def _named_by(named, rel):
+def _named_by(named, listed, rel):
+    # A test names a file by its path, a trailing path or its basename. A directory above the file selects a test only
+    # with that name, or when the test lists the directory: a test that names a directory has many scripts under it (#1784).
     parts = rel.split("/")
-    hits = set()
-    for i in range(1, len(parts) + 1):
-        hits |= named.get("/".join(parts[:i]), set())
+    file_named = set()
+    for i in range(len(parts)):
+        file_named |= named.get("/".join(parts[i:]), set())
+    hits = set(file_named)
+    for i in range(1, len(parts)):
+        directory = "/".join(parts[:i])
+        hits |= named.get(directory, set()) & (file_named | listed.get(directory, set()))
     return hits
 
 
@@ -180,11 +247,11 @@ def _answer(root, base):
     )
     with ProcessPoolExecutor() as pool:
         scanned = list(pool.map(_scan_file, [(root, rel) for rel in rels], chunksize=8))
-    importers, dynamic, named = {}, {}, {}
+    importers, dynamic, named, listed = {}, {}, {}, {}
     for rel, scan in scanned:
         if scan is None:
             _all(f"{rel} does not parse")
-        names, dyn, literals, declared = scan
+        names, dyn, literals, lists, declared = scan
         for name in names:
             importers.setdefault(name, set()).add(rel)
         if dyn:
@@ -192,10 +259,12 @@ def _answer(root, base):
         if _is_test(rel):
             for literal in literals:
                 named.setdefault(literal, set()).add(rel)
+            for directory in lists:
+                listed.setdefault(directory, set()).add(rel)
 
     selected = set()
     for rel in live:
-        hits = _named_by(named, rel)
+        hits = _named_by(named, listed, rel)
         if _is_test(rel):
             hits.add(rel)
         elif (rel.startswith("squad/") or rel in DATA_READERS.values()) and rel.endswith(".py"):
