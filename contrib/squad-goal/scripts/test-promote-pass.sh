@@ -295,6 +295,28 @@ SG_PROMOTE_CI_WAIT=0 SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tp" ] && [ "$(runs)" = "$((n + 1))" ] && ok "past the CI wait bound the local suite answers" \
   || ko "past the CI wait bound: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
 
+# (#1736) The wait runs from the pass that first found the tip's CI pending, never from the commit's own date. A tip that
+# lands by fast-forward keeps the date of the child's commit, so it is older than the wait the moment it reaches dev: read
+# from that date, the pass starts the local suite beside a CI that began seconds ago.
+GIT_COMMITTER_DATE="2020-01-01T00:00:00Z" adv dev ci-pending-old-commit; to=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$to" success success running running; SG_PROMOTE_CI_WAIT=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "an old commit whose CI is in flight waits: the wait runs from the first pending pass" \
+  || ko "old commit, CI in flight: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
+[ "$(cut -f1 "$SG_STATE/promote-ci-wait" 2>/dev/null)" = "$to" ] && ok "the wait record names the tip" \
+  || ko "wait record: '$(cat "$SG_STATE/promote-ci-wait" 2>/dev/null)'"
+SG_PROMOTE_CI_WAIT=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && ok "a second pass inside the wait keeps the first pass's start" \
+  || ko "second pass inside the wait: rc $rc, runs $(runs) was $n"
+printf '%s\t%s\n' "$to" "$(( $(date +%s) - 901 ))" > "$SG_STATE/promote-ci-wait"; echo 0 > "$T/suite-rc"
+SG_PROMOTE_CI_WAIT=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$to" ] && [ "$(runs)" = "$((n + 1))" ] && ok "a wait record older than the bound lets the local suite answer" \
+  || ko "wait record past the bound: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
+GIT_COMMITTER_DATE="2020-01-01T00:00:00Z" adv dev ci-pending-next-tip; tn=$(tip dev); n=$(runs)
+printf '%s\t%s\n' "$to" "$(( $(date +%s) - 5000 ))" > "$SG_STATE/promote-ci-wait"
+shards "$tn" success success running running; SG_PROMOTE_CI_WAIT=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(cut -f1 "$SG_STATE/promote-ci-wait")" = "$tn" ] && ok "a new tip starts its own wait" \
+  || ko "new tip: rc $rc, runs $(runs) was $n, record '$(cat "$SG_STATE/promote-ci-wait" 2>/dev/null)'"
+
 # The suite is the fallback for a CI that cannot answer: a fixture that has waited past the bound still runs it.
 adv dev shard-unfinished; tu=$(tip dev); echo 0 > "$T/suite-rc"; before=$(tip stg); n=$(runs)
 shards "$tu" success success running timed_out; SG_PROMOTE_CI_WAIT=0 SG_GHREAD="$T/bin/ghread" pass; rc=$?
