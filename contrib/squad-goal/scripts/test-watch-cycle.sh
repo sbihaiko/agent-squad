@@ -86,6 +86,7 @@ lane_down; run_cycles 1
 # 3) wtclean is not a per-cycle step: at most one run in three cycles, while a per-cycle step keeps its cadence
 run_cycles 3
 [ "$(count wtclean)" = 1 ] && ok "wtclean runs once in three cycles" || ko "wtclean ran $(count wtclean)× in 3 cycles"
+for _ in $(seq 1 50); do [ "$(count janitor)" -ge 3 ] && break; /bin/sleep 0.1; done   # the janitor is detached (#1774): its last pass may end after the cycle
 [ "$(count janitor)" = 3 ] && ok "a per-cycle step still runs every cycle" || ko "janitor ran $(count janitor)× in 3 cycles"
 
 # 4) reconcile does not hold the cycle, writes its own log, and stays out of cycle.log
@@ -300,5 +301,26 @@ for _ in $(seq 1 50); do [ -s "$ST/locks/single-promote-main/pid" ] && break; /b
 run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900; /bin/sleep 0.3
 [ "$(mcount)" = 0 ] && ok "16 a stg-to-main pass in flight is skipped, never doubled" || ko "16 the step ran beside a held pass ($(mcount))"
 kill -TERM "$hp" 2>/dev/null; wait "$hp" 2>/dev/null; rm -rf "$ST/locks/single-promote-main"; rm -f "$ST/landed.tsv" "$ST/promote-defer"
+
+# 17) (#1774) the janitor never holds the cycle: it runs detached under its own single-flight lock, as the promotion does.
+# A pass slower than the cycle lets the cycle write CYCLE and go on; the next cycle starts no second pass, names the holder
+# once, and the pass writes its own time to cycle.log when it ends. The stub sleeps on the real sleep for JAN_HOLD seconds.
+cat > "$S/janitor.sh" <<EOF
+#!/bin/bash
+echo janitor >> "$STEPS"
+/bin/sleep "\${JAN_HOLD:-0}"
+exit 0
+EOF
+chmod +x "$S/janitor.sh"
+lane_down; rm -rf "$ST/locks/single-janitor"; : > "$ST/cycle.log"; : > "$ST/active-runs.txt"
+t0=$(date +%s); run_cycles 2 JAN_HOLD=8; el=$(( $(date +%s) - t0 ))
+[ "$el" -lt 7 ] && ok "17 the cycle does not wait for a slow janitor pass (${el}s for two cycles with an 8 s pass)" || ko "17 the cycle waited for the janitor (${el}s)"
+/usr/bin/grep -Eq ' CYCLE [0-9]+s$' "$ST/cycle.log" && ! /usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log" && ok "17 the cycle wrote CYCLE while the pass still ran" || ko "17 cycle.log: $(tr '\n' '|' < "$ST/cycle.log")"
+[ "$(count janitor)" = 1 ] && ok "17 a pass in flight is never doubled" || ko "17 the janitor ran $(count janitor)x in two cycles beside a held pass"
+/usr/bin/grep -q "JANITOR skipped: a pass in flight holds the janitor lock (pid [0-9]" "$ST/cycle.log" && ok "17 the skip names the holder" || ko "17 no JANITOR skipped line: $(tr '\n' '|' < "$ST/cycle.log")"
+for _ in $(seq 1 120); do [ -d "$ST/locks/single-janitor" ] || break; /bin/sleep 0.1; done
+for _ in $(seq 1 30); do /usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log" && break; /bin/sleep 0.1; done
+/usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log" && ok "17 the pass writes its own time when it ends" || ko "17 no janitor.sh time line: $(tr '\n' '|' < "$ST/cycle.log")"
+printf '#!/bin/bash\necho janitor >> "%s"\n' "$STEPS" > "$S/janitor.sh"; rm -rf "$ST/locks/single-janitor"
 
 rm -rf "$T"; exit $fail

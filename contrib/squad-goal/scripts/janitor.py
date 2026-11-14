@@ -81,21 +81,43 @@ DEADLINE = float(os.environ.get("JANITOR_CALL_TIMEOUT", "60"))   # a call has a 
 # hardcoded path turns a missing tool into a failed pass. The shell resolves it into SG_LSOF (env.sh); this is the same
 # one resolution for a run with no shell around it, and the last entry keeps a tool outside both paths reachable.
 LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
+def _num(name, default):   # a bad value falls back to the default, never stops the pass
+    try: return float(os.environ.get(name) or default)
+    except ValueError: return float(default)
+PASS_DEADLINE = _num("SG_JANITOR_DEADLINE", 900)   # seconds a pass may run; 0 keeps no bound (#1774)
+SLOW_CALL = _num("SG_JANITOR_SLOW_CALL", 5)        # a call of this many seconds or more writes its time and its command
+T0, CALLS = time.monotonic(), [0]
+def note(m):   # a timing line for cycle.log: it is no action, so it never enters the pass summary that `acts` builds
+    if dry: print("JANITOR " + m, flush=True)
+    else: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
+def _over():   # past the pass deadline: one line in cycle.log and in alerts.log, then the pass ends here (#1774)
+    msg = f"pass deadline {PASS_DEADLINE:g}s: {CALLS[0]} calls, the rest of the pass is skipped"
+    note(msg)
+    if not dry: open(st / "alerts.log", "a").write(time.strftime("%F %T ") + "janitor " + msg + "\n")
+    raise SystemExit(0)   # a BaseException: no `except Exception` of a rule can keep the pass going
 def _run(a, cwd=None, env=None, timeout=None):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
     """Run one command and return (exit status, stdout), at most DEADLINE seconds. A pipe is never used: a command's
     grandchild that inherits stdout would hold the pipe past the child's exit, and the pass would wait for it for ever
-    (the loop stopped for 28 min on 2026-10-13). A deadline miss is one status of 1 and one line in the pass log."""
-    with tempfile.TemporaryFile("w+") as f:
-        try:
-            rc = subprocess.run(a, stdout=f, stderr=subprocess.DEVNULL, text=True, cwd=cwd, env=env, timeout=(DEADLINE if timeout is None else timeout) or None).returncode
-        except subprocess.TimeoutExpired:
-            say(f"call timed out after {(DEADLINE if timeout is None else timeout):g}s: {' '.join(a[:3])}")
-            return 1, ""
-        except OSError as e:
-            say(f"call failed: {' '.join(a[:3])}: {e}")
-            return 1, ""
-        f.seek(0)
-        return rc, f.read()
+    (the loop stopped for 28 min on 2026-10-13). A deadline miss is one status of 1 and one line in the pass log.
+    The pass has a deadline too (#1774): past SG_JANITOR_DEADLINE no call starts and the pass ends."""
+    if PASS_DEADLINE and time.monotonic() - T0 > PASS_DEADLINE: _over()
+    CALLS[0] += 1
+    t = time.monotonic()
+    try:
+        with tempfile.TemporaryFile("w+") as f:
+            try:
+                rc = subprocess.run(a, stdout=f, stderr=subprocess.DEVNULL, text=True, cwd=cwd, env=env, timeout=(DEADLINE if timeout is None else timeout) or None).returncode
+            except subprocess.TimeoutExpired:
+                say(f"call timed out after {(DEADLINE if timeout is None else timeout):g}s: {' '.join(a[:3])}")
+                return 1, ""
+            except OSError as e:
+                say(f"call failed: {' '.join(a[:3])}: {e}")
+                return 1, ""
+            f.seek(0)
+            return rc, f.read()
+    finally:
+        e = time.monotonic() - t
+        if e >= SLOW_CALL: note(f"slow call {e:.1f}s: {' '.join(str(x) for x in a[:4])}")
 def sh(*a): return _run(a)[1]
 def rc(*a): return _run(a)[0]
 alerts = st / "alerts.log"
@@ -224,17 +246,17 @@ def own_pass(q):
 _in_land = {}
 def in_land(sha):   # the commit is an ancestor of origin/<land>, read in the checkout as named_in_land reads it: the work reached the landing branch. A checkout with no such ref holds none
     if sha not in _in_land:
-        _in_land[sha] = subprocess.run(["git", "-C", str(co), "merge-base", "--is-ancestor", sha, f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"], capture_output=True).returncode == 0
+        _in_land[sha] = _run(["git", "-C", str(co), "merge-base", "--is-ancestor", sha, f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"])[0] == 0
     return _in_land[sha]
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def unpushed(f):   # #771: "<branch> <sha9> in <tree>" for each child tree of the run whose HEAD is in no origin/<land> and on no remote branch
     out = []
     for w in sorted((f / "ws").glob("*")) if (f / "ws").is_dir() else []:
-        r = subprocess.run(["git", "-C", str(w), "rev-parse", "HEAD"], capture_output=True, text=True)
-        sha = r.stdout.strip() if r.returncode == 0 else ""
+        r = _run(["git", "-C", str(w), "rev-parse", "HEAD"])
+        sha = r[1].strip() if r[0] == 0 else ""
         if not sha or in_land(sha): continue
-        if subprocess.run(["git", "-C", str(w), "branch", "-r", "--contains", sha], capture_output=True, text=True).stdout.strip(): continue
-        b = subprocess.run(["git", "-C", str(w), "branch", "--show-current"], capture_output=True, text=True).stdout.strip() or "detached"
+        if _run(["git", "-C", str(w), "branch", "-r", "--contains", sha])[1].strip(): continue
+        b = _run(["git", "-C", str(w), "branch", "--show-current"])[1].strip() or "detached"
         out.append(f"{b} {sha[:9]} in {w}")
     return out
 def read(f):
@@ -694,12 +716,12 @@ def run_branch_names(f, x):   # #1571: a branch of this run names the issue: a c
     # (`fix/<n>-...`, `gui/<n>-...`), or its commits carry the `Refs #<n>` line the engine writes. That branch is work still
     # to land, so its issue is not a stop signal.
     for w in sorted((f / "ws").glob("*")) if f is not None and (f / "ws").is_dir() else []:
-        b = subprocess.run(["git", "-C", str(w), "branch", "--show-current"], capture_output=True, text=True)
-        name = b.stdout.strip() if b.returncode == 0 else ""
+        b = _run(["git", "-C", str(w), "branch", "--show-current"])
+        name = b[1].strip() if b[0] == 0 else ""
         m = re.match(r"(?:fix|gui)/(\d+)(?:\D|$)", name)
         if m and m.group(1) == str(x): return True
-        log = subprocess.run(["git", "-C", str(w), "log", "--format=%B", "-n", "200"], capture_output=True, text=True)
-        if log.returncode == 0 and re.search(rf"\bRefs #{x}\b", log.stdout): return True
+        log = _run(["git", "-C", str(w), "log", "--format=%B", "-n", "200"])
+        if log[0] == 0 and re.search(rf"\bRefs #{x}\b", log[1]): return True
     return False
 def closed_undelivered(run_name, i, infos, f):   # #1571: a run whose work an issue's close already answered keeps
     # burning nodes and the machine-wide gate lock, so rule I ends it. Every accepted issue closed after the run started and
@@ -867,8 +889,8 @@ def named_in_land():   # {issue} whose fix is a commit in origin/<land>: its sub
     if _named_in_land is None:
         land = f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"
         base = os.environ.get("SG_LAND_SCAN_FROM", "").strip()   # a fork's last upstream commit: the upstream's `(#N)` subjects name its PRs, never this repository's issues (#759)
-        r = subprocess.run(["git", "-C", str(co), "log", "-n", "2000", "--format=%s", f"{base}..{land}" if base else land], capture_output=True, text=True)
-        _named_in_land = {m.group(1) for line in (r.stdout.splitlines() if r.returncode == 0 else []) if not line.startswith("TDD RED")
+        r = _run(["git", "-C", str(co), "log", "-n", "2000", "--format=%s", f"{base}..{land}" if base else land])
+        _named_in_land = {m.group(1) for line in (r[1].splitlines() if r[0] == 0 else []) if not line.startswith("TDD RED")
                           for m in [re.search(r"\(#(\d+)\)\s*$", line)] if m}
     return _named_in_land
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
@@ -1674,3 +1696,4 @@ if acts and not dry:
     kinds = {}
     for a in acts: k = a.split()[0] if not a.startswith("kill") else ("kill " + ("dashboard" if "dashboard" in a else "leftover")); kinds[k] = kinds.get(k, 0) + 1
     print("JANITOR " + ", ".join(f"{v} {k}" for k, v in kinds.items()) + " (details in cycle.log)", flush=True)
+note(f"pass {int(time.monotonic() - T0)}s: {CALLS[0]} calls")   # one count line a pass (#1774): a slow pass names its calls

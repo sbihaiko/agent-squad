@@ -48,6 +48,10 @@ on:
 # runs on that pull request, so the dev tip could never prove it. promote-main-pass.sh reads the complete tier's job names
 # the same way, the jobs that wait on the guard, and reads their runs on the sha it requested. A check run another event
 # skipped is no evidence of either tier.
+# Which branch supplies this file: a pull_request run executes the workflow of the pull request's merge commit, so the
+# head branch supplies it: stg carries the complete tier before the first stg-to-main request, the promote label starts
+# the tier from stg's copy, and main takes that same file in the fast-forward that moves it. The trigger reads the base
+# branch, main, to decide that the event starts a run.
 concurrency:
   group: ci-${{ github.head_ref }}-${{ github.event.action == 'labeled' && github.sha || 'tip' }}
   cancel-in-progress: ${{ github.event.action != 'labeled' }}

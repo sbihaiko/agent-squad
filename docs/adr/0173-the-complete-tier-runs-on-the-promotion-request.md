@@ -19,6 +19,13 @@ an hour; on the stg tip it runs once for a burst of promotions.
 - A run that ended `cancelled` or `timed_out` measured nothing. The guard does not count it, so a new label starts the
   tier again. The guard and the pass read that set of conclusions from one place.
 
+## The workflow file
+
+A `pull_request` run executes the workflow of the pull request's merge commit, so the head branch supplies the file. The
+stg-to-main pull request therefore reads `ci.yml` from `stg`: the `promote` label starts the complete tier from `stg`'s
+copy, and `main` takes that same file in the fast-forward that moves it. The first request needs no copy of the tier on
+`main`. The trigger reads the base branch, `main`, to decide that the event starts a run.
+
 ## The stg-to-main pass
 
 The watch cycle runs `promote-main-pass.sh` every cycle, detached, under its own single-flight lock and outside the quiet
