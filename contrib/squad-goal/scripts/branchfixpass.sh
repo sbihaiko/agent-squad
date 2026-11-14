@@ -12,7 +12,7 @@
 # a row. At SG_BRANCHFIX_STALLS (default 2) the branch is stalled and its rounds stop: one status line on the issue and the label frozen:owner, once. Changed
 # findings restart the count. At most SG_FIX_PASS_MAX fix runs (default 3) start per pass. watch.sh runs this under single.sh.
 # A loop defect is fixed outside the loop (ADR-0146, #841): no fix run for a branch whose issue carries `loop-bug` or a `loop-bug:*`
-# label, and none at all while LOOP STOP holds. Each such tip gets one BRANCHFIX SKIP line (auto/branchfix-skip-<key>-<sha9>).
+# label, and none at all while LOOP STOP holds or the loop is paused (auto/off, #1789). Each such tip gets one BRANCHFIX SKIP line (auto/branchfix-skip-<key>-<sha9>).
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=branchfix
@@ -102,6 +102,9 @@ while read -r sha br i; do
   [ -e "$A/branchfix-$key-$s9" ] && continue
   why=; case "$bugs" in *" $i "*) why="loop-bug, fixed outside the loop";; esac
   [ -n "$why" ] || [ -z "$lstop" ] || why="LOOP STOP holds, fixed outside the loop"
+  # (#1789) A paused loop (auto/off: an owner pause, or a stop or restart drain) starts no run, as autobug and autofrontier;
+  # the push back above still runs, so a round that ends under the pause still pushes its head.
+  [ -n "$why" ] || [ ! -e "$A/off" ] || why="the loop is paused (auto/off), no run starts"
   if [ -n "$why" ]; then   # a skip dispatches nothing and keeps no fix marker: the tip is dispatched when the label or the stop lifts
     [ -e "$A/branchfix-skip-$key-$s9" ] || { echo "BRANCHFIX SKIP $br: $why"; : > "$A/branchfix-skip-$key-$s9"; }
     continue
