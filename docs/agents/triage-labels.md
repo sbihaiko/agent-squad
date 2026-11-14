@@ -8,13 +8,13 @@ The triage vocabulary is three label strings on this repository's issue tracker.
 | `ready-for-human` | Holder | A person implements the card. No dispatch pass takes it. |
 | `ready-for-HAL9K` | Holder | The HAL9K agent implements the card. No dispatch pass takes it. |
 
-A permission authorizes when present. A holder holds when present, whatever else the card carries, even beside `ready-for-agent`. An absent label authorizes: a card that carries no holder is the agent's to take, once it carries `ready-for-agent` and sits in Todo.
+A permission authorizes when present. A holder holds when present, whatever else the card carries, even beside `ready-for-agent`. An absent label authorizes: a card that carries no holder and no hold is the agent's to take in Todo.
 
 `needs-triage` holds an issue that nobody has triaged. It is a hold on its own, so an untriaged issue is never read as an unlabelled one. Removing it is the triage.
 
-Every issue an agent creates also carries one product type label: `bug` for a defect, `enhancement` for a non-defect change, or `spec` for a specification. The vocabulary is the three labels in the first table; do not invent a fourth.
+Every issue an agent creates also carries one product type label: `bug` for a defect, `enhancement` for a non-defect change, or `spec` for a specification. The triage vocabulary is the three labels in the first table; do not invent a fourth.
 
-The holds are a floor of both dispatch lanes, the frontier pass and the bug pass. A card that carries a floor label is never a candidate, with or without `ready-for-agent`. A profile's own skip list adds labels and never removes one.
+The holds are a floor of both dispatch lanes, the frontier pass and the bug pass. A card that carries a floor label is never a candidate, with or without `ready-for-agent`. A profile's own skip list adds labels and never removes one. The floor and lane tables below name the labels the dispatch passes read: apply a floor label to hold a card, and remove it to release the card.
 
 | Floor label | Meaning |
 | --- | --- |
