@@ -19,6 +19,11 @@ import pytest
 from tests.test_janitor_card_done_base import janitor, sandbox, writes
 
 
+def _box(tmp_path: Path) -> None:
+    sandbox(tmp_path, "echo 0")
+    (tmp_path / "st/cq").mkdir()   # the comment queue the live state carries: a failed dispatch queues its comment there
+
+
 def _log(tmp_path: Path, name: str) -> str:
     f = tmp_path / "st" / name
     return f.read_text() if f.exists() else ""
@@ -26,7 +31,7 @@ def _log(tmp_path: Path, name: str) -> str:
 
 @pytest.mark.heavy
 def test_a_pass_past_its_deadline_refuses_every_further_call_and_says_so(tmp_path):
-    sandbox(tmp_path, "echo 0")
+    _box(tmp_path)
     p = janitor(tmp_path, SG_JANITOR_DEADLINE="0.000001", JANITOR_NOTIFY="/usr/bin/true")
     assert p.returncode == 0, p.stderr
     cyc, alerts = _log(tmp_path, "cycle.log"), _log(tmp_path, "alerts.log")
@@ -37,7 +42,7 @@ def test_a_pass_past_its_deadline_refuses_every_further_call_and_says_so(tmp_pat
 
 @pytest.mark.heavy
 def test_a_slow_call_is_named_and_the_pass_counts_its_calls(tmp_path):
-    sandbox(tmp_path, "echo 0")
+    _box(tmp_path)
     p = janitor(tmp_path, SG_JANITOR_SLOW_CALL="0", JANITOR_NOTIFY="/usr/bin/true")
     assert p.returncode == 0, p.stderr
     cyc = _log(tmp_path, "cycle.log")
@@ -49,7 +54,7 @@ def test_a_slow_call_is_named_and_the_pass_counts_its_calls(tmp_path):
 
 @pytest.mark.heavy
 def test_a_fast_pass_names_no_slow_call(tmp_path):
-    sandbox(tmp_path, "echo 0")
+    _box(tmp_path)
     janitor(tmp_path, JANITOR_NOTIFY="/usr/bin/true")
     cyc = _log(tmp_path, "cycle.log")
     assert "slow call" not in cyc, cyc

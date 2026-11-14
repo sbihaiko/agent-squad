@@ -220,7 +220,14 @@ if v:
   # worktree cleanup every third cycle (~4.5 min): the trees are almost always clean and ~17 s of every cycle is 10% of the loop (#1845).
   # An on-demand pass is unchanged: run scripts/wtclean.sh (the step is still self-contained, one pass over the worktrees).
   [ $((tick % 3)) -eq 1 ] && tm "$(dirname "$0")/wtclean.sh" 2>&1
-  tm "$(dirname "$0")/janitor.sh" 2>&1   # leftover processes of finished runs, zombie runs, idle dashboards, stale dispatch markers   # finished, pushed child worktrees
+  # The janitor (leftover processes of finished runs, zombie runs, idle dashboards, stale dispatch markers) runs detached under
+  # its own single-flight lock, as the promotion does (#1774): one pass of 5046 s held this cycle, and every landing read with
+  # it, for 2 h 40 min. A held lock is named, never waited for; the pass bounds itself (SG_JANITOR_DEADLINE in janitor.py) and
+  # writes its own time here when it ends. Its summary line still goes to this log's stdout.
+  ( j0=$SECONDS; o=$(bash "$(dirname "$0")/single.sh" janitor "$(dirname "$0")/janitor.sh" 2>&1); rc=$?; je=$((SECONDS - j0))
+    if [ "$rc" = 76 ]; then echo "$(date +%T) JANITOR skipped: a pass in flight holds the janitor lock (pid $(cat "$SG_STATE/locks/single-janitor/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
+    else [ -n "$o" ] && printf '%s\n' "$o"
+      { [ "$je" -ge 5 ] || [ "$rc" != 0 ]; } && echo "$(date +%T) janitor.sh ${je}s$([ "$rc" = 0 ] || echo " rc=$rc")" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null &
   # The live skill -- the copy this cycle and the owner's info bar actually run -- follows the repository copy through live-guard.sh
   # (publish-live.sh, one explicit file list). It runs before the vendorguard step, so a drift is read, published and named in the same cycle.
   tm bash "$(dirname "$0")/single.sh" liveguard bash "$(dirname "$0")/live-guard.sh" 2>&1   # the live skill follows the repository copy: the difference is read, published, and named
