@@ -294,6 +294,20 @@ issues '[{"number":53,"title":"a","body":"b","labels":[{"name":"no-auto"},{"name
 r=$(run)
 [ "$(marked 53 54)" = 2 ] && ok "a bug-lane label never holds a frontier card" || ko "the frontier skipped a bug-lane label: $(marked 53 54) marker(s): '$r'"
 
+# 9c) (#1673) a holder or needs-triage label holds a Todo card, with or without the go label: the frontier never takes it.
+scene holders 24
+issues '[{"number":55,"title":"a","body":"b","labels":[{"name":"frontier"},{"name":"ready-for-human"},{"name":"wave:01"}]},{"number":56,"title":"a","body":"b","labels":[{"name":"frontier"},{"name":"ready-for-HAL9K"},{"name":"wave:01"}]},{"number":57,"title":"a","body":"b","labels":[{"name":"frontier"},{"name":"needs-triage"},{"name":"wave:01"}]},{"number":59,"title":"a","body":"b","labels":[{"name":"ready-for-human"},{"name":"wave:01"}]},{"number":58,"title":"a","body":"b","labels":[{"name":"frontier"},{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 55 56 57 59)" = 0 ] && ok "a holder or needs-triage label keeps a frontier card out, beside or without the go label" || ko "a holder card was dispatched: $(marked 55 56 57 59) marker(s): '$r'"
+[ "$(marked 58)" = 1 ] && ok "a go-labelled card beside the holders is dispatched" || ko "the card beside the holders was not dispatched: '$r'"
+
+# 9d) (#1673) the floors hold under a profile list that names none of them: no holder card is dispatched, with or without ready-for-agent.
+scene floors 24
+sed -i.bak 's/SG_FRONTIER_SKIP_LABELS=[^;]*;/SG_FRONTIER_SKIP_LABELS=wontfix;/' "$T/scripts/env.sh" && rm -f "$T/scripts/env.sh.bak"
+issues '[{"number":55,"title":"a","body":"b","labels":[{"name":"ready-for-human"},{"name":"wave:01"}]},{"number":56,"title":"a","body":"b","labels":[{"name":"ready-for-HAL9K"},{"name":"wave:01"}]},{"number":57,"title":"a","body":"b","labels":[{"name":"needs-triage"},{"name":"wave:01"}]},{"number":58,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":60,"title":"a","body":"b","labels":[{"name":"ready-for-agent"},{"name":"ready-for-HAL9K"},{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 55 56 57 60)" = 0 ] && [ "$(marked 58)" = 1 ] && ok "a profile list that names no floor still holds the holder cards, and the plain card is dispatched" || ko "a profile list lifted a floor: $(marked 55 56 57 60) holder marker(s), $(marked 58) plain: '$r'"
+
 # 10) #340: a run parent issue is a roll-up of a run's children, never work. It carries the run-parent label, and the pass
 #     skips it whatever SG_FRONTIER_SKIP_LABELS says.
 scene parent

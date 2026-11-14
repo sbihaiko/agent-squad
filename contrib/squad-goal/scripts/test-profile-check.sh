@@ -5,7 +5,7 @@
 # usage: bash test-profile-check.sh
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/p" "$T/co"; git -C "$T/co" init -q; git -C "$T/co" remote add origin git@github.com:acme/emu.git
-all='[{"name":"bug"},{"name":"ready-for-agent"},{"name":"ready-for-human"},{"name":"needs-triage"},{"name":"needs-info"},{"name":"wontfix"}]'
+all='[{"name":"bug"},{"name":"ready-for-agent"},{"name":"ready-for-human"},{"name":"ready-for-HAL9K"},{"name":"needs-triage"},{"name":"needs-info"},{"name":"wontfix"}]'
 cat > "$T/reader" <<R
 #!/bin/bash
 echo "\$1" >> "$T/routes"; cat "$T/labels"
@@ -30,6 +30,11 @@ good; echo "$all" > "$T/labels"; row "a complete profile passes" 0 "profile emu:
 echo '[{"name":"bug"},{"name":"ready-for-agent"},{"name":"wontfix"}]' > "$T/labels"
 row "a missing label is named" 1 "label missing: ready-for-human"
 row "every missing label is named" 1 "label missing: needs-info"
+echo '[{"name":"bug"},{"name":"ready-for-agent"},{"name":"ready-for-human"},{"name":"needs-triage"},{"name":"needs-info"},{"name":"wontfix"}]' > "$T/labels"
+row "a missing ready-for-HAL9K label is named" 1 "label missing: ready-for-HAL9K"
+good; printf 'SG_LABELS_REQUIRED=bug\n' >> "$T/p/emu.sh"
+echo '[{"name":"bug"},{"name":"ready-for-agent"},{"name":"ready-for-human"},{"name":"needs-triage"}]' > "$T/labels"
+row "a missing ready-for-HAL9K label is named even when a profile narrows the required list" 1 "label missing: ready-for-HAL9K"
 echo "$all" > "$T/labels"
 printf ': "${SG_REPO:=owner/repo}"\n' > "$T/p/emu.sh"; row "the example placeholder is refused" 1 "SG_REPO"
 good; printf 'SG_PROJECT=\n' >> "$T/p/emu.sh"; row "an unset board is named" 1 "SG_PROJECT"

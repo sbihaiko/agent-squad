@@ -15,10 +15,11 @@
 # its structural labels -- it leaves the bug, debt and run-parent units to their own lanes. The bug lane adds needs-info, a
 # ticket that waits on an answer (#729). A label one lane skips is no hold for the other: no-auto and question belong to the
 # bug lane alone, and the frontier starts a card that carries one (health.sh reads the frontier lane for its idle alert).
+# The floor is spelled out in each arm, never a shared variable: a profile is sourced after this file and must not lift it (#1673).
 sg_skip_labels() {
   case "${1:-}" in
-    frontier) printf '%s,frozen:owner,frozen:dependency%s\n' "$SG_FRONTIER_SKIP_LABELS" "${2:+,$2}" ;;
-    bug) printf '%s,frozen:owner,frozen:dependency,needs-info\n' "$SG_BUG_SKIP_LABELS" ;;
+    frontier) printf '%s,frozen:owner,frozen:dependency,ready-for-human,ready-for-HAL9K,needs-triage%s\n' "$SG_FRONTIER_SKIP_LABELS" "${2:+,$2}" | tr ',' '\n' | awk 'NF && !s[$0]++' | paste -sd, - ;;
+    bug) printf '%s,frozen:owner,frozen:dependency,ready-for-human,ready-for-HAL9K,needs-triage,needs-info\n' "$SG_BUG_SKIP_LABELS" | tr ',' '\n' | awk 'NF && !s[$0]++' | paste -sd, - ;;
     *) echo "sg_skip_labels: name a lane, frontier or bug, not '${1:-}'" >&2; return 2 ;;
   esac
 }

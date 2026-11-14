@@ -252,6 +252,13 @@ def test_nested_pytest_checks_carry_the_heavy_marker():
     assert missing == [], f"these checks start a nested pytest and carry no heavy mark: {missing}"
 
 
+def test_a_no_progress_window_wait_carries_the_heavy_mark():
+    """Each entry in this test waits out the no-progress window, and a loaded runner pushed the call to 2.2 s (#1694)."""
+    from tests.test_entry_no_progress import test_the_second_entry_gets_what_is_left_of_the_node_deadline as waits
+
+    assert _heavy_marked(waits), "this test waits out a no-progress window and carries no heavy mark"
+
+
 def test_nested_pytest_checks_explain_their_slow_marker():
     checks = NESTED_CHECKS
     assert {_test.__name__: _slow_reason(_test) for _test in checks} == {

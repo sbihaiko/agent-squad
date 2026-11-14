@@ -182,6 +182,7 @@ case "${1:-status}" in
       [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"
       exit 0
     fi
+    bash "$(dirname "$me")/triage-labels.sh" >> "$SG_STATE/cycle.log" 2>&1 || echo "watchd run: the triage labels were not refreshed, see cycle.log" >> "$L"   # #1673: an idempotent label write, never a refusal of the run
     mkdir -p "$RU" && printf '%s\n' "$$" > "$RU/$$"
     # The driver's own end, shared by the stop, a deleted script and the exit path (#1587): the lanes go with the group,
     # and only the slot holder removes the files it owns. The stop reaches every pass of both lanes, not the two lanes
