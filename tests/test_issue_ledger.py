@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -372,6 +373,44 @@ def test_a_state_dir_with_no_profile_is_refused_by_name(monkeypatch):
     mod = import_ledger("il_unpinned")
     with pytest.raises(RuntimeError, match="SG_STATE"):
         mod.state_dir()
+
+
+def test_a_slower_footer_pass_never_replaces_a_newer_open_cache(tmp_path, monkeypatch):
+    """Two footer threads share one ledger. The pass that read its signature first stalls, a newer pass publishes, and the
+    stalled pass then finishes: it must not put its older signature over the newer one (#1746)."""
+    mod = import_ledger("il_open_race")
+    d = tmp_path
+    (d / "state").mkdir()
+    f = d / "state" / "o__r__1.json"
+
+    def write(episodes):
+        f.write_text(json.dumps({"own": {"count": 0, "runs": [], "stopped": None},
+                                 "loop": {"count": 0, "runs": [], "stopped": None}, "episodes": episodes}))
+
+    write([{"run": "run-a", "cause": "gate lock held by pid 9", "start": 900.0, "count": 1}])
+    real_signature = mod._state_signature
+    stalled, release = threading.Event(), threading.Event()
+
+    def signature_then_stall(path):
+        sig = real_signature(path)
+        if threading.current_thread().name == "footer-a":
+            stalled.set()
+            release.wait(5)
+        return sig
+
+    monkeypatch.setattr(mod, "_state_signature", signature_then_stall)
+    slow = threading.Thread(target=mod.open_episodes, kwargs={"state": d, "now": 1000.0}, name="footer-a")
+    slow.start()
+    assert stalled.wait(5)
+    write([{"run": "run-a", "cause": "gate lock held by pid 9", "start": 900.0, "count": 1},
+           {"run": "run-b", "cause": "gate slots are full", "start": 950.0, "count": 1}])
+    newer = mod.open_episodes(state=d, now=1000.0)
+    release.set()
+    slow.join(5)
+    assert len(newer["episodes"]) == 2
+    current = real_signature(d)
+    assert any(part == current for part in mod._OPEN_CACHE[str(d)]), \
+        "the cache holds an older signature than the pass that published last"
 
 
 class _Clock:
