@@ -931,7 +931,7 @@ def test_a_loop_audit_line_is_written_atomically(hub, monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- the pages
 def page():
-    return HUB_PY.read_text()
+    return HUB_PY.read_text() + (SCRIPTS / "hub-profiler.js").read_text()
 
 
 def test_the_tab_is_named_loop_and_stands_between_flow_and_settings_on_the_desktop_page(served):
@@ -948,13 +948,13 @@ def test_the_tab_is_named_loop_and_stands_between_flow_and_settings_on_the_deskt
 
 def test_the_entry_stands_before_settings_on_the_mobile_page():
     """The phone has no Flow tab: its More menu holds the Lead Time chart and the link to Settings, so the entry stands
-    between them. It names the desktop view before it navigates, as the Settings entry does (#1446)."""
+    between them. The entry opens the Loop layer on the phone (#1754); it is no link to the desktop view."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
     menu = html[html.index('<div id="more-menu">'):]
     menu = menu[:menu.index("</div>")]
     assert re.findall(r">([^<>\n]+)</(?:button|a)>", menu) == ["Cost and usage", "Lead time", "Loop", "Settings"]
-    assert re.search(r'<a class="more-link" id="more-loop" href="\./#loop">Loop</a>', menu)
-    assert re.search(r'\$\("more-loop"\)\.onclick\s*=\s*\(\)\s*=>\s*localStorage\.setItem\("squad-view","desktop"\)', html)
+    assert re.search(r'<button id="more-loop" data-more="profiler" type="button">Loop</button>', menu), "the entry opens a layer, not a link"
+    assert 'more-loop").onclick' not in html, "the entry is no longer a link to the desktop view"
 
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
@@ -967,9 +967,8 @@ def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
 def run_js(expr):
     if not shutil.which("node"):
         pytest.skip("node is not installed")
-    src = page()
     js = ("const esc=s=>String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]);\n"
-          + src[src.index("// profiler:start"):src.index("// profiler:end")] + f"\nprocess.stdout.write(String({expr}));")
+          + (SCRIPTS / "hub-profiler.js").read_text() + f"\nprocess.stdout.write(String({expr}));")
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
     assert r.returncode == 0, r.stderr
     return r.stdout

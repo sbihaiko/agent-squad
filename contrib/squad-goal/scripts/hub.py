@@ -6292,34 +6292,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #board{position:relative;width:auto}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);display:flex;flex-direction:column}#flowov[hidden]{display:none}
-#profb .lph{display:flex;align-items:center;gap:12px;margin:4px 0 12px}#profb .lph h2{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profb .lpn{color:var(--mute);font-size:var(--fs-caption)}#profb .lpl{font-size:var(--fs-caption)}
-#profb .psw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true]{background:var(--ok)}
-#profb .psw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true] i{transform:translateX(20px)}
-#profb .psw:disabled{opacity:.6;cursor:default}#profb .psw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-#proftrip{margin:0 0 16px}#proftrip h3{margin:0 0 4px;font-size:var(--fs-caption);font-weight:600}#proftrip .tpn{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
-#proftrip .ptb{display:flex;gap:1px;width:100%;height:14px;margin:0 0 8px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}#proftrip .ptb-seg{display:block;height:100%;min-width:4px}
-#proftrip .ptk{display:inline-block;width:10px;height:10px;margin-right:8px;border-radius:var(--radius-sm);vertical-align:-1px;background:currentColor}
-#proftrip .pts-wait{background:var(--mute)}#proftrip .pts-coding{background:var(--run)}#proftrip .pts-review{background:var(--acc)}#proftrip .pts-gates{background:var(--warn)}#proftrip .pts-landing{background:var(--ok)}
-#proftrip .ptk-wait{color:var(--mute)}#proftrip .ptk-coding{color:var(--run)}#proftrip .ptk-review{color:var(--acc)}#proftrip .ptk-gates{color:var(--warn)}#proftrip .ptk-landing{color:var(--ok)}
-#proftrip .pts-queue{background:var(--s5)}#proftrip .pts-between{background:var(--s3)}#proftrip .pts-after{background:var(--drop)}
-#proftrip .ptk-queue{color:var(--s5)}#proftrip .ptk-between{color:var(--s3)}#proftrip .ptk-after{color:var(--drop)}
-#profload{margin:0 0 18px}#profload .lsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 6px}#profload h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
-#profload svg{display:block;width:100%;height:120px}#profload .plg{fill:var(--edge)}#profload .pll{fill:none;stroke:var(--acc);stroke-width:1.5;vector-effect:non-scaling-stroke}#profload .pld{fill:var(--acc)}
-#profload .plc{stroke:var(--mute);stroke-width:1;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
-#proftrip .ptk.ptk-none{background:none;box-shadow:inset 0 0 0 1px currentColor}
-#proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#proftt th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#proftt th:first-child{text-align:left}#proftt td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#proftt td:first-child{text-align:left}
-#profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}
-#profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
-#profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}
-#profb table .pbar{display:block;height:100%;background:var(--err)}#profb table .pnm{margin-left:6px}#profb table .pk-orphan .pnm{color:var(--err)}#profb table .pk-other .pnm,#profb table .pk-unknown .pnm{color:var(--mute)}#profb .lerr{color:var(--err)}
-/* The run slots in use (#1766): a step line of the slots a run holds and the cap as its dashed ceiling, on the window the
-   route folds the loop state for, so a column of the page is one instant in both views. A gap is the hatched band. */
-#profslots{margin:0 0 18px}#profslots .lslotsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 4px}
-#profslots h4{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
-#profslots .lslwrap{position:relative;display:block;width:100%;height:56px;background:var(--edge);border-radius:var(--radius-sm);overflow:hidden}
-#profslots .lsl{display:block;width:100%;height:100%}#profslots .lsline{fill:none;stroke:var(--acc);stroke-width:2}
-#profslots .lscap{fill:none;stroke:var(--err);stroke-width:1.5;stroke-dasharray:3 3}
-#profslots .lsg{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(45deg,transparent 0 4px,var(--line) 4px 8px)}
+/*PROFILER_CSS*/
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
@@ -7721,119 +7694,8 @@ $("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok
  if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
 setInterval(loopPoll,5000);loopPoll();livePoll();   // the live work is read on load, beside the loop's own state (#1697)
 setInterval(accPoll,5000);accPoll();
-// profiler:start
-// The Loop tab (#1743): /api/profiler is the one read and the one write. The hub folds the tree and sorts it; the page
-// draws it and keeps only which rows are open. The root is open until it is closed; every other node opens on a press.
-// The context row, every process outside the loop, is its own table below the tree.
-const profDue=(tab,hidden,v)=>tab==="prof"&&!hidden&&!!v&&v.on;
-const profFileDue=(tab,hidden,v)=>tab==="prof"&&!hidden&&!!v&&!v.on;   // the file views, the trip bar among them: no sampler drives them, so a slower cadence reads them (#1769)
-const profSecs=s=>s>=100?s.toFixed(0)+" s":s>=1?s.toFixed(2)+" s":(s*1000).toFixed(0)+" ms";
-const profRate=r=>r>=10?r.toFixed(0)+"/s":r>=1?r.toFixed(1)+"/s":r.toFixed(2)+"/s";
-const profSw=v=>`<button type=button role=switch aria-label="CPU sampling" aria-checked="${!!v.on}" data-prof${v.write?"":" disabled"} class=psw${v.reason?` title="${esc(v.reason)}"`:""}><i aria-hidden="true"></i></button>`;
-const profTw=(name,kids,isOpen)=>kids?`<button type=button class=ptw aria-label="${isOpen?"Close":"Open"} ${esc(name)}">${isOpen?"&#9662;":"&#9656;"}</button>`:`<span class=ptw></span>`;
-function profRows(n,path,level,open,out){const kids=n.children||[],isOpen=kids.length>0&&(level===1)!==open.has(path),pct=(100*(n.share||0)).toFixed(1)+"%";
- out.push(`<tr data-p="${esc(path)}"${kids.length?` aria-expanded=${isOpen}`:""} aria-level=${level} class="pk-${esc(n.kind)}"><td class=pn style="padding-left:${(level-1)*18+6}px">`
-  +profTw(n.name,kids.length,isOpen)+`<span class=pbw><i class=pbar style="width:${pct}"></i></span><b>${pct}</b><span class=pnm>${esc(n.name)}</span></td>`
-  +`<td>${profSecs(n.self_s||0)}</td><td>${profSecs(n.total_s||0)}</td><td>${profRate(n.total_starts_s||0)}</td></tr>`);
- if(isOpen)for(const k of kids)profRows(k,path+"/"+k.name,level+1,open,out)}
-function profCtx(c,open){const kids=c.children||[],isOpen=kids.length>0&&open.has("context");
- const row=(p,level,name,n,tw)=>`<tr data-p="${esc(p)}"${tw?` aria-expanded=${isOpen}`:""} aria-level=${level} class="pk-other"><td class=pn style="padding-left:${(level-1)*18+6}px">${tw?profTw(name,1,isOpen):`<span class=ptw></span>`}<span class=pnm>${esc(name)}</span></td><td>${profSecs(n.total_s||0)}</td><td>${n.events||0}</td></tr>`;
- return `<table id=profc role=treegrid aria-label="Every process outside the loop"><thead><tr><th title="every process that is not the loop of this profile, by application: a loaded machine shows here, a costly loop in the tree">Context</th><th title="CPU seconds in the window">Total time</th><th title="processes first seen in the window">Starts</th></tr></thead><tbody>`
-  +row("context",1,c.name,c,kids.length>0)+(isOpen?kids.map(k=>row("context/"+k.name,2,k.name,k,false)).join(""):"")+`</tbody></table>`}
-const profStamp=t=>new Date(t*1000).toLocaleString();   // the load line's hover stamps (the owner dropped the loop state panel)
-let profWin=86400;   // the profiler read's window: the page draws no picker for it, so it reads the hub's 24 hour default
-const profTime=s=>s>=3600?(s/3600).toFixed(1)+" h":s>=60?(s/60).toFixed(1)+" min":s>=1?s.toFixed(1)+" s":Math.round(s*1000)+" ms";
-const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
-// The machine load (#1768): under the strip, on the strip's own window and time axis, the line of the machine's
-// one-minute load average from the hub's minute record. A minute the record does not cover is a gap, never a zero, and
-// the core count is a dashed reference line: above it the machine holds more work than its cores can run at once.
-const PROF_LOAD_W=1000,PROF_LOAD_H=120;
-function profLoad(v){
- if(!v)return "";
- const start=v.start,end=v.end,span=(end-start)||1;   // the window the hub folded on: the page never re-projects it
- const px=at=>(PROF_LOAD_W*(at-start)/span).toFixed(1),top=Math.max(v.peak||0,v.cores||1)||1,py=load=>(PROF_LOAD_H*(1-Math.max(0,Math.min(load,top))/top)).toFixed(1);
- const gaps=(v.gaps||[]).map(g=>{const a=Math.max(g.start,start),b=Math.min(g.end,end);
-  return b>a?`<rect class=plg x="${px(a)}" y="0" width="${(PROF_LOAD_W*(b-a)/span).toFixed(1)}" height="${PROF_LOAD_H}" title="${esc(String(g.reason||"no load record"))}"></rect>`:""}).join("");
- const segs=(v.segments||[]).map(seg=>seg.length>1?`<polyline class=pll points="${seg.map(p=>px(p.at)+","+py(p.load)).join(" ")}"></polyline>`
-  :seg.length?`<circle class=pld cx="${px(seg[0].at)}" cy="${py(seg[0].load)}" r="2.5" title="${esc("load "+Number(seg[0].load).toFixed(2)+" at "+profStamp(seg[0].at))}"></circle>`:"").join("");
- const cores=v.cores||1,core=`<line class=plc x1="0" y1="${py(cores)}" x2="${PROF_LOAD_W}" y2="${py(cores)}"><title>The machine's ${cores} cores</title></line>`;
- const gap=(v.gap_s||0)>0?`, ${profTime(v.gap_s)} with no load record, drawn as a gap`:"";
- const aria=`Machine load over the last ${profTime(span)}: peak ${Number(v.peak||0).toFixed(2)} against ${cores} cores${gap}`;
- return `<section id=profload><div class=lsh><h3>${esc(v.label||"Machine load")}</h3></div>`
-  +`<svg viewBox="0 0 ${PROF_LOAD_W} ${PROF_LOAD_H}" role=img aria-label="${esc(aria)}" preserveAspectRatio=none>${gaps}${segs}${core}</svg>`
-  +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window${gap}.</p></section>`}
-// The run slots in use (#1766): a step line of the slots a run holds against the cap as its dashed ceiling. The hub folds
-// the line, its ceiling steps and its gaps on the window the route folds the loop state for; the page draws them at the
-// same percentages of the same start and end, so a column of the page is one instant in both views.
-function profSlots(s){
- if(!s||((!s.rows||!s.rows.length)&&(!s.gaps||!s.gaps.length)))return "";
- const span=(s.end-s.start)||1,x=t=>(100*(t-s.start)/span).toFixed(2),top=Math.max(1,s.top||1);
- const y=n=>(100*(1-(n||0)/top)).toFixed(2),rows=s.rows||[],caps=s.ceilings||[],gaps=s.gaps||[];
- const step=rs=>rs.length?`M${x(rs[0].start)} ${y(rs[0].slots!=null?rs[0].slots:rs[0].cap)}`
-  +rs.map((r,i)=>`${i?`V${y(r.slots!=null?r.slots:r.cap)}`:""}H${x(r.end)}`).join(""):"";
- const peak=s.peak||0,capText=s.cap!=null?`a ceiling of ${s.cap}`:"no run cap read";
- const band=gaps.map(g=>`<i class="lsg" style="left:${x(g.start)}%;width:${(100*(g.end-g.start)/span).toFixed(2)}%" title="${esc("No readable record: "+(g.reason||"no record"))}"></i>`).join("");
- const why=[...new Set(gaps.map(g=>g.reason||"no record"))];
- const aria=`The run slots in use over the last ${profTime(span)}: at most ${peak} of ${capText}`
-  +(gaps.length?", with a stretch that has no readable record.":".");
- return `<section id=profslots><div class=lslotsh><h4>${esc(s.label||"Run slots in use")}</h4></div>`
-  +`<div class=lslwrap>${band}<svg class=lsl viewBox="0 0 100 100" preserveAspectRatio=none role=img aria-label="${esc(aria)}">`
-  +(caps.length?`<path class="lscap" vector-effect=non-scaling-stroke d="${step(caps)}"></path>`:"")
-  +(rows.length?`<path class="lsline" vector-effect=non-scaling-stroke d="${step(rows)}"></path>`:"")+`</svg></div>`
-  +`<p class=lpn>at most ${peak} of ${capText}${why.length?` · no readable record: ${esc(why.join("; "))}`:""}</p></section>`}
-// The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
-// medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
-const profTripNum=s=>s==null?"&#8212;":profTime(s);
-// The wall time of the loop's steps and gates (#1748): the slow cycle's time at the top, each lane's steps by total, the steps
-// still in flight with their age, and the gates by kind and outcome with their mean load at the start and at the finish.
-let wallWin=3600;   // the wall-time view's window: its own three controls choose it, and the poll names it
-const profLoadNum=x=>x==null?"&#8212;":x.toFixed(2);
-function profWall(w,windows){
- if(!w)return "";
- const picks=(windows||[]).map(s=>`<button type=button data-wall="${s.s}" aria-pressed=${s.s===w.window_s}>${esc(s.label)}</button>`).join("");
- const c=w.cycle||{},cyc=c.n>0?`The slow cycle takes a median of ${profTime(c.median_s)} and a p90 of ${profTime(c.p90_s)}, over ${c.n} cycle${c.n===1?"":"s"}.`:"Fewer than two heartbeats in the window: no cycle time.";
- const steps=[...(w.slow||[]),...(w.fast||[])].map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td>${r.count}</td><td>${profSecs(r.total_s)}</td><td>${profSecs(r.median_s)}</td><td>${profSecs(r.p90_s)}</td></tr>`)
-  .concat((w.running||[]).map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td colspan=4>running for ${profSecs(r.age_s)}</td></tr>`));
- const gates=(w.gates||[]).map(g=>`<tr><td class=pn><span class=pnm>${esc(g.kind)}</span></td><td>${esc(g.outcome)}</td><td>${g.count}</td><td>${profSecs(g.total_s)}</td><td>${profSecs(g.median_s)}</td><td>${profSecs(g.p90_s)}</td><td>${profLoadNum(g.load_start)}</td><td>${profLoadNum(g.load_finish)}</td></tr>`);
- return `<section id=profwall><h3>Wall time of each step</h3><div role=group aria-label="Wall time window">${picks}</div><p class=tpn>${cyc}</p>`
-  +`<table id=profsteps aria-label="Wall time of each loop step, by lane"><thead><tr><th>Lane</th><th>Step</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th></tr></thead><tbody>${steps.join("")||`<tr><td colspan=6>no step finished in this window</td></tr>`}</tbody></table>`
-  +`<table id=profgates aria-label="Wall time of each gate run, by kind and outcome"><thead><tr><th>Kind</th><th>Outcome</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th><th>Load at start</th><th>Load at finish</th></tr></thead><tbody>${gates.join("")||`<tr><td colspan=8>no gate run in this window</td></tr>`}</tbody></table></section>`}
-function profTrip(t){
- if(!t)return "";
- const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
- if(!t.bar)return `<section id=proftrip>${head}<p class=tpn>${n} deliver${n===1?"y":"ies"} in the last ${span}: fewer than three, so no bar is drawn.</p></section>`;
- const stages=t.stages||[],total=stages.reduce((a,s)=>a+(s.median_s||0),0);
- const seg=s=>{const pct=total&&s.median_s?100*s.median_s/total:0;
-  return `<i class="ptb-seg pts-${esc(s.stage)}" style="width:${pct.toFixed(2)}%" title="${esc(`${s.label}: median ${profTripNum(s.median_s)}, p90 ${profTripNum(s.p90_s)} (${s.observations} observation${s.observations===1?"":"s"})`)}"></i>`};
- const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each stage`)}">${stages.filter(s=>s.median_s>0).map(seg).join("")}</div>`;
- const rows=stages.map(s=>`<tr data-p="trip/${esc(s.stage)}"><td class=pn><i class="ptk ptk-${esc(s.stage)}${s.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(s.label)}</span></td><td>${profTripNum(s.median_s)}</td><td>${profTripNum(s.p90_s)}</td><td>${s.observations||0}</td></tr>`).join("");
- return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds their median time in each stage, in the order of the rows below.</p>${bar}`
-  +`<table id=proftt aria-label="The trip of an issue, a stage a row"><thead><tr><th>Stage</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
-function profNote(v){
- if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
- const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
- return `On: the last ${profSecs(v.window_s||0)} of the process table. `
-  +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
-  +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")
-  +(v.coverage==null?"":v.coverage>=1?"Read every process.":`Read ${(100*v.coverage).toFixed(1)}% of the processes.`)
-  +" A process that lives between two readings is not counted."}
-function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,slots=profSlots(v.slots),load=profLoad(v.load),wall=profWall(v.wall,v.wall_windows),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+slots+load+wall+trip;   // the file views read files only, so the switch does not gate them
- const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+slots+load+wall+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
-  +(v.context?profCtx(v.context,open):"")}
-// profiler:end
-let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),wb=!!a&&a.hasAttribute&&a.hasAttribute("data-wall");
- b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):wb?b.querySelector(`[data-wall="${a.dataset.wall}"]`):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin+"&ww="+wallWin)).json();profDraw()}catch(e){}}
-async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
- await profPoll()}
-$("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
- const wb=e.target.closest("button[data-wall]");if(wb){wallWin=Number(wb.dataset.wall);profPoll();return}
- const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
+/*PROFILER_JS*/
+profMount("desktop");
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
 /*BOARD_LANES*/
@@ -7925,6 +7787,9 @@ function hubStale(msg){if(!msg){if(hubNote)hubNote.remove();hubNote=null;return}
 setInterval(async()=>{try{const r=await fetch("/api/version");if(!r.ok)throw new Error(String(r.status));const v=(await r.json()).v;hubStale("");if(v!==SERVED_BUILD)location.reload()}catch(e){hubStale("the hub did not answer: this page may be out of date")}},3000);
 addEventListener("pageshow",e=>{if(e.persisted)location.reload()});
 </script>"""
+PROFILER_JS = (pathlib.Path(__file__).resolve().parent / "hub-profiler.js").read_text()   # the Loop view, shared with the phone (#1754)
+PROFILER_CSS = (pathlib.Path(__file__).resolve().parent / "hub-profiler.css").read_text()
+PAGE = PAGE.replace("/*PROFILER_JS*/", PROFILER_JS).replace("/*PROFILER_CSS*/", PROFILER_CSS)
 PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS) + "\n<!--OVERLAY-->"
 SWITCHER_JS = (pathlib.Path(__file__).resolve().parent / "hub-switcher.js").read_text()   # the project switcher, both pages (#876)
 PAGE = PAGE.replace("/*SWITCHER_JS*/", SWITCHER_JS)
@@ -9221,7 +9086,7 @@ def mobile_photo(page):
                 .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
 
 BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*SEARCH*/", SEARCH_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*CHAT*/", CHAT_JS).replace("/*VOICE*/", VOICE_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*SEARCH*/", SEARCH_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*PROFILER_JS*/", PROFILER_JS).replace("/*PROFILER_CSS*/", PROFILER_CSS).replace("/*CHAT*/", CHAT_JS).replace("/*VOICE*/", VOICE_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()

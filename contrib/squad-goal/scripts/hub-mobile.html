@@ -42,7 +42,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 .looprow b{display:block;font-weight:600}.looprow .mut{color:var(--mute);font-size:var(--fs-caption)}
 .looprow.on b{color:var(--ok)}.looprow.off b{color:var(--err)}.looprow.draining b,.looprow.starting b{color:var(--warn,var(--warn))}
 #loops-msg:not(:empty){color:var(--err);font-size:var(--fs-caption)}
-#loops-content,#loop-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#loops-content,#loop-content,#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 #loops-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #loops-log{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:var(--mute);font-size:var(--fs-caption)}
 #loops-actions,#loop-actions{flex:none;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
@@ -59,6 +59,19 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #loop-confirm button{min-height:44px;padding:0 14px;margin-right:8px}
 #loop-menu{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone);padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 #loop-menu[hidden]{display:none}#loop-menu button{min-height:44px;width:100%}
+/*PROFILER_CSS*/
+#profb .lph{flex-wrap:wrap;gap:6px 10px}#profb .psw{min-width:52px;min-height:32px}
+#profb table{table-layout:fixed;width:100%}
+#profb table th:not(:first-child),#profb table td:not(.pn){width:4.25em;padding-left:2px;padding-right:2px}
+#profb table td{white-space:normal}
+#profb table td.pn{white-space:normal;overflow-wrap:anywhere;padding-left:calc(var(--lv,0)*10px + 2px);padding-right:4px}
+#profb table .pbw{width:40px;margin-right:4px}
+#profb table .ptw{width:44px;min-width:44px;min-height:44px}
+#profb table tr[aria-expanded] td.pn{min-height:44px}
+#profb table .pnm{overflow-wrap:anywhere}
+#profb .lerr,#profb .lpr{overflow-wrap:anywhere}
+#profb .lpn{overflow-wrap:anywhere}
+#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 6px;text-align:center}
 .tile b{display:block;font-size:var(--fs-display)}
@@ -420,6 +433,11 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <div id=loop-menu hidden><button id=loop-menu-stop type=button>Stop now</button></div>
 </article>
+<article id=profpage data-screen=profiler hidden>
+<div id=prof-content><div class=scr-head><button id=prof-backtop data-topback=profiler type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">More</span></button><h2>Loop</h2></div>
+<div id=profb></div></div>
+<div id=prof-actions><button data-actback type=button>Back</button></div>
+</article>
 <article id=loopbugs data-screen=bugs hidden>
 <div id=bugs-content><div class=scr-head><button id=bugs-backtop data-topback=bugs type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Loop</span></button><h2 id=bugs-title>Loop-bugs</h2></div>
 <ul id=bugs-list></ul>
@@ -490,7 +508,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="more-menu">
 <button data-more="cost" type="button">Cost and usage</button>
 <button data-more="lead" type="button">Lead time</button>
-<a class="more-link" id="more-loop" href="./#loop">Loop</a>
+<button id="more-loop" data-more="profiler" type="button">Loop</button>
 <a class="more-link" id="more-settings" href="./#set">Settings</a>
 </div>
 <p class="msg" role="status">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
@@ -727,8 +745,9 @@ $("more-settings").href = "./#set-" + lastSetTheme;
 // #1446: the entry names the desktop view, so the desktop page's narrow-screen redirect does not return the owner
 $("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
 // settings-handoff:end
-// #1743: Loop is a desktop tab; its entry names the desktop view first, as the Settings entry does
-$("more-loop").onclick = () => localStorage.setItem("squad-view","desktop");
+/*PROFILER_JS*/
+profMount("phone");
+setInterval(() => { if (!$("profpage").hidden && !document.hidden && profV && profV.on) profPoll(); }, 2000);
 
 // The phone's navigation shell (SPEC 1596, #1597): five tabs, one stack of screens per tab, and one history entry per
 // screen that names its tab and the address the location mirrors. A screen opens inside the tab whose list it came from,
@@ -767,13 +786,14 @@ const LAYER = {
   loop: { show(s) { loopSlug = (s && s.slug) || ""; $("looppage").hidden = false; drawLoop(); },
           hide() { $("looppage").hidden = true; $("loop-confirm").hidden = true; } },
   bugs: { show() { $("loopbugs").hidden = false; }, hide() { $("loopbugs").hidden = true; } },
+  profiler: { show() { $("profpage").hidden = false; profPoll(); }, hide() { $("profpage").hidden = true; } },
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
 // screen a nested one stands on.
-const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", usage: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now" };
+const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", usage: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now", profiler: "now" };
 const LAYER_TITLE = { sheet: "Card", psheet: "Projects", term: "Session", run: "Run", usage: "Usage", cost: "Cost and usage", lead: "Lead time", more: "More",
-                      loops: "Loops", loop: "Loop", bugs: "Loop-bugs" };
-const LAYER_PARENT = { cost: "more", lead: "more", loop: "loops", bugs: "loop" };
+                      loops: "Loops", loop: "Loop", bugs: "Loop-bugs", profiler: "Loop" };
+const LAYER_PARENT = { cost: "more", lead: "more", loop: "loops", bugs: "loop", profiler: "more" };
 const screenChain = name => { const out = []; for (let p = LAYER_PARENT[name]; p; p = LAYER_PARENT[p]) out.unshift(p); return out; };
 const tabStacks = { now: [], work: [], specs: [], chat: [], runs: [] };
 const layerState = { now: {}, work: {}, specs: {}, chat: {}, runs: {} };
@@ -820,6 +840,7 @@ const SEG = {
   loops: () => "loops",
   loop: s => "loop=" + encodeURIComponent(s.slug || ""),
   bugs: () => "bugs",
+  profiler: () => "profiler",
 };
 const routeHash = s => "#/" + ((s && s.tab) || tabActive) + (s && s.layer && SEG[s.layer] ? "/" + SEG[s.layer](s) : "");
 function routeFromHash(hash) {
@@ -834,6 +855,7 @@ function routeFromHash(hash) {
   else if (head === "lead") out.layer = "lead";
   else if (head === "loops") out.layer = "loops";
   else if (head === "bugs") out.layer = "bugs";
+  else if (head === "profiler") out.layer = "profiler";
   else if (head.startsWith("loop=")) { out.layer = "loop"; out.data = { slug: decodeURIComponent(head.slice(5)) }; }
   else if (head.startsWith("card=")) { out.layer = "sheet"; out.data = { n: +head.slice(5) }; }
   else if (head.startsWith("session=")) { out.layer = "term"; out.data = { sid: decodeURIComponent(head.slice(8)), name: q.name || "" }; }
