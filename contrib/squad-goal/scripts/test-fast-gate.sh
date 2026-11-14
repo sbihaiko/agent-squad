@@ -359,6 +359,31 @@ $G -C "$R" rebase -q dev
 out=$(mg "$md" dev); rc=$?
 [ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a moved merge-base misses the memo: the battery runs" || ko "moved merge-base: rc $rc runs $(battery_runs): $out"
 
+# (#1718, ADR-0168) `--memo-hit` asks the memo before any caller takes the machine gate lock: it answers whether a green pass
+# already holds this tree, base, merge-base and suite. A hit prints the reuse line and exits 0 with no battery and no lock; a
+# miss, a tree the key cannot name, or a memo turned off exits 1 with the reason, so the caller runs the gate as before.
+mh() {  # <state dir> <base>: the probe alone
+  local st=$1 base=$2; rm -f "$T/ran.log"
+  (cd "$R" && SG_STATE=$st SG_FAST_MEMO=${memo:-1} SG_FAST_BASE=$base SG_FAST_CMD="bash $T/base.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" --memo-hit 2>&1)
+}
+mp=$T/memo-probe; mkdir -p "$mp"
+out=$(mh "$mp" dev); rc=$?
+[ $rc = 1 ] && [ ! -e "$T/ran.log" ] && ok "the probe at a key with no pass exits 1 and runs no battery" || ko "probe miss: rc $rc: '$out'"
+out1=$(mg "$mp" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the gate at that key runs the battery and keeps its pass" || ko "probe setup: rc $rc runs $(battery_runs): $out1"
+out=$(mh "$mp" dev); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && case "$out" in *memo*) true;; *) false;; esac \
+  && ok "the probe answers a stored pass with one reuse line and runs no battery" || ko "probe hit: rc $rc: '$out'"
+[ "$(lgof "$out")" = "$(lgof "$out1")" ] && ok "the probe names the log of the pass it reuses" || ko "probe log: '$(lgof "$out")' vs '$(lgof "$out1")'"
+IFS=$'\t' read -r _ kind res at < "$mp/gate-status" 2>/dev/null
+[ "$kind $res $at" = "fast pass $(git -C "$R" rev-parse HEAD)" ] && ok "the probe leaves the hub's pass line for the tip" || ko "probe status: '$(cat "$mp/gate-status" 2>&1)'"
+out=$(memo=0 mh "$mp" dev); rc=$?
+[ $rc = 1 ] && case "$out" in *"SG_FAST_MEMO"*) true;; *) false;; esac && ok "a memo turned off is no hit, and the probe names the memo" || ko "probe memo off: rc $rc: '$out'"
+echo probe-dirt >> "$R/docs/x.md"
+out=$(mh "$mp" dev); rc=$?
+[ $rc = 1 ] && ok "an uncommitted change is a different key: the probe answers no pass for it" || ko "probe dirty: rc $rc: '$out'"
+$G -C "$R" checkout -q -- docs/x.md
+
 mq=$T/memo-queued; mkdir -p "$mq"; rm -f "$T/ran.log"
 slow="bash $T/base.sh; sleep 2"
 (cd "$R" && SG_STATE=$mq SG_FAST_MEMO=1 SG_FAST_BASE=dev SG_FAST_CMD="$slow" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" > "$T/q1.out" 2>&1) &

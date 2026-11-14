@@ -20,7 +20,7 @@ unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
-cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$T/s/" 2>/dev/null
+cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$d/fast-gate.sh" "$d/quality-reading.py" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 {
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
@@ -1479,5 +1479,40 @@ lwave run-l7 1507:lf7; ldev lf7; lreset; r=$(land2 run-l7)
 lwave run-l12 1515:lf12; ldev lf12; land2 run-l12 >/dev/null; ldev lf12; nd=$($O rev-parse dev); lreset
 r=$(cd "$T/co" && bash "$T/s/wave.sh" landconflict fix/1515-land-run-l12 "$nd" "$($O rev-parse fix/1515-land-run-l12)" "lf12")
 [ "$(sed -n 4p "$(lmk 1515 run-l12)" 2>/dev/null)" = "round 2 $nd" ] && ok "L12: landconflict starts round two at the moved base" || ko "L12: '$(cat "$(lmk 1515 run-l12)" 2>&1 | tr '\n' '|')' '$r'"
+
+# Z9 (#1718, ADR-0168): the child's final gate is its last step, so its green pass is the wave entry gate's own key. The entry
+# asks the memo before it takes the machine gate lock: a pass already holding the tree it enters with admits the child with no
+# second battery and with no wait behind a held lock, and the entry record names the reuse. A child that commits after its gate
+# made a new tree: the memo answers nothing, so the entry still meets the lock, holds out of a held one, and runs the battery
+# once the lock is free. A red or a doubt always runs the suite.
+W23=wave/run-23; start2 run-23 >/dev/null
+printf '#!/bin/bash\necho battery >> "%s/z9-battery.log"\n' "$T" > "$T/z9-batt.sh"
+BL=$T/z9-battery.log
+z9_childgate() { (cd "$1" && SG_STATE=$T/st SG_FAST_CMD="bash $T/z9-batt.sh" SG_FAST_RETRY_CMD=false bash "$T/s/fast-gate.sh" 2>&1); }
+z9_entry() { (cd "$1" && SG_STATE=$T/st SG_WAVE_GATES="bash $T/s/fast-gate.sh" SG_FAST_CMD="bash $T/z9-batt.sh" SG_FAST_RETRY_CMD=false bash "../s/wave.sh" enter run-23 "$2" 2>&1); }
+child 960 g960 "origin/$W23"; rm -f "$BL"; o=$(z9_childgate "$T/c960")
+[ -s "$BL" ] && ok "Z9: the child's final gate runs the battery and keeps its pass" || ko "Z9: the child's gate ran no battery: '$o'"
+if hold; then
+  rm -f "$BL"; REV_BASE=$W23 rev 960
+  o=$(z9_entry "$T/c960" 960); rc=$?
+  case "$o" in *"entered $W23"*) ok "Z9: a green final gate frees the child of the held gate lock: it enters";; *) ko "Z9: the entry did not enter under the held lock: rc $rc '$o'";; esac
+  [ -s "$BL" ] && ko "Z9: the entry ran a second battery: $(cat "$BL")" || ok "Z9: the entry runs no second battery for the tree the child proved"
+  case "$(wfact 960 run-23)" in *reuse*) ok "Z9: the entry record names the reuse";; *) ko "Z9: the record does not name the reuse: '$(wfact 960 run-23)'";; esac
+  # A child that commits after its gate holds a tree the pass never read: under the same held lock the entry holds it out,
+  # with no battery, as it did before the reuse.
+  child 961 g961 "origin/$W23"; rm -f "$BL"; o=$(z9_childgate "$T/c961")
+  echo more >> "$T/c961/g961"; $G -C "$T/c961" commit -qam "a change after the gate (Refs #961)"
+  rm -f "$BL"; REV_BASE=$W23 rev 961
+  o=$(z9_entry "$T/c961" 961); rc=$?
+  case "$o" in *"WAVE HOLD #961"*) ok "Z9: a tree the pass never read still meets the held gate lock";; *) ko "Z9: the changed tree entered beside the lock or ran a battery: rc $rc '$o'";; esac
+  [ -s "$BL" ] && ko "Z9: the changed tree ran a battery beside the lock: $(cat "$BL")" || ok "Z9: nothing ran beside the held lock"
+  wait
+  rm -f "$BL"; r=$(z9_entry "$T/c961" 961); rc=$?
+  [ $rc = 0 ] && [ -s "$BL" ] && ok "Z9: with the lock free, the changed tree runs its own battery and enters" || ko "Z9: the changed tree did not run its battery: rc $rc '$(cat "$BL" 2>/dev/null)' '$r'"
+  case "$(wfact 961 run-23)" in *reuse*) ko "Z9: a fresh battery recorded a reuse it never made: '$(wfact 961 run-23)'";; *) ok "Z9: a fresh battery records no reuse";; esac
+else
+  wait 2>/dev/null
+  ko "Z9: the holder never came to hold the gate lock, so the entry without a lock could not be proved"
+fi
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
