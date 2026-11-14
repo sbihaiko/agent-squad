@@ -420,17 +420,16 @@ def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
     assert "$shard_list" not in promote, "promote-pass.sh reads the shard checks from a matrix the workflow forbids"
     stg = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-stg.sh").read_text()
     assert "sg_ci_class" in stg, "promote-stg.sh reads every check run of the tip, so a red shard job refuses the merge"
-    # #1644: the complete tier starts on the promote request alone, so a green check set of the tip does not prove it ran.
-    # promote-stg.sh reads the tier the workflow declares and refuses a tip with no green run of it.
-    assert "--ci-complete-job-names" in stg, \
-        "promote-stg.sh reads the complete tier's job names through the one structural reader"
+    # #1723: the dev-to-stg promotion reads the fast tier alone and asks for no complete tier: promote-stg.sh neither reads the
+    # complete tier's jobs nor sends the promote label, and the pass waits on the jobs that do not ask for the label.
+    assert "--ci-complete-job-names" not in stg, "promote-stg.sh holds the dev-to-stg promotion on the complete tier"
+    assert "labels[]=promote" not in stg, "promote-stg.sh asks for the complete tier on the dev-to-stg pull request"
     r = subprocess.run(["bash", str(ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh"),
-                        "--ci-complete-job-names", str(ROOT / ".github" / "workflows" / "ci.yml")],
+                        "--ci-fast-job-names", str(ROOT / ".github" / "workflows" / "ci.yml")],
                        cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert sorted(r.stdout.split()) == sorted(job.get("name", name) for name, job in wf["jobs"].items()
-                                               if name in COMPLETE_TIER_JOBS), \
-        f"the complete tier are the jobs the workflow starts on the promote label: {r.stdout!r}"
+    assert sorted(r.stdout.split()) == sorted(wf["jobs"][name].get("name", name) for name in FAST_TIER_JOBS), \
+        f"the dev-to-stg promotion waits on the fast tier alone: {r.stdout!r}"
 
 
 def test_the_complete_tier_starts_on_the_promote_label_alone():

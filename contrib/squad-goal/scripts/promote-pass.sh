@@ -24,9 +24,10 @@
 d=$(cd "$(dirname "$0")" && pwd)
 dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promotion branch, both named by the profile (#1646)
 [ "${SG_PROMOTE:-on}" = off ] && exit 0         # a profile that delivers by another path promotes nothing: no fetch, no line
-# ci_job_names <workflow file> [gated|complete]: the check-run name of every job under jobs:, one per line; with `gated`,
+# ci_job_names <workflow file> [gated|complete|fast]: the check-run name of every job under jobs:, one per line; with `gated`,
 # only the jobs whose `if:` names base_ref; with `complete`, only the jobs whose `if:` asks for the `promote` label, the tier
-# the promotion request starts (#1644). The reader stays inside the jobs: block (a line at column zero ends it), so a step's
+# the promotion request starts (#1644); with `fast`, only the jobs whose `if:` does not ask for that label, the tier the
+# dev-to-stg promotion waits on (#1723). The reader stays inside the jobs: block (a line at column zero ends it), so a step's
 # `name:`, a `with: name:` or any other four-space `name:` outside a job never becomes a check run whose absence would hold
 # every tip forever (ADR-0164, #1322). Only a job that names itself is read; the full suite's shard jobs name themselves, so
 # they are read like every other job (#1518). A file that names no job answers nothing, and its caller reads that as pending,
@@ -36,7 +37,7 @@ dev=${SG_BASE:-dev}; stg=${SG_STG_BRANCH:-stg}   # the work branch and the promo
 ci_job_names() {
   awk -v want="${2:-}" '
     function flush() {
-      if (cur != "" && (want == "" || (want == "gated" && gated) || (want == "complete" && complete && waits))) print cur
+      if (cur != "" && (want == "" || (want == "gated" && gated) || (want == "complete" && complete && waits) || (want == "fast" && !complete))) print cur
       cur = ""; gated = 0; complete = 0; waits = 0
     }
     /^jobs:[[:space:]]*$/ { injobs = 1; next }
@@ -77,6 +78,10 @@ fi
 if [ "${1:-}" = --ci-complete-job-names ]; then   # the jobs a workflow starts on the `promote` label, one per line
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-complete-job-names needs a workflow file" >&2; exit 2; }
   ci_job_names "$2" complete; exit 0
+fi
+if [ "${1:-}" = --ci-fast-job-names ]; then   # the jobs the dev-to-stg promotion waits on: those that do not ask for the label
+  [ -n "${2:-}" ] || { echo "promote-pass: --ci-fast-job-names needs a workflow file" >&2; exit 2; }
+  ci_job_names "$2" fast; exit 0
 fi
 if [ "${1:-}" = --ci-description ]; then   # the bounded status description a workflow's job list produces
   [ -n "${2:-}" ] || { echo "promote-pass: --ci-description needs a workflow file" >&2; exit 2; }
@@ -168,7 +173,11 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # (#1461). A job the file gates to another pull request never runs on this one, so the tip can never prove it: the pass
   # refuses by name instead of reading the rest as a full pass.
   ci_names=()
-  while IFS= read -r n; do [ -n "$n" ] && ci_names+=("$n"); done < <(ci_job_names "$ci_file")
+  while IFS= read -r n; do [ -n "$n" ] && ci_names+=("$n"); done < <(ci_job_names "$ci_file" fast)
+  # #1723: the dev-to-stg promotion waits on the fast tier alone; the complete tier belongs to the stg-to-main pull request. A
+  # workflow that names a job outside the fast tier is tiered: its green fast tier promotes, and it is never recorded as a
+  # full pass, because no full suite ran. A workflow with one tier keeps the full record.
+  ci_tiered=0; [ "$(ci_job_names "$ci_file" | /usr/bin/grep -c .)" -gt "${#ci_names[@]}" ] && ci_tiered=1
   ci_gated=()
   while IFS= read -r n; do [ -n "$n" ] && ci_gated+=("$n"); done < <(ci_job_names "$ci_file" gated)
   if [ "${#ci_gated[@]}" -gt 0 ]; then
@@ -202,6 +211,19 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   v=$(ci_verdict "$tip")
   case "$v" in
     pass)
+      if [ "$ci_tiered" = 1 ]; then
+        ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
+        echo "$(date -u +%FT%TZ) promote-pass: $tip CI fast tier green: $ci_jobs" >> "$log"
+        o=$(SG_PROMOTE_PROOF=ci bash "$d/promote-stg.sh" 2>&1); rc=$?
+        etip=$(printf '%s\n' "$o" | sed -n 's/^promote-stg: tip //p' | tail -n 1); etip=${etip:-$tip}
+        if [ $rc = 75 ]; then
+          echo "$(date -u +%FT%TZ) promote-pass: $etip waiting for CI: the check has not reported on it yet" >> "$log"
+          echo "promote-pass: $etip waiting for CI"; exit 0
+        fi
+        [ $rc = 73 ] && { refused "$tip" "not proven: the gate cap is full, retried later"; exit 0; }
+        [ $rc = 0 ] || { mark "$etip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+        mark "$etip" "promoted: the CI fast tier carried the pass"; exit 0
+      fi
       bash "$d/gate.sh" --status full pass "$tip"
       # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
       # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322). The status line is
