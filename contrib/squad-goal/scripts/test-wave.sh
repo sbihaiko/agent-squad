@@ -1295,13 +1295,22 @@ case "$r" in *"broke the wave tip"*) ko "W1687: a child was blamed on the first 
 [ "$(/usr/bin/grep -c '^o 3 Todo 1960$' "$T/board.log")" = 0 ] && ok "W1687: the child is not requeued on that red" || ko "W1687: requeue: '$(cat "$T/board.log")'"
 r=$(SG_WAVE_TIP_GATES="bash $T/tipflaky.sh" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
 case "$r" in *"WAVE CHECK RED"*"#1960"*) ok "W1687: a second red on the same tip names the child, as before";; *) ko "W1687: second red: exit $rc: '$r'";; esac
+# After the child left, the tip without it is red too, on a tree with a pass of its own: that red takes the old path in
+# the same pass. A second look there would move the one marker to the other tip, and the wave would wait for ever (#1699).
+case "$r" in *"WAVE WAIT"*) ko "W1699: a red after a child left opened another second look: '$r'";; *) ok "W1699: a red after a child left opens no second look";; esac
+[ "$(cat "$T/st/auto/tipred-wave_run-98" 2>/dev/null)" = "$($G -C "$T/origin.git" rev-parse "$W98" 2>/dev/null)" ] && ok "W1699: the marker stays on the tip that waited" || ko "W1699: the marker moved to another tip: '$(cat "$T/st/auto/tipred-wave_run-98" 2>/dev/null)'"
 # A child's own pytest that was bounded (gate.sh exit 4) measured no red: the child is not blamed and the wave waits.
 W99=wave/run-99; start2 run-99 >/dev/null; child 1962 g1962 "origin/$W99"; en2 run-99 1962 >/dev/null
 printf 'run-99\n' > "$T/st/auto/disp-1962"; : > "$T/gh.log"; : > "$T/board.log"
-r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_PYTEST='exit 4' land2 run-99 2>&1); rc=$?
+r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_PYTEST='echo "gate: bounded: the gate passed its 1s deadline and no check reported a defect"; exit 4' land2 run-99 2>&1); rc=$?
 [ $rc != 0 ] && case "$r" in *"WAVE WAIT $W99"*"no verdict"*) true;; *) false;; esac && ok "W1687: a bounded child check holds the wave with no verdict" || ko "W1687: bounded child: exit $rc: '$r'"
 case "$r" in *"broke the wave tip"*) ko "W1687: a bounded child check blamed the child: '$r'";; *) ok "W1687: a bounded child check blames no child";; esac
 [ "$(/usr/bin/grep -c '^o 3 Todo 1962$' "$T/board.log")" = 0 ] && ok "W1687: the bounded child is not requeued" || ko "W1687: requeue: '$(cat "$T/board.log")'"
+# An exit 4 with no bounded line is the command's own (pytest exits 4 on a conftest import error): the child is red (#1699).
+W97=wave/run-97; start2 run-97 >/dev/null; child 1964 g1964 "origin/$W97"; en2 run-97 1964 >/dev/null
+printf 'run-97\n' > "$T/st/auto/disp-1964"; : > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_PYTEST='exit 4' land2 run-97 2>&1); rc=$?
+case "$r" in *"#1964 broke the wave tip"*) ok "W1699: a child whose check exits 4 with no bounded line is blamed";; *) ko "W1699: bare exit 4: exit $rc: '$r'";; esac
 
 # SD (#1434): the sibling filter before dispatch reads the bodies; the entry also reads each child's own diff. Two siblings
 # whose bodies name nothing in common but whose diffs touch one file are a conflict before the wave: the second never
