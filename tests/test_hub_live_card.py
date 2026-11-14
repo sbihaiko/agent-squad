@@ -48,7 +48,7 @@ def _card(page, runs):
         pytest.skip("node is required")
     helpers, card = _pieces(page)
     prelude = ('const esc=s=>String(s==null?"":s);const sub=r=>{const v=Object.values(r.titles||{});return v.length?v[0]:""};'
-               'const name=r=>r.label||r.id;const labelTip=r=>"";const pins=new Set();')
+               'const name=r=>r.label||r.id;const labelTip=r=>"";const pins=new Set();let liveWork=null;')
     body = "console.log(JSON.stringify(liveCard(" + json.dumps(runs) + ")));"
     src = "\n".join([helpers, prelude, card, body])
     p = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, timeout=30)

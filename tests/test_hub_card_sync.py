@@ -264,3 +264,99 @@ def test_a_pressed_row_draws_a_labelled_card_at_its_own_scope(hub):
     finally:
         Path(path).unlink(missing_ok=True)
     assert "ROW-OK" in out.stdout, f"a pressed row threw: {out.stdout[-300:]}{out.stderr[-500:]}"
+
+# --- #1670: a spec press refreshes the spec and every sub-issue under it ------------------------------------------
+
+def _tree(hub, monkeypatch, children, reads=None):
+    """A tree as GitHub answers it: `children` maps an issue to its sub-issue numbers. The board holds every card named."""
+    hub._sync_frontier.clear()
+    names = set(children) | {c for subs in children.values() for c in subs}
+    _cache(hub, monkeypatch, [card(x) for x in sorted(names)])
+
+    def one(num):
+        if reads is not None:
+            reads.append(num)
+        subs = children.get(num, [])
+        return {**fresh(num), "l": ["spec"] if subs else ["bug"], "si": {"total": len(subs), "completed": 0}}
+
+    monkeypatch.setattr(hub, "read_one_card", one)
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: ([{"number": c} for c in children.get(issue, [])], None))
+
+
+def test_a_spec_press_refreshes_the_spec_and_every_sub_issue_recursively(hub, monkeypatch):
+    reads = []
+    _tree(hub, monkeypatch, {5: [6, 7], 7: [8]}, reads)
+    out = hub.sync_card(5)
+    assert sorted(reads) == [5, 6, 7, 8], "the spec, its sub-issues and their sub-issues are read"
+    assert out["count"] == 4 and sorted(r["n"] for r in out["rows"]) == [5, 6, 7, 8]
+    assert out["capped"] is None
+
+
+def test_a_spec_press_reads_a_hand_attached_child_the_relation_names(hub, monkeypatch):
+    reads = []
+    _tree(hub, monkeypatch, {5: [9]}, reads)
+    out = hub.sync_card(5)
+    assert 9 in reads, "a child attached by hand is in the sub-issue relation, so it is read"
+    assert out["count"] == 2
+
+
+def test_a_plain_press_reads_only_that_card(hub, monkeypatch):
+    reads, asked = [], []
+    _cache(hub, monkeypatch, [card(5), card(6)])
+    monkeypatch.setattr(hub, "read_one_card", lambda n: reads.append(n) or {**fresh(n), "l": ["bug"], "si": {"total": 2, "completed": 0}})
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: asked.append(issue) or ([{"number": 6}], None))
+    out = hub.sync_card(5)
+    assert reads == [5] and asked == [], "a plain card's sub-issues are not read"
+    assert out["count"] == 1 and out["capped"] is None
+
+
+def test_a_tree_past_the_depth_bound_says_so_and_the_next_press_continues(hub, monkeypatch):
+    monkeypatch.setattr(hub, "SYNC_TREE_DEPTH", 1)
+    _tree(hub, monkeypatch, {5: [6], 6: [7], 7: [8]})
+    first = hub.sync_card(5)
+    assert first["capped"] == "depth"
+    assert sorted(r["n"] for r in first["rows"]) == [5, 6]
+    second = hub.sync_card(5)
+    assert 7 in [r["n"] for r in second["rows"]], "the next press reads past the bound"
+    assert 8 not in [r["n"] for r in second["rows"]], "one press still stops at its own bound"
+
+
+def test_a_tree_past_the_node_bound_says_so_and_the_next_press_continues(hub, monkeypatch):
+    monkeypatch.setattr(hub, "SYNC_TREE_NODES", 3)
+    _tree(hub, monkeypatch, {5: [6, 7, 8, 9, 10]})
+    first = hub.sync_card(5)
+    assert first["capped"] == "nodes" and first["count"] == 3
+    second = hub.sync_card(5)
+    assert sorted(r["n"] for r in second["rows"]) == [5, 8, 9], "the next press continues where the first stopped"
+    assert second["capped"] == "nodes"
+
+
+def test_the_page_names_the_cap_a_spec_press_passed(hub):
+    assert "press again to continue" in hub.PAGE, "the sync line says a capped tree continues on the next press"
+
+
+def test_a_wide_tree_stays_under_its_node_cap(hub, monkeypatch):
+    reads = []
+    _tree(hub, monkeypatch, {5: list(range(100, 300))}, reads)
+    out = hub.sync_card(5)
+    assert len(reads) <= hub.SYNC_TREE_NODES, "a wide tree is read no further than the node cap"
+    assert out["capped"] == "nodes"
+
+
+def test_a_wide_tree_stays_under_its_deadline(hub, monkeypatch):
+    reads = []
+    _tree(hub, monkeypatch, {5: list(range(100, 300))}, reads)
+    monkeypatch.setattr(hub, "SYNC_TREE_SECONDS", 0.2)
+    base = hub.read_one_card
+
+    def slow(n):
+        time.sleep(0.02)
+        return base(n)
+
+    monkeypatch.setattr(hub, "read_one_card", slow)
+    started = time.monotonic()
+    out = hub.sync_card(5)
+    elapsed = time.monotonic() - started
+    assert out["capped"] == "deadline"
+    assert len(reads) <= 11, "the reads stop once the deadline has passed, one read past it at most"
+    assert elapsed < 1.0, "the press answers near its deadline, not after the whole tree"

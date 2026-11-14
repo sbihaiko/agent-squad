@@ -3330,6 +3330,31 @@ def hold_rows(now=None):
                     "age": int(h["activity"] or 0), "rank": 0, "spend": 0, "dur": 0, "kind": "hold", "live": True,
                     "running": False, "titles": {str(h["issue"]): TITLE.get(h["issue"], "")}})
     return out
+def live_work_lines(items, state=None, checkout=None, procs=None, now=None):
+    """The Live work panel's lines, all from local state and the board read the hub already holds: the loop's state,
+    each live run (its issue, node and age), each gate lock (its pid and the child it serves), each hand hold, each issue
+    labelled ready-for-human, and one line on the work the hub cannot see (a hand gate or a Claude Code fix pass)."""
+    now = time.time() if now is None else now
+    base = pathlib.Path(state) if state else STATE
+    lines = []
+    if loop_state({}, now=now, state=base) == "off": lines.append("loop off")
+    for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
+        folder = active_folder(entry)
+        if not folder: continue
+        row, _ = run_row(folder, "", procs or {})
+        issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
+        lines.append(f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min")
+    for d in sorted((base / "locks").glob("*")):
+        pid = _read(d / "pid").strip()
+        if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
+            lines.append(f"lock {d.name}: pid {pid} serves {_read(d / 'cmd').strip() or 'an unknown child'}")
+    for i in items:
+        if "ready-for-human" in (i.get("l") or []):
+            lines.append(f"ready-for-human #{i['n']} {i.get('t') or ''} · label ready-for-human")
+    if not lines: lines.append("no live work")
+    lines.append("hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here")
+    return lines
+
 def task_count(i):
     """How far a card's own work got, `completed` over `total` (`3/5`), off the sub-issue summary the items route the
     pass already reads hands over (#153). Nothing when the issue has no tasks, and nothing when the summary is missing
@@ -3577,31 +3602,86 @@ def synced_rows(n, at):
     return out
 
 
+SYNC_TREE_DEPTH = 3          # the levels below a spec one press descends into (#1670)
+SYNC_TREE_NODES = 50         # the cards one press reads, the spec included (#1670)
+SYNC_TREE_SECONDS = 20.0     # one press's deadline: a read already begun finishes, none begins past it (#1670)
+_sync_frontier = {}          # a capped spec's unread numbers, which its next press continues from (#1670)
+
+
+def _has_subs(item):
+    return bool((item.get("si") or {}).get("total"))
+
+
+def sync_tree(root):
+    """The root and, when it is a spec, every sub-issue under it, read to the depth, node and time bounds (#1670).
+
+    Answers (items read, the cap that stopped the walk or None, a note). A press past a bound keeps the numbers it did not
+    read, and the next press continues from them as fresh roots, so a wide tree is read across presses, never in one."""
+    n = root["n"]
+    if _columns_module.SPEC_LABEL not in (root.get("l") or []): return [root], None, ""
+    started = time.monotonic()
+    if n in _sync_frontier: pending = [(x, 0) for x in _sync_frontier.pop(n)]
+    else:
+        subs, err = sub_issues(n, root.get("r") or REPO)
+        if err: return [root], None, err
+        pending = [(s["number"], 1) for s in subs if isinstance(s.get("number"), int)]
+    items, seen, deferred, rest = [root], {n}, [], []
+    capped, failed = None, 0
+    while pending:
+        num, depth = pending.pop(0)
+        if num in seen: continue
+        if len(items) >= SYNC_TREE_NODES:
+            capped, rest = "nodes", [num] + [x for x, _ in pending]
+            break
+        if time.monotonic() - started >= SYNC_TREE_SECONDS:
+            capped, rest = "deadline", [num] + [x for x, _ in pending]
+            break
+        seen.add(num)
+        try: child = read_one_card(num)
+        except Exception: failed += 1; continue
+        items.append(child)
+        if not _has_subs(child): continue
+        if depth >= SYNC_TREE_DEPTH:
+            capped = capped or "depth"
+            deferred.append(num)
+            continue
+        subs, err = sub_issues(num, child.get("r") or REPO)
+        if err: failed += 1; continue
+        pending += [(s["number"], depth + 1) for s in subs if isinstance(s.get("number"), int)]
+    frontier = deferred + rest
+    if frontier: _sync_frontier[n] = frontier
+    else: _sync_frontier.pop(n, None)
+    note = f"{failed} sub-issue read(s) did not answer" if failed else ""
+    return items, capped, note
+
+
 def sync_card(n):
-    """POST /api/sync: re-read one card from GitHub now and answer the row refreshed (#1668).
+    """POST /api/sync: re-read one card from GitHub now, and a spec's sub-issues with it, and answer the rows refreshed (#1668, #1670).
 
     A press is a read. It sends no move, no close and no edit to GitHub, and it never touches the board cache's own read
-    instant: the row it refreshes, and only that row, carries the instant of this read as `ri`. A failed read answers its
-    error, empties nothing and keeps the row the page already had. A card GitHub no longer carries keeps its last good row
-    and is named. The answer is {n, rows, count, at, err, missing, note}."""
+    instant: each row it refreshes carries the instant of this read as `ri`. A failed read answers its error, empties
+    nothing and keeps the row the page already had. A card GitHub no longer carries keeps its last good row and is named.
+    The answer is {n, rows, count, at, err, missing, capped, note}; `capped` names the bound a spec's tree passed."""
     if isinstance(n, bool) or not isinstance(n, int) or n <= 0: return {"err": "n: a card number"}
     at = sync_instant()
     held = next((i for i in board_cache.get("items") or [] if i.get("n") == n), None)
     try:
-        item = read_one_card(n)
+        root = read_one_card(n)
     except SyncMissing as e:
         rows = synced_rows(n, at)
         if not rows and held is not None: rows = [{"n": n, "t": held.get("t"), "c": held.get("c"), "l": held.get("l") or [], "st": held.get("st"), "ri": at}]
-        return {"n": n, "rows": rows, "count": 0, "at": at, "err": None, "missing": True, "note": str(e)}
+        return {"n": n, "rows": rows, "count": 0, "at": at, "err": None, "missing": True, "capped": None, "note": str(e)}
     except Exception as e:
-        return {"n": n, "rows": [], "count": 0, "at": at, "err": str(e)[:200] or "the read did not answer"}
+        return {"n": n, "rows": [], "count": 0, "at": at, "err": str(e)[:200] or "the read did not answer", "capped": None}
+    items, capped, note = sync_tree(root)
+    ids = {i["n"] for i in items}
     with _board_lock:
-        board_cache["items"] = [i for i in board_cache.get("items") or [] if i.get("n") != n] + [item]
-    rows = synced_rows(n, at)
+        board_cache["items"] = [i for i in board_cache.get("items") or [] if i.get("n") not in ids] + items
+    rows = [r for i in items for r in synced_rows(i["n"], at)]
     if not rows:
-        note = f"#{n} is closed: it is no longer an open card" if str(item.get("s") or "").lower() == "closed" else f"#{n} has no open column"
-        return {"n": n, "rows": [], "count": 0, "at": at, "err": None, "note": note}
-    return {"n": n, "rows": rows, "count": len(rows), "at": at, "err": None}
+        closed = str(root.get("s") or "").lower() == "closed"
+        note = note or (f"#{n} is closed: it is no longer an open card" if closed else f"#{n} has no open column")
+    return {"n": n, "rows": rows, "count": len(rows), "at": at, "err": None, "capped": capped, "note": note}
 
 
 def set_part(name, err):
@@ -5816,7 +5896,8 @@ function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.ag
  const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
  const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
- return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")||"<div class=m>no live work</div>")+more}}
+ const extra=(liveWork||[]).filter(t=>!live.some(r=>t.includes(r.id))).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a run row already drawn is not drawn twice
+ return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")+extra||"<div class=m>no live work</div>")+more}}
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
@@ -5864,7 +5945,7 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   const fresh=allRuns.filter(r=>r.kind!=="childcc"&&!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
-async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh()}catch(e){}}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277)
+async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh();livePoll()}catch(e){}}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277)
 function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
   const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
   const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
@@ -6733,6 +6814,8 @@ function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=
  setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
+let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the ready-for-human issues
+async function livePoll(){try{liveWork=await (await fetch("/api/live")).json();refresh()}catch(e){}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
@@ -6782,7 +6865,7 @@ const syncMove=(el,col)=>{if(!col)return;const lane=el.closest(".lane"),cell=lan
 // hub did not answer", because the throw lands after the read answered.
 const syncRow=(el,f)=>{if(!el)return;const set=(sel,html)=>{let x=el.querySelector(sel);if(x)x.innerHTML=html;else if(html){x=document.createElement("span");x.className=sel.slice(1);x.innerHTML=html;el.appendChild(x)}};el.dataset.col=encodeURIComponent(f.col||"");el.dataset.b=encodeURIComponent(JSON.stringify(f.b));el.dataset.bl=encodeURIComponent(JSON.stringify(f.bl));el.dataset.ho=encodeURIComponent(f.ho);el.dataset.prf=encodeURIComponent(JSON.stringify(f.prf));const t=el.querySelector(".tt");if(t&&f.t)t.textContent=String(f.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");set(".lbs",(f.labels||[]).map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}">${esc(l)}</span>`).join(""));set(".blk",(f.b||[]).length?"blocked by "+f.b.map(m=>`<a target=_blank rel=noopener href="https://github.com/${esc(el.dataset.r||"__REPO__")}/issues/${m}">#${m}</a>`).join(", "):"");let hd=el.querySelector(".hld");if(f.ho){if(!hd){hd=document.createElement("span");hd.className="hld";el.appendChild(hd)}hd.title=f.ho;hd.textContent=f.hc||(f.hs==="running"?"Squad · running":"Squad")}else if(hd)hd.remove();syncMove(el,f.col)};
 const syncApply=d=>{if(d.err||d.missing||!(d.count>0))return false;for(const r of d.rows||[]){const f=syncFacts(r);syncRow(document.querySelector(`#bbody .it[data-n="${f.n}"]`),f);const box=$("#tkfacts");if(box&&$("#tk").classList.contains("on")&&+cur===f.n)box.innerHTML=syncFactsHtml(f)}return true};
-const syncNote=d=>{const s=$("#bsync");if(!s)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:d.count?`${d.count} row refreshed at ${at}`:`0 rows refreshed at ${at}${d.note?": "+d.note:""}`};
+const syncNote=d=>{const s=$("#bsync");if(!s)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:d.count?`${d.count} row refreshed at ${at}${d.capped?` · capped at the ${d.capped} bound: press again to continue`:""}`:`0 rows refreshed at ${at}${d.note?": "+d.note:""}`};
 const syncSheetNote=d=>{const s=$("#tksyncnote");if(!s||!$("#tk").classList.contains("on")||+cur!==+d.n)return;const at=syncInstant(d);s.title=d.err||"";s.textContent=d.err?`sync failed: ${d.err}`:d.missing?`0 rows refreshed: ${d.note||"#"+d.n+" is not on GitHub"}`:`${d.count||0} row${d.count===1?"":"s"} refreshed at ${at}`+((d.count||0)===0&&d.note?": "+d.note:"")};
 const syncMark=(n,at,missing,note)=>{const el=document.querySelector(`#bbody .it[data-n="${n}"]`);if(!el)return;el.dataset.ri=at;el.insertAdjacentHTML("beforeend",`<span class=syncage data-ri="${esc(at)}" title="this row was read at ${esc(at)}">${esc("read "+age(at))}</span>`+(missing?`<div class=perr title="the last good row this page holds; GitHub no longer carries the card">${esc(note||"GitHub no longer carries #"+n)}</div>`:""))};
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .syncb");if(!b||b.disabled)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it"),label=b.textContent,say=m=>{if(card)card.insertAdjacentHTML("beforeend",m)};b.disabled=true;b.textContent="syncing…";try{const d=await syncOne(n);syncNote(d);syncSheetNote(d);if(d.err)say(`<div class=perr>sync failed: ${esc(d.err)}</div>`);else{syncApply(d);syncMark(n,d.at,d.missing,d.note);if(!card)pollBoard()}b.disabled=false;b.textContent=label}catch(x){say(`<div class=perr>sync failed: ${esc(x&&x.message?"the row could not be drawn: "+x.message:"the hub did not answer")}</div>`);b.disabled=false;b.textContent=label}});   // (#1685) a throw after the read answered is the page's, never the hub's: the message says which
@@ -8524,6 +8607,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
+        elif self.path.startswith("/api/live"): body, ct = json.dumps(live_work_lines(board_cache.get("items", []))).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
