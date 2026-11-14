@@ -280,6 +280,7 @@ def test_a_change_to_the_inert_list_answers_all_with_the_path(tmp_path):
     assert len(lines) == 1 and lines[0].startswith("all: ") and INERT in lines[0]
 
 
+@pytest.mark.heavy   # parses every test file, and the runner's load can push the scan past the 2 s line
 def test_the_inert_list_names_no_path_a_test_reads():
     entries = [
         line.strip() for line in (ROOT / INERT).read_text().splitlines()
