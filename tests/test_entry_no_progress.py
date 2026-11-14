@@ -43,6 +43,7 @@ async def test_the_record_names_the_no_progress_end_of_the_silent_entry(tmp_path
     assert refused[0]["model"] == chain_of(tmp_path, "router")[0]
 
 
+@pytest.mark.heavy   # the silent entry waits out WINDOW, and the runner's load can push the call past the 1 s line
 async def test_the_second_entry_gets_what_is_left_of_the_node_deadline(tmp_path):
     def tweak(d):
         node(d, "router")["deadline"] = 1.0
