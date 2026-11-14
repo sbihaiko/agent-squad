@@ -25,12 +25,36 @@ def _seconds(etime):
     return int(days or 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
 
 
+def _table_procs():
+    """The table through squad.procs, the reader built for a session inside the child's sandbox-exec wall (#1508), as
+    (pid, ppid, age, command) rows; None when that reader cannot answer, so the binary below may."""
+    try:
+        from squad import procs
+    except ImportError:
+        return None
+    try:
+        table = procs.snapshot()
+    except (procs.ReadError, OSError):   # a reader that cannot answer is no reader, never a crash of the session that ends
+        return None
+    now = time.time()
+    # A process whose start the system will not say is never read as one that started inside the session: unknown is old.
+    return [(p.pid, p.ppid, now - p.start if p.start else float("inf"), p.command) for p in table.values()]
+
+
 def _table():
+    # The read goes through squad.procs first: the child's sandbox refuses to exec the process table binary, and a session
+    # that cannot read the table would end red on a green tree (#1691, #1508).
+    rows = _table_procs()
+    if rows is not None:
+        return rows
     # One -o per column: procps reads the text after `=` as the column's header, to the end of the argument, so a joined
     # `pid=,ppid=,...` list is one column there and no row has four fields. -ww keeps the whole command: a cut line
     # loses the leftover's name.
-    out = subprocess.run(["ps", "-e", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "etime=", "-o", "command="],
-                         capture_output=True, text=True).stdout
+    try:
+        out = subprocess.run(["ps", "-e", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "etime=", "-o", "command="],
+                             capture_output=True, text=True).stdout
+    except OSError:   # the sandbox refused the binary too: no rows, and the reap ends nothing it cannot see
+        return []
     rows = []
     for line in out.splitlines():
         cols = line.split(None, 3)

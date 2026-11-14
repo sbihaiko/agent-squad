@@ -252,6 +252,21 @@ def test_nested_pytest_checks_carry_the_heavy_marker():
     assert missing == [], f"these checks start a nested pytest and carry no heavy mark: {missing}"
 
 
+def test_a_dispatch_test_that_builds_two_child_worktrees_carries_the_heavy_mark():
+    """One call that builds two child worktrees in a real repository does git worktree adds and a repository copy, and a
+    loaded runner pushed it to 4.6 s, past the 2 s line an unmarked call is held to (#1721)."""
+    from tests import test_dispatch as dispatch
+
+    builders = [
+        dispatch.test_a_request_never_picks_its_workspace_and_each_child_worktree_starts_from_the_target_head,
+        dispatch.test_parallel_writing_children_run_in_distinct_worktrees_and_a_reader_shares_the_workspace,
+        dispatch.test_the_checks_gates_run_after_every_child_and_a_failed_check_fails_the_child,
+        dispatch.test_the_dispatch_artifact_feeds_the_final_gate_with_the_child_commands,
+    ]
+    missing = [_test.__name__ for _test in builders if not _heavy_marked(_test)]
+    assert missing == [], f"these tests build two child worktrees and carry no heavy mark: {missing}"
+
+
 def test_a_no_progress_window_wait_carries_the_heavy_mark():
     """Each entry in this test waits out the no-progress window, and a loaded runner pushed the call to 2.2 s (#1694)."""
     from tests.test_entry_no_progress import test_the_second_entry_gets_what_is_left_of_the_node_deadline as waits

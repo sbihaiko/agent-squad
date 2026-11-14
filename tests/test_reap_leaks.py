@@ -80,3 +80,27 @@ def test_the_process_table_is_read_on_this_system():
         assert any(pid == child.pid and long in cmd for pid, _, _, cmd in reap_leaks._table()), "ps cut a long command line"
     finally:
         child.kill()
+
+
+def test_the_table_is_read_without_the_process_table_binary(monkeypatch):
+    """A session inside the child's sandbox-exec wall cannot exec /bin/ps (#1508), so a read that ends the session on it
+    records a red the machine caused as the tree's own (#1691). The table comes from squad.procs, the reader built for
+    that wall."""
+    def denied(*_a, **_k):
+        raise PermissionError(1, "Operation not permitted", "ps")
+
+    monkeypatch.setattr(reap_leaks.subprocess, "run", denied)
+    rows = reap_leaks._table()
+    assert any(pid == os.getpid() for pid, _, _, _ in rows), "the read fell back to the refused binary"
+
+
+def test_a_table_no_reader_can_read_is_no_rows(monkeypatch):
+    """A read the machine refuses is no rows, never an exception: the reap ends nothing it cannot see, which is the safe
+    half of the choice."""
+    monkeypatch.setattr(reap_leaks, "_table_procs", lambda: None)
+
+    def denied(*_a, **_k):
+        raise PermissionError(1, "Operation not permitted", "ps")
+
+    monkeypatch.setattr(reap_leaks.subprocess, "run", denied)
+    assert reap_leaks._table() == []

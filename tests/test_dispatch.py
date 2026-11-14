@@ -235,6 +235,7 @@ async def test_a_request_the_run_cannot_fund_is_rejected(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # two child worktrees in a real repository: 1.1 s here and a loaded runner pushes it past the line (#1721)
 async def test_the_checks_gates_run_after_every_child_and_a_failed_check_fails_the_child(tmp_path):
     bad = {"output": {"diff": {"files": [{"path": "src/auth/login.py"}]}, "ac_commands": ["true"]}, "spend": 0.2}
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": bad, "route.router.2": CHILD})
@@ -246,6 +247,7 @@ async def test_the_checks_gates_run_after_every_child_and_a_failed_check_fails_t
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # two child worktrees in a real repository, one per engine: 1.9 s here (#1721)
 async def test_the_dispatch_artifact_feeds_the_final_gate_with_the_child_commands(tmp_path):
     ok = {"output": {"ac_commands": ["true"]}, "spend": 0.1}
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": ok})
@@ -609,6 +611,7 @@ async def test_a_crash_before_any_request_is_decided_replays_the_entry_artifact(
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # two writing children, so two child worktrees in a real repository: 1.4 s here (#1721)
 async def test_parallel_writing_children_run_in_distinct_worktrees_and_a_reader_shares_the_workspace(tmp_path):
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs"), req("codebase-design", tools=["Read"])), **{f"route.router.{i}": CHILD for i in (1, 2, 3)}})
     assert (await eng.run()).verdict == "completed"
@@ -622,6 +625,7 @@ async def test_parallel_writing_children_run_in_distinct_worktrees_and_a_reader_
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy   # two child worktrees in a real repository: 4.6 s on a loaded CI runner (#1721)
 async def test_a_request_never_picks_its_workspace_and_each_child_worktree_starts_from_the_target_head(tmp_path):
     repo = sibling_repo(tmp_path)
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": CHILD, "route.router.2": CHILD})

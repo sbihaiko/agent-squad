@@ -354,5 +354,13 @@ $G -qxF "posted=1" "$f/board.calls" && ok "21 the card is added after the filing
 n=$(SG_FILED_BY=autobug SG_FILED_LABELS=ready-for-agent bash "$S/autohunt.sh" --file "a second defect" "$f/body.md" 2>&1)
 labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
 [ "$labels" = "labels[]=bug labels[]=ready-for-agent " ] && ok "21 only a named caller adds the startable label" || ko "21 a caller's labels: '$labels'"
+# 21b) (#1677) a bug filed for a person carries ready-for-human on the issue before its card reaches Todo, so no pass
+# takes it in the window between the two writes; a bug filed for the loop carries the bug kind and nothing extra.
+: > "$f/ghpost"; : > "$f/board.calls"
+n=$(SG_FILED_BY=manual SG_FILED_LABELS=ready-for-human bash "$S/autohunt.sh" --file "a defect for a person" "$f/body.md" 2>&1)
+case "$n" in *"HUNT filed #42"*) ok "21b the filing for a person lands";; *) ko "21b the filing for a person failed: '$n'";; esac
+labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
+[ "$labels" = "labels[]=bug labels[]=ready-for-human " ] && ok "21b a bug filed for a person carries ready-for-human" || ko "21b a person's labels: '$labels'"
+$G -qxF "posted=1" "$f/board.calls" && ok "21b the holder label is on the issue before its card reaches Todo" || ko "21b the card came first: $(cat "$f/board.calls")"
 
 rm -rf "$T"; exit $fail

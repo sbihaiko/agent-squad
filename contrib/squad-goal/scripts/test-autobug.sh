@@ -802,10 +802,12 @@ case "$r" in *"[72]"*) ko "16 a bug with no card in Todo was dispatched: '$r'";;
 printf '72\tBacklog\n' > "$T/cards.tsv"
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ko "16 a bug in Backlog was dispatched: '$r'";; *) ok "16 a bug in Backlog is not dispatched";; esac
-todo 72 73; printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"   # room for both: only the label holds #73
+todo 72 73; printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"   # room for both: the column alone decides
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ok "16 a bug in Todo is dispatched";; *) ko "16 a bug in Todo was not dispatched: '$r'";; esac
-case "$r" in *73*) ko "16 a bug in Todo without the go label was dispatched: '$r'";; *) ok "16 a bug in Todo without the go label is not dispatched";; esac
+# Re-anchored (#1677, ADR-0018): the column is the go signal, so an untriaged Todo bug is taken too; the pass writes its
+# label in the same act. A holder label is the brake, and case 15d pins it.
+case "$r" in *73*) ok "16 a bug in Todo with no triage label is dispatched too (#1677)";; *) ko "16 the untriaged Todo bug was not dispatched: '$r'";; esac
 rm -f "$T/cards.tsv"
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ko "16 a bug went out with no board read: '$r'";; *"board"*) ok "16 a board that does not answer dispatches nothing, and the pass says so";; *) ko "16 the pass is silent about the board: '$r'";; esac
@@ -1287,5 +1289,129 @@ $G -qxF 'AUTOBUG pass 1: none (loop off)' "$PL/st/cycle.log" && ok "34d a pass w
 [ "$($G -c '^AUTOBUG pass ' "$PL/st/cycle.log")" = 1 ] && ok "34d the loop-off line is written once" \
   || ko "34d the line repeats: '$(cat "$PL/st/cycle.log")'"
 rm -f "$PL/st/auto/off"
+
+# 35-39) (#1677, SPEC 1672) the bug pass follows the frontier's triage rule: the column Todo is the one go signal, so a bug
+# with no triage label is claimed and dispatched, and the pass writes ready-for-agent on it once, before the pending Doing
+# event (ADR-0165) -- a refused write leaves no event, and the next pass retries the bug. A holder label still holds and
+# costs no write, a bug that already carries the label costs none either, and bugs-waiting counts an untriaged Todo bug.
+# The fixture records one call order: every GitHub call, every ledger call and the launch land in the same file.
+TR=$T/triage; mkdir -p "$TR/bin" "$TR/st/auto" "$TR/st/req" "$TR/st/cq" "$TR/st/locks" "$TR/co/docs/squad/workflows" "$TR/s"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$TR/s/"
+: > "$TR/st/active-runs.txt"
+printf 'caps:\n  runs: 2\n' > "$TR/co/docs/squad/defaults.yaml"
+printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$TR/st" "$TR/co" > "$TR/s/env.sh"
+printf '#!/bin/bash\necho READY\n' > "$TR/s/stack.sh"; chmod +x "$TR/s/stack.sh"
+printf 'print("-")\n' > "$TR/s/fundroom.py"
+cat > "$TR/s/issue_state.py" <<PY
+import sys
+if sys.argv[1:2] not in ([], ["--go"]): sys.exit(1)
+try: sys.stdout.write(open("$TR/cards.tsv").read())
+except OSError: print("no board", file=sys.stderr); sys.exit(1)
+PY
+# The ledger spy (#1677): every call to the one writer lands in the pass's call order, beside every GitHub call, so the
+# order of the label write and the pending Doing event is read from what the pass did, never inferred.
+mv "$TR/s/issue_ledger.py" "$TR/s/issue_ledger-real.py"
+cat > "$TR/s/issue_ledger.py" <<PY
+import os, subprocess, sys
+_real = os.path.join(os.path.dirname(os.path.abspath(__file__)), "issue_ledger-real.py")
+if __name__ != "__main__":   # imported by startability.sh and the pass: the real module answers, the spy writes nothing
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("issue_ledger_real", _real)
+    _m = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_m)
+    globals().update({k: v for k, v in vars(_m).items() if not k.startswith("__")})
+else:
+    open("$TR/calls", "a").write("ledger " + " ".join(sys.argv[1:]) + "\n")
+    sys.exit(subprocess.call([sys.executable, _real] + sys.argv[1:]))
+PY
+printf '#!/bin/bash\necho "board $*" >> %s/calls\nexit 0\n' "$TR" > "$TR/s/board.sh"
+printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "{}" > "$SG_STATE/req/$1.json"; echo "$SG_STATE/req/$1.json"\n' > "$TR/s/mkreq.sh"
+printf 'import sys\nopen("%s/calls", "a").write("launch " + sys.argv[1] + "\\n")\n' "$TR" > "$TR/s/launch.py"
+chmod +x "$TR/s/board.sh" "$TR/s/mkreq.sh" "$TR/s/launch.py"
+cat > "$TR/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},parent:(if .parent then {number:.parent} else null end),comments:{nodes:[]}}]}}}}' "$TR/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$TR/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *issues/*/labels*) echo "labels \$*" >> "$TR/calls"; if [ -e "$TR/label.fail" ]; then printf '%s' '{"message":"Bad credentials","status":401}'; exit 1; fi; echo '[]' ;;
+  *"issues?state=open"*labels=bug*) jq -c '[.[]|select((.labels // [])|index("bug"))|.labels=[(.labels//[])[]|{name:.}]]' "$TR/issues.json" ;;
+  *"issues?state=open"*labels=debt*) jq -c '[.[]|select((.labels // [])|index("debt"))|.labels=[(.labels//[])[]|{name:.}]]' "$TR/issues.json" ;;
+  *"issues?state=open"*) jq -c '[.[]|.labels=[(.labels//[])[]|{name:.}]]' "$TR/issues.json" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$TR/issues.json" ;;
+  *) echo "[]" ;;
+esac
+J
+chmod +x "$TR/bin/gh"
+tr_fresh() {   # this pass's state empty, and one open bug in Todo unless the case writes its own list
+  rm -rf "$TR/st/auto" "$TR/st/req" "$TR/st/cq" "$TR/st/locks" "$TR/st/state"; mkdir -p "$TR/st/auto" "$TR/st/req" "$TR/st/cq" "$TR/st/locks"
+  : > "$TR/calls"; rm -f "$TR/label.fail" "$TR/st/bugs-waiting"; : > "$TR/st/cycle.log"
+  printf '1701\tTodo\n' > "$TR/cards.tsv"
+  printf '[{"number":1701,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]\n' > "$TR/issues.json"
+}
+tr_run() { PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" bash "$TR/s/autobug.sh" 2>&1; }
+tr_ledger() { SG_STATE=$TR/st SG_REPO=x/y python3 "$TR/s/issue_ledger-real.py" "$@"; }
+tr_at() { $G -n "$1" "$TR/calls" | head -1 | cut -d: -f1; }   # the first place a call of this kind lands in the pass's order
+
+tr_fresh
+r=$(tr_run); rc=$?
+[ "$rc" = 0 ] && ok "35 an untriaged bug pass exits 0" || ko "35 exit $rc: '$r'"
+[ "$($G -c '^labels .*issues/1701/labels' "$TR/calls")" = 1 ] && ok "35 the untriaged Todo bug is dispatched with exactly one label write" \
+  || ko "35 label writes: '$($G '^labels ' "$TR/calls")'"
+$G -q '^labels .*labels\[\]=ready-for-agent' "$TR/calls" && ok "35 the one write carries ready-for-agent" || ko "35 the write's argument: '$($G '^labels ' "$TR/calls")'"
+a=$(tr_at '^labels .*issues/1701/labels'); b=$(tr_at '^ledger board x/y#1701 .* Doing ')
+[ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ] && ok "35 the label write lands before the pending Doing event (ADR-0165)" \
+  || ko "35 order (label at ${a:-none}, Doing event at ${b:-none}): '$(cat "$TR/calls")'"
+$G -q '^AUTOBUG triaged #1701: wrote ready-for-agent$' <<<"$r" && ok "35 the pass prints one line for the card it triaged" || ko "35 no triage line: '$r'"
+$G -q '^CHILD — GitHub issue(s) 1701 ' "$TR/st/req/"*.body 2>/dev/null && ok "35 the request names the triaged bug" || ko "35 request: '$(cat "$TR/st/req/"*.body 2>/dev/null)'"
+[ -e "$TR/st/auto/bug-1701" ] && [ -n "$($G '^launch ' "$TR/calls")" ] && ok "35 the triaged bug is claimed and its run launched" \
+  || ko "35 no claim or launch for #1701: '$r'"
+
+# 36) a Todo bug carrying a holder label dispatches nothing and issues no label write; a card outside Todo is taken by no
+# pass, untriaged or not.
+tr_fresh
+printf '1711\tTodo\n1712\tTodo\n1713\tBacklog\n' > "$TR/cards.tsv"
+printf '[{"number":1711,"title":"Bug for a person","body":"a.py","created_at":"2026-10-10T15:01:00Z","labels":["bug","ready-for-human"]},{"number":1712,"title":"Bug the owner holds","body":"b.py","created_at":"2026-10-10T15:02:00Z","labels":["bug","needs-owner"]},{"number":1713,"title":"Bug in Backlog","body":"c.py","created_at":"2026-10-10T15:03:00Z","labels":["bug"]}]\n' > "$TR/issues.json"
+r=$(tr_run); rc=$?
+[ "$rc" = 0 ] && ok "36 a pass with only held bugs exits 0" || ko "36 exit $rc: '$r'"
+m=($(find "$TR/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "36 a holder label dispatches nothing" || ko "36 markers: ${m[*]##*/}"
+[ "$($G -c '^labels ' "$TR/calls")" = 0 ] && ok "36 a holder label costs no label write" || ko "36 writes: '$($G '^labels ' "$TR/calls")'"
+[ -z "$(ls "$TR/st/req/"*.body 2>/dev/null)" ] && [ ! -e "$TR/st/auto/bug-1713" ] && ok "36 a card outside Todo is never taken" \
+  || ko "36 a card outside Todo went out: '$(cat "$TR/st/req/"*.body 2>/dev/null)'"
+
+# 37) a bug that already carries ready-for-agent is dispatched with no label write: the record is already there.
+tr_fresh
+printf '[{"number":1721,"title":"Plain bug","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]\n' > "$TR/issues.json"
+printf '1721\tTodo\n' > "$TR/cards.tsv"
+r=$(tr_run)
+[ -e "$TR/st/auto/bug-1721" ] && ok "37 a bug that already carries the label is dispatched" || ko "37 no dispatch: '$r'"
+[ "$($G -c '^labels ' "$TR/calls")" = 0 ] && ok "37 a bug that already carries the label costs no write" || ko "37 writes: '$($G '^labels ' "$TR/calls")'"
+
+# 38) a refused label write leaves no pending Doing event, frees the claim, and the next pass retries the bug.
+tr_fresh; touch "$TR/label.fail"
+r=$(tr_run); rc=$?
+[ "$rc" = 0 ] && ok "38 a refused triage write exits 0" || ko "38 exit $rc: '$r'"
+case "$r" in *"AUTOBUG triage failed #1701:"*) ok "38 the pass names the refused write and the card that waits";; *) ko "38 no failure line: '$r'";; esac
+[ "$($G -c '^ledger board x/y#1701 ' "$TR/calls")" = 0 ] && ok "38 a refused write leaves no pending Doing event" || ko "38 the event was recorded: '$(cat "$TR/calls")'"
+[ -z "$(tr_ledger pending x/y | awk -F'\t' '$1==1701')" ] && ok "38 the ledger holds no pending event for the bug" || ko "38 pending: '$(tr_ledger pending x/y)'"
+[ -z "$(ls "$TR/st/req/"*.body 2>/dev/null)" ] && ok "38 a refused write writes no request" || ko "38 a request was written: '$(cat "$TR/st/req/"*.body 2>/dev/null)'"
+[ ! -e "$TR/st/auto/bug-1701" ] && ok "38 a refused write frees the claim" || ko "38 the claim stays"
+[ "$(cat "$TR/st/bugs-waiting" 2>/dev/null)" = 1 ] && ok "38 the refused bug counts as waiting" || ko "38 bugs-waiting: '$(cat "$TR/st/bugs-waiting" 2>/dev/null)'"
+: > "$TR/calls"; rm -f "$TR/label.fail"
+r=$(tr_run)
+[ -e "$TR/st/auto/bug-1701" ] && [ "$($G -c '^labels .*issues/1701/labels' "$TR/calls")" = 1 ] \
+  && ok "38 the next pass retries the bug and writes its label once" || ko "38 retry: '$(cat "$TR/calls")' / '$r'"
+
+# 39) bugs-waiting counts a Todo bug with no holder label, and no bug a holder label keeps back.
+tr_fresh; printf 'print("0")\n' > "$TR/s/fundroom.py"   # one run funds no child: every candidate waits
+r=$(AB_DRY=1 PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" bash "$TR/s/autobug.sh" 2>&1)
+[ "$(cat "$TR/st/bugs-waiting" 2>/dev/null)" = 1 ] && ok "39 bugs-waiting counts a Todo bug with no holder label" \
+  || ko "39 bugs-waiting '$(cat "$TR/st/bugs-waiting" 2>/dev/null)': '$r'"
+tr_fresh; printf 'print("0")\n' > "$TR/s/fundroom.py"
+printf '[{"number":1731,"title":"Bug for a person","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-human"]}]\n' > "$TR/issues.json"
+printf '1731\tTodo\n' > "$TR/cards.tsv"
+r=$(AB_DRY=1 PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" bash "$TR/s/autobug.sh" 2>&1)
+[ "$(cat "$TR/st/bugs-waiting" 2>/dev/null)" = 0 ] && ok "39 a bug a holder label keeps back is not counted as waiting" \
+  || ko "39 bugs-waiting '$(cat "$TR/st/bugs-waiting" 2>/dev/null)': '$r'"
+printf 'print("-")\n' > "$TR/s/fundroom.py"
 
 rm -rf "$T"; exit $fail
