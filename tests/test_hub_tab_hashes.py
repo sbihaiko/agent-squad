@@ -16,7 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 NODE = shutil.which("node")
-TABS_ORDER = ["board", "runs", "flow", "set"]
+TABS_ORDER = ["board", "runs", "flow", "prof", "set"]
 
 
 @pytest.fixture(scope="module")
@@ -48,7 +48,7 @@ def _run(hub, tmp_path, name, hash_, stored, steps):
 const localStorage={hub:__STORED__};const location={hash:__HASH__};
 const writes=[];const history={replaceState(_s,_t,u){writes.push(u);location.hash=u}};
 let TAB="board",pins=new Set(),q="",per=10,src="",FLOWK=null,focused=null;
-const sTheme=null,setTheme=()=>{},drawMain=()=>{},flowOpen=()=>{};
+const sTheme=null,setTheme=()=>{},drawMain=()=>{},flowOpen=()=>{},profPoll=()=>{};
 const cl=()=>({s:new Set(),toggle(c,f){if(f===undefined)f=!this.s.has(c);f?this.s.add(c):this.s.delete(c)},contains(c){return this.s.has(c)}});
 const els={};const $=s=>els[s]||(els[s]={hidden:s!=="#flowov"?false:true,classList:cl()});
 const btns=__TABS__.map(t=>({dataset:{t},classList:cl(),attrs:{},tabIndex:0,setAttribute(k,v){this.attrs[k]=String(v)},focus(){focused=this}}));
@@ -98,7 +98,7 @@ needs_node = pytest.mark.skipif(NODE is None, reason="node is not installed")
 
 
 @needs_node
-@pytest.mark.parametrize("hash_,tab", [("#kanban", "board"), ("#runs", "runs"), ("#flow", "flow"), ("#settings", "set")])
+@pytest.mark.parametrize("hash_,tab", [("#kanban", "board"), ("#runs", "runs"), ("#flow", "flow"), ("#profiler", "prof"), ("#settings", "set")])
 def test_loading_a_tab_hash_opens_that_tab(hub, tmp_path, hash_, tab):
     snaps = _run(hub, tmp_path, "load.js", hash_, "{}", [])
     assert _only(snaps[0], tab), snaps[0]
@@ -119,11 +119,11 @@ def test_no_hash_opens_the_tab_saved_last_or_kanban(hub, tmp_path):
 
 @needs_node
 def test_switching_a_tab_writes_its_hash(hub, tmp_path):
-    steps = ['setTab("runs")', 'setTab("flow")', 'setTab("set")', 'setTab("board")']
+    steps = ['setTab("runs")', 'setTab("flow")', 'setTab("prof")', 'setTab("set")', 'setTab("board")']
     snaps = _run(hub, tmp_path, "switch.js", "#kanban", "{}", steps)
-    assert [s["hash"] for s in snaps[1:]] == ["#runs", "#flow", "#settings", "#kanban"]
-    assert snaps[-1]["writes"] == ["#runs", "#flow", "#settings", "#kanban"]
-    for snap, tab in zip(snaps[1:], ["runs", "flow", "set", "board"], strict=True):
+    assert [s["hash"] for s in snaps[1:]] == ["#runs", "#flow", "#profiler", "#settings", "#kanban"]
+    assert snaps[-1]["writes"] == ["#runs", "#flow", "#profiler", "#settings", "#kanban"]
+    for snap, tab in zip(snaps[1:], ["runs", "flow", "prof", "set", "board"], strict=True):
         assert _only(snap, tab), snap
 
 
@@ -142,10 +142,10 @@ def test_the_card_link_is_resolved_before_the_tab_is_chosen(hub):
 @needs_node
 def test_arrow_home_and_end_keys_move_one_current_tab_and_its_pane(hub, tmp_path):
     steps = ['focusTab("board")', 'press("ArrowRight")', 'press("ArrowRight")', 'press("ArrowRight")',
-             'press("ArrowRight")', 'press("ArrowLeft")', 'press("Home")', 'press("End")', 'press("ArrowLeft")']
+             'press("ArrowRight")', 'press("ArrowRight")', 'press("ArrowLeft")', 'press("Home")', 'press("End")', 'press("ArrowLeft")']
     snaps = _run(hub, tmp_path, "keys.js", "#kanban", "{}", steps)[2:]
-    expected = ["runs", "flow", "set", "board", "set", "board", "set", "flow"]
-    hashes = {"board": "#kanban", "runs": "#runs", "flow": "#flow", "set": "#settings"}
+    expected = ["runs", "flow", "prof", "set", "board", "set", "board", "set", "prof"]
+    hashes = {"board": "#kanban", "runs": "#runs", "flow": "#flow", "prof": "#profiler", "set": "#settings"}
     assert len(snaps) == len(expected)
     for snap, tab in zip(snaps, expected, strict=True):
         assert _only(snap, tab), snap
@@ -158,7 +158,7 @@ def test_a_key_that_is_not_a_tab_key_moves_nothing(hub, tmp_path):
     assert _only(snaps[-1], "runs") and snaps[-1]["writes"] == []
 
 
-def test_the_bar_is_a_tab_list_of_four_tabs(hub):
+def test_the_bar_is_a_tab_list_of_five_tabs(hub):
     top = hub.PAGE[hub.PAGE.index("<div class=tabs role=tablist>"):]
     top = top[:top.index("</div>")]
     assert re.findall(r"<button data-t=(\w+) role=tab>", top) == TABS_ORDER

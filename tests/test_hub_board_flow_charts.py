@@ -192,7 +192,7 @@ def test_a_stored_pick_that_names_no_chart_opens_cumulative_flow(hub, tmp_path):
 def test_the_top_bar_gains_no_tab_when_a_chart_opens(hub):
     top = hub.PAGE[hub.PAGE.index("<div class=tabs role=tablist>"):]
     top = top[:top.index("</div>")]
-    assert re.findall(r"data-t=(\w+)", top) == ["board", "runs", "flow", "set"], "a chart is a tab of the top bar"
+    assert re.findall(r"data-t=(\w+)", top) == ["board", "runs", "flow", "prof", "set"], "a chart is a tab of the top bar"
 
 
 def test_cfd_bands_follow_the_hub_order(hub, board):
