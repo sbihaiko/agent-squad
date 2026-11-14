@@ -102,7 +102,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_dashboard_harness.py", "tests/test_dashboard_legend_help.py", "tests/test_dashboard_model_label.py", "tests/test_dashboard_rework.py", "tests/test_dashboard_save_review.py",
         "tests/test_debt_filing.py", "tests/test_dispatch_request.py", "tests/test_dispatchers_single_flight.py", "tests/test_gate_attempts.py", "tests/test_gate_command_env.py",
         "tests/test_gateway_cache_usage.py", "tests/test_gateway_price.py", "tests/test_gh_aggregate_params.py", "tests/test_gh_cache.py", "tests/test_hub_board_etag.py",
-        "tests/test_hub_board_freshness.py", "tests/test_hub_board_holder.py", "tests/test_hub_caps_resolution.py", "tests/test_hub_cost_usage_panel.py", "tests/test_hub_gauge_markup.py", "tests/test_hub_lane_head_columns.py",
+        "tests/test_hub_board_freshness.py", "tests/test_hub_board_holder.py", "tests/test_hub_run_folder.py", "tests/test_hub_caps_resolution.py", "tests/test_hub_cost_usage_panel.py", "tests/test_hub_gauge_markup.py", "tests/test_hub_lane_head_columns.py",
         "tests/test_hub_lane_hidden_cols.py", "tests/test_hub_lane_mode_saved.py", "tests/test_hub_loop_flag.py", "tests/test_hub_mobile.py", "tests/test_hub_mobile_more.py",
         "tests/test_hub_mobile_run_control.py", "tests/test_hub_mobile_tap.py", "tests/test_hub_mobile_terminal_send.py", "tests/test_hub_model_row_narrow.py", "tests/test_hub_mux_tailnet.py",
         "tests/test_hub_nightly_fact.py", "tests/test_hub_occupancy_header.py", "tests/test_hub_run_row_read.py", "tests/test_hub_screenshot.py", "tests/test_hub_shipped_vocab.py",
