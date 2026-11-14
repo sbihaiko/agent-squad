@@ -29,11 +29,10 @@ on:
 # nothing. A complete-tier job that takes over fifteen minutes on a real dev-to-stg run is split by test path into sibling
 # jobs, each with its own check-run name, never into matrix legs (ADR-0163). The full suite is that split: twelve sibling
 # jobs, one per shard per mode, each well inside its twenty minutes on a runner (#1518).
-# The group names the commit, so no queue holds a pull request behind another and GitHub cancels none.
-# A group shared by one branch's pushes cannot say that: GitHub queues the group's pending runs and cancels the runs
-# past the queue's cap, which is one pending run by default and 100 with `queue: max` (GitHub Actions workflow syntax,
-# `concurrency.queue`). A burst of pushes to one pull request cancels its run there. A group that names the commit holds
-# one run and nothing pending, so no cap applies and a pull request keeps its run.
+# A newer tip ends the fast tier of an older tip: the fast tier's group names the pull request's branch, and a new push
+# cancels the run in progress, so one pull request holds one fast run, of its newest tip, and never two (owner).
+# The complete tier keeps its run: a labeled event's group names the commit and cancels nothing, so a promotion request
+# is never cancelled by a push.
 # No job outlives the twenty minutes it gives itself (#128). The fast-battery jobs run `-m "not heavy"`.
 # The full suite's shard partition is tests/ci_shards.py, and each shard job asks that one module for its files: every test
 # file is in exactly one shard, in both modes, and tests/test_tooling.py fails when a file is in no shard or in two. A new
@@ -44,8 +43,8 @@ on:
 # under the CI proof it also refuses a tip with no green run of the complete tier: the label starts that tier, so a push
 # alone never proves the full suite. A check run another event skipped is no evidence of either tier.
 concurrency:
-  group: ci-${{ github.head_ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: ci-${{ github.head_ref }}-${{ github.event.action == 'labeled' && github.sha || 'tip' }}
+  cancel-in-progress: ${{ github.event.action != 'labeled' }}
 
 permissions:
   contents: read
@@ -54,7 +53,7 @@ jobs:
   ruff:
     name: ruff
     if: github.head_ref == 'dev' && github.event.action != 'labeled'   # every event but the promotion request: a push starts the fast tier alone
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -69,7 +68,7 @@ jobs:
   mypy:
     name: mypy
     if: github.head_ref == 'dev' && github.event.action != 'labeled'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -84,7 +83,7 @@ jobs:
   fast-battery:
     name: fast-battery
     if: github.head_ref == 'dev' && github.event.action != 'labeled'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
@@ -104,7 +103,7 @@ jobs:
   complete-guard:
     name: complete-guard
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -140,7 +139,7 @@ jobs:
     name: full-xdist-1
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -160,7 +159,7 @@ jobs:
     name: full-xdist-2
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -180,7 +179,7 @@ jobs:
     name: full-xdist-3
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -200,7 +199,7 @@ jobs:
     name: full-xdist-4
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -220,7 +219,7 @@ jobs:
     name: full-xdist-5
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -240,7 +239,7 @@ jobs:
     name: full-xdist-6
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -260,7 +259,7 @@ jobs:
     name: full-serial-1
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -280,7 +279,7 @@ jobs:
     name: full-serial-2
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -300,7 +299,7 @@ jobs:
     name: full-serial-3
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -320,7 +319,7 @@ jobs:
     name: full-serial-4
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -340,7 +339,7 @@ jobs:
     name: full-serial-5
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -360,7 +359,7 @@ jobs:
     name: full-serial-6
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
@@ -380,7 +379,7 @@ jobs:
     name: fast-battery-311
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"
@@ -398,7 +397,7 @@ jobs:
     name: gui-e2e
     if: github.head_ref == 'dev' && github.event.action == 'labeled' && github.event.label.name == 'promote' && needs.complete-guard.outputs.run == 'true'
     needs: [complete-guard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SQUAD_CI_RUNNER: "1"

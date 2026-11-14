@@ -1,8 +1,9 @@
 """End the processes a test session started and left behind (#1722).
 
-A leak is a process whose parent is 1, whose command names a test leftover inside this tree, and which started after the
-session began. A process with a living parent, an older process, and a process of another tree are never touched: the
-live loop, a nightly check and another session keep theirs. The session calls `reap` when it ends (`tests/conftest.py`);
+A leak is a process whose command names a test leftover inside this tree, which started after the session began, and
+which no process of the tree owns any more: its parent is 1, or no ancestor names the tree or runs pytest (Linux hands
+an orphan to a subreaper, never to 1). A process a test or a suite of the tree still owns, an older process, and a
+process of another tree are never touched: the live loop, a nightly check and another session keep theirs. The session calls `reap` when it ends (`tests/conftest.py`);
 `python tests/reap_leaks.py <tree> <since-epoch>` does the same by hand.
 """
 import os
@@ -25,7 +26,11 @@ def _seconds(etime):
 
 
 def _table():
-    out = subprocess.run(["ps", "-eo", "pid=,ppid=,etime=,command="], capture_output=True, text=True).stdout
+    # One -o per column: procps reads the text after `=` as the column's header, to the end of the argument, so a joined
+    # `pid=,ppid=,...` list is one column there and no row has four fields. -ww keeps the whole command: a cut line
+    # loses the leftover's name.
+    out = subprocess.run(["ps", "-e", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "etime=", "-o", "command="],
+                         capture_output=True, text=True).stdout
     rows = []
     for line in out.splitlines():
         cols = line.split(None, 3)
@@ -34,13 +39,29 @@ def _table():
     return rows
 
 
+def _owned(pid, parents, commands, roots):
+    """True when an ancestor of `pid` names the tree or runs pytest: a test or a suite still owns the process."""
+    seen = set()
+    parent = parents.get(pid)
+    while parent and parent != 1 and parent not in seen:
+        seen.add(parent)
+        cmd = commands.get(parent, "")
+        if " -m pytest" in cmd or any(r + "/" in cmd for r in roots):
+            return True
+        parent = parents.get(parent)
+    return False
+
+
 def leaks(tree, since, rows=None):
-    """The pids of the leftovers of `tree` that started at or after `since` and have parent 1."""
+    """The pids of the leftovers of `tree` that started at or after `since` and that no process of the tree owns."""
     roots = {str(Path(tree)), str(Path(tree).resolve())}
     now = time.time()
-    return [pid for pid, ppid, age, cmd in (_table() if rows is None else rows)
-            if ppid == 1 and now - age >= since - 1 and any(k in cmd for k in LEFTOVERS)
-            and any(r + "/" in cmd for r in roots)]
+    rows = _table() if rows is None else rows
+    parents = {pid: ppid for pid, ppid, _, _ in rows}
+    commands = {pid: cmd for pid, _, _, cmd in rows}
+    return [pid for pid, ppid, age, cmd in rows
+            if now - age >= since - 1 and any(k in cmd for k in LEFTOVERS) and any(r + "/" in cmd for r in roots)
+            and (ppid == 1 or not _owned(pid, parents, commands, roots))]
 
 
 def reap(tree, since):

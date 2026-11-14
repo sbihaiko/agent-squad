@@ -308,21 +308,17 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
 
 # The sentence the workflow states for its landing group. A group that names the commit holds one run and nothing
 # pending, so no queue cap applies and GitHub cancels no landing.
-LANDING_GROUP_RULE = "The group names the commit, so no queue holds a pull request behind another and GitHub cancels none."
+LANDING_GROUP_RULE = "A newer tip ends the fast tier of an older tip"
 
 
-def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
-    """Guard for the CI rule: one commit starts its tier's jobs once each, none of them has a matrix, and a landing on
-    dev, stg or main is never cancelled (#149, #398, #1518): the full suite's shards are sibling jobs, never matrix legs.
+def test_one_pull_request_holds_one_fast_run_and_a_promotion_request_is_never_cancelled():
+    """Guard for the CI rule: one commit starts its tier's jobs once each, none of them has a matrix, and one pull
+    request holds one fast run, of its newest tip (#149, #398, #1518, owner): a new push cancels the fast run in
+    progress, so a burst of landings never leaves two runs of one pull request side by side.
 
-    A matrix on the check job made one commit start two jobs that queued behind each other for two runners, and a check
-    no runner picks up answers nothing.
-
-    A group shared by one branch's pushes cannot keep that promise: GitHub queues the group's pending runs and cancels
-    the runs past the queue's cap (`queue: single` holds one pending run, `queue: max` holds 100), so a burst of
-    landings on one branch cancels a landing. A group that names the commit holds one run and nothing pending, so no
-    cap applies and GitHub cancels none. The guard checks the group, the cancel semantics, and the workflow's own
-    sentence for the rule.
+    The complete tier is the promotion request. Its group names the commit and it cancels nothing, so a push never
+    cancels a requested proof. The guard checks the group, the cancel semantics, and the workflow's own sentence for
+    the rule.
     """
     import yaml
 
@@ -333,16 +329,13 @@ def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
         assert "matrix" not in (job.get("strategy") or {}), "a matrix splits a job into legs that wait for runners"
     con = wf["concurrency"]
     group = con["group"]
-    assert "github.sha" in group, (
-        f"{group}: a group shared by a branch's pushes queues them, and GitHub cancels a run past the queue's cap, so a "
-        "landing on dev, stg or main can be cancelled; the group names the commit instead"
-    )
-    assert "github.head_ref" in group, f"{group}: the group names the pull request's own branch, never its base"
+    assert group == "ci-${{ github.head_ref }}-${{ github.event.action == 'labeled' && github.sha || 'tip' }}", (
+        f"{group}: the fast tier shares one group per pull request branch, and a labeled event names its commit")
     assert not re.search(r"github\.ref\b", group), f"{group}: the group names the branch, not the full ref"
-    assert con["cancel-in-progress"] is False, "a pull request's run is never cancelled, and no other event starts one"
-    assert "queue" not in con, (
-        f"the group holds nothing pending, so no queue cap can cancel a landing; found queue={con.get('queue')!r}"
-    )
+    assert con["cancel-in-progress"] == "${{ github.event.action != 'labeled' }}", (
+        "a new push cancels the fast run in progress, and a promotion request is never cancelled; found "
+        f"{con['cancel-in-progress']!r}")
+    assert "queue" not in con, f"no queue: the newest tip runs at once; found queue={con.get('queue')!r}"
     stated = " ".join(
         line.lstrip("#").strip() for line in text.split("concurrency:", 1)[0].splitlines() if line.startswith("#")
     )
@@ -578,3 +571,11 @@ def test_every_shell_fixture_that_runs_a_dispatcher_pins_its_disk_floor():
     scripts = ROOT / "contrib/squad-goal/scripts"
     unpinned = [p.name for p in sorted(scripts.glob("test-*.sh")) if _runs_a_dispatcher_without_pin(p.read_text(errors="replace"))]
     assert unpinned == [], f"these fixtures run autobug.sh or autofrontier.sh with no SG_MIN_FREE_GB pin: {unpinned}"
+
+
+def test_every_job_names_a_fixed_runner_image():
+    """A `-latest` label moves to a new image on the vendor's date, so a job would change its system with no commit, and
+    GitHub annotates every run with the migration notice. Each job names its image version."""
+    wf = _ci_workflow()
+    moving = {name: job.get("runs-on") for name, job in wf["jobs"].items() if str(job.get("runs-on")).endswith("-latest")}
+    assert not moving, f"a job runs on a label that moves: {moving}"
