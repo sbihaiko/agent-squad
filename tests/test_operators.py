@@ -13,8 +13,6 @@ import socket
 import time
 from pathlib import Path
 
-import pytest
-
 from tests.proxystop import track_starts
 
 ROOT = Path(__file__).resolve().parent.parent
