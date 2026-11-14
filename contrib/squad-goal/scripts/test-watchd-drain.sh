@@ -18,7 +18,7 @@ t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
 # refuses the setuid table binary, and a copy that fell back to it read its own supervisor as gone.
 t=t.replace('"$(dirname "$0")/caps.sh"','"%s/caps.sh"'%sys.argv[3])
 t=t.replace('. "$(dirname "$0")/ghcall.sh"   # the one seam the start\'s loop-bug read goes through (ADR-0146)',
-            'gh_aggregate() { return 1; }')
+            'gh_aggregate() { [ -s "$SG_STATE/issues.json" ] || return 1; cat "$SG_STATE/issues.json"; }')
 t=t.replace('"$(dirname "$me")/watch.sh"','"%s/watch.sh"'%f.rsplit("/",1)[0])
 t=t.replace('"$(dirname "$me")/fastloop.sh"','"%s/fastloop.sh"'%f.rsplit("/",1)[0])
 t=t.replace('"$(dirname "$me")/cqflush.sh"','"%s/cqflush.sh"'%f.rsplit("/",1)[0])
@@ -196,5 +196,100 @@ for p in PIDS:
     except OSError: pass
 raise SystemExit(bad)
 PY
+# (#1708, ADR-0146) Any open loop-bug drains the loop, and the loop starts again when none is open. Two marks say why the
+# loop is off: auto/owner-stop (the owner) and auto/loop-bug-drain (the loop, for the issue it names). The owner wins.
+A="$SG_STATE/auto"; AU="$SG_STATE/loop-audit.jsonl"; W="$T/watchd.sh"
+issues() { printf "%s\n" "$1" > "$SG_STATE/issues.json"; }
+clean() { rm -f "$A/off" "$A/drain" "$A/drain-pause" "$A/restart" "$A/owner-stop" "$A/loop-bug-drain" "$AU" "$SG_STATE/locks/gate/pid" "$SG_STATE/issues.json"; : > "$SG_STATE/active-runs.txt"; }
+up() { bash "$W" start >/dev/null 2>&1; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null); }
+down() { for _ in $(seq 1 20); do alive_sup || return 0; sleep 1; done; return 1; }
+hold() { sleep 300 & gp=$!; echo "$gp" > "$SG_STATE/locks/gate/pid"; }
+bash "$W" stop --force >/dev/null 2>&1; clean
+# the label rule, with the loop down: nothing drains
+lb() { printf "%s" "$1" > "$T/i.json"; bash "$W" loopbug "$T/i.json" 2>/dev/null; }
+o=$(lb "[{\"number\":42,\"labels\":[{\"name\":\"bug\"},{\"name\":\"loop-bug\"}]}]"); [ "$o $?" = "42 0" ] && ok "1708 a bare loop-bug is a loop defect" || ko "1708 a bare loop-bug is not read"
+o=$(lb "[{\"number\":43,\"labels\":[{\"name\":\"loop-bug:infra\"}]}]"); [ "$o $?" = "43 0" ] && ok "1708 a prefixed loop-bug is a loop defect" || ko "1708 a prefixed loop-bug is not read"
+lb "[{\"number\":44,\"labels\":[{\"name\":\"loop-buggy\"}]}]" >/dev/null; [ $? = 1 ] && ok "1708 a lookalike label is none" || ko "1708 a lookalike label is not none"
+lb "[{\"number\":45,\"pull_request\":{},\"labels\":[{\"name\":\"loop-bug\"}]}]" >/dev/null; [ $? = 1 ] && ok "1708 a pull request is no issue" || ko "1708 a pull request read as a loop defect"
+lb "" >/dev/null; [ $? = 2 ] && ok "1708 an empty body is unknown" || ko "1708 an empty body is not unknown"
+lb "{}" >/dev/null; [ $? = 2 ] && ok "1708 a body that is no list is unknown" || ko "1708 an object body is not unknown"
+[ ! -e "$A/loop-bug-drain" ] && ok "1708 a loop that is down is not drained" || ko "1708 a dead loop took the loop-bug mark"
+# the owner stop leaves its own mark, on a live loop and on one that is not running
+clean; up; bash "$W" stop >/dev/null 2>&1
+[ -e "$A/owner-stop" ] && ! alive_sup && ok "1708 an owner stop on an idle loop leaves the owner mark" || ko "1708 an idle owner stop left no owner mark"
+[ ! -e "$A/off" ] && ok "1708 the owner mark is its own: the stop sets no pause" || ko "1708 the owner stop set the pause"
+out=$(bash "$W" start --not-owner 2>&1); rc=$?; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+[ "$rc" != 0 ] && ! alive_sup && ok "1708 a start that is not the owner refuses under the owner mark" || ko "1708 a non-owner start ran under the owner mark: $out"
+up; alive_sup && [ ! -e "$A/owner-stop" ] && ok "1708 an owner start removes the owner mark" || ko "1708 an owner start kept the owner mark"
+bash "$W" stop --force >/dev/null 2>&1
+[ -e "$A/owner-stop" ] && ok "1708 stop --force leaves the owner mark" || ko "1708 stop --force left no owner mark"
+clean; echo 7 > "$A/loop-bug-drain"; : > "$A/off"; : > "$A/drain-pause"   # the state a finished loop-bug drain leaves
+bash "$W" stop >/dev/null 2>&1
+[ -e "$A/owner-stop" ] && [ ! -e "$A/loop-bug-drain" ] && ok "1708 an owner stop on a loop that is not running takes the drain over" || ko "1708 an owner stop on a dead loop left the loop-bug mark"
+clean; echo 7 > "$A/loop-bug-drain"; : > "$A/off"; : > "$A/drain-pause"
+bash "$W" drain >/dev/null 2>&1
+[ -e "$A/owner-stop" ] && [ ! -e "$A/loop-bug-drain" ] && ok "1708 an owner drain on a loop that is not running takes the drain over" || ko "1708 an owner drain on a dead loop left the loop-bug mark"
+# the loop-bug drain: marked, audited once, and nothing is killed
+clean; up; hold
+SG_GH_PASS=autobug SG_DRAIN_POLL=1 bash "$W" bugdrain 7 >/dev/null 2>&1
+[ "$(cat "$A/loop-bug-drain" 2>/dev/null)" = 7 ] && [ -e "$A/off" ] && [ -e "$A/drain" ] && ok "1708 a loop-bug drain marks the issue and pauses dispatch" || ko "1708 bugdrain left no mark or no pause"
+sleep 2; alive_sup && kill -0 "$gp" 2>/dev/null && ok "1708 the drain kills no gate and keeps the loop up under it" || ko "1708 the loop-bug drain stopped under a held gate"
+[ "$(/usr/bin/grep -c "\"action\": \"drain\"" "$AU" 2>/dev/null)" = 1 ] && /usr/bin/grep -q "\"issue\": 7" "$AU" && /usr/bin/grep -q "\"from\": \"autobug\"" "$AU" && /usr/bin/grep -q "\"at\": " "$AU" \
+  && ok "1708 the drain is one audit line that names the issue and the pass" || ko "1708 the audit: $(cat "$AU" 2>/dev/null)"
+SG_DRAIN_POLL=1 bash "$W" bugdrain 8 >/dev/null 2>&1
+[ "$(cat "$A/loop-bug-drain")" = 7 ] && [ "$(wc -l < "$AU" | tr -d " ")" = 1 ] && ok "1708 a second request is a no-op" || ko "1708 a second bugdrain wrote again"
+out=$(bash "$W" restart 2>&1); case "$out" in *refused*"#7"*) ok "1708 a restart under the drain names the issue";; *) ko "1708 a restart under the drain said: $out";; esac
+issues "[{\"number\":7,\"labels\":[{\"name\":\"loop-bug\"}]}]"
+out=$(bash "$W" start 2>&1); rc=$?
+[ "$rc" != 0 ] && [ -e "$A/drain" ] && [ -e "$A/loop-bug-drain" ] && case "$out" in *"#7"*) true;; *) false;; esac && ok "1708 a start under the drain refuses while the loop-bug is open, and names it" || ko "1708 a start cancelled the loop-bug drain: rc=$rc $out"
+rm -f "$SG_STATE/issues.json"; out=$(bash "$W" start 2>&1); rc=$?
+[ "$rc" != 0 ] && [ -e "$A/loop-bug-drain" ] && [ -e "$A/drain" ] && ok "1708 an unknown read holds the drain" || ko "1708 a failed read cancelled the loop-bug drain: rc=$rc $out"
+issues "[]"; out=$(bash "$W" start --if-bug-drain 2>&1); rc=$?
+[ "$rc" = 0 ] && alive_sup && [ ! -e "$A/loop-bug-drain" ] && [ ! -e "$A/off" ] && [ ! -e "$A/drain" ] && ok "1708 with no loop-bug open the watcher start cancels the drain and removes the mark" || ko "1708 the watcher start: rc=$rc $out"
+out=$(bash "$W" start --if-bug-drain 2>&1); [ $? != 0 ] && ok "1708 the watcher start refuses a loop that carries no loop-bug mark" || ko "1708 the watcher start ran with no mark: $out"
+# the owner wins
+SG_DRAIN_POLL=1 bash "$W" drain >/dev/null 2>&1
+[ -e "$A/owner-stop" ] && ok "1708 an owner drain leaves the owner mark" || ko "1708 an owner drain left no owner mark"
+aun=$(wc -l < "$AU" | tr -d " "); SG_DRAIN_POLL=1 bash "$W" bugdrain 9 >/dev/null 2>&1
+[ ! -e "$A/loop-bug-drain" ] && [ "$(wc -l < "$AU" | tr -d " ")" = "$aun" ] && ok "1708 a loop-bug drain under an owner drain writes nothing" || ko "1708 bugdrain overwrote the owner drain"
+bash "$W" start >/dev/null 2>&1
+[ ! -e "$A/owner-stop" ] && alive_sup && ok "1708 a start that cancels the owner drain removes the owner mark" || ko "1708 the owner mark stayed beside a live loop"
+SG_DRAIN_POLL=1 bash "$W" bugdrain 9 >/dev/null 2>&1
+[ "$(cat "$A/loop-bug-drain" 2>/dev/null)" = 9 ] && ok "1708 the loop-bug drain works again after that start" || ko "1708 a stale owner mark disabled the loop-bug drain"
+SG_DRAIN_POLL=1 bash "$W" stop >/dev/null 2>&1
+[ -e "$A/owner-stop" ] && [ ! -e "$A/loop-bug-drain" ] && ok "1708 an owner stop under a loop-bug drain takes it over" || ko "1708 an owner stop kept the loop-bug mark"
+kill "$gp" 2>/dev/null; gp=; down && ok "1708 the loop stops once the gate ends" || ko "1708 the drained loop did not stop"
+# a mark with no pause beside it is stale
+clean; up; echo 5 > "$A/loop-bug-drain"; hold
+SG_DRAIN_POLL=1 bash "$W" bugdrain 6 >/dev/null 2>&1
+[ "$(cat "$A/loop-bug-drain")" = 6 ] && [ -e "$A/drain" ] && ok "1708 a stale loop-bug mark is written again and the loop drains" || ko "1708 a stale mark made the drain a no-op"
+kill "$gp" 2>/dev/null; gp=; down
+# a loop drained for a loop-bug: an unknown read holds it, and no open loop-bug starts it
+[ -e "$A/loop-bug-drain" ] && [ -e "$A/off" ] && ! alive_sup && ok "1708 a finished loop-bug drain leaves the loop off with its mark" || ko "1708 the finished drain left: $(ls "$A")"
+rm -f "$SG_STATE/issues.json"; out=$(bash "$W" start 2>&1); rc=$?; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+[ "$rc" != 0 ] && ! alive_sup && [ -e "$A/loop-bug-drain" ] && ok "1708 an unknown read does not start a loop drained for a loop-bug" || ko "1708 a failed read started the drained loop: $out"
+issues "[]"; out=$(bash "$W" start --if-bug-drain 2>&1); rc=$?; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+[ "$rc" = 0 ] && alive_sup && [ ! -e "$A/loop-bug-drain" ] && [ ! -e "$A/off" ] && ok "1708 with no loop-bug open the drained loop starts, and the mark and the pause go" || ko "1708 the drained loop did not start: rc=$rc $out"
+# a stop that fails leaves the loop on, and so leaves no owner mark
+mkdir -p "$T/nostop1708"
+python3 - "$W" "$T/nostop1708/watchd.sh" <<"PY"
+import pathlib, sys
+t = pathlib.Path(sys.argv[1]).read_text()
+t = t.replace("\ncase \"${1:-status}\" in", "\nhard_stop() { echo \"watchd did not stop\" >&2; return 1; }\ncase \"${1:-status}\" in", 1)
+pathlib.Path(sys.argv[2]).write_text(t)
+PY
+bash "$T/nostop1708/watchd.sh" stop --force >/dev/null 2>&1; rc=$?
+[ "$rc" != 0 ] && alive_sup && [ ! -e "$A/owner-stop" ] && ok "1708 a hard stop that fails leaves no owner mark" || ko "1708 a failed stop left the owner mark beside a live loop"
+: > "$A/owner-stop"; bash "$T/nostop1708/watchd.sh" halt >/dev/null 2>&1
+[ ! -e "$A/owner-stop" ] && ok "1708 a halt that fails removes the owner mark" || ko "1708 a failed halt left the owner mark beside a live loop"
+# (#1708) the pass verb on a live loop: `loopbug` reads the list, prints the number and writes the drain mark itself.
+rm -f "$A/owner-stop" "$A/loop-bug-drain" "$A/off" "$A/drain" "$SG_STATE/loop-audit.jsonl"
+printf '[{"number":88,"labels":[{"name":"loop-bug"}]}]' > "$T/i.json"
+out=$(bash "$W" loopbug "$T/i.json" 2>/dev/null); rc=$?
+[ "$rc" = 0 ] && [ "$out" = 88 ] && [ "$(cat "$A/loop-bug-drain" 2>/dev/null)" = 88 ] && alive_sup \
+  && [ "$(wc -l < "$SG_STATE/loop-audit.jsonl" 2>/dev/null | tr -d " ")" = 1 ] \
+  && ok "1708 loopbug on a live loop prints the issue, writes the mark and one audit line, and kills nothing" \
+  || ko "1708 loopbug on a live loop: rc=$rc out=$out mark=$(cat "$A/loop-bug-drain" 2>/dev/null)"
+bash "$W" stop --force >/dev/null 2>&1; clean
 [ "$fail" = 0 ] && echo "watchd drain: all ok" || echo "watchd drain: FAILED"
 exit "$fail"

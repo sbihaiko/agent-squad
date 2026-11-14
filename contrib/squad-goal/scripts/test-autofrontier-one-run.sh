@@ -48,7 +48,7 @@ printf 'import os,sys\nopen(os.environ["LAUNCHLOG"], "a").write("launch\\n")\nif
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,issue_ledger.py,workbranches.sh,loopbug.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,issue_ledger.py,workbranches.sh,loopbug.sh,watchd.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
 # The issues an open work branch names (#361, workbranches.sh): the real read is `git ls-remote` against github.com, which no
 # fixture may reach, so the stand-in answers WORK_ISSUES (none unless a case sets it) (#756).
 printf '#!/bin/bash\nsg_work_issues() { echo "${WORK_ISSUES:-}"; }\n' > "$T/scripts/workbranches.sh"
@@ -403,11 +403,17 @@ issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 91)" = 1 ] && ok "Y: closing the issue resumes dispatch with no other action" || ko "Y: dispatch did not resume: '$r'"
 
-# Y0 (owner answer B1): a bare `loop-bug` names a defect the loop works beside: it halts nothing, and the pass dispatches.
+# Y0 (#1708, ADR-0146): any open loop-bug drains the loop, a bare one too: the pass names it and dispatches nothing. A label
+# that only resembles one stops nothing.
 scene loopbugbare
 issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":596,"title":"The loop cannot land its own fix","body":"b","labels":[{"name":"wave:01"},{"name":"loop-bug"}]}]'
 r=$(run)
-[ "$(marked 91)" = 1 ] && ok "Y0: a bare loop-bug halts nothing" || ko "Y0: a bare loop-bug held the pass: '$r'"
+[ "$(marked 91)" = 0 ] && ok "Y0: a bare loop-bug dispatches nothing" || ko "Y0: the pass dispatched under a bare loop-bug: '$r'"
+case "$r" in *"LOOP STOP: #596 is a loop defect; the fix lands outside the loop"*) ok "Y0: the stop names the bare loop-bug";; *) ko "Y0: the stop is not named: '$r'";; esac
+scene loopbuglike
+issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":596,"title":"x","body":"b","labels":[{"name":"wave:01"},{"name":"loop-buggy"}]}]'
+r=$(run)
+[ "$(marked 91)" = 1 ] && ok "Y0: a label that only resembles loop-bug stops nothing" || ko "Y0: a lookalike label held the pass: '$r'"
 
 # Y1 (#641): `loop-bug:landing` names a loop defect in the landing path. It is a loop-bug too, so it halts dispatch as well.
 scene loopbugland

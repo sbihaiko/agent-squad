@@ -13,7 +13,7 @@ Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Review, Co
 
 Each dispatch pass first runs the stops in `ghcall.sh`, in order. Each stop prints one line, writes it to cycle.log, and the pass dispatches nothing:
 
-- `gh_loop_stop`: an open issue carries `loop-bug:dispatch`, `loop-bug:landing` or `loop-bug:infra` (ADR-0146); a bare `loop-bug` stops nothing. `childcc.py` stops on the same three labels, from the one list `ghread.LOOP_STOP_LABELS` (`loop_defect`): it starts no review, fix run or entry, exits 0 when every pending child is in its wave, and exits 3 while a child of a wave that is not past its age cap is out of it.
+- `gh_loop_stop`: an open issue carries `loop-bug`, bare or prefixed (ADR-0146); the pass stops and asks `watchd.sh` for the drain. `childcc.py` stops on `loop-bug:dispatch`, `loop-bug:landing` and `loop-bug:infra` only, from the one list `ghread.LOOP_STOP_LABELS` (`loop_defect`): it starts no review, fix run or entry, exits 0 when every pending child is in its wave, and exits 3 while a child of a wave that is not past its age cap is out of it.
 
 The landing has one stop, `gh_land_stop`: an open issue carries `loop-bug:landing`, which names a defect in the landing path. `land_wave` (`watch.sh`) and `branchland.sh` then land nothing, and the run stays unread. A plain `loop-bug` never stops a landing (ADR-0146 decision 3).
 - `gh_dispatch_hold`: the count in `childcc-waiting` is over `SG_DISPATCH_MAX_WAITING` (unset: no hold; a count over 30 min old: no hold).

@@ -65,4 +65,14 @@ out=$(STOP_RC=1 bash "$E" set limits.max_stalls 8 2>&1); rc=$?
   && ok "stop failure: nothing is edited and dispatch is started again" \
   || ko "stop failure: rc=$rc out=$out log=$(tr '\n' ' ' < "$LOG")"
 
+# (#1708) the edit's own stop and start are not the owner's: with no seam named, the stop is the internal `cycle-stop`,
+# which leaves no owner mark and keeps a loop-bug drain's mark, and the start is `start --not-owner`, which never starts a
+# loop the owner stopped. The stub watchd.sh records the verbs it is called with and refuses the stop, so nothing is edited.
+fresh; mkdir -p "$T/k/a/b"; cp "$E" "$T/k/a/b/cap-edit.sh"
+printf '#!/bin/bash\necho "$*" >> "%s/verbs"\n[ "$1" = cycle-stop ] && exit 1\nexit 0\n' "$T" > "$T/k/a/b/watchd.sh"
+out=$(env -u SG_CAP_EDIT_STOP -u SG_CAP_EDIT_START bash "$T/k/a/b/cap-edit.sh" set limits.max_stalls 8 2>&1)
+[ "$(cat "$T/verbs" 2>/dev/null)" = "$(printf 'cycle-stop\nstart --not-owner')" ] \
+  && ok "1708 a cap edit stops and starts the loop through the verbs that are not the owner's" \
+  || ko "1708 the cap edit called watchd.sh with: $(tr '\n' ';' < "$T/verbs" 2>/dev/null) ($out)"
+
 rm -rf "$T"; exit $fail

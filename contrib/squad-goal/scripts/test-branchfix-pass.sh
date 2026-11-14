@@ -138,7 +138,7 @@ r=$(OPEN="20" LABELED="20=loop-bug" fp); r="$r"$'\n'"$(OPEN="20" LABELED="20=loo
 [ "$(n gui/20-lb)" = 0 ] && ok "a loop-bug branch gets no fix run" || ko "a loop-bug branch was dispatched: '$r'"
 [ "$(printf '%s' "$r" | /usr/bin/grep -c '^BRANCHFIX SKIP gui/20-lb: loop-bug, fixed outside the loop$')" = 1 ] && ok "the skip is said once per tip" || ko "skip lines: '$r'"
 # 16) (#841, B1) while a defect in the dispatch path holds LOOP STOP, no fix run starts, even for a plain bug; the skip
-# says LOOP STOP. A bare `loop-bug` halts nothing, so it holds no fix run either.
+# says LOOP STOP. 
 : > "$T/launch.log"; push gui/21-ls; rev gui/21-ls CHANGES "m.sh:1 fix"
 r=$(OPEN="21 90" LABELED="90=loop-bug:dispatch" fp)
 [ "$(n gui/21-ls)" = 0 ] && ok "LOOP STOP holds the fix pass for a plain bug" || ko "a fix run started under LOOP STOP: '$r'"
@@ -148,6 +148,13 @@ case "$r" in *"BRANCHFIX SKIP gui/21-ls: LOOP STOP holds, fixed outside the loop
 r=$(OPEN="22 23" LABELED="22=loop-bug:other" fp)
 [ "$(n gui/22-lx)" = 0 ] && ok "a loop-bug:* branch gets no fix run" || ko "a loop-bug:* branch was dispatched: '$r'"
 [ "$(n gui/23-pl)" = 1 ] && ok "a plain bug branch still gets one fix run" || ko "a plain bug branch dispatched $(n gui/23-pl) times: '$r'"
+# 17b) (#1708) the pass hands its list to the drain's one writer, and an open loop-bug of any spelling holds every fix run:
+# the loop drains, so it starts no new run. Case 17 is a copy with no `watchd.sh`, which asks for no drain.
+: > "$T/launch.log"; push gui/24-pd; rev gui/24-pd CHANGES "s.sh:1 fix"
+printf '#!/bin/bash\necho 22\n' > "$T/lbcmd"; chmod +x "$T/lbcmd"
+r=$(OPEN="22 24" LABELED="22=loop-bug" SG_LOOPBUG_CMD="$T/lbcmd" fp)
+[ "$(n gui/24-pd)" = 0 ] && ok "1708 an open loop-bug holds the fix pass for a plain bug" || ko "1708 a fix run started under a loop-bug drain: '$r'"
+case "$r" in *"LOOP STOP: #22"*) ok "1708 the fix pass names the loop-bug";; *) ko "1708 no LOOP STOP line: '$r'";; esac
 # 18) (#841) a plain bug alone: one launch, no skip line
 : > "$T/launch.log"; push gui/24-pb; rev gui/24-pb CHANGES "r.sh:1 fix"
 r=$(OPEN="24" LABELED="24=bug" fp)

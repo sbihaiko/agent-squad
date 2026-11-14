@@ -101,14 +101,20 @@ sg_loop_build() {
 # gh_loop_stop <issues.json>   A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): while an
 # open issue carries a defect in the dispatch path, the landing path or the loop's infrastructure, a dispatch pass
 # dispatches nothing, because the loop cannot deliver its own fix. Those are `loop-bug:dispatch`, `loop-bug:landing` and
-# `loop-bug:infra`; a bare `loop-bug` names a defect the loop works beside, and it never stops dispatch (owner answer B1,
-# #960). The stop is read from the open-issue list the pass already reads, never from a marker, so closing the issue
+# `loop-bug:infra`. Any open loop-bug, bare or prefixed, also drains the loop (#1708): the pass hands the list it already
+# read to `watchd.sh loopbug`, the one label rule and the one writer of the drain, and dispatches nothing. The live runs
+# and the held gate finish, then the loop is off until no loop-bug is open. A list that rule cannot read asks for nothing.
+# The stop is read from the open-issue list the pass already reads, never from a marker, so closing the issue
 # resumes dispatch at the next pass with no other action.
 # Returns 0 and prints the one line when such an issue is present, 1 when there is none. The line is published to the loop
 # log and to the issue's line on the board, not only to stdout. `loop-bug:landing` stops the landing as well (gh_land_stop, #641).
 gh_loop_stop() {
-  local j=${1:?gh_loop_stop: an issues file is required} n line f
+  local j=${1:?gh_loop_stop: an issues file is required} n line f lb
   n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) | . == "loop-bug:dispatch" or . == "loop-bug:landing" or . == "loop-bug:infra")))][0].number // empty' "$j" 2>/dev/null) || return 1
+  # SG_LOOPBUG_CMD is the seam a suite names; a copy of the scripts with no watchd.sh asks for no drain and keeps the halt.
+  if [ -n "${SG_LOOPBUG_CMD:-}" ] || [ -f "$ghcall_here/watchd.sh" ]; then
+    lb=$(${SG_LOOPBUG_CMD:-bash "$ghcall_here/watchd.sh" loopbug} "$j" 2>/dev/null) && [ -z "$n" ] && n=$lb
+  fi
   # The stop is also one marker the hub reads without a query (#956): the page shows Loop:OFF while dispatch is held, and the
   # marker goes with the label, so closing the issue reads ON again at the same pass.
   [ -n "$n" ] || { rm -f "${SG_STATE:?gh_loop_stop: no state directory}"/auto/loop-stop-* 2>/dev/null; return 1; }

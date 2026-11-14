@@ -19,8 +19,8 @@ file="$SG_CHECKOUT/docs/squad/defaults.yaml"
 py=${SG_CAP_EDIT_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 snap=""; had=0; stopped=0
 
-stop_dispatch() { if [ -n "${SG_CAP_EDIT_STOP:-}" ]; then "$SG_CAP_EDIT_STOP"; else bash "$here/watchd.sh" stop --force; fi; }   # the hard stop, as before #1662: an edit does not wait for live runs
-start_dispatch() { if [ -n "${SG_CAP_EDIT_START:-}" ]; then "$SG_CAP_EDIT_START"; else (cd "$SG_CHECKOUT" && bash "$here/watchd.sh" start); fi; }
+stop_dispatch() { if [ -n "${SG_CAP_EDIT_STOP:-}" ]; then "$SG_CAP_EDIT_STOP"; else bash "$here/watchd.sh" cycle-stop; fi; }   # the hard stop, as before #1662: an edit does not wait for live runs. It is no owner stop (#1708): it leaves no owner mark and keeps a loop-bug drain's mark
+start_dispatch() { if [ -n "${SG_CAP_EDIT_START:-}" ]; then "$SG_CAP_EDIT_START"; else (cd "$SG_CHECKOUT" && bash "$here/watchd.sh" start --not-owner); fi; }   # never starts a loop the owner stopped (#1708)
 check_settings() { if [ -n "${SG_CAP_EDIT_CHECK:-}" ]; then "$SG_CAP_EDIT_CHECK"; else PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.cli config --target "$SG_CHECKOUT" check; fi; }
 edit_settings() { PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.cli config --target "$SG_CHECKOUT" "$@" >/dev/null; }
 

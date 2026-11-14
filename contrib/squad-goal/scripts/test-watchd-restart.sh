@@ -22,7 +22,7 @@ t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
 # table binary, and a copy that fell back to it read its own supervisor as gone.
 t=t.replace('"$(dirname "$0")/caps.sh"','"%s/caps.sh"'%sys.argv[3])
 t=t.replace('. "$(dirname "$0")/ghcall.sh"   # the one seam the start\'s loop-bug read goes through (ADR-0146)',
-            'gh_aggregate() { return 1; }')
+            'gh_aggregate() { [ -s "$SG_STATE/issues.json" ] || return 1; cat "$SG_STATE/issues.json"; }')
 for lane in ("watch.sh", "fastloop.sh", "cqflush.sh"):
     t=t.replace('"$(dirname "$me")/%s"'%lane,'"%s/%s"'%(f.rsplit("/",1)[0],lane))
 p.write_text(t)
@@ -121,14 +121,16 @@ mkdir -p "$T/nostop"
 python3 - "$T/watchd.sh" "$T/nostop/watchd.sh" <<'PY'
 import pathlib, sys
 t = pathlib.Path(sys.argv[1]).read_text()
-t = t.replace('  halt) hard_stop; exit $?;;', '  halt) echo "watchd did not stop" >&2; exit 1;;', 1)   # the waiter's end is halt (#1662)
+a = '  halt) hard_stop; rc=$?;'; assert a in t   # the waiter's end is halt (#1662); its failure path stays the real one (#1708)
+t = t.replace(a, '  halt) (echo "watchd did not stop" >&2; exit 1); rc=$?;', 1)
 pathlib.Path(sys.argv[2]).write_text(t)
 PY
 chmod +x "$T/nostop/watchd.sh"
 bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
 alive_sup "$sup" || { ko "the loop did not start for the failed-stop case"; exit 1; }
-mkdir -p "$SG_STATE/auto"; : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; : > "$SG_STATE/auto/drain"; : > "$SG_STATE/auto/restart"
+mkdir -p "$SG_STATE/auto"; : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; : > "$SG_STATE/auto/drain"; : > "$SG_STATE/auto/restart"; : > "$SG_STATE/auto/owner-stop"
 bash "$T/nostop/watchd.sh" drain-wait >/dev/null 2>&1
+[ ! -e "$SG_STATE/auto/owner-stop" ] && ok "1708 a stop that fails leaves no owner mark beside the live loop" || ko "1708 a failed halt left the owner mark beside a live loop"
 alive_sup "$sup" && ok "a supervisor that survives the stop stays live" || ko "the failed-stop case lost the supervisor"
 [ ! -e "$SG_STATE/auto/off" ] && [ ! -e "$SG_STATE/auto/drain-pause" ] \
   && ok "a failed stop lifts the drain's pause, so dispatch never stays paused with no waiter" \
@@ -157,5 +159,24 @@ out=$(bash "$T/watchd.sh" restart 2>&1); sup=$(cat "$SG_STATE/watchd.pid" 2>/dev
 case "$out" in *"not running: starting"*) ok "a restart on a stopped loop starts it and says why";; *) ko "a restart on a stopped loop: $out";; esac
 alive_sup "$sup" && ok "the loop is up after that start" || ko "the start of a stopped loop did not bring it up"
 bash "$T/watchd.sh" stop >/dev/null
+# (#1708) A restart in flight when a loop-bug opens: the waiter stops the loop, its start is refused for the loop-bug, and
+# the refusal becomes a loop-bug drain, so the loop starts again when the issue closes and never stays off for good.
+A="$SG_STATE/auto"; rm -f "$A"/* "$SG_STATE/loop-audit.jsonl" "$SG_STATE/issues.json"; : > "$SG_STATE/active-runs.txt"
+bash "$T/watchd.sh" start >/dev/null 2>&1; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+sleep 300 & gp=$!; echo "$gp" > "$SG_STATE/locks/gate/pid"
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" restart >/dev/null 2>&1
+printf "%s\n" "[{\"number\":77,\"labels\":[{\"name\":\"loop-bug\"}]}]" > "$SG_STATE/issues.json"
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" bugdrain 77 >/dev/null 2>&1
+[ ! -e "$A/loop-bug-drain" ] && [ -e "$A/restart" ] && ok "1708 a loop-bug drain leaves a restart in flight to its waiter" || ko "1708 bugdrain changed a restart in flight"
+kill "$gp" 2>/dev/null; gp=; rm -f "$SG_STATE/locks/gate/pid"
+for _ in $(seq 1 30); do [ -e "$A/loop-bug-drain" ] && break; sleep 1; done
+alive_sup "$(cat "$SG_STATE/watchd.pid" 2>/dev/null)" && ko "1708 the restart started the loop under an open loop-bug" || ok "1708 the restart is refused while a loop-bug is open"
+[ "$(cat "$A/loop-bug-drain" 2>/dev/null)" = 77 ] && [ -e "$A/off" ] && ok "1708 the refused restart becomes a loop-bug drain that names the issue" || ko "1708 the refused restart left no loop-bug mark: $(ls "$A")"
+for _ in $(seq 1 20); do [ -s "$SG_STATE/loop-audit.jsonl" ] && break; sleep 1; done   # the waiter writes the mark, then the line
+/usr/bin/grep -q "\"issue\": 77" "$SG_STATE/loop-audit.jsonl" 2>/dev/null && ok "1708 that drain is audited" || ko "1708 the refused restart wrote no audit line"
+printf "[]\n" > "$SG_STATE/issues.json"
+bash "$T/watchd.sh" start --if-bug-drain >/dev/null 2>&1; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+alive_sup "$sup" && [ ! -e "$A/off" ] && [ ! -e "$A/loop-bug-drain" ] && ok "1708 the loop starts once the loop-bug closes" || ko "1708 the loop stayed off after the loop-bug closed"
+bash "$T/watchd.sh" stop >/dev/null 2>&1; rm -f "$SG_STATE/issues.json" "$A/owner-stop"
 [ "$fail" = 0 ] && echo "watchd restart: all ok" || echo "watchd restart: FAILED"
 exit "$fail"

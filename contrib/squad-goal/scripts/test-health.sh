@@ -462,5 +462,49 @@ bd
 GH_READY="427 428" bash "$T/s/health.sh" >/dev/null
 [ -s "$T/numreads" ] && ok "the readiness walk asks the numbered list once" || ko "the readiness walk asked no numbered list"
 [ "$(/usr/bin/grep -c 'numbers=' "$T/numreads")" = 1 ] && ok "one numbered list covers the startable cards" || ko "the numbered list ran $(/usr/bin/grep -c 'numbers=' "$T/numreads") times: $(cat "$T/numreads")"
+# ---- #1708, ADR-0146: the watcher, end to end over the real watchd.sh and stub lanes. A loop that drained itself for a
+# loop-bug starts again on the first pass after no loop-bug is open, and the audit names the issue. A loop the owner
+# stopped stays off, whatever closes.
+pkill -f "$T/s/watchd.sh run" 2>/dev/null; kill $wp $fp 2>/dev/null; rm -f "$T/st/watchd.pid" "$T/st/fastloop.pid" "$T/st/relights" "$T/st/auto"/* "$T/st/loop-audit.jsonl" "$T/st/loop-bug-watch"
+python3 - "$(dirname "$src")/watchd.sh" "$T/s/watchd.sh" "$(dirname "$src")" <<"PY"
+import pathlib, sys
+t = pathlib.Path(sys.argv[1]).read_text()
+a = "\"$(dirname \"$0\")/caps.sh\""; assert a in t; t = t.replace(a, "\"%s/caps.sh\"" % sys.argv[3])
+# the open-issue list is a file, as the other watchd suites stub the one seam: an absent file is a failed read
+a = ". \"$(dirname \"$0\")/ghcall.sh\"   # the one seam the start\x27s loop-bug read goes through (ADR-0146)"; assert a in t
+t = t.replace(a, "gh_aggregate() { [ -s \"$SG_STATE/issues.json\" ] || return 1; cat \"$SG_STATE/issues.json\"; }")
+pathlib.Path(sys.argv[2]).write_text(t)
+PY
+li() { printf "%s\n" "$1" > "$T/st/issues.json"; }
+for l in watch.sh fastloop.sh cqflush.sh; do printf "#!/bin/bash\nsleep 300\n" > "$T/s/$l"; done; chmod +x "$T/s"/*.sh
+export SG_LOOPBUG_WATCH_S=0 SG_DRAIN_POLL=1
+hsup() { p=$(cat "$T/st/watchd.lock/pid" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+hdown() { for _ in $(seq 1 20); do hsup || return 0; /bin/sleep 1; done; return 1; }
+li "[{\"number\":427,\"labels\":[]}]"
+(cd "$T/co" && bash "$T/s/watchd.sh" start >/dev/null 2>&1); hsup && ok "1708 the real watchd is up for the watcher cases" || ko "1708 the real watchd did not start: $(cd "$T/co" && bash "$T/s/watchd.sh" start 2>&1 | tail -2)"
+li "[{\"number\":427,\"labels\":[]},{\"number\":1708,\"labels\":[{\"name\":\"bug\"},{\"name\":\"loop-bug\"}]}]"
+SG_GH_PASS=autobug bash "$T/s/watchd.sh" bugdrain 1708 >/dev/null 2>&1; hdown
+[ "$(cat "$T/st/auto/loop-bug-drain" 2>/dev/null)" = 1708 ] && [ -e "$T/st/auto/off" ] && ! hsup && ok "1708 the loop drained itself for the loop-bug and is off" || ko "1708 the drain left: $(ls "$T/st/auto")"
+bash "$T/s/health.sh" >/dev/null 2>&1
+! hsup && [ -e "$T/st/auto/loop-bug-drain" ] && ok "1708 the watcher holds while the loop-bug is open" || ko "1708 the watcher started the loop under an open loop-bug"
+li "{}"; bash "$T/s/health.sh" >/dev/null 2>&1
+! hsup && [ -e "$T/st/auto/loop-bug-drain" ] && ok "1708 the watcher holds on an answer that is no issue list" || ko "1708 the watcher started the loop on a body that is no list"
+li "[{\"number\":427,\"labels\":[]}]"
+SG_LOOPBUG_WATCH_S=300 bash "$T/s/health.sh" >/dev/null 2>&1
+! hsup && ok "1708 inside the cadence the watcher reads nothing and starts nothing" || ko "1708 the watcher started inside its cadence"
+bash "$T/s/health.sh" >/dev/null 2>&1
+hsup && [ ! -e "$T/st/auto/off" ] && [ ! -e "$T/st/auto/loop-bug-drain" ] && ok "1708 with no loop-bug open the watcher starts the loop, and the pause and the mark go" || ko "1708 the watcher did not start the loop: $(ls "$T/st/auto"; tail -2 "$T/st/watch.log")"
+[ "$(/usr/bin/grep -c "\"action\": \"start\"" "$T/st/loop-audit.jsonl" 2>/dev/null)" = 1 ] && /usr/bin/grep "\"action\": \"start\"" "$T/st/loop-audit.jsonl" | /usr/bin/grep -q "\"issue\": 1708" && ok "1708 the start is one audit line that names the issue" || ko "1708 the audit: $(cat "$T/st/loop-audit.jsonl" 2>/dev/null)"
+# the owner twins: an owner stop after the drain ended, and an owner stop on an idle loop
+li "[{\"number\":1708,\"labels\":[{\"name\":\"loop-bug\"}]}]"
+bash "$T/s/watchd.sh" bugdrain 1708 >/dev/null 2>&1; hdown
+bash "$T/s/watchd.sh" stop >/dev/null 2>&1
+li "[{\"number\":427,\"labels\":[]}]"; bash "$T/s/health.sh" >/dev/null 2>&1
+! hsup && ok "1708 a loop the owner stopped after the drain stays off when the loop-bug closes" || ko "1708 the watcher started a loop the owner stopped"
+rm -f "$T/st/auto"/*; (cd "$T/co" && bash "$T/s/watchd.sh" start >/dev/null 2>&1); hsup || ko "1708 the loop did not start for the idle owner stop"
+bash "$T/s/watchd.sh" stop >/dev/null 2>&1; hdown
+o=$(bash "$T/s/health.sh" 2>&1)
+! hsup && printf "%s" "$o" | /usr/bin/grep -q "the owner stopped the loop" && ok "1708 an owner stop on an idle loop is not relit, and the pass names it" || ko "1708 the pass relit a loop the owner stopped: $o"
+bash "$T/s/watchd.sh" stop --force >/dev/null 2>&1; unset SG_LOOPBUG_WATCH_S SG_DRAIN_POLL
 pkill -f "$T/s/watchd.sh run" 2>/dev/null
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail

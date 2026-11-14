@@ -10,7 +10,7 @@ A defect in the loop's own machinery was reviewed by the general review chain, w
 Fable and Astra were not in that chain at all, so the defect that most needs the strongest judgment got the weakest one.
 
 A bare `loop-bug` also reached the build with no review of its proposed fix. [ADR-0146](0146-a-loop-defect-is-fixed-outside-the-loop.md)
-halts dispatch for `loop-bug:dispatch`, `loop-bug:landing` and `loop-bug:infra` only. A bare `loop-bug` halts nothing, so the loop built it
+then halted dispatch for `loop-bug:dispatch`, `loop-bug:landing` and `loop-bug:infra` only, so the loop built a bare `loop-bug`
 like any other bug.
 
 ## Decision
@@ -25,11 +25,12 @@ like any other bug.
 3. **A loop defect is planned before it is built.** `review.sh --plan <issue>` reviews the issue alone: its title, body and
    acceptance criteria, with no branch and no diff. It walks the loop-defect chain. Its record is the record of a branch
    review, under the issue's key: the verdict in `review-<key>.md`, and the reviewed body hash in `review-<key>.sha`.
-4. **Only an approval of the current body releases the build.** `autobug.sh` dispatches no `loop-bug` issue unless its plan
-   review exists, its first line is `VERDICT: APPROVE`, and its recorded body hash equals the issue's current body. A review
-   of an older body is stale and does not count. The pass names the reason in one line and holds that issue.
-5. **The hold is per issue.** A `loop-bug` waiting for its plan review holds only itself. The halt rule of ADR-0146 is
-   unchanged.
+4. **Only an approval of the current body releases the build.** The plan review exists, its first line is
+   `VERDICT: APPROVE`, and its recorded body hash equals the issue's current body. A review of an older body is stale and
+   does not count. The build is a hand build outside the loop: an open loop-bug drains the loop, so `autobug.sh` dispatches
+   none, approved or not (ADR-0146).
+5. **The review does not lift the drain.** An approved plan releases the build and nothing else: the loop stays drained
+   until the issue closes with its fix published (ADR-0146).
 
 ## Consequences
 
