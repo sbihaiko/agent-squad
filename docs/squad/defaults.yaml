@@ -6,8 +6,7 @@
 caps:
   runs: 4
   children: 12
-  gates: 6                          # one gate at a time on this 8-core machine: at twelve slots three gates held the machine
-                                    # between them, each waited for the lock while keeping its slots, and the queue outlived
-                                    # the takeover bound (#1191, #1192)
+  gates: 2                          # one gate of two workers at a time on this 8-core machine: at six slots three gates ran
+                                    # at once, the load average passed 140, and a saturated gate repeats (#1716)
 limits:
   max_budget_usd: 30
