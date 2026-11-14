@@ -250,5 +250,36 @@ export SG_PROMOTE_PROOF=local; adv dev lock; line full pass "$(tip dev)"; rm -f 
 out=$(bash "$d/promote-stg.sh" 2>&1); wait
 [ "$(printf '%s\n' "$out" | grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "the promotion waits for the holder, on one line" || ko "promotion wait lines: '$out'"
 [ "$(tip stg)" = "$(tip dev)" ] && ok "the waiting promotion is not dropped: stg is promoted" || ko "the waiting promotion did not promote"
+# #1723 (plan item): the dev-to-stg merge names the proven head sha, so a tip that moves under the proof is never merged.
+adv dev mg; tmg=$(tip dev); rm -f "$T/pr"; : > "$T/gh.log"; line full pass "$tmg"; export SG_PROMOTE_PROOF=local
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+/usr/bin/grep -q -- "-X PUT repos/x/emu/pulls/7/merge.* sha=$tmg" "$T/gh.log" && ok "the merge call carries the proven head sha" \
+  || ko "merge without the sha: rc $rc, out '$out', gh '$(/usr/bin/grep merge "$T/gh.log")'"# A 409 on the merge means the head moved. The pull request now names another head, so the pass exits 75 and the next pass reads it.
+mkdir -p "$T/bin409"; export GH_REAL=$T/bin/gh
+cat > "$T/bin409/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"-X PUT repos/x/emu/pulls/"*"/merge"*) echo '{"message":"Head branch was modified. Review and try the merge again.","documentation_url":"https://docs.github.com"}'; exit 1;;
+  *"pulls?state=open"*) echo '[{"number":7,"head":{"ref":"dev","sha":"1111111111111111111111111111111111111111"},"base":{"ref":"stg"}}]';;
+  *"repos/x/emu/pulls/7"*) echo '{"number":7,"head":{"sha":"1111111111111111111111111111111111111111"}}';;
+  *) exec "$GH_REAL" "$@";;
+esac
+EOF
+chmod +x "$T/bin409/gh"
+adv dev mv; tmv=$(tip dev); before=$(tip stg); rm -f "$T/pr"; line full pass "$tmv"
+out=$(PATH="$T/bin409:$PATH" bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 75 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"pending $tmv"*) true;; *) false;; esac \
+  && ok "a 409 on the merge (the head moved) exits 75 and moves nothing" || ko "409 merge: rc $rc, stg $(tip stg) was $before, out '$out'"
+# The fast proof word (#1723 plan item): a `fast` record for the exact tip promotes it; any other tip or word never does.
+adv dev fp; tfp=$(tip dev); rm -f "$T/pr"; printf '%s\tfast\tpass\t%s\n' "$(date +%s)" "$tfp" > "$SG_STATE/gate-status-promote"
+out=$(SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tfp" ] && ok "the fast proof word promotes the tip it names" || ko "fast proof: rc $rc, stg $(tip stg), out '$out'"
+adv dev fq; tfq=$(tip dev); before=$(tip stg); rm -f "$T/pr"; printf '%s\tfast\tpass\t%s\n' "$(date +%s)" "$before" > "$SG_STATE/gate-status-promote"
+out=$(SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 75 ] && [ "$(tip stg)" = "$before" ] && ok "a fast record for another tip waits and moves nothing" || ko "fast record for another tip: rc $rc, out '$out'"
+adv dev fw; tfw=$(tip dev); before=$(tip stg); rm -f "$T/pr"; printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$tfw" > "$SG_STATE/gate-status-promote"
+out=$(SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 1 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"not the fast proof"*) true;; *) false;; esac \
+  && ok "a full word in the fast record never promotes" || ko "full word: rc $rc, out '$out'"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
