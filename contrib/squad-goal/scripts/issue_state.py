@@ -15,6 +15,7 @@ The seam answers two questions and only these:
     state.write(236, "Code Review")         # proven by the read that follows; returns the state the issue then carries
     state.holder(236)                   # the run that holds issue 236: {"run": id, "started": time}, None when none does
     state.holders()                     # every holder, one read: {"236": {"run": ..., "started": ...}}
+    state.board()                       # every state and holder, one read: ({236: "Todo"}, {"236": {"run": ..., "started": ...}})
     state.hold(236, run, started)       # name the run on the issue, proven by the read that follows
     state.release(236)                  # clear the holder when the run ends, proven by the read that follows
     state.kind(243)                     # the repository's own kind the item carries: bug, task, spec, test case; "" when none
@@ -262,6 +263,10 @@ class State:
     def holders(self):
         """Every issue a run holds, in one read: {issue: {"run": id, "started": time}}. An issue no run holds is absent."""
         return self.binding.holders()
+
+    def board(self):
+        """Every state and every holder the carrier answers, in one read: ({issue: state}, {issue: {"run", "started"}})."""
+        return self.binding.board()
 
     def holder(self, issue):
         """The run that holds `issue`, {"run": id, "started": time}; None when no run holds it."""
@@ -767,6 +772,26 @@ class BoardBinding:
             n = n.strip()
             if n.isdigit() and run and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = {"run": run, "started": started}
         return m
+
+    def board(self):
+        """Every card's state and holder, in ONE read: ({issue: state}, {issue: {"run", "started"}}). The Status and the Run
+        fields ride the same items read, so a caller that needs both asks once. The repository url filters as in `read_all`."""
+        tf = self.text_fields()
+        ids = [x for x in (self.status_field()["id"], tf.get("Run"), tf.get("Run started")) if x]
+        fq = f"&fields[]={','.join(ids)}" if ids else ""
+        val = 'if type=="object" then (.raw//.text//"") else (.//"") end'
+        out = self.api("--paginate", f"{self.base}/items?per_page=100{fq}", "--jq",
+                       '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name=="Status")|.value.name|if type=="object" then .raw else . end))//""),'
+                       '(((.fields[]?|select(.name=="Run")|.value|%s))//""),(((.fields[]?|select(.name=="Run started")|.value|%s))//""),'
+                       '(.content.repository_url//"")]|@tsv' % (val, val))
+        states, held = {}, {}
+        for l in out.splitlines():
+            n, s, run, started, u = (l.split("\t") + ["", "", "", ""])[:5]
+            n = n.strip()
+            if n.isdigit() and (not self.repo or not u or u.endswith("/" + self.repo)):
+                states[n] = self.state_name(s)
+                if run: held[n] = {"run": run, "started": started}
+        return states, held
 
     def kind_field(self):
         """The Kind field: `{"id", "opt"}`, the field's id and its option ids by normalized name. Cached a day, as Status."""

@@ -22,6 +22,7 @@ case "$a" in
     else echo PATCH-STATUS >> "TMPDIR/events"; fi
     echo '{"id":"ITEM2101"}';;
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_DOING","name":{"raw":"Doing"}}]},{"id":"F_RUN","name":"Run"},{"id":"F_START","name":"Run started"}]';;
+  *'fields[]=F_STATUS,F_RUN,F_START'*) echo READ-RUN >> "TMPDIR/events"; [ -e "TMPDIR/holders-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }; h=$(cat "TMPDIR/holder.tsv" 2>/dev/null); printf '2101\tDoing\t%s\t%s\thttps://api.github.com/repos/x/y\n' "$(printf '%s' "$h" | cut -f2)" "$(printf '%s' "$h" | cut -f3)";;
   *'fields[]=F_RUN'*) echo READ-RUN >> "TMPDIR/events"; [ -e "TMPDIR/holders-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }; cat "TMPDIR/holder.tsv" 2>/dev/null;;
   *'fields[]=F_STATUS'*) printf '2101\tDoing\thttps://api.github.com/repos/x/y\n';;
   *items?per_page=100*) printf '[2101,"ITEM2101","https://api.github.com/repos/x/y"]\n';;
@@ -53,6 +54,6 @@ o=$(cycle)
 b=$(/usr/bin/grep -c 'items?per_page=100&fields' "$T/gh.calls")
 [ "$b" = 1 ] && ok "one pass reads the board once: Status and holders ride one read" || ko "board reads in one pass: $b: $(cat "$T/gh.calls") $o"
 touch "$T/holders-down"; o=$(cycle)
-[ "$(count PATCH-RUN)" = 1 ] && ok "a holder read that fails writes on: nothing is skipped on a guess" || ko "holders down: $(count PATCH-RUN) Run PATCH: $o $(cat "$T/events")"
+[ "$(count PATCH-RUN)" = 0 ] && ok "a board read that fails moves nothing: no Run PATCH on a guess" || ko "board down: $(count PATCH-RUN) Run PATCH: $o $(cat "$T/events")"
 [ -n "$DBG" ] && { cat "$T/st/cycle.log" "$T/gh.calls"; }
 rm -rf "$T"; exit $fail
