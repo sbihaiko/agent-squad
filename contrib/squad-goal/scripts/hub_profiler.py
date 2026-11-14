@@ -129,7 +129,9 @@ def _run(t, depth=0, raw=None):
         while i < len(t) and t[i].startswith("-"):
             if _SHELL_CODE.match(t[i]):   # the process table joins the arguments, so the code is the rest of the line
                 rest = t[i + 1:]   # one word is the code itself, its own quotes kept; more words are a process table line, read raw
-                return _code(rest[0] if len(rest) == 1 else _after(raw, t[i]) if raw else " ".join(rest), depth)
+                if not rest:
+                    return None, None
+                return _code(_after(raw, t[i]) if raw and len(rest) > 1 else rest[0], depth)   # words of shell code are a true argument list: the code is the first, the rest are its parameters
             i += 2 if t[i] in ("-o", "+o") else 1
         return (_classify(t[i]), t[i]) if i < len(t) else (None, None)
     if _PYTHON.match(name):
@@ -188,7 +190,7 @@ def _code(code, depth):
     for t in _commands(code):
         while t and t[0] in ("exec", "time", "if", "then", "else", "do", "while", "!"):
             t = t[1:]
-        found = _run(t, depth + 1)
+        found = _run(t, depth + 1)   # no raw line: these words kept their quotes
         if found[0]:
             return found
     return None, None
@@ -236,7 +238,8 @@ def _paths(rows, scope):
     """A function pid -> the node path of that process in `rows` ({pid: (ppid, cpu, command)}), memoized over one reading."""
     memo = {}
     marks = tuple(scope.marks)
-    above = rows[scope.supervisor][0] if scope.supervisor in rows else None   # the pid file names the loop the supervisor runs; the supervisor is its parent
+    held = label(rows[scope.supervisor][2]) if scope.supervisor in rows else None
+    above = rows[scope.supervisor][0] if held and held[0] == SUPERVISOR else None   # the pid file names the loop the supervisor runs; the supervisor is its parent
 
     def place(pid):
         """(in the loop, in another loop, or outside; the named parts; the top ancestor's command)."""
