@@ -105,3 +105,35 @@ def test_the_queue_is_one_read_of_the_ledger_not_one_per_waiting_child(hub, tmp_
     assert len(calls) == 1, "the episodes are read once per refresh"
     assert sorted(opened) == [f"o__r__{n}.json" for n in range(1, 6)], "each ledger file is opened once, never once per child"
     assert [i for i in items if i["key"] == "queue"][0]["text"].startswith("queue 5 held")
+
+
+def test_the_queue_is_read_again_only_when_a_ledger_file_changes(hub, tmp_path, monkeypatch):
+    """#1746: the footer asks for the queue once a tick, and the ledger changes when a child is held or released. The pass
+    is kept between ticks, so an unchanged ledger opens no file; a changed one is read on the same tick, and the queue and
+    each age follow it."""
+    _ledger(tmp_path, 1, [{"run": "run-a", "cause": LOCK, "start": NOW - 60, "count": 1}])
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    opened = []
+    real_read = Path.read_text
+
+    def counting(self, *a, **k):
+        if self.parent.name == "state":
+            opened.append(self.name)
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", counting)
+
+    def queue(now):
+        return [i for i in hub.foot_refresh(now) if i["key"] == "queue"][0]["text"]
+
+    assert queue(NOW).startswith("queue 1 held")
+    assert opened == ["o__r__1.json"]
+
+    opened.clear()
+    assert queue(NOW + hub.LOAD_SAMPLE_SECS).startswith("queue 1 held")
+    assert opened == [], "the footer read the ledger again with no ledger file changed"
+
+    _ledger(tmp_path, 1, [{"run": "run-a", "cause": LOCK, "start": NOW - 60, "count": 1},
+                          {"run": "run-b", "cause": LOCK, "start": NOW - 30, "count": 1}])
+    assert queue(NOW + 2 * hub.LOAD_SAMPLE_SECS).startswith("queue 2 held")
+    assert opened == ["o__r__1.json"], "a changed ledger file was not read again"
