@@ -1,6 +1,6 @@
 # Triage Labels
 
-The triage vocabulary is three label strings on this repository's issue tracker. `contrib/squad-goal/scripts/triage-labels.sh` creates and refreshes them.
+The triage vocabulary is three label strings on this repository's issue tracker. `contrib/squad-goal/scripts/triage-labels.sh` creates and refreshes them, and `profile-check.sh` reads a repository's copy through `triage-labels.sh --check`, so one list answers both.
 
 | Label | Kind | Meaning |
 | --- | --- | --- |
@@ -14,7 +14,9 @@ A permission authorizes when present. A holder holds when present, whatever else
 
 Every issue an agent creates also carries one product type label: `bug` for a defect, `enhancement` for a non-defect change, or `spec` for a specification. The triage vocabulary is the three labels in the first table; do not invent a fourth.
 
-The holds are a floor of both dispatch lanes, the frontier pass and the bug pass. A card that carries a floor label is never a candidate, with or without `ready-for-agent`. A profile's own skip list adds labels and never removes one. The floor and lane tables below name the labels the dispatch passes read: apply a floor label to hold a card, and remove it to release the card.
+The holds are a floor of both dispatch lanes, the frontier pass and the bug pass. A card that carries a floor label is never a candidate, with or without `ready-for-agent`. A profile's own skip list adds labels and never removes one.
+
+The floor and lane tables below are the dispatch vocabulary, beside the triage vocabulary above: an operator applies and removes those labels by hand, as they apply a triage label, a floor label to hold a card and its removal to release the card. The dispatch passes read these labels by name; `triage-labels.sh` and `profile-check.sh` read the three triage labels alone.
 
 | Floor label | Meaning |
 | --- | --- |
