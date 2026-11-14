@@ -31,7 +31,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_grok_refresh.py", "tests/test_hub_instruments.py", "tests/test_hub_lane_collapse.py", "tests/test_hub_mobile_card_facts.py", "tests/test_hub_mobile_icons.py", "tests/test_hub_mobile_lanes.py",
         "tests/test_hub_mobile_motion.py", "tests/test_hub_mobile_reload.py", "tests/test_hub_mobile_text_targets.py", "tests/test_hub_mobile_warnings.py", "tests/test_hub_model_level_switch.py",
         "tests/test_hub_mux.py", "tests/test_hub_mux_terminals.py", "tests/test_hub_question_card.py", "tests/test_hub_resumed_verdict.py", "tests/test_hub_seam_binds_its_profile.py",
-        "tests/test_hub_session_image.py", "tests/test_hub_swimlanes.py", "tests/test_hub_terminal_routes.py", "tests/test_hub_webapp.py", "tests/test_hub_work_branches.py",
+        "tests/test_hub_session_image.py", "tests/test_hub_status_spend.py", "tests/test_hub_swimlanes.py", "tests/test_hub_terminal_routes.py", "tests/test_hub_webapp.py", "tests/test_hub_work_branches.py",
         "tests/test_hubmux_shared_board.py", "tests/test_kind_chains.py", "tests/test_lead_survival.py", "tests/test_load_reading_stays_a_reading.py", "tests/test_machine_caps.py",
         "tests/test_mermaid.py", "tests/test_message_ceiling.py", "tests/test_model_naming.py", "tests/test_model_resolver_seam.py", "tests/test_modelreg_model_off.py",
         "tests/test_monitor.py", "tests/test_nightly_obligation.py", "tests/test_profiler_dataset.py", "tests/test_prune.py", "tests/test_qwen_key_gate.py",
