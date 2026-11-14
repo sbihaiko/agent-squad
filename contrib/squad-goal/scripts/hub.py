@@ -3345,11 +3345,11 @@ def gate_lock_line(pid, line, issues_of):
 
 def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
     """The Live work panel's lines, all from local state and the board read the hub already holds: the loop's state,
-    each live run (its issue, node and age), each gate lock (its pid and the run it checks), the loop drivers, each hand hold, each issue
-    labelled ready-for-human, and one line on the work the hub cannot see (a hand gate or a Claude Code fix pass)."""
+    each live run (its issue, node and age), each gate lock (its pid and the run it checks), the loop drivers, each hand hold, and each open
+    Doing card no live run names (work by hand). A ready-for-human card waits on the owner and is no live work (#1701)."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
-    lines, issues_of, drivers = [], {}, []
+    lines, issues_of, drivers, held = [], {}, [], set()
     if loop_state({}, now=now, state=base) == "off": lines.append("loop off")
     for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
         folder = active_folder(entry)
@@ -3357,18 +3357,17 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         row, _ = run_row(folder, "", procs or {})
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
         lines.append(f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min")
-        issues_of[row["id"]] = issues
+        issues_of[row["id"]] = issues; held.update(row["issues"])
     for d in sorted((base / "locks").glob("*")):
         pid = _read(d / "pid").strip()
         if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
             if _read(d / "cmd").strip(): lines.append(gate_lock_line(pid, (argv or _holder_argv)(int(pid)), issues_of))
             else: drivers.append(d.name)   # a lock that names no command is a loop driver's own: no live work (#1692)
     if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
-    for i in items:
-        if "ready-for-human" in (i.get("l") or []) and i.get("s") != "closed":   # the label outlives the issue (#1692)
-            lines.append(f"ready-for-human #{i['n']} {i.get('t') or ''} · label ready-for-human")
+    for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
+        if i.get("st") == "Doing" and i.get("s") != "closed" and i.get("n") not in held and "ready-for-human" not in (i.get("l") or []):
+            lines.append(f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run")
     if not lines: lines.append("no live work")
-    lines.append("hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here")
     return lines
 
 def task_count(i):
@@ -6833,7 +6832,7 @@ function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=
  setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
-let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the ready-for-human issues
+let liveWork=null;   // the hub's Live work lines (/api/live): the loop's state, the gate locks, the hand-worked Doing cards
 async function livePoll(){try{liveWork=await (await fetch("/api/live")).json();refresh()}catch(e){}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,client:"desktop"})}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
