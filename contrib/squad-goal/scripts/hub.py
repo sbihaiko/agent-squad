@@ -3308,17 +3308,18 @@ def holder_chip(i, taken=None, state=None):
         t = dt.datetime.fromtimestamp(float(when), dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
         return f"Squad · taken over {t} UTC"
     return "Squad · running" if state == "running" else "Squad"
-def hold_rows(now=None):
+def hold_rows(now=None, state=None):
     """The Live work rows for hand holds: a Manual or HAL9k hold proven by folder activity (the marker's own write time,
     under the one bound `SG_HAND_HOLD_MINUTES`), never stale and never an orphan. A Squad run is a run row, proven by its
     live process. The read and the write are `squad.handhold`'s, so the page holds no rule of its own (ADR-0137)."""
     now = time.time() if now is None else now
+    base = pathlib.Path(state) if state else STATE
     closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
     try:
         (HH,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__),
                            ("handhold",))
-        HH.alerts(state=STATE, closed=closed, now=now)   # one line per stale or orphan episode, never one per poll
-        rows = HH.holds(state=STATE, closed=closed, now=now)
+        HH.alerts(state=base, closed=closed, now=now)   # one line per stale or orphan episode, never one per poll
+        rows = HH.holds(state=base, closed=closed, now=now)
     except Exception as e:
         log_once(f"hub: the hand holds are unknown: {type(e).__name__}: {' '.join(str(e).split())}"); return []
     out = []
@@ -3364,8 +3365,10 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
             if _read(d / "cmd").strip(): lines.append(gate_lock_line(pid, (argv or _holder_argv)(int(pid)), issues_of))
             else: drivers.append(d.name)   # a lock that names no command is a loop driver's own: no live work (#1692)
     if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
+    live_holds = {n for r in hold_rows(now=now, state=base) for n in r["issues"]}   # a held card is its hold, drawn beside the runs (#1713)
     for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
-        if i.get("st") == "Doing" and i.get("s") != "closed" and i.get("n") not in held and "ready-for-human" not in (i.get("l") or []):
+        if (i.get("st") == "Doing" and i.get("s") != "closed" and i.get("n") not in held
+                and str(i.get("n")) not in live_holds and "ready-for-human" not in (i.get("l") or [])):
             lines.append(f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run")
     if not lines: lines.append("no live work")
     return lines
