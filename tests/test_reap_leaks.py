@@ -14,11 +14,7 @@ def _orphan(tree, tmp_path):
     script.write_text("#!/bin/bash\nsleep 30\n")
     pidfile = tmp_path / f"pid-{time.time_ns()}"
     subprocess.run(["bash", "-c", f"(bash {script} live-check >/dev/null 2>&1 & echo $! > {pidfile})"], check=True)
-    pid = int(pidfile.read_text())
-    for _ in range(50):
-        if subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip() == "1":
-            break
-        time.sleep(0.02)
+    pid = int(pidfile.read_text())   # the subshell that started it is gone, so no process of the tree owns it
     return pid
 
 
@@ -57,10 +53,14 @@ def test_a_process_of_another_tree_and_an_older_process_are_kept(tmp_path):
 
 
 def test_a_process_with_a_living_parent_is_kept(tmp_path):
-    rows = [(4242, 77, 1, f"bash {tmp_path}/contrib/squad-goal/scripts/serial.sh live-check")]
-    assert reap_leaks.leaks(tmp_path, 0.0, rows) == []
-    rows = [(4242, 1, 1, f"bash {tmp_path}/contrib/squad-goal/scripts/serial.sh live-check")]
-    assert reap_leaks.leaks(tmp_path, 0.0, rows) == [4242]
+    leftover = f"bash {tmp_path}/contrib/squad-goal/scripts/serial.sh live-check"
+    suite = (77, 60, 5, f"bash {tmp_path}/contrib/squad-goal/scripts/test-live-check.sh")
+    assert reap_leaks.leaks(tmp_path, 0.0, [(4242, 77, 1, leftover), suite]) == [], "a suite of the tree owns it"
+    session = (77, 60, 5, "python3 -m pytest -n auto")
+    assert reap_leaks.leaks(tmp_path, 0.0, [(4242, 78, 1, leftover), (78, 77, 2, "bash -c x"), session]) == []
+    assert reap_leaks.leaks(tmp_path, 0.0, [(4242, 1, 1, leftover)]) == [4242]
+    # Linux hands an orphan to a subreaper, never to 1: a parent that is no part of the tree owns nothing.
+    assert reap_leaks.leaks(tmp_path, 0.0, [(4242, 900, 1, leftover), (900, 1, 99, "systemd --user")]) == [4242]
 
 
 def test_the_session_reaps_when_it_ends():
