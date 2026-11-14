@@ -5,6 +5,7 @@ import subprocess
 import time
 
 PROXY_SCRIPT = "model_proxy.py"
+STARTED = []
 
 
 def live_proxy_pids(parent_pid):
@@ -13,6 +14,27 @@ def live_proxy_pids(parent_pid):
     if result.returncode > 1:
         raise RuntimeError(f"pgrep could not list the children of {parent_pid}: {result.stderr.strip()}")
     return [int(pid) for pid in result.stdout.split()]
+
+
+def track_starts(module):
+    """Record each proxy the module starts, so the test that started it ends it at teardown."""
+    start = module.start_proxy
+
+    def tracked(*args, **kwargs):
+        entry = start(*args, **kwargs)
+        STARTED.append(entry)
+        return entry
+
+    module.start_proxy = tracked
+
+
+def end_started():
+    """End every proxy recorded since the last call; the list is cleared even when one end raises."""
+    try:
+        while STARTED:
+            end_proxy(STARTED.pop()["pid"])
+    finally:
+        STARTED.clear()
 
 
 def end_proxy(pid, timeout=5):

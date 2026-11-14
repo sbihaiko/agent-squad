@@ -46,6 +46,14 @@ def _hub_seam_defaults(tmp_path_factory):
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
 
 
+@pytest.fixture(autouse=True)
+def _proxies_end_with_their_test():
+    """A model proxy a test starts is ended when that test ends, pass or fail (#1686)."""
+    yield
+    from tests.proxystop import end_started
+    end_started()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _no_model_proxy_survives():
     """A model proxy this test process started must be ended by its test; one that outlives the session is a leak (#1686)."""

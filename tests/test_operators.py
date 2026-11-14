@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.proxystop import end_proxy
+from tests.proxystop import track_starts
 
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
@@ -37,31 +37,12 @@ exit 2
 """
 
 
-PROXIES_BY_TEST = {}
-
-
-@pytest.fixture(autouse=True)
-def _proxies_end_with_their_test(tmp_path):
-    try:
-        yield
-    finally:
-        for entry in PROXIES_BY_TEST.pop(tmp_path, []):
-            end_proxy(entry["pid"])
-
-
 def operators(tmp_path, monkeypatch):
     """The module, with its CLI name bound to the fake on the path."""
     spec = importlib.util.spec_from_file_location("operators", VOICE / "operators.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    start_proxy = module.start_proxy
-
-    def tracked(*args, **kwargs):
-        entry = start_proxy(*args, **kwargs)
-        PROXIES_BY_TEST.setdefault(tmp_path, []).append(entry)
-        return entry
-
-    module.start_proxy = tracked
+    track_starts(module)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "claude"
