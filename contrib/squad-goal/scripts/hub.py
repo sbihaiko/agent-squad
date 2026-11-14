@@ -5917,8 +5917,9 @@ function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.ag
  const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
  const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
- const extra=(liveWork||[]).filter(t=>!live.some(r=>t.includes(r.id))).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a run row already drawn is not drawn twice
- return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")+extra||"<div class=m>no live work</div>")+more}}
+ const own=r=>(liveWork||[]).filter(t=>t.includes(r.id)&&!t.startsWith("run "+r.id+" ")).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a line that names a live run, but is not the row itself, is drawn beside that row: a gate lock names the run it checks (#1713)
+ const extra=(liveWork||[]).filter(t=>!live.some(r=>t.includes(r.id))).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // every other line is drawn once
+ return{head,html:(drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra||"<div class=m>no live work</div>")+more}}
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
