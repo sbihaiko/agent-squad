@@ -181,3 +181,14 @@ def test_loop_write_takes_true_or_false_and_names_its_key_otherwise():
 def test_the_shipped_default_leaves_the_tailnet_loop_switch_read_only():
     text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
     assert "loop_write: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
+
+
+def test_profiler_write_is_its_own_grant_off_by_default():
+    """The Loop tab's switch (#1743) has its own grant: the loop-write grant is not widened (ADR-0162)."""
+    P.validate({"tailnet": {"profiler_write": True}})
+    P.validate({"tailnet": {"profiler_write": False}})
+    with pytest.raises(OptionError, match="tailnet.profiler_write"):
+        P.validate({"tailnet": {"profiler_write": "yes"}})
+    assert P.ENV_KEYS["tailnet.profiler_write"] == "SQUAD_TAILNET_PROFILER_WRITE"
+    text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
+    assert "profiler_write: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]

@@ -66,3 +66,10 @@ def test_loop_write_reads_from_the_env_file_as_a_bool_only(repo):
 def test_loop_write_set_key_writes_the_env_name(repo):
     ps.set_key(repo, "tailnet.loop_write", "true")
     assert "SQUAD_TAILNET_LOOP_WRITE=true" in (repo / ".env").read_text()
+
+
+def test_profiler_write_reads_from_the_env_file_as_a_bool_only(repo):
+    (repo / ".env").write_text("SQUAD_TAILNET_PROFILER_WRITE=true\n")
+    data, _ = ps.load(repo)
+    assert data["tailnet"]["profiler_write"] is True
+    assert ps.env_tailnet(repo) == {"profiler_write": True}

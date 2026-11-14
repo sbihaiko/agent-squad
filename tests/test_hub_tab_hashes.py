@@ -98,7 +98,7 @@ needs_node = pytest.mark.skipif(NODE is None, reason="node is not installed")
 
 
 @needs_node
-@pytest.mark.parametrize("hash_,tab", [("#kanban", "board"), ("#runs", "runs"), ("#flow", "flow"), ("#profiler", "prof"), ("#settings", "set")])
+@pytest.mark.parametrize("hash_,tab", [("#kanban", "board"), ("#runs", "runs"), ("#flow", "flow"), ("#loop", "prof"), ("#settings", "set")])
 def test_loading_a_tab_hash_opens_that_tab(hub, tmp_path, hash_, tab):
     snaps = _run(hub, tmp_path, "load.js", hash_, "{}", [])
     assert _only(snaps[0], tab), snaps[0]
@@ -121,8 +121,8 @@ def test_no_hash_opens_the_tab_saved_last_or_kanban(hub, tmp_path):
 def test_switching_a_tab_writes_its_hash(hub, tmp_path):
     steps = ['setTab("runs")', 'setTab("flow")', 'setTab("prof")', 'setTab("set")', 'setTab("board")']
     snaps = _run(hub, tmp_path, "switch.js", "#kanban", "{}", steps)
-    assert [s["hash"] for s in snaps[1:]] == ["#runs", "#flow", "#profiler", "#settings", "#kanban"]
-    assert snaps[-1]["writes"] == ["#runs", "#flow", "#profiler", "#settings", "#kanban"]
+    assert [s["hash"] for s in snaps[1:]] == ["#runs", "#flow", "#loop", "#settings", "#kanban"]
+    assert snaps[-1]["writes"] == ["#runs", "#flow", "#loop", "#settings", "#kanban"]
     for snap, tab in zip(snaps[1:], ["runs", "flow", "prof", "set", "board"], strict=True):
         assert _only(snap, tab), snap
 
@@ -145,7 +145,7 @@ def test_arrow_home_and_end_keys_move_one_current_tab_and_its_pane(hub, tmp_path
              'press("ArrowRight")', 'press("ArrowRight")', 'press("ArrowLeft")', 'press("Home")', 'press("End")', 'press("ArrowLeft")']
     snaps = _run(hub, tmp_path, "keys.js", "#kanban", "{}", steps)[2:]
     expected = ["runs", "flow", "prof", "set", "board", "set", "board", "set", "prof"]
-    hashes = {"board": "#kanban", "runs": "#runs", "flow": "#flow", "prof": "#profiler", "set": "#settings"}
+    hashes = {"board": "#kanban", "runs": "#runs", "flow": "#flow", "prof": "#loop", "set": "#settings"}
     assert len(snaps) == len(expected)
     for snap, tab in zip(snaps, expected, strict=True):
         assert _only(snap, tab), snap
