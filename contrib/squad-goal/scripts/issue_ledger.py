@@ -105,6 +105,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import threading
 import time
 
 LEDGERS = ("own", "loop")
@@ -257,7 +258,8 @@ def _key_of(name):   # the issue key a ledger file name spells, `<owner>__<repo>
     return key
 
 
-_OPEN_CACHE: dict = {}   # state dir -> (files' signature, open episodes, read): the queue kept between ticks (#1746)
+_OPEN_CACHE: dict = {}   # state dir -> (pass token, files' signature, open episodes, read): the queue kept between ticks (#1746)
+_OPEN_LOCK = threading.Lock()
 
 
 def _state_signature(d):
@@ -280,10 +282,12 @@ def open_episodes(state=None, now=None):
     is one signature of a few stats, never a parse of every issue. An age is measured against the caller's own `now`."""
     d = pathlib.Path(state) if state is not None else state_dir()
     now = time.time() if now is None else now
+    token = time.monotonic_ns()
     sig = _state_signature(d)
-    kept = _OPEN_CACHE.get(str(d)) if sig is not None else None
-    if kept is not None and kept[0] == sig:
-        out, read = kept[1], kept[2]
+    with _OPEN_LOCK:
+        kept = _OPEN_CACHE.get(str(d)) if sig is not None else None
+    if kept is not None and kept[1] == sig:
+        out, read = kept[2], kept[3]
     else:
         out, read = [], True
         for f in sorted((d / "state").glob("*.json")):
@@ -295,7 +299,10 @@ def open_episodes(state=None, now=None):
             except (KeyError, TypeError): read = False; continue
             out += [{"key": key, **{k: e[k] for k in ("run", "cause", "start", "count")}} for e in eps if e["open"]]
         out.sort(key=lambda e: e["start"])
-        if sig is not None: _OPEN_CACHE[str(d)] = (sig, out, read)
+        if sig is not None:
+            with _OPEN_LOCK:
+                held = _OPEN_CACHE.get(str(d))
+                if held is None or held[0] < token: _OPEN_CACHE[str(d)] = (token, sig, out, read)
     return {"episodes": [{**e, "age": round(now - e["start"], 3)} for e in out], "read": read}
 
 
