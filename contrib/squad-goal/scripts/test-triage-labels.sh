@@ -45,7 +45,11 @@ out=$(run); rc=$?
 out=$(run); rc=$?
 [ "$rc" = 0 ] && [ "$(wc -l < "$T/labels" | tr -d ' ')" = 3 ] && ok "apply creates the one missing label" || ko "apply after a missing label: rc $rc: '$out'"
 
-docnames=$(awk '/^\| Label /{t=1} t && /^\|/{print; next} t{exit}' "$doc" | /usr/bin/grep -o '`[^`]*`' | tr -d '`' | sort)
+docnames=$(awk '/^\| Label \| Kind \|/{t=1} t && /^\|/{print; next} t{exit}' "$doc" | /usr/bin/grep -o '`[^`]*`' | tr -d '`' | sort)
 : > "$T/labels"; botnames=$(run --check | sed -n 's/^label missing: //p' | sort)
 [ -n "$docnames" ] && [ "$docnames" = "$botnames" ] && ok "the vocabulary doc names the labels the bootstrap creates" || ko "doc and bootstrap disagree: doc '$(echo $docnames)' bootstrap '$(echo $botnames)'"
+required=$(/usr/bin/grep -o 'SG_LABELS_REQUIRED:=[^"]*' "$d/profile-check.sh" | sed 's/SG_LABELS_REQUIRED:=//')
+missing=; for n in $docnames; do case " $required " in *" $n "*) ;; *) missing="$missing $n";; esac; done
+[ -z "$missing" ] && ok "profile-check requires each label the doc names" || ko "profile-check does not require:$missing"
+/usr/bin/grep -q 'triage-labels\.sh' "$d/watchd.sh" && ok "the watchd start runs the label bootstrap" || ko "the watchd start does not run the label bootstrap, so the loop creates none of the triage labels"
 exit $fail

@@ -12,7 +12,7 @@ A permission authorizes when present. A holder holds when present, whatever else
 
 `needs-triage` holds an issue that nobody has triaged. It is a hold on its own, so an untriaged issue is never read as an unlabelled one. Removing it is the triage.
 
-Every issue an agent creates also carries one product type label: `bug` for a defect, `enhancement` for a non-defect change, or `spec` for a specification. Do not add a triage label outside this table.
+Every issue an agent creates also carries one product type label: `bug` for a defect, `enhancement` for a non-defect change, or `spec` for a specification. The vocabulary is the three labels in the first table; do not invent a fourth.
 
 The holds are a floor of both dispatch lanes, the frontier pass and the bug pass. A card that carries a floor label is never a candidate, with or without `ready-for-agent`. A profile's own skip list adds labels and never removes one.
 

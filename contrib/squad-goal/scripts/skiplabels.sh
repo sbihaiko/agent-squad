@@ -8,7 +8,6 @@
 # that waits on the owner or on an answer is no work yet.
 : "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
 : "${SG_BUG_SKIP_LABELS:=needs-owner,no-auto,wontfix,question}"
-_sg_floor=frozen:owner,frozen:dependency,ready-for-human,ready-for-HAL9K,needs-triage   # the floor of both lanes (#1673)
 # No export here: env.sh exports both after the profile (#757), and a sourced library that exports them defeats a
 # profile's := default in any suite that sources this file before it runs env.sh in a child.
 # sg_skip_labels <frontier|bug> [<extra>,...]: the comma list of labels one lane takes no work from. The freeze markers are a
@@ -16,10 +15,11 @@ _sg_floor=frozen:owner,frozen:dependency,ready-for-human,ready-for-HAL9K,needs-t
 # its structural labels -- it leaves the bug, debt and run-parent units to their own lanes. The bug lane adds needs-info, a
 # ticket that waits on an answer (#729). A label one lane skips is no hold for the other: no-auto and question belong to the
 # bug lane alone, and the frontier starts a card that carries one (health.sh reads the frontier lane for its idle alert).
+# The floor is spelled out in each arm, never a shared variable: a profile is sourced after this file and must not lift it (#1673).
 sg_skip_labels() {
   case "${1:-}" in
-    frontier) printf '%s,%s%s\n' "$SG_FRONTIER_SKIP_LABELS" "$_sg_floor" "${2:+,$2}" ;;
-    bug) printf '%s,%s,needs-info\n' "$SG_BUG_SKIP_LABELS" "$_sg_floor" ;;
+    frontier) printf '%s,frozen:owner,frozen:dependency,ready-for-human,ready-for-HAL9K,needs-triage%s\n' "$SG_FRONTIER_SKIP_LABELS" "${2:+,$2}" ;;
+    bug) printf '%s,frozen:owner,frozen:dependency,ready-for-human,ready-for-HAL9K,needs-triage,needs-info\n' "$SG_BUG_SKIP_LABELS" ;;
     *) echo "sg_skip_labels: name a lane, frontier or bug, not '${1:-}'" >&2; return 2 ;;
   esac
 }
