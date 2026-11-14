@@ -178,6 +178,7 @@ test-shell-suites-gate.sh 4.22
 test-shell-suites-hermetic.sh 0.05
 test-single-owner.sh 0.70
 test-single.sh 16.06
+test-skiplabels.sh 0.05
 test-slicecut.sh 6.44
 test-spec-forecast.sh 0.53
 test-spend-routed.sh 0.54
@@ -190,6 +191,7 @@ test-throughput.sh 1.04
 test-todo-unread.sh 0.53
 test-token-guard.sh 2.43
 test-token-ledger.sh 12.98
+test-triage-labels.sh 1.57
 test-tune-report.sh 0.81
 test-vendor-guard.sh 1.38
 test-view-domain-firewall.sh 0.37
