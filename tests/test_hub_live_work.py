@@ -168,19 +168,31 @@ def test_a_gate_lock_whose_command_line_is_unread_names_its_pid_alone(hub):
     assert f"gate: pid {os.getpid()}" in lines, lines
 
 
-def test_a_ready_for_human_issue_is_listed_with_its_label(hub):
-    items = [{"n": 1681, "t": "Health rule", "s": "open", "l": ["ready-for-human", "bug"]}]
+def test_a_ready_for_human_issue_is_never_live_work(hub):
+    """#1701: a ready-for-human card waits on the owner; it is no live work, in Doing or elsewhere."""
+    items = [{"n": 1681, "t": "Health rule", "s": "open", "st": "Todo", "l": ["ready-for-human", "bug"]},
+             {"n": 1682, "t": "Held in Doing", "s": "open", "st": "Doing", "l": ["ready-for-human"]}]
     lines = _lines(hub, items)
-    assert any("#1681" in x and "ready-for-human" in x for x in lines)
+    assert not any("#1681" in x or "#1682" in x or "ready-for-human" in x for x in lines), lines
 
 
-def test_a_closed_ready_for_human_issue_is_not_live_work(hub):
-    """#1692: the label stays on an issue after it closes, and a closed issue waits on nobody."""
-    items = [{"n": 447, "t": "An old defect", "s": "closed", "l": ["ready-for-human", "bug"]},
-             {"n": 1681, "t": "Health rule", "s": "open", "l": ["ready-for-human"]}]
+def test_a_doing_card_with_no_live_run_is_hand_work(hub):
+    """#1701: the panel agrees with the Doing column: a card worked by hand is a line, a closed card is not."""
+    items = [{"n": 1695, "t": "The lock line", "s": "open", "st": "Doing", "l": ["bug"]},
+             {"n": 1690, "t": "Done by hand", "s": "closed", "st": "Doing", "l": ["bug"]},
+             {"n": 1691, "t": "Queued", "s": "open", "st": "Todo", "l": ["bug"]}]
     lines = _lines(hub, items)
-    assert not any("#447" in x for x in lines), lines
-    assert any("#1681" in x for x in lines)
+    assert "hand work #1695 The lock line · in Doing, no registered run" in lines, lines
+    assert not any("#1690" in x or "#1691" in x for x in lines), lines
+
+
+def test_a_doing_card_a_live_run_names_is_not_listed_twice(hub, monkeypatch, tmp_path):
+    run = tmp_path / "run-20261113-000000-abcdef"
+    run.mkdir()
+    monkeypatch.setattr(hub, "loop_live", lambda **kw: {"runs": [str(run)], "gates": []})
+    monkeypatch.setattr(hub, "run_row", lambda folder, port, procs: ({"id": run.name, "issues": [1696], "stage": "router", "age": 60}, None))
+    lines = _lines(hub, [{"n": 1696, "t": "Debt", "s": "open", "st": "Doing", "l": []}])
+    assert sum("#1696" in x for x in lines) == 1, lines
 
 
 def test_the_driver_locks_fold_into_one_line_with_no_pid(hub):
@@ -207,8 +219,9 @@ def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
     assert any("#1674" in x and "wave.landing" in x and "age" in x for x in lines)
 
 
-def test_the_panel_says_it_cannot_see_hand_work(hub):
-    assert any("hand" in x and "not visible" in x for x in _lines(hub))
+def test_the_panel_carries_no_line_on_work_it_cannot_see(hub):
+    """#1701: hand work is named by its Doing card, so the panel no longer says it cannot see it."""
+    assert not any("not visible" in x for x in _lines(hub))
 
 
 def test_the_card_draws_the_loop_lines_and_no_run_twice(hub):
@@ -217,11 +230,11 @@ def test_the_card_draws_the_loop_lines_and_no_run_twice(hub):
     fn = re.search(r"^function liveCard\(.*?^ return\{[^\n]*$", hub.PAGE, re.M | re.S).group(0)
     script = ('const esc=s=>String(s);const age=s=>s+"s";const liveRow=(r,shown)=>"<row "+r.id+">";const LIVE_ROWS=4;\n'
               'let liveWork=["loop off","run run-b · #1674 · node wave.landing · age 3 min","run run-c · #1676 · node wave · age 1 min",'
-              '"hand work outside a registered run (a hand gate, a Claude Code fix pass) is not visible here"];\n'
+              '"hand work #1695 The lock line · in Doing, no registered run"];\n'
               + fn + '\nconsole.log(JSON.stringify(liveCard([{id:"run-b",age:5,spend:0}],"").html));\n')
     out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     html = out.stdout
-    assert "loop off" in html and "run-c" in html and "not visible" in html
+    assert "loop off" in html and "run-c" in html and "hand work #1695" in html
     assert "no live work" not in html
     assert html.count("run-b") == 1
