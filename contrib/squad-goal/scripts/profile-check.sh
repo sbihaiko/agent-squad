@@ -13,7 +13,7 @@ dir=${SG_PROFILES_DIR:-$here/profiles}; f=$dir/$name.sh
 bash -n "$f" 2>/dev/null || { echo "profile $name: does not parse ($f)"; exit 1; }
 # shellcheck disable=SC1090
 . "$f" >/dev/null 2>&1 || { echo "profile $name: does not parse ($f)"; exit 1; }
-: "${SG_LABELS_REQUIRED:=bug ready-for-agent ready-for-human needs-triage needs-info wontfix}"
+: "${SG_LABELS_REQUIRED:=bug ready-for-agent ready-for-human ready-for-HAL9K needs-triage needs-info wontfix}"
 gaps=0; gap() { echo "profile $name: $1"; gaps=$((gaps + 1)); }
 for v in SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE; do [ -n "${!v:-}" ] || gap "$v is not set"; done
 case "${SG_REPO:-}" in owner/repo) gap "SG_REPO is the example placeholder owner/repo";; ""|*/*/*) ;; */?*) ;; *) gap "SG_REPO '$SG_REPO' is not owner/name";; esac
