@@ -26,5 +26,5 @@ for f in single.sh autofrontier.sh autobug.sh; do cp "$S/$f" "$S2/$f"; done
 bash -c 'perl -e "alarm 20; exec @ARGV" bash "$1" >/dev/null 2>&1 & echo $! > "$2"; sleep 4' _ "$S2/fastloop.sh" "$T/lp2" & sup=$!
 sleep 2.5; lp2=$(cat "$T/lp2" 2>/dev/null)
 [ -n "$lp2" ] && kill -0 "$lp2" 2>/dev/null && ok "an empty process reader answer does not end the lane" || ko "the lane ended on an empty process reader answer"
-kill "$lp2" 2>/dev/null; kill "$sup" 2>/dev/null
+kill "$lp2" 2>/dev/null; { kill "$sup"; wait "$sup"; } 2>/dev/null
 kill "$lp" 2>/dev/null; rm -rf "$T"; exit $fail

@@ -250,6 +250,42 @@ case "${1:-status}" in
     # ever: it says so and ends the way a stop ends it.
     gone() { [ -r "$me" ] || { printf 'WATCHD run %s refused: this script is gone\n' "$$" >> "$L"; shutdown; }; }
     reload=; trap 'reload=1' HUP
+    # #1781: a lane that dies while watch.sh lives starts again from the one-second poll below; before, a lane started only at
+    # the top of this loop, which a cycle reaches only when watch.sh exits, and a dead fast lane stayed dead for hours.
+    # Each lane has its own back-off, a due time the poll reads, never a sleep: SG_LANE_BACKOFF s (2), doubled at each death
+    # up to SG_LANE_BACKOFF_MAX s (60), and back to the first step when the lane lived 10 min. Each relight writes one dated
+    # line; the third relight inside one hour writes one alerts.log line, at most one an hour. bash 3.2 has no maps, so the
+    # state of lane <n> is in plain variables: lb_<n> back-off, ld_<n> due time (0: none), ls_<n> start time, lx_<n> exit
+    # status, lr_<n> relight times in the last hour, la_<n> last alert time.
+    for n in fast cq; do printf -v "lb_$n" 0; printf -v "ld_$n" 0; printf -v "ls_$n" 0; printf -v "la_$n" 0; printf -v "lr_$n" ''; done
+    # lane_start <fast|cq>: the pid is set in the command that starts the lane, so a reload always ends the newest lane (#527).
+    lane_start() {
+      case $1 in
+        fast) bash "$(dirname "$me")/fastloop.sh" >> "$L" 2>&1 & fast=$! ;;
+        cq) bash "$(dirname "$me")/cqflush.sh" >> "$SG_STATE/cqflush.log" 2>&1 & cq=$! ;;
+      esac
+      printf -v "ls_$1" %s "$(date +%s)"; printf -v "ld_$1" 0; }
+    # lane_poll <fast|cq>: the first poll that finds the lane dead reads its status and sets the due time; the first poll
+    # past the due time starts it again.
+    lane_poll() {
+      local n=$1 p v b now t k c
+      p=${!n}; [ -n "$p" ] || return 0; kill -0 "$p" 2>/dev/null && return 0
+      now=$(date +%s); v=ld_$n
+      if [ "${!v}" = 0 ]; then
+        wait "$p" 2>/dev/null; printf -v "lx_$n" %s "$?"
+        v=ls_$n; t=$(( now - ${!v} )); v=lb_$n; b=${!v}
+        if [ "$b" = 0 ] || [ "$t" -ge 600 ]; then b=${SG_LANE_BACKOFF:-2}; else b=$(( b * 2 )); fi
+        [ "$b" -gt "${SG_LANE_BACKOFF_MAX:-60}" ] && b=${SG_LANE_BACKOFF_MAX:-60}
+        printf -v "lb_$n" %s "$b"; printf -v "ld_$n" %s $(( now + b )); return 0
+      fi
+      [ "$now" -ge "${!v}" ] || return 0
+      lane_start "$n"; v=lx_$n; b=lb_$n
+      printf '%s WATCHD lane %s %s ended: %s; started again in %ss\n' "$(date '+%F %T')" "$n" "$p" "${!v}" "${!b}" >> "$L"
+      v=lr_$n; k=; for t in ${!v} $now; do [ $(( now - t )) -lt 3600 ] && k="$k $t"; done; printf -v "lr_$n" %s "$k"
+      c=$(set -- $k; echo $#); t=la_$n
+      [ "$c" -ge 3 ] && [ $(( now - ${!t} )) -ge 3600 ] && { printf -v "la_$n" %s "$now"
+        printf '%s WATCHD lane %s started again %s times in one hour; the last ended: %s\n' "$(date '+%F %T')" "$n" "$c" "${!v}" >> "$SG_STATE/alerts.log"; }
+      return 0; }
     while :; do
       gone
       # A reload lands here, once the cycle has ended: the fast and comment lanes end their current pass, SG_SQUAD is read
@@ -259,16 +295,17 @@ case "${1:-status}" in
         fast=; cq=; old=$SG_SQUAD; unset SG_SQUAD; . "$(dirname "$0")/env.sh"; reload=; record_sha
         printf 'WATCHD RELOAD %s -> %s\n' "$old" "$SG_SQUAD" >> "$L"; }
       # the fast lane (childcc every SG_FAST_INTERVAL s) lives beside watch.sh, so a slow cycle step never delays a dispatch
-      { [ -n "$fast" ] && kill -0 "$fast" 2>/dev/null; } || { bash "$(dirname "$me")/fastloop.sh" >> "$L" 2>&1 & fast=$!; }
+      { [ -n "$fast" ] && kill -0 "$fast" 2>/dev/null; } || lane_start fast
       # the comment queue is the only place a child learns why the entry gate rejected its work (#669): a loop that runs
       # without its flusher repeats every rejection blind, so the flusher runs beside the two lanes and restarts with them
-      { [ -n "$cq" ] && kill -0 "$cq" 2>/dev/null; } || { bash "$(dirname "$me")/cqflush.sh" >> "$SG_STATE/cqflush.log" 2>&1 & cq=$!; }
+      { [ -n "$cq" ] && kill -0 "$cq" 2>/dev/null; } || lane_start cq
       bash "$(dirname "$me")/watch.sh" >> "$L" 2>&1 & child=$!
       # watch.sh never exits by itself, so a reload ends this lane too: its TERM trap leaves after the step in flight.
       # The wait is bounded to one second so a deleted script is noticed while the lane still runs (#1587).
       while kill -0 "$child" 2>/dev/null; do
         [ -n "$reload" ] && kill -TERM "$child" 2>/dev/null
         gone
+        [ -n "$reload" ] || { lane_poll fast; lane_poll cq; }
         sleep 1
       done
       [ -n "$reload" ] || { echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; }; done;;
