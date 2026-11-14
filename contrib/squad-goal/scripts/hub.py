@@ -3361,17 +3361,23 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         row, _ = run_row(folder, "", procs or {})
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
         lines.append(f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min")
-        issues_of[row["id"]] = issues; held.update(row["issues"])
+        issues_of[row["id"]] = issues; held.update(str(n) for n in row["issues"])
     for d in sorted((base / "locks").glob("*")):
         pid = _read(d / "pid").strip()
         if d.is_dir() and pid.isdigit() and _pid_alive(int(pid)):
             if _read(d / "cmd").strip(): lines.append(gate_lock_line(pid, (argv or _holder_argv)(int(pid)), issues_of))
             else: drivers.append(d.name)   # a lock that names no command is a loop driver's own: no live work (#1692)
     if drivers: lines.append("🔒 loop drivers running: " + ", ".join(drivers))   # a padlock marks a lock, never work
-    live_holds = {n for r in hold_rows(now=now, state=base) for n in r["issues"]}   # a held card is its hold, drawn beside the runs (#1713)
+    holds = hold_rows(now=now, state=base)   # each live hand hold is one line, with its carrier (#1713)
+    titles = {str(i.get("n")): (i.get("t") or "") for i in items}
+    for r in holds:
+        title = titles.get(str(r["issues"][0])) or ""
+        lines.append(f"hold: {r['label']}" + (f" {title}" if title else ""))
+    hold_ids = {str(n) for r in holds for n in r["issues"]}   # the registry keys a hold on the issue; a row matches on it or on its item id
     for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
-        if (cache_row_column(i, moves, window) == DOING and i.get("s") != "closed" and i.get("n") not in held
-                and str(i.get("n")) not in live_holds and "ready-for-human" not in (i.get("l") or [])):
+        ids = {str(i.get("n")), str(i.get("i") or "")}
+        if (cache_row_column(i, moves, window) == DOING and i.get("s") != "closed" and not (ids & held)
+                and not (ids & hold_ids) and "ready-for-human" not in (i.get("l") or [])):
             lines.append(f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run")
     if not lines: lines.append("no live work")
     return lines
@@ -5917,7 +5923,7 @@ const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"
 const LIVE_ROWS=4;
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
 function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0),total=live.reduce((s,r)=>s+(+r.spend||0),0);   // a reduce, never a spread: the live list is unbounded
- const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
+ const drawn=live.slice().sort((a,b)=>b.age-a.age).filter(r=>r.kind!=="hold").slice(0,LIVE_ROWS);   // a hand hold is its own line below, never also a row (#1713)
  const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
  const own=r=>(liveWork||[]).filter(t=>t.includes(r.id)&&!t.startsWith("run "+r.id+" ")).map(t=>`<div class=m>${esc(t)}</div>`).join("");   // a line that names a live run, but is not the row itself, is drawn beside that row: a gate lock names the run it checks (#1713)
