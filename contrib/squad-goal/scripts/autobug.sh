@@ -288,7 +288,10 @@ gh_loop_stop "$F/issues.json" && { AB_REASON="a loop defect stops dispatch"; exi
 # Too many finished children wait for review (#562): a new run only adds more, so the pass holds until childcc catches up.
 gh_dispatch_hold && { AB_REASON="a dispatch hold"; exit 0; }
 gh_disk_stop && { AB_REASON="disk stop"; exit 0; }
-# The column Todo is the owner's go signal, and the go label says an agent may take the issue (#550): a candidate needs both.
+# The column Todo is the one go signal (#550, #1677): a bug whose card sits in Todo and whose issue carries no holder label
+# is a candidate, and the pass writes the go label on it once, in the same act. A holder label, a freeze or any other hold
+# still wins, and a bug that already carries the go label costs no write. The label is written before the pending Doing
+# event, so a refused write leaves no event and the next pass retries the bug (ADR-0165, ADR-0148).
 go=${SG_FRONTIER_LABEL:-ready-for-agent}
 board=$(sg_board_rows) || { AB_REASON="the board did not answer"; echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
 printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
@@ -320,7 +323,7 @@ ab_check_open() {
 pendset=" $(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | cut -f1 | tr '\n' ' ') "
 case "$pendset" in *[0-9]*) AB_PENDING=1;; esac   # a pending card event (ADR-0165): the pass writes before it picks anything new
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
-cand=(); cj="["; nb=0
+cand=(); cj="["; nb=0; triaged=()
 for sel in "$lab" debt; do
   [ "$sel" = "$lab" ] || { [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ] || continue; }
   if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || { AB_REASON="the candidate list is not readable"; exit 0; }; else list=$(gather "$sel") || { AB_REASON="the candidate list is not readable"; exit 0; }; fi   # refused selection: no candidate, no marker, no request (#1855)
@@ -329,7 +332,9 @@ for sel in "$lab" debt; do
     sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
     case "$pendset" in *" $n "*) echo "AUTOBUG skip #$n: its card write is pending (ADR-0165)"; continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
-    case ",$labels," in *",$go,"*) ;; *) continue;; esac; case "$todo" in *" $n "*) ;; *) continue;; esac   # no go label, or the card is not in Todo: not started
+    case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: not started
+    tri=; if [ "$sel" = "$lab" ]; then case ",$labels," in *",$go,"*) ;; *) tri=1;; esac   # an untriaged bug is still taken; its label is written after the claim (#1677)
+    else case ",$labels," in *",$go,"*) ;; *) continue;; esac; fi   # debt still needs the go label
     # ADR-0171 (#1358): a loop defect is built only after a plan review approved its current body. The body is read now, so an
     # edit since the review makes the review stale and it is asked again. One line names the reason, and the issue waits.
     if lb_is_loop_bug "$labels"; then
@@ -344,13 +349,16 @@ for sel in "$lab" debt; do
     h=$(sg_ledger_held "$n") && { echo "AUTOBUG skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
     ready_now "$n" || continue
     sg_ac_refused "$n" "$F/issue-$n.json" AUTOBUG && continue   # an acceptance command on a missing script (#729)
-    cand+=("$n")
+    cand+=("$n"); [ -n "${tri:-}" ] && triaged+=("$n")
   done <<<"$list"
   if [ "$sel" = "$lab" ]; then
     # The startable bugs this pass leaves without a run (#616), read by the frontier pass: every candidate until the pick is known.
     nb=${#cand[@]}; echo "$nb" > "$SG_STATE/bugs-waiting"
     ab_check_open "${cand[@]}"; cand=("${live[@]}")   # a bug closed since the open list is no candidate: it waits for no slot (#868)
     nb=${#cand[@]}; echo "$nb" > "$SG_STATE/bugs-waiting"   # the live count; debt is considered only when it is 0 (#616)
+    if [ ${#triaged[@]} -gt 0 ]; then   # a bug closed since the list is no card to triage
+      lt=(); for n in "${triaged[@]}"; do case " ${cand[*]} " in *" $n "*) lt+=("$n");; esac; done; triaged=("${lt[@]}")
+    fi
   else
     ab_check_open "${cand[@]}"; cand=("${live[@]}")
   fi
@@ -380,8 +388,12 @@ for c in "${clusters[@]}"; do
   pick+=("${parts[@]}")
 done
 [ ${#pick[@]} -gt 0 ] || exit 0
-w=${nb:-0}; [ "$w" -gt 0 ] && for p in "${pick[@]}"; do case " ${cand[*]} " in *" $p "*) w=$((w - 1));; esac; done
-echo "$(( w < 0 ? 0 : w ))" > "$SG_STATE/bugs-waiting"
+ab_waiting() {   # the startable bugs this pass leaves with no run (#616): the candidates less the ones it takes
+  local w=${nb:-0} p
+  [ "$w" -gt 0 ] && for p in "${pick[@]}"; do case " ${cand[*]} " in *" $p "*) w=$((w - 1));; esac; done
+  echo "$(( w < 0 ? 0 : w ))" > "$SG_STATE/bugs-waiting"
+}
+ab_waiting
 [ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${#clusters[@]} cluster(s): $(printf '[%s] ' "${clusters[@]}")($free free slots)"; exit 0; }
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass
@@ -390,6 +402,33 @@ name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # reads only `disp-*` markers, so a bug- marker is never released by that sweep, but its rule O does read a bug- marker
 # and drops it with the cards when the run ended failed and landed nothing.
 for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
+# The auto-triage (#1677, SPEC 1672): a bug the pass picked with no triage label gets ready-for-agent written here, once --
+# after the claim, so an overlapping pass cannot take the same card, and after every gate, so a card left behind is never
+# labelled. It is the only label this pass writes, and it stands before the pending Doing event (ADR-0165): a refused write
+# records no event. A cluster of a refused card is dropped whole (one root cause, one child), its claims are freed, and the
+# next pass retries the bug; the count of startable bugs is written again, because a dropped card still waits.
+if [ ${#triaged[@]} -gt 0 ]; then
+  failed=()
+  for n in "${triaged[@]}"; do
+    case " ${pick[*]} " in *" $n "*) ;; *) continue;; esac
+    if o=$(gh_send --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=$go"); then
+      echo "AUTOBUG triaged #$n: wrote $go"
+    else
+      failed+=("$n")
+      echo "AUTOBUG triage failed #$n: ${o:-the label write reached no verdict}; the card waits for the next pass" >&2
+    fi
+  done
+  if [ ${#failed[@]} -gt 0 ]; then
+    kept=()
+    for c in "${clusters[@]}"; do
+      hit=0; for p in $c; do case " ${failed[*]} " in *" $p "*) hit=1;; esac; done
+      if [ "$hit" = 1 ]; then for p in $c; do rm -f "$A/bug-$p"; done; else kept+=("$c"); fi   # no request names it: free its claim now
+    done
+    clusters=("${kept[@]}"); pick=(); for c in "${clusters[@]}"; do pick+=($c); done
+    ab_waiting
+    [ ${#pick[@]} -gt 0 ] || { AB_REASON="a triage write failed"; exit 0; }
+  fi
+fi
 { echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for each of the ${#clusters[@]} child(ren) below, all in one turn; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. Each child's spend: $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child per CHILD block: the run cut each child's own worktree and checked out its branch there. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line."
   echo "Every child: work where you stand -- the run cut you a worktree of your own and checked out your branch there, so your own working directory is that worktree, and you name no path for it. Commit there. Create no worktree and no branch of your own; push nothing. The loop reads that worktree, enters your commits into the run's wave branch, and lands the wave in $SG_BASE with one push (ADR-0145 rule 9). Each commit's message carries exactly one \"Refs #N\" line, for the one issue it fixes, and never Closes: a block of several issues gets one commit per issue (a commit naming several issues closes none of them). A block with several issues is ONE probable root cause seen as several symptoms: find the shared cause and fix it once, test-side and product-side in the same worktree, and the commit for each other issue of the block is empty (git commit --allow-empty) and names only its own issue; if an issue of the block turns out unrelated, say so in the issue status comment and leave it out. Rules: $SG_CODING_RULES."
   pc=${SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local}   # (#740) the profile's prepush command, or none
