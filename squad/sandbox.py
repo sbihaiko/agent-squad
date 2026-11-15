@@ -282,9 +282,10 @@ def signal_reason(cmd, depth=0):
     return None
 
 
-# #1855: the kernel wall hides the process table from a child session -- /bin/ps answers a bare "operation not permitted"
-# at exec, and a child that ran a suite reading it read the wall as its own defect. The Bash wall names the tool and the
-# rule, so an unrunnable suite reads as an environment limit, as ADR-0139 reads the same denial for a pytest case.
+# #1855: the kernel wall hides the process table from a child session -- the ps binary answers a bare "operation not
+# permitted" at exec, and a child that ran a suite reading it read the wall as its own defect. The Bash wall names the
+# tool and the rule, so an unrunnable suite reads as an environment limit, as ADR-0139 reads the same denial for a pytest
+# case. A read that must work sources the seam `$SG_PS` (squad/procs.py, #1508) instead of naming the binary.
 _TABLE_READER = "ps"
 
 

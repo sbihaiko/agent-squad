@@ -43,7 +43,7 @@ def reason(cmd):
     "kill $(cat state/watchd.pid)",
     "pgrep -f watchd | xargs kill",
     "pgrep -f sleep | xargs kill -9",
-    "ps ax | awk '{print $1}' | xargs pkill",
+    "pgrep -a sleep | awk '{print $1}' | xargs pkill",
     "launchctl bootout gui/501/com.squad-goal.health.agent-squad",
     "launchctl unload ~/Library/LaunchAgents/x.plist",
     "launchctl stop com.squad-goal.health.agent-squad",
@@ -71,7 +71,7 @@ def test_a_signal_outside_the_session_is_denied(cmd):
     "pkill -f \"$PWD/scripts/test-gate.sh\"",
     "kill %watchdog-test",
     "pgrep -f watchd",
-    "ps -p 1 -o command=",
+    "pgrep -p 1",   # a process read is no signal; the table read itself is the wall's own rule (#1855)
     "launchctl list | grep squad",
     "echo done; git status",
     "python3 -m pytest -q tests/test_sandbox.py",
