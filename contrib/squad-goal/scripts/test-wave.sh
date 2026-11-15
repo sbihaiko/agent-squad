@@ -646,6 +646,56 @@ case "$r" in *"WAVE-ERROR the fetch of"*"an unnamed transport defect"*) ok "K6: 
 r=$(land2 run-17); rc=$?
 [ $rc = 0 ] && [ "$($O cat-file -e dev:nf17 2>/dev/null && echo yes)" = yes ] && ok "K6: the next landing on a machine that can fork lands the wave" || ko "K6: exit $rc: '$r'"
 
+# K7 (#1710): the machine that refuses git-upload-pack a fork refuses the helper commands the landing's own readers fork
+# too. Case L failed once in a fast gate with `WAVE-ERROR the fetch of wave/run-8 from .../origin.git failed` and named no
+# cause: netfail and gitwhy read the fetch's stderr through a pipeline (`grep`, `tail`, `head`), so the same full process
+# table that refused the transport refused them, the machine cause was dropped exactly when it happens, and the landing
+# took the stuck path -- a try counted and, at the cap, the wave marker cleared and the issue frozen. It is the reason the
+# cases behind L cascaded. The cause is read with bash's own match and read loop here: no helper to fork, so the machine
+# cause is named, no try is counted, the wave stays and nothing is frozen. The transport is stubbed the way K6 stubs it,
+# and the helpers that must not be forked fail as they do on a machine with a full process table.
+W71=wave/run-k7; start2 run-k7 >/dev/null; child 1710 nf1710 "origin/$W71"; en2 run-k7 1710 >/dev/null
+mkdir -p "$T/co/runs/run-k7"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #1710 work"}}' > "$T/co/runs/run-k7/record.jsonl"
+printf '#!/bin/bash\necho "error: cannot fork() for git-upload-pack '"'"'$1'"'"': Resource temporarily unavailable" >&2\necho "fatal: unable to fork" >&2\nexit 128\n' > "$T/bin/stubexec/git-upload-pack"
+chmod +x "$T/bin/stubexec/git-upload-pack"
+mkdir -p "$T/bin/nofork"
+for c in grep tail head; do printf '#!/bin/bash\necho "bash: fork: Resource temporarily unavailable" >&2\nexit 128\n' > "$T/bin/nofork/$c"; chmod +x "$T/bin/nofork/$c"; done
+nohelper() { (cd "$T/co" && PATH="$T/bin/nofork:$PATH" GIT_EXEC_PATH="$T/bin/stubexec" bash "$T/s/wave.sh" land "$1" 2>&1); }
+: > "$T/gh.log"; before=$($O rev-parse dev); tr=""; nhr=""
+for i in 1 2 3; do r=$(nohelper run-k7); nhr="$nhr$? "; tr="$tr$(tries 1710 run-k7)"; done
+[ "$nhr" = "2 2 2 " ] && ok "K7: a machine-caused fetch exits 2 with the helper commands unable to start" || ko "K7: exits $nhr: '$r'"
+case "$r" in *"WAVE-NETWORK"*"fork"*"lands on a later cycle"*) ok "K7: the machine cause is named with no helper command to fork";; *) ko "K7: the cause is dropped when the helpers cannot start: '$r'";; esac
+case "$r" in *"WAVE-ERROR"*|*"NEEDS-HUMAN"*) ko "K7: the dropped cause took the stuck path: '$r'";; *) ok "K7: a cause read without a fork is no stuck landing";; esac
+[ -z "$tr" ] && ok "K7: no landing try is counted with the helpers down" || ko "K7: tries counted with the helpers down: '$tr'"
+/usr/bin/grep -q 'frozen:owner' "$T/gh.log" && ko "K7: the machine cause froze the issue with the helpers down" || ok "K7: nothing is frozen with the helpers down"
+[ -e "$T/st/auto/wave-run-k7" ] && ok "K7: the wave marker is kept with the helpers down" || ko "K7: the wave marker is gone with the helpers down"
+[ "$($O rev-parse dev)" = "$before" ] && ok "K7: dev does not move with the helpers down" || ko "K7: dev moved"
+# A class no name covers still carries git's own first line, read without a helper command.
+printf '#!/bin/bash\necho "warning: the remote is a local path" >&2\necho "fatal: an unnamed transport defect" >&2\nexit 128\n' > "$T/bin/stubexec/git-upload-pack"
+r=$(nohelper run-k7)
+case "$r" in *"WAVE-ERROR the fetch of"*"failed: warning: the remote is a local path"*) ok "K7: git's first line survives with no helper command";; *) ko "K7: git's line is dropped with the helpers down: '$r'";; esac
+
+# K8 (#1710): the fixture owns its repository, and a second writer on it is not one of the causes the issue lists. Each
+# suite process makes its own mktemp tree and its bare origin.git inside it, and the remote every landing fetches is that
+# tree's own default, never a fixed path a second suite or a second gate would share. Every case writes the repository one
+# at a time, and a ref another process pushes takes a lock on its own ref alone: a landing beside such a writer fetches and
+# lands, and its fetch names no no-cause shape.
+/usr/bin/grep -qF "SG_LAND_REMOTE:=$T/origin.git" "$T/s/env.sh" && ok "K8: the fixture's remote is the suite's own temp tree, never a shared path" || ko "K8: the fixture remote is not the suite's own: '$(/usr/bin/grep -n SG_LAND_REMOTE "$T/s/env.sh" 2>&1)'"
+W72=wave/run-k9; start2 run-k9 >/dev/null; child 1711 nf1711 "origin/$W72"; en2 run-k9 1711 >/dev/null
+mkdir -p "$T/co/runs/run-k9"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #1711 work"}}' > "$T/co/runs/run-k9/record.jsonl"
+rm -rf "$T/w18"; $G clone -q "$T/origin.git" "$T/w18" 2>/dev/null
+(cd "$T/w18" && $G checkout -q dev && echo noise > noise && $G add noise && $G -c user.email=a@b -c user.name=t commit -q -m noise 2>/dev/null \
+  && for i in $(seq 1 20); do $G push -q origin "HEAD:refs/heads/noise-$i" 2>/dev/null; done) &
+wpid=$!
+: > "$T/gh.log"; before=$($O rev-parse dev)
+r=$(land2 run-k9); rc=$?
+wait "$wpid" 2>/dev/null
+[ $rc = 0 ] && [ "$($O cat-file -e dev:nf1711 2>/dev/null && echo yes)" = yes ] && ok "K8: a landing fetches and lands beside a second writer on the fixture" || ko "K8: exit $rc beside a second writer: '$r'"
+case "$r" in *"the fetch of"*"failed"*) ko "K8: the fetch failed beside a second writer: '$r'";; *) ok "K8: the fetched ref survives a second writer on the fixture";; esac
+[ -n "$($O rev-parse -q --verify refs/heads/noise-20)" ] && [ "$($O rev-parse dev)" != "$before" ] && ok "K8: the second writer's ref and the wave's landing both reached the fixture" || ko "K8: the concurrent write did not happen: '$($O for-each-ref --format='%(refname)' | tr '\n' ' ')'"
+
 # K4 (#663): a landing that failed on a cause the loop itself caused -- here the base battery is red and no child's own
 # suite names the cause -- counts no landing try and freezes nothing: it is named once per issue it carries as
 # WAVE-LOOP-CAUSED, and the wave stays to land on a later cycle. A real work failure still counts and freezes at the cap (K).
@@ -1036,11 +1086,13 @@ awk -F '\t' '$2 == "run-15" && $3 == "151"' "$T/st/wave-outside.tsv" 2>/dev/null
 # S777 (#1340): a landing whose push to the base is refused twice takes the stuck path: its issue goes back to Todo as
 # no-landing (board.py refuses any other automated backward move from Code Complete). The origin refuses every push to dev.
 W1340=wave/run-1340; start2 run-1340 >/dev/null; child 1340 g1340 "origin/$W1340"; en2 run-1340 1340 >/dev/null
-cp "$T/origin.git/hooks/pre-receive" "$T/pre-receive.keep"; printf '#!/bin/bash\necho "refused by the test remote" >&2\nexit 1\n' > "$T/origin.git/hooks/pre-receive"
+cp "$T/origin.git/hooks/pre-receive" "$T/pre-receive.keep"; printf '#!/bin/bash\nprintf "error: refused by the test remote\\nhint: the operator reads the last line\\nfatal: the test remote refuses every push to dev\\n" >&2\nexit 1\n' > "$T/origin.git/hooks/pre-receive"
 : > "$T/gh.log"; : > "$T/board.log"; : > "$T/board-reason.log"; rm -f "$T/st/cq/"*1340*
 r=$(SG_WAVE_LAND_TRIES=1 land2 run-1340); rc=$?
 cp "$T/pre-receive.keep" "$T/origin.git/hooks/pre-receive"
-case "$r" in *"WAVE-ERROR the push of wave/run-1340 to dev was refused"*) true;; *) false;; esac && [ $rc = 1 ] && ok "S777: a push refused twice takes the stuck path" || ko "S777: exit $rc: '$r'"
+# The reason quotes the push's own LAST line, as it did before (#1710): the reader that picks it forks no helper, but it still
+# picks the last one, so a pasted failure reads the same.
+case "$r" in *"WAVE-ERROR the push of wave/run-1340 to dev was refused: error: failed to push some refs to '"*) true;; *) false;; esac && [ $rc = 1 ] && ok "S777: a push refused twice takes the stuck path, quoting the push's own last line" || ko "S777: exit $rc: '$r'"
 /usr/bin/grep -qx "no-landing o 3 Todo 1340" "$T/board-reason.log" && ok "S777: the stuck path moves #1340 back to Todo as no-landing (#1340)" || ko "S777: #1340 move reason: '$(cat "$T/board-reason.log")', board '$(cat "$T/board.log")'"
 
 # (#646) The wave tip's check is the base battery over origin/$SG_BASE, and its pytest runs over the selection. The check's command
