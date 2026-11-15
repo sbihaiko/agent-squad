@@ -119,3 +119,27 @@ def test_the_gate_filters_a_stubbed_result_by_its_kind_not_by_its_label(tmp_path
 def test_a_clean_ac_command_still_passes_on_its_exit_code(tmp_path):
     assert run(tmp_path, "true").ok
     assert run(tmp_path, "exit 3").findings == ["ac_failed:exit 3"]
+
+
+def test_the_shells_own_words_for_a_missing_program_agree(tmp_path):
+    """The suite runs under more than one shell and the CI's is not the laptop's: bash writes `No such file or directory`
+    and dash writes `not found` for the same command (#1803, #1818). The reading must not follow the platform."""
+    from squad import workcmd
+    (tmp_path / "sub").mkdir()
+    missing = str(tmp_path / "sub" / "missing")
+    assert workcmd._cannot_start(f"cd sub && ./missing", str(tmp_path), {}, f"/bin/bash: {missing}: No such file or directory\n")
+    assert workcmd._cannot_start(f"cd sub && ./missing", str(tmp_path), {}, f"/bin/dash: 1: {missing}: not found\n")
+
+
+def test_a_shebang_interpreter_that_is_not_there_is_read_from_the_file(tmp_path):
+    """dash says only `not found` for a script whose shebang names a missing interpreter, so the shell's words cannot tell
+    that case from a missing program. The file itself can (#1803, #1818)."""
+    from squad import workcmd
+    prog = tmp_path / "check"
+    prog.write_text("#!/nonexistent/interpreter\n")
+    prog.chmod(0o755)
+    assert workcmd._cannot_start("./check", str(tmp_path), {}, "/bin/dash: 1: ./check: not found\n")
+    good = tmp_path / "good"
+    good.write_text("#!/bin/sh\nexit 126\n")
+    good.chmod(0o755)
+    assert not workcmd._cannot_start("./good", str(tmp_path), {}, ""), "a started program is measured, not malformed"

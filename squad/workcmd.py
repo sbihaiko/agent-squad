@@ -207,8 +207,9 @@ class CmdResult:
 # The exit code alone does not tell: a program that started may exit 126 or 127 by design, and a compound command may end
 # on 127 after a real check failed. So the shell's own start-failure text is read with it, beside what the command starts.
 CANNOT_START = (126, 127)
-# The shell's report that it never started a program. A shell builtin that starts says nothing of the kind.
-START_REFUSAL = ("command not found", "No such file or directory", "Permission denied", "is a directory")
+# The shell's report that it never started a program. A shell builtin that starts says nothing of the kind. The suites run
+# under more than one shell and the words differ: bash says `No such file or directory`, the CI's dash says `not found`.
+START_REFUSAL = ("command not found", "No such file or directory", "not found", "Permission denied", "is a directory")
 # A file that exists and is executable can still be refused by the kernel: a shebang interpreter that is not there, a
 # binary built for another machine. Only these name the file the command starts first; a `command not found` here is a
 # program the command started itself, as in `sh -c missing_prog`, and that one is a measured failure.
@@ -224,6 +225,25 @@ def _leading_program(cmd):
     """The program the shell starts first, after any `VAR=value` assignments; empty when the command names none."""
     m = LEADING_PROGRAM.match(cmd)
     return m.group(1).strip("'\"") if m else ""
+
+
+def _refused_shebang(path):
+    """True when the file names a shebang interpreter that is not there, so the kernel refuses the file itself and nothing
+    it holds ran. Read from the file, never from the shell's message: bash calls it `bad interpreter` and dash only `not
+    found`, and the two must answer the same (#1803). A file with no shebang is left to the shell's own words, which is the
+    only reading of a binary built for another machine."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(512)
+    except OSError:
+        return True
+    if not head.startswith(b"#!"):
+        return False
+    words = head[2:].split(b"\n", 1)[0].split()
+    if not words:
+        return True
+    interpreter = os.fsdecode(words[0])
+    return not (os.path.isfile(interpreter) and os.access(interpreter, os.X_OK))
 
 
 def _cannot_start(cmd, cwd, env, stderr):
@@ -247,7 +267,7 @@ def _cannot_start(cmd, cwd, env, stderr):
         path = shutil.which(program, path=env.get("PATH", ""))
     if path is None or not (os.path.isfile(path) and os.access(path, os.X_OK)):
         return True
-    return any(phrase in stderr for phrase in EXEC_REFUSAL)
+    return _refused_shebang(path) or any(phrase in stderr for phrase in EXEC_REFUSAL)
 
 
 def run(cmd, cwd, timeout=None):
