@@ -21,7 +21,6 @@ NODE = shutil.which("node")
 RUN = "run-20261106-101010-aaaa"
 ENDED = "run-20261106-090000-bbbb"
 KILLED = "run-20261106-080000-cccc"
-GROUPED = "run-20261106-070000-dddd"
 UNKNOWN = "run-20261106-060000-eeee"
 FIXED = 1800000000.0
 OPEN = {"whole": False, "nodes": [], "released": []}
@@ -155,25 +154,6 @@ def test_a_killed_run_says_it_has_no_verdict(hub):
     out = open_run(hub, OPEN_ENDED, routes(runs=[], ended=[killed_row(time.time())]))
     assert out["pauseHidden"] is True
     assert out["verdictRowHidden"] is False and out["verdict"] == "killed, no verdict"
-
-
-@pytest.mark.node_bound
-@pytest.mark.skipif(NODE is None, reason="node is needed for the run view")
-def test_a_run_only_the_history_groups_name_opens_on_its_overview(hub):
-    run_routes = routes(runs=[], ended=[])
-    run_routes["/api/runs"] = [
-        {"body": json.dumps([]), "status": 200},
-        {"body": json.dumps({"runs": [done_row(time.time(), GROUPED)], "groups": [], "muted": ""}), "status": 200},
-    ]
-    body = f"""
-  await loadRuns();
-  openRun("{GROUPED}", "/dash/{GROUPED}/", "Grouped run");
-  await __tick(20);
-  return facts();
-"""
-    out = open_run(hub, body, run_routes)
-    assert out["overview"] is True
-    assert out["issues"] == "#9 Old fix" and out["verdict"] == "completed"
 
 
 @pytest.mark.node_bound

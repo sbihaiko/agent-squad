@@ -84,8 +84,9 @@ def test_run_list_first_group_header_reads_workers(hub):
     assert groups[0] == ("running", "WORKERS")
 
 
-def test_other_run_groups_keep_their_wording(hub):
-    assert _groups(hub)[1:] == [("1h", "≤ 1 h"), ("2h", "1–2 h"), ("4h", "2–4 h"), ("8h", "4–8 h"), ("24h", "8–24 h"), ("d", "24 h+ (days)")]
+def test_the_answer_carries_the_live_group_alone(hub):
+    """No page draws an age band any more (#1778): the answer names the Live group and no history band."""
+    assert _groups(hub) == [("running", "WORKERS")]
 
 
 def test_the_running_group_key_is_unchanged(hub):
@@ -99,14 +100,6 @@ def test_the_running_pill_keeps_its_occupancy_and_its_tooltip(hub):
     h = hub.group_header("running", rows, {"runs": 10, "children": 20})
     assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
     assert h["title"] == "$6.60"
-
-
-def test_the_group_header_still_carries_the_tooltip(hub):
-    """The answer carries the title of an age band; the phone paints it (#1277). The desktop page draws no age band (#1770)."""
-    rows = [{"id": "run-20261011-101010-abcd", "state": "completed", "live": False, "rank": 1, "age": 600,
-             "spend": 2.5, "agents": 0, "dur": 1, "port": 1234}]
-    groups = hub.run_groups(rows, None)
-    assert next(g for g in groups if g["key"] == "1h") == {"key": "1h", "label": "≤ 1 h", "text": "1 · $2.50", "title": "$2.50", "empty": False}
 
 
 # --- the rest of the page's text ---
