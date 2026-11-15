@@ -1404,17 +1404,33 @@ r=$(SG_WAVE_TIP_GATES="SERIAL_TRY=1 SG_GATE_KIND=fast bash $T/s/gate.sh bash $T/
 case "$r" in *"broke the wave tip"*) ko "W1409: a passing child was named after a tip red: '$r'";; *) ok "W1409: a passing child is not named after a measured tip red";; esac
 [ "$(/usr/bin/grep -c '^o 3 Todo 194[45]$' "$T/board.log")" = 0 ] && ok "W1409: no passing child is requeued after a tip red" || ko "W1409: requeue: '$(cat "$T/board.log")'"
 
-# W1687 (#1687): a tip red on a tree a gate passed before may be the machine's (a timeout under load), so no child is blamed on
-# it: the wave waits and the check runs again on a later pass. A second red on that same tip takes the red path. The tip gate
-# here records a covering pass for its HEAD in the gate history, as a child's own gate did before the wave entered, then fails.
+# The tip check of the wave second look (#1687, #1700): the fast gate through gate.sh, which writes its own history row for the
+# tree it checked -- kind fast, the selection and the scope its battery named (#1700 finding 5). It fails, as a flaky red does.
+printf '%s\n' 'printf "selected 2 files\n" > "$GATE_SELECT_FILE"; printf "delta\n" > "$GATE_SCOPE_FILE"; printf "fail\tred\tpytest\n" > "$GATE_OUTCOME_FILE"; exit 1' > "$T/tipred1700.sh"
+TIP1700="SERIAL_TRY=1 SG_GATE_KIND=fast bash $T/s/gate.sh bash $T/tipred1700.sh"
+
+# W1687 (#1687, #1700): a tip red on a tree a gate passed before may be the machine's (a timeout under load), so no child is
+# blamed on it: the wave waits and the check runs again on a later pass. A second red on that same tip takes the red path.
+# The covering pass is the row the child's entry gate wrote before the wave landed, with caller entry; the tip check runs
+# through gate.sh and writes its own row, the red one. Both name the same tree and the same suite (#1700 finding 5).
 W98=wave/run-98; start2 run-98 >/dev/null; child 1960 g1960 "origin/$W98"; en2 run-98 1960 >/dev/null
 printf 'run-98\n' > "$T/st/auto/disp-1960"; : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/auto/tipred-wave_run-98"
-printf '%s\n' 'printf "1\tfast\tpass\t%s\t0\t-\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tchild\n" "$(/usr/bin/git rev-parse HEAD)" >> "$SG_STATE/gate-history"; exit 1' > "$T/tipflaky.sh"
-r=$(SG_WAVE_TIP_GATES="bash $T/tipflaky.sh" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
+# The covering pass is the wave entry's row: the child's own gate ran on this tree before the wave landed, with caller entry,
+# over the same kind, selection and scope the tip check names (#1700 finding 5).
+T98=$($G -C "$T/origin.git" rev-parse "$W98")
+printf '1\tfast\tpass\t%s\t0\tselected 2 files\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tentry\n' "$T98" >> "$T/st/gate-history"
+r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
 [ $rc != 0 ] && case "$r" in *"WAVE WAIT $W98"*"passed before"*) true;; *) false;; esac && ok "W1687: a tip red on a tree a gate passed holds the wave for a second look" || ko "W1687: first red: exit $rc: '$r'"
 case "$r" in *"broke the wave tip"*) ko "W1687: a child was blamed on the first red of a passed tree: '$r'";; *) ok "W1687: no child is blamed on the first red of a passed tree";; esac
 [ "$(/usr/bin/grep -c '^o 3 Todo 1960$' "$T/board.log")" = 0 ] && ok "W1687: the child is not requeued on that red" || ko "W1687: requeue: '$(cat "$T/board.log")'"
-r=$(SG_WAVE_TIP_GATES="bash $T/tipflaky.sh" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
+# W1700 finding 5: the fixture is production's. In production the entry gate writes the covering pass row on the wave tip
+# before the check, with caller entry, and the tip check writes its own row, the red one. Neither row is written by the
+# other's check.
+hn=$(awk -F'\t' -v s="$($G -C "$T/origin.git" rev-parse "$W98")" '$4 == s && $14 == "entry" && $3 == "pass" && $6 == "selected 2 files"' "$T/st/gate-history" | /usr/bin/grep -c .)
+[ "$hn" = 1 ] && ok "W1700: the covering pass is the entry gate's row on the wave tip" || ko "W1700: entry pass rows for the wave tip: '$hn' in '$(cat "$T/st/gate-history")'"
+hn=$(awk -F'\t' -v s="$($G -C "$T/origin.git" rev-parse "$W98")" '$4 == s && $14 == "tip" && $3 == "fail"' "$T/st/gate-history" | /usr/bin/grep -c .)
+[ "$hn" = 1 ] && ok "W1700: the tip check writes its own red row" || ko "W1700: tip red rows for the wave tip: '$hn' in '$(cat "$T/st/gate-history")'"
+r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
 case "$r" in *"WAVE CHECK RED"*"#1960"*) ok "W1687: a second red on the same tip names the child, as before";; *) ko "W1687: second red: exit $rc: '$r'";; esac
 # After the child left, the tip without it is red too, on a tree with a pass of its own: that red takes the old path in
 # the same pass. A second look there would move the one marker to the other tip, and the wave would wait for ever (#1699).
@@ -1432,6 +1448,82 @@ W97=wave/run-97; start2 run-97 >/dev/null; child 1964 g1964 "origin/$W97"; en2 r
 printf 'run-97\n' > "$T/st/auto/disp-1964"; : > "$T/gh.log"; : > "$T/board.log"
 r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_PYTEST='exit 4' land2 run-97 2>&1); rc=$?
 case "$r" in *"#1964 broke the wave tip"*) ok "W1699: a child whose check exits 4 with no bounded line is blamed";; *) ko "W1699: bare exit 4: exit $rc: '$r'";; esac
+
+# W1700 (#1700): the debt of the #1687 review. The second-look marker goes wherever the check settles and the wave lands or
+# stops; the second look needs the same tree AND the same suite; the marker's write decides; the wait for a check with no
+# verdict names its one cause and keeps the check's log. The marker names one wave: auto/tipred-<wave with / as _>.
+# 1: a check that passes with no word still settles the check, so it clears the marker.
+W70=wave/run-70; start2 run-70 >/dev/null; child 1701 g1701 "origin/$W70"; en2 run-70 1701 >/dev/null
+M70="$T/st/auto/tipred-wave_run-70"; printf '%s\n' "$($G -C "$T/origin.git" rev-parse "$W70")" > "$M70"
+r=$(SG_WAVE_TIP_GATES=true land2 run-70 2>&1); rc=$?
+[ $rc = 0 ] && [ ! -e "$M70" ] && ok "W1700: a check that passes with no word clears the second-look marker" || ko "W1700: no-word pass: exit $rc, marker '$(cat "$M70" 2>/dev/null)': '$r'"
+# 1: an unproven check lands the wave with its obligation, so no tip waits for a second look.
+W71=wave/run-71; start2 run-71 >/dev/null; child 1702 g1702 "origin/$W71"; en2 run-71 1702 >/dev/null
+M71="$T/st/auto/tipred-wave_run-71"; printf '%s\n' "$($G -C "$T/origin.git" rev-parse "$W71")" > "$M71"
+r=$(SG_WAVE_TIP_GATES='printf "unproven\tinconclusive\t\tpytest\n" > "$GATE_OUTCOME_FILE"; exit 4' land2 run-71 2>&1); rc=$?
+[ $rc = 0 ] && [ ! -e "$M71" ] && ok "W1700: an unproven check that lands clears the marker" || ko "W1700: unproven: exit $rc, marker '$(cat "$M71" 2>/dev/null)': '$r'"
+# 1: an empty wave ends here: the branch goes, and so does its marker.
+W72=wave/run-72; start2 run-72 >/dev/null
+M72="$T/st/auto/tipred-wave_run-72"; printf 'deadbeef\n' > "$M72"
+r=$(land2 run-72 2>&1); rc=$?
+[ $rc = 0 ] && [ ! -e "$M72" ] && ok "W1700: an empty landing clears the marker" || ko "W1700: empty landing: exit $rc, marker '$(cat "$M72" 2>/dev/null)': '$r'"
+# 1: a wave that freezes for good ends too, and its marker goes with it. The landing cannot fetch its base (a remote that is
+# not there is no network cause), so it freezes before any check could settle the marker, at one try.
+W73=wave/run-73; start2 run-73 >/dev/null; child 1703 g1703 "origin/$W73"; en2 run-73 1703 >/dev/null
+M73="$T/st/auto/tipred-wave_run-73"; printf 'deadbeef\n' > "$M73"
+r=$(SG_LAND_REMOTE="$T/nosuch.git" SG_WAVE_LAND_TRIES=1 SG_WAVE_TIP_GATES=true land2 run-73 2>&1); rc=$?
+case "$r" in *"WAVE NEEDS-HUMAN"*) true;; *) false;; esac && [ ! -e "$M73" ] \
+  && ok "W1700: a frozen wave clears the marker" || ko "W1700: frozen wave: exit $rc, marker '$(cat "$M73" 2>/dev/null)': '$r'"
+
+# 2: the second look is the same tree AND the same suite. A pass row of the tip check's kind over another selection is another
+# suite, and so is a pass of another kind over a delta: neither covers the tip check.
+W74=wave/run-74; start2 run-74 >/dev/null; child 1704 g1704 "origin/$W74"; en2 run-74 1704 >/dev/null
+: > "$T/st/gate-history"; M74="$T/st/auto/tipred-wave_run-74"; rm -f "$M74"
+printf '1\tfast\tpass\t%s\t0\tselected 1 file\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tentry\n' "$($G -C "$T/origin.git" rev-parse "$W74")" >> "$T/st/gate-history"
+r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 0' land2 run-74 2>&1); rc=$?
+case "$r" in *"passed before"*) ko "W1700: another selection covered the tip check: '$r'";; *) ok "W1700: a pass row over another selection does not cover the tip check";; esac
+[ ! -e "$M74" ] && ok "W1700: no second look is spent on another suite" || ko "W1700: the second look was spent on another suite"
+W75=wave/run-75; start2 run-75 >/dev/null; child 1705 g1705 "origin/$W75"; en2 run-75 1705 >/dev/null
+: > "$T/st/gate-history"; M75="$T/st/auto/tipred-wave_run-75"; rm -f "$M75"
+printf '1\tgate\tpass\t%s\t0\tselected 2 files\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tentry\n' "$($G -C "$T/origin.git" rev-parse "$W75")" >> "$T/st/gate-history"
+r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 0' land2 run-75 2>&1); rc=$?
+case "$r" in *"passed before"*) ko "W1700: a delta pass of another gate kind covered the tip check: '$r'";; *) ok "W1700: a delta pass of another gate kind does not cover the tip check";; esac
+# 2: a full battery covers any suite of the same tree: it ran every test the tip check asks for.
+W76=wave/run-76; start2 run-76 >/dev/null; child 1706 g1706 "origin/$W76"; en2 run-76 1706 >/dev/null
+: > "$T/st/gate-history"; M76="$T/st/auto/tipred-wave_run-76"; rm -f "$M76"
+T76=$($G -C "$T/origin.git" rev-parse "$W76")
+printf '1\tfull\tpass\t%s\t0\tall: the promotion proof runs the full battery\tfull\tpass\t-\tfull\t-\t2\t-\tother\n' "$T76" >> "$T/st/gate-history"
+r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 0' land2 run-76 2>&1); rc=$?
+case "$r" in *"passed before"*) ok "W1700: a full battery on the same tree covers the tip check";; *) ko "W1700: full battery: exit $rc: '$r'";; esac
+[ "$(cat "$M76" 2>/dev/null)" = "$T76" ] && ok "W1700: the second look names the tip it was spent on" || ko "W1700: marker: '$(cat "$M76" 2>/dev/null)' for tip '$T76'"
+
+# 3: the marker's write decides. A marker path that cannot hold the sha (a directory here) leaves no proof that the second
+# look was spent, so the red takes its usual path and one line names the marker; an unchecked write would answer the second
+# look on every pass and the wave would never land.
+W77=wave/run-77; start2 run-77 >/dev/null; child 1707 g1707 "origin/$W77"; en2 run-77 1707 >/dev/null
+: > "$T/st/gate-history"; : > "$T/board.log"; mkdir -p "$T/st/auto/tipred-wave_run-77"
+printf '1\tfast\tpass\t%s\t0\tselected 2 files\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tentry\n' "$($G -C "$T/origin.git" rev-parse "$W77")" >> "$T/st/gate-history"
+r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 1' land2 run-77 2>&1); rc=$?
+case "$r" in *"passed before"*) ko "W1700: an unwritable marker answered a second look it never recorded: '$r'";; *) ok "W1700: an unwritable marker spends no second look";; esac
+case "$r" in *"WAVE-NOTE $W77"*"cannot be written"*) ok "W1700: an unwritable marker is named";; *) ko "W1700: the unwritable marker is silent: '$r'";; esac
+case "$r" in *"#1707 broke the wave tip"*) ok "W1700: with no marker written, the red names the child";; *) ko "W1700: marker write: exit $rc: '$r'";; esac
+rm -rf "$T/st/auto/tipred-wave_run-77"
+
+# 4: the three causes of a check with no verdict are named apart, and each keeps the check's log, so a bounded child and a held
+# lock leave a trace for the next pass. The holder of the gate lock is the same one Q uses.
+W78=wave/run-78; start2 run-78 >/dev/null; child 1708 g1708 "origin/$W78"; en2 run-78 1708 >/dev/null
+sleep 30 & hp=$!; mkdir -p "$T/st/locks/gate"; echo "$hp" > "$T/st/locks/gate/pid"
+r=$(SERIAL_TRY=1 SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-78 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W78"*"gate lock is held by pid $hp"*) ok "W1700: a held gate lock is named as its own cause";; *) ko "W1700: held lock: exit $rc: '$r'";; esac
+case "$r" in *"gate slots are held by another gate, or a child's own check was bounded"*) ko "W1700: the causes still share one catch-all: '$r'";; *) ok "W1700: a held lock is not read as the catch-all";; esac
+[ -f "$T/st/wave-check-wave_run-78.log" ] && ok "W1700: a check the lock held keeps its log" || ko "W1700: the check log of the held landing was deleted"
+rm -rf "$T/st/locks/gate"; kill $hp 2>/dev/null
+W79=wave/run-79; start2 run-79 >/dev/null; child 1709 g1709 "origin/$W79"; en2 run-79 1709 >/dev/null
+r=$(SG_WAVE_TIP_GATES='echo tip-check-ran; exit 1' SG_WAVE_CHILD_PYTEST='echo "gate: bounded: the gate passed its 1s deadline and no check reported a defect"; exit 4' land2 run-79 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W79"*"#1709"*"bounded"*) ok "W1700: a bounded child is named as its own cause";; *) ko "W1700: bounded child: exit $rc: '$r'";; esac
+L79="$T/st/wave-check-wave_run-79.log"
+[ -f "$L79" ] && /usr/bin/grep -q 'tip-check-ran' "$L79" && /usr/bin/grep -q 'gate: bounded: ' "$L79" \
+  && ok "W1700: the bounded child's own line stays in the check log" || ko "W1700: check log: '$(cat "$L79" 2>/dev/null)'"
 
 # SD (#1434): the sibling filter before dispatch reads the bodies; the entry also reads each child's own diff. Two siblings
 # whose bodies name nothing in common but whose diffs touch one file are a conflict before the wave: the second never
