@@ -182,6 +182,15 @@ def _inert(root):
     return {line.strip() for line in lines if line.strip() and not line.startswith("#")}
 
 
+def _existing(root, literal):
+    """The literal as a file of the tree, or None. A module carries prose and long strings, and a stat that cannot answer
+    proves nothing: the literal is no path, and the edge it would settle stays unknown (#1878)."""
+    try:
+        return (root / literal) if len(literal) < 256 and (root / literal).is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
 def _named_by(named, listed, rel):
     # A test names a file by its path, a trailing path or its basename. A directory above the file selects a test only
     # with that name, or when the test lists the directory: a test that names a directory has many scripts under it (#1784).
@@ -196,7 +205,7 @@ def _named_by(named, listed, rel):
     return hits
 
 
-def _reach(start, start_rel, importers, dynamic):
+def _reach(start, start_rel, importers, dynamic, resolved=()):
     reached, queue, seen = set(), [start], set()
     while queue:
         name = queue.pop()
@@ -211,7 +220,9 @@ def _reach(start, start_rel, importers, dynamic):
                 continue
             # A module that declared the changed path is answered by that declaration; one that declared another path only
             # proves nothing about this edge, so the edge still answers `all` rather than drop the importers it hides.
-            if rel in dynamic and start_rel not in dynamic[rel]:
+            # A load whose literal target the selector scanned is no unknown edge: that target's own imports are in the
+            # graph, so this static edge stands (#1878).
+            if rel in dynamic and start_rel not in dynamic[rel] and rel not in resolved:
                 _all(f"{rel} imports dynamically and reaches {start_rel}")
             queue.append(_module(rel))
     return reached
@@ -270,15 +281,37 @@ def _answer(root, base):
     )
     with ProcessPoolExecutor() as pool:
         scanned = list(pool.map(_scan_file, [(root, rel) for rel in rels], chunksize=8))
+    # (#1878) A dynamic load names its target by a path literal, and that target is a module like any other: the selector
+    # scans it, so what it imports is a real edge of the graph. A load whose target no literal names stays unknown, and a
+    # module carrying one still answers the full battery.
+    known = set(rels)
+    targets = {
+        literal
+        for rel, scan in scanned
+        if scan is not None and scan[1]
+        for literal in scan[2]
+        if _existing(root, literal) is not None
+    }
+    extra = sorted(targets - known)
+    if extra:
+        with ProcessPoolExecutor() as pool:
+            scanned += list(pool.map(_scan_file, [(root, rel) for rel in extra], chunksize=8))
+        known |= {rel for rel, scan in scanned if scan is not None and rel in targets}
     importers, dynamic, named, listed = {}, {}, {}, {}
+    resolved = set()
     for rel, scan in scanned:
         if scan is None:
+            if rel in targets:
+                continue   # a target that does not parse proves nothing: its module stays an unknown edge
             _all(f"{rel} does not parse")
         names, dyn, literals, lists, declared = scan
         for name in names:
             importers.setdefault(name, set()).add(rel)
         if dyn:
             dynamic[rel] = declared
+            files = {literal for literal in literals if _existing(root, literal) is not None}
+            if not declared and files and files <= known:
+                resolved.add(rel)
         if _is_test(rel):
             for literal in literals:
                 named.setdefault(literal, set()).add(rel)
@@ -293,7 +326,7 @@ def _answer(root, base):
         elif rel in added_paths and _is_shell_suite(rel):
             hits.add(MEASURED_LINE_GUARD)
         elif (rel.startswith("squad/") or rel in DATA_READERS.values()) and rel.endswith(".py"):
-            hits |= _reach(_module(rel), rel, importers, dynamic)
+            hits |= _reach(_module(rel), rel, importers, dynamic, resolved)
         if not hits:
             _all(f"{rel} is reached by no test: no import, no path literal, not inert")
         selected |= hits
