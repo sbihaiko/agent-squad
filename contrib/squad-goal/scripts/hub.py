@@ -3373,6 +3373,7 @@ def ledger_calls():
     return out
 
 OPERATOR = None   # squad.operator_usage.Cache: the operator transcripts' fold, kept between polls (#1756)
+OPERATOR_WINDOW_S = 48 * 3600   # the Spend panel reads two days: a row older than this is never a candidate (#1897)
 
 def operator_calls(runs=None, src="both"):
     """The operator session's model calls, its agents and workflows included (#1756): this checkout's Claude Code project
@@ -3398,10 +3399,11 @@ def operator_calls(runs=None, src="both"):
         OPERATOR = OU.Cache(STATE / "operator-usage.json")   # the fold outlives this process, so a restart re-parses nothing (#1888)
     rows = OPERATOR.read(folder)
     keep = lambda m: _src_keeps(src, m)   # noqa: E731  the panel's own filter, so the two readings never disagree
+    since = time.time() - OPERATOR_WINDOW_S   # the panel reads a window, so the match never walks the history (#1897)
     loop = [c for c in ledger_calls() if isinstance(c, dict) and keep(c.get("model") or "")]
     for r in (all_runs() if runs is None else runs):
         loop.extend(c for c in (r.get("calls") or []) if isinstance(c, dict) and keep(c.get("model") or ""))
-    return OU.calls(rows, loop, canon=canon_model)
+    return OU.calls(rows, loop, canon=canon_model, since=since)
 
 def _billed(src, model, spend):
     """A call's spend under the stats' billing filter: both, the subscriptions only, or the API only (as `stats` filters runs)."""
