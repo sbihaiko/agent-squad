@@ -34,6 +34,7 @@ run=$1 child=$2 iss=$3; NONE=3 FIX=4 AGAIN=5 NOCHANGE=6 NOCHANGE_PROBE=7
 br=$(git symbolic-ref --quiet --short HEAD) || { echo "RUNREVIEW $PWD is on no branch (#$iss)" >&2; exit 2; }
 key=$(printf '%s' "$br" | tr / _); head=$(git rev-parse HEAD)
 holder="runreview-$run-$child"
+drain_stopping && { echo "RUNREVIEW $run $child: a drain is stopping the loop, no review starts (#$iss)" >&2; exit $AGAIN; }
 sg_caps take reviews "$holder" --pid $$ --wait "${SG_RUN_REVIEW_WAIT:-1800}" >/dev/null
 rc=$?; [ "$rc" = 0 ] || { echo "RUNREVIEW $run $child: no reviews slot (exit $rc), try again (#$iss)" >&2; exit $AGAIN; }
 trap 'sg_caps release reviews "$holder" >/dev/null 2>&1' EXIT

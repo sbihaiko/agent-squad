@@ -39,6 +39,19 @@ sig_driver() { if [ "$($SG_PS -o pgid= -p $$ | tr -d ' ')" = "$1" ]; then python
 # names a later publish to another sha as a restart only the owner makes (#700). No sha known: no stale driver.sha.
 record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED" 2>/dev/null); [ -n "$ds" ] || ds=$(git -C "$k" rev-parse HEAD 2>/dev/null)
   if [ -n "$ds" ]; then printf '%s\n' "$ds" > "$SG_STATE/driver.sha.$$" && mv "$SG_STATE/driver.sha.$$" "$SG_STATE/driver.sha"; else rm -f "$SG_STATE/driver.sha"; fi; }
+# Name what the drain waits for besides a run, one alerts.log line per holder, never one per poll (#1711). The reader
+# writes each in-flight review and landing on stderr; a name already named by this drain is not written again, and the
+# set is cleared when the drain ends, so the next drain names its own.
+drain_named() {
+  local f="$SG_STATE/drain-reader.err" seen="$SG_STATE/auto/drain-named" n now
+  now=$(date '+%F %T')
+  n=$(grep -o '^run_liveness: .* is in flight$' "$f" 2>/dev/null | sed 's/^run_liveness: //; s/ is in flight$//' | sort -u)
+  [ -n "$n" ] || return 0
+  comm -13 <(sort -u "$seen" 2>/dev/null) <(printf '%s\n' "$n") | while read -r l; do
+    [ -n "$l" ] && printf '%s DRAIN the drain waits for %s\n' "$now" "$l" >> "$SG_STATE/alerts.log"
+  done
+  printf '%s\n' "$n" > "$seen.$$" && mv "$seen.$$" "$seen"
+}
 # The live work a drain waits for: a run in active-runs.txt that still runs, or a gate whose lock pid is alive (#923).
 drain_busy() {
   local g v rc e f k n r s root
@@ -51,7 +64,7 @@ drain_busy() {
   # file, never into the answer. Any other result is unknown, and unknown holds the drain: a drain that waits is safe, one
   # that stops under a live run is not. Each distinct failure is one watch.log line; SG_DRAIN_ALERT_AFTER failures in a row
   # are one alerts.log line; drain_pause backs off while they last.
-  [ -s "$SG_STATE/active-runs.txt" ] && {
+  {   # the run list may be empty and the drain still waits: a review or a landing in flight is work too (#1711)
     root=; for r in "$(cd "$(dirname "$me")/../../.." 2>/dev/null && pwd)" "${SG_SQUAD:-}" "${SG_CHECKOUT:-}"; do
       [ -n "$r" ] && [ -f "$r/squad/run_liveness.py" ] && { root=$r; break; }; done
     e="$SG_STATE/drain-reader.err"; f="$SG_STATE/drain-reader.fail"
@@ -60,7 +73,7 @@ drain_busy() {
     else v=; rc=127; printf 'no squad/run_liveness.py in this repository, SG_SQUAD or SG_CHECKOUT\n' > "$e"; fi
     if [ "$rc" = 0 ] && { [ "$v" = live ] || [ "$v" = idle ]; }; then
       [ -e "$f" ] && { printf '%s drain: the run reader answers again after %s failed reads\n' "$(date '+%F %T')" "$(head -n 1 "$f")" >> "$L"; rm -f "$f"; }
-      [ "$v" = live ] && return 0
+      [ "$v" = live ] && { drain_named; return 0; }
     else
       case $rc in 0) k="exit 0 with no answer: $(printf '%s' "$v" | head -c 80 | tr '\n' ' ')";; 142) k="no answer in ${SG_DRAIN_READ_S:-30}s";; *) k="exit $rc: $(tail -n 1 "$e" 2>/dev/null | cut -c1-300)";; esac
       n=$(head -n 1 "$f" 2>/dev/null); case $n in ''|*[!0-9]*) n=0;; esac; n=$((n + 1))
@@ -84,7 +97,7 @@ drain_pause() {
 # A start during a drain cancels it (#1316): the waiter ends, and the pause the drain set lifts with its marker. A start
 # cancels a restart's drain the same way, because it reaches the supervisor the loop already runs and carries no new copy.
 drain_cancel() { w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && kill -TERM "$w" 2>/dev/null
-  rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-waiter" "$SG_STATE/auto/restart"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"; }
+  rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-waiter" "$SG_STATE/auto/restart" "$SG_STATE/auto/drain-stop" "$SG_STATE/auto/drain-named"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"; }
 # A pid file a dead drain-wait left behind names no waiter: joining it would drop the drain or the restart into a process
 # that already ended. The waiter's own state directory is part of its command line, so a waiter serving another state
 # directory is no waiter here (#1471).
@@ -361,9 +374,17 @@ case "${1:-status}" in
     [ -n "$w" ] && is_waiter "$w" && { echo "watchd restarting: draining pid=$pid"; exit 0; }
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait",sys.argv[2]],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me" "$SG_STATE"
     echo "watchd restarting: draining pid=$pid";;
-  drain-wait) rm -f "$SG_STATE/drain-reader.fail"   # a failure streak is one drain's own
+  drain-wait) rm -f "$SG_STATE/drain-reader.fail" "$SG_STATE/auto/drain-named"   # a failure streak and a name set are one drain's own
     echo "$$" > "$SG_STATE/auto/drain-waiter"
-    while alive && [ -e "$SG_STATE/auto/drain" ] && drain_busy; do sleep "$(drain_pause)"; done
+    while alive && [ -e "$SG_STATE/auto/drain" ]; do
+      while drain_busy; do sleep "$(drain_pause)"; done
+      : > "$SG_STATE/auto/drain-stop"      # from here no review and no landing starts (#1711)
+      drain_busy || break                  # nothing started in the gap: the stop is safe
+      rm -f "$SG_STATE/auto/drain-stop"    # work took its lease before the mark: wait for it, as for any live work
+    done
+    # The mark stands through the stop and is cleared after it: the stop and the last read are two instants, and a review
+    # that starts between them is exactly the work this rule refuses. A stop that kills this waiter leaves the mark to its
+    # TTL (drain_stopping, caps.sh), so a mark that never goes never blocks a landing or a review for long.
     # The restart's decision is read before the stop, because the stop itself clears both marks (#1471).
     r=; [ -e "$SG_STATE/auto/drain" ] && [ -e "$SG_STATE/auto/restart" ] && alive && r=1
     if [ -e "$SG_STATE/auto/drain" ] && alive; then

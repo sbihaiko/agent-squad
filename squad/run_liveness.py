@@ -15,6 +15,10 @@ lease reclaim in `squad/caps.py` read it.
 A read that fails is an explicit unknown: `ReadError`, never "no process" and never "an empty record". A missing file is
 absence: a missing list names no run, and a missing record is a run with no event.
 
+The drain entry point answers more than runs: a child review and a landing are work in flight too, and the stop takes
+them with the group (#1711). `squad/drainwork.py` reads them, in the same pass and by the same unknown rule, and this
+module imports it inside the entry point, so importing this module still does no I/O.
+
 The module does no I/O when it is imported. Paths, the process snapshot, the time and the launch window come from the
 caller. The hub imports it through its `load_squad`; `watchd.sh` runs the entry point below, so the drain never imports the
 hub.
@@ -36,6 +40,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple, Union
 
+from squad import drainwork  # a review and a landing in flight are work a drain waits for too (#1711)
 from squad import procs as P
 from squad.procs import ReadError  # re-exported: callers catch it here
 
@@ -226,10 +231,13 @@ def main(argv: list[str]) -> int:
     run_cmd = opts["--run-cmd"] or os.environ.get("SG_RUN_CMD_RE") or RUN_CMD
     try:
         runs = live_runs(args[1], args[2], read_processes, time.time(), launch_s, run_cmd, os.getpid())
+        other = drainwork.live_work(Path(args[1]).resolve().parent)   # a child review and a landing in flight (#1711)
     except ReadError as e:
         print(f"run_liveness: unknown: {e}", file=sys.stderr)
         return UNKNOWN_EXIT
-    print("live" if runs else "idle")
+    for name in other:
+        print(f"run_liveness: {name} is in flight", file=sys.stderr)   # the drain names what it waits for
+    print("live" if runs or other else "idle")
     return 0
 
 

@@ -265,3 +265,44 @@ def test_the_hub_holds_no_copy_of_the_reader():
         assert name not in text, name
     assert "def last_invocation" not in (ROOT / "squad" / "reap.py").read_text()
     assert "def engine_process" not in (ROOT / "squad" / "reap.py").read_text()
+
+
+# ---------------------------------------------------------------- the work a drain waits for besides a run (#1711)
+def _lease(folder, name, pid, since=None):
+    d = Path(folder) / "reviews"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(json.dumps({"pid": pid, "holder": name, "since": since or time.time()}))
+
+
+def test_a_live_child_review_holds_the_drain(tmp_path, monkeypatch):
+    """A review in flight is work the stop would take with the group: a drain that waits is safe, one that stops is not."""
+    monkeypatch.setenv("SQUAD_CAPS_DIR", str(tmp_path / "caps"))
+    listed = tmp_path / "active-runs.txt"
+    listed.write_text("")
+    assert drain(listed, tmp_path).stdout == "idle\n", "no work at all is idle"
+    _lease(tmp_path / "caps", "runreview-r-c", os.getpid())
+    p = drain(listed, tmp_path)
+    assert (p.returncode, p.stdout) == (0, "live\n"), p.stderr
+
+
+def test_a_landing_in_flight_holds_the_drain(tmp_path, monkeypatch):
+    monkeypatch.setenv("SQUAD_CAPS_DIR", str(tmp_path / "caps"))
+    listed = tmp_path / "active-runs.txt"
+    listed.write_text("")
+    lock = tmp_path / "locks" / "single-wland"
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(f"{os.getpid()}\n")
+    p = drain(listed, tmp_path)
+    assert (p.returncode, p.stdout) == (0, "live\n"), p.stderr
+
+
+def test_a_work_fact_it_cannot_read_is_unknown_and_holds(tmp_path, monkeypatch):
+    """The rule the run read already carries: unknown holds. A landing lock with no readable pid is not "nobody lands"."""
+    monkeypatch.setenv("SQUAD_CAPS_DIR", str(tmp_path / "caps"))
+    listed = tmp_path / "active-runs.txt"
+    listed.write_text("")
+    lock = tmp_path / "locks" / "single-wland"
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text("")
+    p = drain(listed, tmp_path)
+    assert p.returncode == RL.UNKNOWN_EXIT and p.stdout == "" and "landing" in p.stderr
