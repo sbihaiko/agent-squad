@@ -181,8 +181,48 @@ redfix() { local br=$1 sha=$2 line=$3 b ref full tip
 # A `loop-bug:landing` issue names a defect in the landing path: no branch lands while it is open (#641, ADR-0146 decision 3).
 gh_land_stop && exit 0
 sg_work_branches "$remote" || { echo "BRANCHLAND: $wb_err"; exit 0; }
+
+# bookkeep <branch> <landed sha> <green sentence> <issue> [delete-branch]: the books a landing writes (#695, #1500). The push that
+# lands a branch deletes it, so only a branch the base already carried is deleted here (#1826).
+bookkeep() { local br=$1 ms=$2 green=$3 i=$4 del=${5:-}
+  rm -f "$A"/branchland-*-"$(printf '%s' "$br" | tr '/' '_')"-*
+  # The landing is the issue's `landed` fact (ADR-0149, #695): rule R reads it instead of a run's land heads. Written before
+  # the close, because the work is in $land whether or not the API accepts the close; a refused write is named, never dropped.
+  # (#1500) A kept landing branch fix/<n>-land-<run> closes every `issue` line of its marker; a marker with none (the #1344 form) closes
+  # the branch's own issue. The marker is read here, before it is removed below.
+  kmark="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; closeset=$(sed -n 's/^issue //p' "$kmark" 2>/dev/null | sort -un | tr '\n' ' '); closeset=${closeset:-$i}
+  for ci in $closeset; do
+    out=$(python3 "$here/issue_ledger.py" landed "$SG_REPO#$ci" "$br" branch "$ms" 2>&1) || echo "BRANCHLAND: the landed fact of #$ci was refused: $out"
+    gh_send -X PATCH "repos/$SG_REPO/issues/$ci" -f state=closed -f state_reason=completed >/dev/null || echo "BRANCHLAND: #$ci did not close after the landing of $br"
+    mkdir -p "$SG_STATE/cq"   # the delivery comment goes through the queue: cqflush.sh keeps one per issue, edited in place (#328)
+    cat > "$(sg_cq_delivery "$ci" "branchland$$")" <<EOT
+Closed #$ci after landing $br in $land as $ms (fast-forward push, $br deleted). $green Refs #$ci
+EOT
+    col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed   # the shipped vocabulary has no Done (#468)
+    $BOARD "$SG_OWNER" "$SG_PROJECT" "$col" "$ci" >/dev/null
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$ci" >> "$SG_STATE/landed.tsv"   # the ledger the hub's last-landing fact reads: the landed branch is deleted by the push, so the remote no longer names it. The board draws no lane for it (#384): a landed branch is read from its issue card
+  done
+  case "$br" in fix/*-land-*) remote_run=${br#fix/*-land-}; /usr/bin/git -C "$SG_CHECKOUT" push -q "$remote" --delete "wave/$remote_run" >/dev/null 2>&1; rm -f "$SG_STATE/landround-$(printf '%s' "$br" | tr / _).head";; esac   # the retired wave branch goes with its landing (#1500)
+  [ -n "$del" ] && /usr/bin/git -C "$SG_CHECKOUT" push -q "$remote" --delete "$br" >/dev/null 2>&1   # a branch the base already carried is not deleted by any push of ours (#1826)
+  rm -f "$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"   # a landed rebase round's branch is gone, so its kept marker is too (#1344)
+  sg_base_red "$land" >/dev/null   # the base right after the landing (#786): a red head it lands on is reported now, not at the next landing
+  echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"; }
+
+# A kept landing branch (fix/<n>-land-<run> with its marker) whose tip the base already carries has landed: the work reached the base
+# in an earlier round, and the tip it names now is the base's own commit, so no review, gate or push can add anything (#1826). Its
+# books are written here; a review of that tip answers BLOCKED with no diff, and each round moves the tip to a fresh try count.
+# Only a kept branch: an ordinary fix/<n> pushed at the base tip with no commit yet reads the same in git (the #676 trap in
+# wtclean.sh), and the marker is the proof that the branch carried work. An unreadable fetch falls through to the pass below.
+kept_landed() { local br=$1 sha=$2 ref full
+  ref=$(printf '%s' "$br" | tr '/' '_'); [ -s "$SG_STATE/auto/kept-$ref" ] || return 1
+  /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "+refs/heads/$land:refs/sg-kept/$land" "+refs/heads/$br:refs/sg-kept/$ref" >/dev/null 2>&1 || return 1
+  full=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-kept/$land^{commit}") || return 1
+  /usr/bin/git -C "$SG_CHECKOUT" merge-base --is-ancestor "$sha" "$full" 2>/dev/null; }
+
 while read -r sha br i; do
   [ -n "$br" ] || continue
+  case "$br" in fix/*-land-*)
+    kept_landed "$br" "$sha" && { bookkeep "$br" "$sha" "The tip ${sha:0:9} was already in $land, so it carries no work of its own." "$i" delete; continue; };; esac
   cr=$(gh_api "repos/$SG_REPO/commits/$sha/check-runs") || { echo "BRANCHLAND: the checks of $br are not readable: $cr"; continue; }
   total=$(printf '%s' "$cr" | jq -er '.check_runs|length' 2>/dev/null) || { echo "BRANCHLAND: the checks of $br are not a check-run list"; continue; }
   gate=
@@ -224,27 +264,7 @@ while read -r sha br i; do
     "FFLAND "*) ms=${fl#FFLAND };;
     *) say refuse "$br" "$sha" push "not landed in $land: ${fl#FFLAND-FALLBACK }"; continue;;
   esac
-  rm -f "$A"/branchland-*-"$(printf '%s' "$br" | tr '/' '_')"-*
-  # The landing is the issue's `landed` fact (ADR-0149, #695): rule R reads it instead of a run's land heads. Written before
-  # the close, because the work is in $land whether or not the API accepts the close; a refused write is named, never dropped.
-  # (#1500) A kept landing branch fix/<n>-land-<run> closes every `issue` line of its marker; a marker with none (the #1344 form) closes
-  # the branch's own issue. The marker is read here, before it is removed below.
-  kmark="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; closeset=$(sed -n 's/^issue //p' "$kmark" 2>/dev/null | sort -un | tr '\n' ' '); closeset=${closeset:-$i}
-  for ci in $closeset; do
-    out=$(python3 "$here/issue_ledger.py" landed "$SG_REPO#$ci" "$br" branch "$ms" 2>&1) || echo "BRANCHLAND: the landed fact of #$ci was refused: $out"
-    gh_send -X PATCH "repos/$SG_REPO/issues/$ci" -f state=closed -f state_reason=completed >/dev/null || echo "BRANCHLAND: #$ci did not close after the landing of $br"
-    mkdir -p "$SG_STATE/cq"   # the delivery comment goes through the queue: cqflush.sh keeps one per issue, edited in place (#328)
-    cat > "$(sg_cq_delivery "$ci" "branchland$$")" <<EOT
-Closed #$ci after landing $br in $land as $ms (fast-forward push, $br deleted). $green Refs #$ci
-EOT
-    col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed   # the shipped vocabulary has no Done (#468)
-    $BOARD "$SG_OWNER" "$SG_PROJECT" "$col" "$ci" >/dev/null
-    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$ci" >> "$SG_STATE/landed.tsv"   # the ledger the hub's last-landing fact reads: the landed branch is deleted by the push, so the remote no longer names it. The board draws no lane for it (#384): a landed branch is read from its issue card
-  done
-  case "$br" in fix/*-land-*) remote_run=${br#fix/*-land-}; /usr/bin/git -C "$SG_CHECKOUT" push -q "$remote" --delete "wave/$remote_run" >/dev/null 2>&1; rm -f "$SG_STATE/landround-$(printf '%s' "$br" | tr / _).head";; esac   # the retired wave branch goes with its landing (#1500)
-  rm -f "$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"   # a landed rebase round's branch is gone, so its kept marker is too (#1344)
-  sg_base_red "$land" >/dev/null   # the base right after the landing (#786): a red head it lands on is reported now, not at the next landing
-  echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"
+  bookkeep "$br" "$ms" "$green" "$i"
 done <<EOT
 $wb_list
 EOT
