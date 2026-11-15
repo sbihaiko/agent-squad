@@ -335,6 +335,87 @@ def test_the_index_counts_only_the_runs_that_work(tmp_path, monkeypatch):
     assert "run-done" not in page
 
 
+@pytest.fixture
+def counted(tmp_path, monkeypatch):
+    """Two profiles whose runs() counts its own reads, over a clock the test moves (#1848)."""
+    prof, base = tmp_path / "profiles", tmp_path / "state"
+    prof.mkdir()
+    for slug, repo in (("alpha", "x/alpha"), ("beta", "y/beta")):
+        (tmp_path / f"co-{slug}").mkdir()
+        _profile(prof, slug, repo, tmp_path / f"co-{slug}")
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    spec = importlib.util.spec_from_file_location("hubmux_runs_cache", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    apps = mux.load_apps()
+    reads, clock = [], [1000.0]
+    monkeypatch.setattr(mux, "CLOCK", lambda: clock[0])
+    for slug in apps:
+        def runs(slug=slug):
+            reads.append(slug)
+            return [_row(f"run-{slug}-1", "running")]
+        monkeypatch.setattr(apps[slug]["mod"], "runs", runs)
+    return mux, apps, reads, clock
+
+
+def test_the_index_reads_one_run_list_per_profile_per_poll_window(counted):
+    """#1848: the index called runs() for every profile on every request -- five profiles, ten process snapshots, 775 ms
+    -- and every open page polls /api/hub every 10 s. One read per profile per poll window now answers, keyed by profile;
+    an entry as old as the window is read again, never served as fresh. The age is proved by an injected clock, never a
+    sleep."""
+    mux, apps, reads, clock = counted
+    d = mux.listing(apps)
+    assert reads == ["alpha", "beta"], "the first listing does not read each profile's run list once"
+    assert [r["live"] for r in d["repos"]] == [["run-alpha-1"], ["run-beta-1"]]   # one entry per profile, never shared
+    clock[0] += mux.RUNS_TTL - 0.001   # a second page's poll inside the window
+    mux.listing(apps)
+    assert reads == ["alpha", "beta"], "a poll inside the window rebuilt every profile's run list"
+    clock[0] += 0.001   # the entry is now exactly as old as the index poll's own window
+    mux.listing(apps)
+    assert reads == ["alpha", "beta", "alpha", "beta"], "an entry at its window was served as fresh"
+
+
+def test_the_api_hub_route_and_the_index_page_share_the_one_read(counted):
+    """The route a page polls and the page it opens first both list every profile: neither rebuilds the run list while
+    the other's read is inside the window."""
+    mux, apps, reads, clock = counted
+    srv = mux.server(0, apps)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        d = json.loads(_get(base + "/api/hub")[1])
+        assert [r["live"] for r in d["repos"]] == [["run-alpha-1"], ["run-beta-1"]], d
+        assert reads == ["alpha", "beta"], reads
+        page = _get(base + "/")[1]
+        assert "run-alpha-1" in page, page
+        assert reads == ["alpha", "beta"], "/api/hub and the index page each rebuilt every profile's run list"
+        clock[0] += mux.RUNS_TTL   # past the window: the next request reads each list again
+        _get(base + "/api/hub")
+        assert reads == ["alpha", "beta", "alpha", "beta"], "a request past the window served the old run list"
+    finally:
+        srv.shutdown()
+
+
+def test_a_failed_run_read_is_not_served_as_fresh(counted):
+    """A read that fails answers no live work for that request, and stores nothing: one error never hides a profile's
+    runs for the rest of the window."""
+    mux, apps, reads, clock = counted
+    down = [True]
+
+    def runs():
+        reads.append("alpha")
+        if down[0]:
+            raise RuntimeError("the process table is unreadable")
+        return [_row("run-alpha-1", "running")]
+
+    apps["alpha"]["mod"].runs = runs
+    assert mux.live(apps["alpha"], "alpha") == []   # the index shows no live work, it never fails the request
+    down[0] = False
+    assert mux.live(apps["alpha"], "alpha") == ["run-alpha-1"], "a failed read was cached and hid the profile's runs"
+    assert reads == ["alpha", "alpha"], reads
+
+
 def _hubctl(port, cwd, env):
     return subprocess.run(["bash", str(SCRIPTS / "hubctl.sh"), str(port)], cwd=cwd, capture_output=True, text=True,
                           timeout=30, env={**os.environ, **env, "SG_PROFILE": "beta"})

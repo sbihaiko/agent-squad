@@ -17,6 +17,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -104,11 +105,39 @@ def refresh(apps, on_new=None):
             if on_new: on_new(apps[slug])
 
 
-def live(app):
-    """The live workers of one repository: the runs the hub itself sees working (hub.py), not the live-run list, which keeps finished runs on purpose."""
+RUNS_TTL = 10.0   # seconds: the index poll's own interval, never a guess (#1848)
+CLOCK = time.monotonic   # the age reader; a test injects its own, so freshness is proved by a clock and never by a sleep
+_RUNS = {}   # {profile: (read_at, hub module, rows)}: run rows only, one entry per loaded profile; a listing is never cached
+
+
+def runs_of(profile, app):
+    """One profile's run list, read at most once per index poll window (#1848).
+
+    The index lists every profile on every `/api/hub` and every open page's hub-switcher polls that route every 10 s, while
+    one `runs()` costs ten process snapshots: uncached the route took 775 ms per request (issue #1848). The window is the
+    poll's own interval (INDEX_JS: `setInterval(poll,10000)`), so a page reads each profile's list once per tick and two
+    pages polling inside one window share that read. An entry at or past its window is read again, never served as fresh.
+
+    The cache holds run rows only, keyed by profile and bound to the hub module that read them, so a reloaded profile
+    reads afresh; it never holds a listing. `admitted()` still runs on every request, because a tailnet request may see
+    only the profiles its login admits (ADR-0152), and `?identity=1` still reads no state (#1202)."""
     mod = app.get("mod")
     if mod is None: return []
-    try: return mod.working(mod.runs())
+    hit = _RUNS.get(profile)
+    now = CLOCK()
+    if hit is not None and hit[1] is mod and now - hit[0] < RUNS_TTL:
+        return hit[2]
+    rows = mod.runs()   # a failed read raises: the caller answers no live work and this stores nothing
+    _RUNS[profile] = (now, mod, rows)
+    return rows
+
+
+def live(app, slug=None):
+    """The live workers of one repository: the runs the hub itself sees working (hub.py), not the live-run list, which keeps finished runs on purpose.
+    The run list comes from the poll-window cache, keyed by the profile's slug (its repository name when no caller names it)."""
+    mod = app.get("mod")
+    if mod is None: return []
+    try: return mod.working(runs_of(slug if slug is not None else app.get("repo", ""), app))
     except Exception: return []
 
 
@@ -121,7 +150,7 @@ def alert(app):
 
 
 def listing(apps):
-    return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a), "alert": alert(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
+    return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a, s), "alert": alert(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
 
 
 def identity(apps):
