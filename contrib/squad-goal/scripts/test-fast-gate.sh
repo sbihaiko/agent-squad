@@ -139,14 +139,14 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="bash $T/base.sh" bash "$d
 /usr/bin/grep -q 'SG_WAVE_GATES:=.*fast-gate\.sh' "$d/env.sh" && ok "the default wave entry gate is the fast gate" || ko "env.sh: the default SG_WAVE_GATES does not run fast-gate.sh"
 
 # (#566) The default battery is the loop's one definition (base-battery.sh), and its pytest runs with a bounded worker count,
-# SG_GATE_WORKERS, instead of `auto`. A stub python logs the argv of each leg: the count is set here, so this suite reads no
-# profile's default and depends on no worker count.
+# SG_GATE_WORKERS_CHILD, instead of `auto`. A stub python logs the argv of each leg: the count is set here, so this suite
+# reads no profile's default and depends on no worker count.
 printf '#!/bin/bash\necho "$*" >> "%s/py.log"\ncase "$*" in *squad.testselect*) echo "all: stub";; esac\nexit 0\n' "$T" > "$T/py"; chmod +x "$T/py"
 rm -f "$T/ran.log" "$T/py.log"; $G -C "$R" checkout -q dev   # no script changes at the base: the battery alone runs
-out=$(cd "$R" && SG_FAST_BASE=dev SG_GATE_PY="$T/py" SG_GATE_WORKERS=3 bash "$d/fast-gate.sh" 2>&1); rc=$?
+out=$(cd "$R" && SG_FAST_BASE=dev SG_GATE_PY="$T/py" SG_GATE_WORKERS_CHILD=3 bash "$d/fast-gate.sh" 2>&1); rc=$?
 [ $rc = 0 ] && ok "the default battery passes on a stub python" || ko "default battery: rc $rc: $out"
 /usr/bin/grep -q -- '-m ruff check squad tests' "$T/py.log" && /usr/bin/grep -q -- '-m mypy squad' "$T/py.log" && ok "the default battery runs ruff and mypy" || ko "default battery: '$(cat "$T/py.log" 2>&1)'"
-/usr/bin/grep 'pytest' "$T/py.log" | /usr/bin/grep -q -- '-n 3' && ok "the default battery's pytest runs with SG_GATE_WORKERS" || ko "the worker count: '$(grep pytest "$T/py.log" 2>&1)'"
+/usr/bin/grep 'pytest' "$T/py.log" | /usr/bin/grep -q -- '-n 3' && ok "the default battery's pytest runs with SG_GATE_WORKERS_CHILD" || ko "the worker count: '$(grep pytest "$T/py.log" 2>&1)'"
 /usr/bin/grep -q -- '-n auto' "$T/py.log" && ko "the default battery runs pytest -n auto" || ok "the default battery never runs pytest -n auto"
 /usr/bin/grep -q 'sg_base_battery' "$d/fast-gate.sh" && ok "fast-gate builds its default command from the shared definition" || ko "fast-gate keeps its own copy of the base battery"
 # The retry of what failed stays serial, and runs only the names the battery failed: the id list, never the battery.
@@ -161,7 +161,7 @@ case "$retryline" in *heavy_cap_seconds*) ko "the serial retry lifts the 2 s lin
 # on one line and answers squad.testselect from $T/select.out, so each pytest line is compared exactly, never by one word.
 printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in\n  *squad.testselect*) cat "%s/select.out" 2>/dev/null;;\n  *pytest*)\n    case "$*" in *" -n "*) for s in $SLOW_IDS; do echo "SLOW-UNMARKED (deferred to the serial run): $s took 9.0 s, at or over the heavy line; the serial run enforces it"; done;; esac\n    [ "$PY_FAIL" = 1 ] && { echo "FAILED tests/test_a.py::test_one - boom"; exit 1; };;\nesac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
 printf '#!/bin/bash\necho "$*" >> "%s/retry.log"\n' "$T" > "$T/retry.sh"
-selrun() { rm -f "$T/argv.log" "$T/retry.log" "$SG_STATE/gate-status"; (cd "$R" && env -u SG_TEST_SELECT -u SG_FAST_CMD SG_FAST_BASE=dev SG_GATE_PY="$T/selpy" SG_GATE_WORKERS=3 SG_FAST_RETRY_CMD="bash $T/retry.sh" "$@" bash "$d/fast-gate.sh" 2>&1); }
+selrun() { rm -f "$T/argv.log" "$T/retry.log" "$SG_STATE/gate-status"; (cd "$R" && env -u SG_TEST_SELECT -u SG_FAST_CMD SG_FAST_BASE=dev SG_GATE_PY="$T/selpy" SG_GATE_WORKERS_CHILD=3 SG_FAST_RETRY_CMD="bash $T/retry.sh" "$@" bash "$d/fast-gate.sh" 2>&1); }
 PYTEST_OPTS='-p no:deepeval -n 3 -m not heavy'
 printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun); rc=$?
@@ -612,19 +612,31 @@ esac
 /usr/bin/grep -q 'sg_gate_python' "$d/fast-gate.sh" && ok "fast-gate names sg_gate_python" || ko "fast-gate keeps its own interpreter lookup"
 /usr/bin/grep -q 'py=python3' "$d/fast-gate.sh" && ko "fast-gate keeps a hand-rolled interpreter fallback" || ok "fast-gate keeps no hand-rolled interpreter fallback"
 
-# (#1436) A child's own gate asks for two gate slots, so three children land at once on a six-slot budget; an entry or a tip
-# gate keeps the full count. The budget is the plugin's here, so the count a gate took reaches its command as SQUAD_GATE_WORKERS.
+# (#1436, #1865) A child's own gate asks for one gate slot, so three children land at once on a three-slot budget; an entry or
+# a tip gate keeps the full count. The budget is the plugin's here, so the count a gate took reaches its command as
+# SQUAD_GATE_WORKERS. The loop's own environment sets SG_GATE_WORKERS (env.sh exports six), so a child's count is never read
+# from that inherited variable: the child overrides it, and a caller that wants another count names SG_GATE_WORKERS_CHILD.
 ws=$T/ws; mkdir -p "$ws"
 printf '#!/bin/bash\nprintf "%%s\\n" "$SQUAD_GATE_WORKERS" > "%s"\n' "$T/workers" > "$T/wbase.sh"
 wcase() {  # <env assignment>...: one passing child gate, the count it took written by its battery stub
   rm -f "$T/workers"
-  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_CALLER "$@" SG_STATE="$ws" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/wbase.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" >/dev/null 2>&1)
+  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_WORKERS_CHILD -u SG_GATE_CALLER "$@" SG_STATE="$ws" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/wbase.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" >/dev/null 2>&1)
   cat "$T/workers" 2>/dev/null
 }
-w=$(wcase); [ "$w" = 2 ] && ok "a child gate with no count named takes two gate slots" || ko "child gate slots: '$w', want 2"
+w=$(wcase); [ "$w" = 1 ] && ok "a child gate with no count named takes one gate slot" || ko "child gate slots: '$w', want 1"
 w=$(wcase SG_GATE_CALLER=entry); [ "$w" = 6 ] && ok "an entry gate keeps the full count" || ko "entry gate slots: '$w', want 6"
 w=$(wcase SG_GATE_CALLER=entry SG_GATE_WORKERS=3); [ "$w" = 3 ] && ok "a count named by the caller wins over the kind's default" || ko "named count: '$w', want 3"
-w=$(wcase SG_GATE_CALLER=child SG_GATE_WORKERS=5); [ "$w" = 5 ] && ok "a child gate named a count of its own: it wins" || ko "child named count: '$w', want 5"
+# (#1865) The inherited default is the loop's, never the child's decision: a child in the loop's own environment still takes
+# its own count, and only SG_GATE_WORKERS_CHILD names another.
+w=$(wcase SG_GATE_WORKERS=6); [ "$w" = 1 ] && ok "a child overrides the loop's inherited SG_GATE_WORKERS" || ko "inherited count won: '$w', want 1"
+w=$(wcase SG_GATE_WORKERS=6 SG_GATE_WORKERS_CHILD=2); [ "$w" = 2 ] && ok "a child's own count is named by SG_GATE_WORKERS_CHILD" || ko "child named count: '$w', want 2"
+# The take reaches the lease, not only the command: the history row is where a count that never reached the slots would show.
+hcase() {  # <env assignment>...: field 12 (slots) of the one history row a fresh state records
+  local hs; hs=$(mktemp -d "$T/hs.XXXXXX")
+  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_WORKERS_CHILD -u SG_GATE_CALLER "$@" SG_FAST_MEMO=0 SG_STATE="$hs" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/wbase.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" >/dev/null 2>&1)
+  awk -F'\t' 'NR==1{print $12}' "$hs/gate-history" 2>/dev/null
+}
+h=$(hcase SG_GATE_WORKERS=6); [ "$h" = 1 ] && ok "a child's take reaches the lease: the history row reads one slot" || ko "history slots: '$h', want 1"
 # (#1783) The caller reaches the history row: a gate that names no caller is the child's own check, and gate.sh runs as a new
 # process, so the caller is exported or the row reads `other`.
 ccase() {  # <env assignment>...: field 14 of the one history row a fresh state records
@@ -675,7 +687,9 @@ out=$(loadgate); rc=$?
 # waves on 2026-11-13 threw a whole child's work away for a budget another gate held.
 rm -rf "$T/caps"; mkdir -p "$T/caps"
 sleep 120 >/dev/null 2>&1 & capslive=$!
-PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps take gates other --count 11 --pid "$capslive" >/dev/null 2>&1
+# (#1865) The budget is filled to its ceiling, never to a count that happens to leave a slot free: the cap is the plugin's here,
+# and a child asks for one slot, so a take that left one free would leave this gate passing.
+PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps take gates other --count 999 --pid "$capslive" >/dev/null 2>&1
 out=$(SG_CALL_DEADLINE_SECONDS=2 fg); rc=$?
 [ $rc = 4 ] && ok "a gate with no slot to take answers unproven (exit 4), never 73" || ko "capacity answer: rc $rc, '$(last "$out")'"
 case "$(last "$out")" in *"budget is full"*) ok "the capacity answer names the machine's budget on its last line";; *) ko "capacity line: '$(last "$out")'";; esac

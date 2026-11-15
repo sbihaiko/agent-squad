@@ -36,10 +36,13 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 . "$here/base-battery.sh"
 . "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
 py=$(sg_gate_python)
-# (#1436, #1527) A child's own gate takes two workers unless the caller names a count. It is set before the battery command is
-# built, so the memo key read before the lock names the same count as the key stored inside it.
+# (#1436, #1865, #1527) A child's own gate takes one gate slot, so three children land at once on a three-slot budget; an entry
+# or a tip gate keeps the full count. The count never rides on SG_GATE_WORKERS: env.sh exports it for the whole loop, so a child
+# would inherit six and hold the whole budget, and `:-` substitutes only an unset name. A caller that wants another count names
+# SG_GATE_WORKERS_CHILD. It is set before the battery command is built, so the memo key read before the lock names the same
+# count as the key stored inside it.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
-  *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2};; esac
+  *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=${SG_GATE_WORKERS_CHILD:-1};; esac
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
 # (#1557) The retry keeps the serial 2 s line: it lifts no cap, so it cannot clear the slow unmarked call the serial pass found.
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist"}
@@ -119,11 +122,13 @@ if [ -n "$memokey" ] && [ "${SG_GATE_CALLER:-child}" = child ] && [ -r "$(bmemo_
   echo "fast-gate: bounded already at ${hsha:0:9}: a child spends one bounded attempt per head (#1527); the entry gate and the landing own the obligation (ADR-0164), so commit and report done (log $(cut -f2 "$(bmemo_file "$memokey")"))"
   exit 4
 fi
-# (#1436) A child's own gate asks for two slots and an entry or tip gate for the full count: three children fit a six-slot
-# budget, and a landing is never starved by the children that feed it. A count the caller names always wins.
+# (#1436, #1865) A child's own gate asks for one slot and an entry or tip gate for the full count: three children fit a
+# three-slot budget, and a landing is never starved by the children that feed it, because a queued landing keeps the lock
+# (ADR-0174) and the children stop taking slots while it waits. A count the caller names as SG_GATE_WORKERS_CHILD wins over the
+# child's own; the count env.sh exports for the loop never does.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
   *) export SG_GATE_CALLER=${SG_GATE_CALLER:-child}
-     if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=${SG_GATE_WORKERS:-2}; fi
+     if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=${SG_GATE_WORKERS_CHILD:-1}; fi
      # (ADR-0166) A child waits for a free slot inside its deadline; the wait is gate wait, never run time, because the gate
      # starts its clock only once it holds the lock and its slots.
      slot_by=$(( $(date +%s) + ${SG_CALL_DEADLINE_SECONDS:-1800} )); waited=0

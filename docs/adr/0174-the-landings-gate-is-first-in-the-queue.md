@@ -23,3 +23,19 @@ no run time is charged for a queue it does not control.
 Guard: `contrib/squad-goal/scripts/test-serial.sh` proves the order by state, never by timing: two waiters queue behind
 one holder, the holder is released only after both markers exist, and the waiter that runs first is the one the rule
 chose.
+
+## The child's slot
+
+A child's gate used to take the whole budget. `env.sh` exports `SG_GATE_WORKERS` for every process the loop starts, and
+the child's own count was written as a default, `${SG_GATE_WORKERS:-2}`, which never applies to a name the environment
+already set. So every gate asked for six, the ceiling lowered it to the machine's budget, and two gates never overlapped.
+The queue the landing competes in was therefore one gate long, and a run could wait at its own bound for a budget that
+never freed.
+
+One slot per child makes the ceiling mean what it says: three children gate inside the same three-slot budget, and the
+worker total does not rise, because the ceiling is the machine's budget and it is not raised. The count never rides on
+the inherited name; a caller that wants another count names `SG_GATE_WORKERS_CHILD`. The landing is not starved by the
+rotation: while its gate waits, the children stand aside at the lock, so the slots drain to it.
+
+Guard: `contrib/squad-goal/scripts/test-fast-gate.sh` runs a child gate in the loop's own environment (the inherited
+count already set) and reads the count that reached the lease, never a stub that accepts any argument.
