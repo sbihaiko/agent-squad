@@ -984,8 +984,9 @@ def sample_load(src=None):
     return out
 
 LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {},
-              "record_at": None, "record_cpu": [], "record_rows": None, "record_stamp": None}
-              # the minute record's last line, the tick samples since it, and the rows and file identity the view folds (#1768)
+              "record_at": None, "record_cpu_sum": 0.0, "record_cpu_n": 0, "record_rows": None, "record_stamp": None}
+              # the minute record's last line, the running sum and count of the ticks since it, and the rows and file
+              # identity the view folds (#1768): a sum and a count, never a list that grows with the tick rate
 LOAD_RUNS = []            # the light rows the last /api/runs served: id, folder and worktrees, for owners_of
 _PROC_PREV, _PROC_AT = None, 0.0
 
@@ -1025,11 +1026,35 @@ def attribute_pass(now=None):
 
 # The minute record (#1768): the machine's load average and CPU share, one line a minute, in the profile's state folder.
 # The Loop tab's chart reads it on the strip's own window. It is this monitor's record, never the Loop tab's: it is
-# written with the CPU sampling switch on or off. The file is bounded to a fixed age and rewritten atomically (ADR-0030),
-# so an interrupted hub leaves the record as it was, never a partial line.
-LOAD_RECORD = STATE / "load-record.tsv"   # one line a minute: `<epoch> TAB <1-minute load average> TAB <CPU share>`
+# written with the CPU sampling switch on or off. Every write replaces the whole file — a read, a join and one atomic
+# write of at most LOAD_RECORD_MAX_LINES lines, a cost bounded with the file — and it is synced before it is visible
+# (ADR-0030), so an interrupted hub leaves the record as it was, never a partial line.
 LOAD_RECORD_SECS = 60                     # the record's cadence
-LOAD_RECORD_MAX_AGE = 24 * 3600           # the largest strip window, and the whole file's bound
+LOAD_RECORD_MAX_AGE = 24 * 3600           # the largest strip window
+LOAD_RECORD_MAX_LINES = LOAD_RECORD_MAX_AGE // LOAD_RECORD_SECS   # 1440: the age in lines, so a shorter cadence or a
+                                          # clock that steps back can never grow the file past the age it was read for
+
+def load_record_path():
+    """The minute record's file, resolved when it is used: hubmux gives each profile its own STATE, and a resolution per
+    call keeps each profile's line in its own state folder (#1768)."""
+    return STATE / "load-record.tsv"      # one line a minute: `<epoch> TAB <1-minute load average> TAB <CPU share>`
+
+def _write_record(path, text):
+    """Write `text` to `path` so a reader sees the old file or the whole new one, and a power cut leaves one of the two:
+    the temp file is synced, renamed, and then the folder is synced (ADR-0030). A failed rename leaves no temp behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _temp_name(path)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(text.encode()); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        try: tmp.unlink()
+        except OSError: pass
+        raise
+    fd = os.open(path.parent, os.O_RDONLY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
 
 def _loadavg():
     """The machine's one-minute load average, or None where the system does not answer: a missing value is no zero."""
@@ -1043,22 +1068,21 @@ def load_average(now=None):
     return procscan.table(_loadavg, LOAD_SAMPLE_SECS, now)[0]
 
 def load_record_add(now, load, cpu):
-    """Append the minute record's line and drop the lines past LOAD_RECORD_MAX_AGE, in one atomic write (ADR-0030): the
-    destination holds the old record or the finished one, never half a line. A line at or after `now` is a leftover of a
-    clock that stepped back: it leaves with this write, so the record's minutes run forward. Returns the rows the chart
-    folds, so one write serves the page and one file read serves the write."""
+    """Append the minute record's line, drop the lines past LOAD_RECORD_MAX_AGE and keep the newest LOAD_RECORD_MAX_LINES,
+    in one atomic write (ADR-0030): the destination holds the old record or the finished one, never half a line. The age
+    and the line cap bound the same file, so a cadence shorter than the one the age was read for cannot grow it. A line at
+    or after `now` is a leftover of a clock that stepped back: it leaves with this write, so the record's minutes run
+    forward. Returns the rows the chart folds, so one write serves the page and one file read serves the write."""
     keep = {}
-    for raw in _read(LOAD_RECORD).splitlines():
+    for raw in _read(load_record_path()).splitlines():
         fields = raw.split("\t")
         try: at = float(fields[0])
         except (IndexError, ValueError): continue
         if now - LOAD_RECORD_MAX_AGE <= at < now: keep[at] = raw
     keep[now] = "\t".join((f"{now:.3f}", "-" if load is None else f"{load:.2f}",
                            "-" if cpu is None else f"{cpu:.1f}"))
-    lines = sorted(keep.items())
-    LOAD_RECORD.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _temp_name(LOAD_RECORD); tmp.write_text("\n".join(raw for _, raw in lines) + "\n")
-    os.replace(tmp, LOAD_RECORD)
+    lines = sorted(keep.items())[-LOAD_RECORD_MAX_LINES:]
+    _write_record(load_record_path(), "\n".join(raw for _, raw in lines) + "\n")
     return [hub_profiler.load_row(raw) for _, raw in lines]
 
 def load_record_warm(now):
@@ -1074,19 +1098,22 @@ def load_record_tick(sample, now, load=None):
     turned. The first tick writes at once unless the record already holds this minute, so a page never waits a minute
     for the chart's first point and a restarted hub appends no duplicate line. A write this hub cannot make keeps the
     window one minute long: the minute still advances and its samples leave, so the chart draws a gap and the next
-    line's share is never a mean over the failed stretch."""
-    pending = LOAD_STATE.setdefault("record_cpu", [])
-    if sample.get("cpu") is not None: pending.append(sample["cpu"])
+    line's share is never a mean over the failed stretch. The tick's CPU reading joins a running sum and a count, so a
+    sampler set to a tiny interval costs no memory for the minute it waits."""
+    if sample.get("cpu") is not None:
+        LOAD_STATE["record_cpu_sum"] = LOAD_STATE.get("record_cpu_sum", 0.0) + sample["cpu"]
+        LOAD_STATE["record_cpu_n"] = LOAD_STATE.get("record_cpu_n", 0) + 1
     last = LOAD_STATE.get("record_at")
     if last is None: last = LOAD_STATE["record_at"] = load_record_warm(now)
     if last is not None and now - last < LOAD_RECORD_SECS: return
-    cpu = round(sum(pending) / len(pending), 1) if pending else None
+    n = LOAD_STATE.get("record_cpu_n", 0)
+    cpu = round(LOAD_STATE.get("record_cpu_sum", 0.0) / n, 1) if n else None
     try: rows = load_record_add(now, load_average(now) if load is None else load, cpu)
     except OSError:
-        LOAD_STATE["record_at"], LOAD_STATE["record_cpu"] = now, []   # a gap, never a broken sampler
+        LOAD_STATE["record_at"], LOAD_STATE["record_cpu_sum"], LOAD_STATE["record_cpu_n"] = now, 0.0, 0   # a gap, never a broken sampler
         return
-    LOAD_STATE["record_at"], LOAD_STATE["record_cpu"], LOAD_STATE["record_rows"] = now, [], rows
-    LOAD_STATE["record_stamp"] = load_record_stamp()
+    LOAD_STATE["record_at"], LOAD_STATE["record_cpu_sum"], LOAD_STATE["record_cpu_n"] = now, 0.0, 0
+    LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = rows, load_record_stamp()
 
 def load_tick(sample=None, now=None, load=None):
     """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, append the minute
@@ -2785,7 +2812,7 @@ def load_record_rows():
     """The minute record's lines as the chart reads them: `{at, load, cpu}`, a field the writer could not read as None.
     A line that names no time is no record: it never draws."""
     out = []
-    for raw in _read(LOAD_RECORD).splitlines():
+    for raw in _read(load_record_path()).splitlines():
         row = hub_profiler.load_row(raw)
         if row is not None: out.append(row)
     return out
@@ -2793,7 +2820,7 @@ def load_record_rows():
 def load_record_stamp():
     """The record file's identity for the row cache: any write changes it, so the view reads the file only when it did."""
     try:
-        s = LOAD_RECORD.stat()
+        s = load_record_path().stat()
     except OSError:
         return None
     return (s.st_mtime_ns, s.st_size)
@@ -2815,10 +2842,13 @@ def profiler_view(a, w=None, sw=None):
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
     st = strip_view(sw) if a.allowed else None   # no loop record read for a caller the hub already refused
+    # The load chart is drawn only with the strip, and the page draws it with the switch off as it draws the strip, so
+    # the one stat of the record is the cost of a drawn chart: a refused poll stats nothing (#1768).
+    load = load_view(st) if st else None
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
            "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
-           "strip": st, "load": load_view(st) if st else None,
+           "strip": st, "load": load,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out
@@ -7610,9 +7640,9 @@ function profStrip(v){
 // one-minute load average from the hub's minute record. A minute the record does not cover is a gap, never a zero, and
 // the core count is a dashed reference line: above it the machine holds more work than its cores can run at once.
 const PROF_LOAD_W=1000,PROF_LOAD_H=120;
-function profLoad(v,strip){
+function profLoad(v){
  if(!v)return "";
- const s=strip||{},start=s.start!=null?s.start:v.start,end=s.end!=null?s.end:v.end,span=(end-start)||1;
+ const start=v.start,end=v.end,span=(end-start)||1;   // the window the hub folded on: the page never re-projects it
  const px=at=>(PROF_LOAD_W*(at-start)/span).toFixed(1),top=Math.max(v.peak||0,v.cores||1)||1,py=load=>(PROF_LOAD_H*(1-Math.max(0,Math.min(load,top))/top)).toFixed(1);
  const gaps=(v.gaps||[]).map(g=>{const a=Math.max(g.start,start),b=Math.min(g.end,end);
   return b>a?`<rect class=plg x="${px(a)}" y="0" width="${(PROF_LOAD_W*(b-a)/span).toFixed(1)}" height="${PROF_LOAD_H}" title="${esc(String(g.reason||"no load record"))}"></rect>`:""}).join("");
@@ -7645,7 +7675,7 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,strip=profStrip(v.strip),load=profLoad(v.load,v.strip),trip=profTrip(v.trip);
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,strip=profStrip(v.strip),load=profLoad(v.load),trip=profTrip(v.trip);
  if(!v.on||!v.tree)return head+strip+load+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
  return head+strip+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`

@@ -194,9 +194,13 @@ def test_three_profiles_read_the_load_average_once_a_tick(three_profiles, monkey
         reads.append(1)
         return 1.5
 
-    now = time.time() + 3600   # a tick past any read a test before this one kept
+    ps = three_profiles[0].procscan
+    assert all(m.procscan is ps for m in three_profiles), "the profiles share one scan store"
+    monkeypatch.setattr(ps, "_CELLS", {})   # a private store: no read a test before this one kept
+    now = 5_000_000.0                       # a private monotonic base, never the wall clock
     for m in three_profiles:
         monkeypatch.setattr(m, "_loadavg", gauge)
     for m in three_profiles:
         assert m.load_average(now) == 1.5
     assert len(reads) == 1, f"one tick read the load average {len(reads)} times for three profiles"
+    assert ps._CELLS is three_profiles[0].procscan._CELLS, "the three profiles read through one cache object"
