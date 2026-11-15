@@ -239,25 +239,25 @@ SG_PROMOTE=off pass; rc=$?
 env -u SG_STATE bash "$d/promote-main-pass.sh" >/dev/null 2>&1; rc=$?
 [ $rc = 2 ] && ok "18 with SG_STATE unset the pass refuses (exit 2)" || ko "18 SG_STATE unset: rc $rc"
 
-# 25) The request window is short: with SG_PROMOTE_MAIN_QUIET_S unset, a tip quiet for 700 s sends the label, and one
-# quiet for 300 s does not.
-pass600() { env -u SG_PROMOTE_MAIN_QUIET_S bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }
-realign; adv stg short-quiet 700; s25=$(tip stg); : > "$T/gh.log"; pass600; rc=$?
+# 25) The quiet window default: with SG_PROMOTE_MAIN_QUIET_S unset, a tip quiet for 700 s sends the label, and one quiet
+# for 200 s does not.
+passq() { env -u SG_PROMOTE_MAIN_QUIET_S bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }
+realign; adv stg short-quiet 700; s25=$(tip stg); : > "$T/gh.log"; passq; rc=$?
 [ $rc = 0 ] && [ "$(req)" = "$s25" ] && /usr/bin/grep -q "X POST repos/x/emu/issues/31/labels .*labels\[\]=promote" "$T/gh.log" \
-  && ok "25 a tip quiet 700 s sends the label under the 600 s default window" || ko "25 700 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
-realign; adv stg still-moving 300; : > "$T/gh.log"; pass600; rc=$?
-[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "25 a tip quiet 300 s is not requested under the 600 s default window" || ko "25 300 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+  && ok "25 a tip quiet 700 s sends the label under the 300 s default window" || ko "25 700 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+realign; adv stg still-moving 200; : > "$T/gh.log"; passq; rc=$?
+[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "25 a tip quiet 200 s is not requested under the 300 s default window" || ko "25 200 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
 # 26) A red hold names the sha it measured, never the branch (#1889). A red on A holds main; a new stg tip B is not held
 # by a verdict about content no job ran, so the quiet window alone gates the request on B. While stg still holds A, the
 # pass waits.
-realign; adv stg red-hold-a 7200; a26=$(tip stg); request "$a26" 600; checks "$a26" failure success; pass600
+realign; adv stg red-hold-a 7200; a26=$(tip stg); request "$a26" 600; checks "$a26" failure success; passq
 [ -s "$ST/promote-main-hold" ] && [ "$(cat "$ST/promote-main-red")" = "$a26" ] \
   && ok "26 the red records the hold and the red sha" || ko "26 red: hold '$(cat "$ST/promote-main-hold" 2>/dev/null)', red '$(cat "$ST/promote-main-red" 2>/dev/null)', out '$(cat "$T/out")'"
 # (b) stg still holds the red sha: the pass waits, and asks for no label.
-: > "$T/gh.log"; pass600; rc=$?
+: > "$T/gh.log"; passq; rc=$?
 [ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "26 while stg holds the red sha the pass waits" || ko "26 same tip: record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
 # (a) stg moves to a new sha inside the re-arm: the complete tier is requested on it, the quiet window alone gating it.
-adv stg red-hold-b 700; b26=$(tip stg); : > "$T/gh.log"; pass600; rc=$?
+adv stg red-hold-b 700; b26=$(tip stg); : > "$T/gh.log"; passq; rc=$?
 [ $rc = 0 ] && [ "$(req)" = "$b26" ] && ok "26 a new tip after a red is requested without a re-arm about the red sha" || ko "26 new tip: record '$(req)', red '$a26', stg '$b26', out '$(cat "$T/out")'"
 
 # No loop script but the two promotion scripts names the main push, and the pass itself pushes nothing.

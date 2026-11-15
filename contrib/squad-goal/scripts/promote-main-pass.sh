@@ -24,7 +24,7 @@
 #      must not be the sha of the last red verdict; then promote-stg.sh opens or reuses the pull request, removes the
 #      label, sends it, and writes R only after the label is accepted.
 # The rule reads the first-parent chain of stg by committer date, with no local record:
-#   quiet    now - committer date of the stg tip >= SG_PROMOTE_MAIN_QUIET_S (600)
+#   quiet    now - committer date of the stg tip >= SG_PROMOTE_MAIN_QUIET_S (300)
 #   ceiling  now - committer date of the oldest first-parent commit main lacks >= SG_PROMOTE_MAIN_MAX_S (14400)
 # After a red, an unproven verdict or a refused move, the next request also waits SG_PROMOTE_MAIN_REARM_S (3600) from the
 # hold time: the re-arm is its own wait, not the short quiet window. A red's hold names the sha it measured (#1889), the
@@ -42,7 +42,7 @@ remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}; tree=${SG_PROMOTE_
 export GIT_TERMINAL_PROMPT=0 SG_GH_PASS=${SG_GH_PASS:-promote-main}   # the pass the call log names (ADR-0277)
 rec=$state/promote-main-requested; bugrec=$state/promote-main-bug; hold=$state/promote-main-hold; redrec=$state/promote-main-red
 secs() { case "$1" in ''|*[!0-9]*) echo "$2";; *) echo "$1";; esac; }   # <value> <default>: a setting that is not a number is the default
-quiet=$(secs "${SG_PROMOTE_MAIN_QUIET_S:-}" 600); ceiling=$(secs "${SG_PROMOTE_MAIN_MAX_S:-}" 14400)
+quiet=$(secs "${SG_PROMOTE_MAIN_QUIET_S:-}" 300); ceiling=$(secs "${SG_PROMOTE_MAIN_MAX_S:-}" 14400)
 rearm=$(secs "${SG_PROMOTE_MAIN_REARM_S:-}" 3600)
 flight=$(secs "${SG_PROMOTE_MAIN_FLIGHT_S:-}" 3600); grace=$(secs "${SG_PROMOTE_MAIN_GRACE_S:-}" 300)
 g() { /usr/bin/git -C "$tree" "$@"; }
