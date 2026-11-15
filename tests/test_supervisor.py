@@ -660,3 +660,38 @@ def test_a_read_of_a_live_session_says_it_has_not_ended(state, tmp_path, monkeyp
         assert sup.read(sid, 0)["ended"] is False
     finally:
         sup.stop(sid, sv.Caller())
+
+
+@pytest.mark.heavy   # a real detached daemon and its own timer: the wall time is the process's, not the test's
+def _gone(pid):
+    """True when the process is over: `os.kill(pid, 0)` also answers for a zombie, which the parent has not reaped yet."""
+    out = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return not out or out.startswith("Z")
+
+
+@pytest.mark.heavy   # a real detached daemon and its own timer: the wall time is the process's, not the test's
+def test_a_daemon_leaves_when_the_folder_that_owns_it_is_gone(tmp_path, monkeypatch):
+    """`ensure` starts the daemon detached, so nothing waits for it and nothing kills it. A test fixture under a temp
+    folder left dozens of servers running for days (#1817). The folder that holds its socket is the owner's mark: when it
+    goes, the daemon goes with it."""
+    folder = Path(tempfile.mkdtemp(prefix="sq1817-", dir="/tmp"))
+    monkeypatch.setenv("SQUAD_SUPERVISOR_DIR", str(folder))
+    probe = tmp_path / "state"
+    pid = None
+    try:
+        sv.ensure(probe)
+        pid = int((probe / sv.PIDFILE).read_text())
+        assert sv._answers(probe)
+        shutil.rmtree(folder, ignore_errors=True)
+        deadline = time.time() + 25
+        while time.time() < deadline and not _gone(pid):
+            time.sleep(0.5)
+        assert _gone(pid), "the daemon outlived the folder that owns it"
+    finally:
+        if pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        shutil.rmtree(folder, ignore_errors=True)
+        monkeypatch.delenv("SQUAD_SUPERVISOR_DIR", raising=False)

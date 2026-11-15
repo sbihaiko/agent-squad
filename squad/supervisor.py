@@ -462,9 +462,24 @@ class _Server(socketserver.ThreadingUnixStreamServer):
         super().__init__(path, _Handler)
 
 
+FOLDER_POLL_S = 5.0   # how often a daemon asks whether the folder that owns it still exists: one stat, and a fixture is gone in seconds
+
+
+def _leave_when_the_folder_goes(folder: Path, stop: threading.Event) -> None:
+    """End the daemon once the folder that holds its socket is gone. `ensure` starts it detached (`start_new_session`), so
+    nothing waits for it and nothing kills it: a test fixture under a temp folder left dozens of servers running for days,
+    each holding a port, its memory and a process slot (#1817). The folder is the owner's mark, so its absence is the proof
+    that whoever started this daemon is gone too."""
+    while not stop.wait(FOLDER_POLL_S):
+        if not folder.is_dir():
+            os._exit(0)
+
+
 def serve(state: Path) -> None:
     state.mkdir(parents=True, exist_ok=True)
     supervisor = Supervisor(state)
+    _watch = threading.Event()
+    threading.Thread(target=_leave_when_the_folder_goes, args=(socket_path(state).parent, _watch), daemon=True).start()
     fd = os.open(state / SECRET, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as handle:
         handle.write(supervisor.secret)
