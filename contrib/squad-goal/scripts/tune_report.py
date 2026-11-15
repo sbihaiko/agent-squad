@@ -135,6 +135,8 @@ def main():
         parts = line.split("\t")
         if len(parts) < 5:
             continue
+        if len(parts) > 16 and parts[-1] in ("reused", "skipped"):
+            continue   # a gate that ran no battery (#1798) is no gate time and no entry attempt
         finish, start = _float(parts[0]), _float(parts[4])
         if start is not None and inside(finish):
             durations.append(finish - start)

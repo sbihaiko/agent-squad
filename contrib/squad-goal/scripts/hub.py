@@ -2731,13 +2731,14 @@ def gate_row(line):
     return hub_profiler.gate_row(line)
 
 def trip_gates(since):
-    """The gate-history rows of the window, `start` and `finish` in seconds beside their kind, outcome and caller."""
+    """The gate-history rows of the window, `start` and `finish` in seconds beside their kind, outcome and caller. A row
+    that ran no battery (#1798, mode `reused` or `skipped`) is no gate observation: its start is its finish."""
     out = []
     try: lines = (STATE / "gate-history").read_text(errors="replace").splitlines()
     except OSError: return out
     for line in lines:
         row = gate_row(line)
-        if row is None: continue
+        if row is None or row.get("mode") in hub_profiler.NO_BATTERY_MODES: continue
         try: finish, start = float(row["finish"]), float(row["start"])
         except (KeyError, TypeError, ValueError): continue
         if finish < since: continue

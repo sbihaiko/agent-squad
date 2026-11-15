@@ -46,7 +46,11 @@
 # is `-`, `red` for a measured red this gate recorded, `red-stands <sha>` for a red of the same tree that this attempt did not
 # clear, `cleared-green <sha>` or `cleared-fix <red sha>..<sha>` for the two ways a red is cleared (#1170). The caller field (#1410)
 # is SG_GATE_CALLER: child (the child's own last check), entry (the wave entry or a fix branch landing), tip (the wave-tip gate)
-# or other; a row from before the field has 13 fields, and the loop report reads it as an unknown caller. Two load fields follow it (#1691, gate_load below); a row from before them has 14. The duration
+# or other; a row from before the field has 13 fields, and the loop report reads it as an unknown caller. Two load fields follow it (#1691, gate_load below); a row from before them has 14. The entry mode is the seventeenth field (#1798): `gated` when the
+# gate ran the battery, `reused` when a kept green pass answered for the tree (ADR-0168), `skipped` when it ran no battery; a row
+# from before the field has 16, and every reader answers it as a gate with no mode. SG_GATE_ENTRY_MODE names the word a caller
+# knows: the wave entry sets `gated` for its gate and `reused` for its reuse, and a gate that names no word takes `gated` when it
+# wrote a selection or a scope and `skipped` when it wrote neither. The duration
 # is finish minus start, and start is read inside the lock, after the wait: it is the gate's run time, never its queue time. A gate
 # that sets SG_GATE_STATUS=self writes no history line, as it writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
@@ -223,14 +227,32 @@ gate_load() {
   case "$l" in ''|*[!0-9.]*) l=-;; esac
   printf '%s' "$l"
 }
+gate_mode() {  # <selection> <scope>: the entry mode this row carries (#1798). A caller that knows the word names it; a gate
+  # that names none ran the battery when it wrote a selection or a scope, and ran none when it wrote neither.
+  case "${SG_GATE_ENTRY_MODE:-}" in gated|reused|skipped) printf '%s' "$SG_GATE_ENTRY_MODE"; return;; esac
+  if [ -n "$1" ] || [ -n "$2" ]; then printf gated; else printf skipped; fi
+}
 gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red>
   fin=$(date +%s)   # the finish epoch the line carries, and the epoch the obligation's deadline counts from (note)
   mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)"
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)" "$(gate_mode "$5" "$6")"
+  append_line "$st/gate-history" "$line"
+}
+# The wave entry's reuse (#1798): one history row for an entry a kept green pass answered, so the entry's mode is on the record
+# and the reuse is no silent skip (ADR-0168 rule 5). The row ran nothing: its start is its finish, and a reader that folds gate
+# time counts it in neither (hub.py, throughput.py, tune_report.py). gate.sh stays the history file's one writer.
+entry_reuse() {  # <sha>
+  local t
+  t=$(date +%s); mkdir -p "$st" 2>/dev/null || return 0
+  printf -v line '%s\t%s\t%s\t%s\t%s\t\t\tpass\t-\t-\t-\t0\t-\t%s\t%s\t%s\treused' "$t" "${SG_GATE_KIND:-fast}" pass "$1" "$t" \
+    "${SG_GATE_CALLER:-entry}" "${gate_load0:--}" "$(gate_load)"
   append_line "$st/gate-history" "$line"
 }
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
+  --entry-reuse)  # a wave entry a kept green pass answered: one history row, mode reused, and no battery and no status line,
+                  # because the reuse path writes the pass line itself (fast-gate.sh, memo_reuse).
+    [ $# = 2 ] || { echo "usage: gate.sh --entry-reuse <sha>" >&2; exit 2; }; entry_reuse "$2"; exit 0;;
   --inner)  # inside the lock: take the slots, then run the gate. The take is one try, never a wait: a gate that cannot take its
             # slots exits 73 at once with none, and serial.sh releases the lock on that exit, so it holds neither resource while
             # it waits for the other. Every later exit path runs the EXIT trap and gives the slots back.

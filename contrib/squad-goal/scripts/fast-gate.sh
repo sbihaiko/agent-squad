@@ -83,9 +83,12 @@ memo_store() {  # <key> <log>: a temp file and a mv, so no reader sees half of i
   f=$(memo_file "$1"); printf '%s\t%s\n' "$1" "$2" > "$f.$$" && mv -f "$f.$$" "$f"
 }
 memo_reuse() {  # <key> <sha> <log>: a green pass answers this key; write what a memo hit writes, and nothing else
-  # The hit writes the pass line itself and no history line: a line with no selection and no run time would read as a whole
+  # The hit writes the pass line itself and no battery line: a line with no selection and no run time would read as a whole
   # battery. The line names the current commit, not the tree object: the pass answers for the tip the gate stands on.
   SG_GATE_STATUS=self bash "$here/gate.sh" --status fast pass "$2"
+  # A wave entry's reuse is on the record (#1798): one history row with its mode `reused` and no run time, so the entry gate
+  # is never a silent skip (ADR-0168 rule 5). A child's own gate sets no entry mode and writes no row here.
+  [ -z "${SG_GATE_ENTRY_MODE:-}" ] || SG_GATE_STATUS=self SG_GATE_CALLER=entry bash "$here/gate.sh" --entry-reuse "$2"
   # A memo reuse is no attempt (#1255): it is recorded as a reuse marker, and Gate Tries rises by none.
   local fgj=${SG_GATE_JOURNAL:-}
   if [ -n "${SG_GATE_CARD:-}" ]; then

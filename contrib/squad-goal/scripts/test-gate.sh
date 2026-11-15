@@ -8,6 +8,9 @@ export HANG_NAP=$(( 271800000 + $$ ))
 # Both lines are `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`.
 # usage: bash test-gate.sh [scripts dir]
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the hold is proved
+# The machine-wide gate a suite is often run under exports its own bound into every command it starts (#392): this suite reads
+# the gate's default bound, so an inherited one is dropped here, as a promotion gate's 1200 s would move the obligation's deadline.
+unset SG_GATE_BOUND_SECONDS SG_PROMOTE_BOUND_SECONDS
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st; mkdir -p "$SG_STATE"
 # (#1166) The gate takes its worker slots from a throwaway budget, never the machine's live one.
@@ -44,7 +47,9 @@ hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/d
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
 IFS=$'\t' read -r fin kind res at start _ < <(tail -n 1 "$H"); sel=$(tail -n 1 "$H" | cut -f6); scope=$(tail -n 1 "$H" | cut -f7)
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 15 ] && ok "the history line has sixteen fields: the selection and scope, the verdict, the slots, how a red cleared, the caller, then the load at the start and at the finish" || ko "history fields: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 16 ] && ok "the history line has seventeen fields: the selection and scope, the verdict, the slots, how a red cleared, the caller, the load at the start and at the finish, then the entry mode" || ko "history fields: '$(tail -n 1 "$H")'"
+# (#1798) The entry mode is the last field: a gate that ran its battery is `gated`, and one that ran none is `skipped`.
+[ "$(tail -n 1 "$H" | cut -f17)" = gated ] && ok "a gate that ran a battery names its entry mode gated" || ko "entry mode of a battery gate: '$(tail -n 1 "$H")'"
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$S" 2>/dev/null
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the status line carries the selection and the scope" || ko "status selection: '$(cat "$S" 2>&1)'"
@@ -52,7 +57,8 @@ case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$sta
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 
 (cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" sh -c 'exit 7'); rc=$?
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 15 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 16 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | cut -f17)" = skipped ] && ok "a gate that ran no battery names its entry mode skipped" || ko "entry mode of a gate with no battery: '$(tail -n 1 "$H")'"
 
 # --- the load (#1691): a gate line carries the one-minute load at its start and at its finish, so a set of gate runs can be
 # labeled before any load bound enters a gate (ADR-0012, ADR-0018). The reader is a seam: this suite cannot set the machine's load.
