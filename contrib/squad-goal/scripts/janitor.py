@@ -10,7 +10,7 @@
     victim, a dashboard another project started is not this pass's to count, and JANITOR_DRY=1 reports without killing.
  C  zombie run (no verdict, record.jsonl idle 20 min, no run process inside its folder -- the engine, a gate or a session, never a dashboard server -- last started call dead): write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
     Its active-runs.txt line stays, as squad/reap.py keeps it (#1230): the readers of a finished run need it, and wtclean.sh rule A alone drops it.
- T  taken-over run (no verdict, its record has not moved for SG_TAKEOVER_SECONDS, default 1800, and no gate process is alive in its folder): end it and keep its issues claimed (ADR-0166). A run waiting its turn in the machine-wide gate queue is not stuck: that wait is no run time, so it never reaches the bound (#1191). The pass writes the killed
+ T  taken-over run (no verdict, its record has not moved for SG_TAKEOVER_SECONDS, default 1800, no gate process is alive in its folder, and no open call is still inside the deadline that call recorded): end it and keep its issues claimed (ADR-0166). A run waiting its turn in the machine-wide gate queue is not stuck: that wait is no run time, so it never reaches the bound (#1191). A call writes no event until it ends, so a run inside one long call is inside that call's own deadline: the deadline ends the call, and a takeover before it would kill the call short of its cap (#1842). The pass writes the killed
     verdict, kills every process inside the run folder and its dashboard, drops it from active-runs and writes auto/taken-<run>, which names the run and its issues.
     It never frees auto/disp-<n> or auto/bug-<n>, so no fresh child starts the same work with none of the context: a person or an agent takes it over.
     While the marker stands its issues are held, so rule Q never puts their cards back in Todo. The owner or the agent drops the marker after the hand fix.
@@ -270,6 +270,10 @@ def read(f):
     # The spawn batch (#480): the engine answers a dispatch's requests in one batch, then starts the children. Any event after
     # the last spawn event is past that batch, so the run's choice of children is decided; spawn_ts is when it was made.
     spawned = decided = False; spawn_ts = 0.0
+    # The calls open now (#1842): one `call_start` with no later outcome for its node, entry and item. A call writes no event
+    # until it ends, so the last motion of a run inside one long call is that `call_start`, and the call's own deadline is the
+    # bound it recorded. An invocation starts with no call open: a `run_start` or a `resume` clears what the last one left.
+    open_calls = {}
     if not t.exists(): return None
     for l in t.read_text().splitlines():
         try: d = json.loads(l)
@@ -286,7 +290,7 @@ def read(f):
             if ev == "run_start": rts = str(d.get("ts") or d.get("started_at") or rts)
             # A verdict is final only after the last start or resume (ADR-0105): a resumed run is live again until its
             # next verdict, so an earlier verdict no longer reads it as finished (ADR-0167).
-            v = False; ver = None; rs = []; vts = None; vkey = ""
+            v = False; ver = None; rs = []; vts = None; vkey = ""; open_calls = {}
         if ev == "verdict":   # the fold takes the last verdict event after the last start or resume (ADR-0105)
             v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
             vts = d.get("ts") if isinstance(d.get("ts"), (int, float)) else None; vkey = f"{vts if vts is not None else ''}:{nv}"; nv += 1
@@ -300,10 +304,12 @@ def read(f):
             moved = eff.get("before") is None or eff.get("before") != eff.get("head")
             if d.get("outcome") == "pass" and moved: heads.append((d.get("node"), eff.get("head"), eff.get("held_out") != "fail"))
         if ev == "outcome":   # the outcome the node itself recorded, child or run stage: the fact rule R reads per child (#271)
+            open_calls.pop((d.get("node"), d.get("entry"), d.get("item")), None)   # the call closed (#1842)
             if d.get("node") is not None:
                 outs[str(d["node"])] = (str(d.get("outcome") or ""), [str(x) for x in (d.get("reasons") or [])])
         if ev == "call_start":
             pidc = d.get("pid") or pidc; started_at = d.get("started_at") or started_at
+            open_calls[(d.get("node"), d.get("entry"), d.get("item"))] = (d.get("started_at"), d.get("limit"))
         if ev == "spawn_accepted" or '"spawn_accepted"' in l:
             # The router writes the issue down without the hash ("Fix GitHub issue 11 in the repository"), and a child that
             # took several writes them as a list. A hashed-only read lost the run's own issues: rule I and free_reaped read
@@ -331,7 +337,8 @@ def read(f):
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
             "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts, "last_ts": lts, "vts": vts, "vkey": vkey,
-            "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "decided": decided, "spawn_ts": spawn_ts}
+            "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "decided": decided, "spawn_ts": spawn_ts,
+            "open_calls": list(open_calls.values())}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
         return pidc in procs
@@ -355,6 +362,13 @@ def progress_age(i):   # T: seconds since the run's own record last moved; a gat
     return age_of(i["last_ts"])
 def run_age(i):   # T: the fallback when the record carries no readable event stamp: the age of its start
     return age_of(i["run_ts"])
+def open_call_in_time(i):   # T: an open call still inside the deadline it recorded (#1842). The call ends itself when the
+    # deadline fires, so the run is not stuck, however long its record has been still. A call that records no readable
+    # deadline (a null limit, a stamp that is not a number) has no end the pass can prove, so it never moves the bound alone.
+    for st, lim in i["open_calls"]:
+        if not isinstance(st, (int, float)) or not isinstance(lim, (int, float)) or now < st + lim:
+            return True
+    return False
 def _now(): return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
@@ -531,7 +545,10 @@ for r in names:
     gate_wait = any(GATE.search(procs.get(q, (0, ""))[1]) and now - starts.get(q, now) < GATE_STUCK_SECONDS for q in hips)
     age = progress_age(i)
     if age is None: age = run_age(i)
-    if age is not None and age > TAKEOVER_SECONDS and not gate_wait:   # T: past the bound with no progress the run is stuck; it is ended and handed over, never requeued (ADR-0166)
+    # T: past the bound with no progress the run is stuck; it is ended and handed over, never requeued (ADR-0166). A run
+    # inside one long call shows no progress either, but its call's own deadline is the bound that ends it: the pass leaves
+    # it while that deadline has time, so the call reaches its cap (#1842).
+    if age is not None and age > TAKEOVER_SECONDS and not gate_wait and not open_call_in_time(i):
         nums = sorted(req_issues(f) | i["acc"], key=int)
         # #1662: the work the run left uncommitted is saved before any teardown, one WIP line per tree. A tree that could not be
         # saved holds the run for this pass: nothing is killed, and the next pass tries the snapshot again.
