@@ -256,11 +256,15 @@ def ac_verify(params, inp):
     run's dispatch: its work is on the branch the child checked out, and its target is cut from the base. Every other command,
     and every command of a run that is not a fix run, runs only in the target.
     No fallback: a red result is never replaced by another tree's green (ADR-0018).
+
+    A `malformed` command (prose in it, or a program that cannot start) is recorded and answers unproven for that command:
+    nothing ran, so nothing was proved false, and a run whose findings are all malformed is not failed for them (ADR-0164,
+    delivery outranks the proof). One measured `ac_failed` still fails the gate (#1803).
     """
     runs, dispatch = suite_runs(params, inp)
     if not runs:
         return GateResult(False, ["no_ac_commands"])
-    findings, evidence, counts = [], {}, {}
+    findings, failing, evidence, counts = [], [], {}, {}
     for c, tree in dict.fromkeys(runs):     # each (command, tree) runs once, however many children named it
         held_out = dispatch and (inp.fix_run or workcmd.reads_history(c))
         label = f"{c} @{Path(tree).name}" if held_out and tree else c     # a held-out command's result names the tree it ran in
@@ -269,6 +273,7 @@ def ac_verify(params, inp):
         elif held_out_tree_missing(c, tree, inp.fix_run):
             findings.append(f"child_tree_missing:{label}")     # never a silent run in the target: that is the false red of #862
             evidence[f"child_tree_missing:{label}"] = f"child worktree not found: {tree}" if tree else "no child worktree recorded"
+            failing.append(f"child_tree_missing:{label}")      # a missing tree is a defect of the run, never an unproven check
             continue
         else:
             r = workcmd.run(c, tree)
@@ -278,7 +283,9 @@ def ac_verify(params, inp):
             kind = "malformed" if r.malformed else "ac_failed"     # prose in a command is a bad check, not a failed one
             findings.append(f"{kind}:{label}")
             evidence[f"{kind}:{label}"] = r.evidence
-    return GateResult(not findings, findings, evidence, counts)
+            if kind != "malformed":
+                failing.append(f"{kind}:{label}")   # only a measured failure holds the run; the kind decides, not the text (#1803)
+    return GateResult(not failing, findings, evidence, counts)
 
 
 def visual_guard(_params, inp):
