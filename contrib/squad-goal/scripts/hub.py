@@ -2496,7 +2496,9 @@ def profiler_refusal(a, origin_ok, tn):
 
 def profile_run_rows(window_s, now=None):
     """The folded rows of this profile's runs the window can hold, from the one reader of a record (`scan`): `t0`, `t1`,
-    the verdict and its reasons. A record whose last write is older than the window is an older run, so it is not read."""
+    the verdict and its reasons. The window is the fold's own rule, the run's end (`t1`, or `now` while a run has no
+    verdict) at or after its start, so the write time of a record never decides: a run still going with no recent event
+    is in the window, and a run that ended inside it stays there."""
     now = time.time() if now is None else now
     since = now - window_s
     out = []
@@ -2504,12 +2506,10 @@ def profile_run_rows(window_s, now=None):
         try: ds = sorted(root.glob("run-*"))
         except OSError: continue
         for d in ds:
-            p = d / "record.jsonl"
-            try:
-                if p.stat().st_mtime < since: continue
-            except OSError: continue
-            r = scan(p)
-            if r and r.get("t0"): out.append({"t0": r["t0"], "t1": r["t1"], "verdict": r["verdict"], "reasons": r["reasons"]})
+            r = scan(d / "record.jsonl")
+            if not r or not r.get("t0"): continue
+            if (r.get("t1") if r.get("t1") is not None else now) < since: continue   # the same window the fold applies
+            out.append({"t0": r["t0"], "t1": r["t1"], "verdict": r["verdict"], "reasons": r["reasons"]})
     return out
 
 def profile_run_table(window_s, now=None):

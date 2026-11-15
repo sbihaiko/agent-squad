@@ -8,6 +8,7 @@ import http.client
 import importlib.util
 import inspect
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -360,6 +361,17 @@ def test_a_fixture_record_with_no_verdict_is_a_running_run(records):
     record(runs / "run-20261115-010404-dddddd", ev("run_start", NOW - 600), ev("call_start", NOW - 60))
     t = mod.profile_run_table(3600, NOW)
     assert [(r["verdict"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", 1, 600.0)]
+
+
+def test_a_running_run_whose_record_write_is_older_than_the_window_still_counts(records):
+    """A run with no verdict is running up to now, so its old last write never ages it out of the window (AC3).
+    The fold's rule is the timestamps: a run still running ends at `now`, whatever its record's write time."""
+    mod, runs = records
+    d = runs / "run-20261115-010505-eeeeee"
+    record(d, ev("run_start", NOW - 200_000), ev("call_start", NOW - 190_000))
+    os.utime(d / "record.jsonl", (NOW - 172800, NOW - 172800))   # a long think: no event for two days
+    t = mod.profile_run_table(86400, NOW)
+    assert [(r["verdict"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", 1, 200_000.0)]
 
 
 # ---------------------------------------------------------------- the route
@@ -844,6 +856,29 @@ def test_the_route_answers_the_table_of_the_window_the_page_asked_for(hub):
     code, short = ask(port, "GET", path="/api/profiler?w=3600")
     assert code == 200 and short["runs_window_s"] == 3600 and short["runs"]["rows"] == v["runs"]["rows"]
     assert ask(port, "GET", path="/api/profiler?w=99")[1]["runs_window_s"] == 86400, "a choice the page cannot read is the default"
+
+
+def test_the_route_folds_every_run_record_through_the_one_reader(hub, monkeypatch):
+    """AC4: the route's table is what the hub's one reader of a record answers, `scan`, never a parse of its own and
+    nothing from GitHub. The reader answers a reason this test writes nowhere on disk, and the route must show it."""
+    mod, port, _, state, _ = hub
+    now = time.time()
+    d = state.parent / "runs" / "run-20261115-050505-ffffff"
+    record(d, ev("run_start", now - 600), ev("verdict", now - 300, verdict="failed", exit_code=1, reasons=["gate:red"]))
+    seen, real = [], mod.scan
+
+    def counted(p):
+        seen.append(str(p))
+        if str(p) == str(d / "record.jsonl"):
+            return {"t0": now - 100, "t1": now - 50, "verdict": "failed", "reasons": ["folded:only"]}
+        return real(p)
+
+    monkeypatch.setattr(mod, "scan", counted)
+    code, v = ask(port, "GET")
+    assert code == 200
+    assert str(d / "record.jsonl") in seen, "the route reads every run record through the hub's one reader"
+    assert ("failed", "folded:only") in [(r["verdict"], r["reason"]) for r in v["runs"]["rows"]], \
+        "the route renders the reader's answer, never a second parse of the record"
 
 
 # ---------------------------------------------------------------- behind the many-repository hub
