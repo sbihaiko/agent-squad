@@ -486,6 +486,23 @@ r=$(OPEN="7 9" CHECKS="$GREEN" bl)
 land7; printf 'origin/dev\n' > "$T/st/auto/kept-fix_7-land-run-z"
 r=$(OPEN="7 9" CHECKS="$GREEN" bl)
 /usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && ! /usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && [ ! -e "$T/st/auto/kept-fix_7-land-run-z" ] && ok "an old-form one-line marker closes the branch's own issue alone" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+# (#1826) A kept landing branch whose tip the base already carries has landed: the pass writes its books, deletes the branch, its wave
+# branch and the marker, and spends no check, no review and no gate. Its tip is a dev commit, so a review of it reads an empty diff
+# and answers BLOCKED for ever, and each round moves the tip to a fresh try count.
+land7; $O update-ref refs/heads/dev "$($O rev-parse refs/heads/fix/7-land-run-z)"
+printf 'origin/dev\nissue 7\nissue 9\nround 1 abc\n' > "$T/st/auto/kept-fix_7-land-run-z"
+before=$($O rev-parse dev)
+r=$(OPEN="7 9" CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$before" ] && ok "an already-landed kept branch pushes nothing" || ko "the pass pushed a branch the base already carried"
+case "$r" in *"BRANCHLAND LANDED fix/7-land-run-z"*) ok "an already-landed kept branch writes its books";; *) ko "no landed line: '$r'";; esac
+/usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && /usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && ok "an already-landed kept branch closes every issue line of its marker" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+case "$r" in *"BRANCHLAND WAIT"*) ko "an already-landed kept branch waited: '$r'";; *) ok "an already-landed kept branch waits for no review and no gate";; esac
+[ -z "$($O rev-parse -q --verify refs/heads/fix/7-land-run-z)" ] && [ -z "$($O rev-parse -q --verify refs/heads/wave/run-z)" ] && [ ! -e "$T/st/auto/kept-fix_7-land-run-z" ] \
+  && ok "an already-landed kept branch goes, with its wave branch and its marker" || ko "the branch, its wave branch or its marker remains"
+# Only a kept branch: an ordinary work branch at the base tip carries no commit yet, and the pass waits for its review as before.
+reset; (cd "$T/w" && $G checkout -q -b fix/8-z origin/dev && $G push -q origin fix/8-z 2>/dev/null) >/dev/null 2>&1
+r=$(OPEN="8" CHECKS="$GREEN" bl)
+! /usr/bin/grep -q 'state=closed' "$T/gh.log" && ok "an ordinary branch at the base tip is not read as landed" || ko "an ordinary branch at the base tip closed an issue: $(/usr/bin/grep 'state=closed' "$T/gh.log")"
 
 # DEBT (#1500): the lander's one route to the repeat rule. A kept landing branch whose round pushed a head (landround-*.head differs from
 # the tip) and still conflicts with dev goes to `wave.sh landconflict`; one case for each outcome, on the real route.

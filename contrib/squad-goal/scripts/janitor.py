@@ -1642,7 +1642,9 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
                 if not dry: mk.touch()
 def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts none says so once past a bound
     """The streak autofrontier.sh leaves in $SG_STATE/frontier-idle: `<epoch> TAB FRONTIER idle: ...`. Past the bound, and
-    once per bound, one alert names the Todo count and the reasons; the frontier drops the file when it dispatches."""
+    once per bound, one alert names the Todo count and the reasons; the frontier drops the file when it dispatches.
+    A frontier whose every unstartable reason is `no slot` is at its cap, which is backpressure and not a stuck loop: the
+    alert says which of the two it is, so a full queue never reads as a call for the owner."""
     bound = int(os.environ.get("SG_FRONTIER_IDLE_SECONDS") or 3600)
     f, mk = st / "frontier-idle", st / "frontier-idle-alert"
     try: since, _, line = f.read_text().partition("\t"); since = float(since)
@@ -1652,7 +1654,13 @@ def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts n
     except (OSError, ValueError): last = 0.0
     if now - last < bound: return
     if dry: return
-    alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} (the frontier holds this work and starts none; NEEDS OWNER)")
+    m = re.search(r"0 startable \(([^)]*)\)", line)
+    why = [p.strip() for p in (m.group(1).split(",") if m else []) if p.strip()]
+    held = [p for p in why if p.split()[:1] not in (["0"], [])]   # a reason at zero is no reason
+    full = bool(held) and all(re.fullmatch(r"\d+ no slot", p) for p in held)
+    tail = ("every run slot is busy, so this is backpressure and no owner action is needed" if full
+            else "the frontier holds this work and starts none; NEEDS OWNER")
+    alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} ({tail})")
     mk.write_text(f"{now}\n")
 def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lane of this scripts dir still runs; one alert per episode
     here = os.path.dirname(os.path.abspath(__file__)); mk = st / "watchd-orphan-alert"

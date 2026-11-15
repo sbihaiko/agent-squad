@@ -330,6 +330,17 @@ if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$($SG_PS -o stat= -p "$lhp"
   la=$(( now - lp ))
   [ "$ls" -gt 0 ] && [ "$la" -gt $(( lw + lb )) ] && add landing-held "the landing lock has been held by pid $lhp since $(date -r "$ls" '+%F %T' 2>/dev/null || date -d "@$ls" '+%F %T' 2>/dev/null || printf '%s' "$ls") (no gate round began for ${la}s, past the ${lw}s gate wait plus the ${lb}s gate bound): the landing is stuck, not queued"
 fi
+# A janitor pass that holds its single-janitor lock past its own bound is stuck, not slow (#1775): the pass deadline lives
+# inside janitor.py (#1774) and fires only when the next call would start, so a hang in the shell wrapper, or in Python code
+# between calls, held the lock in silence. The bound is the pass deadline plus one call deadline, and a live holder past it
+# names its pid and the lock's age. A lock whose holder is dead is the stale lock single.sh reaps, never this cause.
+jld="$SG_STATE/locks/single-janitor"; jlp=$(cat "$jld/pid" 2>/dev/null)
+if [ -n "$jlp" ] && kill -0 "$jlp" 2>/dev/null && [ "$($SG_PS -o stat= -p "$jlp" 2>/dev/null | cut -c1)" != Z ]; then
+  jpd=${SG_JANITOR_DEADLINE:-900}; case $jpd in ''|*[!0-9]*) jpd=900;; esac   # janitor.py's own default and name (#1774)
+  jcd=${JANITOR_CALL_TIMEOUT:-60}; case $jcd in ''|*[!0-9]*) jcd=60;; esac    # janitor.py's call deadline (ADR-0051)
+  ja=$(( now - $(mtime "$jld/pid") ))
+  [ "$jpd" -gt 0 ] && [ "$ja" -gt $(( jpd + jcd )) ] && add janitor-held "the janitor lock has been held by pid $jlp for ${ja}s, past the ${jpd}s pass deadline plus the ${jcd}s call deadline: the pass is stuck outside any call"
+fi
 { printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"relights":%s,"last_relight":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard" "$(relights)" "$(last_relight)"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf '],"briefs":{'; bn=0; for i in "${!causes[@]}"; do [ -n "${briefs[$i]}" ] || continue; [ $bn = 0 ] || printf ','; bn=1; printf '"%s":"%s"' "${causes[$i]}" "${briefs[$i]}"; done; printf '}}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
 # The marker is written after the pass, not inside it: one cause may arrive as several lines (a repeating failure names one per
