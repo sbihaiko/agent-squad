@@ -4973,6 +4973,7 @@ def spec_plan_parents(items):
     return {i["pa"] for i in items if isinstance(i.get("pa"), int) and str(i.get("s") or "").lower() != "closed"
             and _columns_module.SPEC_LABEL not in (i.get("l") or []) and not set(i.get("l") or []) & set(TICKET_HOLD_LABELS)}
 def board(moves=None):
+    _HOLDER_CACHE.clear()   # the memo answers for one board build, never across two: its fact is the run's liveness, which changes with no board read, so a later build asks again (#1790)
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     if moves is None: moves = read_moves() if overlay else {}   # the serve passes the record it already read, so one serve reads it once (#973); the record is read on every serve, so a page reload sees the same overlay (#650)
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
@@ -5089,6 +5090,7 @@ def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
     overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
     moves = read_moves() if overlay_on() else {}
+    _HOLDER_CACHE.clear()   # the key reads the same facts the body will: a memo from an earlier build would key this board on a liveness it no longer has (#1790)
     holders = [(i["n"], holder_fact(i)[1]) for i in board_cache["items"] if (i.get("h") or {}).get("run")]   # a holder's process moves with no board read (#1661)
     key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
