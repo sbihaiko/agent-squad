@@ -14,6 +14,10 @@ scheduling slowdown measured right then (`contention_factor`): the measured wall
 call that only waited for a CPU is not named while a call that sleeps past the line still is. The measure runs only for
 a call already over a line, so a passing suite pays nothing.
 
+A CPU spin sees only work that waits for a CPU. A process blocked on a disk waits just as long and spins for none of it,
+so `pressure_factor` reads the load average against the CPU count, which counts a disk-blocked process too. The shell
+suite runner multiplies its bound by it (#1885); a spin measure alone called a green suite on a busy machine its own cost.
+
 The 1 s line is a timing-only finding, and xdist load still turns a 0.4 s suite into 2.2 s past what the factor excuses
 (#629). So the mode decides how it is read. Under xdist (pytest-xdist's own worker state: the call runs in a worker, whose
 config carries `workerinput`), an unmarked call at or over `heavy_cap_seconds` does not fail; it is named in the summary
@@ -21,6 +25,7 @@ as `SLOW-UNMARKED (deferred to the serial run)`. In a serial run (`-p no:xdist`,
 runs that mode on the same tip after the xdist run, so the line is still enforced. The mode is read from the runner, never
 from a worker count. The 20 s cap and every functional failure are strict in both modes.
 """
+import os
 import signal
 import time
 
@@ -94,6 +99,31 @@ def contention_factor():
     if cpu <= 0:
         return 1.0
     return min(MAX_CONTENTION_FACTOR, max(1.0, wall / cpu))
+
+
+def load_average():
+    """The machine's one-minute load average, or 0 when the platform reports none: a load that cannot be read excuses
+    nothing."""
+    try:
+        return os.getloadavg()[0]
+    except OSError:
+        return 0.0
+
+
+def cpu_count():
+    """The CPUs the machine schedules on, or 1 when it cannot say: one CPU divides the load by one."""
+    return os.cpu_count() or 1
+
+
+def pressure_factor(load=None, cpus=None):
+    """How many waiters the machine holds per CPU right now: 1 at or under one per CPU, that ratio above it, and never
+    past `MAX_CONTENTION_FACTOR`. Unlike `contention_factor`, the load average counts a process blocked on a disk, so a
+    suite that only waited on I/O under load reads as the machine's cost, not its own (#1885)."""
+    load = load_average() if load is None else load
+    cpus = cpu_count() if cpus is None else cpus
+    if cpus <= 0:
+        return 1.0
+    return min(MAX_CONTENTION_FACTOR, max(1.0, load / cpus))
 
 
 def _over(item, seconds):

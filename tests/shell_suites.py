@@ -12,8 +12,11 @@ suite under that load. A new suite is found with no edit here, and a test fails 
 Both lines follow the machine's own measure, never a wall second guessed on a quiet one (#736). The cap excuses a call over
 its line only up to the slowdown `tests/slowcap.py` measures and bounds (`MAX_CONTENTION_FACTOR`), so the slow line is the cap
 divided by that factor: a suite at or over it can cross the cap under load. One run of a suite is bounded by its measured time
-times the same factor, never below a floor, so a bound tighter than the load it may meet never fails a suite for the machine's
-work rather than its own.
+times the same factor and times the pressure the machine carries at call time (`slowcap.pressure_factor`, the load average
+per CPU), never below a floor, so a bound tighter than the load it may meet never fails a suite for the machine's work rather
+than its own. A spin measure alone misses a suite that clones and pushes trees: it waits on the disk and spins for none of it,
+so it took 485.2 s under load 24.6 against a 424.76 s bound and was stopped while green (#1885). The pressure factor is
+measured and bounded too, so a suite that really costs more keeps a finite bound.
 """
 import os
 import signal
@@ -61,9 +64,12 @@ def is_slow(suite):
 
 
 def timeout_for(suite):
-    """The wall bound of one run of `suite`: its own measured time times the slowdown the cap excuses, never below the floor a
-    short suite gets. A bound tighter than that fails a suite for the machine's load, not for its own work (#736)."""
-    return max(MIN_TIMEOUT_SECONDS, measured().get(Path(suite).name, 0.0) * LOAD_FACTOR)
+    """The wall bound of one run of `suite`: its own measured time times the slowdown the cap excuses times the pressure the
+    machine carries now, never below the floor a short suite gets. The pressure is the load average per CPU, so a suite that
+    only waited on a busy disk is not failed for the machine's wall, while a suite whose cost is past the bounded widening
+    still is (#736, #1885)."""
+    return max(MIN_TIMEOUT_SECONDS,
+               measured().get(Path(suite).name, 0.0) * LOAD_FACTOR * slowcap.pressure_factor())
 
 
 def end_group(pgid):
