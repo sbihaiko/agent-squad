@@ -8731,7 +8731,15 @@ def request_target(h):
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
 CHART_INPUTS = {"cfd": lambda: history_key(), "lead": lambda: (board_cache.get("t"), history_key())}
-VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_subject(), **CHART_INPUTS})
+_board_parsed = {}   # the board body parsed once per ETag: the stream asks every tick, and a thousand cards parsed and dumped each time was most of the hub's CPU (#1790)
+def board_subject():
+    """The board event's content and its digest, in the shape hubstream.Versions reads without a serialization: the body
+    is parsed once per ETag, and the ETag is already the hash of that body, so the stream never walks it again."""
+    body, etag = board_served()
+    if etag is None: return json.loads(body)   # an error body carries no ETag, so the stream hashes that small content as before
+    if _board_parsed.get("etag") != etag: _board_parsed.update(etag=etag, content=json.loads(body))
+    return _board_parsed["content"], etag
+VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": board_subject, "sessions": lambda: sessions_subject(), **CHART_INPUTS})
 TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NAME, sid, None, profiles_of=profiles_of_cwd))
 
 _TICKERS = {}
