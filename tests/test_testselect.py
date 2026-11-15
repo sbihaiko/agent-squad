@@ -460,3 +460,21 @@ def test_the_measured_seconds_file_selects_its_readers_though_one_loads_a_script
         },
     )
     assert select(repo) == ["tests/test_dynamic.py", "tests/test_reader.py"]
+
+
+SHARD_GUARD_BASE = {"tests/test_tooling.py": "def test_every_test_file_is_in_exactly_one_full_suite_shard():\n    pass\n"}
+
+
+def test_a_delta_that_adds_a_test_file_selects_the_shard_guard(tmp_path):
+    repo = tip(tmp_path, {"tests/test_new.py": "X = 1\n"}, extra=SHARD_GUARD_BASE)
+    assert select(repo) == ["tests/test_new.py", "tests/test_tooling.py"]
+
+
+def test_a_delta_that_deletes_a_test_file_selects_the_shard_guard(tmp_path):
+    repo = tip(tmp_path, {"tests/test_gamma.py": None}, extra=SHARD_GUARD_BASE)
+    assert select(repo) == ["tests/test_tooling.py"]
+
+
+def test_a_delta_that_only_edits_a_test_file_does_not_select_the_shard_guard(tmp_path):
+    repo = tip(tmp_path, {"tests/test_alpha.py": "from squad import alpha\nX = 1\n"}, extra=SHARD_GUARD_BASE)
+    assert select(repo) == ["tests/test_alpha.py"]
