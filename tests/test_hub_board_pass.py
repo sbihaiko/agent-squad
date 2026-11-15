@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,35 @@ def _fast_pass_ready(hub, monkeypatch, state, *answers):
     monkeypatch.setattr(hub, "FAST_BUDGET", hub.board_fast.Budget(600))
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [_row(11)], "prs": [], "lc": {}, "err": None, "parts": {}})
     monkeypatch.setattr(hub, "_graphql", gql)
+
+
+def test_moves_closer_than_the_minimum_gap_ask_for_one_full_read(hub, monkeypatch):
+    """A burst of card moves asks for one full read, never one per move. The board holds more than a thousand cards, so a
+    full read is a dozen pages; a loop that moves cards every few seconds turned the dirty flag into a full read every few
+    seconds, and the hub spent most of its CPU parsing a board that had changed in one card (#1790). The fast read already
+    carries each card's column within FAST_EVERY, so the full read is allowed to wait out the gap."""
+    state = Path(tempfile.mkdtemp())
+    _fast_pass_ready(hub, monkeypatch, state, _snapshot(_node(11), _node(12)))
+    hub.fast_board_pass()
+    assert (state / "board-dirty").exists(), "the move asks for a full read"
+    hub.board_cache["t"] = time.time() - 5   # the full read ran five seconds ago: inside the minimum gap
+
+    passes, sleeps = [], []
+
+    def fake_pass():
+        passes.append(1)
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        if len(sleeps) > 2:
+            raise StopIteration
+
+    monkeypatch.setattr(hub, "board_pass", fake_pass)
+    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    with pytest.raises(StopIteration):
+        hub.refresh_board()
+    assert len(passes) == 1, "a move inside the minimum gap waits for the gap instead of re-reading the whole board"
+    assert sleeps == [2, 2, 2], "the flag is polled every beat and the read stays due"
 
 
 def test_a_card_the_cache_does_not_hold_asks_for_the_full_read(hub, monkeypatch):

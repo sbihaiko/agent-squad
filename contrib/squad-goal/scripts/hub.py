@@ -3913,6 +3913,8 @@ def save_board():
     profile in one process, so the pid alone is shared."""
     _tmp = _temp_name(BOARD); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
 FULL_EVERY = 600   # seconds between full board reads; a board-dirty flag reads at once
+DIRTY_MIN_SECS = 30.0   # the least gap between two full reads a card move asks for: a board of a thousand cards is a
+                        # dozen pages, so one read per move spent the hub's CPU on a board that changed in one card (#1790)
 FAST_EVERY = 15    # seconds between fast reads of the open cards
 FULL_DEADLINE = 300   # the full read's overall deadline (ADR-0051): its page loops and branch fetches stop past it
 BOARD_OVERDUE_SECS = FULL_EVERY + FULL_DEADLINE   # a board item read older than the cadence plus one full pass is overdue (#1661)
@@ -3984,7 +3986,9 @@ def refresh_board():
         for _ in range(8 if quick else FULL_EVERY // 2):
             time.sleep(2)
             try:
-                if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): quick = True; break
+                if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0):
+                    if time.time() - (board_cache.get("t") or 0) < DIRTY_MIN_SECS: continue   # a burst of moves asks once (#1790): the fast read carries each card's column in the meantime
+                    quick = True; break
             except OSError: pass
         else: quick = False
 ORDER = [column["name"] for column in BOARD_COLUMNS]
