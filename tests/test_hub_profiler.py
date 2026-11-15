@@ -712,7 +712,7 @@ def mux(tmp_path, monkeypatch):
     mod.process_table = table
     srv = hubmux.server(0, apps)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
-    yield mod, srv.server_address[1], table
+    yield mod, srv.server_address[1], table, apps
     mod.profiler_set(False, "test", "loopback")
     wait(lambda: not mod.profiler_running())
     srv.shutdown()
@@ -721,7 +721,7 @@ def mux(tmp_path, monkeypatch):
 
 def test_a_profile_behind_the_many_repository_hub_takes_the_switch(mux):
     """The many-repository hub forwards a write by the name of its handler: a route it does not forward answers nothing."""
-    mod, port, table = mux
+    mod, port, table, _ = mux
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     c.request("POST", "/alpha/api/profiler", body=json.dumps({"on": True}),
               headers={"Host": f"127.0.0.1:{port}", "Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}"})
@@ -735,19 +735,188 @@ def test_a_profile_behind_the_many_repository_hub_takes_the_switch(mux):
     assert v["on"] is True and v["tree"]["name"] == "loop"
 
 
-def test_the_many_repository_hub_starts_the_sampler_of_a_profile_whose_switch_is_on(mux):
+def test_the_many_repository_hub_starts_the_sampler_of_a_profile_only_when_a_page_reads_it(mux):
     """`start_profile` is what the many-repository hub's `__main__` runs for each profile, at its start and for a profile
-    added later. The profile's other background reads are stubbed."""
-    mod, _, table = mux
-    for name in ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler"):
+    added later. A switch left on starts no reading there: the Loop tab's read is what starts the sampler (#1790)."""
+    mod, port, table, apps = mux
+    for name in SAMPLERS:
         setattr(mod, name, lambda: None)
     mod.PROFILER_SWITCH.parent.mkdir(parents=True, exist_ok=True)
     mod.PROFILER_SWITCH.write_text(json.dumps({"on": True}))
     assert not mod.profiler_running()
     mux_mod = load("hubmux_profiler_start", SCRIPTS / "hubmux.py")
-    mux_mod.start_profile({"mod": mod})
+    mux_mod.start_profile(apps["alpha"])
+    time.sleep(0.3)
+    assert not mod.profiler_running() and table.reads == 0, "a switch left on read the process table with no page open"
+    mux_get(port, "/alpha/api/profiler")
     wait(lambda: table.reads >= 2)
-    assert mod.profiler_running()
+
+
+# ---------------------------------------------------------------- the background reads (#1790)
+# A page read is what keeps a profile's background reads running. With no page, a reader does no work: the many-repository
+# hub reads six of them per profile, and one of those reads the process table every five seconds.
+SAMPLERS = ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler")
+
+
+class StopSampling(Exception):
+    """Ends a sampler loop a test started: the gate's pause raises it once the test is done with the loop."""
+
+
+def gated(mod, idle):
+    """A gate whose pause ends the loop on request, so a test leaves no thread behind. A sleep a page is keeping alive is
+    cut to 20 ms: the read's own minute is the real cadence, which a test never waits."""
+    class Gate(mod.ReadGate):
+        def pause(self, secs):
+            if getattr(self, "done", False):
+                raise StopSampling
+            if self.wanted():
+                time.sleep(min(secs, 0.02))
+            else:
+                super().pause(secs)
+            if getattr(self, "done", False):
+                raise StopSampling
+    g = Gate(idle=idle); g.done = False; return g
+
+
+def drive(fn):
+    try:
+        fn()
+    except StopSampling:
+        pass
+
+
+def mux_get(port, path):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("GET", path, headers={"Host": f"127.0.0.1:{port}"})
+    r = c.getresponse(); body = r.read(); c.close()
+    return r.status, body
+
+
+def test_a_background_read_does_no_work_while_no_page_reads_the_profile(hub, monkeypatch):
+    """The load sampler reads only while a page reads its profile: no read for the idle window means no work, a read makes
+    it read at once, and it parks again when the page stops (#1790)."""
+    mod = hub[0]
+    ticks = []
+    monkeypatch.setattr(mod, "load_tick", lambda: ticks.append("load"))
+    monkeypatch.setattr(mod, "foot_refresh", lambda: ticks.append("foot"))
+    monkeypatch.setattr(mod, "LOAD_SAMPLE_SECS", 0.02)
+    gate = gated(mod, 0.15)
+    monkeypatch.setattr(mod, "READ_GATE", gate)
+    t = threading.Thread(target=drive, args=(mod.load_sampler,), daemon=True)
+    t.start()
+    try:
+        time.sleep(0.3)
+        assert ticks == [], f"{len(ticks)} reads with no page reading the profile"
+        gate.touch()
+        wait(lambda: len(ticks) >= 2)
+        time.sleep(0.4)                                      # the page stops reading: the idle window passes
+        parked = len(ticks)
+        time.sleep(0.2)
+        assert len(ticks) == parked, "the load sampler went on reading after the page stopped"
+    finally:
+        gate.done = True; gate.touch(); t.join(2)
+    assert not t.is_alive()
+
+
+def test_a_page_read_wakes_a_long_background_read_at_once(hub, monkeypatch):
+    """The history read sleeps a minute or more between passes. A page read ends that sleep at once, so a page that opens
+    on a cold profile is not a minute behind (#1790)."""
+    mod = hub[0]
+    passes = []
+    monkeypatch.setattr(mod, "history_pass", lambda: passes.append(time.time()))
+    monkeypatch.setattr(mod, "HISTORY_EVERY", 600)
+    gate = gated(mod, 0.2)
+    monkeypatch.setattr(mod, "READ_GATE", gate)
+    t = threading.Thread(target=drive, args=(mod.refresh_history,), daemon=True)
+    t.start()
+    try:
+        time.sleep(0.3)
+        assert passes == [], "the history read ran with no page reading the profile"
+        gate.touch()
+        wait(lambda: passes)                                 # the 600 s sleep ended on the read, not after it
+    finally:
+        gate.done = True; gate.touch(); t.join(2)
+    assert not t.is_alive()
+
+
+def test_a_short_read_resumes_beside_a_long_one_after_an_idle_gap(hub, monkeypatch):
+    """Each read keeps its own place, so a long sleeper never holds a short one: a page that comes back after an idle gap
+    finds the fast readings moving again (#1790)."""
+    mod = hub[0]
+    ticks, passes = [], []
+    monkeypatch.setattr(mod, "load_tick", lambda: ticks.append(1))
+    monkeypatch.setattr(mod, "foot_refresh", lambda: None)
+    monkeypatch.setattr(mod, "LOAD_SAMPLE_SECS", 0.02)
+    monkeypatch.setattr(mod, "history_pass", lambda: passes.append(1))
+    monkeypatch.setattr(mod, "HISTORY_EVERY", 600)
+    gate = gated(mod, 0.15)
+    monkeypatch.setattr(mod, "READ_GATE", gate)
+    a = threading.Thread(target=drive, args=(mod.load_sampler,), daemon=True)
+    b = threading.Thread(target=drive, args=(mod.refresh_history,), daemon=True)
+    a.start(); b.start()
+    try:
+        gate.touch()
+        wait(lambda: len(ticks) >= 2 and passes)             # both read while a page reads
+        time.sleep(0.4)                                      # the page goes away
+        parked = len(ticks)
+        time.sleep(0.2)
+        assert len(ticks) == parked, "the short read went on with no page"
+        gate.touch()
+        wait(lambda: len(ticks) > parked + 1 and len(passes) >= 2)   # and both come back on the next read
+    finally:
+        gate.done = True; gate.touch(); a.join(2); b.join(2)
+    assert not a.is_alive() and not b.is_alive()
+
+
+def test_the_process_table_read_stops_once_no_page_reads_the_profile(hub, monkeypatch):
+    """The Loop tab's sampler is the one reading that costs most: it reads the process table every second. It runs while
+    a page reads the profile and ends when none does (#1790)."""
+    mod, port, _, _, table = hub
+    gate = gated(mod, 0.2)
+    monkeypatch.setattr(mod, "READ_GATE", gate)
+    gate.touch()
+    assert ask(port, "POST", {"on": True})[0] == 200
+    wait(lambda: table.reads >= 2)
+    time.sleep(0.45)                                         # no page reads the profile
+    assert not mod.profiler_running(), "the process table read went on with no page reading the profile"
+    seen = table.reads
+    time.sleep(0.1)
+    assert table.reads == seen
+    gate.touch()                                             # the Loop tab's read starts it again
+    ask(port, "GET")
+    wait(lambda: table.reads > seen)
+
+
+def test_a_page_read_starts_the_reads_of_the_profile_it_names(mux):
+    """The many-repository hub parks a profile's reads at boot: a read of that profile's page is what starts them (#1790)."""
+    _, port, _, apps = mux
+    mux_mod = load("hubmux_read_gate", SCRIPTS / "hubmux.py")
+    app = apps["alpha"]
+    mux_mod.start_profile(app)
+    assert not app["gate"].wanted(), "the profile reads at boot with no page open"
+    assert mux_get(port, "/alpha/")[0] == 200
+    assert app["gate"].wanted(), "a page read did not start the profile's reads"
+
+
+def test_the_index_read_starts_the_reads_of_every_repository_it_lists(mux):
+    """The index lists each repository's live work and its worst alert, so it reads each of them: its poll keeps their
+    readings running (#1790)."""
+    _, port, _, apps = mux
+    mux_mod = load("hubmux_index_gate", SCRIPTS / "hubmux.py")
+    mux_mod.start_profile(apps["alpha"])
+    assert not apps["alpha"]["gate"].wanted()
+    assert mux_get(port, "/api/hub")[0] == 200
+    assert apps["alpha"]["gate"].wanted()
+
+
+def test_the_identity_check_starts_no_read(mux):
+    """`hubctl.sh` probes the identity on its own bound, and ADR-0124 keeps that answer off the profile's state reads: it
+    starts no background read either (#1202, #1790)."""
+    _, port, _, apps = mux
+    mux_mod = load("hubmux_identity_gate", SCRIPTS / "hubmux.py")
+    mux_mod.start_profile(apps["alpha"])
+    assert mux_get(port, "/api/hub?identity=1")[0] == 200
+    assert not apps["alpha"]["gate"].wanted(), "the identity check started the profile's reads"
 
 
 # ---------------------------------------------------------------- the second review's findings

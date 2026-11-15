@@ -254,13 +254,15 @@ def test_the_hub_starts_the_history_writer_as_a_thread(hub):
 
 
 def _mux_read_threads():
-    """The read functions the live server starts for each profile's hub: the names in hubmux's loop over its read threads."""
+    """The read functions the live server starts for each profile's hub: the names of hubmux's own `SAMPLERS` tuple, the
+    one its start loops over."""
     for node in ast.walk(ast.parse(MUX_PY.read_text())):
-        if isinstance(node, ast.For) and isinstance(node.iter, ast.Tuple):
-            names = [e.value for e in node.iter.elts if isinstance(e, ast.Constant)]
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "SAMPLERS" for t in node.targets) \
+                and isinstance(node.value, ast.Tuple):
+            names = [e.value for e in node.value.elts if isinstance(e, ast.Constant)]
             if "refresh_board" in names:
                 return names
-    raise AssertionError("hubmux starts no board read")
+    raise AssertionError("hubmux names no SAMPLERS tuple with a board read")
 
 
 def test_the_live_mux_starts_the_history_writer_as_a_thread():

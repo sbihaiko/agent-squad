@@ -160,3 +160,26 @@ def test_three_profiles_scan_the_process_table_once_a_tick(three_profiles, monke
     clock["t"] += gap
     three_profiles[0].load_tick(sample)
     assert len(scans) == 1, "a later tick kept a scan it should have read again"
+
+
+def test_three_profiles_profile_from_one_scan_a_tick(three_profiles, monkeypatch):
+    """The Loop tab's sampler reads the table once a tick for every profile of the hub, not once per profile (#1790):
+    three profile samplers at one reading a second each scanned the machine three times a second."""
+    scans = []
+
+    def scan():
+        scans.append(1)
+        return {}
+
+    clock = {"t": time.time()}
+    monkeypatch.setitem(sys.modules["procscan"]._STATE, "snap", None)   # no scan a test before this one left behind
+    monkeypatch.setitem(sys.modules["procscan"]._STATE, "at", None)
+    for m in three_profiles:
+        monkeypatch.setattr(m, "process_table", scan)
+        monkeypatch.setattr(m, "time", SimpleNamespace(time=lambda: clock["t"]))
+    for m in three_profiles:
+        m.profiling_table()
+    assert len(scans) == 1, f"one profiler tick read the process table {len(scans)} times for three profiles"
+    clock["t"] += three_profiles[0].PROFILER_SECS + 0.1
+    three_profiles[0].profiling_table()
+    assert len(scans) == 2, "a later tick kept a scan it should have read again"
