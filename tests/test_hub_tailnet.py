@@ -135,7 +135,7 @@ def test_tailnet_get_with_an_allowed_login_is_answered(serve):
     status, text = request(s.port, "GET", "/api/runs?groups=1", host=TAILNET, login=ANA)
     data = json.loads(text)
     assert status == 200 and data["runs"] == []
-    assert [g["key"] for g in data["groups"]] == ["running", "1h", "2h", "4h", "8h", "24h", "d"]   # the opted-in answer carries the history groups
+    assert [(g["key"], g["label"]) for g in data["groups"]] == [("running", "WORKERS")]   # the opted-in answer carries the Live group alone (#1778)
 
 
 @pytest.mark.parametrize("route, body", [("/api/models", {}), ("/api/plans", {}), ("/api/promote", {"issue": 5})])

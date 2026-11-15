@@ -20,6 +20,7 @@ Guards: `tests/test_workcmd.py`.
 import contextlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -201,9 +202,79 @@ class CmdResult:
     counts: dict | None = None    # the counts of the output's last pytest summary, or None: how much of the suite passed (#80)
 
 
+# The exits of a command the shell could not start: 126 is "found, not executable" (a bad shebang interpreter too), 127 is
+# "no such command". A path that names no program, such as an absolute home path in another machine's tree, lands here (#1803).
+# The exit code alone does not tell: a program that started may exit 126 or 127 by design, and a compound command may end
+# on 127 after a real check failed. So the shell's own start-failure text is read with it, beside what the command starts.
+CANNOT_START = (126, 127)
+# The shell's report that it never started a program. A shell builtin that starts says nothing of the kind. The suites run
+# under more than one shell and the words differ: bash says `No such file or directory`, the CI's dash says `not found`.
+START_REFUSAL = ("command not found", "No such file or directory", "not found", "Permission denied", "is a directory")
+# A file that exists and is executable can still be refused by the kernel: a shebang interpreter that is not there, a
+# binary built for another machine. Only these name the file the command starts first; a `command not found` here is a
+# program the command started itself, as in `sh -c missing_prog`, and that one is a measured failure.
+EXEC_REFUSAL = ("bad interpreter", "exec format error", "Bad CPU type in executable")
+LEADING_PROGRAM = re.compile(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*([^\s;&|()<>]+)")
+# A shell word always starts, so its non-zero exit is a measured failure: `exit 127` is a check, not a missing program.
+SHELL_WORDS = frozenset("""! : . [ [[ break case cd command continue do done elif else esac eval exec exit export false fi
+for function getopts hash if in local printf pwd read readonly return select set shift source test then times trap true
+type ulimit umask unalias unset until wait while""".split())
+
+
+def _leading_program(cmd):
+    """The program the shell starts first, after any `VAR=value` assignments; empty when the command names none."""
+    m = LEADING_PROGRAM.match(cmd)
+    return m.group(1).strip("'\"") if m else ""
+
+
+def _refused_shebang(path):
+    """True when the file names a shebang interpreter that is not there, so the kernel refuses the file itself and nothing
+    it holds ran. Read from the file, never from the shell's message: bash calls it `bad interpreter` and dash only `not
+    found`, and the two must answer the same (#1803). A file with no shebang is left to the shell's own words, which is the
+    only reading of a binary built for another machine."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(512)
+    except OSError:
+        return True
+    if not head.startswith(b"#!"):
+        return False
+    words = head[2:].split(b"\n", 1)[0].split()
+    if not words:
+        return True
+    interpreter = os.fsdecode(words[0])
+    return not (os.path.isfile(interpreter) and os.access(interpreter, os.X_OK))
+
+
+def _cannot_start(cmd, cwd, env, stderr):
+    """True when the shell never started a program, so the command proves nothing (#1803).
+
+    A shell built-in always starts, so a refusal in its wake names the program the command runs next, as in
+    `cd sub && ./missing`. A word with a path separator is checked as a path, relative to the tree the command runs in; a
+    bare word is looked up on the command's own `PATH`. A program that exists and started is measured at any exit, never
+    called malformed: its own `command not found` belongs to something it ran, not to the shell. Only the kernel's
+    refusal of that very file, a bad shebang interpreter or a binary of another machine, makes it malformed anyway.
+    """
+    program = _leading_program(cmd)
+    if not program:
+        return False
+    refused = any(phrase in stderr for phrase in START_REFUSAL)
+    if program in SHELL_WORDS:
+        return refused
+    if os.sep in program or (os.altsep and os.altsep in program):
+        path = program if os.path.isabs(program) else os.path.join(cwd, program)
+    else:
+        path = shutil.which(program, path=env.get("PATH", ""))
+    if path is None or not (os.path.isfile(path) and os.access(path, os.X_OK)):
+        return True
+    return _refused_shebang(path) or any(phrase in stderr for phrase in EXEC_REFUSAL)
+
+
 def run(cmd, cwd, timeout=None):
     """Run a shell command in `cwd`. Exit code 0 is ok; any other exit or a timeout is a failure with evidence.
     A command the shell cannot parse is `malformed`, not a failed check: nothing ran, so nothing was proved false.
+    So is a command whose leading program cannot start (exit 126 or 127 with no such executable): a path that names no
+    program proves nothing about the code. A program that did start is a measured failure at any exit.
     `timeout` None takes the cap of `ac_timeout()` at call time, so `SG_AC_TIMEOUT` reaches the gate and the landing check.
     The counts of the output's last pytest summary are reported beside the exit code, on a green command and a red one
     alike (#80). A timeout and a command the shell cannot parse report none: nothing was measured."""
@@ -212,10 +283,14 @@ def run(cmd, cwd, timeout=None):
     if syntax.returncode != 0:
         return CmdResult(False, evidence_of(syntax.stderr), malformed=True)
     with gate_slots(cwd) as n:
+        env = {**clean_env(os.environ), **bounded_env(n)}
         try:
-            r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env={**clean_env(os.environ), **bounded_env(n)})
+            r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             return CmdResult(False, f"timeout after {timeout:g} s")
     if r.returncode == 0:
         return CmdResult(True, counts=counts_of(r.stdout + r.stderr))
+    stderr = r.stderr.decode("utf-8", "replace")
+    if r.returncode in CANNOT_START and _cannot_start(cmd, cwd, env, stderr):      # nothing ran, so nothing was measured (#1803)
+        return CmdResult(False, evidence_of(r.stdout + r.stderr), malformed=True)
     return CmdResult(False, evidence_of(r.stdout + r.stderr), counts=counts_of(r.stdout + r.stderr))

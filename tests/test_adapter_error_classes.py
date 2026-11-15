@@ -243,3 +243,18 @@ def test_a_bare_number_is_not_the_api_s_own_status():
     # frame size or a duration never reads as an authentication or a quota failure.
     assert AC.cause("ResultError: the call produced nothing in 403 s") == "unknown"
     assert AC.cause("ResultError: the frame was 422 bytes") == "unknown"
+
+
+# --- a model the CLI cannot start is the chain's turn to move on -----------------------------------------------------
+
+UNRECOGNIZED_MODEL = ('ProcessError: Command failed with exit code -9 (exit code: -9)\n'
+                      'stderr tail: [claude-code:unrecognized_model] '
+                      '{"model":"claude-deepseek-flash[1m]","query_source":"sdk"}')
+
+
+def test_a_model_the_cli_cannot_start_is_a_transport_failure():
+    """The CLI refused the spelling before the provider saw it, so nothing about the model was proved and the node has
+    nothing to report but a lost call: the chain moves to its next entry (#1818). Read as `unknown`, the node ended
+    adapter_error after 4008 s and the run was killed with its whole wave."""
+    assert AC.is_transport(UNRECOGNIZED_MODEL)
+    assert AC.cause(UNRECOGNIZED_MODEL) == "protocol"

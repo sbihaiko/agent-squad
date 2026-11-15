@@ -851,6 +851,23 @@ def test_the_router_prompt_names_the_three_answers_and_warns_that_a_handoff_may_
     assert "stale" in text and "ask a child" in text
 
 
+PATH_RULE = ("A command names a repo-relative path and the repository's own interpreter, never an absolute home path "
+             "or a `$(pwd)` expansion: write `python3 -m pytest tests/test_workcmd.py -q` or "
+             "`.venv/bin/python -m pytest tests/test_workcmd.py -q` from the repo root.")
+
+
+SHELL_RULE = ("The gate runs each command under `/bin/sh`, so a command stays inside POSIX shell syntax: "
+              "no bash-only forms such as `[[ ]]`, arrays, process substitution or `function`.")
+
+
+def test_the_router_prompt_asks_for_repo_relative_paths_and_the_repositorys_interpreter():    # #1803
+    root = Path(__file__).resolve().parent.parent
+    for text in ((root / "prompts" / "router.md").read_text(), _seed_router().get("instructions", "")):
+        para = next(p for p in text.split("\n\n") if "`ac_commands`" in p and "NARROWEST" in p)
+        assert PATH_RULE in para, "the ac_commands paragraph must carry the concrete path and interpreter rule"
+        assert SHELL_RULE in para, "the ac_commands paragraph must name the shell dialect a command runs under"
+
+
 def test_a_child_with_no_artifact_records_how_its_session_ended():
     from squad.adapter import CallResult
     from squad.runners import children  # noqa: F401  the runner reads `ended` from the result

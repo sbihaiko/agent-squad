@@ -41,68 +41,35 @@ def test_live_running_starting_stalled_are_in_running(hub):
         assert hub.group_of({"state": st, "age": 60, "live": True}) == "running"
 
 
-def test_ended_run_lands_in_the_age_bucket(hub):
-    cases = [
-        (0, "1h"),
-        (3600, "1h"),
-        (3600 + 1, "2h"),
-        (7200, "2h"),
-        (7200 + 1, "4h"),
-        (14400, "4h"),
-        (14400 + 1, "8h"),
-        (5 * 3600, "8h"),
-        (28800, "8h"),
-        (28800 + 1, "24h"),
-        (12 * 3600, "24h"),
-        (86400, "24h"),
-        (86400 + 1, "d"),
-        (30 * 3600, "d"),
-    ]
-    for age, key in cases:
-        assert hub.group_of({"state": "completed", "age": age, "live": False}) == key
-
-
-def test_run_list_age_ladder_has_six_bands(hub):
-    """The ladder is the hub's own rule now (#1277): six age bands after the WORKERS group."""
-    assert list(hub.RUN_GROUPS[1:]) == [
-        ("1h", "≤ 1 h"),
-        ("2h", "1–2 h"),
-        ("4h", "2–4 h"),
-        ("8h", "4–8 h"),
-        ("24h", "8–24 h"),
-        ("d", "24 h+ (days)"),
-    ]
-
-
-def test_run_list_group_header_reads_workers_not_open(hub):
-    assert hub.RUN_GROUPS[0] == ("running", "WORKERS")
-    assert not any(k == "open" or label == "OPEN" for k, label in hub.RUN_GROUPS)
-
-
-def test_the_answer_carries_one_entry_per_group_with_its_text_title_and_emptiness(hub):
-    """The hub builds each group's header and marks a band empty, so the page draws what it is given (#1277)."""
+def test_the_answer_carries_the_live_group_alone(hub):
+    """No page draws an age band any more (#1778): the hub builds the Live header and nothing else. An ended run fills no
+    group, so its spend is in no header."""
     rows = [
         {"state": "running", "live": True, "spend": 1.0, "agents": 1},
         {"state": "completed", "live": False, "age": 600, "spend": 2.5, "agents": 0},
     ]
     groups = hub.run_groups(rows, {"runs": 6, "children": 20})
-    assert [g["key"] for g in groups] == ["running", "1h", "2h", "4h", "8h", "24h", "d"]
-    assert groups[0] == {"key": "running", "label": "WORKERS", "text": "RUNS 1/6 · AGENTS 1/20", "title": "$1.00", "empty": False}
-    assert groups[1] == {"key": "1h", "label": "≤ 1 h", "text": "1 · $2.50", "title": "$2.50", "empty": False}
-    assert [g["empty"] for g in groups[2:]] == [True] * 5
+    assert groups == [{"key": "running", "label": "WORKERS", "text": "RUNS 1/6 · AGENTS 1/20", "title": "$1.00", "empty": False}]
 
 
-def test_the_answer_names_each_rows_band_and_leaves_the_bare_array_alone(hub, monkeypatch):
-    """The phone places a row in its group from the answer's own `band` (#1337): it never rebuilds the ladder. The rows are
-    copies, so the bare /api/runs array is never given a page's field."""
+def test_run_groups_no_longer_builds_an_age_band_or_a_muted_line(hub):
+    """The ladder and its 'no runs in ...' line leave with the bands they named (#1778)."""
+    assert not hasattr(hub, "run_muted") and not hasattr(hub, "RUN_GROUPS")
+    assert [g["key"] for g in hub.run_groups([], None)] == ["running"]
+
+
+def test_the_answer_names_no_rows_band_and_keeps_the_bare_array_alone(hub, monkeypatch):
+    """No page places a row in a band any more (#1778), so the answer carries no per-row `band` and no muted line. The rows
+    are the bare array's own, never copies given a page's field."""
     live = dict(LIVE)
     ended = dict(HOUR_2)
     cc = {"id": "childcc", "kind": "childcc", "state": "waiting", "live": False, "rank": 0, "age": 4000, "spend": 0, "agents": 0}
     monkeypatch.setattr(hub, "run_list", lambda: [live, ended, cc])
     monkeypatch.setattr(hub, "loop_caps", lambda: {"runs": 6, "children": 20})
-    rows = hub.runs_answer()["runs"]
-    assert [r["band"] for r in rows] == ["running", "2h", "running"], "a band and the pass's own WORKERS group"
-    assert "band" not in live and "band" not in ended, "the bare array's rows were written by the page's answer"
+    answer = hub.runs_answer()
+    assert set(answer) == {"runs", "groups"}, "the answer carries a field no page reads"
+    assert not any("band" in r for r in answer["runs"])
+    assert answer["runs"][0] is live, "the rows are the bare list's own, not copies for a page"
 
 
 def test_a_changed_cap_shows_after_one_answer(hub, monkeypatch):

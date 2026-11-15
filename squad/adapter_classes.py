@@ -43,7 +43,10 @@ _PROTOCOL_WORDS = ("protocol", "malformed", "parse error", "parseerror", "invali
 # and every chain entry read `unknown`. The words are the ones the CLI and the socket layer write. A quota or a tool
 # refusal beside them is the provider's own answer and wins (`_settled_refusal`), and the transport's own `refused`
 # is taken out before the refusal words are read, so `Connection refused` never reads as a refusal.
-_TRANSPORT_WORDS = ("connection refused", "connection reset", "econnrefused", "econnreset")
+_TRANSPORT_WORDS = ("connection refused", "connection reset", "econnrefused", "econnreset",
+                    # A spelling the CLI would not start is the transport failing to deliver the model, never the
+                    # model's answer: the chain moves to its next entry at once (#1818).
+                    "unrecognized_model", "unknown model", "model not found", "invalid model")
 _STATUS = re.compile(r"\b(\d{3})\b")
 _STATUS_CAUSE = {"400": "protocol", "401": "auth", "402": "quota", "403": "auth", "408": "timeout",
                  "422": "protocol", "429": "quota"}

@@ -745,34 +745,13 @@ def group_header(kind, rows, caps):
         return {"text": f"{n} · {agents}", "title": title}
     return {"text": f"{n} · {title}", "title": title}
 
-RUN_GROUPS = (("running", "WORKERS"), ("1h", "≤ 1 h"), ("2h", "1–2 h"), ("4h", "2–4 h"),
-              ("8h", "4–8 h"), ("24h", "8–24 h"), ("d", "24 h+ (days)"))
-
-def band_of(r):
-    """The history group a row lands in: group_of's ladder, and the childcc pass is a worker, never a run, so it joins
-    WORKERS and never an age band."""
-    return "running" if r.get("kind") == "childcc" else group_of(r)
-
 def run_groups(rows, caps=None):
-    """The run history's groups, in ladder order: each key, its label, the header text and title built by group_header, and
-    `empty` marking a band that holds no run. The page draws what it is given, so the worktree ladder and its wording live here
-    alone (#1277). The rows are run_list's, each carrying `state`, `live`, `rank` and `age` (run_row, childcc_row, the test
-    row and the held row alike). The childcc pass is a worker, never a run: it lands in WORKERS and never in an age band, and
-    group_header never counts it."""
-    by = {k: [] for k, _ in RUN_GROUPS}
-    for r in rows: by[band_of(r)].append(r)
-    out = []
-    for k, label in RUN_GROUPS:
-        held = by[k]
-        h = group_header(k, held, caps)
-        out.append({"key": k, "label": label, "text": h["text"], "title": h["title"], "empty": not held})
-    return out
-
-def run_muted(groups):
-    """The one muted line naming the age bands that hold no run, built here: the page lays it out and never invents the
-    wording or its separator (#1277, #1337). Empty when every band holds a run."""
-    empty = [g["label"] for g in groups if g["key"] != "running" and g.get("empty")]
-    return "no runs in " + " · ".join(empty) if empty else ""
+    """The Live group's header: its key, label, the text and title group_header builds, and `empty` (#1778). The page draws
+    what it is given, so the occupancy's wording lives here alone (#1277). The rows are run_list's, each carrying `state`,
+    `live`, `rank` and `age`. The childcc pass is a worker, never a run: group_header never counts it."""
+    held = [r for r in rows if r.get("kind") == "childcc" or group_of(r) == "running"]
+    h = group_header("running", held, caps)
+    return [{"key": "running", "label": "WORKERS", "text": h["text"], "title": h["title"], "empty": not held}]
 def run_rank(st, live=True):
     return 0 if live and st in LIVE_STATES else 1
 
@@ -3069,14 +3048,12 @@ def run_list():
     with RUN_LIST_LOCK: return list(RUN_LIST)
 
 def runs_answer():
-    """The opted-in runs answer (`/api/runs?groups=1`): the rows the page draws and one entry per history group, its header
-    built here (#1277). The bare route keeps its array, so a script, a phone forward or any other client that reads it is
+    """The opted-in runs answer (`/api/runs?groups=1`): the rows the page draws and the Live group's header, built here
+    (#1277, #1778). The bare route keeps its array, so a script, a phone forward or any other client that reads it is
     untouched. The caps are read on every answer, so a changed ceiling shows after one poll and the page substitutes none at
-    serve time. Each row carries its own group's key as `band` (#1337), on a copy, so the bare array's rows are never given a
-    page's field. `muted` is the one line naming the empty bands, built here so a page lays it out (#1337)."""
-    rows = [dict(r, band=band_of(r)) for r in run_list()]
-    groups = run_groups(rows, loop_caps())
-    return {"runs": rows, "groups": groups, "muted": run_muted(groups)}
+    serve time."""
+    rows = run_list()
+    return {"runs": rows, "groups": run_groups(rows, loop_caps())}
 
 def watch_runs(stop=None):
     """Watch the known runs directories without a platform-specific dependency; the API poll remains the fallback.
@@ -6061,7 +6038,7 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   top.forEach(id=>{if(!next.includes(id)){const j=next.indexOf(null);if(j>=0)next[j]=id}});
   slots=next.filter(Boolean);
 }
-let GROUPS=[];   // the run history's groups, exactly as /api/runs answers them: key, label, text, title and empty (#1277)
+let GROUPS=[];   // the Live group, exactly as /api/runs answers it: key, label, text, title and empty (#1277)
 const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
 function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
 // The strip's cells (#1816). One line of text could not carry a per-attribute colour, so the page builds the three cells
@@ -6209,7 +6186,7 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   const fresh=allRuns.filter(r=>r.kind!=="childcc"&&!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
-async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh()}catch(e){}livePoll()}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277); the live read is its own statement, so a failed runs read never skips it (#1697)
+async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh()}catch(e){}livePoll()}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the Live heading stays honestly empty (#1277); the live read is its own statement, so a failed runs read never skips it (#1697)
 function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
   const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
   const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
@@ -8917,7 +8894,7 @@ class H(BaseHTTPRequestHandler):
             try: lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
             except Exception: lg = "(no output yet)" if d.get("state") == "running" else "no such test"   # test.sh makes the log after the json
             body, ct = test_log_page(d, lg), "text/html; charset=utf-8"
-        elif self.path.startswith("/api/runs"):   # the bare route keeps its array; `?groups=1` asks for the history groups too (#1277)
+        elif self.path.startswith("/api/runs"):   # the bare route keeps its array; `?groups=1` asks for the Live group too (#1277)
             body, ct = json.dumps(runs_answer() if re.search(r"[?&]groups=1\b", self.path) else run_list()).encode(), "application/json"
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
