@@ -250,7 +250,8 @@ def test_a_lease_naming_a_run_dashboard_holds_no_slot(tmp_path):
 def listed(tmp_path, *runs):
     """An active-runs.txt naming one run folder per (name, events) pair; the entries are absolute, as launch.py writes them.
     `events` is None for a run with no record yet (a launch, with a fresh `request.txt` as launch.py writes), else the
-    record's events in order, each of "verdict", "run_start" or "progress"."""
+    record's events in order, each of "verdict", "run_start" or "progress", or a `("call_start", pid)` or `("signal", pid)`
+    pair naming a process the run's record holds."""
     st = tmp_path / "st"
     st.mkdir(parents=True, exist_ok=True)
     path = st / "active-runs.txt"
@@ -269,6 +270,10 @@ def listed(tmp_path, *runs):
                     rec.append("run_start", run_id=name, graph_name="g", graph_hash="h", engine_options={}, root="root", plan=[])
                 elif event == "progress":
                     rec.append("progress", node="root", entry=1, item=0, session="s", messages=1, context_tokens=1, tool="Read")
+                elif isinstance(event, tuple) and event[0] == "call_start":
+                    rec.append("call_start", node="root", entry=1, session="s", pid=event[1], limit=600, started_at=time.time())
+                elif isinstance(event, tuple) and event[0] == "signal":
+                    rec.append("signal", signal="SIGTERM", pid=event[1], ppid=1, pgid=1)
                 else:
                     raise ValueError(event)
         names.append(str(folder))
@@ -299,6 +304,32 @@ def test_a_run_without_a_verdict_keeps_its_slot(tmp_path):
     c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
     p = listed(tmp_path, ("run-a", ("progress",)), ("run-b", ("progress",)))
     assert caps.free_runs(c, p, root=tmp_path) == 0
+
+
+def test_a_listed_run_whose_named_process_is_gone_holds_no_slot(tmp_path):
+    """A run killed with no verdict leaves its active-runs line and a record whose last line is the engine's SIGTERM. The
+    counter counted that line as live until the janitor's takeover bound reached it (50 minutes on the live profile), so
+    four dead runs held caps.runs and the frontier dispatched nothing for forty minutes. The counter asks the liveness
+    question the janitor asks (ADR-0166): the process the record names is gone, so the slot is free. The surgery stays the
+    janitor's: the killed verdict and the comment are still its own."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    gone = dead_pid()
+    p = listed(tmp_path, ("run-killed", (("call_start", gone), ("signal", gone))))
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+
+
+def test_a_listed_run_whose_named_process_lives_holds_its_slot(tmp_path):
+    """A live run keeps its slot whatever its age: only the takeover bound ends it (ADR-0166). The process its record names
+    still runs, so the counter never frees the slot of a run that is working."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    engine = subprocess.Popen(["bash", "-c", 'exec -a "squad start /tmp/run-live" sleep 30'])
+    try:
+        time.sleep(0.1)
+        p = listed(tmp_path, ("run-live", (("call_start", engine.pid),)))
+        assert caps.free_runs(c, p, root=tmp_path) == 0
+    finally:
+        engine.kill()
+        engine.wait()
 
 
 def test_a_live_runs_lease_and_its_listed_line_are_one_holder(tmp_path):
@@ -716,7 +747,7 @@ def test_reap_gives_a_dead_unfinished_run_its_killed_verdict_and_keeps_its_line(
     run = reap_run(tmp_path, "run-dead", "start", (dead_pid(), time.time() - 7200))
     act = tmp_path / "st" / "active-runs.txt"
     before = act.read_text()
-    assert caps.free_runs(caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases"), act) == 0
+    assert caps.free_runs(caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases"), act) == 1   # the counter already frees it (ADR-0167)
     assert reap_pass(tmp_path, c) == ["run-dead"]
     ev = last_event(run)
     assert ev["event"] == "verdict" and ev["verdict"] == "failed" and ev["reasons"] == ["killed/no-process"]
@@ -895,10 +926,14 @@ def test_a_holder_whose_named_engine_is_alive_is_never_printed(tmp_path):
     assert stale_slots(tmp_path, c, procs=[]) == []
 
 
-def test_a_holder_whose_named_engine_is_dead_is_still_named(tmp_path):
+def test_a_holder_whose_named_engine_is_dead_holds_no_slot_and_is_never_named(tmp_path):
+    """A run whose record names a dead engine holds no slot at all: the counter frees it at the count (ADR-0167), so a full
+    ceiling is never the dead run's and the pass names only the holder that is left. The killed verdict and the comment stay
+    the janitor's own work."""
     c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    reap_run(tmp_path, "run-idle", "start", "ceiling_wait", record_age=400)
     reap_run(tmp_path, "run-gone", "start", (dead_pid(), time.time() - 7200), record_age=400)
-    assert [name for name, _ in stale_slots(tmp_path, c, procs=[])] == ["run-gone"]
+    assert [name for name, _ in stale_slots(tmp_path, c, procs=[])] == ["run-idle"]
 
 
 def test_a_dashboard_server_in_the_folder_is_no_live_process_for_the_pass(tmp_path):

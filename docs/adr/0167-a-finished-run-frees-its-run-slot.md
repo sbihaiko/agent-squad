@@ -16,8 +16,12 @@ keeps its slot.
 - A live lease always counts, even when the run it names is finished. The engine releases its lease before it writes the
   verdict, so a finished run normally holds none. A lingering lease is counted by both the dispatcher and the engine, and
   the dispatcher never starts a run the engine refuses at `try_take`.
-- A run with a record and no final verdict keeps its slot. The heartbeat and the janitor handle a dead run and write its
-  killed verdict.
+- A run with a record and no final verdict keeps its slot while its own process lives, whatever its age: only the takeover
+  bound ends a live run (ADR-0166). The counter asks the liveness question the janitor and the reap pass ask
+  (`squad/reap.py` `run_live`): the process the record's last `call_start` or `gate_start` names is gone, under the
+  pid-reuse rule, so the run frees its slot at the next count. The janitor still writes the killed verdict and the comment;
+  the counter only stops counting a process that is not there. A record that names no pid is no proof of death, so that
+  run keeps its slot and the janitor and the heartbeat settle it.
 - The lease read takes the ceiling lock, as `occupancy` and `try_take` do, so a lease mid-write is never read as absent.
 - The engine's admission still counts raw leases (`try_take`, `_live`). This decision covers the dispatcher's side. The two
   agree on every lease, and the dispatcher also counts a listed run before its engine takes its lease, so its count stays
