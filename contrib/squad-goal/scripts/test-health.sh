@@ -400,6 +400,30 @@ o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing
   && ok "a landing whose last gate round is past the bounds alerts, naming the held instant" || ko "a stale gate round did not alert: $o"
 kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "the round-progress landing clears its cause" || ko "round-progress cause not cleared: $o"
+# ---- #1775: a janitor pass that holds its single-janitor lock past its own bound is stuck, not slow. The pass deadline
+# lives inside janitor.py (#1774) and fires only when the next call would start, so a hang in the shell wrapper, or in
+# Python code between calls, held the lock in silence. The bound is the pass deadline plus one call deadline; a live
+# holder past it alerts once, naming its pid and the age, and a lock whose holder is dead raises no alert of this kind.
+aget() { local e=$(( $(date +%s) - $2 )); touch -t "$(date -r "$e" '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "@$e" '+%Y%m%d%H%M.%S')" "$1"; }   # mtime <n> seconds ago, whichever date this machine has
+jhld="$T/st/locks/single-janitor"; rm -rf "$jhld" "$T/st/auto/health-janitor-held"
+mkdir -p "$jhld"; /bin/sleep 60 & jh=$!; echo "$jh" > "$jhld/pid"
+o=$(SG_JANITOR_DEADLINE=20 JANITOR_CALL_TIMEOUT=10 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'janitor-held' && ko "a fresh janitor pass alerted: $o" || ok "a janitor pass inside its deadline stays quiet"
+aget "$jhld/pid" 20
+o=$(SG_JANITOR_DEADLINE=20 JANITOR_CALL_TIMEOUT=10 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'janitor-held' && ko "a lock inside the pass deadline plus one call deadline alerted: $o" || ok "a lock inside the pass deadline plus one call deadline stays quiet"
+aget "$jhld/pid" 40
+o=$(SG_JANITOR_DEADLINE=20 JANITOR_CALL_TIMEOUT=10 bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qE "HEALTH janitor-held: the janitor lock has been held by pid $jh for 4[0-9]s, past the 20s pass deadline plus the 10s call deadline" \
+  && ok "a live holder past the pass deadline plus one call deadline alerts, naming the pid and the age" || ko "no janitor-held cause: $o"
+/usr/bin/grep -q 'HEALTH janitor-held:' "$T/st/alerts.log" && ok "alerts.log carries the held janitor lock" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+o=$(SG_JANITOR_DEADLINE=20 JANITOR_CALL_TIMEOUT=10 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH janitor-held:' && ko "the same held janitor lock alerted twice" || ok "the same held janitor lock alerts once"
+kill "$jh" 2>/dev/null; wait "$jh" 2>/dev/null
+o=$(SG_JANITOR_DEADLINE=20 JANITOR_CALL_TIMEOUT=10 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH janitor-held cleared' && ok "a freed janitor lock clears the cause" || ko "not cleared: $o"
+rm -f "$T/st/auto/health-janitor-held"; : > "$T/st/alerts.log"   # re-arm: the dead-holder case must raise no alert of its own
+mkdir -p "$jhld"; echo "$jh" > "$jhld/pid"; aget "$jhld/pid" 40   # the pid of the process just waited for: dead, the stale lock single.sh reaps
+o=$(SG_JANITOR_DEADLINE=20 JANITOR_CALL_TIMEOUT=10 bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'HEALTH janitor-held' && ko "a lock whose holder is dead alerted: $o" || ok "a lock whose holder is dead raises no janitor-held alert"
+[ -s "$T/st/alerts.log" ] && ko "a dead janitor holder wrote an alert line" || ok "a dead janitor holder writes no alert line"
+rm -rf "$jhld"
 # ---- #1467: a pass that finds the supervisor dead relights it, through the same stops a start obeys. The stub start is a real
 # `watchd.sh run` child, so the process check that reads the slot finds it, exactly as the live script's own start leaves it.
 rm -f "$T/st/watchd.pid" "$T/st/relights" "$T/st/start-mode" "$T/st/auto/off" "$T/st/auto/drain-waiter" "$T/st/auto/health-watchd-down"; : > "$T/bin/started"   # each cause alerts once: re-arm watchd-down
@@ -466,7 +490,9 @@ GH_READY="427 428" bash "$T/s/health.sh" >/dev/null
 # loop-bug starts again on the first pass after no loop-bug is open, and the audit names the issue. A loop the owner
 # stopped stays off, whatever closes.
 pkill -f "$T/s/watchd.sh run" 2>/dev/null; kill $wp $fp 2>/dev/null; rm -f "$T/st/watchd.pid" "$T/st/fastloop.pid" "$T/st/relights" "$T/st/auto"/* "$T/st/loop-audit.jsonl" "$T/st/loop-bug-watch"
-python3 - "$(dirname "$src")/watchd.sh" "$T/s/watchd.sh" "$(dirname "$src")" <<"PY"
+# The copy's caps.sh is the sandbox's own beside health.sh: a path taken from the caller's spelling of `src` is relative
+# whenever the suite is run with a relative path, and the supervisor starts from another directory, so it died at once.
+python3 - "$(dirname "$src")/watchd.sh" "$T/s/watchd.sh" "$T/s" <<"PY"
 import pathlib, sys
 t = pathlib.Path(sys.argv[1]).read_text()
 a = "\"$(dirname \"$0\")/caps.sh\""; assert a in t; t = t.replace(a, "\"%s/caps.sh\"" % sys.argv[3])
