@@ -780,7 +780,7 @@ class BoardBinding:
         except (ValueError, TypeError, AttributeError): tf = {}   # a carrier that answers no field list names no text field; the
         # Status column still answers, and the miss is never cached, so the next pass asks again
         ids = [x for x in (self.status_field()["id"], tf.get("Run"), tf.get("Run started")) if x]
-        fq = f"&fields[]={','.join(ids)}" if ids else ""
+        fq = f"&fields[]={','.join(map(str, ids))}" if ids else ""   # the REST route answers a field id as a number
         val = 'if type=="object" then (.raw//.text//"") else (.//"") end'
         out = self.api("--paginate", f"{self.base}/items?per_page=100{fq}", "--jq",
                        '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name=="Status")|.value.name|if type=="object" then .raw else . end))//""),'
