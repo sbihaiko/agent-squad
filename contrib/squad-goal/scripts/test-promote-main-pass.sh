@@ -237,6 +237,25 @@ SG_PROMOTE=off pass; rc=$?
 env -u SG_STATE bash "$d/promote-main-pass.sh" >/dev/null 2>&1; rc=$?
 [ $rc = 2 ] && ok "18 with SG_STATE unset the pass refuses (exit 2)" || ko "18 SG_STATE unset: rc $rc"
 
+# 25) The request window is short: with SG_PROMOTE_MAIN_QUIET_S unset, a tip quiet for 700 s sends the label, and one
+# quiet for 300 s does not.
+pass600() { env -u SG_PROMOTE_MAIN_QUIET_S bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }
+realign; adv stg short-quiet 700; s25=$(tip stg); : > "$T/gh.log"; pass600; rc=$?
+[ $rc = 0 ] && [ "$(req)" = "$s25" ] && /usr/bin/grep -q "X POST repos/x/emu/issues/31/labels .*labels\[\]=promote" "$T/gh.log" \
+  && ok "25 a tip quiet 700 s sends the label under the 600 s default window" || ko "25 700 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+realign; adv stg still-moving 300; : > "$T/gh.log"; pass600; rc=$?
+[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "25 a tip quiet 300 s is not requested under the 600 s default window" || ko "25 300 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+# 26) The re-arm after a red is its own wait: 3600 s from the hold, whatever the short window says.
+realign; adv stg rearm-red 700; r26=$(tip stg); request "$r26" 600; checks "$r26" failure success; pass600
+[ -s "$ST/promote-main-hold" ] && [ "$(cat "$ST/promote-main-red")" = "$r26" ] \
+  && ok "26 the red records the hold and the red sha" || ko "26 red: hold '$(cat "$ST/promote-main-hold" 2>/dev/null)', red '$(cat "$ST/promote-main-red" 2>/dev/null)', out '$(cat "$T/out")'"
+adv stg rearm-new 700; t26=$(tip stg); : > "$T/gh.log"; pass600; rc=$?
+[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "26 a new tip after a red is not requested at once" || ko "26 at once: record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+echo "$(( $(date +%s) - 1200 ))" > "$ST/promote-main-hold"; : > "$T/gh.log"; pass600; rc=$?
+[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "26 1200 s after the hold a new tip still waits: the re-arm is 3600 s, not the short window" || ko "26 1200 s: record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+echo "$(( $(date +%s) - 4000 ))" > "$ST/promote-main-hold"; pass600
+[ "$(req)" = "$t26" ] && ok "26 past 3600 s from the hold the new tip is requested" || ko "26 past the re-arm: record '$(req)', out '$(cat "$T/out")'"
+
 # No loop script but the two promotion scripts names the main push, and the pass itself pushes nothing.
 /usr/bin/grep -nE '^[^#]*\bpush\b' "$d/promote-main-pass.sh" >/dev/null && ko "the pass pushes by itself" || ok "the pass pushes nothing: promote-main.sh moves main"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
