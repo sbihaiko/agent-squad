@@ -74,3 +74,12 @@ def test_peak_names_the_busiest_bucket_in_millions():
 
 def test_today_line_reads_the_served_totals():
     assert js("usageTodayLine({tok_today: 1000000, today: 1})") == "1.0M tokens · $1.00"
+
+
+def test_the_phone_names_the_operator_session_as_its_own_slice_and_segment():
+    """#1756: the operator session's calls are their own slice and their own bar segment, never merged into the loop's model."""
+    models = MODELS + [{"model": "claude-opus", "consumer": "operator", "month_tokens": 100, "spend": 0.0}]
+    got = js(f"usageSlices({json.dumps(models)})")
+    assert [(s["model"], s["tokens"]) for s in got] == [("claude-sonnet", 600), ("deepseek-flash", 300), ("claude-opus", 100), ("operator · claude-opus", 100)]
+    bars = js(f"usageBars({json.dumps([{'t': '2026-11-08 10:00', 'tokens': 1000000, 'op': 3000000, 'runs': 1}])}, 'hour')")
+    assert [(b["tokens"], b["op"], b["h"], b["hLoop"]) for b in bars] == [(1000000, 3000000, 100.0, 25.0)]
