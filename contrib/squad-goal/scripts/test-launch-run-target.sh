@@ -8,7 +8,7 @@
 src=${1:-$(dirname "$0")/launch.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git
 mkdir -p "$T/bin" "$T/s" "$T/st" "$T/squad"
-cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/liveholds.py" "$(dirname "$src")/registry.json" "$T/s/"
+cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/liveholds.py" "$(dirname "$src")/registry.json" "$T/s/"; mkdir -p "$T/squad/squad"; cp "$(dirname "$src")/../../../squad/active_runs.py" "$T/squad/squad/"   # the list's writer protocol, loaded as the launcher loads it (#1862)
 printf '{"coding_models":["test-model"],"hours":{}}\n' > "$T/s/models.json"
 printf 'print("hub")\n' > "$T/s/hub.py"
 # The stub build names the one engine option a fix run needs (#1374), so the launcher's probe of it is exercised.

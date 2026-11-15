@@ -405,5 +405,17 @@ except OSError:
     subprocess.Popen(["caffeinate", "-dimsu", "python3", str(here / "hub.py"), "7700"],
                      stdout=open(state / "hub.log", "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
 finally: _s.close()
-with open(state / "active-runs.txt", "a") as f: f.write(str(runs / run) + "\n")   # absolute: watch.sh/heartbeat.sh find it from any cwd
+def _active_runs_module():   # #1862: squad/active_runs.py, the list's one writer protocol, from the build this launcher starts
+    roots = [r for r in (str(here.parents[2]), os.environ.get("SG_SQUAD"), str(squad), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
+    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "active_runs.py").is_file()), None)
+    if root is None:
+        sys.exit("refused: no squad/active_runs.py in " + ", ".join(roots) + ": the run's line in active-runs.txt has no "
+                 "writer protocol, so a janitor pass could lose it (#1862)")
+    spec = importlib.util.spec_from_file_location("active_runs", pathlib.Path(root) / "squad" / "active_runs.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+# The append holds the lock the janitor's rewrite holds, so a run started during a pass keeps its line (#1862). Absolute:
+# watch.sh/heartbeat.sh find it from any cwd.
+_active_runs_module().append(state / "active-runs.txt", str(runs / run))
 print(run)
