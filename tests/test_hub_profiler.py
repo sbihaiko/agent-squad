@@ -1830,3 +1830,86 @@ def test_the_phone_reaches_the_strip_and_the_shares_wrap_under_the_bar():
     html = (SCRIPTS / "hub-mobile.html").read_text()
     assert re.search(r'id="more-loop" href="\./#loop"', html), "the phone opens the Loop tab of the same page"
     assert re.search(r"#profstrip \.lss\{display:flex;flex-wrap:wrap", page()), "the shares wrap under the bar at phone width"
+
+
+# The gates under the strip (#1767): one mark per finished gate of the same window, on the same axis. The fold from the
+# gate-history lines is a pure function of this rule layer, so its tests feed lines in and read no file.
+GATE_LINES = [
+    f"{W0 - 12000}\tgate\tpass\tabc\t{W0 - 12060}\tall\troot\tpass\t-\truff mypy pytest\t-\t2\t-\tchild\t1.2\t3.4\n",
+    f"{W0 - 9000}\tfast\tfail\tdef\t{W0 - 9060}\tdelta\troot\tfail\texit 1\tpytest\t-\t1\tred\ttip\t4.0\t-\n",
+    f"{W0 - 6000}\tgate\tunproven\tghi\t{W0 - 6900}\tall\troot\tunproven\tbounded by 900 s\tpytest\t-\t2\t-\tentry\t2.0\t7.5\n",
+    "not a gate history line\n",
+    f"{W0 - 5000}\tfast\tpass\tjkl\t{W0 - 5990}\tall\troot\tpass\t-\tpytest\t-\t1\t-\tchild\n",
+    f"{W0 - 4000}\tfast\tpass\tmno\t{W0 - 3000}\tall\troot\tpass\t-\tpytest\t-\t1\t-\tchild\t-\t-\n",
+]
+
+
+def test_the_gate_marks_fold_one_mark_per_finished_gate_and_skip_a_malformed_line(prof):
+    """A gate-history line becomes one mark at its finish: kind, scope, seconds, the reason of a fail or unproven outcome
+    and the load at its start and finish. A line the fold cannot read is no mark, and a pass carries no reason."""
+    out = prof.gate_marks(GATE_LINES, W0 - 4 * H, W0)
+    assert [m["outcome"] for m in out["marks"]] == ["pass", "fail", "unproven", "pass"], \
+        "the malformed line and the finish before the start are no marks"
+    assert out["counts"] == {"pass": 2, "fail": 1, "unproven": 1}, "the counts are of the window only"
+    assert out["marks"][0] == {"at": W0 - 12000, "kind": "gate", "scope": "root", "outcome": "pass", "seconds": 60.0,
+                               "reason": None, "load_start": 1.2, "load_finish": 3.4}
+    assert out["marks"][1] == {"at": W0 - 9000, "kind": "fast", "scope": "root", "outcome": "fail", "seconds": 60.0,
+                               "reason": "exit 1", "load_start": 4.0, "load_finish": None}
+    assert out["marks"][2]["reason"] == "bounded by 900 s" and out["marks"][2]["load_finish"] == 7.5
+    assert out["marks"][3]["load_start"] is None, "a row from before the load fields has no load reading"
+
+
+def test_the_gate_marks_fold_only_the_window_it_is_given(prof):
+    """A gate that finished before the window is no mark and no count: the marks share the strip's own window."""
+    out = prof.gate_marks(GATE_LINES, W0 - 8000, W0)
+    assert [m["outcome"] for m in out["marks"]] == ["unproven", "pass"]
+    assert out["counts"] == {"pass": 1, "fail": 0, "unproven": 1}
+
+
+def test_the_route_carries_the_gate_marks_of_the_strip_window(hub):
+    """The /api/profiler answer names the gates of the strip's window, folded from the gate-history file."""
+    mod, port, _, state, table = hub
+    now = time.time()
+    (state / "gate-history").write_text(
+        f"{int(now - 600)}\tgate\tpass\tabc\t{int(now - 660)}\tall\troot\tpass\t-\tpytest\t-\t2\t-\tchild\t1.0\t2.0\n"
+        f"{int(now - 300)}\tfast\tfail\tdef\t{int(now - 330)}\tdelta\troot\tfail\texit 1\tpytest\t-\t1\t-\ttip\t-\t-\n"
+        "not a gate history line\n")
+    code, v = ask(port, "GET", path="/api/profiler?sw=14400")
+    assert code == 200
+    gates = v["strip"]["gates"]
+    assert [m["outcome"] for m in gates["marks"]] == ["pass", "fail"]
+    assert gates["counts"] == {"pass": 1, "fail": 1, "unproven": 0}
+    assert gates["marks"][1]["reason"] == "exit 1"
+    assert table.reads == 0, "the gate marks read files only"
+
+
+GATES = {"counts": {"pass": 3, "fail": 1, "unproven": 2},
+         "marks": [{"at": W0 - 5000, "kind": "gate", "scope": "all", "outcome": "pass", "seconds": 60.0,
+                    "reason": None, "load_start": 1.0, "load_finish": 2.0},
+                   {"at": W0 - 3000, "kind": "fast", "scope": "delta", "outcome": "fail", "seconds": 30.0,
+                    "reason": "exit 1", "load_start": 5.0, "load_finish": 6.5},
+                   {"at": W0 - 1000, "kind": "gate", "scope": "delta", "outcome": "unproven", "seconds": 900.0,
+                    "reason": "bounded by 900 s", "load_start": None, "load_finish": 3.0}]}
+
+
+def test_the_strip_draws_gate_marks_whose_shapes_differ_without_color_with_their_counts():
+    """Under the bar, on the same axis and window: one mark a gate, its shape per outcome, its hover naming the facts, and
+    beside the chart the count of each outcome."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': {**STRIP, 'gates': GATES}})},new Set())")
+    part = strip_part(out)
+    shapes = re.findall(r'class="lsg lsgo-(\w+) sh-(\w+)"', part)
+    assert shapes == [("pass", "circle"), ("fail", "square"), ("unproven", "diamond")], \
+        "the three outcomes differ by shape, never by colour alone"
+    lefts = re.findall(r'class="lsg [^"]*" style="left:([\d.]+)%"', part)
+    assert [round(float(x), 1) for x in lefts] == [round(100 * (W0 - 5000 - (W0 - 14400)) / 14400, 1),
+                                                   round(100 * (W0 - 3000 - (W0 - 14400)) / 14400, 1),
+                                                   round(100 * (W0 - 1000 - (W0 - 14400)) / 14400, 1)], \
+        "each mark sits at its finish on the strip's own axis"
+    fail = re.search(r'title="([^"]*)"[^>]*></span>', part[part.index("lsgo-fail"):]).group(1)
+    assert "fast" in fail and "delta" in fail and "30" in fail and "exit 1" in fail, "the hover names kind, scope, seconds and the reason"
+    assert "5.0" in fail and "6.5" in fail, "the hover names the load at the start and at the finish"
+    pass_mark = re.search(r'title="([^"]*)"[^>]*></span>', part[part.index("lsgo-pass"):]).group(1)
+    assert "exit" not in pass_mark and "1.0" in pass_mark and "2.0" in pass_mark, "a pass carries no reason and still its loads"
+    assert "bounded by 900 s" in part
+    assert re.search(r"<b>Pass</b> 3", part) and re.search(r"<b>Fail</b> 1", part) and re.search(r"<b>Unproven</b> 2", part), \
+        "the counts of the window stand beside the chart"
