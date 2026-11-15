@@ -32,5 +32,14 @@ bash "$d/child-gate.sh" ./test-a.sh > "$T/c2.out" 2>&1; rc2=$?
 wait "$pc"
 [ "$rc2" = 73 ] && /usr/bin/grep -q 'already running' "$T/c2.out" && ok "a second copy of one suite is refused with a reason" || ko "second copy rc=$rc2: $(cat "$T/c2.out")"
 
+# a wait past its own bound names the ceiling and runs nothing: no history line, since no suite ran
+nb0=$(/usr/bin/grep -cF "$T/proj/test-b.sh" "$hist" 2>/dev/null)
+bash "$d/child-gate.sh" ./test-a.sh > "$T/h.out" 2>&1 & ph=$!
+sleep 0.3
+SG_CHILD_GATE_WAIT=1 bash "$d/child-gate.sh" ./test-b.sh > "$T/w.out" 2>&1; rcw=$?
+wait "$ph"
+[ "$rcw" = 75 ] && /usr/bin/grep -q 'no caps.gates slot' "$T/w.out" && ok "a wait past its bound names the full ceiling" || ko "wait bound rc=$rcw: $(cat "$T/w.out")"
+[ "$(/usr/bin/grep -cF "$T/proj/test-b.sh" "$hist" 2>/dev/null)" = "$nb0" ] && ok "a suite that never ran writes no history line" || ko "history after the expired wait: $(cat "$hist" 2>/dev/null)"
+
 [ "$fail" = 0 ] && echo "child-suite: all green" || echo "child-suite: FAILED"
 exit "$fail"

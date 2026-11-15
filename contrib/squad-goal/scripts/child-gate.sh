@@ -33,7 +33,10 @@ holder="child-gate-$$"
 trap 'sg_caps release gates "$holder" >/dev/null 2>&1; rm -rf "$lock"' EXIT
 load() { local l; l=$(LC_ALL=C uptime 2>/dev/null | sed -n 's/.*load average[s]*: *\([0-9.]*\).*/\1/p'); echo "${l:--}"; }
 t0=$(date +%s)
-sg_caps take gates "$holder" --count 1 --wait "${SG_CHILD_GATE_WAIT:-900}" --pid $$ --target "$PWD" >/dev/null || exit $?
+sg_caps take gates "$holder" --count 1 --wait "${SG_CHILD_GATE_WAIT:-900}" --pid $$ --target "$PWD" >/dev/null; rc=$?
+if [ "$rc" != 0 ]; then
+  echo "child-gate: no caps.gates slot within ${SG_CHILD_GATE_WAIT:-900}s; $suite did not run (exit $rc)" >&2; exit "$rc"
+fi
 start=$(date +%s); wait_s=$((start - t0)); load0=$(load)
 bash "$suite" "$@"; rc=$?
 fin=$(date +%s)
