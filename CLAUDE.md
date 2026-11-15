@@ -33,7 +33,9 @@ This file and the ADRs are never ledgers: no dates, counts, statuses, issue numb
   A PreToolUse hook on every adapter session denies the call with a reason and records `sandbox_deny` (`bypassPermissions` skips `can_use_tool`).
   The child's CLI runs under `sandbox-exec` (`contrib/squad-goal/scripts/claude-sandboxed.sh`), so the kernel refuses a signal to any process outside the session, whatever spells it; no child starts without it (macOS).
   The janitor alerts when the live copy changes with no publish. A child that runs the fast gate reads one printed verdict line and a log outside the state directory.
-  Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`, `contrib/squad-goal/scripts/test-fast-gate.sh`.
+  A suite a child starts runs through `contrib/squad-goal/scripts/child-gate.sh`: it takes one `caps.gates` slot, its wait is gate wait and not run time (ADR-0166),
+  a second copy of the same suite is refused, and each run lands in `$SG_STATE/child-suite-history` with its load at start and at finish.
+  Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-child-gate.sh`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`, `contrib/squad-goal/scripts/test-fast-gate.sh`.
 - **A project settings file overlays the plugin defaults** (`docs/squad/defaults.yaml`, `squad/project_settings.py`).
   Order: plugin defaults, project file, roles, graph run block, node; only the project file may raise a default.
   `run_start` records its path and hash, and a resume refuses when it changed. Guard: `tests/test_project_settings.py`.

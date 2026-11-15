@@ -151,3 +151,25 @@ def test_a_run_waiting_for_a_gate_slot_is_not_taken_over(tmp_path):
     assert RUN in (st / "active-runs.txt").read_text(), "a run waiting for a gate slot left active-runs"
     assert not (st / "auto" / f"taken-{RUN}").exists(), "a run waiting for a gate slot was taken over"
     assert (st / "auto" / f"disp-{N}").exists(), "the dispatch marker of a run waiting for a gate slot went"
+
+
+@pytest.mark.heavy
+def test_a_run_waiting_in_the_child_gate_is_not_taken_over(tmp_path):
+    """#1762, ADR-0166: a suite a child starts runs under the machine's gates ceiling, so its wait on a full ceiling is gate
+    wait too, never run time. The wrapper's process is the gate the janitor reads while the record holds still."""
+    run = live_run(tmp_path, 3300)
+    suite = run / "test-slow.sh"
+    suite.write_text("#!/bin/bash\nsleep 60\n")
+    wrapper = Path(__file__).resolve().parents[1] / "contrib" / "squad-goal" / "scripts" / "child-gate.sh"
+    env = {**os.environ, "SQUAD_CAPS_DIR": str(tmp_path / "caps"), "SG_STATE": str(tmp_path / "st")}
+    waiter = subprocess.Popen(["bash", str(wrapper), str(suite)], cwd=run.resolve(), env=env)
+    try:
+        time.sleep(1.0)     # the wrapper takes its lock and its slot: give it a cwd and a process line first
+        janitor(tmp_path)
+    finally:
+        waiter.kill()
+        waiter.wait()
+    st = tmp_path / "st"
+    assert RUN in (st / "active-runs.txt").read_text(), "a run waiting in the child's gate left active-runs"
+    assert not (st / "auto" / f"taken-{RUN}").exists(), "a run waiting in the child's gate was taken over"
+    assert (st / "auto" / f"disp-{N}").exists(), "the dispatch marker of a run waiting in the child's gate went"

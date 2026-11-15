@@ -97,21 +97,58 @@ def bash_needles(env, home):
 
 
 # #1762: a child ran its suites outside the gates ceiling, three copies at once, and the load reached 67 on 8 cores. A suite
-# named as a command goes through child-gate.sh, which takes a gates slot and refuses a second copy of the same suite.
-_SUITE = re.compile(r"test-[\w.-]+\.sh")
+# named as a command goes through child-gate.sh, which takes a gates slot and refuses a second copy of the same suite. The
+# aggregate runner counts as a suite: it starts every test-*.sh the same way.
+_SUITE = re.compile(r"(?:test-[\w.-]+|shell-suites)\.sh")
+_SHELLS = ("sh", "bash", "zsh", "dash")
+_NOEXEC = ("-n", "--noexec")   # a syntax read runs nothing, so it is a read and passes
 
 
-def suite_reason(cmd):
-    """Why a Bash command that runs a test-*.sh suite directly is denied, or None (#1762)."""
+def _shell_script(args):
+    """The script word a shell command runs: its first word that is no flag. None for a `-c` body, which is a command."""
+    for i, a in enumerate(args):
+        if a == "--":
+            return os.path.basename(args[i + 1]) if i + 1 < len(args) else None
+        if a in _NOEXEC:
+            return None
+        if a == "-c" or (a.startswith("-") and not a.startswith("--") and "c" in a[1:]):
+            return None
+        if a.startswith("-"):
+            continue
+        return os.path.basename(a)
+    return None
+
+
+def _shell_body(args):
+    """The `-c` body a shell command runs, or None."""
+    for i, a in enumerate(args):
+        if a == "-c" or (a.startswith("-") and not a.startswith("--") and "c" in a[1:]):
+            return args[i + 1] if i + 1 < len(args) else ""
+    return None
+
+
+def suite_reason(cmd, root="", depth=0):
+    """Why a Bash command that runs a test-*.sh suite directly is denied, or None (#1762). A shell's flags are read, so
+    `bash -x test-a.sh` is the same run as `bash test-a.sh`, and a `-c` body is read as the command it is."""
     for seg in _SEGMENT.split(cmd):
         words = _segment_words(seg)
         if not words:
             continue
-        verb = os.path.basename(words[0])
-        target = os.path.basename(words[1]) if verb in ("bash", "sh", "zsh", "dash") and len(words) > 1 else verb
-        if _SUITE.fullmatch(target):
-            return ("sandbox: a test suite run directly is denied; run it as "
-                    "`bash <checkout>/contrib/squad-goal/scripts/child-gate.sh <suite>`, which takes the machine's gates slot (caps.gates)")
+        verb, args = os.path.basename(words[0]), words[1:]
+        if verb in _SHELLS:
+            body = _shell_body(args)
+            if body is not None:
+                if depth < 3 and (inner := suite_reason(body, root, depth + 1)):
+                    return inner
+                continue
+            target = _shell_script(args)
+        else:
+            target = verb
+        if target and _SUITE.fullmatch(target):
+            wrapper = os.path.join(root, "contrib", "squad-goal", "scripts", "child-gate.sh") if root else "contrib/squad-goal/scripts/child-gate.sh"
+            return (f"sandbox: a test suite run directly is denied; run it as "
+                    f"`bash {wrapper} <suite>`, which takes the machine's gates slot (caps.gates) and refuses a second "
+                    f"copy of the same suite")
     return None
 
 
@@ -150,7 +187,7 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
         for needle in bash_needles(env, home):
             if needle in cmd:
                 return f"sandbox: a command that names {needle} is denied; the live skill copy and the loop state are not this session's to touch"
-        if (reason := suite_reason(cmd)) is not None:
+        if (reason := suite_reason(cmd, root)) is not None:
             return reason
         return signal_reason(cmd)
     return None
