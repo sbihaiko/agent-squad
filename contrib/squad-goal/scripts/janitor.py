@@ -1230,7 +1230,8 @@ def reconcile_board():
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
         if n not in specs and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") == "Code Complete":   # a fresh branch is in dev too, so only a card that reached the wave is delivered by it, and a spec's branch is its children's (#665)
             set_expected(n, "Closed" if shipped else "Done", "its work branch is in dev", "", "", 80)
-    answered, have_all = cards(proj)   # no answer from the board: no card is moved or created on a guess, and the Run fields still go (#1747)
+    answered, have_all = cards(proj)
+    if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
     # The hand hold (#1664): an issue a takeover marker or a hand hold names is somebody's, so its Todo card goes to Doing once and
     # no lower rule moves it back while the marker or hold lives. A release record names the column the card moves to, once: the
     # card moves through the same loop below, and the record goes when the card carries the column. No marker, no hold and no
@@ -1271,17 +1272,17 @@ def reconcile_board():
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
         have = have_all.get(str(n))
         note = None
-        if shipped and answered and want in TERMINAL and have != want:   # the guard (#245): no terminal write without the comment that states its condition
+        if shipped and want in TERMINAL and have != want:   # the guard (#245): no terminal write without the comment that states its condition
             note = terminal_comment(want, terminal_facts(n, want))
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
         if shipped and want in (doing, CODE_REVIEW, "Code Complete", GATING) and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
-        if answered and have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
+        if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
             if note: queue_terminal(n, want, note)
-        elif answered and have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None):
+        elif have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None):
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:

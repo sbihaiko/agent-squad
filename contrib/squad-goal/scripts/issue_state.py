@@ -776,7 +776,9 @@ class BoardBinding:
     def board(self):
         """Every card's state and holder, in ONE read: ({issue: state}, {issue: {"run", "started"}}). The Status and the Run
         fields ride the same items read, so a caller that needs both asks once. The repository url filters as in `read_all`."""
-        tf = self.text_fields()
+        try: tf = self.text_fields()
+        except (ValueError, TypeError, AttributeError): tf = {}   # a carrier that answers no field list names no text field; the
+        # Status column still answers, and the miss is never cached, so the next pass asks again
         ids = [x for x in (self.status_field()["id"], tf.get("Run"), tf.get("Run started")) if x]
         fq = f"&fields[]={','.join(ids)}" if ids else ""
         val = 'if type=="object" then (.raw//.text//"") else (.//"") end'
