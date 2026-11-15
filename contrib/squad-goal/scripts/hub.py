@@ -975,6 +975,13 @@ def proc_snapshot(now=None):
     now = time.time() if now is None else now
     return procscan.table(read_proc_table, LOAD_SAMPLE_SECS, now)
 
+def profiling_table(now=None):
+    """The process table of this profiler tick, read once for every profile of this interpreter (#1746, #1790): three
+    profile samplers at one reading a second each scanned the machine three times a second. The tick is PROFILER_SECS, so
+    each profile still folds a reading of its own interval."""
+    now = time.time() if now is None else now
+    return procscan.table(process_table, PROFILER_SECS, now)[0]
+
 def attribute_pass(now=None):
     """CPU per run over the last interval, as a share of the machine. The sampler calls it only while the machine is
     warned: a calm machine never builds a process table. The window runs from the instant of the snapshot it compares
@@ -2360,6 +2367,42 @@ def loop_switch_project(a, slug, body, origin_ok):
     if row is None: return 404, {"err": "unknown project", "reason": f"this hub serves no project named {slug}"}
     return loop_switch(a, body, origin_ok, row=row)
 
+# ---------------------------------------------------------------- a read only while a page reads (#1790)
+# A background read is a page's reading, not the machine's: with no page open, nobody reads what it publishes, and the
+# hub still paid for it every few seconds -- the process-table scan, the board and history reads, the quota probes. The
+# many-repository hub gives each profile a gate: a request to that profile's page touches it, and a read works only while
+# the gate says a page read the profile recently. A hub served alone (hub.py's own `__main__`) sets no gate, and its
+# reads run as they always did.
+READ_IDLE_SECS = 60.0   # the pages poll every few seconds, so an open page keeps its profile's reads running
+
+class ReadGate:
+    """Whether a page reads this profile now, and the sleep between two reads: a read parked with no page ends that sleep
+    at once when a page reads the profile, so the read that follows a page opening runs on the read, never on the end of
+    the sleep before it. A read a page is keeping alive keeps its own period: a page read never shortens a cadence (#1790)."""
+    def __init__(self, idle=None):
+        self.idle = READ_IDLE_SECS if idle is None else idle
+        self.at = 0.0
+        self.wake = threading.Event()
+    def touch(self):
+        self.at = time.time(); self.wake.set()
+    def wanted(self):
+        return time.time() - self.at < self.idle
+    def pause(self, secs):
+        if self.wanted():
+            time.sleep(secs)   # a page reads this profile: the cadence stands
+        else:
+            self.wake.wait(secs); self.wake.clear()
+
+READ_GATE = None   # the many-repository hub sets one per profile (hubmux.start_profile)
+
+def read_wanted():
+    return READ_GATE is None or READ_GATE.wanted()
+
+def read_pause(secs):
+    """Sleep up to `secs`, and return at once when a page reads this profile."""
+    if READ_GATE is None: time.sleep(secs)
+    else: READ_GATE.pause(secs)
+
 # ---------------------------------------------------------------- the Loop tab (#1743)
 # The loop of this profile as a hot-spot tree, folded from the process table by hub_profiler (the rule layer, ADR-0137).
 # The tab has its own switch, `CPU sampling`, and off is the default: off, no sampler thread runs and nothing here reads
@@ -2394,16 +2437,17 @@ def profiler_scope():
     return hub_profiler.Scope(pid, tuple(marks))
 
 def profiler_sampler(stop):
-    """Read the process table every PROFILER_SECS, start to start, until `stop` is set. A failed or empty read is counted
-    and not folded: folded, it would count every process of the next reading as new."""
+    """Read the process table every PROFILER_SECS, start to start, until `stop` is set, while a page reads this profile
+    (#1790). A failed or empty read is counted and not folded: folded, it would count every process of the next reading as
+    new."""
     while not stop.is_set():
         began = time.monotonic()
-        try: reading = {(pid, p.start): (p.ppid, p.cpu, p.command) for pid, p in process_table().items()}
+        try: reading = {(pid, p.start): (p.ppid, p.cpu, p.command) for pid, p in profiling_table().items()}
         except Exception: reading = None
         try: scope = profiler_scope() if reading else None
         except Exception: reading = None
         with PROFILER_LOCK:
-            if stop.is_set() or not profiler_on(): break   # the switch file is the truth, whoever wrote it
+            if stop.is_set() or not profiler_on() or not read_wanted(): break   # the switch file is the truth, whoever wrote it
             if reading: PROFILER["window"].add(time.time(), reading, scope)
             else: PROFILER["window"].fail()
         stop.wait(max(0.0, PROFILER_SECS - (time.monotonic() - began)))
@@ -2783,13 +2827,15 @@ def worst_alert():
     return next((f["text"] for f in (LOAD_STATE.get("facts") or []) if f.get("bad")), "")
 
 def load_sampler():
-    """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
+    """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page. It reads
+    while a page reads this profile, and does no work while none does (#1790)."""
     while True:
-        try: load_tick()
-        except Exception: pass
-        try: foot_refresh()
-        except Exception: pass
-        time.sleep(LOAD_SAMPLE_SECS)
+        if read_wanted():
+            try: load_tick()
+            except Exception: pass
+            try: foot_refresh()
+            except Exception: pass
+        read_pause(LOAD_SAMPLE_SECS)
 
 # A coordinator test pass writes `running` at its start and its terminal state at the end; killed in between, the file says
 # `running` forever. Four hours without a touch is longer than any pass this coordinator runs, so an untouched file is not a
@@ -3989,12 +4035,20 @@ def refresh_board():
     """board_pass() every FULL_EVERY seconds, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
     The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
     quick = False
+    watched = read_wanted()
     while True:
-        try: board_pass()
-        except Exception as e:
-            with _board_lock: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
+        if watched:   # the board read is a page's reading: with no page it does no work (#1790)
+            try: board_pass()
+            except Exception as e:
+                with _board_lock: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
         for _ in range(8 if quick else FULL_EVERY // 2):
-            time.sleep(2)
+            read_pause(2)
+            now_watched = read_wanted()
+            if now_watched and not watched:
+                watched = True; quick = False; break   # the page's first read: the board is read now, not a cycle later (#1790)
+            if not now_watched:
+                watched = False
+                continue                              # no page: the dirty flag is not read either
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0):
                     if time.time() - (board_cache.get("t") or 0) < DIRTY_MIN_SECS: continue   # a burst of moves asks once (#1790): the fast read carries each card's column in the meantime
@@ -4913,11 +4967,13 @@ def history_pass(read_issue=None, read_search=None, now=None):
 
 
 def refresh_history():
-    """history_pass() every HISTORY_EVERY seconds; one failed pass never ends the loop (#1024)."""
+    """history_pass() every HISTORY_EVERY seconds while a page reads this profile (#1024, #1790); one failed pass never
+    ends the loop."""
     while True:
-        try: history_pass()
-        except Exception as e: print(f"history pass failed: {e}", file=sys.stderr)
-        time.sleep(HISTORY_EVERY)
+        if read_wanted():
+            try: history_pass()
+            except Exception as e: print(f"history pass failed: {e}", file=sys.stderr)
+        read_pause(HISTORY_EVERY)
 
 
 def drawn_column(i, moves, window):
@@ -5548,9 +5604,13 @@ def refresh_closed_prs():
         prs_cache.update(t=time.time(), rows=sorted(rows, key=lambda r: r["merged"]), err=None)
         _tmp = _temp_name(PRS); _tmp.write_text(json.dumps(prs_cache)); os.replace(_tmp, PRS)
 def refresh_prs():
+    """The closed-PR read every ten minutes, and only while a page reads this profile (#1790). Its sleep is not cut
+    short by a page read: the read is ten minutes old at worst, and a page that opens and closes would otherwise read
+    again each time."""
     while True:
-        try: refresh_closed_prs()
-        except Exception as e: prs_cache["err"] = str(e)[:80]
+        if read_wanted():
+            try: refresh_closed_prs()
+            except Exception as e: prs_cache["err"] = str(e)[:80]
         time.sleep(600)
 
 def speed():
@@ -7503,9 +7563,12 @@ def quota_write():
         try: QUOTA.write_text(json.dumps(quota))
         except OSError: pass
 def refresh_quota():
-    """Every 20 min, one refresh_quota_once pass (the age of the last good value is shown on the row)."""
+    """Every 20 min, one refresh_quota_once pass (the age of the last good value is shown on the row), and only while a
+    page reads this profile (#1790): the probe starts a CLI, so a page read never cuts its sleep short and a page that
+    opens and closes does not start one."""
     while True:
-        refresh_quota_once(); time.sleep(1200)
+        if read_wanted(): refresh_quota_once()
+        time.sleep(1200)
 QUOTA_MAX_AGE = 3 * 3600   # a probe repolls every 20 min; a reading older than this stopped tracking the account
 def quota_row(k, now=None):
     """What the cost panel and the footer show for provider k: the CLI's own reading, or the reason there is no reading.

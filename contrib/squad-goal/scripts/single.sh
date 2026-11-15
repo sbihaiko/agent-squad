@@ -11,6 +11,9 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 if [ -z "${SG_STATE:-}" ]; then . "$(dirname "$0")/address.sh"; SG_STATE=$(sg_state_base); fi
 . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS (#1508)
 st=$SG_STATE; n=$1; shift; L="$st/locks/single-$n"; mkdir -p "$st/locks"
+# A landing does not start under a drain that committed its stop (#1711): the drain's last busy read would miss it, and the
+# stop takes it with the group. 76 is the wait code watch.sh already draws for a held landing lock.
+case $n in wland) drain_stopping && { echo "single: no landing starts while a drain stops the loop (#1711)" >&2; exit 76; };; esac
 # SG_SINGLE_WAIT=<polls>: a caller that must not skip its step in silence waits up to that many one-second polls for the holder
 # (#471), and still exits 76 when the lock stays held; the caller reads the holder from $L/pid to say why.
 w=${SG_SINGLE_WAIT:-0}

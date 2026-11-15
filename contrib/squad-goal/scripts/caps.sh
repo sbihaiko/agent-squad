@@ -19,6 +19,20 @@ sg_battery_workers() {
   echo "${SG_BATTERY_WORKERS:-$w}"
 }
 
+# drain_stopping: a drain has committed its stop (#1711). Its last busy read and the stop are two instants, and a review or
+# a landing that starts between them is work the drain could not see and takes with the group. So the drain writes
+# $SG_STATE/auto/drain-stop before that last read, and every taker asks here: a review exits 5, a landing exits 76, both of
+# which a caller already reads as "try again later". The mark outlives the drain only if the stop kills it, so a mark older
+# than SG_DRAIN_STOP_TTL seconds is stale and is cleared here: a mark that never goes would stop every landing and review.
+drain_stopping() {
+  local m=${SG_STATE:-}/auto/drain-stop t=${SG_DRAIN_STOP_TTL:-300} age
+  [ -n "${SG_STATE:-}" ] && [ -e "$m" ] || return 1
+  mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
+  age=$(( $(date +%s) - $(mtime "$m") ))
+  [ "$age" -lt "$t" ] && return 0
+  rm -f "$m"; return 1
+}
+
 sg_caps() {
   local root; root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$root/squad/caps.py" ] || root=${SG_SQUAD:-}
   PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.caps "$@"

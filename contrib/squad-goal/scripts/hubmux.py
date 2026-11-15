@@ -303,6 +303,7 @@ def server(port, apps, on_new=None):
                     view = dict(apps)
                 seen, reason = admitted(view, self, method)
                 if reason: return self.refuse(reason)
+                touch_listed(seen)   # the index lists every repository it may see (#1790)
                 if path == "/": return self._send(200, root_page(seen, "squad hub"), "text/html; charset=utf-8")
                 return self._send(200, json.dumps(listing(seen)).encode(), "application/json")
             slug = path.split("/")[1]
@@ -311,7 +312,9 @@ def server(port, apps, on_new=None):
             if not app or "mod" not in app:
                 seen, reason = admitted(view, self, method)
                 if reason: return self.refuse(reason)
+                touch_listed(seen)   # the 404 page lists every repository it may see (#1790)
                 return self._send(404, root_page(seen, f"no repository at /{slug}", test_note(slug, seen)), "text/html; charset=utf-8")
+            touch_profile(app)   # a page reads this profile: its background reads run until it stops (#1790)
             self.profile = app["mod"].H
             self.path = self.path[len(slug) + 1:] or "/"
             if self.path.startswith("?"): self.path = "/" + self.path
@@ -341,14 +344,33 @@ def supervise(app):
     m.start_terminal_supervisor()
 
 
+SAMPLERS = ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler")
+
+
 def start_profile(a):
-    """Each profile's own background reads: a profile added later starts its own too (#917). The sampler of a profiler
-    switch left on starts here (#1743); off, that starts nothing."""
+    """Each profile's own background reads, one thread each, a profile added later starts its own too (#917). They are
+    parked at boot: a read works only while a page reads that profile (#1790), so a hub with no page open costs its
+    listeners and nothing more. The sampler of a profiler switch left on starts from the same read, never at boot
+    (#1743)."""
     m = a.get("mod")
     if m is None: return
-    for f in ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler"):
-        threading.Thread(target=getattr(m, f), daemon=True).start()
-    m.profiler_ensure()
+    a["gate"] = m.ReadGate()
+    m.READ_GATE = a["gate"]
+    for f in SAMPLERS:
+        threading.Thread(target=getattr(m, f), daemon=True, name=f"{a.get('repo') or 'profile'}:{f}").start()
+
+
+def touch_profile(a):
+    """A page read of this profile: its background reads run until READ_IDLE_SECS passes with no read (#1790). The Loop
+    tab's own read starts the profiler sampler (hub.py `profiler_view`), so every request here reads no switch file."""
+    g = a.get("gate")
+    if g is not None: g.touch()
+
+
+def touch_listed(apps):
+    """The index reads each repository's live work and its worst alert, so it reads each of them: its poll keeps their
+    readings running (#1790)."""
+    for a in apps.values(): touch_profile(a)
 
 
 if __name__ == "__main__":

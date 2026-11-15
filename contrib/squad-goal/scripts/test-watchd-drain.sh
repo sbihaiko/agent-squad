@@ -291,5 +291,38 @@ out=$(bash "$W" loopbug "$T/i.json" 2>/dev/null); rc=$?
   && ok "1708 loopbug on a live loop prints the issue, writes the mark and one audit line, and kills nothing" \
   || ko "1708 loopbug on a live loop: rc=$rc out=$out mark=$(cat "$A/loop-bug-drain" 2>/dev/null)"
 bash "$W" stop --force >/dev/null 2>&1; clean
+# (#1711) A drain waits for a landing and for a child review in flight, not only for runs and gates.
+rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-stop" "$SG_STATE/auto/drain-named"
+: > "$SG_STATE/active-runs.txt"; rm -f "$SG_STATE/locks/gate/pid"
+export SQUAD_CAPS_DIR="$T/caps"
+mkdir -p "$SG_STATE/locks/single-wland"
+sleep 300 & lp=$!; echo "$lp" > "$SG_STATE/locks/single-wland/pid"
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" drain >/dev/null 2>&1
+for _ in $(seq 1 10); do alive_sup || break; sleep 1; done
+alive_sup && ok "a landing in flight holds the drain" || ko "the drain stopped the loop under a live landing"
+grep -q "DRAIN the drain waits for landing:$lp" "$SG_STATE/alerts.log" 2>/dev/null && ok "the drain names the landing it waits for" \
+  || ko "the drain did not name the landing it waits for"
+kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null
+for _ in $(seq 1 25); do ! alive_sup && break; sleep 1; done
+alive_sup && ko "the loop stayed up after the landing ended" || ok "the drain stops once the landing is done"
+bash "$T/watchd.sh" stop >/dev/null
+mkdir -p "$T/caps/reviews"
+printf '{"pid":%d,"holder":"runreview-r-c","since":%d}\n' "$$" "$(date +%s)" > "$T/caps/reviews/r.json"
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" drain >/dev/null 2>&1
+for _ in $(seq 1 10); do alive_sup || break; sleep 1; done
+alive_sup && ok "a child review in flight holds the drain" || ko "the drain stopped the loop under a live review"
+grep -q "DRAIN the drain waits for runreview-r-c" "$SG_STATE/alerts.log" 2>/dev/null && ok "the drain names the review it waits for" \
+  || ko "the drain did not name the review it waits for"
+rm -f "$T/caps/reviews/r.json"
+for _ in $(seq 1 25); do ! alive_sup && break; sleep 1; done
+alive_sup && ko "the loop stayed up after the review ended" || ok "the drain stops once the review is done"
+# A landing does not start under a committed stop: that is the gap between the last busy read and the stop.
+rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain"
+: > "$SG_STATE/auto/drain-stop"
+bash "$d/single.sh" wland true >/dev/null 2>&1; [ "$?" = 76 ] && ok "no landing starts under a committed stop" || ko "a landing started under a committed stop"
+rm -f "$SG_STATE/auto/drain-stop"
+bash "$d/single.sh" wland true >/dev/null 2>&1; [ "$?" = 0 ] && ok "a landing starts once the stop is lifted" || ko "a landing did not start after the stop was lifted"
 [ "$fail" = 0 ] && echo "watchd drain: all ok" || echo "watchd drain: FAILED"
 exit "$fail"
