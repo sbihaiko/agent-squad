@@ -8,7 +8,10 @@
 #
 # Exit 0: landed; stdout `FFLAND <sha>`. Exit 1: nothing landed; stdout `FFLAND-FALLBACK <reason>`. A push a ruleset
 # refuses is the expected reason. $SG_LAND_REMOTE overrides the remote.
-br=$1 iss=$2; base=${SG_BASE:-main}; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}
+br=$1 iss=$2; base=${SG_BASE:-}; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}
+# (#1846) The base is never guessed. A hand caller that loads no profile used to land on `main`, one commit ahead of stg and
+# unprovable, and the rules refuse to rewind main, so the repair took a merge. env.sh sets SG_BASE (dev) for every loop call.
+[ -n "$base" ] || { echo "FFLAND-FALLBACK SG_BASE is not set: name the branch a wave lands in (env.sh sets it), never guess"; exit 1; }
 d=$(cd "$(dirname "$0")" && pwd)
 case "$iss" in ''|*[!0-9]*) echo "FFLAND-FALLBACK bad arguments"; exit 1;; esac
 [ -n "$br" ] || { echo "FFLAND-FALLBACK no branch"; exit 1; }

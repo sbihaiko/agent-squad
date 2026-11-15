@@ -40,6 +40,42 @@ def live_run(tmp_path: Path, age: float, moved: float | None = None) -> Path:
     return run
 
 
+def open_call(run: Path, started: float, limit: float | None) -> None:
+    """One call open since `started` seconds ago, with the deadline it recorded (`limit`, in seconds; None for no limit).
+    A long call writes the `call_start` and then nothing until it ends, so this event is the record's last motion."""
+    now = time.time()
+    ev = {"event": "call_start", "node": "route.router.1", "entry": 1, "session": "s", "pid": os.getpid(),
+          "limit": limit, "started_at": now - started, "ts": now - started}
+    with (run / "record.jsonl").open("a") as f:
+        f.write(json.dumps(ev) + "\n")
+    os.utime(run / "record.jsonl", (now, now))
+
+
+@pytest.mark.heavy
+def test_a_run_whose_open_call_still_has_time_is_not_taken_over(tmp_path):
+    """#1842: the bound reads progress, and a call writes none until it ends. A run inside one long call is inside the
+    deadline that call recorded: that deadline ends the call, and a takeover before it kills the call short of its cap,
+    however long the run has been working."""
+    run = live_run(tmp_path, 3300)     # the record's last motion is 3300 s old, well past the 1800 s bound
+    open_call(run, started=3300, limit=7200)   # the call's own deadline is 3900 s ahead
+    janitor(tmp_path)
+    st = tmp_path / "st"
+    assert RUN in (st / "active-runs.txt").read_text(), "a run inside its open call's deadline left active-runs"
+    assert not (st / "auto" / f"taken-{RUN}").exists(), "a run inside its open call's deadline was taken over"
+    assert (st / "auto" / f"disp-{N}").exists(), "the dispatch marker of a run inside its call's deadline went"
+
+
+@pytest.mark.heavy
+def test_a_run_whose_open_call_passed_its_deadline_is_taken_over(tmp_path):
+    """#1842: once the open call is past the deadline it recorded, the run is stuck by both measures and still ends."""
+    run = live_run(tmp_path, 3300)
+    open_call(run, started=3300, limit=600)   # the call's own deadline passed 2700 s ago
+    janitor(tmp_path)
+    st = tmp_path / "st"
+    assert RUN not in (st / "active-runs.txt").read_text(), "a run past its open call's deadline stayed in active-runs"
+    assert (st / "auto" / f"taken-{RUN}").exists(), "no taken-over marker names the run past its call's deadline"
+
+
 @pytest.mark.heavy
 def test_a_run_past_the_bound_is_ended_and_its_issues_stay_claimed(tmp_path):
     live_run(tmp_path, 1900)

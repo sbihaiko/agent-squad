@@ -231,7 +231,7 @@ def _code(code, depth):
 def _parse(command):
     """Every shape reads the whole line: there is no head cap, so a script past a long argument list still names its
     process. The line is not cached either, since a cache would hold the whole argument list of every process and a
-    process table churns it: a reading parses each line once or twice."""
+    process table churns it: the label memo keys a reading's row by a length and a hash, never by the line."""
     return _run(_words(command), raw=command)
 
 
@@ -240,10 +240,9 @@ def label(command):
     return _parse(command)[0]
 
 
-def _orphan(command, marks):
+def _orphan(script, marks):
     """The orphan's node for a parentless command whose script sits in a temp folder, or None. A script in a folder of
     the profile is no orphan, wherever that folder is."""
-    script = _parse(command)[1]
     if not script or not _TEMP.search(script) or any(m in script for m in marks):
         return None
     return (f"orphan {_base(script)} (temp folder)", "orphan")
@@ -263,29 +262,55 @@ def _names(command, marks):
     return any(m in command for m in marks)
 
 
-def _paths(rows, scope):
-    """A function pid -> the node path of that process in `rows` ({pid: (ppid, cpu, command)}), memoized over one reading."""
-    memo = {}
+# The labels of one reading, keyed by (pid, start, the argv text's length, its hash) -> (label, script). It holds no
+# command line: a length and a hash name the same argv without keeping it, so the rule that a line is never cached holds.
+# An exec keeps the pid and the start time and changes the hash, so it names a new label. `fold` drops every process the
+# reading no longer holds, and the memo never outgrows one reading of the table. One hub process serves several profiles
+# on their own sampler threads, so a fold's prune can drop another profile's entry: that costs a reparse, never a wrong
+# label, because the key names the whole process.
+_LABELS = {}
+
+
+def _labeller(rows, starts, memo):
+    """pid -> (label, script) over the rows of one reading, from `memo` when it holds that argv, else parsed and kept.
+    With no memo every call parses: the plain path the memo is measured against."""
+    def label_of(pid):
+        command = rows[pid][2]
+        if memo is None:
+            return _parse(command)
+        key = (pid, starts.get(pid), len(command), hash(command))
+        cell = memo.get(key)
+        if cell is None:
+            memo[key] = cell = _parse(command)
+        return cell
+    return label_of
+
+
+def _paths(rows, scope, starts=None, memo=None):
+    """A function pid -> the node path of that process in `rows` ({pid: (ppid, cpu, command)}), memoized over one reading.
+    `starts` is each pid's start time and `memo` the label memo, so a process is labelled once per argv."""
+    seen = {}
     marks = tuple(scope.marks)
-    held = label(rows[scope.supervisor][2]) if scope.supervisor in rows else None
+    parsed = _labeller(rows, starts or {}, memo)
+    held = parsed(scope.supervisor)[0] if scope.supervisor in rows else None
     above = rows[scope.supervisor][0] if held and held[0] == SUPERVISOR else None   # the pid file names the loop the supervisor runs; the supervisor is its parent
 
     def place(pid):
         """(in the loop, in another loop, or outside; the named parts; the top ancestor's command)."""
-        if pid in memo:
-            return memo[pid]
+        if pid in seen:
+            return seen[pid]
         chain, base = [], None
         while pid in rows and len(chain) < 64:   # the cap ends a parent cycle a torn read can show
             chain.append(pid)
             pid = rows[pid][0]
             if pid <= 1 or pid == chain[-1]:   # pid 1 adopts every orphan: it is no ancestor that names a tree
                 break
-            if pid in memo:
-                base = memo[pid]
+            if pid in seen:
+                base = seen[pid]
                 break
         for p in reversed(chain):
             ppid, _, command = rows[p]
-            own = label(command)
+            own, script = parsed(p)
             state, parts, top = base or (_OUT, (), command)
             if (p == scope.supervisor or p == above) and own and own[0] == SUPERVISOR:   # a stale pid file can name another program
                 state, parts = _IN, (own,)
@@ -293,14 +318,14 @@ def _paths(rows, scope):
                 if own and (not parts or parts[-1] != own):
                     parts = parts + (own,)
             elif state == _OUT:
-                orphan = _orphan(command, marks) if ppid == 1 else None
+                orphan = _orphan(script, marks) if ppid == 1 else None
                 if orphan:
                     state, parts = _IN, (orphan,)
                 elif own and own[0] == SUPERVISOR:   # the same scripts run another profile's loop: its pid tells it apart
                     state = _OTHER_LOOP
                 elif _names(command, marks):
                     state, parts = _IN, ((own,) if own else ())
-            base = memo[p] = (state, parts, top)
+            base = seen[p] = (state, parts, top)
         return base
 
     def path(pid):
@@ -311,12 +336,22 @@ def _paths(rows, scope):
     return path
 
 
-def fold(prev, cur, scope):
+def fold(prev, cur, scope, memo=_LABELS):
     """{node path: [cpu seconds, events]} for what happened between two readings.
     A (pid, start time) the first reading does not hold is one event, and all its CPU time is new. So is one whose CPU
-    time went back, where the system gives no start time."""
+    time went back, where the system gives no start time. `memo` keeps each process's label while the reading holds it,
+    so the next reading reuses it instead of parsing the line again; a process the reading no longer holds leaves the
+    memo, and with no memo every line is parsed."""
+    if memo is not None:
+        live = set(cur)
+        for key in list(memo):   # a snapshot: another profile's sampler can fold on its own thread in the same hub
+            if (key[0], key[1]) not in live:
+                memo.pop(key, None)
     out = {}
-    path = _paths({pid: row for (pid, _), row in cur.items()}, scope)
+    rows, starts = {}, {}
+    for (pid, start), row in cur.items():
+        rows[pid], starts[pid] = row, start
+    path = _paths(rows, scope, starts, memo)
     for key, (_, cpu, _) in cur.items():
         was = prev.get(key)
         new = was is None or cpu < was[1]

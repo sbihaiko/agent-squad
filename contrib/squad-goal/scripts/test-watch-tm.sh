@@ -10,6 +10,7 @@ echo 1000 > "$CLK"
 # the fake clock: date +%s reads it, and each stub step advances it by its own duration
 date() { if [ "$1" = +%s ]; then cat "$CLK"; else command date "$@"; fi; }
 orphaned() { false; }
+. "$S/steprec.sh"   # the timer writes the step's dated record as it runs (#1750), so its fixture loads the writer
 eval "$(/usr/bin/grep '^tm() ' "$S/watch.sh")"
 step() { printf '#!/bin/bash\necho $(( $(cat "%s") + %s )) > "%s"\nexit %s\n' "$CLK" "$2" "$CLK" "${3:-0}" > "$1"; chmod +x "$1"; }
 step "$T/bin/single.sh" 7

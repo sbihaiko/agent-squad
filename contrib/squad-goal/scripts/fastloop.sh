@@ -11,6 +11,10 @@
 # The cache is the hub's one board (SG_PROJECT): the bug project's own Todo column (SG_BUG_*) is not in it, so a bug filed there waits for the beat.
 # --interval prints the resolved beat and exits (tests). SG_FASTLOOP_ONCE=1 runs one iteration and exits (tests).
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; [ "${1:-}" = --interval ] && { echo "$SG_FAST_INTERVAL"; exit 0; }; here="$(dirname "$0")"; P="$SG_STATE/fastloop.pid"
+# One dated record for each pass this lane starts detached (#1750), in the same file the cycle writes: a start as the pass is
+# launched and a finish when it really ends, so a pass in flight holds a start and no finish. A copy of this script that
+# travels without the writer (a fixture) runs as before: a missing record never stops a pass.
+. "$here/steprec.sh" 2>/dev/null || { srec_start() { srec_id=; }; srec_end() { :; }; }
 # todos: the numbers of Todo cards in the fresh hub board cache; nothing when it is missing, stale or unreadable.
 todos() { python3 "${here:-$(dirname "$0")}/issue_state.py" --hub-todos 2>/dev/null; }
 # A lane removes the pid file only when the file names it: the lane of a later start may own it by then (#527).
@@ -41,11 +45,12 @@ while :; do
   [ -n "${SG_FASTLOOP_ONCE:-}" ] || echo $$ > "$P"   # every beat: watch.sh reads this file to know the lane is up, and a missing one sent the cycle to run childcc inline (#513)
   load_sample
   # $cc is the pass this lane started: a later beat starts none while it lives, and the childcc lock still bars every other pass.
-  { [ -n "$cc" ] && kill -0 "$cc" 2>/dev/null; } || { bash "$here/single.sh" childcc python3 "$here/childcc.py" 2>&1 & cc=$!; }
+  { [ -n "$cc" ] && kill -0 "$cc" 2>/dev/null; } || { srec_start childcc; csid=$srec_id; { bash "$here/single.sh" childcc python3 "$here/childcc.py" 2>&1; srec_end "$csid" childcc $?; } & cc=$!; }
   # Both go out detached: a pass ends in a squad start that runs for minutes, and it must not hold the beat. They are called bare, as watch.sh calls them,
   # because each takes its own single.sh <stage> lock inside — so a pass already running is skipped here, and never doubled against the cycle's standalone path.
   # The bug pass goes first (#616): it writes the bugs it left waiting, and the frontier pass after it reads that count.
-  ( { "$here/autobug.sh" 2>&1; "$here/autofrontier.sh" 2>&1; } & ) 2>/dev/null
+  ( { srec_start autobug; bs=$srec_id; "$here/autobug.sh" 2>&1; br=$?; srec_end "$bs" autobug "$br"
+      srec_start autofrontier; fs=$srec_id; "$here/autofrontier.sh" 2>&1; fr=$?; srec_end "$fs" autofrontier "$fr"; } & ) 2>/dev/null
   [ -n "${SG_FASTLOOP_ONCE:-}" ] && { wait "$cc"; exit 0; }   # a test's one iteration ends with its pass
   # The wait is SG_FAST_INTERVAL seconds at most (a fraction is fine), polled; a card in Todo that the beat's start did not see ends it.
   # It counts polls, never SECONDS: an integer test on a fractional beat errored and the lane spun with no pause. The remainder is one last short sleep.

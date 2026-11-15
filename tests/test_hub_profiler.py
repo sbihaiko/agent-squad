@@ -237,6 +237,48 @@ def test_a_process_is_keyed_by_pid_and_start_time(prof, scope):
     assert same["self_s"] == pytest.approx(10.0) and same["events"] == 0
 
 
+def test_the_label_memo_answers_the_fold_the_plain_path_answers(prof, scope):
+    """The memo is a cache over the same parser: one reading folds to the same tree with and without it, warm or cold."""
+    plain = prof.fold(FIRST, SECOND, scope, memo=None)
+    memo = {}
+    assert prof.fold(FIRST, SECOND, scope, memo=memo) == plain
+    assert prof.tree(prof.fold(FIRST, SECOND, scope, memo=memo)) == prof.tree(plain), \
+        "a warm memo answers the reading the cold one answered"
+
+
+def test_a_label_is_built_once_per_distinct_argv(prof, scope, monkeypatch):
+    """Each process of a reading is labelled once; the next reading of the same argv reuses that label, and an exec on
+    the same pid names a new argv, so it is labelled then."""
+    calls = []
+    real = prof._parse
+
+    def counted(command):
+        calls.append(command)
+        return real(command)
+    monkeypatch.setattr(prof, "_parse", counted)
+    a = rd({10: (1, 0.0, f"/bin/bash {S}/watchd.sh supervise"), 11: (10, 0.0, f"bash {S}/watch.sh")})
+    b = rd({10: (1, 1.0, f"/bin/bash {S}/watchd.sh supervise"), 11: (10, 1.0, f"bash {S}/watch.sh")})
+    c = rd({10: (1, 2.0, f"/bin/bash {S}/watchd.sh supervise"), 11: (10, 2.0, f"bash {S}/gate.sh")})
+    memo = {}
+    prof.fold(a, b, scope, memo=memo)
+    assert sorted(calls) == sorted({row[2] for row in b.values()}), "one label per distinct argv of the reading"
+    calls.clear()
+    prof.fold(b, c, scope, memo=memo)
+    assert calls == [f"bash {S}/gate.sh"], "the same argv reuses its label; an exec names a new one"
+
+
+def test_the_memo_drops_a_process_that_leaves_the_reading(prof, scope):
+    """The memo follows the table: a process the reading no longer holds leaves the memo with it, and it keeps no argv."""
+    memo = {}
+    prof.fold(FIRST, SECOND, scope, memo=memo)
+    assert any(key[0] == 20 for key in memo)
+    gone = {k: v for k, v in SECOND.items() if k[0] != 20}
+    prof.fold(SECOND, gone, scope, memo=memo)
+    assert not any(key[0] == 20 for key in memo), "a process that left the reading is dropped"
+    assert all(isinstance(key, tuple) and len(key) == 4 for key in memo), "the key is (pid, start, length, hash)"
+    assert not any(isinstance(part, str) and "/" in part for key in memo for part in key), "no argv is kept"
+
+
 def test_the_window_keeps_the_last_span_and_restarts_on_reset(prof, scope):
     def reading(cpu, extra=()):
         return rd({9: (1, cpu, f"bash {S}/watch.sh"), **{p: (9, 0.0, "true") for p in extra}})

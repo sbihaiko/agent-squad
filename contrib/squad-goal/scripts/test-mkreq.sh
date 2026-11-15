@@ -288,5 +288,14 @@ case "$sl" in *'Run it once per commit'*'exit 4'*'unproven'*'never run it a seco
 # 21. (#1715) A child that met a full gate budget read exit 4 as a failure, because the request tied exit 4 to two words of the
 # gate line. The request names exit 4 by its code, with no condition on the line, and still names exit 1 as a defect.
 case "$sl" in *'exit 4 is unproven whatever its line names'*'a full gate budget'*'it ends your gate step'*'Exit 1 names a defect'*) ok "21 the request names exit 4 as unproven whatever the gate line says (#1715)";; *) ko "21 the request ties exit 4 to the words of the gate line: $sl";; esac
+# 22. (#1844) A delta that adds a test file selects the shard guard, and one that adds a shell suite selects the measured-line
+# guard, so the child runs the guard in the gate its commit must pass. A rule the brief never names comes back as a red in the
+# child's own gate, one gate late: the request names the shard entry and the write command for the measured line.
+rq=$R/z1527.txt   # the request case 20 built, whose body names the same checkout as 19
+if /usr/bin/grep -q 'ci_shards.py' "$rq" && /usr/bin/grep -q 'measure_shell_suites.py --write' "$rq"; then
+  ok "22 the request names the shard entry and the measured line a new test file and suite need (#1844)"
+else
+  ko "22 the request names no shard entry or no measured-line command: $(/usr/bin/grep -c 'ci_shards.py' "$rq") shard, $(/usr/bin/grep -c 'measure_shell_suites.py' "$rq") measure"
+fi
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
