@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from tests.gitrepo import with_origin
-from tests.launchdeps import LAUNCH_MODULES
+from tests.launchdeps import LAUNCH_MODULES, install_squad_modules
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"))
 import router_envelope  # noqa: E402
@@ -50,6 +50,7 @@ def _launch(tmp_path, coding, envelope, shared=None, hours=None):
         d.mkdir(parents=True, exist_ok=True)
     for name in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / name, s / name)
+    squad_root = install_squad_modules(tmp_path)   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
     (s / "models.json").write_text(json.dumps({"coding_models": coding, "review_models": [], "vision_models": [], "hours": {"coding_models": hours or {}}}))
     (s / "hub.py").write_text("print('hub')\n")
     doc = {"schema_version": 1, "name": "g", "root": "main", "nodes": [
@@ -65,7 +66,7 @@ def _launch(tmp_path, coding, envelope, shared=None, hours=None):
     req = tmp_path / "req.txt"
     req.write_text(f"Coding model: {coding[0]} (no [1m] suffix); fall back to {coding[-1]}.\n--- issue\n")
     e = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
-    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"), **({"SG_SHARED": str(shared)} if shared else {}))
+    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=squad_root, **({"SG_SHARED": str(shared)} if shared else {}))
     with_origin(co)   # launch.py fetches origin/main before a run (#580)
     return subprocess.run([sys.executable, "-I", str(s / "launch.py"), str(req)], cwd=co, env=e, capture_output=True, text=True, timeout=60)
 

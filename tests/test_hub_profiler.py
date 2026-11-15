@@ -1390,6 +1390,37 @@ def test_the_push_stream_subject_does_no_work_while_no_page_reads_the_profile(hu
     assert not t.is_alive()
 
 
+def test_an_unanswered_subject_rests_at_the_tick_after_the_startup_window(hub, monkeypatch):
+    """A subject whose reader answers None never publishes, so the fast first-read period must end: kept forever it read
+    fifty times a second for as long as a page read the profile, and the mux burned a whole core (#1875)."""
+    mod = hub[0]
+    pauses = []
+
+    class Versions:
+        @classmethod
+        def refresh_one(cls, name):
+            pass
+        @classmethod
+        def newer(cls, _):
+            return {}          # the subject never answers
+
+    monkeypatch.setattr(mod, "VERSIONS", Versions())
+    monkeypatch.setattr(mod.hubstream, "TICK_SECONDS", 7.0)
+    monkeypatch.setattr(mod.hubstream, "FIRST_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(mod.hubstream, "FIRST_EVENT_SECONDS", 0.0)   # the startup window is over before the first tick
+    monkeypatch.setattr(mod, "READ_GATE", None)                      # a page reads the profile: read_wanted() is true
+
+    def pause(secs):
+        pauses.append(secs)
+        if len(pauses) >= 2:
+            raise StopSampling
+    monkeypatch.setattr(mod, "read_pause", pause)
+    monkeypatch.setattr(threading, "excepthook", lambda _: None)
+    t = mod._ticker("probe")
+    wait(lambda: not t.is_alive(), 2)
+    assert pauses and pauses[0] == 7.0, f"the reader asked {pauses[:2]} s: the fast first-read period never ended"
+
+
 # ---------------------------------------------------------------- the second review's findings
 def test_the_supervisor_above_the_pid_file_s_process_is_this_loop(prof):
     """watchd.pid names the `run` child; its `supervise` parent is the same loop, never another one."""
