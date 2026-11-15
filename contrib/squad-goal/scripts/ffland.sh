@@ -9,22 +9,33 @@
 # Exit 0: landed; stdout `FFLAND <sha>`. Exit 1: nothing landed; stdout `FFLAND-FALLBACK <reason>`. A push a ruleset
 # refuses is the expected reason. $SG_LAND_REMOTE overrides the remote.
 br=$1 iss=$2; base=${SG_BASE:-main}; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}
+d=$(cd "$(dirname "$0")" && pwd)
 case "$iss" in ''|*[!0-9]*) echo "FFLAND-FALLBACK bad arguments"; exit 1;; esac
 [ -n "$br" ] || { echo "FFLAND-FALLBACK no branch"; exit 1; }
 export GIT_TERMINAL_PROMPT=0
 W=$(mktemp -d) || { echo "FFLAND-FALLBACK no scratch dir"; exit 1; }; trap 'rm -rf "$W"' EXIT
 g() { /usr/bin/git -C "$W" "$@"; }
-fb() { echo "FFLAND-FALLBACK $*"; exit 1; }
+# The landing's own commit status (#1836): `pending` on the branch tip when the landing starts, and its end on the tip the
+# push landed. GitHub keeps created_at and updated_at per status, so the time a landing took sits on the commit beside the
+# checks it waited for, and a status left pending is a landing that died. A report, never a gate: landstatus.sh exits 0 on
+# every refusal, and SG_LAND_STATUS=off silences it.
+pendsha=
+status() { [ -n "$1" ] && bash "$d/landstatus.sh" "$@"; return 0; }
+fb() { echo "FFLAND-FALLBACK $*"; status "$pendsha" failure "landing #$iss refused"; exit 1; }
+
 g init -q . 2>/dev/null; g remote add origin "$remote"
 [ -n "$(g config user.name)" ] || g config user.name "${SG_LAND_NAME:-squad-goal}"; [ -n "$(g config user.email)" ] || g config user.email "${SG_LAND_EMAIL:-squad-goal@localhost}"
 o=$(g fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" "+refs/heads/$br:refs/remotes/origin/$br" 2>&1) || fb "fetch failed: $(printf '%s' "$o" | tail -1)"
 g rev-parse "origin/$br" >/dev/null || fb "no branch $br"
 g checkout -q -B land "origin/$br" 2>/dev/null || fb "checkout failed"
 o=$(g rebase "origin/$base" 2>&1) || { g rebase --abort >/dev/null 2>&1; fb "rebase on $base conflicts: $(printf '%s' "$o" | tail -1)"; }
-[ "$(g rev-list --count "origin/$base..HEAD")" -gt 0 ] || fb "nothing ahead of $base"
+[ "$(g rev-list --count "origin/$base..HEAD")" -gt 0 ] || { status "$(g rev-parse "origin/$br")" success "already in $base"; echo "FFLAND-FALLBACK nothing ahead of $base"; exit 1; }
 head=$(g rev-parse HEAD)
+pendsha=$(g rev-parse "origin/$br")
+status "$pendsha" pending "landing #$iss"
 o=$(g push -q origin "HEAD:refs/heads/$base" 2>&1) || {
   case "$o" in *GH006*|*GH013*|*"rule violations"*|*"protected branch"*|*"remote rejected"*) fb "a ruleset refused the push to $base: $(printf '%s' "$o" | tr '\n' ' ' | cut -c1-200)";; esac
   fb "the push to $base failed: $(printf '%s' "$o" | tail -1)"; }
 g push -q origin ":refs/heads/$br" >/dev/null 2>&1 || echo "FFLAND-NOTE branch $br was not deleted" >&2
+status "$head" success "landed #$iss"
 echo "FFLAND $head"

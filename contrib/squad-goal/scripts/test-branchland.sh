@@ -6,7 +6,7 @@ unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this sui
 unset SG_BOARD_VOCAB   # the loop's shipped vocabulary (Closed, not Done) is ambient in a live shell; this suite expects the default
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$T/s/" 2>/dev/null
+cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/landstatus.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -47,8 +47,14 @@ O="$G -C $T/origin.git"
 reset() { rm -f "$T/st/cq"/* "$T/gh.log" "$T/board.log" "$T/st/auto"/branchland-*; mkorigin; rev APPROVE; }
 rev APPROVE
 
+bsha=$($O rev-parse gui/7-x)   # the tip the landing starts from, before the push moves dev (#1836)
 r=$(CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ko "dev did not move: '$r'" || ok "green: the branch landed in dev"
+# The landing's own commit status (#1836): pending on the tip it started from, success on the tip it landed. GitHub keeps
+# created_at/updated_at per status, so the landing's duration sits on the commit; a status left pending is a landing that died.
+/usr/bin/grep -q "statuses/$bsha -f state=pending" "$T/gh.log" && ok "the landing is marked pending on the tip it started from" || ko "no pending status on $bsha: $(/usr/bin/grep -c statuses "$T/gh.log") status calls"
+/usr/bin/grep -q "statuses/$($O rev-parse dev) -f state=success" "$T/gh.log" && ok "the landing is marked success on the tip it landed" || ko "no success status on $($O rev-parse dev)"
+/usr/bin/grep -q 'statuses/.* -f context=squad/landing' "$T/gh.log" && ok "the status names its context" || ko "the status names no context"
 $O merge-base --is-ancestor main dev && [ "$($O log --format=%s dev | head -1)" = work ] && ok "dev is a fast-forward of its old head" || ko "dev is not a fast-forward"
 $O rev-list --merges dev | /usr/bin/grep -q . && ko "a merge commit landed" || ok "history stays linear"
 [ "$($O rev-parse main)" = "$($G -C "$T/co" rev-parse main)" ] && ok "main did not move" || ko "main moved"
