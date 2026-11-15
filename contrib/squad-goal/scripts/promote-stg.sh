@@ -17,6 +17,8 @@
 #     A delta record (ADR-0156, $SG_STATE/gate-status-delta) carries the full pass of an ancestor P across a covered change: stg
 #     moves on it when the record says pass for the dev tip, P has a full pass and the changed-file list still hashes to P..tip.
 #     Each carried P is appended to $SG_STATE/gate-carried after the merge, and a P already there refuses.
+#   fast: the fast proof word, $SG_STATE/gate-status-promote (#1723): `<epoch> TAB fast TAB pass TAB <sha>` for the dev tip. A
+#     record for another tip waits (exit 75); any other word or result refuses.
 #   bound: the bound-ended proof (ADR-0164). Only for the tip promote-pass.sh recorded in $SG_STATE/promote-indeterminate, and
 #     only while neither the full line nor the delta record says fail for that tip. Nothing else measured the tip, so a CI check
 #     that reported a defect on it refuses the merge by name (#1196); a check still running or absent holds nothing. The merge
@@ -143,6 +145,12 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     [ "$kind" = full ] && [ "$sha" = "$1" ] && [ "$res" = fail ] && refuse "$1" "not promoted: the last full proof of the dev tip is a fail"
     IFS=$'\t' read -r _ dk dres _ dT _ 2>/dev/null < "$state/gate-status-delta"
     [ "$dk" = delta ] && [ "$dT" = "$1" ] && [ "$dres" = fail ] && refuse "$1" "not promoted: the delta proof of the dev tip is a fail"
+  elif [ "$proof" = fast ]; then
+    # #1723: the fast proof word is one record for the exact tip. A record for another tip is a wait (#1495); any other word refuses.
+    IFS=$'\t' read -r _ fk fres fsha < "$state/gate-status-promote" 2>/dev/null
+    [ "$fk" = fast ] || refuse "$1" "not promoted: the fast record holds ${fk:-no word}, not the fast proof"
+    [ "$fsha" = "$1" ] || { echo "promote-stg: pending $1: the fast proof is for ${fsha:-no tip}, not this tip"; exit 75; }
+    [ "$fres" = pass ] || refuse "$1" "not promoted: the fast proof is ${fres:-none}, not a pass"
   else
     st=$(ci_state "$1" 2>/dev/null)
     [ "$st" = running ] && { echo "promote-stg: pending $1: CI is running"; exit 75; }   # the checks have not reported: a wait, never a refusal (#1495)
@@ -183,8 +191,12 @@ if [ -z "$pr" ]; then
   pr=$(printf '%s' "$o" | jq -r '.number // empty' 2>/dev/null)
   [ -n "$pr" ] || refuse "$tip" "not promoted: the pull request was opened but its number was not read"
 fi
-o=$(gh_send -X PUT "repos/$SG_REPO/pulls/$pr/merge" -f merge_method=merge 2>&1) \
-  || refuse "$tip" "not promoted: pull request #$pr could not be merged: $(printf '%s' "$o" | tail -1)"
+# The merge names the proven head: GitHub answers 409 when the head moved past it. The pull request then names the new head, and
+# the next pass reads that tip (#1723), so a moved head is a wait, never a refusal of the old one.
+o=$(gh_send -X PUT "repos/$SG_REPO/pulls/$pr/merge" -f merge_method=merge -f sha="$tip" 2>&1) || {
+  hd=$(gh_api "repos/$SG_REPO/pulls/$pr" -q '.head.sha' 2>/dev/null) || hd=
+  [ -n "$hd" ] && [ "$hd" != "$tip" ] && { echo "promote-stg: pending $tip: the head moved to $hd before the merge (409)" >&2; exit 75; }
+  refuse "$tip" "not promoted: pull request #$pr could not be merged: $(printf '%s' "$o" | tail -1)"; }
 printf '%s' "$o" | jq -e '.merged == true' >/dev/null 2>&1 \
   || refuse "$tip" "not promoted: pull request #$pr did not merge: $(printf '%s' "$o" | jq -r '.message // "no reason"' 2>/dev/null)"
 [ -n "${carried:-}" ] && echo "$carried" >> "$state/gate-carried"

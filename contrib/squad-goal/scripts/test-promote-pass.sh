@@ -388,6 +388,21 @@ IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
 [ "$sha" = "$tfg" ] && ko "a fast-tier pass wrote the full pass line" || ok "a fast-tier pass writes no full pass line"
 /usr/bin/grep -q -- "/labels" "$T/gh.log" && ko "the pass asked for the complete tier on the dev -> stg pull request: $(/usr/bin/grep labels "$T/gh.log")" \
   || ok "the pass never labels the dev -> stg pull request (#1723)"
+IFS=$'\t' read -r _ pk pres psha < "$SG_STATE/gate-status-promote" 2>/dev/null
+[ "$pk" = fast ] && [ "$pres" = pass ] && [ "$psha" = "$tfg" ] && ok "a fast-tier pass writes the fast proof word for its tip" \
+  || ko "fast proof word: '$pk $pres $psha' for $tfg"
+# #1723 (plan item): a tiered tip whose CI never reports is proven by the local fast battery, never the full suite.
+adv dev fb; tfb=$(tip dev); before=$(tip stg); : > "$T/suite.log"; rm -f "$SG_STATE/gate-status-full" "$SG_STATE/promote-ci-wait" "$T/pr-open"
+SG_PROMOTE_CI_WAIT=0 SG_PROMOTE_SUITE="echo fast >> $T/suite.log" SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tfb" ] && grep -qx fast "$T/suite.log" && ok "a missing fast-tier answer is proven by the local fast battery and promotes" \
+  || ko "fallback: rc $rc, stg $(tip stg), dev $tfb, suite '$(cat "$T/suite.log")', out '$(cat "$T/out")'"
+IFS=$'\t' read -r _ pk pres psha < "$SG_STATE/gate-status-promote" 2>/dev/null
+[ "$pk" = fast ] && [ "$pres" = pass ] && [ "$psha" = "$tfb" ] && ok "the fast battery writes the fast proof word for its tip" \
+  || ko "fallback proof word: '$pk $pres $psha'"
+/usr/bin/grep -q "$tfb" "$SG_STATE/gate-status-full" 2>/dev/null && ko "the fast battery wrote a full line" || ok "the fast battery writes no full line"
+adv dev fr; tfr=$(tip dev); before=$(tip stg); rm -f "$SG_STATE/promote-ci-wait" "$T/pr-open"
+SG_PROMOTE_CI_WAIT=0 SG_PROMOTE_SUITE="false" SG_CI_WORKFLOW="$T/ci-complete.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && ok "a red fast battery holds the tip" || ko "red fast battery: rc $rc, stg $(tip stg)"
 rm -f "$T/pr-open"
 
 # The Statuses API rejects a description past 140 characters with a 422, so a green set whose names do not fit would never
@@ -534,12 +549,14 @@ moved red
 [ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && ok "dev moved to B with CI red: the pass refuses (#1495)" || ko "moved red: rc $rc, stg $(tip stg)"
 /usr/bin/grep -q "^$mb " "$SG_STATE/promote-pass.tips" && ! /usr/bin/grep -q "^$ma " "$SG_STATE/promote-pass.tips" \
   && ok "the refusal marker names B, never the proved tip A (#1495)" || ko "moved red marker: A $ma, B $mb: $(cat "$SG_STATE/promote-pass.tips")"
-# The local-suite and delta invocations keep the local proof; only the CI path calls promote-stg.sh under the ci proof.
+# The local-suite and delta invocations keep the local proof; the CI path names its proof word (fast for a tiered workflow, #1723,
+# else ci), and the fast battery fallback calls the fast proof.
 nl=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
-nc=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=ci bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
+nw=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=$proof_word bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
+nf=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 na=$(/usr/bin/grep -c 'bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
-[ "$nl" = 3 ] && [ "$nc" = 1 ] && [ "$na" = 6 ] && ok "the local-suite and delta calls pass the local proof, the CI call the ci proof (#1495)" \
-  || ko "promote-stg.sh calls: local $nl, ci $nc, all $na"
+[ "$nl" = 3 ] && [ "$nw" = 1 ] && [ "$nf" = 1 ] && [ "$na" = 7 ] && ok "the local-suite and delta calls pass the local proof, the CI path the fast or ci word, the fallback the fast word (#1723)" \
+  || ko "promote-stg.sh calls: local $nl, word $nw, fast $nf, all $na"
 
 # #1086: an interpreter that lacks a tool the suite runs refuses the pass before any suite runs. The refusal names the tool,
 # writes no marker and no status, and the same tip is proved by a later pass once an interpreter holds the tool.
