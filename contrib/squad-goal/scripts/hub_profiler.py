@@ -653,3 +653,155 @@ def trip(spans, gates, since):
                      "p90_s": round(p90, 3) if p90 is not None else None,
                      "share": round(medians[key] / total, 4) if total and medians[key] is not None else 0.0})
     return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "stages": rows, "label": TRIP_LABEL}
+
+# The loop state strip (#1765): one strip across the top of the Loop tab, from the two records the loop already writes. The
+# switch audit (`loop-audit.jsonl`) gives active, draining and off: each line is one change, with its writer, origin and the
+# issue a loop drain names. The dated step records (`steps.tsv`, #1750) give the heartbeat: a stretch where the switch says
+# on and no step started for longer than DOWN_GAP_S is `down`, never active. A window that starts between two audit lines
+# takes the state the earlier line left. A stretch with no source data is `gap`, with its reason, never a state.
+# The fold is pure: it reads the lists a caller folded from the files, never a file, a clock or GitHub.
+LOOP_STATES = ("active", "draining", "off", "down")
+LOOP_STATE_LABELS = {"active": "Active", "draining": "Draining", "off": "Off", "down": "Down"}
+GAP = "gap"
+STATE_OF_ACTION = {"start": "active", "drain": "draining", "stop-now": "off"}
+STRIP_WINDOWS = (4 * 3600, 8 * 3600, 24 * 3600)
+STRIP_WINDOW_LABELS = {STRIP_WINDOWS[0]: "4 hours", STRIP_WINDOWS[1]: "8 hours", STRIP_WINDOWS[2]: "24 hours"}
+STRIP_WINDOW_DEFAULT = STRIP_WINDOWS[2]
+# The slow cycle starts a step every cycle and the fast lane every SG_FAST_INTERVAL (120 s by default), so ten silent
+# minutes with the switch on is far past any pause the loop takes by itself: it is a loop that died, not a quiet one.
+DOWN_GAP_S = 600
+
+
+def strip_window(w):
+    """The window a page asked for, in seconds: one of STRIP_WINDOWS, else the 24 hour default."""
+    try:
+        w = int(w)
+    except (TypeError, ValueError):
+        return STRIP_WINDOW_DEFAULT
+    return w if w in STRIP_WINDOWS else STRIP_WINDOW_DEFAULT
+
+
+def _audit_state(e):
+    return STATE_OF_ACTION.get(str(e.get("action") or ""))
+
+
+def _row(a, b, state, reason=None):
+    row = {"start": a, "end": b, "state": state}
+    if reason is not None:
+        row["reason"] = reason
+    return row
+
+
+def _active_rows(a, b, starts, down_gap):
+    """One stretch the switch says on, over the step starts: active while the loop steps, `down` past the bound, a gap
+    where the records hold no step at all before the first one they do hold.
+
+    Every row stays inside `[a, b)`: a step before the window only says the loop was live then, and the bound it sets is
+    clamped to the stretch, so a long silence before the window is down from the window's own start, never a row that
+    reaches back before it.
+    """
+    if not starts:
+        return [_row(a, b, GAP, "no step record")]
+    history = [t for t in starts if t <= a]
+    inside = [t for t in starts if a < t < b]
+    out, cur = [], a
+    if history:
+        last = history[-1]
+    else:
+        if not inside:
+            return [_row(a, b, GAP, "no step record in this stretch")]
+        first = inside[0]
+        if first - a > down_gap:
+            out.append(_row(a, first, GAP, "no step record before the first one in this stretch"))
+        else:
+            out.append(_row(a, first, "active"))
+        cur = last = first
+        inside = inside[1:]
+    for t in inside:
+        live_to = min(last + down_gap, b)
+        if t > live_to:
+            if live_to > cur:
+                out.append(_row(cur, live_to, "active"))
+            out.append(_row(max(cur, live_to), t, "down"))
+            cur = t
+        last = max(last, t)
+    live_to = min(last + down_gap, b)
+    if live_to > cur:
+        out.append(_row(cur, live_to, "active"))
+    if b > live_to:
+        out.append(_row(max(cur, live_to), b, "down"))
+    return [r for r in out if r["end"] > r["start"]]
+
+
+def _merged(rows):
+    out = []
+    for r in rows:
+        if r["end"] <= r["start"]:
+            continue
+        if out and out[-1]["state"] == r["state"] and out[-1].get("reason") == r.get("reason"):
+            out[-1]["end"] = r["end"]
+        else:
+            out.append(dict(r))
+    return out
+
+
+def strip(audit, steps, landings, promotions, window_s, now, down_gap=DOWN_GAP_S):
+    """`(audit, steps, landings, promotions, window, now)` -> the strip's states, its four shares and its marks.
+
+    `audit` is one dict per switch-audit line (`at` epoch, `action`, `who`, `from`, `issue`), `steps` one dict per folded
+    step record (`start`, `end`, `name`, `state`), `landings` one row per landing (`at`, `branch`, `sha`, `issue`) and
+    `promotions` one mark per promotion (`at`, `branch`, `sha`). The rows cover the whole window, in order: a `gap` row
+    names the source it lacks. `shares` is the seconds of each of the four states; `gap_s` is the part no source covers,
+    so the shares and the gap add up to the window.
+    """
+    w = strip_window(window_s)
+    start, end = now - w, now
+    events = sorted((e for e in audit if _audit_state(e) and start <= e["at"] < end), key=lambda e: e["at"])
+    before = [e for e in audit if _audit_state(e) and e["at"] <= start]
+    rows, segs = [], []
+    if before:
+        anchor = max(before, key=lambda e: e["at"])
+        segs.append((start, events[0]["at"] if events else end, _audit_state(anchor)))
+    elif events:
+        rows.append(_row(start, events[0]["at"], GAP, "no switch audit line at or before this window"))
+    else:
+        rows.append(_row(start, end, GAP, "no switch audit line at or before this window"))
+    for i, e in enumerate(events):
+        segs.append((e["at"], events[i + 1]["at"] if i + 1 < len(events) else end, _audit_state(e)))
+    starts = sorted(s["start"] for s in steps if isinstance(s.get("start"), (int, float)))
+    for a, b, state in segs:
+        if b <= a:
+            continue
+        rows.extend(_active_rows(a, b, starts, down_gap) if state == "active" else [_row(a, b, state)])
+    rows = _merged(rows)
+    shares = {s: 0.0 for s in LOOP_STATES}
+    gap_s = 0.0
+    for r in rows:
+        if r["state"] == GAP:
+            gap_s += r["end"] - r["start"]
+        else:
+            shares[r["state"]] += r["end"] - r["start"]
+    return {"window_s": w, "start": start, "end": end, "labels": dict(LOOP_STATE_LABELS),
+            "windows": [{"s": s, "label": STRIP_WINDOW_LABELS[s]} for s in STRIP_WINDOWS],
+            "rows": rows, "shares": {k: round(v, 3) for k, v in shares.items()}, "gap_s": round(gap_s, 3),
+            "marks": strip_marks(audit, landings, promotions, start, end)}
+
+
+def strip_marks(audit, landings, promotions, start, end):
+    """The marks of the strip, in time order: each switch change (writer, origin, issue), each landing, each promotion."""
+    out = []
+    for e in audit:
+        state = _audit_state(e)
+        if state and start <= e["at"] < end:
+            out.append({"at": e["at"], "kind": "switch", "action": e.get("action"), "state": state,
+                        "who": e.get("who") or "unknown author", "from": e.get("from") or "unknown origin",
+                        "issue": e.get("issue")})
+    for l in landings:
+        if start <= l["at"] < end:
+            out.append({"at": l["at"], "kind": "landing", "branch": l.get("branch"), "sha": l.get("sha"),
+                        "issue": l.get("issue")})
+    for p in promotions:
+        if start <= p["at"] < end:
+            out.append({"at": p["at"], "kind": "promotion", "branch": p.get("branch"), "sha": p.get("sha")})
+    out.sort(key=lambda m: m["at"])
+    return out

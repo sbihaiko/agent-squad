@@ -199,9 +199,9 @@ USAGE_FILES = {}         # one transcript file's messages, cached by (path, mtim
 WRITE_TOOLS = {"Edit", "Write", "Bash", "NotebookEdit"}   # squad/graph.py:WRITE_TOOLS; a child with one of these runs in its own worktree (#802)
 
 def _epoch(s):
-    """A transcript line's ISO timestamp as epoch seconds, None when it has none or it is not one (#802)."""
+    """An ISO timestamp as epoch seconds, None when it is not one or it has none (#802, the loop state strip #1765)."""
     try:
-        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        return dt.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
     except (TypeError, ValueError):
         return None
 
@@ -2625,15 +2625,68 @@ def trip_view(window_s, now=None):
             **hub_profiler.trip([trip_stages(p) for p in files], trip_gates(since), since)}
 
 
-def profiler_view(a, w=None):
+PROMOTED_STG = re.compile(r"^(\S+)\s+promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
+PROMOTED_MAIN = re.compile(r"^(\S+)\s+promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
+
+def strip_audit():
+    """The switch audit's lines, each with its epoch, action, writer, origin and the issue a loop drain names."""
+    out = []
+    for raw in _read(LOOP_AUDIT).splitlines():
+        try: e = json.loads(raw)
+        except ValueError: continue
+        at = _epoch(e.get("at"))
+        if at is not None:
+            out.append({"at": at, "action": e.get("action"), "who": e.get("who"), "from": e.get("from"), "issue": e.get("issue")})
+    return out
+
+def strip_steps():
+    """The dated step records, folded by the one reader #1750 ships: this tab adds no second reader of the file."""
+    import steprec
+    return steprec.fold(_read(STATE / "steps.tsv").splitlines())
+
+def strip_landings():
+    """The landing ledger's rows, `<epoch> TAB <branch> TAB <sha> TAB <issue>`: a row this reader cannot read is skipped."""
+    out = []
+    for raw in _read(STATE / "landed.tsv").splitlines():
+        f = raw.split("\t")
+        if len(f) < 4: continue
+        try: at = int(f[0])
+        except ValueError: continue
+        try: issue = int(f[3])
+        except ValueError: issue = None
+        out.append({"at": at, "branch": f[1], "sha": f[2], "issue": issue})
+    return out
+
+def strip_promotions():
+    """The promotion log's success lines: a line that says `promoted:` at its own date, never a refusal's line."""
+    stg = os.environ.get("SG_STG_BRANCH") or "stg"
+    main = os.environ.get("SG_MAIN_BRANCH") or "main"
+    out = []
+    for raw in _read(STATE / "promote.log").splitlines():
+        for rx, branch in ((PROMOTED_MAIN, main), (PROMOTED_STG, stg)):
+            m = rx.match(raw)
+            if not m: continue
+            at = _epoch(m.group(1))
+            if at is not None:
+                out.append({"at": at, "branch": branch, "sha": m.group(2)})
+    return out
+
+def strip_view(w=None, now=None):
+    """The loop state strip of the window `w` the page chose, from the records the loop already writes: the switch audit,
+    the dated step records, the landing ledger and the promotion log. No GitHub read, and no process table."""
+    return hub_profiler.strip(strip_audit(), strip_steps(), strip_landings(), strip_promotions(), w,
+                              time.time() if now is None else now)
+
+def profiler_view(a, w=None, sw=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
-    it, the facts of the reading, the trip bar and the time in failed runs table of the window `w` the page chose; no
-    tree while the switch is off, and the file views read files only, so they show with the switch off."""
+    it, the facts of the reading, the loop state strip of its own window `sw`, the trip bar and the time in failed runs
+    table of the window `w` the page chose; no tree while the switch is off, and the file views read files only, so they
+    show with the switch off."""
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
-           "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
+           "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s, "strip": strip_view(sw),
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out
@@ -5947,6 +6000,17 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
 #profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}
 #profb table .pbar{display:block;height:100%;background:var(--err)}#profb table .pnm{margin-left:6px}#profb table .pk-orphan .pnm{color:var(--err)}#profb table .pk-other .pnm,#profb table .pk-unknown .pnm{color:var(--mute)}#profb .lerr{color:var(--err)}
+/* The loop state strip (#1765): the four states as one bar, each state's share beside it, and one mark per switch change,
+   landing and promotion. A phone wraps the shares under the bar and the bar spans the page, so the strip holds no fixed width. */
+#profstrip{margin:0 0 18px}#profstrip .lsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 6px}#profstrip h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profstrip .lsh .lpw{float:none;margin-left:auto}
+#profstrip .lsb{position:relative;display:flex;width:100%;height:14px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}
+#profstrip .lsc{display:block;height:100%}#profstrip .ls-active{background:var(--ok)}#profstrip .ls-draining{background:var(--warn)}#profstrip .ls-off{background:var(--mute)}#profstrip .ls-down{background:var(--err)}
+#profstrip .ls-gap{background:repeating-linear-gradient(45deg,transparent 0 4px,var(--line) 4px 8px)}
+#profstrip .lsm{position:absolute;top:0;bottom:0;width:2px;background:var(--fg);opacity:.75}#profstrip .lsm-landing{background:var(--acc)}#profstrip .lsm-promotion{background:var(--run,var(--acc))}
+#profstrip .lss{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0 0;padding:0;list-style:none;font-size:var(--fs-caption);color:var(--mute)}
+#profstrip .lss li{display:flex;align-items:center;gap:6px;white-space:nowrap}#profstrip .lss i{display:inline-block;flex:none;width:10px;height:10px;border-radius:var(--radius-full)}
+#profstrip .lss .ls-active i{background:var(--ok)}#profstrip .lss .ls-draining i{background:var(--warn)}#profstrip .lss .ls-off i{background:var(--mute)}#profstrip .lss .ls-down i{background:var(--err)}
+#profstrip .lss b{color:var(--fg);font-weight:600}#profstrip .lss span{font-variant-numeric:tabular-nums}
 #profb .lpr{margin-top:20px}#profb .lpr h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profb .lpr .lpn{margin:2px 0 8px}#profb .lpw{float:right;font-size:var(--fs-caption)}#profr{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb #profr td:first-child{text-align:left;white-space:normal}#profb #profr .prr{color:var(--err);margin-left:6px}
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
@@ -7377,6 +7441,34 @@ const profWinSave=()=>{try{localStorage.setItem("squad-prof",JSON.stringify({w:p
 const profWinPick=()=>`<label class=lpw>Window <select data-profwin aria-label="The window of the Loop tab's file views">${PROF_WIN.map(([s,l])=>`<option value=${s}${s===profWin?" selected":""}>${l}</option>`).join("")}</select></label>`;
 const profTime=s=>s>=3600?(s/3600).toFixed(1)+" h":s>=60?(s/60).toFixed(1)+" min":s>=1?s.toFixed(1)+" s":Math.round(s*1000)+" ms";
 const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
+// The loop state strip (#1765): the switch audit and the dated step records as one strip at the top of the tab. The hub
+// folds the four states, their shares and the marks; the page draws them and keeps the window the owner chose on the
+// device. The strip's window is the tab's own (4, 8 or 24 hours), apart from the file views' window below it.
+const PROF_STRIP_WIN=[[14400,"4 hours"],[28800,"8 hours"],[86400,"24 hours"]];
+const profStripGet=()=>{try{const s=JSON.parse(localStorage.getItem("squad-prof-strip")||"{}")||{};return PROF_STRIP_WIN.some(([x])=>x===s.w)?s.w:86400}catch(e){return 86400}};
+let profStripWin=profStripGet();
+const profStripSave=()=>{try{localStorage.setItem("squad-prof-strip",JSON.stringify({w:profStripWin}))}catch(e){}};
+const PROF_STATE_ORDER=["active","draining","off","down"];
+const profStamp=t=>new Date(t*1000).toLocaleString();
+const profStripPick=v=>`<label class=lpw>Window <select data-stripwin aria-label="The window of the loop state strip">${PROF_STRIP_WIN.map(([s,l])=>`<option value=${s}${s===(v&&v.window_s)?" selected":""}>${l}</option>`).join("")}</select></label>`;
+const profMarkText=m=>m.kind==="switch"?`${esc(String(m.action||"switch"))} by ${esc(m.who||"unknown author")} from ${esc(m.from||"unknown origin")}${m.issue!=null?" · #"+esc(m.issue):""}`
+ :m.kind==="landing"?`Landing in dev: ${esc(m.branch||"unknown branch")}${m.issue!=null?" · #"+esc(m.issue):""}`
+ :`Promotion to ${esc(m.branch||"unknown branch")}: ${esc((m.sha||"").slice(0,9))}`;
+function profStrip(v){
+ if(!v||!v.rows||!v.rows.length)return "";
+ const span=(v.end-v.start)||1,pct=s=>(100*s/span).toFixed(2),lab=k=>(v.labels||{})[k]||k;
+ const bars=v.rows.map(r=>r.state==="gap"
+  ?`<i class="lsc ls-gap" style="width:${pct(r.end-r.start)}%" title="${esc("No source data: "+(r.reason||"no record"))}"></i>`
+  :`<i class="lsc ls-${esc(r.state)}" style="width:${pct(r.end-r.start)}%" title="${esc(lab(r.state)+" · "+profStamp(r.start)+" to "+profStamp(r.end))}"></i>`).join("");
+ const marks=(v.marks||[]).map(m=>`<span class="lsm lsm-${esc(m.kind)}" style="left:${pct(m.at-v.start)}%" title="${profMarkText(m)}"></span>`).join("");
+ const shares=PROF_STATE_ORDER.map(k=>{const s=(v.shares||{})[k]||0;
+  return `<li class=ls-${k}><i aria-hidden=true></i><b>${esc(lab(k))}</b> ${profTime(s)} <span>${(100*s/span).toFixed(1)}%</span></li>`}).join("");
+ const gaps=v.rows.filter(r=>r.state==="gap"),gap=gaps.length
+  ?`<p class=lpn>${profTime(v.gap_s||0)} of the window has no source data, drawn as a gap: ${esc([...new Set(gaps.map(r=>r.reason||"no record"))].join("; "))}</p>`:"";
+ const aria=`The loop over the last ${profTime(span)}: ${PROF_STATE_ORDER.map(k=>lab(k)+" "+(100*((v.shares||{})[k]||0)/span).toFixed(1)+"%").join(", ")}`
+  +(gaps.length?`, ${(100*(v.gap_s||0)/span).toFixed(1)}% with no source data`:"");
+ return `<section id=profstrip><div class=lsh><h3>Loop state</h3>${profStripPick(v)}</div>`
+  +`<div class=lsb role=img aria-label="${esc(aria)}">${bars}${marks}</div><ul class=lss>${shares}</ul>${gap}</section>`}
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
@@ -7404,22 +7496,23 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+trip+profRuns(v.runs);   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,strip=profStrip(v.strip),trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+strip+trip+profRuns(v.runs);   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+strip+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")+profRuns(v.runs)}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),win=!!a&&a.hasAttribute&&a.hasAttribute("data-profwin");
+function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),win=!!a&&a.hasAttribute&&a.hasAttribute("data-profwin"),swin=!!a&&a.hasAttribute&&a.hasAttribute("data-stripwin");
  b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):win?b.querySelector("select[data-profwin]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
+ const t=sw?b.querySelector("[data-prof]"):win?b.querySelector("select[data-profwin]"):swin?b.querySelector("select[data-stripwin]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin+"&sw="+profStripWin)).json();profDraw()}catch(e){}}
 async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 $("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
-$("#profb").addEventListener("change",e=>{const s=e.target.closest("select[data-profwin]");if(!s)return;profWin=Number(s.value)||86400;profWinSave();profPoll()});   // the window is the page's own choice, kept on this device
+$("#profb").addEventListener("change",e=>{const s=e.target.closest("select[data-profwin]");if(s){profWin=Number(s.value)||86400;profWinSave();profPoll();return}
+ const w=e.target.closest("select[data-stripwin]");if(!w)return;profStripWin=Number(w.value)||86400;profStripSave();profPoll()});   // each window is the page's own choice, kept on this device
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
 /*BOARD_LANES*/
@@ -9259,9 +9352,10 @@ class H(BaseHTTPRequestHandler):
             out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
-        elif self.path.split("?", 1)[0] == "/api/profiler":   # the Loop tab (#1743); `?w=` is the failed-run table's window (#1751)
+        elif self.path.split("?", 1)[0] == "/api/profiler":   # the Loop tab (#1743); `?w=` is the failed-run table's window (#1751), `&sw=` the strip's (#1765)
             q = re.search(r"[?&]w=(\d{1,9})\b", self.path)
-            body, ct = json.dumps(profiler_view(a, q[1] if q else None)).encode(), "application/json"
+            sw = re.search(r"[?&]sw=(\d{1,9})\b", self.path)
+            body, ct = json.dumps(profiler_view(a, q[1] if q else None, sw[1] if sw else None)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/clip"):   # the answer's one Kore clip (#1603)
