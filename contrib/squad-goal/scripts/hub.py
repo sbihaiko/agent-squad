@@ -582,21 +582,47 @@ def procs_mod():
     (PR,) = load_squad([own, *[r for r in roots if r != own]] if (pathlib.Path(own) / "squad" / "procs.py").is_file() else roots, ("procs",))
     return PR
 
-def process_table():
+PROCSCAN_SECS = 1.0   # the shared process snapshot's tick: every reader format in one second costs one read of the machine
+
+def _machine_snapshot():
+    """The machine's raw process table, from the one reader (squad/procs.py): libproc and sysctl, no exec, so a
+    sandboxed child reads it too."""
+    return procs_mod().snapshot()
+
+def _same(snap):
+    """The identity view: the raw table is already the format `process_table` answers."""
+    return snap
+
+def process_table(now=None):
     """{pid: Proc} for every process, from one read of the process table (no exec, so a sandboxed child reads it too).
+
+    The read is shared for one second (`PROCSCAN_SECS`, squad/procscan.py `view`): `process_table`, `read_procs` and
+    the two samplers each keep their own view of one machine read, so N readers in a tick cost one read. The cache is why
+    a run process born inside the tick may read as gone for up to one second on the screen; the kill path (`_ps_rows`)
+    reads fresh and never this, so nothing acted on is ever stale.
     {} when the read fails, logged once: a caller then sees no process, never a guessed one."""
+    now = time.time() if now is None else now
     try:
-        return procs_mod().snapshot()
+        return procscan.view("table", _same, PROCSCAN_SECS, now, _machine_snapshot)[0]
     except Exception as e:
         log_once(f"hub: the process table could not be read: {type(e).__name__}: {' '.join(str(e).split())}")
         return {}
 
-def read_procs():
-    """The process reading the run list judges liveness on: every pid with its start, from one `ps`. A read that fails is
-    no evidence, logged once: the run list then calls no run gone (`run_gone` on an empty reading), never a guessed answer."""
+def _starts(snap):
+    """The {pid: start} reading of one process snapshot. An empty snapshot is no evidence, so it raises as the one reader
+    does: the caller then calls no run gone."""
+    if not snap: raise RuntimeError("cannot read the processes: no process named")
+    return {pid: p.start for pid, p in snap.items()}
+
+def read_procs(now=None):
+    """The process reading the run list judges liveness on: every pid with its start. It derives from the same one
+    snapshot `process_table` reads (`PROCSCAN_SECS`, squad/procscan.py `view`), so the run list costs no read of its own:
+    N readers in a tick cost one read. A run process born inside the tick may read as gone for one second on the screen
+    only; the kill path (`_ps_rows`) reads fresh. A read that fails is no evidence, logged once: the run list then calls
+    no run gone (`run_gone` on an empty reading), never a guessed answer."""
+    now = time.time() if now is None else now
     try:
-        RL = liveness()
-        return {pid: p.start for pid, p in RL.read_processes().items()}
+        return procscan.view("procs", _starts, PROCSCAN_SECS, now, _machine_snapshot)[0]
     except Exception as e:
         log_once(f"hub: the process reading failed, no run is called gone on it: {type(e).__name__}: {' '.join(str(e).split())}")
         return {}
@@ -954,33 +980,26 @@ LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {}}
 LOAD_RUNS = []            # the light rows the last /api/runs served: id, folder and worktrees, for owners_of
 _PROC_PREV, _PROC_AT = None, 0.0
 
-def read_proc_table():
-    """pid -> (ppid, CPU seconds, argv) for the processes this user can see: psutil when it is importable (a read inside
-    this process), else one `ps`. Only the sampler's scan calls this, and only while the machine is warned."""
-    try:
-        import psutil
-        out = {}
-        for p in psutil.process_iter(["pid", "ppid", "cpu_times", "cmdline"]):
-            i = p.info
-            try: out[i["pid"]] = (i["ppid"], float(sum(i["cpu_times"][:3])), " ".join(i["cmdline"] or []))
-            except Exception: continue
-        if out: return out
-    except Exception: pass
-    return {pid: (p.ppid, p.cpu, p.command) for pid, p in process_table().items()}
+def load_tuples(snap):
+    """pid -> (ppid, CPU seconds, argv) for the load attribution, from the one process snapshot of the tick. Only the
+    sampler's scan reads this, and only while the machine is warned."""
+    return {pid: (p.ppid, p.cpu, p.command) for pid, p in snap.items()}
 
 def proc_snapshot(now=None):
     """The process table of this tick, read once for every profile's hub in this interpreter (#1746): hubmux loads one
     hub.py per profile and each runs its own sampler, so an unshared read scanned the machine's table once per profile
-    per tick. `procscan` keeps the scan for one tick, and the tick is `LOAD_SAMPLE_SECS` long."""
+    per tick. `procscan` keeps the scan for one tick, and the tick is `LOAD_SAMPLE_SECS` long. Its view is the tuple
+    format the attribution reads, derived from the same snapshot every reader shares (#1848)."""
     now = time.time() if now is None else now
-    return procscan.table(read_proc_table, LOAD_SAMPLE_SECS, now)
+    return procscan.view("load", load_tuples, LOAD_SAMPLE_SECS, now, process_table)
 
 def profiling_table(now=None):
     """The process table of this profiler tick, read once for every profile of this interpreter (#1746, #1790): three
     profile samplers at one reading a second each scanned the machine three times a second. The tick is PROFILER_SECS, so
-    each profile still folds a reading of its own interval."""
+    each profile still folds a reading of its own interval. Its view is the process table itself, derived from the same
+    snapshot the runs list reads (#1848)."""
     now = time.time() if now is None else now
-    return procscan.table(process_table, PROFILER_SECS, now)[0]
+    return procscan.view("profiler", _same, PROFILER_SECS, now, process_table)[0]
 
 def attribute_pass(now=None):
     """CPU per run over the last interval, as a share of the machine. The sampler calls it only while the machine is
@@ -2263,8 +2282,9 @@ def loop_refusal(a, origin_ok, tn):
     return "" if origin_ok else "forbidden"
 
 def _ps_rows():
-    """Every process as (pid, ppid, command), from one read of the process table."""
-    return [(p.pid, p.ppid, p.command) for p in process_table().values()]
+    """Every process as (pid, ppid, command), from a FRESH read of the process table: the kill path never reads the
+    one-second snapshot cache, so a run born inside a tick is always seen here (see `process_table`)."""
+    return [(p.pid, p.ppid, p.command) for p in _machine_snapshot().values()]
 
 def loop_kill(root):
     """End `root` and every process under it: TERM, then KILL what is left. True when `root` is gone after it."""
@@ -3108,24 +3128,40 @@ def run_row(d, port, procs):
     return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": r["verdict"] is None and not gone, "running": r["verdict"] is None and not gone,   # a finished run is not live, however present its row is (#1649)
             "started": r["t0"], "ended": None if r["verdict"] is None and not gone else r["t1"], "verdict": r["verdict"], "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share"), "stage": r.get("node"), "model": r.get("model"), "model_label": (model_labels({r["model"]}).get(r["model"]) if r.get("model") else None)}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
+PORT_MEMO = {}   # (pid, start) -> the listening port of a dashboard this profile owns
+
+def dashboard_port(pid, start):
+    """The port a dashboard listens on, asked of `lsof` once per process and kept by `(pid, start)`. A pid is reused only
+    with a new start, so a kept answer can never describe another process. A miss is not kept: a dashboard still starting
+    listens a moment later. `runs()` asks only for a dashboard this profile owns."""
+    key = (pid, start)
+    if key in PORT_MEMO: return PORT_MEMO[key]
+    m = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"))
+    if not m: return ""
+    PORT_MEMO[key] = m.group(1) or m.group(2)
+    return PORT_MEMO[key]
+
 def runs():
     _titles()
     out = []; load_rows = []
-    ps_lines = [f"{p.pid} {p.command}" for p in process_table().values()]
+    table = process_table()
     procs = read_procs()
     own = own_roots()
-    for l in ps_lines:
-        m = re.match(r"\s*(\d+)\s+\S+\s+-m\s+squad\.dashboard_server\s+(\S+)", l)   # any interpreter: macOS runs the server as `.../MacOS/Python` (#1751)
+    pids = set()
+    for p in table.values():
+        pids.add(p.pid)
+        m = re.match(r"\s*(\d+)\s+\S+\s+-m\s+squad\.dashboard_server\s+(\S+)", f"{p.pid} {p.command}")   # any interpreter: macOS runs the server as `.../MacOS/Python` (#1751)
         if not m: continue
-        pid, d = m.group(1), m.group(2)
-        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
-        if not port: continue
-        if not pathlib.Path(d).exists(): continue
+        d = m.group(2)
+        if not pathlib.Path(d).exists(): continue   # a dashboard server outliving its run folder (worktree removed) must not break the list
         if pathlib.Path(d).parent not in own: continue   # another profile's dashboard: the ps scan sees the whole machine
-        if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
-        row, load = run_row(d, port.group(1) or port.group(2), procs)
+        if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs
+        port = dashboard_port(p.pid, p.start)   # lsof runs only for this profile's own dashboard, once per process
+        if not port: continue
+        row, load = run_row(d, port, procs)
         out.append(row)
         if load: load_rows.append(load)
+    for k in [k for k in PORT_MEMO if k[0] not in pids]: PORT_MEMO.pop(k, None)   # a dashboard that ended leaves no entry behind
     listed = {r["id"] for r in out}
     for entry in active_entries():   # a registered run has no dashboard server until someone opens it: it is listed all the same (#1649)
         folder = active_folder(entry)
