@@ -30,9 +30,10 @@ A child the pass tried and could not enter waits on a deadline (ADR-0134): SG_CH
 unchanged (tip, cause) requeue the issue with that cause, and record the head, so the wave lands and the next pass costs
 nothing (#931). The counter is auto/dwait-<run>-<child>, a name the janitor never removes; the escalation marker stays
 auto/ccdefer-<run>-<child>, which the janitor drops once the run has its verdict. A machine-wide hold -- the gate lock, the
-gate slots, an inconclusive gate, a full review budget -- clears by itself, so it never counts and never requeues; a child a
-finished run never approved is missing review evidence, so it is never requeued either (ADR-0151 rule 5): the wave age cap
-owns it. A child the pass never reached (its budget, its cursor) has no deadline, because the pass did not try it (#590).
+gate slots, an inconclusive gate, a full review budget -- clears by itself, so it never counts and never requeues. A child a
+live run never approved waits on that run, at no deadline (ADR-0151 rule 5); once the run has its final verdict no actor can
+review that head again, so the child keeps no path to an approval and the deadline owns it like any other. A child the pass
+never reached (its budget, its cursor) has no deadline, because the pass did not try it (#590).
 A gate-lock or gate-slot hold with no review run in this pass is no work: it spends no budget, the cursor stops before the held child, and the pass ends its entries (exit 3), because the next child meets the same holder (#1407).
 A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
 the queue once with the landing's reason, and no card moves (#592).
@@ -345,11 +346,26 @@ def child_request(rd):   # the run was dispatched for a child (launch.py's _issu
     try: txt = (rd / "request.txt").read_text(errors="replace")
     except OSError: return False
     return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
+def record_finished(rec):
+    """True when the record's last of a start, a resume or a verdict is a verdict: a verdict is final only after the last
+    start or resume, so a resumed run is live again until its next verdict (ADR-0167, and the same fold as janitor.py).
+    A run that reads as finished can never review a child again, which is what the deferral deadline turns on."""
+    finished = False
+    try: lines = rec.open()
+    except OSError: return False
+    with lines:
+        for line in lines:
+            if '"run_start"' not in line and '"resume"' not in line and '"verdict"' not in line: continue
+            try: ev = json.loads(line).get("event")
+            except ValueError: continue
+            if ev in ("run_start", "resume"): finished = False
+            elif ev == "verdict": finished = True
+    return finished
 pending, runs = [], set()   # every finished child with no marker yet, as (key, run, child, why, issue, finished, definition)
 for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
-    finished = '"event": "verdict"' in rec.read_text()
+    finished = record_finished(rec)
     issue, seen, done, unmapped, defn, failed, verdict = {}, set(), {}, [], {}, {}, {}   # done: one item per child, its last passing entry (#611)
     owned, landed, rounds = set(), set(), {}   # the children the run reviews itself (#696), the children with a `land` event, and each child's last review round
     try: gated = {g.get("name") for g in json.loads((rec.parent / "graph.json").read_text()).get("nodes", []) if isinstance(g, dict) and g.get("review")}   # the dispatch nodes with a review gate
@@ -445,6 +461,12 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
             CAUSE[key] = held
             logged(f"held {name} {child}", f"CHILD RUN-OWNED #{n} ({name} {child}): {held}; delivery holds")
             RUN_HELD.add(key)
+            if finished and not (requeue_head(name, n) == head_of(child_worktree(pathlib.Path(r), child, d))):
+                # The run has its final verdict and will never review that head again, so the hold has no path to an
+                # approval: the child counts toward the deferral deadline and its issue goes back to the queue with the
+                # cause named (ADR-0151 rule 5). A live run's child keeps its unbounded hold. A head already requeued
+                # stays out, so one issue is never sent back twice (ADR-0149).
+                ATTEMPTED.add(key)
             if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode: visited.discard(key)   # a wave past its age cap lands and requeues it (#378)
             continue
     if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592); for a run-owned child only a standing approval at its reviewed head reaches here, so the failure is not the review's
@@ -526,6 +548,7 @@ if left:
         if e.returncode or not (stopped or "WAVE REQUEUE" in answer):   # a refused requeue is no delivery: name it, keep the child and its count, retry next pass (#931)
             print(f"CHILD DEFER REQUEUE #{n} ({name} {child}) refused: {answer[:300] or f'exit {e.returncode}'}", flush=True)
             continue
+        if not stopped: record_requeue(name, n, tip)   # the head the issue went back on, so no later pass requeues it again (ADR-0149); a terminal stop is no requeue
         if not stopped and esc != "1":   # the escalation is reported once, and only after the requeue stands (#808); a terminal stop is no requeue, so no comment claims the issue went back to the queue (#931)
             dk.write_text(json.dumps({"tip": tip, "cause": cause, "cnt": cnt, "esc": "1"}))
             (A / f"ccdefer-{name}-{child}").write_text(f"{tip} {cnt} 1\n")   # the escalation marker the janitor drops once the run is over
