@@ -753,7 +753,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', src), "the read carries the window the owner chose"
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\+"&sw="\+profStripWin\)', src), "the read carries the windows the owner chose"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -1538,3 +1538,257 @@ def test_the_starts_column_is_marked_a_lower_bound():
     out = tree_part(run_js(f"profHtml({json.dumps(VIEW)},new Set())"))
     head = re.search(r"<th[^>]*>Starts/s \(lower bound\)</th>", out)
     assert head and "lower bound" in head.group(0)
+
+
+# ---------------------------------------------------------------- the loop state strip (#1765)
+# The strip folds two records the loop already writes: the switch audit (`loop-audit.jsonl`, one line per change with its
+# writer, origin and issue) and the dated step records (`steps.tsv`, #1750). A stretch where the switch says on and no step
+# started for longer than the bound is `down`, never active. The fold is pure: fixture lists in, rows out, no clock and no
+# file. The marks are the same two sources plus the landing ledger and the promotion log the loop already writes.
+W0 = 1_800_000_000                    # the instant the window ends in these fixtures
+H = 3600
+
+
+def sw(at, action, who="owner", frm="loopback", issue=None):
+    return {"at": at, "action": action, "who": who, "from": frm, "issue": issue}
+
+
+def stp(name, a, b=None, state="done", rc=0):
+    return {"id": f"{name}-{a}", "name": name, "start": a, "end": b, "state": state, "rc": rc, "reason": None}
+
+
+def beat(a, b, by=120):
+    """One step every `by` seconds: a loop that runs its cycle."""
+    return [stp("janitor", t, t + 5) for t in range(a, b + 1, by)]
+
+
+def states(rows):
+    return [(r["state"], r["start"], r["end"]) for r in rows]
+
+
+def test_the_strip_folds_the_audit_and_the_step_records_into_the_four_states(prof):
+    audit = [sw(W0 - 4 * H, "start", who="owner", frm="loopback"), sw(W0 - 2 * H, "stop-now", who="owner", frm="tailnet")]
+    out = prof.strip(audit, beat(W0 - 4 * H, W0 - 2 * H), [], [], 4 * H, W0)
+    assert states(out["rows"]) == [("active", W0 - 4 * H, W0 - 2 * H), ("off", W0 - 2 * H, W0)]
+
+
+def test_a_silent_stretch_with_the_switch_on_is_down(prof):
+    """The switch says on and no step started for longer than the bound: the loop died by itself, so it is down."""
+    audit = [sw(W0 - 4 * H, "start")]
+    steps = beat(W0 - 4 * H, W0 - 3 * H) + [stp("janitor", W0 - 3 * H, W0 - 3 * H + 5)]
+    out = prof.strip(audit, steps, [], [], 4 * H, W0)
+    tail = out["rows"][-1]
+    last = W0 - 3 * H
+    assert tail["state"] == "down" and tail["start"] == last + prof.DOWN_GAP_S and tail["end"] == W0
+    assert out["shares"]["down"] == W0 - (last + prof.DOWN_GAP_S)
+
+
+def test_a_window_that_starts_between_audit_lines_takes_the_earlier_state(prof):
+    """The first row starts at the window's own start, in the state the last earlier audit line left."""
+    audit = [sw(W0 - 10 * H, "start"), sw(W0 - H, "drain", who="loop", frm="restart", issue=1234)]
+    out = prof.strip(audit, beat(W0 - 4 * H - 300, W0), [], [], 4 * H, W0)
+    assert out["rows"][0] == {"start": W0 - 4 * H, "end": W0 - H, "state": "active"}
+    assert out["rows"][-1] == {"start": W0 - H, "end": W0, "state": "draining"}
+
+
+def test_a_window_with_no_audit_line_before_it_is_a_gap_with_its_reason(prof):
+    """No audit line at or before the window is no source data, never a guessed state."""
+    audit = [sw(W0 - H, "start")]
+    out = prof.strip(audit, beat(W0 - 4 * H, W0), [], [], 4 * H, W0)
+    first = out["rows"][0]
+    assert first["state"] == "gap" and first["start"] == W0 - 4 * H and first["end"] == W0 - H
+    assert first["reason"] and "audit" in first["reason"]
+    assert out["rows"][-1]["state"] == "active"
+
+
+def test_a_stretch_with_no_step_record_before_the_first_one_is_a_gap_named_by_its_reason(prof):
+    """A cut steps file holds no record of an old stretch: its silence is no evidence of down."""
+    audit = [sw(W0 - 10 * H, "start")]
+    out = prof.strip(audit, beat(W0 - H, W0), [], [], 4 * H, W0)
+    first = out["rows"][0]
+    assert first["state"] == "gap" and first["end"] == W0 - H and "step" in first["reason"]
+    assert out["rows"][-1]["state"] == "active"
+
+
+def test_the_four_shares_add_up_to_the_window(prof):
+    audit = [sw(W0 - 4 * H, "start"), sw(W0 - 3 * H, "drain"), sw(W0 - 2 * H, "stop-now"),
+             sw(W0 - H, "start")]
+    out = prof.strip(audit, beat(W0 - 4 * H, W0), [], [], 4 * H, W0)
+    assert set(out["shares"]) == set(prof.LOOP_STATES)
+    assert sum(out["shares"].values()) == pytest.approx(4 * H)
+    assert out["gap_s"] == 0
+
+
+def test_a_gap_is_counted_apart_from_the_four_shares(prof):
+    audit = [sw(W0 - H, "start")]
+    out = prof.strip(audit, beat(W0 - 4 * H, W0), [], [], 4 * H, W0)
+    covered = sum(out["shares"].values())
+    assert out["gap_s"] == 3 * H and covered + out["gap_s"] == pytest.approx(4 * H)
+
+
+def test_a_step_long_before_the_window_leaves_no_row_outside_it(prof):
+    """The step record is silent past the bound at the window's own start: the stretch is down from there, never a row
+    that reaches back before the window, so the shares still add up to the window."""
+    audit = [sw(W0 - 4 * H, "start")]
+    out = prof.strip(audit, [stp("janitor", W0 - 5 * H, W0 - 5 * H + 5), stp("janitor", W0 - 3 * H, W0 - 3 * H + 5)],
+                     [], [], 4 * H, W0)
+    assert all(W0 - 4 * H <= r["start"] < r["end"] <= W0 for r in out["rows"]), states(out["rows"])
+    assert sum(out["shares"].values()) + out["gap_s"] == pytest.approx(4 * H)
+    assert states(out["rows"]) == [("down", W0 - 4 * H, W0 - 3 * H), ("active", W0 - 3 * H, W0 - 3 * H + 600),
+                                    ("down", W0 - 3 * H + 600, W0)]
+
+
+def test_the_marks_name_each_switch_change_and_each_delivery(prof):
+    audit = [sw(W0 - 100 * H, "start", who="owner", frm="loopback"),           # before the window: no mark
+             sw(W0 - 3 * H, "drain", who="loop", frm="restart", issue=1234),
+             sw(W0 - 2 * H, "stop-now", who="owner", frm="tailnet")]
+    landings = [{"at": W0 - 2 * H - 60, "branch": "wave/7-a", "sha": "abc123", "issue": 7}]
+    promotions = [{"at": W0 - H, "branch": "stg", "sha": "def456"}, {"at": W0 - H + 60, "branch": "main", "sha": "def456"}]
+    marks = prof.strip_marks(audit, landings, promotions, W0 - 4 * H, W0)
+    assert [(m["kind"], m["at"]) for m in marks] == [
+        ("switch", W0 - 3 * H), ("landing", W0 - 2 * H - 60), ("switch", W0 - 2 * H), ("promotion", W0 - H),
+        ("promotion", W0 - H + 60)]
+    drain = marks[0]
+    assert (drain["who"], drain["from"], drain["issue"], drain["state"]) == ("loop", "restart", 1234, "draining")
+    assert marks[1]["issue"] == 7 and marks[1]["branch"] == "wave/7-a"
+    assert [m["branch"] for m in marks if m["kind"] == "promotion"] == ["stg", "main"]
+
+
+def test_the_strip_window_is_four_eight_or_twenty_four_hours(prof):
+    assert prof.STRIP_WINDOWS == (4 * H, 8 * H, 24 * H)
+    assert [prof.strip_window(w) for w in prof.STRIP_WINDOWS] == [4 * H, 8 * H, 24 * H]
+    assert [prof.strip_window(w) for w in (None, "x", 2 * H)] == [24 * H, 24 * H, 24 * H]
+    assert prof.strip([], [], [], [], 4 * H, W0)["window_s"] == 4 * H, "the answer names the window it covers"
+
+
+def iso(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ts)) + "+00:00"
+
+
+def test_the_route_answers_the_strip_from_the_files_with_the_switch_off(hub):
+    """The strip reads the loop's own records only: the switch is off and no process table is read."""
+    mod, port, _, state, table = hub
+    now = time.time()
+    (state / "loop-audit.jsonl").write_text(
+        json.dumps({"at": iso(now - 4 * H - 600), "who": "owner", "from": "loopback", "action": "start"}) + "\n")
+    rows = []
+    for i, t in enumerate(range(int(now - 4 * H), int(now) - 60, 120)):
+        rows.append(f"start\ts{i}\tjanitor\t{t}\t-\t-")
+        rows.append(f"end\ts{i}\tjanitor\t{t + 5}\tdone\t0")
+    (state / "steps.tsv").write_text("\n".join(rows) + "\n")
+    (state / "landed.tsv").write_text(f"{int(now - 600)}\twave/7-a\tabc123\t7\n")
+    (state / "promote.log").write_text(
+        f"{iso(now - 300)} promote-pass: def456 not promoted: CI is red\n"
+        f"{iso(now - 240)} promote-main-pass: def456789 promoted: the complete tier is green, main is at def456789\n")
+    code, v = ask(port, "GET", path="/api/profiler?sw=14400")
+    assert code == 200 and v["on"] is False
+    strip = v["strip"]
+    assert strip["window_s"] == 14400 and strip["end"] >= now - 5
+    assert [r["state"] for r in strip["rows"]][0] == "active" and strip["rows"][-1]["state"] == "active"
+    assert set(strip["shares"]) == set(mod.hub_profiler.LOOP_STATES)
+    assert [m["kind"] for m in strip["marks"]] == ["landing", "promotion"], "a refusal is no promotion mark"
+    assert strip["marks"][0]["issue"] == 7 and strip["marks"][1]["branch"] == "main"
+    assert [w["s"] for w in strip["windows"]] == [14400, 28800, 86400]
+    assert ask(port, "GET", path="/api/profiler?sw=99")[1]["strip"]["window_s"] == 86400
+    assert table.reads == 0, "the strip reads files only"
+
+
+def test_a_draining_stretch_that_stops_stepping_is_down(prof):
+    """The switch still says on while draining, so a drain whose steps stop is down past the bound, never draining."""
+    audit = [sw(W0 - 4 * H, "start"), sw(W0 - 2 * H, "drain", who="loop", frm="restart", issue=7)]
+    steps = beat(W0 - 4 * H, W0 - 2 * H) + [stp("janitor", W0 - 2 * H + 120, W0 - 2 * H + 125)]
+    out = prof.strip(audit, steps, [], [], 4 * H, W0)
+    assert states(out["rows"]) == [("active", W0 - 4 * H, W0 - 2 * H),
+                                   ("draining", W0 - 2 * H, W0 - 2 * H + 720),
+                                   ("down", W0 - 2 * H + 720, W0)]
+    assert out["shares"]["down"] == W0 - (W0 - 2 * H + 720)
+
+
+def test_a_drain_that_never_steps_again_is_down_not_draining(prof):
+    """A drain line followed by silence is a loop that died, drawn down for the whole stretch."""
+    out = prof.strip([sw(0, "drain", who="loop", frm="restart")], [], [], [], 4 * H, 4 * H)
+    assert any(r["state"] == "down" for r in out["rows"]), out["rows"]
+    assert out["shares"]["draining"] == 0
+
+
+def test_a_missing_step_record_is_a_gap_never_down(prof):
+    """No step record at all is no source data: the stretch is a gap with its reason, apart from the four shares."""
+    out = prof.strip([sw(W0 - 4 * H, "start")], None, [], [], 4 * H, W0)
+    assert out["rows"] == [{"start": W0 - 4 * H, "end": W0, "state": "gap", "reason": "no step record"}]
+    assert out["gap_s"] == 4 * H and sum(out["shares"].values()) == 0
+
+
+def test_a_prefixed_promotion_line_still_marks_its_delivery(hub, monkeypatch):
+    """A writer that wraps the line must not hide the promotion: the nearest date before the marker is the mark's own."""
+    mod, _, _, state, _ = hub
+    monkeypatch.setenv("SG_MAIN_BRANCH", "trunk")
+    monkeypatch.setenv("SG_STG_BRANCH", "stage")
+    now = int(time.time())
+    (state / "promote.log").write_text(
+        f"[{iso(now - 300)}] promote-pass: aaa111 promoted: the CI checks carried the full pass\n"
+        f"note: {iso(now - 240)} promote-main-pass: bbb222 promoted: main moved to bbb222\n"
+        f"{iso(now - 180)} promote-pass: ccc333 not promoted: CI is red\n")
+    out = mod.strip_promotions()
+    assert [(p["branch"], p["sha"]) for p in out] == [("stage", "aaa111"), ("trunk", "bbb222")], "each marker names its branch, a refusal is no mark"
+
+
+STRIP = {"window_s": 14400, "start": W0 - 14400, "end": W0,
+         "windows": [{"s": 14400, "label": "4 hours"}, {"s": 28800, "label": "8 hours"},
+                     {"s": 86400, "label": "24 hours"}],
+         "labels": {"active": "Active", "draining": "Draining", "off": "Off", "down": "Down"},
+         "rows": [{"start": W0 - 14400, "end": W0 - 5400, "state": "active"},
+                  {"start": W0 - 5400, "end": W0 - 1800, "state": "down"},
+                  {"start": W0 - 1800, "end": W0 - 900, "state": "gap", "reason": "no step record in this stretch"},
+                  {"start": W0 - 900, "end": W0, "state": "active"}],
+         "shares": {"active": 9000, "draining": 0, "off": 0, "down": 3600}, "gap_s": 1800,
+         "marks": [{"at": W0 - 10000, "kind": "switch", "action": "drain", "state": "draining", "who": "loop",
+                    "from": "restart", "issue": 1234},
+                   {"at": W0 - 8000, "kind": "landing", "branch": "wave/7-a", "sha": "abc123", "issue": 7},
+                   {"at": W0 - 4000, "kind": "promotion", "branch": "stg", "sha": "def456"}]}
+
+
+def strip_part(out):
+    at = out.index("<section id=profstrip>")
+    return out[at:out.index("</section>", at) + 10]
+
+
+def test_the_strip_is_drawn_above_the_trip_bar_and_shows_four_shares():
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'trip': TRIP, 'runs': RUNS})},new Set())")
+    assert out.index("id=profstrip") < out.index("id=proftrip"), "the strip is the tab's first view"
+    part = strip_part(out)
+    assert re.findall(r"<b>([A-Za-z]+)</b>", part) == ["Active", "Draining", "Off", "Down"]
+    assert "62.5%" in part and "25.0%" in part, "the share is of the window"
+
+
+def test_the_strip_draws_a_gap_with_its_reason_and_names_each_mark():
+    part = strip_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP})},new Set())"))
+    assert "no source data" in part and "no step record in this stretch" in part
+    assert re.search(r'title="[^"]*loop[^"]*restart[^"]*#1234', part), "a switch change names writer, origin and issue"
+    assert re.search(r'title="[^"]*#7', part), "a landing names the issue it carries"
+    assert re.search(r'title="[^"]*stg', part) and re.search(r'title="[^"]*main', part) is None, "a promotion names its branch"
+
+
+def test_the_strip_offers_four_eight_and_twenty_four_hours():
+    part = strip_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP})},new Set())"))
+    opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", part)
+    assert [(v, bool(sel), lab) for v, sel, lab in opts] == [
+        ("14400", True, "4 hours"), ("28800", False, "8 hours"), ("86400", False, "24 hours")]
+    assert len(re.findall(r"<select data-stripwin", part)) == 1
+
+
+def test_the_strip_keeps_its_own_window_on_this_device_and_sends_it():
+    src = page()
+    assert re.search(r'localStorage\.setItem\("squad-prof-strip"', src), "the window survives a reload"
+    assert re.search(r"&sw=\"\+profStripWin", src), "the read carries the strip's window"
+
+
+def test_the_strip_shows_with_the_switch_off():
+    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'strip': STRIP})},new Set())")
+    assert "id=profstrip" in off and "<table id=proft " not in off
+
+
+def test_the_phone_reaches_the_strip_and_the_shares_wrap_under_the_bar():
+    """The phone's More menu opens the Loop tab of this page, and the strip's shares wrap, so no fixed width overflows it."""
+    html = (SCRIPTS / "hub-mobile.html").read_text()
+    assert re.search(r'id="more-loop" href="\./#loop"', html), "the phone opens the Loop tab of the same page"
+    assert re.search(r"#profstrip \.lss\{display:flex;flex-wrap:wrap", page()), "the shares wrap under the bar at phone width"

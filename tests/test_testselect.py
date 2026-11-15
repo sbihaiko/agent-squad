@@ -480,6 +480,21 @@ def test_a_delta_that_only_edits_a_test_file_does_not_select_the_shard_guard(tmp
     assert select(repo) == ["tests/test_alpha.py"]
 
 
+def test_a_delta_that_edits_the_shard_map_selects_the_shard_guard_not_the_full_battery(tmp_path):
+    """#1870: every card that adds a test file edits `tests/ci_shards.py` to give it a shard line, so the selector answered
+    `all` for a required edit and spent a full battery on it. The guard that reads the map is the only test the edit reaches."""
+    extra = {**SHARD_GUARD_BASE, "tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a'}\n"}
+    repo = tip(tmp_path, {"tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a', 'test_beta.py': 'b'}\n"}, extra=extra)
+    assert select(repo) == ["tests/test_tooling.py"]
+
+
+def test_an_edited_shard_map_beside_a_changed_module_selects_the_guard_and_the_module_importers(tmp_path):
+    extra = {**SHARD_GUARD_BASE, "tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a'}\n"}
+    repo = tip(tmp_path, {"tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a', 'test_beta.py': 'b'}\n",
+                          "squad/alpha.py": "VALUE = 2\n"}, extra=extra)
+    assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_tooling.py"]
+
+
 MEASURED_LINE_GUARD_BASE = {
     "tests/test_shell_suite_runner.py": "def test_every_suite_has_a_measured_line_so_none_lands_unmeasured():\n    pass\n",
 }
