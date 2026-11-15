@@ -775,7 +775,9 @@ def board_read(p):   # one items read per pass for every card's Status and holde
     if p not in _boards:
         seam = board_seam(p)
         try: _boards[p] = (bool(seam.binding.status_field()["id"]), *seam.board())
-        except (RuntimeError, ValueError): _boards[p] = (False, {}, None)
+        except Exception as e:   # any failure of the read is an unanswered board, never a dead pass: nothing is moved on it
+            _boards[p] = (False, {}, None)
+            say(f"BOARD-READ-FAILED project {p}: {type(e).__name__}: {str(e)[:160]}")
     return _boards[p]
 def cards(p): return board_read(p)[:2]
 def fill_missing(p, known):   # an issue the pass's REST read omitted is asked once of the GraphQL projectItems read (#1463), and the card it finds rides the pass's map: a card the route never carried stops being named absent. One call per omitted issue per pass, never one per item; the id it finds also seeds the item map the writer reads, so the write path spends no second read on the omission
