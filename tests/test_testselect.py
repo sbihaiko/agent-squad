@@ -437,6 +437,44 @@ def test_a_dynamic_test_on_an_undeclared_edge_is_selected_and_never_asks_for_the
     assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_dyn.py"]
 
 
+def test_a_module_that_loads_a_script_by_a_literal_path_never_asks_for_the_battery(tmp_path):
+    """#1878: `squad/runners/dispatch.py` loads `contrib/squad-goal/scripts/issue_ledger.py` by a path literal, and that script
+    imports nothing from `squad`. The target is scanned like any other module, so the static edge to `squad.alpha` is a real
+    edge and the answer is the loader's own test, never the full battery."""
+    loader = (
+        "import importlib.util\n"
+        "import pathlib\n"
+        "from squad import alpha\n"
+        "\n"
+        "def helper():\n"
+        "    p = pathlib.Path(__file__).parents[1] / 'scripts' / 'helper.py'\n"
+        "    return importlib.util.spec_from_file_location('helper', p)\n"
+    )
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"}, extra={
+        "squad/loader.py": loader,
+        "scripts/helper.py": "VALUE = 9\n",
+        "tests/test_loader.py": "from squad import loader\n",
+    })
+    assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_loader.py"]
+
+
+def test_a_module_whose_dynamic_target_names_no_existing_file_still_answers_all(tmp_path):
+    """A load the selector cannot resolve is still an unknown edge: the module could reach any module, so the answer is the
+    full battery and never a narrower list."""
+    loader = (
+        "import importlib\n"
+        "from squad import alpha\n"
+        "\n"
+        "def load(name):\n"
+        "    return importlib.import_module('squad.' + name)\n"
+    )
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"}, extra={
+        "squad/loader.py": loader,
+        "tests/test_loader.py": "from squad import loader\n",
+    })
+    assert select(repo)[0].startswith("all:")
+
+
 def test_the_measured_seconds_file_selects_its_readers_though_one_loads_a_script_by_path(tmp_path):
     """The shape a hand gate meets: a script change edits the measured line of its suite, the selector maps that data file to
     its reader, and a test importing the reader also loads a script by a computed path. The reader's tests are the delta; their
