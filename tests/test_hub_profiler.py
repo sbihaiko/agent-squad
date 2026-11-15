@@ -526,6 +526,7 @@ class Table:
     def __init__(self):
         self.reads = 0
         self.rows = {8: (1, f"bash {SCRIPTS}/watch.sh"), 9: (1, "/Applications/Foo.app/Contents/MacOS/Foo")}
+        self.refused = set()                               # the pids whose CPU read the system refuses
         self.before = None                                 # a hook a test sets: it runs inside each read
 
     def __call__(self):
@@ -537,6 +538,7 @@ class Table:
         for pid, (ppid, command) in self.rows.items():
             p = P()
             p.pid, p.ppid, p.cpu, p.command, p.start = pid, ppid, float(self.reads), command, 5.0
+            p.cpu_known = pid not in self.refused
             rows[pid] = p
         return rows
 
@@ -656,6 +658,52 @@ def test_two_readings_of_one_window_are_never_closer_than_one_period(hub, monkey
     ask(port, "POST", {"on": True})
     wait(lambda: len(intervals) >= 2)
     assert intervals[1] >= mod.PROFILER_SECS
+
+
+def test_the_scope_names_each_other_profile_s_loop_by_its_supervisor_and_run_folders(hub, tmp_path, monkeypatch):
+    """The hub serves every profile, so this tab's context row names each other profile's loop: its supervisor's pid from
+    that profile's own state folder, and the run folders only that profile's work names."""
+    mod, *_ = hub
+    state = tmp_path / "zesty-state"
+    state.mkdir()
+    (state / "watchd.pid").write_text("4243 supervise\n")
+    monkeypatch.setattr(mod, "project_contexts", lambda: [
+        {"slug": "alpha", "state": str(mod.STATE), "checkout": mod.CHECKOUT, "own": True},
+        {"slug": "zesty", "state": str(state), "checkout": "/Users/o/zesty", "own": False}])
+    mod.PROFILER_OTHERS.update(at=0.0, rows=())
+    sc = mod.profiler_scope()
+    assert sc.supervisor != 4243 and sc.others == (
+        ("zesty", 4243, ("/Users/o/zesty/runs/", "/Users/o/zesty/worktrees/run/", "/Users/o/zesty/worktrees/child/")),)
+
+
+def test_the_answer_splits_the_context_row_by_each_other_profile_s_loop(hub, tmp_path, monkeypatch):
+    mod, port, _, state, table = hub
+    other = tmp_path / "zesty-state"
+    other.mkdir()
+    (other / "watchd.pid").write_text("50\n")
+    (state / "watchd.pid").write_text("8\n")
+    monkeypatch.setattr(mod, "project_contexts", lambda: [
+        {"slug": "zesty", "state": str(other), "checkout": "/Users/o/zesty", "own": False}])
+    mod.PROFILER_OTHERS.update(at=0.0, rows=())
+    table.rows = {8: (1, f"bash {SCRIPTS}/watchd.sh supervise"), 50: (1, f"bash {SCRIPTS}/watchd.sh supervise"),
+                  51: (50, f"bash {SCRIPTS}/watch.sh"), 9: (1, "/Applications/Foo.app/Contents/MacOS/Foo")}
+    ask(port, "POST", {"on": True})
+    wait(lambda: table.reads >= 3)
+    v = ask(port, "GET")[1]
+    assert [c["name"] for c in v["tree"]["children"]] == ["watchd.sh"], "another profile's loop is no node of this tree"
+    assert [(c["name"], c["kind"]) for c in v["context"]["children"]] == [("loop zesty", "loop"), ("Foo", "other")]
+
+
+def test_a_refused_cpu_read_lowers_the_coverage_in_the_answer(hub):
+    """The answer says how much of the machine it could read: the processes read with their CPU over every process seen."""
+    mod, port, _, _, table = hub
+    table.refused = {9}
+    ask(port, "POST", {"on": True})
+    wait(lambda: table.reads >= 3)
+    v = ask(port, "GET")[1]
+    assert v["processes_seen"] == 2 * v["processes_read"] and v["processes_read"] >= 1
+    assert v["coverage"] == pytest.approx(0.5)
+    assert [c["name"] for c in v["context"]["children"]] == [], "a refused read adds no zero-cost row"
 
 
 def test_a_failed_reading_is_counted_and_never_moves_the_last_reading(hub, monkeypatch):
@@ -1328,6 +1376,36 @@ def test_the_many_repository_hub_starts_the_sampler_of_a_profile_only_when_a_pag
     assert not mod.profiler_running() and table.reads == 0, "a switch left on read the process table with no page open"
     mux_get(port, "/alpha/api/profiler")
     wait(lambda: table.reads >= 2)
+
+
+def test_each_profile_s_tab_keeps_its_own_switch_and_window_over_one_shared_scan(tmp_path, monkeypatch):
+    """Two profiles of one hub share the machine's process table, never their switch, their window or their scope: one
+    scan answers both ticks, and each tab names the other profile's loop in its context row (#1746, #1753)."""
+    prof, co_a, co_z = tmp_path / "profiles", tmp_path / "a", tmp_path / "z"
+    for d in (prof, co_a, co_z): d.mkdir()
+    for slug, co in (("alpha", co_a), ("zesty", co_z)):
+        (prof / f"{slug}.sh").write_text(
+            f': "${{SG_REPO:=x/{slug}}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=3}}"; : "${{SG_CHECKOUT:={co}}}"\n')
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(tmp_path / "state"))
+    apps = load("hubmux_profiler_two", SCRIPTS / "hubmux.py").load_apps()
+    a, z = apps["alpha"]["mod"], apps["zesty"]["mod"]
+    table = Table()
+    for m in (a, z):
+        m.runs = lambda: []
+        m.process_table = table
+        m.PROFILER_OTHERS.update(at=0.0, rows=())
+    for m, pid in ((a, 10), (z, 20)):
+        pathlib.Path(m.STATE).mkdir(parents=True, exist_ok=True)
+        (pathlib.Path(m.STATE) / "watchd.pid").write_text(f"{pid}\n")
+    assert pathlib.Path(a.PROFILER_SWITCH).parent != pathlib.Path(z.PROFILER_SWITCH).parent, "each tab keeps its own switch"
+    assert a.PROFILER["window"] is not z.PROFILER["window"], "each tab folds its own window"
+    assert a.profiler_scope().others[0][:2] == ("zesty", 20) and z.profiler_scope().others[0][:2] == ("alpha", 10)
+    before = table.reads
+    now = time.time()
+    a.profiling_table(now)
+    z.profiling_table(now)
+    assert table.reads == before + 1, "one scan of the process table answers every profile of the tick"
 
 
 # ---------------------------------------------------------------- the background reads (#1790)

@@ -2561,6 +2561,10 @@ PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pa
 PROFILER_STILL_RUNNING = "still running: the sampler ends after its current read of the process table"
 PROFILER = {"window": hub_profiler.Window(), "thread": None, "stop": None}
 PROFILER_LOCK = threading.RLock()   # it starts and ends the sampler, and the switch is read and written under it
+# The other profiles of this hub, each with its supervisor pid and the run folders only its work names (#1753). The seam
+# answers them, so they are read once a minute, never on the sampler's tick.
+PROFILER_OTHERS = {"at": None, "rows": ()}
+PROFILER_OTHERS_SECS = 60.0
 
 def profiler_on():
     v = _json(PROFILER_SWITCH)
@@ -2571,21 +2575,44 @@ def profiler_running():
     return t is not None and t.is_alive()
 
 def profiler_scope():
-    """The loop of this profile for the fold: the supervisor's pid (watchd.sh writes $SG_STATE/watchd.pid) and the folders
-    only this profile's work names, its run folders and the scripts the loop runs."""
+    """The loop of this profile for the fold: the supervisor's pid (watchd.sh writes $SG_STATE/watchd.pid), the folders
+    only this profile's work names, its run folders and the scripts the loop runs, and the other profiles' loops."""
     try: pid = int(_read(STATE / "watchd.pid").split()[0])
     except (ValueError, IndexError, OSError): pid = None
     co = pathlib.Path(CHECKOUT)
     live = pathlib.Path.home() / ".claude" / "skills" / "squad-goal" / "scripts"
     marks = dict.fromkeys(f"{d}/" for d in (co / "runs", co / "worktrees" / "run", co / "worktrees" / "child", SCRIPTS, live))
-    return hub_profiler.Scope(pid, tuple(marks))
+    return hub_profiler.Scope(pid, tuple(marks), profiler_others())
+
+def profiler_others(now=None):
+    """(name, supervisor pid, run folders) for every other profile this hub serves, so the context row tells one loop from
+    another: the pid from that profile's own state folder, the folders its work names. Off a page's read the list is a
+    minute old at most; a seam that refuses answers no other loop and never the wrong one."""
+    now = time.time() if now is None else now
+    if PROFILER_OTHERS["at"] is not None and 0 <= now - PROFILER_OTHERS["at"] < PROFILER_OTHERS_SECS:
+        return PROFILER_OTHERS["rows"]
+    rows = []
+    try:
+        for r in project_contexts():
+            if r.get("own") or not r.get("checkout"): continue
+            st = r.get("state")
+            try: pid = int(_read(pathlib.Path(st) / "watchd.pid").split()[0]) if st else None
+            except (ValueError, IndexError, OSError): pid = None
+            co = pathlib.Path(r["checkout"])
+            rows.append((r.get("slug") or "a profile", pid,
+                         tuple(f"{d}/" for d in (co / "runs", co / "worktrees" / "run", co / "worktrees" / "child"))))
+    except Exception:
+        rows = []
+    PROFILER_OTHERS.update(at=now, rows=tuple(rows))
+    return PROFILER_OTHERS["rows"]
 
 def profiler_sampler(stop):
     """Read the process table, then wait PROFILER_SECS after the read ends, until `stop` is set, while a page reads this
     profile (#1790). A failed or empty read is counted and not folded: folded, it would count every process of the next
     reading as new."""
     while not stop.is_set():
-        try: reading = {(pid, p.start): (p.ppid, p.cpu, p.command) for pid, p in profiling_table().items()}
+        try: reading = {(pid, p.start): (p.ppid, p.cpu if getattr(p, "cpu_known", True) else None, p.command)   # a refused CPU read is seen and not read (#1753)
+                        for pid, p in profiling_table().items()}
         except Exception: reading = None
         try: scope = profiler_scope() if reading else None
         except Exception: reading = None
@@ -2957,6 +2984,7 @@ def profiler_view(a, w=None, sw=None, ww=None):
     load = load_view(st) if st else None
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
+           "processes_read": 0, "processes_seen": 0, "coverage": None,
            "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
            "strip": st, "slots": slot_view(sw, now, (loop_caps() or {}).get("runs")) if a.allowed else None, "load": load,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
