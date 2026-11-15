@@ -94,6 +94,8 @@ def test_cards_of_one_run_share_one_read_of_its_record(hub, monkeypatch):
     reads = []
 
     class _R:
+        NO_PID_IDLE_S = 60.0   # the reaper's own bound, which the holder reads beside `run_live`
+
         def run_live(self, f, now=None):
             reads.append(1)
             return True
@@ -116,6 +118,8 @@ def test_a_board_build_never_answers_a_holder_from_an_earlier_build(hub, monkeyp
     live = {"v": False}
 
     class _R:
+        NO_PID_IDLE_S = 60.0   # the reaper's own bound, which the holder reads beside `run_live`
+
         def run_live(self, f, now=None):
             return live["v"]
     monkeypatch.setattr(mod, "reaper", lambda: _R())
