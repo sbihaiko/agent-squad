@@ -7,7 +7,7 @@ src=${1:-$(dirname "$0")/launch.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $
 # The fixture owns its origin (main) and its markers: an inherited loop profile must not redirect the base branch or close a model.
 unset SG_BASE SG_WORKFLOW SG_SHARED
 mkdir -p "$T/bin" "$T/s" "$T/st" "$T/co/runs" "$T/squad"
-cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/registry.json" "$T/s/"
+cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/liveholds.py" "$(dirname "$src")/registry.json" "$T/s/"
 # models.json: one coding model, no hours window, one declared context window. SG_ALLOW_MODEL skips the gate anyway.
 printf '{"schema_version":2,"chains":{"coding":[{"id":"test-model","route":"gateway","ctx":"128k"}]}}\n' > "$T/s/models.json"
 printf 'print("hub")\n' > "$T/s/hub.py"

@@ -671,8 +671,10 @@ class Dispatch:
     async def ac_survey(self, extra=None):
         """Run the held-out commands of every landed child: a history command in its child's tree, and every command of a fix
         run there too, the rest in the target (#862, #1374). Use `workcmd`, the policy of the gate.
-        Return ({child: all its commands passed}, {child: {"ac_failed:<command>": output tail or timeout note}}).
-        The evidence holds every failing command of a child."""
+        Return ({child: its commands held no measured red}, {child: {"ac_failed:<command>": output tail or timeout note}}).
+        The evidence holds every failing command of a child, and every command the gate could not run (`unproven`): that
+        one is no regression, because it proves nothing either way, but it is recorded so the obligation it leaves is
+        never silent (ADR-0164, #1825)."""
         got, evidence = {}, {}
         for name, cmds in self.landed_commands(extra):
             got[name] = True
@@ -683,7 +685,9 @@ class Dispatch:
                 else:
                     where = tree if (self.e.fix_run or workcmd.reads_history(c)) else self.e.target
                     r = await anyio.to_thread.run_sync(lambda c=c, w=where: workcmd.run(c, w))
-                if not r.ok:
+                if r.unproven:      # a gate that could not run measured nothing: no regression, but the obligation is recorded
+                    evidence.setdefault(name, {})[f"unproven:{c}"] = r.evidence
+                elif not r.ok:
                     got[name] = False
                     evidence.setdefault(name, {})[f"{'malformed' if r.malformed else 'ac_failed'}:{c}"] = r.evidence
         return got, evidence
@@ -695,9 +699,12 @@ class Dispatch:
         command at its own landing has no earlier result to move from, so the final gate stays the check on it."""
         after, evidence = await self.ac_survey(extra=name)
         moved = sorted(c for c, ok in self.ac_before.items() if ok and not after.get(c, False))
+        unproven = sorted(k.split(":", 1)[1] for k in evidence.get(name, {}) if k.startswith("unproven:"))
         if not moved:
             self.ac_before = after
-            return actions.ActionResult(True, [], git.head(self.e.target))
+            # A command the gate could not run leaves its obligation on the land event: the landing passes it on, never
+            # silently (ADR-0164, #1825).
+            return actions.ActionResult(True, [], git.head(self.e.target), {"unproven": unproven} if unproven else {})
         await anyio.to_thread.run_sync(lambda: git.run(["reset", "--hard", head_before], self.e.target, timeout=300 * self.e.scale))
         extra = {"evidence": {f"ac_regression:{c}": evidence.get(c, {}) for c in moved}}
         owner, regressions = self.regression_owner(name, moved)

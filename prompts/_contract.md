@@ -4,7 +4,7 @@ Your last message is one JSON object and nothing else. No prose before or after 
 
 Every object has these fields:
 
-- `status`: `pass`, `fail`, or `needs-human`.
+- `status`: `pass`, `fail`, `needs-human`, or `unproven`.
 - `reasons`: a list of short strings. Empty when `status` is `pass`. Each reason names one concrete cause.
 
 Your role adds more fields, named below. Return only what the role asks for.
@@ -12,6 +12,7 @@ Your role adds more fields, named below. Return only what the role asks for.
 A message with no tool call ends your session, and no notice reaches you after it. So never end a turn to wait for a background command, a check, or a notice, even where the project says to wait or never to sleep: run each command in the foreground with a timeout and read its output in the same turn. A last message that is not the JSON object loses the whole call (`child_ended_early`).
 
 Use `needs-human` only when a person must decide and you cannot.
+Use `unproven` only when your proof could not run: the work is done and no check measured a red. The run keeps the proof obligation, so this is never a silent pass (`docs/adr/0164-delivery-outranks-the-proof.md`).
 If you cannot finish inside your turn or spend cap, return `fail` with the reason `out_of_budget`. Do not return a partial result as `pass`.
 
 ## Inputs

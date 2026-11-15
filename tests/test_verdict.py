@@ -158,6 +158,38 @@ def test_a_deadline_before_any_commit_is_still_failed_with_the_deadline_reason()
     assert v.reasons == ["deadline"]
 
 
+def test_a_run_whose_only_failures_are_unproven_completes_and_names_the_node():    # #1825
+    """ADR-0164: an unfinished proof never holds delivery. When every failing outcome is unproven, the run is
+    completed and the reasons name the node whose proof did not finish."""
+    rows = [out("code"), out("final_gate", "unproven", ["ac-verify:unproven:bash contrib/squad-goal/scripts/fast-gate.sh"]), out("main")]
+    v = V.fold(events(*rows, plan=["main", "code", "final_gate"]))
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert v.reasons == ["unproven:final_gate"]
+
+
+def test_an_unproven_outcome_routed_to_continue_is_no_failing_outcome():    # #1825
+    """Only an unproven outcome that exits its step is a failing outcome. A node that answered unproven but was routed
+    to continue did not fail the run, so the fold never counts it: a completed run is not relabelled by it (ADR-0164)."""
+    rows = [out("a", "unproven", routed="continue"), out("main")]
+    v = V.fold(events(*rows))
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert not any(r.startswith("unproven:") for r in v.reasons)
+
+
+def test_a_needs_human_sibling_outranks_an_unproven_one_in_the_join():    # #1825
+    """A person's decision is never turned into a completed run by an unfinished proof beside it: needs-human is the
+    worse join, so the run surfaces the hold."""
+    assert V.join(["unproven", "needs-human"], "all") == "needs-human"
+
+
+def test_a_measured_red_beside_an_unproven_outcome_still_fails():    # #1825
+    """A measured red wins: the unproven sibling never releases it (ADR-0164)."""
+    rows = [out("final_gate", "unproven"), out("main", "fail", ["ac-verify:ac_failed:exit 3"])]
+    v = V.fold(events(*rows, plan=["main", "final_gate"]))
+    assert (v.verdict, v.exit_code) == ("failed", 1)
+    assert "ac-verify:ac_failed:exit 3" in v.reasons
+
+
 def test_a_commit_written_after_the_deadline_keeps_nothing():
     rows = [out("code", "deadline", ["deadline"]), commit("code"), out("main", "deadline", ["deadline"])]
     v = V.fold(events(*rows, plan=["main", "code"]))

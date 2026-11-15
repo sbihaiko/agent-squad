@@ -47,7 +47,7 @@ REQUIRED = {
     "signal": ["signal", "pid", "ppid", "pgid"],   # a SIGTERM, SIGHUP or SIGINT ended the engine; the time is `ts` (squad/killed.py)
     "verdict": ["verdict", "exit_code", "reasons", "remains", "folded"],
 }
-OUTCOMES = {"pass", "fail", "deadline", "needs-human"}
+OUTCOMES = {"pass", "fail", "deadline", "needs-human", "unproven"}   # `unproven`: a check could not run, so nothing was measured (ADR-0164)
 CHAIN_UNKNOWN = "unknown"    # the chain reading of a record written before a call stated its chain (SPEC 1035)
 
 

@@ -33,12 +33,47 @@ grep -q '^other 0$' "$T/out.txt" && ok "the second repository's file holds nothi
 grep -q "board_history" "$here/hub.py" && ok "the hub loads the module" || ko "hub.py does not load board_history"
 "$py" - "$here/hubmux.py" <<'PY' && ok "the live server starts the history writer" || ko "the live server starts no history writer (hubmux read threads)"
 import ast, sys
-for n in ast.walk(ast.parse(open(sys.argv[1]).read())):
-    if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple):
-        names = [e.value for e in n.iter.elts if isinstance(e, ast.Constant)]
-        if "refresh_board" in names:
-            sys.exit(0 if "refresh_history" in names else 1)
-sys.exit(1)
+# The two reads start from one loop (#1790). The tuple may sit in the loop or in a constant it iterates, so the loop's
+# iterated name is resolved to its unique binding: a stale or unrelated tuple that names both reads never answers for
+# the loop that starts them, and a rebound name fails the check instead of passing it.
+tree = ast.parse(open(sys.argv[1]).read())
+WANT = {"refresh_board", "refresh_history"}
+
+
+def tuple_names(node):
+    return {e.value for e in node.elts if isinstance(e, ast.Constant)} if isinstance(node, ast.Tuple) else set()
+
+
+def bound(value, targets):
+    return {t.id for t in targets if isinstance(t, ast.Name)} if WANT <= tuple_names(value) else set()
+
+
+holds, assigns = set(), {}
+for n in ast.walk(tree):
+    if isinstance(n, ast.Assign):
+        holds |= bound(n.value, n.targets)
+    elif isinstance(n, ast.AnnAssign) and n.value is not None:
+        holds |= bound(n.value, [n.target])
+for n in ast.walk(tree):     # every name bound anywhere, to count a rebinding of the one the loop reads
+    targets = n.targets if isinstance(n, ast.Assign) else ([n.target] if isinstance(n, ast.AnnAssign) else [])
+    for t in targets:
+        if isinstance(t, ast.Name):
+            assigns[t.id] = assigns.get(t.id, 0) + 1
+loops = []
+for n in ast.walk(tree):
+    if not isinstance(n, ast.For):
+        continue
+    if WANT <= tuple_names(n.iter):
+        loops.append(("<literal>", n))
+    elif isinstance(n.iter, ast.Name) and n.iter.id in holds:
+        loops.append((n.iter.id, n))
+# Exactly one tuple names both reads, and the loop reads that binding alone: a rebinding makes the resolution ambiguous.
+if len(holds) != 1:
+    sys.exit(1)
+name = next(iter(holds))
+if assigns.get(name, 0) != 1 or [src for src, _ in loops] != [name]:
+    sys.exit(1)
+sys.exit(0)
 PY
 grep -q 'budget_fact(_hist.history_path' "$here/hub.py" \
   && ok "the Monitor facts carry the GraphQL points" || ko "the Monitor facts do not carry the GraphQL points"

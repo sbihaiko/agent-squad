@@ -42,6 +42,8 @@ Read this section as a profiler's hot-spot list. The step numbers are those of t
 | Wave landing | 14 | one tip gate | - | the same gate again on the wave tip |
 | Promotion to `stg` | 15, 18, 19 | CI fast tier | - | starts past the quiet window since the last landing |
 
+The live form of this table is the **trip bar** of the hub's `Loop` tab: one stacked bar over the window the tab's picker names (1 hour, 24 hours or 48 hours), a stage a segment, with each stage's median as the segment's width, its median and its p90 in the segment's hover and in the table under the bar, and the count of deliveries the bar folds. The hub's `GET /api/profiler` answers it as `trip` (`hub_profiler.trip`), folded from the run records and `gate-history`; a window with fewer than three deliveries draws no bar and says so. The bar reads the stages the records hold: the wait for a slot before a run's first call, the child's coding, each review round, each gate, and the merge to the verdict. A percentile is read on the `(n - 1)` weight (`hub_profiler.percentile`), so the bar and this table agree on one definition.
+
 ### Hot spots
 
 Sorted by the time each one costs the loop. "Fix" names the issue that tracks it.

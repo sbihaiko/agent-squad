@@ -8,6 +8,7 @@ import http.client
 import importlib.util
 import inspect
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -267,6 +268,112 @@ def test_the_window_states_its_last_reading_the_measured_interval_and_the_failed
     assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0}
 
 
+# ---------------------------------------------------------------- time in failed runs (#1751)
+# The rows are the hub's folded record rows, one per run: the run fold (hub.scan) is the one reader of a record, and this
+# fold is pure over what it answers. NOW is a fixed clock, so no test reads the machine's.
+NOW = 1_700_000_000.0
+
+
+def run_row(t0, t1, verdict, reasons=()):
+    return {"t0": t0, "t1": t1, "verdict": verdict, "reasons": list(reasons)}
+
+
+def test_the_table_counts_each_verdict_and_each_reason_of_a_failed_run(prof):
+    rows = [run_row(NOW - 900, NOW - 300, "failed", ["gate:red", "review:changes"]),   # 600 s, two reasons
+            run_row(NOW - 800, NOW - 200, "failed", ["gate:red"]),                     # 600 s, the same reason again
+            run_row(NOW - 700, NOW - 100, "completed")]                                # 600 s, no reason
+    t = prof.failed_run_table(rows, 3600, NOW)
+    assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [
+        ("failed", "gate:red", 2, 1200.0),
+        ("failed", "review:changes", 1, 600.0),
+        ("completed", "", 1, 600.0)], "a failed run counts under every reason it names, and the rows sort by seconds"
+    assert t["total_seconds"] == 1800.0 and t["failed_seconds"] == 1200.0 and t["runs"] == 3
+    assert [r["share"] for r in t["rows"]] == [0.667, 0.333, 0.333], "the share is of every run second of the window"
+    assert t["label"] == "Time in failed runs", "the view names time, never waste"
+
+
+def test_a_run_with_no_verdict_counts_as_running_up_to_now(prof):
+    t = prof.failed_run_table([run_row(NOW - 120, None, None)], 3600, NOW)
+    assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", "", 1, 120.0)]
+
+
+def test_a_run_that_ended_before_the_window_is_not_counted(prof):
+    rows = [run_row(NOW - 7200, NOW - 5400, "failed", ["gate:red"]), run_row(NOW - 300, NOW - 60, "failed", ["gate:red"])]
+    assert [(r["count"], r["seconds"]) for r in prof.failed_run_table(rows, 3600, NOW)["rows"]] == [(1, 240.0)]
+
+
+def test_a_failed_run_with_no_reason_is_one_row_with_no_reason(prof):
+    t = prof.failed_run_table([run_row(NOW - 60, NOW, "failed")], 3600, NOW)
+    assert [(r["verdict"], r["reason"], r["seconds"]) for r in t["rows"]] == [("failed", "", 60.0)]
+
+
+def test_an_empty_window_is_an_empty_table_and_no_share(prof):
+    t = prof.failed_run_table([], 3600, NOW)
+    assert t["rows"] == [] and t["total_seconds"] == 0 and t["runs"] == 0
+
+
+def test_the_window_is_one_of_the_three_the_page_offers(prof):
+    assert prof.RUN_WINDOWS == (3600, 86400, 172800)
+    assert [prof.run_window(w) for w in (3600, 86400, 172800)] == [3600, 86400, 172800]
+    assert [prof.run_window(w) for w in (None, "x", 7200)] == [86400, 86400, 86400], "an unread choice is the 24 hour window"
+
+
+def record(folder, *events):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+
+
+def ev(event, ts, **kw):
+    return {"event": event, "pos": 1, "ts": ts, **kw}
+
+
+@pytest.fixture
+def records(served, monkeypatch, tmp_path):
+    """A checkout whose runs folder the test owns: the fold reads only what the hub's run fold answers."""
+    mod, _, _, _ = served
+    monkeypatch.setattr(mod, "CHECKOUT", str(tmp_path))
+    return mod, tmp_path / "runs"
+
+
+def test_a_resumed_run_counts_its_last_verdict_after_the_last_start(records):
+    mod, runs = records
+    record(runs / "run-20261115-010101-aaaaaa",
+           ev("run_start", NOW - 900), ev("verdict", NOW - 800, verdict="failed", exit_code=1, reasons=["gate:red"]),
+           ev("resume", NOW - 700), ev("verdict", NOW - 100, verdict="completed", exit_code=0, reasons=[]))
+    t = mod.profile_run_table(3600, NOW)
+    assert [(r["verdict"], r["count"]) for r in t["rows"]] == [("completed", 1)], "the verdict before the resume is not final"
+    assert t["failed_seconds"] == 0
+
+
+def test_a_fixture_record_of_a_failed_run_gives_its_reasons_their_seconds(records):
+    mod, runs = records
+    record(runs / "run-20261115-010202-bbbbbb",
+           ev("run_start", NOW - 600), ev("verdict", NOW - 300, verdict="failed", exit_code=1, reasons=["gate:red"]))
+    record(runs / "run-20261115-010303-cccccc",
+           ev("run_start", NOW - 400), ev("verdict", NOW - 100, verdict="failed", exit_code=1, reasons=["gate:red", "land:conflict"]))
+    t = mod.profile_run_table(3600, NOW)
+    assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [
+        ("failed", "gate:red", 2, 600.0), ("failed", "land:conflict", 1, 300.0)]
+
+
+def test_a_fixture_record_with_no_verdict_is_a_running_run(records):
+    mod, runs = records
+    record(runs / "run-20261115-010404-dddddd", ev("run_start", NOW - 600), ev("call_start", NOW - 60))
+    t = mod.profile_run_table(3600, NOW)
+    assert [(r["verdict"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", 1, 600.0)]
+
+
+def test_a_running_run_whose_record_write_is_older_than_the_window_still_counts(records):
+    """A run with no verdict is running up to now, so its old last write never ages it out of the window (AC3).
+    The fold's rule is the timestamps: a run still running ends at `now`, whatever its record's write time."""
+    mod, runs = records
+    d = runs / "run-20261115-010505-eeeeee"
+    record(d, ev("run_start", NOW - 200_000), ev("call_start", NOW - 190_000))
+    os.utime(d / "record.jsonl", (NOW - 172800, NOW - 172800))   # a long think: no event for two days
+    t = mod.profile_run_table(86400, NOW)
+    assert [(r["verdict"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", 1, 200_000.0)]
+
+
 # ---------------------------------------------------------------- the route
 @pytest.fixture(scope="module")
 def served(tmp_path_factory):
@@ -338,11 +445,11 @@ def wait(done, secs=5.0):
         time.sleep(0.01)
 
 
-def ask(port, method, body=None, *, origin=None, host=None):
+def ask(port, method, body=None, *, origin=None, host=None, path="/api/profiler"):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Host": host or f"127.0.0.1:{port}", "Content-Type": "application/json",
                "Origin": origin if origin is not None else f"http://127.0.0.1:{port}"}
-    c.request(method, "/api/profiler", body=None if body is None else json.dumps(body), headers=headers)
+    c.request(method, path, body=None if body is None else json.dumps(body), headers=headers)
     r = c.getresponse()
     data = json.loads(r.read() or b"{}")
     c.close()
@@ -604,7 +711,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler"\)', src)
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', src), "the read carries the window the owner chose"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -692,9 +799,261 @@ def test_the_view_states_the_switch_and_an_off_switch_draws_no_tree():
     assert re.search(r'role=switch aria-label="CPU sampling" aria-checked="true" data-prof', on)
     assert re.search(r"<h2>Loop</h2>", on) and re.search(r"<span class=lpl[^>]*>CPU sampling</span>", on)
     off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None})},new Set())")
-    assert re.search(r'aria-checked="false"', off) and "<table" not in off and "CPU sampling is off" in off
+    assert re.search(r'aria-checked="false"', off) and "id=proft" not in off and "CPU sampling is off" in off
     ro = run_js(f"profHtml({json.dumps({**VIEW, 'write': False, 'reason': 'read-only from the tailnet'})},new Set())")
     assert re.search(r'data-prof disabled[^>]*title="read-only from the tailnet"', ro)
+
+
+# ---------------------------------------------------------------- time in failed runs (#1751)
+RUNS = {"label": "Time in failed runs", "window_s": 3600, "runs": 3, "total_seconds": 1800.0, "failed_seconds": 1200.0,
+        "rows": [{"verdict": "failed", "reason": "gate:red", "count": 2, "seconds": 1200.0, "share": 0.667},
+                 {"verdict": "failed", "reason": "review:changes", "count": 1, "seconds": 600.0, "share": 0.333},
+                 {"verdict": "completed", "reason": "", "count": 1, "seconds": 600.0, "share": 0.333}]}
+
+
+def runs_part(out):
+    at = out.index("<table id=profr")
+    return out[at:out.index("</table>", at) + 8]
+
+
+def test_the_view_draws_the_time_in_failed_runs_table_by_verdict_and_reason():
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
+    part = runs_part(out)
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", part)] == ["Verdict", "Runs", "Run time", "Share"]
+    rows = re.findall(r"<td><b>([^<]*)</b>(?: <span class=prr>([^<]*)</span>)?</td><td>(\d+)</td><td>([^<]*)</td><td>([^<]*)</td>", part)
+    assert rows == [("failed", "gate:red", "2", "20.0 min", "66.7%"), ("failed", "review:changes", "1", "10.0 min", "33.3%"),
+                    ("completed", "", "1", "10.0 min", "33.3%")], "a failed run shows one row for each reason it names"
+    assert "Time in failed runs" in out and "waste" not in out.lower(), "the view names time, never waste"
+    assert "20.0 min in failed runs of 30.0 min of run time, 3 runs." in out
+
+
+def test_the_view_offers_the_three_windows_and_marks_the_one_chosen():
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
+    opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", out)
+    assert [(v, bool(sel), label) for v, sel, label in opts] == [("3600", False, "1 hour"), ("86400", True, "24 hours"),
+                                                                ("172800", False, "48 hours")]
+    assert re.search(r'<select data-profwin aria-label="The window of the Loop tab\'s file views">', out)
+
+
+def test_the_table_shows_with_the_switch_off_and_states_an_empty_window():
+    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': RUNS})},new Set())")
+    assert "id=profr" in off and "id=proft" not in off and "gate:red" in off
+    empty = {"label": "Time in failed runs", "window_s": 3600, "runs": 0, "total_seconds": 0, "failed_seconds": 0, "rows": []}
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': empty})},new Set())")
+    assert "No run in this window." in out
+
+
+def test_the_route_answers_the_table_of_the_window_the_page_asked_for(hub):
+    mod, port, _, state, table = hub
+    now = time.time()
+    record(state.parent / "runs" / "run-20261115-020202-eeeeee",
+           ev("run_start", now - 600), ev("verdict", now - 300, verdict="failed", exit_code=1, reasons=["gate:red"]))
+    code, v = ask(port, "GET")
+    assert code == 200 and v["on"] is False and v["runs_window_s"] == 86400, "the table shows with the switch off"
+    assert [(r["verdict"], r["reason"], r["count"]) for r in v["runs"]["rows"]] == [("failed", "gate:red", 1)]
+    assert [w["s"] for w in v["runs_windows"]] == [3600, 86400, 172800]
+    assert table.reads == 0, "the table reads files only"
+    code, short = ask(port, "GET", path="/api/profiler?w=3600")
+    assert code == 200 and short["runs_window_s"] == 3600 and short["runs"]["rows"] == v["runs"]["rows"]
+    assert ask(port, "GET", path="/api/profiler?w=99")[1]["runs_window_s"] == 86400, "a choice the page cannot read is the default"
+
+
+def test_the_route_folds_every_run_record_through_the_one_reader(hub, monkeypatch):
+    """AC4: the route's table is what the hub's one reader of a record answers, `scan`, never a parse of its own and
+    nothing from GitHub. The reader answers a reason this test writes nowhere on disk, and the route must show it."""
+    mod, port, _, state, _ = hub
+    now = time.time()
+    d = state.parent / "runs" / "run-20261115-050505-ffffff"
+    record(d, ev("run_start", now - 600), ev("verdict", now - 300, verdict="failed", exit_code=1, reasons=["gate:red"]))
+    seen, real = [], mod.scan
+
+    def counted(p):
+        seen.append(str(p))
+        if str(p) == str(d / "record.jsonl"):
+            return {"t0": now - 100, "t1": now - 50, "verdict": "failed", "reasons": ["folded:only"]}
+        return real(p)
+
+    monkeypatch.setattr(mod, "scan", counted)
+    code, v = ask(port, "GET")
+    assert code == 200
+    assert str(d / "record.jsonl") in seen, "the route reads every run record through the hub's one reader"
+    assert ("failed", "folded:only") in [(r["verdict"], r["reason"]) for r in v["runs"]["rows"]], \
+        "the route renders the reader's answer, never a second parse of the record"
+
+
+# ---------------------------------------------------------------- the trip of one issue (#1769)
+# A delivery is a run whose record holds a passed land and a verdict. The stages are the record's own spans: the wait for
+# a slot before the first call, the child's coding, each review round's wait, each gate's start to its result, and the time
+# from the last answer or review to the merge. The gates stage also takes every gate row of the window from gate-history.
+def rec(start=1000.0, child="code.1", land_outcome="pass", verdict="completed", gates=True):
+    """One fixture record of a delivery: every stage a known length, so the fold's answer is a worked example."""
+    out = [ev("run_start", start),
+           ev("call_start", start + 30, node="router", entry=1),           # wait: 30 s to the first call
+           ev("spawn_accepted", start + 40, child=child),
+           ev("call_start", start + 44, node=child, entry=1),
+           ev("outcome", start + 244, node=child, entry=1, outcome="pass", elapsed=200.0),   # coding: 244 - 44 = 200 s
+           ev("review_round", start + 300, node=child, round=1),           # review: 300 - 244 = 56 s
+           ev("land", start + 450, node=child, outcome=land_outcome),
+           ev("verdict", start + 500, verdict=verdict, exit_code=0, reasons=[])]
+    if gates:
+        out.insert(6, ev("gate_result", start + 400, node="final_gate", entry=1, item=None, outcome="pass"))
+        out.insert(6, ev("gate_start", start + 310, node="final_gate", entry=1, item=None))   # gates: 400 - 310 = 90 s
+    return out
+
+
+def test_the_trip_spans_of_a_fixture_record_are_its_five_stages(prof):
+    spans = prof.trip_spans(rec())
+    assert spans == {"wait": 30.0, "coding": 200.0, "review": 56.0, "gates": 90.0, "landing": 150.0, "end": 1500.0}
+
+
+def test_a_run_that_landed_nothing_is_no_delivery(prof):
+    assert prof.trip_spans(rec(land_outcome="fail")) is None, "a run whose land failed delivered nothing"
+    no_land = [e for e in rec() if e["event"] != "land"]
+    assert prof.trip_spans(no_land) is None
+    no_verdict = [e for e in rec() if e["event"] != "verdict"]
+    assert prof.trip_spans(no_verdict) is None
+
+
+def test_a_child_that_failed_and_retried_counts_its_whole_span_as_coding(prof):
+    """A failed attempt is retried as another entry of the same child; its time is coding time, never a gap."""
+    evs = [ev("run_start", 2000.0), ev("spawn_accepted", 2000.0, child="code.1"),
+           ev("call_start", 2010.0, node="code.1", entry=1), ev("outcome", 2110.0, node="code.1", entry=1, outcome="fail"),
+           ev("call_start", 2200.0, node="code.1", entry=2), ev("outcome", 2500.0, node="code.1", entry=2, outcome="pass"),
+           ev("land", 2600.0, node="code.1", outcome="pass"), ev("verdict", 2610.0, verdict="completed", exit_code=0, reasons=[])]
+    assert prof.trip_spans(evs)["coding"] == 490.0     # 2500 - 2010: the retry's wait and both entries
+
+
+def test_the_percentile_is_the_linear_rule_the_doc_names(prof):
+    assert prof.percentile([], 90) is None
+    assert prof.percentile([10], 50) == 10
+    assert prof.percentile([10, 20, 30], 50) == 20
+    assert prof.percentile([10, 20, 30], 90) == pytest.approx(28.0), "the (n - 1) weight the trip table's p90 uses"
+    assert prof.percentile([4, 1, 3, 2], 90) == pytest.approx(3.7)   # sorted 1,2,3,4: 1 + 3 * 0.9
+
+
+TRIP_SPANS = [{"wait": 10.0, "coding": 100.0, "review": 20.0, "gates": None, "landing": 30.0, "end": NOW - 100},
+              {"wait": 20.0, "coding": 200.0, "review": 40.0, "gates": 60.0, "landing": 60.0, "end": NOW - 200},
+              {"wait": 30.0, "coding": 300.0, "review": 60.0, "gates": 120.0, "landing": 90.0, "end": NOW - 300}]
+
+
+def test_each_stage_answers_its_median_and_p90_over_the_deliveries(prof):
+    gates = [{"start": NOW - 500, "finish": NOW - 440},                    # 60 s, inside the window
+             {"start": NOW - 9000, "finish": NOW - 8000}]                  # outside it: no observation
+    t = prof.trip(TRIP_SPANS, gates, since=NOW - 3600)
+    assert t["deliveries"] == 3 and t["bar"] is True
+    rows = {r["stage"]: r for r in t["stages"]}
+    assert list(rows) == ["wait", "coding", "review", "gates", "landing"]
+    assert rows["wait"]["median_s"] == 20.0 and rows["wait"]["p90_s"] == pytest.approx(28.0)
+    assert rows["coding"]["median_s"] == 200.0 and rows["coding"]["p90_s"] == pytest.approx(280.0)
+    assert rows["review"]["median_s"] == 40.0 and rows["review"]["observations"] == 3
+    assert rows["gates"]["median_s"] == 60.0 and rows["gates"]["observations"] == 3, \
+        "the two deliveries that hold a gate and the one gate-history row of the window"
+    assert rows["landing"]["p90_s"] == pytest.approx(84.0)
+    assert [r["label"] for r in t["stages"]] == ["Wait for a dispatch", "Coding", "Review", "Gates", "Landing"]
+    assert rows["coding"]["share"] == pytest.approx(0.526, abs=1e-3), "the share is the median over the sum of medians"
+
+
+def test_fewer_than_three_deliveries_draw_no_bar(prof):
+    t = prof.trip(TRIP_SPANS[:2], [], since=NOW - 3600)
+    assert t["deliveries"] == 2 and t["bar"] is False, "a median of two is no profile"
+
+
+def test_a_delivery_that_ended_before_the_window_is_not_folded(prof):
+    old = {"wait": 10.0, "coding": 10.0, "review": 10.0, "gates": 10.0, "landing": 10.0, "end": NOW - 7200}
+    assert prof.trip([*TRIP_SPANS, old], [], since=NOW - 3600)["deliveries"] == 3
+
+
+TRIP = {"window_s": 3600, "since": NOW - 3600, "deliveries": 4, "bar": True,
+        "stages": [{"stage": "wait", "label": "Wait for a dispatch", "observations": 4, "median_s": 20.0, "p90_s": 28.0, "share": 0.0526},
+                   {"stage": "coding", "label": "Coding", "observations": 4, "median_s": 200.0, "p90_s": 280.0, "share": 0.5263},
+                   {"stage": "review", "label": "Review", "observations": 3, "median_s": 40.0, "p90_s": 56.0, "share": 0.1053},
+                   {"stage": "gates", "label": "Gates", "observations": 4, "median_s": 60.0, "p90_s": 60.0, "share": 0.1579},
+                   {"stage": "landing", "label": "Landing", "observations": 2, "median_s": 60.0, "p90_s": 84.0, "share": 0.1579}]}
+
+
+def trip_part(out):
+    at = out.index("<section id=proftrip>")
+    return out[at:out.index("</section>", at) + 10]
+
+
+def test_the_view_draws_the_trip_as_one_stacked_bar_with_its_hover_and_table():
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())"))
+    assert "<h3>The trip of an issue</h3>" in out and "4 deliveries in the last 1.0 h" in out
+    segs = re.findall(r'<i class="ptb-seg pts-(\w+)" style="width:([\d.]+)%" title="([^"]*)"', out)
+    assert [s[0] for s in segs] == ["wait", "coding", "review", "gates", "landing"]
+    assert [float(s[1]) for s in segs] == [5.26, 52.63, 10.53, 15.79, 15.79], "each segment's width is its share of the medians"
+    assert segs[1][2] == "Coding: median 3.3 min, p90 4.7 min (4 observations)", "the hover names the median and the p90"
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Stage", "Median", "p90", "Observations"]
+    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
+    assert rows[1] == ("coding", "Coding", "3.3 min", "4.7 min", "4")
+    assert rows[4] == ("landing", "Landing", "1.0 min", "1.4 min", "2")
+
+
+def test_a_window_with_fewer_than_three_deliveries_says_so_and_draws_no_bar():
+    thin = {**TRIP, "deliveries": 2, "bar": False}
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': thin})},new Set())"))
+    assert "2 deliveries in the last 1.0 h: fewer than three, so no bar is drawn." in out
+    assert "class=ptb " not in out and "ptb-seg" not in out, "fewer than three deliveries draw no bar"
+    one = {**TRIP, "deliveries": 1, "bar": False}
+    assert "1 delivery in " in trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': one})},new Set())"))
+
+
+def test_the_trip_shows_with_the_switch_off_and_beside_the_failed_run_table():
+    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'trip': TRIP, 'runs': RUNS})},new Set())")
+    assert "id=proftrip" in off and "id=proftt" in off and "id=profr" in off and "<table id=proft " not in off
+    on = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())")
+    assert on.index("id=proftrip") < on.index("<table id=proft "), "the bar is the summary above the hot-spot tree"
+
+
+def test_the_file_views_refresh_on_the_slow_cadence_with_the_switch_off():
+    out = json.loads(run_js('JSON.stringify([profFileDue("prof",false,{on:false}),profFileDue("prof",false,{on:true}),'
+                            'profFileDue("flow",false,{on:false}),profFileDue("prof",true,{on:false}),'
+                            'profFileDue("prof",false,null)])'))
+    assert out == [True, False, False, False, False]
+
+
+def test_the_window_picker_names_every_file_view_of_the_tab():
+    """One window choice moves the bar and the failed-run table alike, so its name says so (#1769)."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'runs': RUNS})},new Set())")
+    assert re.search(r"<select data-profwin aria-label=\"The window of the Loop tab's file views\">", out)
+    assert len(re.findall(r"<select data-profwin", out)) == 1, "one window choice serves both file views"
+
+
+def test_the_route_answers_the_trip_of_the_window_the_page_asked_for(hub):
+    mod, port, _, state, table = hub
+    now = time.time()
+    runs = state.parent / "runs"
+    for i, start in enumerate((now - 1000, now - 2000, now - 3000, now - 200_000)):   # the fourth ended two days ago
+        record(runs / f"run-20261115-03030{i}-aaaaa{i}", *[dict(e, ts=e["ts"] - 1000 + start) for e in rec()])
+    (state / "gate-history").write_text(
+        "".join(f"{now - 200}\tfast\tpass\tabc\t{now - 260}\tall\troot\tpass\t-\t1\t0\t0\t0\tchild\t0.1\t0.2\n"
+                for _ in range(2)))
+    code, v = ask(port, "GET")
+    assert code == 200 and v["trip"]["window_s"] == 86400 and v["trip"]["bar"] is True
+    assert v["trip"]["deliveries"] == 3, "the delivery two days back is outside the day the page asked for"
+    assert [s["stage"] for s in v["trip"]["stages"]] == ["wait", "coding", "review", "gates", "landing"]
+    assert {r["stage"]: r["observations"] for r in v["trip"]["stages"]}["gates"] == 5, \
+        "three deliveries hold a gate each, and the gate history adds its two rows of the window"
+    assert table.reads == 0, "the trip reads files only, so it shows with the switch off"
+    assert ask(port, "GET", path="/api/profiler?w=3600")[1]["trip"]["window_s"] == 3600
+
+
+def test_the_trip_reads_the_gate_history_by_column_name(hub):
+    """A gate row's reason may hold a tab; the columns after it keep their own names, never an index."""
+    mod = hub[0]
+    line = "100\tfast\tpass\tabc\t90\tall\troot\tpass\twhy\twith\ttabs\t1\t0\t0\t0\tchild\t0.1\t0.2"
+    row = mod.gate_row(line)
+    assert (row["start"], row["finish"], row["outcome"], row["caller"]) == ("90", "100", "pass", "child")
+    assert row["reason"] == "why\twith\ttabs", "the free-text reason is rejoined, so later columns keep their place"
+    assert mod.gate_row("100\tfast\tpass") is None, "a row too short to hold a start and a finish is no row"
+
+
+def test_the_profile_doc_names_the_bar_as_the_live_form_of_its_trip_table():
+    doc = (ROOT / "docs/loop-sequence.md").read_text()
+    section = doc[doc.index("## 0."):doc.index("### Hot spots")]
+    assert "trip bar" in section and "live form" in section, "the doc names the bar as the live form of its trip table"
+    assert "hub_profiler.trip" in section and "gate-history" in section
+    assert "fewer than three deliveries" in section
 
 
 # ---------------------------------------------------------------- behind the many-repository hub

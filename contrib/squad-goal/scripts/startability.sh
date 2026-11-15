@@ -58,9 +58,15 @@ try:
     import issue_ledger
     for run, n in (issue_ledger.entered(repo) if repo else []):
         if (auto / f"wave-{run}").exists():
-            busy.add(n)
+            busy.add(str(n))
 except (OSError, ImportError, ValueError) as e:
     print(f"startability: the entered facts could not be read ({e})", file=sys.stderr)
+try:
+    import liveholds as lh   # the start's own rule (#1829): one answer for both readers (ADR-0149)
+    busy |= {str(n) for n in lh.live_holders(active, base=root)}
+except (OSError, ImportError, ValueError) as e:
+    lh = None
+    print(f"startability: the live-holder rule could not be read ({e}); the record's own words are read instead", file=sys.stderr)
 try:
     runs = pathlib.Path(active).read_text().split()
 except OSError:
@@ -69,19 +75,11 @@ for run in runs:
     folder = pathlib.Path(run if run.startswith("/") else pathlib.Path(root) / "runs" / run)
     record = folder / "record.jsonl"
     try:
-        lines = record.read_text().splitlines()
+        text = record.read_text()
     except OSError:
-        try:
-            request = (folder / "request.txt").read_text()
-        except OSError:
-            continue
-        for line in request.splitlines():
-            if line.startswith("CHILD"):
-                for listed in re.findall(r"GitHub issue(?:\(s\))? #?([0-9][0-9, ]*)", line):
-                    busy.update(re.findall(r"\d+", listed))
         continue
     events = []
-    for line in lines:
+    for line in text.splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -89,14 +87,11 @@ for run in runs:
         events.append(event)
     if any(isinstance(event, dict) and event.get("event") == "verdict" for event in events) and not (auto / f"wave-{folder.name}").exists():
         continue
-    for event in events:
-        if not isinstance(event, dict) or event.get("event") != "spawn_accepted":
-            continue
-        text = json.dumps(event, ensure_ascii=False)
-        # The request text is not structured yet, so both forms the dispatchers write are read: the router writes
-        # the issue without the hash ("Fix GitHub issue 11 in the repository") and may name a list of them
-        # ("GitHub issues 11, 12"). Reading only the hashed single form left those issues unclaimed, and both
-        # dispatchers sent them into a second run (#428).
+    # The router writes the issue it works in its own words, with and without the hash, one or several at a time, and names
+    # its repository ("issue o/r #12") or its reference ("Refs #12"); liveholds reads every form the record carries (#428, #1829).
+    if lh is not None:
+        busy |= {str(x) for x in lh.busy_from_record(text)}
+    else:
         for listed in re.findall(r"\bgithub\s+issues?\s*#?\s*([0-9][0-9,\s]*)", text, re.IGNORECASE):
             busy.update(re.findall(r"\d+", listed))
         busy.update(re.findall(r"\bissues?\s*#\s*(\d+)\b", text, re.IGNORECASE))
