@@ -2044,7 +2044,8 @@ def loop_audit_add(who, frm, action, killed=None, client=None, path=None, **extr
     line.update(extra)   # a failed start's reason, or a stop-now's survivors
     p = pathlib.Path(path or LOOP_AUDIT)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a") as f: f.write(json.dumps(line) + "\n")
+    old = p.read_bytes() if p.is_file() else b""   # atomic (ADR-0030): an interruption leaves the audit as it was
+    tmp = _temp_name(p); tmp.write_bytes(old + (json.dumps(line) + "\n").encode()); os.replace(tmp, p)
 
 def loop_audit_last(n, path=None):
     out = []
@@ -2391,6 +2392,7 @@ PROFILER_AUDIT = STATE / "profiler-audit.jsonl"
 PROFILER_SECS = 1.0   # the cadence of the process-table read, start to start: a second resolves a fork storm, and the read runs only while the switch is on
 PROFILER_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pass
+PROFILER_STILL_RUNNING = "still running: the sampler ends after its current read of the process table"
 PROFILER = {"window": hub_profiler.Window(), "thread": None, "stop": None}
 PROFILER_LOCK = threading.RLock()   # it starts and ends the sampler, and the switch is read and written under it
 
@@ -2422,7 +2424,7 @@ def profiler_sampler(stop):
         try: scope = profiler_scope() if reading else None
         except Exception: reading = None
         with PROFILER_LOCK:
-            if stop.is_set(): break
+            if stop.is_set() or not profiler_on(): break   # the switch file is the truth, whoever wrote it
             if reading: PROFILER["window"].add(time.time(), reading, scope)
             else: PROFILER["window"].fail()
         stop.wait(max(0.0, PROFILER_SECS - (time.monotonic() - began)))
@@ -2440,9 +2442,10 @@ def profiler_ensure():
         PROFILER["thread"].start()
 
 def profiler_set(on, who, frm, client=None):
-    """Write the switch and its audit line; a write that changes nothing writes neither. An off write returns only when
-    the sampler has ended: it is told to stop under the lock and joined outside it, since its last pass takes the lock."""
-    old = None
+    """Write the switch and its audit line; a write that changes nothing writes neither. An off write returns when the
+    sampler has ended, or the wait bound has passed: it is told to stop under the lock and joined outside it, since its
+    last pass takes the lock. Returns whether the sampler has ended."""
+    old, ended = None, True
     with PROFILER_LOCK:
         if on and PROFILER["thread"] is not None and PROFILER["stop"] is not None and PROFILER["stop"].is_set() and not PROFILER["thread"].is_alive():
             PROFILER["thread"] = None
@@ -2455,9 +2458,11 @@ def profiler_set(on, who, frm, client=None):
             if PROFILER["stop"] is not None: PROFILER["stop"].set()
     if old is not None and old is not threading.current_thread():
         old.join(PROFILER_JOIN_S)   # bounded: a read of the process table that never returns must not hold the request for ever
+        ended = not old.is_alive()
         with PROFILER_LOCK:
-            if PROFILER["thread"] is old and not old.is_alive(): PROFILER["thread"] = None
+            if PROFILER["thread"] is old and ended: PROFILER["thread"] = None
     if on: profiler_ensure()
+    return ended
 
 def profiler_refusal(a, origin_ok, tn):
     """The reason a profiler switch write is refused, or '' when it may run: the access rule, then the switch's own
@@ -2487,8 +2492,10 @@ def profiler_switch(a, body, origin_ok):
     if why: return 403, {"err": "forbidden", "reason": why}
     if not isinstance(body, dict) or not isinstance(body.get("on"), bool): return 400, {"err": "bad request"}
     client = body.get("client") if body.get("client") in LOOP_CLIENTS else None
-    profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
-    return 200, {"ok": True, "on": body["on"]}
+    ended = profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
+    out = {"ok": True, "on": body["on"]}
+    if not ended: out["sampler"] = PROFILER_STILL_RUNNING   # the off answer tells the truth about the sampler it left
+    return 200, out
 
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,

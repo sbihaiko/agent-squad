@@ -36,6 +36,7 @@ _APP = re.compile(r"/Applications/(?:[^/]+/)*?([^/]+)\.app/")
 _PYTHON = re.compile(r"[Pp]ython[\d.]*$")
 _SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
 _SHELL_CODE = re.compile(r"-[A-Za-z]*c[A-Za-z]*$")
+_WORD = re.compile(r"""(?:[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*"|['"])+""", re.S)   # an unclosed quote is one character
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _BREAK = " \t\n;&|(){}"   # what ends a word in shell code; all but the blanks end a command too
 _PYTESTS = frozenset(("pytest", "py.test"))
@@ -107,10 +108,40 @@ def _classify(script):
     return None
 
 
-def _after(raw, flag):
-    """The text of a command line after its shell code flag, quotes kept: the code as the shell reads it."""
-    _, found, rest = raw.partition(f" {flag} ")
-    return rest if found else ""
+class _Word(str):
+    """A word of a command line: its value, the offsets its text starts and ends at, and whether its text opens with a
+    quote."""
+
+
+def _words(command):
+    """The words of a command line, with their offsets kept: a line's shape is read from the text, never guessed."""
+    out = []
+    for m in _WORD.finditer(command):
+        text = m.group()
+        try: value = "".join(shlex.split(text))
+        except ValueError: value = text   # an unclosed quote is one word, read as it is
+        w = _Word(value)
+        w.start, w.end, w.quoted = m.start(), m.end(), text[0] in "'\""
+        out.append(w)
+    return out
+
+
+def _typed(word, raw):
+    """True when a shell's code is one quoted word, the shell-typed shape: its quotes were read, and what follows is only
+    parameters. A code followed by a separator is the start of a longer line, not a typed code."""
+    if not word.quoted: return False
+    after = raw[word.end:].lstrip()
+    return not after or after[0] not in ";&|()"
+
+
+def _shell_code(t, i, raw, depth):
+    """The code of a shell's `-c` at t[i], found at its own word: a shell-typed code reads its one quoted word, and a
+    process table line reads the rest of the line after the flag, as ps prints it (arguments joined, no outer quotes)."""
+    rest = t[i + 1:]
+    if not rest: return None, None
+    if raw is None or _typed(rest[0], raw):
+        return _code(str(rest[0]), depth)   # the shell-typed code: the words after it are its parameters
+    return _code(raw[t[i].end:].lstrip(), depth)   # the process table's line: the code runs from after the flag
 
 
 def _run(t, depth=0, raw=None):
@@ -128,11 +159,8 @@ def _run(t, depth=0, raw=None):
     if name in _SHELLS:
         i = 1
         while i < len(t) and t[i].startswith("-"):
-            if _SHELL_CODE.match(t[i]):   # the process table joins the arguments, so the code is the rest of the line
-                rest = t[i + 1:]   # one word is the code itself, its own quotes kept; more words are a process table line, read raw
-                if not rest:
-                    return None, None
-                return _code(_after(raw, t[i]) if raw and len(rest) > 1 else rest[0], depth)   # words of shell code are a true argument list: the code is the first, the rest are its parameters
+            if _SHELL_CODE.match(t[i]):
+                return _shell_code(t, i, raw, depth)
             i += 2 if t[i] in ("-o", "+o") else 1
         return (_classify(t[i]), t[i]) if i < len(t) else (None, None)
     if _PYTHON.match(name):
@@ -199,12 +227,7 @@ def _code(code, depth):
 
 @functools.lru_cache(maxsize=8192)
 def _parse(command):
-    head = command[:_HEAD]
-    try:
-        tokens = shlex.split(head)
-    except ValueError:   # a quote the cut left open
-        tokens = head.split()
-    return _run(tokens, raw=head)
+    return _run(_words(command), raw=command)   # the whole line: a script past the head still names its process
 
 
 def label(command):
