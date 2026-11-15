@@ -43,8 +43,8 @@ case "$a" in
       *) echo 0;; esac;;
   *projectsV2/*/fields*) echo FID4;;
   *projectsV2/*/items*) @ITEMS@;;
-  *issues/*"-q .state"*) echo open;;
-  *issues/*) echo -e 'open\\t\\tIssue';;
+  *issues/*"-q .state"*) echo @STATE@;;
+  *issues/*) echo -e '@STATE@\\t\\tIssue';;
 esac
 """
 
@@ -64,18 +64,19 @@ def _write(path: Path, text: str) -> None:
 
 
 def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = "", entered: bool = False, card: str = "",
-            live: bool = False, fact: bool = True) -> Path:
+            live: bool = False, fact: bool = True, closed: bool = False) -> Path:
     """The janitor with the throttle and the reader beside it, a stub `gh` (the merge scoped to the base answers
     `scoped`), a stub board.sh, and one finished run for issue #2030. `wave` is "open" (the run's wave is not in the base
     yet) or "closed" (it landed); `entered` leaves the record that the issue's child entered that wave. `card` is the column
-    the board answers the issue's card in, none when empty; `live` leaves the run with no verdict."""
+    the board answers the issue's card in, none when empty; `live` leaves the run with no verdict; `closed` makes the
+    issue read closed."""
     for name in ("janitor.py", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py", "board-definition.json",
                  "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
     calls = tmp_path / "calls"
     items = f"printf '%s\\t%s\\thttps://api.github.com/repos/x/y\\n' {N} '{card}'" if card else ":"
-    _write(tmp_path / "bin/gh", STUB.replace("@N@", str(N)).replace("@SCOPED@", scoped).replace("@CALLS@", str(calls)).replace("@ITEMS@", items))
+    _write(tmp_path / "bin/gh", STUB.replace("@N@", str(N)).replace("@SCOPED@", scoped).replace("@CALLS@", str(calls)).replace("@ITEMS@", items).replace("@STATE@", "closed" if closed else "open"))
     _write(tmp_path / "board.sh", BOARD.replace("@CALLS@", str(calls)))
     run = tmp_path / "co/runs/run-stacked"
     run.mkdir(parents=True)

@@ -1307,6 +1307,10 @@ def reconcile_board():
     hand_columns = {doing, "Code Complete"} | ({CODE_REVIEW, GATING} if shipped else set())
     released = {}
     for n, col in HH.releases(state=st).items():
+        if issue_info(n)[0] == "closed":   # the closed-issue rule already names the card column (ADR-0143 rule 2), so a release has no move to make: the record goes, never a write the board refuses every pass (#1869)
+            if not dry: HH.clear_release(n, state=st)
+            say(f"HAND-RELEASE #{n}: the issue is closed; the release record is dropped and the card keeps its column")
+            continue
         want = col if shipped else {"Closed": "Done"}.get(col, col)
         set_expected(n, want, f"a hand hold was released to {col}", rank=120)
         released[n] = want

@@ -26,12 +26,29 @@ ROOT = Path(__file__).resolve().parents[1]
 SHIPPED = {"SG_BOARD_VOCAB": "shipped"}
 
 
-def bare(tmp_path: Path, card: str) -> Path:
+def bare(tmp_path: Path, card: str, **extra) -> Path:
     """The sandbox with its run gone: one open issue, its card in `card`, no run, no dispatch marker."""
-    sandbox(tmp_path, "echo 0", card=card)
+    sandbox(tmp_path, "echo 0", card=card, **extra)
     (tmp_path / "st/active-runs.txt").write_text("")
     (tmp_path / f"st/auto/disp-{N}").unlink()
     return tmp_path / "st"
+
+
+FORWARD_ONLY = """#!/bin/bash
+case "$1" in
+  --add) echo "ADD $2 $3 $4 $5" >> "@CALLS@";;
+  --run-fields|--clear-run) :;;
+  *) echo "STATUS $1 $2 $3 $4" >> "@CALLS@"; case "$3" in Todo|Backlog) exit 3;; esac;;
+esac
+"""
+
+
+def forward_only(tmp_path: Path) -> None:
+    """The board stub refuses a move back to Todo (`exit 3`, as board.py does, ADR-0143), so a pass that asks one is
+    named in `calls` and refused there."""
+    p = tmp_path / "board.sh"
+    p.write_text(FORWARD_ONLY.replace("@CALLS@", str(tmp_path / "calls")))
+    p.chmod(0o755)
 
 
 def hand(tmp_path: Path, *argv: str) -> subprocess.CompletedProcess[str]:
@@ -108,6 +125,23 @@ def test_a_released_todo_card_is_never_moved_again_by_the_pass(tmp_path):
     janitor(tmp_path, **SHIPPED)
     assert moves(tmp_path) == [], writes(tmp_path)
     assert not (st / f"auto/release-{N}").exists()
+
+
+@pytest.mark.heavy
+def test_a_release_record_for_a_closed_issue_writes_nothing_and_is_dropped(tmp_path):
+    """#1869: the closed-issue rule names the card column (ADR-0143 rule 2), so a release record for a closed issue has
+    no move to make. The record goes and the pass writes nothing: a record that outranked the closure asked for Todo on a
+    Closed card, the board refused the backward move, and every pass asked it again."""
+    st = bare(tmp_path, "Closed", closed=True)
+    forward_only(tmp_path)
+    assert hand(tmp_path, "hold", str(N)).returncode == 0
+    assert hand(tmp_path, "release", str(N), "--to", "Todo").returncode == 0
+    assert (st / f"auto/release-{N}").exists()
+    janitor(tmp_path, **SHIPPED)
+    assert moves(tmp_path) == [], writes(tmp_path)
+    assert not (st / f"auto/release-{N}").exists(), "the record stayed: every pass asks the same refused move"
+    janitor(tmp_path, **SHIPPED)
+    assert moves(tmp_path) == [], writes(tmp_path)
 
 
 @pytest.mark.heavy
