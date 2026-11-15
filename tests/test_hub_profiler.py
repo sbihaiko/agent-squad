@@ -148,6 +148,77 @@ def test_the_root_is_the_supervisor_of_this_profile_and_its_descendants(prof, sc
     assert [(c["name"], c["total_s"]) for c in prof.context(acc)["children"]] == [("another loop", 12.0)]
 
 
+# ---------------------------------------------------------------- the other profiles' loops (#1753)
+# With several profiles on one machine, the context row splits: one row for each other profile's loop, told by that
+# profile's supervisor pid and run folders, and one row for the rest, grouped by application.
+OTHERS = (("ariel", 50, ("/Users/o/ariel/runs/",)), ("zesty", 80, ("/Users/o/zesty/runs/",)))
+
+
+def test_two_profiles_that_run_the_same_script_give_two_rows_one_under_each_loop(prof):
+    scope = prof.Scope(10, (S + "/", CO + "/runs/"), OTHERS)
+    a = rd({10: (1, 0.0, f"bash {S}/watchd.sh supervise"),
+            50: (1, 0.0, f"bash {S}/watchd.sh supervise"), 51: (50, 0.0, f"bash {S}/watch.sh"),
+            80: (1, 0.0, f"bash {S}/watchd.sh supervise"), 81: (80, 0.0, f"bash {S}/watch.sh")})
+    b = rd({10: (1, 1.0, f"bash {S}/watchd.sh supervise"),
+            50: (1, 2.0, f"bash {S}/watchd.sh supervise"), 51: (50, 3.0, f"bash {S}/watch.sh"),
+            80: (1, 4.0, f"bash {S}/watchd.sh supervise"), 81: (80, 5.0, f"bash {S}/watch.sh")})
+    acc = prof.fold(a, b, scope)
+    assert names(prof.tree(acc)) == ["watchd.sh"], "the tree stays this profile's loop alone"
+    assert [(c["name"], c["kind"], c["total_s"]) for c in prof.context(acc)["children"]] == [
+        ("loop zesty", "loop", 9.0), ("loop ariel", "loop", 5.0)]
+
+
+def test_an_other_profile_s_loop_is_told_by_its_run_folders_alone(prof):
+    """The process names another profile's run folder, with no supervisor above it: it is that loop's work, not the rest."""
+    scope = prof.Scope(None, (), OTHERS)
+    ariel = "/x/.venv/bin/python -m squad start --graph /Users/o/ariel/runs/run-1/graph.json"
+    zesty = "node /Users/o/zesty/runs/run-2/x.js"
+    a = rd({60: (1, 0.0, ariel), 61: (1, 0.0, zesty)})
+    b = rd({60: (1, 1.0, ariel), 61: (1, 4.0, zesty)})
+    assert [(c["name"], c["total_s"]) for c in prof.context(prof.fold(a, b, scope))["children"]] == [
+        ("loop zesty", 4.0), ("loop ariel", 1.0)]
+
+
+def test_the_rest_of_the_context_row_stays_one_row_per_application(prof):
+    scope = prof.Scope(10, (S + "/", CO + "/runs/"), OTHERS)
+    a = rd({10: (1, 0.0, f"bash {S}/watchd.sh supervise"), 50: (1, 0.0, f"bash {S}/watchd.sh supervise"),
+            90: (1, 0.0, "bash /elsewhere/watchd.sh supervise"), 30: (1, 0.0, "/Applications/Foo Bar.app/Contents/Foo Bar"),
+            40: (1, 0.0, "/usr/bin/vim /tmp/x")})
+    b = rd({10: (1, 1.0, f"bash {S}/watchd.sh supervise"), 50: (1, 2.0, f"bash {S}/watchd.sh supervise"),
+            90: (1, 3.0, "bash /elsewhere/watchd.sh supervise"), 30: (1, 4.0, "/Applications/Foo Bar.app/Contents/Foo Bar"),
+            40: (1, 5.0, "/usr/bin/vim /tmp/x")})
+    assert [(c["name"], c["kind"], c["total_s"]) for c in prof.context(prof.fold(a, b, scope))["children"]] == [
+        ("vim", "other", 5.0), ("Foo Bar", "other", 4.0), ("another loop", "loop", 3.0), ("loop ariel", "loop", 2.0)]
+
+
+def test_a_refused_cpu_read_lowers_the_coverage_and_adds_no_zero_cost_row(prof, scope):
+    """A process whose CPU read the system refuses is seen and not read: it lowers the coverage, and it is no row."""
+    a = rd({10: (1, 0.0, f"bash {S}/watchd.sh supervise"), 11: (10, 0.0, f"bash {S}/watch.sh"),
+            30: (1, 1.0, "/Applications/Foo Bar.app/Contents/Foo Bar")})
+    b = rd({10: (1, 1.0, f"bash {S}/watchd.sh supervise"), 11: (10, 2.0, f"bash {S}/watch.sh"),
+            12: (11, None, f"python3 {S}/janitor.py"),                 # the task read is refused
+            30: (1, 1.5, "/Applications/Foo Bar.app/Contents/Foo Bar"),
+            40: (1, None, "/usr/bin/vim /tmp/watch.sh")})              # the task read is refused
+    acc = prof.fold(a, b, scope)
+    assert names(prof.tree(acc)) == ["watchd.sh"]
+    assert node(prof.tree(acc), "watchd.sh", "watch.sh")["children"] == [], "a refused process is no zero-cost row"
+    assert [c["name"] for c in prof.context(acc)["children"]] == ["Foo Bar"]
+    w = prof.Window()
+    w.add(1.0, a, scope)
+    w.add(2.0, b, scope)
+    s = w.stats()
+    assert (s["processes_read"], s["processes_seen"]) == (6, 8), "eight processes seen, six of them read with their CPU"
+    assert s["coverage"] == pytest.approx(0.75)
+
+
+def test_a_window_that_read_every_process_answers_the_full_coverage(prof, scope):
+    w = prof.Window()
+    w.add(1.0, FIRST, scope)
+    w.add(2.0, SECOND, scope)
+    s = w.stats()
+    assert s["processes_read"] == s["processes_seen"] == len(FIRST) + len(SECOND) and s["coverage"] == 1.0
+
+
 def test_a_pid_file_that_names_another_program_roots_nothing(prof):
     """A stale pid file can name a pid the system gave to another program."""
     a = rd({10: (1, 0.0, "/usr/bin/vim notes.txt"), 11: (10, 0.0, "sleep 5")})
@@ -301,14 +372,18 @@ def test_the_window_keeps_the_last_span_and_restarts_on_reset(prof, scope):
 def test_the_window_states_its_last_reading_the_measured_interval_and_the_failed_readings(prof, scope):
     w = prof.Window(span=10)
     w.reset(100.0)
-    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0}
+    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0,
+                         "processes_read": 0, "processes_seen": 0, "coverage": None}
     w.add(100.0, rd({9: (1, 1.0, "true")}), scope)
-    assert w.stats() == {"last_reading": 100.0, "interval_s": None, "failed_readings": 0}
+    assert w.stats() == {"last_reading": 100.0, "interval_s": None, "failed_readings": 0,
+                         "processes_read": 1, "processes_seen": 1, "coverage": 1.0}
     w.fail()
     w.add(102.5, rd({9: (1, 1.0, "true")}), scope)
-    assert w.stats() == {"last_reading": 102.5, "interval_s": 2.5, "failed_readings": 1}
+    assert w.stats() == {"last_reading": 102.5, "interval_s": 2.5, "failed_readings": 1,
+                         "processes_read": 2, "processes_seen": 2, "coverage": 1.0}
     w.reset(200.0)
-    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0}
+    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0,
+                         "processes_read": 0, "processes_seen": 0, "coverage": None}
 
 
 # ---------------------------------------------------------------- time in failed runs (#1751)
