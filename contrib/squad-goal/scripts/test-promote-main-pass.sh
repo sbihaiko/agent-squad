@@ -1,7 +1,8 @@
 #!/bin/bash
 # The stg-to-main promotion pass (ADR-0145, ADR-0173): promote-main-pass.sh asks for the complete CI tier on the stg tip, by
 # the `promote` label on the one stg -> main pull request, and moves main to the proven sha by a fast-forward. A red tier holds
-# main and files one bug; an unproven one holds main and files nothing; an unfinished one holds nothing else.
+# main and files one bug; an unproven one holds main and files nothing; an unfinished one holds nothing else. A red's hold
+# names the sha it measured, so a new stg tip is never held by a verdict about another sha (#1889).
 # Offline: a bare local remote, a stub gh that answers the pull request, the labels, the check runs and the issues, and a
 # workflow fixture that names two complete tier jobs. Commit dates are set by hand, so the rule is read against the real clock.
 # usage: bash test-promote-main-pass.sh
@@ -127,9 +128,10 @@ old_hold; : > "$T/gh.log"; pass
 adv stg red-moved 7200; echo "$r1" > "$T/prhead"; : > "$T/gh.log"; pass
 [ -z "$(req)" ] && [ "$(ghn 'issues/[0-9]*/labels')" = 0 ] && ok "8 a pull request whose head is the last red sha gets no label" || ko "8 head compare: record '$(req)', gh '$(cat "$T/gh.log")'"
 rm -f "$T/prhead"
-# 9) A red re-arms only after the quiet window, on a new tip.
+# 9) A hold that names no sha (an unproven or refused-move verdict) re-arms its own wait, on a new tip, past the quiet
+# window. A red's hold names its sha, so it is not this hold (#1889, test 26).
 date +%s > "$ST/promote-main-hold"; : > "$T/gh.log"; pass
-[ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "9 inside the quiet window after a red, a new tip is not requested" || ko "9 re-armed at once: $(cat "$T/gh.log")"
+[ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "9 inside the quiet window after a verdict the next tip is not requested" || ko "9 re-armed at once: $(cat "$T/gh.log")"
 old_hold; pass; r2=$(tip stg)
 [ "$(req)" = "$r2" ] && ok "9 past the quiet window the new tip is requested" || ko "9 no request after the window: '$(req)', out '$(cat "$T/out")'"
 # 10) The next red comments on the open bug and files no second one.
@@ -237,24 +239,26 @@ SG_PROMOTE=off pass; rc=$?
 env -u SG_STATE bash "$d/promote-main-pass.sh" >/dev/null 2>&1; rc=$?
 [ $rc = 2 ] && ok "18 with SG_STATE unset the pass refuses (exit 2)" || ko "18 SG_STATE unset: rc $rc"
 
-# 25) The request window is short: with SG_PROMOTE_MAIN_QUIET_S unset, a tip quiet for 700 s sends the label, and one
-# quiet for 300 s does not.
-pass600() { env -u SG_PROMOTE_MAIN_QUIET_S bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }
-realign; adv stg short-quiet 700; s25=$(tip stg); : > "$T/gh.log"; pass600; rc=$?
+# 25) The quiet window default: with SG_PROMOTE_MAIN_QUIET_S unset, a tip quiet for 700 s sends the label, and one quiet
+# for 200 s does not.
+passq() { env -u SG_PROMOTE_MAIN_QUIET_S bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }
+realign; adv stg short-quiet 700; s25=$(tip stg); : > "$T/gh.log"; passq; rc=$?
 [ $rc = 0 ] && [ "$(req)" = "$s25" ] && /usr/bin/grep -q "X POST repos/x/emu/issues/31/labels .*labels\[\]=promote" "$T/gh.log" \
-  && ok "25 a tip quiet 700 s sends the label under the 600 s default window" || ko "25 700 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
-realign; adv stg still-moving 300; : > "$T/gh.log"; pass600; rc=$?
-[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "25 a tip quiet 300 s is not requested under the 600 s default window" || ko "25 300 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
-# 26) The re-arm after a red is its own wait: 3600 s from the hold, whatever the short window says.
-realign; adv stg rearm-red 700; r26=$(tip stg); request "$r26" 600; checks "$r26" failure success; pass600
-[ -s "$ST/promote-main-hold" ] && [ "$(cat "$ST/promote-main-red")" = "$r26" ] \
+  && ok "25 a tip quiet 700 s sends the label under the 300 s default window" || ko "25 700 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+realign; adv stg still-moving 200; : > "$T/gh.log"; passq; rc=$?
+[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "25 a tip quiet 200 s is not requested under the 300 s default window" || ko "25 200 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+# 26) A red hold names the sha it measured, never the branch (#1889). A red on A holds main; a new stg tip B is not held
+# by a verdict about content no job ran, so the quiet window alone gates the request on B. While stg still holds A, the
+# pass waits.
+realign; adv stg red-hold-a 7200; a26=$(tip stg); request "$a26" 600; checks "$a26" failure success; passq
+[ -s "$ST/promote-main-hold" ] && [ "$(cat "$ST/promote-main-red")" = "$a26" ] \
   && ok "26 the red records the hold and the red sha" || ko "26 red: hold '$(cat "$ST/promote-main-hold" 2>/dev/null)', red '$(cat "$ST/promote-main-red" 2>/dev/null)', out '$(cat "$T/out")'"
-adv stg rearm-new 700; t26=$(tip stg); : > "$T/gh.log"; pass600; rc=$?
-[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "26 a new tip after a red is not requested at once" || ko "26 at once: record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
-echo "$(( $(date +%s) - 1200 ))" > "$ST/promote-main-hold"; : > "$T/gh.log"; pass600; rc=$?
-[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "26 1200 s after the hold a new tip still waits: the re-arm is 3600 s, not the short window" || ko "26 1200 s: record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
-echo "$(( $(date +%s) - 4000 ))" > "$ST/promote-main-hold"; pass600
-[ "$(req)" = "$t26" ] && ok "26 past 3600 s from the hold the new tip is requested" || ko "26 past the re-arm: record '$(req)', out '$(cat "$T/out")'"
+# (b) stg still holds the red sha: the pass waits, and asks for no label.
+: > "$T/gh.log"; passq; rc=$?
+[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "26 while stg holds the red sha the pass waits" || ko "26 same tip: record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+# (a) stg moves to a new sha inside the re-arm: the complete tier is requested on it, the quiet window alone gating it.
+adv stg red-hold-b 700; b26=$(tip stg); : > "$T/gh.log"; passq; rc=$?
+[ $rc = 0 ] && [ "$(req)" = "$b26" ] && ok "26 a new tip after a red is requested without a re-arm about the red sha" || ko "26 new tip: record '$(req)', red '$a26', stg '$b26', out '$(cat "$T/out")'"
 
 # No loop script but the two promotion scripts names the main push, and the pass itself pushes nothing.
 /usr/bin/grep -nE '^[^#]*\bpush\b' "$d/promote-main-pass.sh" >/dev/null && ko "the pass pushes by itself" || ok "the pass pushes nothing: promote-main.sh moves main"

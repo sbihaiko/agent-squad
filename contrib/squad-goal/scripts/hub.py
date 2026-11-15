@@ -3395,7 +3395,7 @@ def operator_calls(runs=None, src="both"):
         log_once(f"hub: operator usage unavailable, none is counted: {type(e).__name__}: {' '.join(str(e).split())}")
         return []
     if OPERATOR is None or not isinstance(OPERATOR, OU.Cache):
-        OPERATOR = OU.Cache()
+        OPERATOR = OU.Cache(STATE / "operator-usage.json")   # the fold outlives this process, so a restart re-parses nothing (#1888)
     rows = OPERATOR.read(folder)
     keep = lambda m: _src_keeps(src, m)   # noqa: E731  the panel's own filter, so the two readings never disagree
     loop = [c for c in ledger_calls() if isinstance(c, dict) and keep(c.get("model") or "")]
@@ -6010,28 +6010,6 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
 #profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}
 #profb table .pbar{display:block;height:100%;background:var(--err)}#profb table .pnm{margin-left:6px}#profb table .pk-orphan .pnm{color:var(--err)}#profb table .pk-other .pnm,#profb table .pk-unknown .pnm{color:var(--mute)}#profb .lerr{color:var(--err)}
-/* The loop state strip (#1765): the four states as one bar, each state's share beside it, and one mark per switch change,
-   landing and promotion. A phone wraps the shares under the bar and the bar spans the page, so the strip holds no fixed width. */
-#profstrip{margin:0 0 18px}#profstrip .lsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 6px}#profstrip h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profstrip .lsh .lpw{float:none;margin-left:auto}
-#profstrip .lsb{position:relative;display:flex;width:100%;height:14px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}
-#profstrip .lsc{display:block;height:100%}#profstrip .ls-active{background:var(--ok)}#profstrip .ls-draining{background:var(--warn)}#profstrip .ls-off{background:var(--mute)}#profstrip .ls-down{background:var(--err)}
-#profstrip .ls-gap{background:repeating-linear-gradient(45deg,transparent 0 4px,var(--line) 4px 8px)}
-#profstrip .lsm{position:absolute;top:0;bottom:0;width:2px;background:var(--fg);opacity:.75}#profstrip .lsm-landing{background:var(--acc)}#profstrip .lsm-promotion{background:var(--run,var(--acc))}
-#profstrip .lsgr{display:flex;align-items:center;gap:12px;margin-top:5px}
-#profstrip .lsga{position:relative;flex:1 1 auto;height:10px;background:var(--edge);border-radius:var(--radius-full)}
-#profstrip .lsg{position:absolute;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px}
-#profstrip .lsgo-pass{background:var(--ok)}#profstrip .lsgo-fail{background:var(--err)}#profstrip .lsgo-unproven{background:var(--warn)}
-#profstrip .sh-circle{border-radius:var(--radius-full)}#profstrip .sh-square{border-radius:var(--radius-sm)}#profstrip .sh-diamond{border-radius:0;transform:rotate(45deg)}
-#profstrip .lsgc{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;padding:0;list-style:none;font-size:var(--fs-caption);color:var(--mute)}
-#profstrip .lsgc li{display:flex;align-items:center;gap:5px;white-space:nowrap}
-#profstrip .lsgc i{display:inline-block;flex:none;width:9px;height:9px}
-#profstrip .lsgc b{color:var(--fg);font-weight:600}
-#profstrip .lsgc-pass i{border-radius:var(--radius-full);background:var(--ok)}#profstrip .lsgc-fail i{border-radius:var(--radius-sm);background:var(--err)}#profstrip .lsgc-unproven i{border-radius:0;transform:rotate(45deg);background:var(--warn)}
-#profstrip .lss{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0 0;padding:0;list-style:none;font-size:var(--fs-caption);color:var(--mute)}
-#profstrip .lss li{display:flex;align-items:center;gap:6px;white-space:nowrap}#profstrip .lss i{display:inline-block;flex:none;width:10px;height:10px;border-radius:var(--radius-full)}
-#profstrip .lss .ls-active i{background:var(--ok)}#profstrip .lss .ls-draining i{background:var(--warn)}#profstrip .lss .ls-off i{background:var(--mute)}#profstrip .lss .ls-down i{background:var(--err)}
-#profstrip .lss b{color:var(--fg);font-weight:600}#profstrip .lss span{font-variant-numeric:tabular-nums}
-#profb .lpr{margin-top:20px}#profb .lpr h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profb .lpr .lpn{margin:2px 0 8px}#profb .lpw{float:right;font-size:var(--fs-caption)}#profr{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb #profr td:first-child{text-align:left;white-space:normal}#profb #profr .prr{color:var(--err);margin-left:6px}
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
@@ -7452,59 +7430,9 @@ function profCtx(c,open){const kids=c.children||[],isOpen=kids.length>0&&open.ha
  const row=(p,level,name,n,tw)=>`<tr data-p="${esc(p)}"${tw?` aria-expanded=${isOpen}`:""} aria-level=${level} class="pk-other"><td class=pn style="padding-left:${(level-1)*18+6}px">${tw?profTw(name,1,isOpen):`<span class=ptw></span>`}<span class=pnm>${esc(name)}</span></td><td>${profSecs(n.total_s||0)}</td><td>${n.events||0}</td></tr>`;
  return `<table id=profc role=treegrid aria-label="Every process outside the loop"><thead><tr><th title="every process that is not the loop of this profile, by application: a loaded machine shows here, a costly loop in the tree">Context</th><th title="CPU seconds in the window">Total time</th><th title="processes first seen in the window">Starts</th></tr></thead><tbody>`
   +row("context",1,c.name,c,kids.length>0)+(isOpen?kids.map(k=>row("context/"+k.name,2,k.name,k,false)).join(""):"")+`</tbody></table>`}
-// Time in failed runs (#1751): the runs of a window by verdict and, for a failed run, by reason. The hub folds it from the
-// run records; the page draws it and keeps the window the owner chose. It reads files only, so it draws with the switch off.
-const PROF_WIN=[[3600,"1 hour"],[86400,"24 hours"],[172800,"48 hours"]];
-const profWinGet=()=>{try{const s=JSON.parse(localStorage.getItem("squad-prof")||"{}")||{};return PROF_WIN.some(([x])=>x===s.w)?s.w:86400}catch(e){return 86400}};
-let profWin=profWinGet();
-const profWinSave=()=>{try{localStorage.setItem("squad-prof",JSON.stringify({w:profWin}))}catch(e){}};
-const profWinPick=()=>`<label class=lpw>Window <select data-profwin aria-label="The window of the Loop tab's file views">${PROF_WIN.map(([s,l])=>`<option value=${s}${s===profWin?" selected":""}>${l}</option>`).join("")}</select></label>`;
+let profWin=86400;   // the profiler read's window: the page draws no picker for it, so it reads the hub's 24 hour default
 const profTime=s=>s>=3600?(s/3600).toFixed(1)+" h":s>=60?(s/60).toFixed(1)+" min":s>=1?s.toFixed(1)+" s":Math.round(s*1000)+" ms";
 const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
-// The loop state strip (#1765): the switch audit and the dated step records as one strip at the top of the tab. The hub
-// folds the four states, their shares and the marks; the page draws them and keeps the window the owner chose on the
-// device. The strip's window is the tab's own (4, 8 or 24 hours), apart from the file views' window below it.
-const PROF_STRIP_WIN=[[14400,"4 hours"],[28800,"8 hours"],[86400,"24 hours"]];
-const profStripGet=()=>{try{const s=JSON.parse(localStorage.getItem("squad-prof-strip")||"{}")||{};return PROF_STRIP_WIN.some(([x])=>x===s.w)?s.w:86400}catch(e){return 86400}};
-let profStripWin=profStripGet();
-const profStripSave=()=>{try{localStorage.setItem("squad-prof-strip",JSON.stringify({w:profStripWin}))}catch(e){}};
-const PROF_STATE_ORDER=["active","draining","off","down"];
-const profStamp=t=>new Date(t*1000).toLocaleString();
-const profStripPick=v=>`<label class=lpw>Window <select data-stripwin aria-label="The window of the loop state strip">${PROF_STRIP_WIN.map(([s,l])=>`<option value=${s}${s===(v&&v.window_s)?" selected":""}>${l}</option>`).join("")}</select></label>`;
-const profMarkText=m=>m.kind==="switch"?`${esc(String(m.action||"switch"))} by ${esc(m.who||"unknown author")} from ${esc(m.from||"unknown origin")}${m.issue!=null?" · #"+esc(m.issue):""}`
- :m.kind==="landing"?`Landing in dev: ${esc(m.branch||"unknown branch")}${m.issue!=null?" · #"+esc(m.issue):""}`
- :`Promotion to ${esc(m.branch||"unknown branch")}: ${esc((m.sha||"").slice(0,9))}`;
-// The gates under the strip (#1767): each finished gate of the same window as one mark at its finish, on the strip's own
-// axis. The outcome is told by shape, never by colour alone: a pass a circle, a fail a square, an unproven a diamond. The
-// hover names the kind, the scope, the seconds, the reason of a fail or unproven outcome and the load at its start and its
-// finish; the count of each outcome of the window stands beside the chart. The hub folds the marks; the page draws them.
-const GATE_OUTCOMES=[["pass","Pass","circle"],["fail","Fail","square"],["unproven","Unproven","diamond"]];
-const profGateLabel=o=>(GATE_OUTCOMES.find(([k])=>k===o)||["","Other"])[1];
-const profLoadText=v=>v==null?"unknown load":"load "+Number(v).toFixed(1);
-const profGateText=m=>`${esc(m.kind||"gate")} gate · ${esc(m.scope||"no scope")} · ${profTime(m.seconds||0)} · ${profGateLabel(m.outcome)}`
- +(m.reason?` · ${esc(m.reason)}`:"")+` · ${profLoadText(m.load_start)} at the start, ${profLoadText(m.load_finish)} at the finish`;
-function profGates(g,v){
- if(!g)return "";
- const span=(v.end-v.start)||1,pct=s=>(100*s/span).toFixed(2),shape=o=>(GATE_OUTCOMES.find(([k])=>k===o)||["","","dot"])[2];
- const marks=(g.marks||[]).map(m=>`<span class="lsg lsgo-${esc(m.outcome)} sh-${shape(m.outcome)}" style="left:${pct(m.at-v.start)}%" title="${profGateText(m)}"></span>`).join("");
- const counts=GATE_OUTCOMES.map(([k,lab])=>`<li class=lsgc-${k}><i aria-hidden=true></i><b>${lab}</b> ${(g.counts||{})[k]||0}</li>`).join("");
- const aria=`Gates of the window: ${GATE_OUTCOMES.map(([k,lab])=>lab+" "+((g.counts||{})[k]||0)).join(", ")}`;
- return `<div class=lsgr><div class=lsga role=img aria-label="${esc(aria)}">${marks}</div><ul class=lsgc>${counts}</ul></div>`}
-function profStrip(v){
- if(!v||!v.rows||!v.rows.length)return "";
- const span=(v.end-v.start)||1,pct=s=>(100*s/span).toFixed(2),lab=k=>(v.labels||{})[k]||k;
- const bars=v.rows.map(r=>r.state==="gap"
-  ?`<i class="lsc ls-gap" style="width:${pct(r.end-r.start)}%" title="${esc("No source data: "+(r.reason||"no record"))}"></i>`
-  :`<i class="lsc ls-${esc(r.state)}" style="width:${pct(r.end-r.start)}%" title="${esc(lab(r.state)+" · "+profStamp(r.start)+" to "+profStamp(r.end))}"></i>`).join("");
- const marks=(v.marks||[]).map(m=>`<span class="lsm lsm-${esc(m.kind)}" style="left:${pct(m.at-v.start)}%" title="${profMarkText(m)}"></span>`).join("");
- const shares=PROF_STATE_ORDER.map(k=>{const s=(v.shares||{})[k]||0;
-  return `<li class=ls-${k}><i aria-hidden=true></i><b>${esc(lab(k))}</b> ${profTime(s)} <span>${(100*s/span).toFixed(1)}%</span></li>`}).join("");
- const gaps=v.rows.filter(r=>r.state==="gap"),gap=gaps.length
-  ?`<p class=lpn>${profTime(v.gap_s||0)} of the window has no source data, drawn as a gap: ${esc([...new Set(gaps.map(r=>r.reason||"no record"))].join("; "))}</p>`:"";
- const aria=`The loop over the last ${profTime(span)}: ${PROF_STATE_ORDER.map(k=>lab(k)+" "+(100*((v.shares||{})[k]||0)/span).toFixed(1)+"%").join(", ")}`
-  +(gaps.length?`, ${(100*(v.gap_s||0)/span).toFixed(1)}% with no source data`:"");
- return `<section id=profstrip><div class=lsh><h3>Loop state</h3>${profStripPick(v)}</div>`
-  +`<div class=lsb role=img aria-label="${esc(aria)}">${bars}${marks}</div>${profGates(v.gates,v)}<ul class=lss>${shares}</ul>${gap}</section>`}
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
@@ -7519,12 +7447,6 @@ function profTrip(t){
  const rows=stages.map(s=>`<tr data-p="trip/${esc(s.stage)}"><td class=pn><i class="ptk ptk-${esc(s.stage)}${s.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(s.label)}</span></td><td>${profTripNum(s.median_s)}</td><td>${profTripNum(s.p90_s)}</td><td>${s.observations||0}</td></tr>`).join("");
  return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds their median time in each stage, in the order of the rows below.</p>${bar}`
   +`<table id=proftt aria-label="The trip of an issue, a stage a row"><thead><tr><th>Stage</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
-function profRuns(r){
- if(!r||!r.rows)return "";
- const rows=r.rows.map(x=>`<tr class="pr-${esc(x.verdict)}"><td><b>${esc(x.verdict)}</b>${x.reason?` <span class=prr>${esc(x.reason)}</span>`:""}</td><td>${x.count}</td><td>${profTime(x.seconds)}</td><td>${profPct(x.share)}</td></tr>`).join("");
- const note=r.rows.length?`${profTime(r.failed_seconds)} in failed runs of ${profTime(r.total_seconds)} of run time, ${r.runs} run${r.runs===1?"":"s"}.`:"No run in this window.";
- return `<div class=lpr><h3>${esc(r.label||"Time in failed runs")}</h3>${profWinPick()}<p class=lpn>${note}</p>`
-  +`<table id=profr aria-label="Time in failed runs"><thead><tr><th title="the run's verdict; a failed run shows one row for each reason its verdict names">Verdict</th><th title="the runs in the row">Runs</th><th title="the run seconds the row covers">Run time</th><th title="the row's seconds as a share of every run second of the window">Share</th></tr></thead><tbody>${rows}</tbody></table></div>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
@@ -7532,23 +7454,21 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,strip=profStrip(v.strip),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+strip+trip+profRuns(v.runs);   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+strip+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
-  +(v.context?profCtx(v.context,open):"")+profRuns(v.runs)}
+ return head+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+  +(v.context?profCtx(v.context,open):"")}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),win=!!a&&a.hasAttribute&&a.hasAttribute("data-profwin"),swin=!!a&&a.hasAttribute&&a.hasAttribute("data-stripwin");
+function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
  b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):win?b.querySelector("select[data-profwin]"):swin?b.querySelector("select[data-stripwin]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin+"&sw="+profStripWin)).json();profDraw()}catch(e){}}
+ const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
 async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 $("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
-$("#profb").addEventListener("change",e=>{const s=e.target.closest("select[data-profwin]");if(s){profWin=Number(s.value)||86400;profWinSave();profPoll();return}
- const w=e.target.closest("select[data-stripwin]");if(!w)return;profStripWin=Number(w.value)||86400;profStripSave();profPoll()});   // each window is the page's own choice, kept on this device
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
 /*BOARD_LANES*/
@@ -9204,11 +9124,6 @@ TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NA
 
 _TICKERS = {}
 _TICKERS_LOCK = threading.Lock()   # the reader threads are started once, however many pages ask (#1217)
-# (#1879) A subject whose read costs hundreds of milliseconds answers at this period, never at the tick: `board_served`
-# costs 428 ms and `run_list` 262 ms on this machine, so reading them once a tick held a whole core. The first read of a
-# page's subject is still made at once, so a page opening is never behind.
-SLOW_SUBJECT_SECS = 5.0
-SLOW_SUBJECTS = {"board", "runs"}
 
 def _ticker(name):
     """One subject's reader thread, alive or started here. The caller holds _TICKERS_LOCK, so two pages opening together
@@ -9234,8 +9149,6 @@ def _ticker(name):
             # the page waits; past the window it rests at the tick like every other subject
             answered = bool(VERSIONS.newer({}).get(n))
             period = hubstream.FIRST_POLL_SECONDS if (not answered and time.monotonic() < fast_until) else hubstream.TICK_SECONDS
-            if n in SLOW_SUBJECTS and time.monotonic() >= fast_until:
-                period = max(period, SLOW_SUBJECT_SECS)
             read_pause(period if want else max(period, hubstream.TICK_SECONDS))
     t = _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
     t.start()

@@ -541,6 +541,24 @@ def test_the_guard_and_the_pass_read_the_same_unproven_set(tmp_path):
     assert _guard_answer(tmp_path, None, "in_progress") == "run=false", "a tip whose tier is in flight starts it again"
 
 
+def test_the_quiet_window_is_one_value_in_the_adr_and_the_pass():
+    """Guard for ADR-0173 (#1890): the ADR's Settings line and promote-main-pass.sh name one quiet-window value.
+
+    The value is measured, not guessed: 300 s and 600 s start nearly the same number of complete tiers, and 300 s waits
+    half as long; 3600 s starts far fewer but holds `main` for up to an hour on a tip that never quiets. The ADR is the
+    decision and the pass is the code, so a value that drifts in one place fails here.
+    """
+    adr = next((ROOT / "docs" / "adr").glob("0173-*.md"))
+    named = re.search(r"`SG_PROMOTE_MAIN_QUIET_S` \((\d+)\)", adr.read_text())
+    assert named, "the ADR-0173 Settings line does not name SG_PROMOTE_MAIN_QUIET_S"
+    script = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-main-pass.sh").read_text()
+    default = re.search(r'SG_PROMOTE_MAIN_QUIET_S:-}\"\s+(\d+)', script)
+    assert default, "promote-main-pass.sh does not default SG_PROMOTE_MAIN_QUIET_S"
+    assert named.group(1) == default.group(1), (
+        f"ADR-0173 names {named.group(1)} s and the pass defaults {default.group(1)} s: they are one measured value")
+    assert named.group(1) == "300", "the measured quiet window is 300 s (#1890)"
+
+
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
 ADR_0139 = ROOT / "docs" / "adr" / "0139-a-test-without-its-fixture-repo-is-deselected.md"
 HOST_NAMES = ("MESENAI_REPO", "MESENAI_ROOT")

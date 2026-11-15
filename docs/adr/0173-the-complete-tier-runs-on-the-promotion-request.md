@@ -56,9 +56,10 @@ of. With no argument it moves `main` to the `stg` tip, which is the owner's comm
 
 ## Settings
 
-`SG_PROMOTE_MAIN_QUIET_S` (3600), `SG_PROMOTE_MAIN_MAX_S` (14400) and `SG_PROMOTE_MAIN_FLIGHT_S` (3600) are the quiet
-window, the ceiling and the flight bound. `SG_MAIN_BRANCH` and `SG_STG_BRANCH` name the pair; no script names a branch as
-a literal.
+`SG_PROMOTE_MAIN_QUIET_S` (300), `SG_PROMOTE_MAIN_MAX_S` (14400) and `SG_PROMOTE_MAIN_FLIGHT_S` (3600) are the quiet
+window, the ceiling and the flight bound. The quiet window stays short: a longer window starts fewer complete tiers, but it
+adds its wait to every promotion and holds `main` longer, so the saving never pays for the delay. `SG_MAIN_BRANCH` and
+`SG_STG_BRANCH` name the pair; no script names a branch as a literal.
 
 Guard: `tests/test_tooling.py`, `contrib/squad-goal/scripts/test-promote-main-pass.sh`,
 `contrib/squad-goal/scripts/test-promote.sh`, `contrib/squad-goal/scripts/test-promote-branch.sh`,

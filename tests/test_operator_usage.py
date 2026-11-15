@@ -184,6 +184,68 @@ def test_a_rewritten_transcript_folds_like_a_fresh_read(OU, tmp_path):
     assert [r["id"] for r in c.read(folder)] == ["m9"]
 
 
+# --- the fold that outlives the process (#1888) ----------------------------------------------------------------------
+
+def test_a_state_path_keeps_the_fold_for_a_new_cache(OU, tmp_path):
+    """#1888: a hub restart starts with an empty Cache, so the first read re-parsed every transcript. The fold is saved to
+    the state path, and a second Cache on the same folder and path parses nothing and returns the same rows."""
+    folder = tmp_path / "p"
+    _write(folder, "a.jsonl", _line("m1", "m", 1, 1, 0))
+    _write(folder, "sub/b.jsonl", _line("m2", "m", 2, 2, 0))
+    state = tmp_path / "state" / "operator-usage.json"
+    c = OU.Cache(state)
+    first = c.read(folder)
+    assert sorted(r["id"] for r in first) == ["m1", "m2"] and c.parsed == 2
+    d = OU.Cache(state)
+    assert d.read(folder) == first and d.parsed == 0   # the new process reads the fold, not the transcripts
+
+
+def test_a_changed_transcript_is_parsed_again_from_the_state(OU, tmp_path):
+    """#1888: the saved fold keeps each file's stamp, so a changed transcript is read again and an unchanged one is not."""
+    folder = tmp_path / "p"
+    p = _write(folder, "a.jsonl", _line("m1", "m", 1, 1, 0))
+    _write(folder, "b.jsonl", _line("m2", "m", 2, 2, 0))
+    state = tmp_path / "operator-usage.json"
+    assert OU.Cache(state).read(folder)
+    p.write_text(_line("m1", "m", 1, 1, 0) + _line("m9", "m", 9, 9, 0))   # a resumed session rewrites the file
+    c = OU.Cache(state)
+    assert [r["id"] for r in c.read(folder)] == ["m1", "m9", "m2"] and c.parsed == 1
+
+
+def test_a_transcript_that_vanished_leaves_the_saved_fold(OU, tmp_path):
+    """#1888: the fold drops a file that is gone, and the saved document follows it."""
+    folder = tmp_path / "p"
+    p = _write(folder, "a.jsonl", _line("m1", "m", 1, 1, 0))
+    _write(folder, "b.jsonl", _line("m2", "m", 2, 2, 0))
+    state = tmp_path / "operator-usage.json"
+    OU.Cache(state).read(folder)
+    p.unlink()
+    c = OU.Cache(state)
+    assert [r["id"] for r in c.read(folder)] == ["m2"] and c.parsed == 0
+    assert "a.jsonl" not in json.loads(state.read_text())["files"]
+
+
+def test_a_corrupt_state_document_starts_empty(OU, tmp_path):
+    """#1888: a truncated or half-written document is no fold: the read parses the folder and raises nothing."""
+    folder = tmp_path / "p"
+    _write(folder, "a.jsonl", _line("m1", "m", 1, 1, 0))
+    state = tmp_path / "operator-usage.json"
+    state.write_text("{not json")
+    c = OU.Cache(state)
+    assert [r["id"] for r in c.read(folder)] == ["m1"] and c.parsed == 1
+
+
+def test_a_state_of_another_root_is_no_fold(OU, tmp_path):
+    """#1888: a document names the folder it folded; a Cache on another folder never adopts it."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    _write(a, "x.jsonl", _line("m1", "m", 1, 1, 0))
+    _write(b, "y.jsonl", _line("m2", "m", 2, 2, 0))
+    state = tmp_path / "operator-usage.json"
+    OU.Cache(state).read(a)
+    c = OU.Cache(state)
+    assert [r["id"] for r in c.read(b)] == ["m2"] and c.parsed == 1
+
+
 # --- the hub's third source, as its own consumer ---------------------------------------------------------------------
 
 def test_the_hub_reads_this_checkouts_project_folder(hub, tmp_path, monkeypatch):

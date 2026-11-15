@@ -753,7 +753,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\+"&sw="\+profStripWin\)', src), "the read carries the windows the owner chose"
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', src), "the read carries the profiler window"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -851,38 +851,6 @@ RUNS = {"label": "Time in failed runs", "window_s": 3600, "runs": 3, "total_seco
         "rows": [{"verdict": "failed", "reason": "gate:red", "count": 2, "seconds": 1200.0, "share": 0.667},
                  {"verdict": "failed", "reason": "review:changes", "count": 1, "seconds": 600.0, "share": 0.333},
                  {"verdict": "completed", "reason": "", "count": 1, "seconds": 600.0, "share": 0.333}]}
-
-
-def runs_part(out):
-    at = out.index("<table id=profr")
-    return out[at:out.index("</table>", at) + 8]
-
-
-def test_the_view_draws_the_time_in_failed_runs_table_by_verdict_and_reason():
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
-    part = runs_part(out)
-    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", part)] == ["Verdict", "Runs", "Run time", "Share"]
-    rows = re.findall(r"<td><b>([^<]*)</b>(?: <span class=prr>([^<]*)</span>)?</td><td>(\d+)</td><td>([^<]*)</td><td>([^<]*)</td>", part)
-    assert rows == [("failed", "gate:red", "2", "20.0 min", "66.7%"), ("failed", "review:changes", "1", "10.0 min", "33.3%"),
-                    ("completed", "", "1", "10.0 min", "33.3%")], "a failed run shows one row for each reason it names"
-    assert "Time in failed runs" in out and "waste" not in out.lower(), "the view names time, never waste"
-    assert "20.0 min in failed runs of 30.0 min of run time, 3 runs." in out
-
-
-def test_the_view_offers_the_three_windows_and_marks_the_one_chosen():
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
-    opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", out)
-    assert [(v, bool(sel), label) for v, sel, label in opts] == [("3600", False, "1 hour"), ("86400", True, "24 hours"),
-                                                                ("172800", False, "48 hours")]
-    assert re.search(r'<select data-profwin aria-label="The window of the Loop tab\'s file views">', out)
-
-
-def test_the_table_shows_with_the_switch_off_and_states_an_empty_window():
-    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': RUNS})},new Set())")
-    assert "id=profr" in off and "id=proft" not in off and "gate:red" in off
-    empty = {"label": "Time in failed runs", "window_s": 3600, "runs": 0, "total_seconds": 0, "failed_seconds": 0, "rows": []}
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': empty})},new Set())")
-    assert "No run in this window." in out
 
 
 def test_the_route_answers_the_table_of_the_window_the_page_asked_for(hub):
@@ -1066,9 +1034,9 @@ def test_a_window_with_fewer_than_three_deliveries_says_so_and_draws_no_bar():
     assert "1 delivery in " in trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': one})},new Set())"))
 
 
-def test_the_trip_shows_with_the_switch_off_and_beside_the_failed_run_table():
-    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'trip': TRIP, 'runs': RUNS})},new Set())")
-    assert "id=proftrip" in off and "id=proftt" in off and "id=profr" in off and "<table id=proft " not in off
+def test_the_trip_shows_with_the_switch_off():
+    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'trip': TRIP})},new Set())")
+    assert "id=proftrip" in off and "id=proftt" in off and "<table id=proft " not in off
     on = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())")
     assert on.index("id=proftrip") < on.index("<table id=proft "), "the bar is the summary above the hot-spot tree"
 
@@ -1078,13 +1046,6 @@ def test_the_file_views_refresh_on_the_slow_cadence_with_the_switch_off():
                             'profFileDue("flow",false,{on:false}),profFileDue("prof",true,{on:false}),'
                             'profFileDue("prof",false,null)])'))
     assert out == [True, False, False, False, False]
-
-
-def test_the_window_picker_names_every_file_view_of_the_tab():
-    """One window choice moves the bar and the failed-run table alike, so its name says so (#1769)."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'runs': RUNS})},new Set())")
-    assert re.search(r"<select data-profwin aria-label=\"The window of the Loop tab's file views\">", out)
-    assert len(re.findall(r"<select data-profwin", out)) == 1, "one window choice serves both file views"
 
 
 def test_the_route_answers_the_trip_of_the_window_the_page_asked_for(hub):
@@ -1421,9 +1382,10 @@ def test_an_unanswered_subject_rests_at_the_tick_after_the_startup_window(hub, m
     assert pauses and pauses[0] == 7.0, f"the reader asked {pauses[:2]} s: the fast first-read period never ended"
 
 
-def test_a_subject_whose_read_costs_hundreds_of_milliseconds_rests_at_its_own_period(hub, monkeypatch):
-    """#1879: `board_served` costs 428 ms and `run_list` 262 ms on this machine, so reading them once a tick is ~70 % of a
-    core. A slow subject answers at SLOW_SUBJECT_SECS, while a cheap one keeps the tick."""
+def test_every_subject_answers_at_the_tick_whatever_its_read_costs(hub, monkeypatch):
+    """#1896: `board_served` costs hundreds of milliseconds, and #1879 made it rest 5 s to save them. A rest longer than
+    the page's own wait is a page that shows an old board: two stream tests hold a change to a 4 s budget. So every
+    subject answers at the tick, and the cost is fixed in the read itself, never in the period that delays the page."""
     mod = hub[0]
 
     class Versions:
@@ -1436,7 +1398,6 @@ def test_a_subject_whose_read_costs_hundreds_of_milliseconds_rests_at_its_own_pe
 
     monkeypatch.setattr(mod, "VERSIONS", Versions())
     monkeypatch.setattr(mod.hubstream, "TICK_SECONDS", 1.0)
-    monkeypatch.setattr(mod, "SLOW_SUBJECT_SECS", 5.0)
     monkeypatch.setattr(mod.hubstream, "FIRST_EVENT_SECONDS", 0.0)   # the startup window is over before the first tick
     monkeypatch.setattr(mod, "READ_GATE", None)                      # a page reads the profile: read_wanted() is true
     monkeypatch.setattr(threading, "excepthook", lambda _: None)
@@ -1454,8 +1415,8 @@ def test_a_subject_whose_read_costs_hundreds_of_milliseconds_rests_at_its_own_pe
         wait(lambda: not t.is_alive(), 2)
         return pauses[0]
 
-    assert first_period("board") == 5.0, "the board read costs hundreds of milliseconds and must not run at the tick"
-    assert first_period("runs") == 5.0, "the run list costs 262 ms and rests with the board"
+    assert first_period("board") == 1.0, "the board answers at the tick: a page holding an old board is the defect"
+    assert first_period("runs") == 1.0, "the run list answers at the tick with the board"
     assert first_period("sessions") == 1.0, "a subject that reads in milliseconds keeps the tick"
 
 
@@ -1785,55 +1746,23 @@ STRIP = {"window_s": 14400, "start": W0 - 14400, "end": W0,
                    {"at": W0 - 4000, "kind": "promotion", "branch": "stg", "sha": "def456"}]}
 
 
-def strip_part(out):
-    at = out.index("<section id=profstrip>")
-    return out[at:out.index("</section>", at) + 10]
+def test_the_page_names_no_gap_sentence_and_draws_no_failed_runs_table():
+    """The owner read the gap sentence and the rows of long verdict reasons as noise, and the loop state panel as noise with
+    them, so the page draws none of it: the hub still folds the strip's rows for its own readers."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'runs': RUNS})},new Set())")
+    assert "of the window has no source data" not in out, "the gap sentence is gone"
+    assert "id=profr" not in out and "Time in failed runs" not in out, "the failed-runs panel is gone"
+    assert "id=profstrip" not in out and "Loop state" not in out, "the loop state panel is gone"
 
 
-def test_the_strip_is_drawn_above_the_trip_bar_and_shows_four_shares():
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'trip': TRIP, 'runs': RUNS})},new Set())")
-    assert out.index("id=profstrip") < out.index("id=proftrip"), "the strip is the tab's first view"
-    part = strip_part(out)
-    assert re.findall(r"<b>([A-Za-z]+)</b>", part) == ["Active", "Draining", "Off", "Down"]
-    assert "62.5%" in part and "25.0%" in part, "the share is of the window"
-
-
-def test_the_strip_draws_a_gap_with_its_reason_and_names_each_mark():
-    part = strip_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP})},new Set())"))
-    assert "no source data" in part and "no step record in this stretch" in part
-    assert re.search(r'title="[^"]*loop[^"]*restart[^"]*#1234', part), "a switch change names writer, origin and issue"
-    assert re.search(r'title="[^"]*#7', part), "a landing names the issue it carries"
-    assert re.search(r'title="[^"]*stg', part) and re.search(r'title="[^"]*main', part) is None, "a promotion names its branch"
-
-
-def test_the_strip_offers_four_eight_and_twenty_four_hours():
-    part = strip_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP})},new Set())"))
-    opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", part)
-    assert [(v, bool(sel), lab) for v, sel, lab in opts] == [
-        ("14400", True, "4 hours"), ("28800", False, "8 hours"), ("86400", False, "24 hours")]
-    assert len(re.findall(r"<select data-stripwin", part)) == 1
-
-
-def test_the_strip_keeps_its_own_window_on_this_device_and_sends_it():
-    src = page()
-    assert re.search(r'localStorage\.setItem\("squad-prof-strip"', src), "the window survives a reload"
-    assert re.search(r"&sw=\"\+profStripWin", src), "the read carries the strip's window"
-
-
-def test_the_strip_shows_with_the_switch_off():
-    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'strip': STRIP})},new Set())")
-    assert "id=profstrip" in off and "<table id=proft " not in off
-
-
-def test_the_phone_reaches_the_strip_and_the_shares_wrap_under_the_bar():
-    """The phone's More menu opens the Loop tab of this page, and the strip's shares wrap, so no fixed width overflows it."""
+def test_the_phone_reaches_the_loop_tab():
+    """The phone's More menu opens the Loop tab of this page."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
     assert re.search(r'id="more-loop" href="\./#loop"', html), "the phone opens the Loop tab of the same page"
-    assert re.search(r"#profstrip \.lss\{display:flex;flex-wrap:wrap", page()), "the shares wrap under the bar at phone width"
 
 
-# The gates under the strip (#1767): one mark per finished gate of the same window, on the same axis. The fold from the
-# gate-history lines is a pure function of this rule layer, so its tests feed lines in and read no file.
+# The gates of the strip were folded for the same window (#1767): the fold stays in the route, and the page draws it no more.
+# The fold from the gate-history lines is a pure function of this rule layer, so its tests feed lines in and read no file.
 GATE_LINES = [
     f"{W0 - 12000}\tgate\tpass\tabc\t{W0 - 12060}\tall\troot\tpass\t-\truff mypy pytest\t-\t2\t-\tchild\t1.2\t3.4\n",
     f"{W0 - 9000}\tfast\tfail\tdef\t{W0 - 9060}\tdelta\troot\tfail\texit 1\tpytest\t-\t1\tred\ttip\t4.0\t-\n",
@@ -1882,34 +1811,3 @@ def test_the_route_carries_the_gate_marks_of_the_strip_window(hub):
     assert gates["marks"][1]["reason"] == "exit 1"
     assert table.reads == 0, "the gate marks read files only"
 
-
-GATES = {"counts": {"pass": 3, "fail": 1, "unproven": 2},
-         "marks": [{"at": W0 - 5000, "kind": "gate", "scope": "all", "outcome": "pass", "seconds": 60.0,
-                    "reason": None, "load_start": 1.0, "load_finish": 2.0},
-                   {"at": W0 - 3000, "kind": "fast", "scope": "delta", "outcome": "fail", "seconds": 30.0,
-                    "reason": "exit 1", "load_start": 5.0, "load_finish": 6.5},
-                   {"at": W0 - 1000, "kind": "gate", "scope": "delta", "outcome": "unproven", "seconds": 900.0,
-                    "reason": "bounded by 900 s", "load_start": None, "load_finish": 3.0}]}
-
-
-def test_the_strip_draws_gate_marks_whose_shapes_differ_without_color_with_their_counts():
-    """Under the bar, on the same axis and window: one mark a gate, its shape per outcome, its hover naming the facts, and
-    beside the chart the count of each outcome."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': {**STRIP, 'gates': GATES}})},new Set())")
-    part = strip_part(out)
-    shapes = re.findall(r'class="lsg lsgo-(\w+) sh-(\w+)"', part)
-    assert shapes == [("pass", "circle"), ("fail", "square"), ("unproven", "diamond")], \
-        "the three outcomes differ by shape, never by colour alone"
-    lefts = re.findall(r'class="lsg [^"]*" style="left:([\d.]+)%"', part)
-    assert [round(float(x), 1) for x in lefts] == [round(100 * (W0 - 5000 - (W0 - 14400)) / 14400, 1),
-                                                   round(100 * (W0 - 3000 - (W0 - 14400)) / 14400, 1),
-                                                   round(100 * (W0 - 1000 - (W0 - 14400)) / 14400, 1)], \
-        "each mark sits at its finish on the strip's own axis"
-    fail = re.search(r'title="([^"]*)"[^>]*></span>', part[part.index("lsgo-fail"):]).group(1)
-    assert "fast" in fail and "delta" in fail and "30" in fail and "exit 1" in fail, "the hover names kind, scope, seconds and the reason"
-    assert "5.0" in fail and "6.5" in fail, "the hover names the load at the start and at the finish"
-    pass_mark = re.search(r'title="([^"]*)"[^>]*></span>', part[part.index("lsgo-pass"):]).group(1)
-    assert "exit" not in pass_mark and "1.0" in pass_mark and "2.0" in pass_mark, "a pass carries no reason and still its loads"
-    assert "bounded by 900 s" in part
-    assert re.search(r"<b>Pass</b> 3", part) and re.search(r"<b>Fail</b> 1", part) and re.search(r"<b>Unproven</b> 2", part), \
-        "the counts of the window stand beside the chart"
