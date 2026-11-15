@@ -83,3 +83,25 @@ def test_a_run_in_a_new_worktree_is_found_after_the_bound(hub, monkeypatch):
     folder = _run(co / "worktrees" / "child" / "b" / "runs", "run-new")
     monkeypatch.setattr(mod, "ROOTS_TTL", 0.0)
     assert mod.run_folder("run-new") == folder, "a run in a worktree made after the last walk is never found"
+
+
+def test_cards_of_one_run_share_one_read_of_its_record(hub, monkeypatch):
+    """The board's key and its body both ask holder_fact for every held card, and each call read the run's whole record
+    and scanned for its process. A real board carries more than a thousand cards, four hundred of them held by a handful
+    of runs, so the answer cost seconds per request (#1790). One run is one read inside the bound."""
+    mod, co = hub
+    folder = _run(co / "runs", "run-7")
+    reads = []
+
+    class _R:
+        def run_live(self, f, now=None):
+            reads.append(1)
+            return True
+    monkeypatch.setattr(mod, "reaper", lambda: _R())
+    monkeypatch.setattr(mod, "run_folder", lambda r: folder)
+    for i in range(50):
+        assert mod.holder_fact({"n": i, "h": {"run": "run-7", "started": "1700000000"}})[1] == "running"
+    assert len(reads) == 1, f"one run's record was read {len(reads)} times for one board answer"
+    mod.HOLDER_CHECK_SECS = 0.0
+    mod.holder_fact({"n": 0, "h": {"run": "run-7", "started": "1700000000"}})
+    assert len(reads) == 2, "a fact past the bound is read again"

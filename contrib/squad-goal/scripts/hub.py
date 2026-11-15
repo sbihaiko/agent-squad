@@ -3429,6 +3429,8 @@ def run_folder(run):
             _run_folders[run] = folder
             return folder
     return None
+HOLDER_CHECK_SECS = 5.0   # seconds a holder's fact answers for: a card says `running` or `ended` within this bound (#1790)
+_HOLDER_CACHE = {}   # (run, start) -> (checked_at, fact)
 def holder_fact(i, now=None):
     """(text, state) of the run that holds a card (#1661). `running` with `held by <run> since <start>` only while the run's
     process is live (squad/reap.py `run_live`, the one predicate). Otherwise `ended` with `held · run <run> ended <time>`, the
@@ -3437,6 +3439,16 @@ def holder_fact(i, now=None):
     h = i.get("h") or {}
     run = h.get("run")
     if not run: return None, None
+    key = (run, str(h.get("started") or ""))   # the fact is the run's, never the card's: every card one run holds shares it
+    if now is None:   # the board's key and its body both ask per card, and one board carries four hundred held cards over a handful of runs (#1790)
+        clock = time.time()
+        hit = _HOLDER_CACHE.get(key)
+        if hit is not None and clock - hit[0] < HOLDER_CHECK_SECS: return hit[1]
+        fact = _holder_fact_now(i, run, clock)
+        _HOLDER_CACHE[key] = (clock, fact)
+        return fact
+    return _holder_fact_now(i, run, now)   # an explicit instant is asked by a test or a probe: it is answered exactly, never from a cache
+def _holder_fact_now(i, run, now):
     folder = run_folder(run)
     if folder is not None and reaper().run_live(folder, now):
         return holder_text(i), "running"
