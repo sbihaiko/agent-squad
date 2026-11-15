@@ -81,6 +81,22 @@ def _dedupe(xs):
     return list(dict.fromkeys(xs))
 
 
+def _kept_after_deadline(events, failing):
+    """The last commit a passed node wrote before the first deadline, when every failing outcome is a deadline: the branch the
+    deadline keeps (ADR-0164). None when the run failed for another reason or no commit came first."""
+    if not failing or any(e["outcome"] != "deadline" for e in failing):
+        return None
+    first = min(e["pos"] for e in failing)
+    commits = [e for e in events if e["event"] == "workspace_commit" and e.get("status") == "committed" and e["pos"] < first]
+    return commits[-1] if commits else None
+
+
+def _unproven(kept, failing):
+    """The reasons a kept branch carries: the node whose proof the deadline cut short, and the branch's commit."""
+    node = min(failing, key=lambda e: e["pos"])["node"]
+    return [f"unproven:{node}", f"kept:{kept['workspace']}@{str(kept.get('head') or '')[:9]}"]
+
+
 def fold(events, observation=None, run_id=None, run_folder=None):
     """Fold a run record and a target observation into one verdict.
 
@@ -105,6 +121,8 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     ran = {n for n, _ in last}
     remains = [n for n in plan if n not in ran]
     conflict = list(obs.get("conflict", [])) + ([pre["reason"]] if pre.get("status") == "conflict" else [])
+    kept = _kept_after_deadline(events, failing)
+    unproven = _unproven(kept, failing) if kept else None
 
     def make(v, rs, rem=True):
         rem_list = remains if v != "completed" and rem else []
@@ -117,6 +135,8 @@ def fold(events, observation=None, run_id=None, run_folder=None):
         o = root_ev["outcome"]
         if o == "deadline" and obs.get("effect_observed"):
             base, rs = "completed", []
+        elif o == "deadline" and unproven:
+            base, rs = "completed", unproven
         elif o == "deadline":
             base, rs = "failed", _dedupe(["deadline", *reasons])
         elif o == "fail":
@@ -126,7 +146,7 @@ def fold(events, observation=None, run_id=None, run_folder=None):
         else:
             base, rs = "completed", []
     elif failing:
-        base, rs = "failed", reasons
+        base, rs = ("completed", unproven) if unproven else ("failed", reasons)
     elif waits or any(_route(e) == "exit:needs-human" for _, _, e in contrib):
         base, rs = "needs-human", [f"wait:{w}" for w in waits]
     elif paused:

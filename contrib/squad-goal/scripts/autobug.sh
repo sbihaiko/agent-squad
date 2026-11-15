@@ -432,14 +432,6 @@ if [ ${#triaged[@]} -gt 0 ]; then
 fi
 { echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for each of the ${#clusters[@]} child(ren) below, all in one turn; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. Each child's spend: $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child per CHILD block: the run cut each child's own worktree and checked out its branch there. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line."
   echo "Every child: work where you stand -- the run cut you a worktree of your own and checked out your branch there, so your own working directory is that worktree, and you name no path for it. Commit there. Create no worktree and no branch of your own; push nothing. The loop reads that worktree, enters your commits into the run's wave branch, and lands the wave in $SG_BASE with one push (ADR-0145 rule 9). Each commit's message carries exactly one \"Refs #N\" line, for the one issue it fixes, and never Closes: a block of several issues gets one commit per issue (a commit naming several issues closes none of them). A block with several issues is ONE probable root cause seen as several symptoms: find the shared cause and fix it once, test-side and product-side in the same worktree, and the commit for each other issue of the block is empty (git commit --allow-empty) and names only its own issue; if an issue of the block turns out unrelated, say so in the issue status comment and leave it out. Rules: $SG_CODING_RULES."
-  pc=${SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local}   # (#740) the profile's prepush command, or none
-  if sg_profile_resolves && [ -n "$pc" ]; then
-    echo "Before you report done, run \"$pc\" in that worktree: it must print nothing."
-  elif sg_profile_resolves; then
-    echo "No prepush check is configured for this repository, so run none: a missing check is not a failure; name that in your report."
-  else
-    echo "The prepush check is unavailable: no squad-goal profile resolves for this session (SG_PROFILE='${SG_PROFILE:-}', SG_PROFILES_DIR='$(sg_profiles_dir)'), so do not run prepush.sh --local; name that in your report."
-  fi
   # (#1198) The entry gate is the child's last step, so the tree it proved is the tree it hands in: a child ran its gate and
   # then kept editing for ten minutes, and the wave entry gate paid the battery again on the tree it never proved. A child
   # that cannot gate last says so, and the entry gate runs its own battery as before.
