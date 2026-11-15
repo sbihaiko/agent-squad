@@ -40,6 +40,24 @@ def test_run_maps_exit_code_output_tail_and_timeout(tmp_path):
     assert workcmd.TIMEOUT_S >= 300      # the project's own suite (159 s real, #1785) has to fit under the default
 
 
+def test_a_timeout_is_unproven_and_the_second_on_the_same_tree_and_command_is_a_red(tmp_path, monkeypatch):
+    """#1874: a command the machine could not finish measured nothing, so the first timeout is unproven (ADR-0164).
+    The same tree and the same command timing out twice is a hang the change brought, so the second is a measured red."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"],
+                   cwd=repo, check=True)
+    first = workcmd.run("sleep 5", str(repo), timeout=0.2)
+    assert not first.ok and first.unproven and first.evidence == "timeout after 0.2 s"
+    second = workcmd.run("sleep 5", str(repo), timeout=0.2)
+    assert not second.ok and not second.unproven, f"the second timeout is a red: {second.unproven}"
+    assert "measured red" in second.evidence
+    other = workcmd.run("sleep 5; true", str(repo), timeout=0.2)
+    assert not other.ok and other.unproven, "another command on the same tree has its own first timeout"
+
+
 def test_the_default_cap_covers_the_project_suite_and_SG_AC_TIMEOUT_moves_it(monkeypatch):
     """#1785: the fork's canonical check `contrib/squad-goal/scripts/shell-suites.sh` runs the 41 test-*.sh suites
     next to it and took 158.69 s real on an idle machine. The instructions name that command, so the default cap must
@@ -100,8 +118,11 @@ def test_the_landing_check_carries_the_failing_command_evidence_into_the_record(
     assert r.extra["evidence"] == {"ac_regression:c1": {"ac_failed:echo boom; exit 1": "boom"}}
 
 
-def test_a_timeout_through_the_landing_path_carries_the_timeout_note(tmp_path, monkeypatch):
+def test_a_timeout_through_the_landing_path_is_unproven_and_never_a_regression(tmp_path, monkeypatch):
+    """#1874: the first timeout on a tree and command measured nothing, so the landing carries it as an obligation and
+    never as a regression; the second timeout on the same (tree, command) is the measured red."""
     monkeypatch.delenv("SG_AC_TIMEOUT", raising=False)
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))
     real = subprocess.run
 
     def late(*a, **kw):
@@ -110,7 +131,7 @@ def test_a_timeout_through_the_landing_path_carries_the_timeout_note(tmp_path, m
         return real(*a, **kw)
     monkeypatch.setattr(subprocess, "run", late)
     r = landing(tmp_path, ["sleep 999"])
-    assert r.extra["evidence"] == {"ac_regression:c1": {"ac_failed:sleep 999": f"timeout after {workcmd.TIMEOUT_S:g} s"}}
+    assert r.ok and r.extra == {"unproven": ["sleep 999"]}, f"the timeout landed as {r.extra}"
 
 
 def test_the_landing_check_sees_the_project_python(tmp_path, monkeypatch):
