@@ -137,3 +137,29 @@ def test_remains_names_steps_that_never_ran_and_a_completed_run_has_none():
     v = V.fold(events(out("a", "fail"), out("main", "fail")))
     assert v.remains == ["b", "c"]
     assert V.fold(events(out("a"), out("main"))).remains == []
+
+
+def commit(node, head="ab12cd34ef56"):
+    return {"event": "workspace_commit", "node": node, "entry": 1, "workspace": "target", "path": "/ws/target",
+            "status": "committed", "head": head}
+
+
+def test_a_deadline_after_a_committed_node_keeps_the_branch_and_names_its_unproven_proof():
+    rows = [commit("code"), out("code"), out("final_gate", "deadline", ["deadline"]), out("main", "deadline", ["deadline"])]
+    v = V.fold(events(*rows, plan=["main", "code", "final_gate"]))
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert v.reasons == ["unproven:final_gate", "kept:target@ab12cd34e"]
+
+
+def test_a_deadline_before_any_commit_is_still_failed_with_the_deadline_reason():
+    rows = [out("code", "deadline", ["deadline"]), out("main", "deadline", ["deadline"])]
+    v = V.fold(events(*rows, plan=["main", "code"]))
+    assert (v.verdict, v.exit_code) == ("failed", 1)
+    assert v.reasons == ["deadline"]
+
+
+def test_a_commit_written_after_the_deadline_keeps_nothing():
+    rows = [out("code", "deadline", ["deadline"]), commit("code"), out("main", "deadline", ["deadline"])]
+    v = V.fold(events(*rows, plan=["main", "code"]))
+    assert v.verdict == "failed"
+    assert "kept:" not in " ".join(v.reasons)

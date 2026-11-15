@@ -54,20 +54,14 @@ def test_profile_and_prepush_range_use_dev():
     assert 'origin/${SG_BASE:-main}' not in read("prepush.sh")
 
 
-def test_the_request_and_the_fix_run_name_the_worktrees_own_prepush():
-    """#662: the sandbox denies any command naming the live skill copy, so a request that prescribes the loop's own
-    prepush path cannot be followed. The child works where it stands, so the relative path is its worktree's copy."""
-    for f in ("autofrontier.sh", "autobug.sh"):
+def test_no_child_brief_sends_the_child_to_prepush_beside_the_fast_gate():
+    """#1761: a child proves its change with the fast gate alone; a prepush run on top of it is a second proof of one tree."""
+    for f in ("autofrontier.sh", "autobug.sh", "childfix.sh"):
         text = read(f)
-        assert "bash contrib/squad-goal/scripts/prepush.sh --local" in text, f
+        for phrase in ("Before the child reports done, run", "Before you report done, run", "Before every commit, run"):
+            assert phrase not in text, (f, phrase)
         assert "$here/prepush.sh" not in text, f
-    fix = read("childfix.sh")
-    # #740: the command is the profile's, agent-squad's by default, and a relative script path is anchored at the checkout, which
-    # the fix child reaches from its own worktree. It never names the kept worktree as the place to write (#814).
-    assert "SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local" in fix
-    assert "pc=${pc/#bash contrib\\//bash $SG_CHECKOUT/contrib/}" in fix
-    assert "Work where you stand" in fix
-    assert "$here/prepush.sh" not in fix
+    assert "Work where you stand" in read("childfix.sh")
 
 
 def test_the_checklist_names_no_live_script_a_child_cannot_run():
