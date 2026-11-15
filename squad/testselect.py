@@ -13,6 +13,8 @@ LITERAL = {"import_module", "__import__"}
 LISTERS = {"glob", "rglob", "iterdir", "listdir", "walk", "scandir"}
 # A data file under tests/ is read by one module; its importers are the suites it reaches.
 DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
+# The shard guard names every top-level test file, so a file added or deleted reaches it and no other test.
+SHARD_GUARD = "tests/test_tooling.py"
 # The gate stages that may run the delta: the tests a change reaches. The landing, the promotion proof and the nightly
 # always run the full battery, so a cheaper check never weakens the gate a delivery stands on (ADR-0018). A stage this
 # list does not name is full too: a typo in a stage never narrows a gate.
@@ -273,6 +275,12 @@ def _answer(root, base):
         if not hits:
             _all(f"{rel} is reached by no test: no import, no path literal, not inert")
         selected |= hits
+    added_or_deleted = _git(root, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=AD",
+                            merge_base.stdout.strip(), "HEAD")
+    if added_or_deleted.returncode:
+        _all(f"the diff against {base} failed")
+    if any(_is_test(rel) and Path(rel).parent.as_posix() == "tests" for rel in added_or_deleted.stdout.split("\0")):
+        selected.add(SHARD_GUARD)
     present = sorted(rel for rel in selected if (root / rel).exists())   # pytest cannot run a path the tip deleted
     if not present:
         _all(f"every test the change reaches is deleted at the tip: {' '.join(sorted(selected))}")
