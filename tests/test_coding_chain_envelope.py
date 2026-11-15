@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from tests.gitrepo import with_origin
+from tests.launchdeps import LAUNCH_MODULES
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"))
 import router_envelope  # noqa: E402
@@ -47,9 +48,7 @@ def _launch(tmp_path, coding, envelope, shared=None, hours=None):
     s, co, st, bin_ = tmp_path / "s", tmp_path / "co", tmp_path / "st", tmp_path / "bin"
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
         d.mkdir(parents=True, exist_ok=True)
-    shutil.copy(SCRIPTS / "launch.py", s / "launch.py")
-    shutil.copy(SCRIPTS / "router_envelope.py", s / "router_envelope.py")
-    for name in ("provkey.py", "modelreg.py", "registry.json"):
+    for name in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / name, s / name)
     (s / "models.json").write_text(json.dumps({"coding_models": coding, "review_models": [], "vision_models": [], "hours": {"coding_models": hours or {}}}))
     (s / "hub.py").write_text("print('hub')\n")

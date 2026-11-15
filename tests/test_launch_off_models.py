@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from tests.gitrepo import with_origin
+from tests.launchdeps import LAUNCH_MODULES
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
@@ -42,9 +43,7 @@ def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=Non
     s, co, st, bin_ = tmp_path / "s", tmp_path / "co", tmp_path / "st", tmp_path / "bin"
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
         d.mkdir(parents=True, exist_ok=True)
-    shutil.copy(SCRIPTS / "launch.py", s / "launch.py")
-    shutil.copy(SCRIPTS / "router_envelope.py", s / "router_envelope.py")
-    for name in ("provkey.py", "modelreg.py", "registry.json"):
+    for name in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / name, s / name)
     models = {"coding_models": ["claude-sonnet-5-5", "test-model"], "review_models": ["claude:claude-opus-5-5"],
               "vision_models": ["claude-sonnet-5-5"], "hours": hours or {}}
