@@ -4,11 +4,16 @@ A reading is {(pid, start time): (ppid, cpu seconds, command)}: a pid alone does
 again. `fold` turns two readings into what happened between them: the CPU seconds each process used and one event for each
 process the second reading saw first.
 
-A `Scope` names the loop of one profile: the supervisor's pid and the folders only that profile's work names. The loop is
-the supervisor and its descendants, each process whose command names one of those folders, with its descendants, and each
-orphan from a temp folder. Each is filed under the loop parts its ancestry names, outermost first, so the tree reads like
-a call tree: a driver, the run it started, the gate below it. A process that names no part of its own counts as its
-nearest named ancestor's own time. Every other process counts in one context row, apart from the tree.
+A `Scope` names the loop of one profile: the supervisor's pid and the folders only that profile's work names, plus the
+other profiles of the hub, each with its own supervisor pid and run folders. The loop is the supervisor and its
+descendants, each process whose command names one of those folders, with its descendants, and each orphan from a temp
+folder. Each is filed under the loop parts its ancestry names, outermost first, so the tree reads like a call tree: a
+driver, the run it started, the gate below it. A process that names no part of its own counts as its nearest named
+ancestor's own time. Every process outside the loop counts in the context row, apart from the tree: one row for each other
+profile's loop, and one row per application for the rest.
+
+A reading answers each process's CPU seconds, or None where the system refused the read. A refused process is seen and not
+read: it lowers the coverage the window answers and adds no row, since a zero there would be a guess.
 
 A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim. The whole line is read, with
 no head cap: a script past a long argument list still names its process.

@@ -925,8 +925,10 @@ def leaf(name, self_s, **kw):
 
 VIEW = {"on": True, "since": 1.0, "window_s": 125, "write": True, "reason": "",
         "last_reading": 1700000000.0, "interval_s": 1.04, "failed_readings": 0,
+        "processes_read": 21, "processes_seen": 21, "coverage": 1.0,
         "context": {"name": "outside the loop", "total_s": 40.0, "events": 9, "children": [
-            {"name": "Foo Bar", "total_s": 30.0, "events": 2}, {"name": "another loop", "total_s": 10.0, "events": 7}]},
+            {"name": "Foo Bar", "kind": "other", "total_s": 30.0, "events": 2},
+            {"name": "another loop", "kind": "loop", "total_s": 10.0, "events": 7}]},
         "tree": {"name": "loop", "kind": "root", "self_s": 0, "total_s": 8.0, "share": 1, "events": 0, "total_events": 12,
                  "children": [
                      leaf("watchd.sh", 0.0, total_s=6.0, share=0.75, events=0,
@@ -983,6 +985,13 @@ def test_the_view_states_the_reading_it_shows():
     bad = run_js(f"profHtml({json.dumps({**VIEW, 'failed_readings': 3, 'last_reading': None, 'interval_s': None})},new Set())")
     note = re.search(r"<span class=lpn>(.*?)</span>", bad, re.S).group(1)
     assert "3 readings failed" in note and "No good reading yet" in note
+
+
+def test_the_view_states_how_much_of_the_machine_it_could_read():
+    def note(v):
+        return re.search(r"<span class=lpn>(.*?)</span>", run_js(f"profHtml({json.dumps(v)},new Set())"), re.S).group(1)
+    assert "Read 94.0% of the processes." in note({**VIEW, "coverage": 0.94})
+    assert "Read every process." in note({**VIEW, "coverage": 1.0})
 
 
 def test_the_view_states_the_switch_and_an_off_switch_draws_no_tree():

@@ -7811,7 +7811,9 @@ function profNote(v){
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
  return `On: the last ${profSecs(v.window_s||0)} of the process table. `
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
-  +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
+  +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")
+  +(v.coverage==null?"":v.coverage>=1?"Read every process.":`Read ${(100*v.coverage).toFixed(1)}% of the processes.`)
+  +" A process that lives between two readings is not counted."}
 function profHtml(v,open){
  const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,slots=profSlots(v.slots),load=profLoad(v.load),wall=profWall(v.wall,v.wall_windows),trip=profTrip(v.trip);
  if(!v.on||!v.tree)return head+slots+load+wall+trip;   // the file views read files only, so the switch does not gate them
