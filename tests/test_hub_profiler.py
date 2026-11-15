@@ -433,11 +433,11 @@ def wait(done, secs=5.0):
         time.sleep(0.01)
 
 
-def ask(port, method, body=None, *, origin=None, host=None):
+def ask(port, method, body=None, *, origin=None, host=None, path="/api/profiler"):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Host": host or f"127.0.0.1:{port}", "Content-Type": "application/json",
                "Origin": origin if origin is not None else f"http://127.0.0.1:{port}"}
-    c.request(method, "/api/profiler", body=None if body is None else json.dumps(body), headers=headers)
+    c.request(method, path, body=None if body is None else json.dumps(body), headers=headers)
     r = c.getresponse()
     data = json.loads(r.read() or b"{}")
     c.close()
@@ -699,7 +699,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler"\)', src)
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', src), "the read carries the window the owner chose"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -787,9 +787,63 @@ def test_the_view_states_the_switch_and_an_off_switch_draws_no_tree():
     assert re.search(r'role=switch aria-label="CPU sampling" aria-checked="true" data-prof', on)
     assert re.search(r"<h2>Loop</h2>", on) and re.search(r"<span class=lpl[^>]*>CPU sampling</span>", on)
     off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None})},new Set())")
-    assert re.search(r'aria-checked="false"', off) and "<table" not in off and "CPU sampling is off" in off
+    assert re.search(r'aria-checked="false"', off) and "id=proft" not in off and "CPU sampling is off" in off
     ro = run_js(f"profHtml({json.dumps({**VIEW, 'write': False, 'reason': 'read-only from the tailnet'})},new Set())")
     assert re.search(r'data-prof disabled[^>]*title="read-only from the tailnet"', ro)
+
+
+# ---------------------------------------------------------------- time in failed runs (#1751)
+RUNS = {"label": "Time in failed runs", "window_s": 3600, "runs": 3, "total_seconds": 1800.0, "failed_seconds": 1200.0,
+        "rows": [{"verdict": "failed", "reason": "gate:red", "count": 2, "seconds": 1200.0, "share": 0.667},
+                 {"verdict": "failed", "reason": "review:changes", "count": 1, "seconds": 600.0, "share": 0.333},
+                 {"verdict": "completed", "reason": "", "count": 1, "seconds": 600.0, "share": 0.333}]}
+
+
+def runs_part(out):
+    at = out.index("<table id=profr")
+    return out[at:out.index("</table>", at) + 8]
+
+
+def test_the_view_draws_the_time_in_failed_runs_table_by_verdict_and_reason():
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
+    part = runs_part(out)
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", part)] == ["Verdict", "Runs", "Run time", "Share"]
+    rows = re.findall(r"<td><b>([^<]*)</b>(?: <span class=prr>([^<]*)</span>)?</td><td>(\d+)</td><td>([^<]*)</td><td>([^<]*)</td>", part)
+    assert rows == [("failed", "gate:red", "2", "20.0 min", "66.7%"), ("failed", "review:changes", "1", "10.0 min", "33.3%"),
+                    ("completed", "", "1", "10.0 min", "33.3%")], "a failed run shows one row for each reason it names"
+    assert "Time in failed runs" in out and "waste" not in out.lower(), "the view names time, never waste"
+    assert "20.0 min in failed runs of 30.0 min of run time, 3 runs." in out
+
+
+def test_the_view_offers_the_three_windows_and_marks_the_one_chosen():
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
+    opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", out)
+    assert [(v, bool(sel), label) for v, sel, label in opts] == [("3600", False, "1 hour"), ("86400", True, "24 hours"),
+                                                                ("172800", False, "48 hours")]
+    assert re.search(r'<select data-profwin aria-label="The window of the time in failed runs table">', out)
+
+
+def test_the_table_shows_with_the_switch_off_and_states_an_empty_window():
+    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': RUNS})},new Set())")
+    assert "id=profr" in off and "id=proft" not in off and "gate:red" in off
+    empty = {"label": "Time in failed runs", "window_s": 3600, "runs": 0, "total_seconds": 0, "failed_seconds": 0, "rows": []}
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': empty})},new Set())")
+    assert "No run in this window." in out
+
+
+def test_the_route_answers_the_table_of_the_window_the_page_asked_for(hub):
+    mod, port, _, state, table = hub
+    now = time.time()
+    record(state.parent / "runs" / "run-20261115-020202-eeeeee",
+           ev("run_start", now - 600), ev("verdict", now - 300, verdict="failed", exit_code=1, reasons=["gate:red"]))
+    code, v = ask(port, "GET")
+    assert code == 200 and v["on"] is False and v["runs_window_s"] == 86400, "the table shows with the switch off"
+    assert [(r["verdict"], r["reason"], r["count"]) for r in v["runs"]["rows"]] == [("failed", "gate:red", 1)]
+    assert [w["s"] for w in v["runs_windows"]] == [3600, 86400, 172800]
+    assert table.reads == 0, "the table reads files only"
+    code, short = ask(port, "GET", path="/api/profiler?w=3600")
+    assert code == 200 and short["runs_window_s"] == 3600 and short["runs"]["rows"] == v["runs"]["rows"]
+    assert ask(port, "GET", path="/api/profiler?w=99")[1]["runs_window_s"] == 86400, "a choice the page cannot read is the default"
 
 
 # ---------------------------------------------------------------- behind the many-repository hub

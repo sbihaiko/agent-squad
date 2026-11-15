@@ -5761,6 +5761,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
 #profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}
 #profb table .pbar{display:block;height:100%;background:var(--err)}#profb table .pnm{margin-left:6px}#profb table .pk-orphan .pnm{color:var(--err)}#profb table .pk-other .pnm,#profb table .pk-unknown .pnm{color:var(--mute)}#profb .lerr{color:var(--err)}
+#profb .lpr{margin-top:20px}#profb .lpr h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profb .lpr .lpn{margin:2px 0 8px}#profb .lpw{float:right;font-size:var(--fs-caption)}#profr{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb #profr td:first-child{text-align:left;white-space:normal}#profb #profr .prr{color:var(--err);margin-left:6px}
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
@@ -7174,6 +7175,21 @@ function profCtx(c,open){const kids=c.children||[],isOpen=kids.length>0&&open.ha
  const row=(p,level,name,n,tw)=>`<tr data-p="${esc(p)}"${tw?` aria-expanded=${isOpen}`:""} aria-level=${level} class="pk-other"><td class=pn style="padding-left:${(level-1)*18+6}px">${tw?profTw(name,1,isOpen):`<span class=ptw></span>`}<span class=pnm>${esc(name)}</span></td><td>${profSecs(n.total_s||0)}</td><td>${n.events||0}</td></tr>`;
  return `<table id=profc role=treegrid aria-label="Every process outside the loop"><thead><tr><th title="every process that is not the loop of this profile, by application: a loaded machine shows here, a costly loop in the tree">Context</th><th title="CPU seconds in the window">Total time</th><th title="processes first seen in the window">Starts</th></tr></thead><tbody>`
   +row("context",1,c.name,c,kids.length>0)+(isOpen?kids.map(k=>row("context/"+k.name,2,k.name,k,false)).join(""):"")+`</tbody></table>`}
+// Time in failed runs (#1751): the runs of a window by verdict and, for a failed run, by reason. The hub folds it from the
+// run records; the page draws it and keeps the window the owner chose. It reads files only, so it draws with the switch off.
+const PROF_WIN=[[3600,"1 hour"],[86400,"24 hours"],[172800,"48 hours"]];
+const profWinGet=()=>{try{const s=JSON.parse(localStorage.getItem("squad-prof")||"{}")||{};return PROF_WIN.some(([x])=>x===s.w)?s.w:86400}catch(e){return 86400}};
+let profWin=profWinGet();
+const profWinSave=()=>{try{localStorage.setItem("squad-prof",JSON.stringify({w:profWin}))}catch(e){}};
+const profWinPick=()=>`<label class=lpw>Window <select data-profwin aria-label="The window of the time in failed runs table">${PROF_WIN.map(([s,l])=>`<option value=${s}${s===profWin?" selected":""}>${l}</option>`).join("")}</select></label>`;
+const profTime=s=>s>=3600?(s/3600).toFixed(1)+" h":s>=60?(s/60).toFixed(1)+" min":s>=1?s.toFixed(1)+" s":Math.round(s*1000)+" ms";
+const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
+function profRuns(r){
+ if(!r||!r.rows)return "";
+ const rows=r.rows.map(x=>`<tr class="pr-${esc(x.verdict)}"><td><b>${esc(x.verdict)}</b>${x.reason?` <span class=prr>${esc(x.reason)}</span>`:""}</td><td>${x.count}</td><td>${profTime(x.seconds)}</td><td>${profPct(x.share)}</td></tr>`).join("");
+ const note=r.rows.length?`${profTime(r.failed_seconds)} in failed runs of ${profTime(r.total_seconds)} of run time, ${r.runs} run${r.runs===1?"":"s"}.`:"No run in this window.";
+ return `<div class=lpr><h3>${esc(r.label||"Time in failed runs")}</h3>${profWinPick()}<p class=lpn>${note}</p>`
+  +`<table id=profr aria-label="Time in failed runs"><thead><tr><th title="the run's verdict; a failed run shows one row for each reason its verdict names">Verdict</th><th title="the runs in the row">Runs</th><th title="the run seconds the row covers">Run time</th><th title="the row's seconds as a share of every run second of the window">Share</th></tr></thead><tbody>${rows}</tbody></table></div>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
@@ -7182,20 +7198,21 @@ function profNote(v){
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
  const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`;
- if(!v.on||!v.tree)return head;
+ if(!v.on||!v.tree)return head+profRuns(v.runs);   // the failed-run table reads files only, so the switch does not gate it
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
  return head+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
-  +(v.context?profCtx(v.context,open):"")}
+  +(v.context?profCtx(v.context,open):"")+profRuns(v.runs)}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
+function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),win=!!a&&a.hasAttribute&&a.hasAttribute("data-profwin");
  b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler")).json();profDraw()}catch(e){}}
+ const t=sw?b.querySelector("[data-prof]"):win?b.querySelector("select[data-profwin]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
 async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 $("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
+$("#profb").addEventListener("change",e=>{const s=e.target.closest("select[data-profwin]");if(!s)return;profWin=Number(s.value)||86400;profWinSave();profPoll()});   // the window is the page's own choice, kept on this device
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
