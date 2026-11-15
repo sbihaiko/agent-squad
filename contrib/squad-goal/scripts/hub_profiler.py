@@ -18,6 +18,7 @@ it answers, is a lower bound.
 """
 import collections
 import functools
+import math
 import re
 import shlex
 
@@ -483,3 +484,137 @@ def failed_run_table(rows, window_s, now):
     failed = sum(run_seconds(r, now) for r in inside if r.get("verdict") == "failed")
     return {"window_s": window_s, "runs": len(inside), "total_seconds": round(total, 3), "failed_seconds": round(failed, 3),
             "rows": out, "label": RUN_TABLE_LABEL}
+
+
+# ---------------------------------------------------------------- the trip of one issue (#1769)
+# One stacked bar of the trip of an issue: the wait for a dispatch, coding, review, gates and landing. Each stage answers
+# its median and its p90 over the deliveries of a window. A delivery is a run whose record holds both a passed land and a
+# verdict; a run that landed nothing is no delivery and is not folded. The bars and tables read the percentiles on the
+# `(n - 1)` weight, the rule `docs/loop-sequence.md` names, so a number taken here and the trip table agree.
+TRIP_STAGES = (("wait", "Wait for a dispatch"), ("coding", "Coding"), ("review", "Review"), ("gates", "Gates"),
+               ("landing", "Landing"))
+TRIP_MIN_DELIVERIES = 3   # fewer than three deliveries say so and draw no bar: a median of two is no profile
+TRIP_LABEL = "The trip of an issue"
+_START = frozenset(("run_start", "resume"))   # an event that opens an invocation: the fold reads the last one only
+
+
+def percentile(values, p):
+    """The p-th percentile of `values`, by linear interpolation on the `(n - 1)` weight; None on no value. The rule is
+    named here and in `docs/loop-sequence.md`, so a bar and the trip table are compared on one definition."""
+    if not values:
+        return None
+    xs = sorted(values)
+    if len(xs) == 1:
+        return xs[0]
+    rank = (len(xs) - 1) * p / 100.0
+    lo, hi = int(math.floor(rank)), int(math.ceil(rank))
+    return xs[lo] + (xs[hi] - xs[lo]) * (rank - lo)
+
+
+def _ts(e):
+    """The event's time, or None when it carries none: a missing time is no zero."""
+    t = e.get("ts")
+    return t if isinstance(t, (int, float)) else None
+
+
+def _invocation(events):
+    """The last invocation's events: a resumed run's earlier attempt is no part of the trip it ended on."""
+    idx = max((i for i, e in enumerate(events) if e.get("event") in _START), default=-1)
+    return events[idx:] if idx >= 0 else []
+
+
+def trip_spans(events):
+    """The five stages of one run record in seconds, or None when the record is no delivery.
+
+    - `wait`: the run's start to its first call, the wait for a slot the record holds (`ceiling_wait` moves the start of
+      that call, so no frontier beat before the run exists is read here).
+    - `coding`: each spawned child's own span, its first call to its last answer. A failed entry that is retried lies
+      inside that span, so a retry is coding time, never a gap.
+    - `review`: each review round's wait, from the last child answer to the round.
+    - `gates`: each gate's start to its result, as the record holds both.
+    - `landing`: the last child answer or review to the merge.
+    A stage the record does not hold is None, never a zero. `end` is the verdict time; a run with no passed land or no
+    verdict is no delivery.
+    """
+    evs = _invocation(events)
+    verdict = next((e for e in reversed(evs) if e.get("event") == "verdict" and _ts(e) is not None), None)
+    land = next((e for e in reversed(evs) if e.get("event") == "land" and e.get("outcome") == "pass" and _ts(e) is not None), None)
+    if verdict is None or land is None or not evs:
+        return None
+    start = _ts(evs[0])
+    kids = {e.get("child") for e in evs if e.get("event") == "spawn_accepted" and e.get("child")}
+    calls = [t for t in (_ts(e) for e in evs if e.get("event") == "call_start") if t is not None]
+    coding, review, gates = None, None, None
+    starts, answers, gstart, first_call, last_answer = {}, [], {}, {}, {}
+    for e in evs:
+        kind, t = e.get("event"), _ts(e)
+        if kind == "call_start" and t is not None:
+            node = e.get("node")
+            starts[(node, e.get("entry"))] = t
+            if node in kids: first_call.setdefault(node, t)
+        elif kind == "outcome" and e.get("node") in kids and t is not None:
+            last_answer[e["node"]] = t
+            answers.append(t)
+        elif kind == "review_round" and t is not None:
+            if answers and t >= answers[-1]:
+                review = (review or 0.0) + (t - answers[-1])
+            answers.append(t)
+        elif kind == "gate_start" and t is not None:
+            gstart[(e.get("node"), e.get("entry"), e.get("item"))] = t
+        elif kind == "gate_result" and t is not None:
+            s = gstart.get((e.get("node"), e.get("entry"), e.get("item")))
+            if s is not None and t >= s:
+                gates = (gates or 0.0) + (t - s)
+    for node, first in first_call.items():
+        last = last_answer.get(node)
+        if last is not None and last >= first:
+            coding = (coding or 0.0) + (last - first)
+    before = [t for t in answers if t <= _ts(land)]
+    return {"wait": calls[0] - start if start is not None and calls and calls[0] >= start else None,
+            "coding": coding, "review": review, "gates": gates,
+            "landing": _ts(land) - max(before) if before else None, "end": _ts(verdict)}
+
+
+def gate_span(gate, since):
+    """The seconds one gate-history row ran, or None when the row is malformed or finished before the window."""
+    try:
+        start, finish = float(gate["start"]), float(gate["finish"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if finish < since or finish < start:
+        return None
+    return finish - start
+
+
+def trip(spans, gates, since):
+    """The trip of one issue as one stacked bar: each stage's median and p90 over the deliveries of a window.
+
+    `spans` is one `trip_spans` answer per run record, None for a record that is no delivery; `gates` is one dict per
+    gate-history row of the window, `start` and `finish` in seconds. A delivery is a run whose verdict is at or after
+    `since`; each gate row after `since` adds one observation to the gates stage, beside the gates each record holds.
+    `share` is the stage's median over the sum of the medians, the width its segment takes in the bar. Fewer than
+    `TRIP_MIN_DELIVERIES` deliveries answer `bar` False, and the page says so and draws no bar.
+    """
+    per = {key: [] for key, _ in TRIP_STAGES}
+    deliveries = 0
+    for s in spans:
+        if s is None or s["end"] < since:
+            continue
+        deliveries += 1
+        for key, _ in TRIP_STAGES:
+            if s.get(key) is not None:
+                per[key].append(s[key])
+    for gate in gates:
+        d = gate_span(gate, since)
+        if d is not None:
+            per["gates"].append(d)
+    medians = {key: percentile(v, 50) for key, v in per.items()}
+    total = sum(m for m in medians.values() if m)
+    rows = []
+    for key, label in TRIP_STAGES:
+        p90 = percentile(per[key], 90)
+        rows.append({"stage": key, "label": label, "observations": len(per[key]),
+                     "median_s": round(medians[key], 3) if medians[key] is not None else None,
+                     "p90_s": round(p90, 3) if p90 is not None else None,
+                     "share": round(medians[key] / total, 4) if total and medians[key] is not None else 0.0})
+    return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "stages": rows, "label": TRIP_LABEL}

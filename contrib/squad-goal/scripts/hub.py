@@ -2517,15 +2517,96 @@ def profile_run_table(window_s, now=None):
     now = time.time() if now is None else now
     return hub_profiler.failed_run_table(profile_run_rows(window_s, now), window_s, now)
 
+# ---------------------------------------------------------------- the trip of one issue (#1769)
+# The five stages of a delivery, folded by the rule layer from the run records and the gate history: the wait for a
+# dispatch, coding, review, gates and landing. It reads files only, so it shows with the CPU sampling switch off. A
+# record's stages are cached by its own signature, so a poll parses only a record that changed; the window is decided by
+# the event times the fold reads, never by a write time.
+TRIP_SPANS = {}       # record path -> (mtime, size, the rule layer's stages): a poll parses only a changed record
+TRIP_SPANS_MAX = 4096 # a bound, never a ledger: a cleared entry is read again on the next poll
+_TRIP_EVENTS = frozenset(("run_start", "resume", "call_start", "spawn_accepted", "outcome", "review_round", "gate_start",
+                          "gate_result", "land", "verdict"))   # the events the trip's stages are read from
+_EVENT_NAME = re.compile(r'"event"\s*:\s*"([a-z_]+)"')
+
+def trip_events(path):
+    """One run record's events, read tolerantly: a line whose event is not one the trip reads, or that is not JSON, is
+    skipped, so a half-written record never ends the fold and a long progress log costs no parse. A run's identity stays
+    `scan`'s; this is the trip's own read of its events."""
+    try: text = path.read_text(errors="replace")
+    except OSError: return []
+    out = []
+    for line in text.splitlines():
+        m = _EVENT_NAME.search(line)
+        if not m or m.group(1) not in _TRIP_EVENTS: continue
+        try: e = json.loads(line)
+        except ValueError: continue
+        if isinstance(e, dict) and e.get("event") == m.group(1): out.append(e)
+    return out
+
+def trip_stages(path):
+    """The rule layer's stages of one record, or None when it is no delivery, cached by the file's own signature."""
+    try: st = path.stat()
+    except OSError: return None
+    key = str(path)
+    hit = TRIP_SPANS.get(key)
+    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size: return hit[2]
+    spans = hub_profiler.trip_spans(trip_events(path))
+    if len(TRIP_SPANS) >= TRIP_SPANS_MAX: TRIP_SPANS.clear()
+    TRIP_SPANS[key] = (st.st_mtime, st.st_size, spans)
+    return spans
+
+# A gate-history row's fields, in the order `gate.sh` writes them. The reason is free text and may hold a tab, so on a
+# whole row the field is rejoined: the seven columns after it keep their own names, never an index.
+GATE_HISTORY_FIELDS = ("finish", "kind", "result", "sha", "start", "selection", "scope", "outcome", "reason", "ran",
+                       "not_run", "slots", "red", "caller", "load_start", "load_finish")
+
+def gate_row(line):
+    """One gate-history line as named fields, or None when it is too short to hold a finish and a start. A reason that
+    holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields."""
+    parts = line.split("\t")
+    if len(parts) < 5: return None
+    if len(parts) >= 16:
+        parts = parts[:8] + ["\t".join(parts[8:-7])] + parts[-7:]
+    return dict(zip(GATE_HISTORY_FIELDS, parts))
+
+def trip_gates(since):
+    """The gate-history rows of the window, `start` and `finish` in seconds beside their kind, outcome and caller."""
+    out = []
+    try: lines = (STATE / "gate-history").read_text(errors="replace").splitlines()
+    except OSError: return out
+    for line in lines:
+        row = gate_row(line)
+        if row is None: continue
+        try: finish, start = float(row["finish"]), float(row["start"])
+        except (KeyError, TypeError, ValueError): continue
+        if finish < since: continue
+        out.append({"finish": finish, "start": start, "kind": row.get("kind", ""),
+                    "outcome": row.get("outcome", ""), "caller": row.get("caller", "")})
+    return out
+
+def trip_view(window_s, now=None):
+    """The Loop tab's trip bar (#1769): the five stages of a delivery over the chosen window, folded by the rule layer
+    from the run records under this profile's run roots and the gate history. It reads files only, so it shows with the
+    CPU sampling switch off."""
+    now = time.time() if now is None else now
+    since = now - window_s
+    files = []
+    for root in run_roots(CHECKOUT):
+        try: files.extend(sorted(root.glob("run-*/record.jsonl")))
+        except OSError: continue
+    return {"window_s": window_s, "since": since,
+            **hub_profiler.trip([trip_stages(p) for p in files], trip_gates(since), since)}
+
+
 def profiler_view(a, w=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
-    it, the facts of the reading, and the time in failed runs table of the window `w` the page chose; no tree while the
-    switch is off, and the table reads files only, so it shows with the switch off."""
+    it, the facts of the reading, the trip bar and the time in failed runs table of the window `w` the page chose; no
+    tree while the switch is off, and the file views read files only, so they show with the switch off."""
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
-           "runs": profile_run_table(window_s), "runs_window_s": window_s,
+           "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out
@@ -5757,6 +5838,10 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profb .psw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true]{background:var(--ok)}
 #profb .psw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true] i{transform:translateX(20px)}
 #profb .psw:disabled{opacity:.6;cursor:default}#profb .psw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#proftrip{margin:0 0 16px}#proftrip h3{margin:0 0 4px;font-size:var(--fs-caption);font-weight:600}#proftrip .tpn{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
+#proftrip .ptb{display:flex;width:100%;height:14px;margin:0 0 8px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}#proftrip .ptb-seg{display:block;height:100%}
+#proftrip .pts-wait{background:var(--mute)}#proftrip .pts-coding{background:var(--run)}#proftrip .pts-review{background:var(--acc)}#proftrip .pts-gates{background:var(--warn)}#proftrip .pts-landing{background:var(--ok)}
+#proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#proftt th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#proftt th:first-child{text-align:left}#proftt td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#proftt td:first-child{text-align:left}
 #profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}
 #profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
 #profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}
@@ -7162,6 +7247,7 @@ setInterval(accPoll,5000);accPoll();
 // draws it and keeps only which rows are open. The root is open until it is closed; every other node opens on a press.
 // The context row, every process outside the loop, is its own table below the tree.
 const profDue=(tab,hidden,v)=>tab==="prof"&&!hidden&&!!v&&v.on;
+const profFileDue=(tab,hidden,v)=>tab==="prof"&&!hidden&&!!v&&!v.on;   // the file views, the trip bar among them: no sampler drives them, so a slower cadence reads them (#1769)
 const profSecs=s=>s>=100?s.toFixed(0)+" s":s>=1?s.toFixed(2)+" s":(s*1000).toFixed(0)+" ms";
 const profRate=r=>r>=10?r.toFixed(0)+"/s":r>=1?r.toFixed(1)+"/s":r.toFixed(2)+"/s";
 const profSw=v=>`<button type=button role=switch aria-label="CPU sampling" aria-checked="${!!v.on}" data-prof${v.write?"":" disabled"} class=psw${v.reason?` title="${esc(v.reason)}"`:""}><i aria-hidden="true"></i></button>`;
@@ -7181,9 +7267,23 @@ const PROF_WIN=[[3600,"1 hour"],[86400,"24 hours"],[172800,"48 hours"]];
 const profWinGet=()=>{try{const s=JSON.parse(localStorage.getItem("squad-prof")||"{}")||{};return PROF_WIN.some(([x])=>x===s.w)?s.w:86400}catch(e){return 86400}};
 let profWin=profWinGet();
 const profWinSave=()=>{try{localStorage.setItem("squad-prof",JSON.stringify({w:profWin}))}catch(e){}};
-const profWinPick=()=>`<label class=lpw>Window <select data-profwin aria-label="The window of the time in failed runs table">${PROF_WIN.map(([s,l])=>`<option value=${s}${s===profWin?" selected":""}>${l}</option>`).join("")}</select></label>`;
+const profWinPick=()=>`<label class=lpw>Window <select data-profwin aria-label="The window of the Loop tab's file views">${PROF_WIN.map(([s,l])=>`<option value=${s}${s===profWin?" selected":""}>${l}</option>`).join("")}</select></label>`;
 const profTime=s=>s>=3600?(s/3600).toFixed(1)+" h":s>=60?(s/60).toFixed(1)+" min":s>=1?s.toFixed(1)+" s":Math.round(s*1000)+" ms";
 const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
+// The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
+// medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
+const profTripNum=s=>s==null?"&#8212;":profTime(s);
+function profTrip(t){
+ if(!t)return "";
+ const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
+ if(!t.bar)return `<section id=proftrip>${head}<p class=tpn>${n} deliver${n===1?"y":"ies"} in the last ${span}: fewer than three, so no bar is drawn.</p></section>`;
+ const stages=t.stages||[],total=stages.reduce((a,s)=>a+(s.median_s||0),0);
+ const seg=s=>{const pct=total&&s.median_s?100*s.median_s/total:0;
+  return `<i class="ptb-seg pts-${esc(s.stage)}" style="width:${pct.toFixed(2)}%" title="${esc(`${s.label}: median ${profTripNum(s.median_s)}, p90 ${profTripNum(s.p90_s)} (${s.observations} observation${s.observations===1?"":"s"})`)}"></i>`};
+ const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each stage`)}">${stages.filter(s=>s.median_s!=null).map(seg).join("")}</div>`;
+ const rows=stages.map(s=>`<tr data-p="trip/${esc(s.stage)}"><td class=pn><span class=pnm>${esc(s.label)}</span></td><td>${profTripNum(s.median_s)}</td><td>${profTripNum(s.p90_s)}</td><td>${s.observations||0}</td></tr>`).join("");
+ return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds their median time in each stage.</p>${bar}`
+  +`<table id=proftt aria-label="The trip of an issue, a stage a row"><thead><tr><th>Stage</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
 function profRuns(r){
  if(!r||!r.rows)return "";
  const rows=r.rows.map(x=>`<tr class="pr-${esc(x.verdict)}"><td><b>${esc(x.verdict)}</b>${x.reason?` <span class=prr>${esc(x.reason)}</span>`:""}</td><td>${x.count}</td><td>${profTime(x.seconds)}</td><td>${profPct(x.share)}</td></tr>`).join("");
@@ -7197,10 +7297,10 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`;
- if(!v.on||!v.tree)return head+profRuns(v.runs);   // the failed-run table reads files only, so the switch does not gate it
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+trip+profRuns(v.runs);   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")+profRuns(v.runs)}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
@@ -7214,6 +7314,7 @@ $("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-p
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
 $("#profb").addEventListener("change",e=>{const s=e.target.closest("select[data-profwin]");if(!s)return;profWin=Number(s.value)||86400;profWinSave();profPoll()});   // the window is the page's own choice, kept on this device
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
+setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
