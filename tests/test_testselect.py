@@ -207,18 +207,98 @@ def test_no_change_selects_no_test_and_says_why(tmp_path):
 
 @pytest.mark.parametrize("changed, named", [
     ("contrib/squad-goal/scripts/check.sh", "contrib/squad-goal/scripts/check.sh"),
-    ("contrib/squad-goal/scripts/check.sh", "contrib/squad-goal/scripts"),
-    ("squad/prompts/review.md", "squad/prompts"),
-    ("docs/squad/workflows/default.yaml", "docs/squad/workflows/default.yaml"),
+    ("contrib/squad-goal/scripts/check.sh", "check.sh"),
+    ("contrib/squad-goal/scripts/check.sh", "scripts/check.sh"),
+    ("squad/prompts/review.md", "squad/prompts/review.md"),
+    ("docs/squad/workflows/default.yaml", "default.yaml"),
     ("CLAUDE.md", "CLAUDE.md"),
-    ("docs/adr/0018-failing-gate-is-a-defect.md", "docs/adr"),
-    (".claude/skills/tdd/SKILL.md", ".claude/skills/tdd"),
+    ("docs/adr/0018-failing-gate-is-a-defect.md", "0018-failing-gate-is-a-defect.md"),
+    (".claude/skills/tdd/SKILL.md", "SKILL.md"),
 ])
-def test_a_changed_file_selects_each_test_that_names_it_or_a_directory_above_it(tmp_path, changed, named):
+def test_a_changed_file_selects_each_test_that_names_it_by_path_or_basename(tmp_path, changed, named):
     repo = tip(
         tmp_path,
         {changed: "changed\n"},
         extra={changed: "old\n", "tests/test_names.py": f'NAMED = "{named}"\n', "tests/test_other.py": "X = 1\n"},
+    )
+    assert select(repo) == ["tests/test_names.py"]
+
+
+@pytest.mark.parametrize("named", ["contrib/squad-goal/scripts", "contrib"])
+def test_a_directory_literal_alone_does_not_select_a_test_under_it(tmp_path, named):
+    """A test that names a directory has many scripts under it; naming the directory does not name this one (#1784)."""
+    path = "contrib/squad-goal/scripts/check.sh"
+    repo = tip(
+        tmp_path,
+        {path: "changed\n"},
+        extra={path: "old\n", "tests/test_names.py": f'NAMED = "{named}"\n', "tests/test_other.py": "X = 1\n"},
+    )
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and path in lines[0], lines
+
+
+def test_a_directory_literal_joined_to_another_script_does_not_select_the_changed_one(tmp_path):
+    """The shape of the join the rule targets: the base of a path join names a directory, and the test names a sibling (#1784)."""
+    joins = (
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parent.parent\n"
+        "OTHER = ROOT / 'contrib' / 'squad-goal' / 'scripts' / 'other.sh'\n"
+    )
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/check.sh": "changed\n"},
+        extra={
+            "contrib/squad-goal/scripts/check.sh": "old\n",
+            "tests/test_joins.py": joins,
+            "tests/test_names.py": 'NAMED = "check.sh"\n',
+        },
+    )
+    assert select(repo) == ["tests/test_names.py"]
+
+
+def test_a_directory_literal_and_the_basename_together_select_the_test(tmp_path):
+    names = "DIR = 'contrib/squad-goal/scripts'\nNAME = 'check.sh'\n"
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/check.sh": "changed\n"},
+        extra={"contrib/squad-goal/scripts/check.sh": "old\n", "tests/test_names.py": names, "tests/test_other.py": "X = 1\n"},
+    )
+    assert select(repo) == ["tests/test_names.py"]
+
+
+@pytest.mark.parametrize("lister", [
+    "(ROOT / 'contrib' / 'squad-goal' / 'scripts').glob('*.sh')",
+    "(ROOT / 'contrib').rglob('*.sh')",
+    "(ROOT / 'contrib' / 'squad-goal' / 'scripts').iterdir()",
+    "os.listdir(ROOT / 'contrib' / 'squad-goal' / 'scripts')",
+    "os.scandir(ROOT / 'contrib' / 'squad-goal' / 'scripts')",
+    "os.walk(ROOT / 'contrib')",
+])
+def test_a_test_that_lists_the_directory_selects_a_script_under_it(tmp_path, lister):
+    lists = (
+        "import os\n"
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parent.parent\n"
+        f"FOUND = {lister}\n"
+    )
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/check.sh": "changed\n"},
+        extra={"contrib/squad-goal/scripts/check.sh": "old\n", "tests/test_lists.py": lists, "tests/test_other.py": "X = 1\n"},
+    )
+    assert select(repo) == ["tests/test_lists.py"]
+
+
+def test_a_test_that_lists_a_sibling_directory_does_not_select_the_changed_script(tmp_path):
+    lists = (
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parent.parent\n"
+        "FOUND = list((ROOT / 'contrib' / 'squad-goal' / 'other').glob('*.sh'))\n"
+    )
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/check.sh": "changed\n"},
+        extra={"contrib/squad-goal/scripts/check.sh": "old\n", "tests/test_lists.py": lists, "tests/test_names.py": 'NAMED = "check.sh"\n'},
     )
     assert select(repo) == ["tests/test_names.py"]
 
