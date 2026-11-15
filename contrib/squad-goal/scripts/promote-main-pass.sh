@@ -27,7 +27,9 @@
 #   quiet    now - committer date of the stg tip >= SG_PROMOTE_MAIN_QUIET_S (600)
 #   ceiling  now - committer date of the oldest first-parent commit main lacks >= SG_PROMOTE_MAIN_MAX_S (14400)
 # After a red, an unproven verdict or a refused move, the next request also waits SG_PROMOTE_MAIN_REARM_S (3600) from the
-# hold time: the re-arm is its own wait, not the short quiet window.
+# hold time: the re-arm is its own wait, not the short quiet window. A red's hold names the sha it measured (#1889), the
+# same sha promote-main-red records: it stops applying as soon as the stg tip is another sha, because the tier measured
+# that content alone. An unproven or refused-move hold names no sha and keeps its own wait.
 # A workflow that names no complete tier job proves nothing: one alert, no request, never green.
 # The live copy is published from stg and never waits for this pass. SG_PROMOTE=off does nothing. Exit 0: nothing to do, a
 # wait, a request or a move. Exit 1: main was held or a write failed; the reason is in promote.log or alerts.log.
@@ -50,7 +52,9 @@ alert_once() {  # <key> <text>: one alerts.log line per key
   local m=$state/auto/promote-main-$1
   [ -e "$m" ] && return 0
   : > "$m"; printf '%s PROMOTE MAIN %s\n' "$(date '+%F %T')" "$2" >> "$state/alerts.log"; }
-held() { put "$hold" "$(date +%s)"; }   # the next request waits the re-arm window from here
+held() {  # [<sha>]: the hold time, and the sha a red measured; an unproven or refused-move hold names no sha
+  local t; t=$(date +%s)
+  if [ -n "${1:-}" ]; then put "$hold" "$(printf '%s\t%s' "$t" "$1")"; else put "$hold" "$t"; fi; }
 . "$d/ghcall.sh"; . "$d/basecheck.sh"
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
 g remote set-url origin "$remote"
@@ -176,7 +180,7 @@ Filed by promote-main-pass.sh."
         # Bug first (ADR-0148): the card goes to Todo through the board door. A refused add is the janitor's to repair.
         ${SG_BOARD_CMD:-bash "$d/board.sh"} --add "${SG_OWNER:-}" "${SG_PROJECT:-}" Todo "$n" >/dev/null 2>&1 || true
       fi
-      held; put "$redrec" "$R"; rm -f "$rec"
+      held "$R"; put "$redrec" "$R"; rm -f "$rec"
       say "$R red: $why; $main stays at ${mtip:0:9}, bug #$n"; exit 1;;
     unproven)
       alert_once "unproven-${R:0:12}" "the complete tier proved nothing on $stg at ${R:0:9}: $why; $main stays at ${mtip:0:9}, and the next request waits ${rearm}s"
@@ -191,8 +195,13 @@ fi
 oldest=$(g rev-list --first-parent "origin/$main..origin/$stg" | tail -n 1); [ -n "$oldest" ] || exit 0
 tage=$(( now - $(g show -s --format=%ct "$stip") )); oage=$(( now - $(g show -s --format=%ct "$oldest") ))
 { [ "$tage" -ge "$quiet" ] || [ "$oage" -ge "$ceiling" ]; } || exit 0
-h=$(secs "$(cat "$hold" 2>/dev/null)" 0)
-[ $(( now - h )) -ge "$rearm" ] || exit 0   # a red, an unproven verdict or a refused move re-arms only after its own wait
+hraw=$(cat "$hold" 2>/dev/null); h=$(secs "${hraw%%[!0-9]*}" 0)
+if [ $(( now - h )) -lt "$rearm" ]; then   # a red, an unproven verdict or a refused move re-arms only after its own wait
+  # A red's hold names the sha it measured (#1889): it stops applying as soon as the stg tip is another sha, and the quiet
+  # window alone gates the new tip. An unproven or refused-move hold names no sha and keeps its own wait.
+  hs=; case "$hraw" in *$'\t'*) hs=${hraw#*$'\t'};; esac
+  [ -n "$hs" ] && [ "$hs" != "$stip" ] || exit 0
+fi
 if ! g merge-base --is-ancestor "$mtip" "$stip"; then
   alert_once "diverged-${mtip:0:12}" "$main at ${mtip:0:9} is not an ancestor of $stg at ${stip:0:9}: $main holds work $stg lacks, so no complete tier is requested; the owner resolves it"
   exit 0
