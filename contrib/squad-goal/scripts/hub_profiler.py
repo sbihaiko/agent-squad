@@ -432,3 +432,54 @@ class Window:
 
     def context(self):
         return context(self.acc)
+
+
+# ---------------------------------------------------------------- time in failed runs (#1751)
+# The third view of the Loop tab, and the only one that reads no process table: the runs of a window by verdict and, for
+# a failed run, by the reasons its verdict names, with the run seconds each row covers. A failure does not prove that
+# every second was lost, so the view names time, never waste. The rows come from the hub's run fold, the one reader of a
+# record, so this fold reads no file and no clock of its own.
+RUN_WINDOWS = (3600, 86400, 172800)   # the windows the page offers: 1 hour, 24 hours and 48 hours
+RUN_WINDOW_DEFAULT = 86400
+RUN_WINDOW_LABELS = {3600: "1 hour", 86400: "24 hours", 172800: "48 hours"}
+RUN_TABLE_LABEL = "Time in failed runs"
+
+
+def run_window(w):
+    """The window a page asked for, in seconds: one of RUN_WINDOWS, else the 24 hour default. A choice the page cannot
+    read is that default, never an error."""
+    try: w = int(w)
+    except (TypeError, ValueError): return RUN_WINDOW_DEFAULT
+    return w if w in RUN_WINDOWS else RUN_WINDOW_DEFAULT
+
+
+def run_seconds(r, now):
+    """The seconds a folded run covers: its first event to its verdict, and up to `now` while it has no verdict."""
+    t0 = r.get("t0")
+    if not t0: return 0.0
+    end = r.get("t1") if r.get("t1") is not None else now
+    return max(0.0, min(end, now) - t0)
+
+
+def failed_run_table(rows, window_s, now):
+    """The runs of the window by verdict and, for a failed run, by reason: count, run seconds and share, sorted by seconds.
+
+    `rows` is what the hub's run fold answers, one per record: `t0`, `t1`, `verdict` and `reasons`. A run is in the window
+    when it ends in it, and a run with no verdict ends at `now`. A failed run counts in the row of every reason it names,
+    so the reason rows of one run can add past its own seconds; the share is over every run second of the window."""
+    since = now - window_s
+    inside = [r for r in rows if r.get("t0") and (r.get("t1") if r.get("t1") is not None else now) >= since]
+    acc, total = {}, 0.0
+    for r in inside:
+        secs = run_seconds(r, now); total += secs
+        ver = r.get("verdict") or "running"
+        reasons = [str(x) for x in (r.get("reasons") or [])] if ver == "failed" else [""]
+        for reason in dict.fromkeys(reasons or [""]):
+            cell = acc.setdefault((ver, reason), [0, 0.0])
+            cell[0] += 1; cell[1] += secs
+    out = [{"verdict": v, "reason": reason, "count": n, "seconds": round(s, 3), "share": round(s / total, 3) if total else None}
+           for (v, reason), (n, s) in acc.items()]
+    out.sort(key=lambda x: (-x["seconds"], x["verdict"] != "failed", x["verdict"], x["reason"]))   # a failed row wins a tie
+    failed = sum(run_seconds(r, now) for r in inside if r.get("verdict") == "failed")
+    return {"window_s": window_s, "runs": len(inside), "total_seconds": round(total, 3), "failed_seconds": round(failed, 3),
+            "rows": out, "label": RUN_TABLE_LABEL}

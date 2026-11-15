@@ -267,6 +267,101 @@ def test_the_window_states_its_last_reading_the_measured_interval_and_the_failed
     assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0}
 
 
+# ---------------------------------------------------------------- time in failed runs (#1751)
+# The rows are the hub's folded record rows, one per run: the run fold (hub.scan) is the one reader of a record, and this
+# fold is pure over what it answers. NOW is a fixed clock, so no test reads the machine's.
+NOW = 1_700_000_000.0
+
+
+def run_row(t0, t1, verdict, reasons=()):
+    return {"t0": t0, "t1": t1, "verdict": verdict, "reasons": list(reasons)}
+
+
+def test_the_table_counts_each_verdict_and_each_reason_of_a_failed_run(prof):
+    rows = [run_row(NOW - 900, NOW - 300, "failed", ["gate:red", "review:changes"]),   # 600 s, two reasons
+            run_row(NOW - 800, NOW - 200, "failed", ["gate:red"]),                     # 600 s, the same reason again
+            run_row(NOW - 700, NOW - 100, "completed")]                                # 600 s, no reason
+    t = prof.failed_run_table(rows, 3600, NOW)
+    assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [
+        ("failed", "gate:red", 2, 1200.0),
+        ("failed", "review:changes", 1, 600.0),
+        ("completed", "", 1, 600.0)], "a failed run counts under every reason it names, and the rows sort by seconds"
+    assert t["total_seconds"] == 1800.0 and t["failed_seconds"] == 1200.0 and t["runs"] == 3
+    assert [r["share"] for r in t["rows"]] == [0.667, 0.333, 0.333], "the share is of every run second of the window"
+    assert t["label"] == "Time in failed runs", "the view names time, never waste"
+
+
+def test_a_run_with_no_verdict_counts_as_running_up_to_now(prof):
+    t = prof.failed_run_table([run_row(NOW - 120, None, None)], 3600, NOW)
+    assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", "", 1, 120.0)]
+
+
+def test_a_run_that_ended_before_the_window_is_not_counted(prof):
+    rows = [run_row(NOW - 7200, NOW - 5400, "failed", ["gate:red"]), run_row(NOW - 300, NOW - 60, "failed", ["gate:red"])]
+    assert [(r["count"], r["seconds"]) for r in prof.failed_run_table(rows, 3600, NOW)["rows"]] == [(1, 240.0)]
+
+
+def test_a_failed_run_with_no_reason_is_one_row_with_no_reason(prof):
+    t = prof.failed_run_table([run_row(NOW - 60, NOW, "failed")], 3600, NOW)
+    assert [(r["verdict"], r["reason"], r["seconds"]) for r in t["rows"]] == [("failed", "", 60.0)]
+
+
+def test_an_empty_window_is_an_empty_table_and_no_share(prof):
+    t = prof.failed_run_table([], 3600, NOW)
+    assert t["rows"] == [] and t["total_seconds"] == 0 and t["runs"] == 0
+
+
+def test_the_window_is_one_of_the_three_the_page_offers(prof):
+    assert prof.RUN_WINDOWS == (3600, 86400, 172800)
+    assert [prof.run_window(w) for w in (3600, 86400, 172800)] == [3600, 86400, 172800]
+    assert [prof.run_window(w) for w in (None, "x", 7200)] == [86400, 86400, 86400], "an unread choice is the 24 hour window"
+
+
+def record(folder, *events):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+
+
+def ev(event, ts, **kw):
+    return {"event": event, "pos": 1, "ts": ts, **kw}
+
+
+@pytest.fixture
+def records(served, monkeypatch, tmp_path):
+    """A checkout whose runs folder the test owns: the fold reads only what the hub's run fold answers."""
+    mod, _, _, _ = served
+    monkeypatch.setattr(mod, "CHECKOUT", str(tmp_path))
+    return mod, tmp_path / "runs"
+
+
+def test_a_resumed_run_counts_its_last_verdict_after_the_last_start(records):
+    mod, runs = records
+    record(runs / "run-20261115-010101-aaaaaa",
+           ev("run_start", NOW - 900), ev("verdict", NOW - 800, verdict="failed", exit_code=1, reasons=["gate:red"]),
+           ev("resume", NOW - 700), ev("verdict", NOW - 100, verdict="completed", exit_code=0, reasons=[]))
+    t = mod.profile_run_table(3600, NOW)
+    assert [(r["verdict"], r["count"]) for r in t["rows"]] == [("completed", 1)], "the verdict before the resume is not final"
+    assert t["failed_seconds"] == 0
+
+
+def test_a_fixture_record_of_a_failed_run_gives_its_reasons_their_seconds(records):
+    mod, runs = records
+    record(runs / "run-20261115-010202-bbbbbb",
+           ev("run_start", NOW - 600), ev("verdict", NOW - 300, verdict="failed", exit_code=1, reasons=["gate:red"]))
+    record(runs / "run-20261115-010303-cccccc",
+           ev("run_start", NOW - 400), ev("verdict", NOW - 100, verdict="failed", exit_code=1, reasons=["gate:red", "land:conflict"]))
+    t = mod.profile_run_table(3600, NOW)
+    assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [
+        ("failed", "gate:red", 2, 600.0), ("failed", "land:conflict", 1, 300.0)]
+
+
+def test_a_fixture_record_with_no_verdict_is_a_running_run(records):
+    mod, runs = records
+    record(runs / "run-20261115-010404-dddddd", ev("run_start", NOW - 600), ev("call_start", NOW - 60))
+    t = mod.profile_run_table(3600, NOW)
+    assert [(r["verdict"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", 1, 600.0)]
+
+
 # ---------------------------------------------------------------- the route
 @pytest.fixture(scope="module")
 def served(tmp_path_factory):

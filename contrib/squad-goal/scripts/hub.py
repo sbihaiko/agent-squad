@@ -2494,12 +2494,39 @@ def profiler_refusal(a, origin_ok, tn):
     if a.tailnet and tn.get("profiler_write") is not True: return PROFILER_READ_ONLY
     return "" if origin_ok else "forbidden"
 
-def profiler_view(a):
+def profile_run_rows(window_s, now=None):
+    """The folded rows of this profile's runs the window can hold, from the one reader of a record (`scan`): `t0`, `t1`,
+    the verdict and its reasons. A record whose last write is older than the window is an older run, so it is not read."""
+    now = time.time() if now is None else now
+    since = now - window_s
+    out = []
+    for root in run_roots(CHECKOUT):
+        try: ds = sorted(root.glob("run-*"))
+        except OSError: continue
+        for d in ds:
+            p = d / "record.jsonl"
+            try:
+                if p.stat().st_mtime < since: continue
+            except OSError: continue
+            r = scan(p)
+            if r and r.get("t0"): out.append({"t0": r["t0"], "t1": r["t1"], "verdict": r["verdict"], "reasons": r["reasons"]})
+    return out
+
+def profile_run_table(window_s, now=None):
+    """The Loop tab's time in failed runs table for this profile, folded by the rule layer (ADR-0137)."""
+    now = time.time() if now is None else now
+    return hub_profiler.failed_run_table(profile_run_rows(window_s, now), window_s, now)
+
+def profiler_view(a, w=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
-    it, and the facts of the reading; no tree while the switch is off."""
+    it, the facts of the reading, and the time in failed runs table of the window `w` the page chose; no tree while the
+    switch is off, and the table reads files only, so it shows with the switch off."""
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
+    window_s = hub_profiler.run_window(w)
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
+           "runs": profile_run_table(window_s), "runs_window_s": window_s,
+           "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out
     profiler_ensure()
@@ -8997,7 +9024,9 @@ class H(BaseHTTPRequestHandler):
             out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
-        elif self.path.split("?", 1)[0] == "/api/profiler": body, ct = json.dumps(profiler_view(a)).encode(), "application/json"   # the Loop tab (#1743)
+        elif self.path.split("?", 1)[0] == "/api/profiler":   # the Loop tab (#1743); `?w=` is the failed-run table's window (#1751)
+            q = re.search(r"[?&]w=(\d{1,9})\b", self.path)
+            body, ct = json.dumps(profiler_view(a, q[1] if q else None)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/clip"):   # the answer's one Kore clip (#1603)
