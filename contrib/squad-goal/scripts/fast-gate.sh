@@ -36,13 +36,25 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 . "$here/base-battery.sh"
 . "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
 py=$(sg_gate_python)
+# (#1872) The scope decides the child's count. A delta takes one slot, which is the concurrency #1865 won; a full battery takes
+# the full count, because ~3000 tests at one worker pass the 900 s bounded proof (ADR-0163) and a gate that proves nothing is a
+# defect (ADR-0018). The selector is asked here, once, so the count is known before the slot take; the battery asks it again
+# over the same tree and answers the same. A full-battery gate waits for its slots inside the gate lock, so a run of one-slot
+# gates cannot starve it, and the wait is gate wait, never run time (ADR-0166): the gate starts its clock when it holds both.
+child_count=${SG_GATE_WORKERS_CHILD:-1}
+if [ -z "${SG_FAST_CMD:-}" ] && [ "${SG_TEST_SELECT:-yes}" != no ] && [ "${SG_GATE_CALLER:-child}" = child ] && [ -z "${SG_SERIAL_HELD:-}" ]; then
+  selans=$("$py" -m squad.testselect --stage fast --base "$base" 2>/dev/null) || selans=
+  case "$selans" in
+    all:*) child_count=${SG_GATE_WORKERS_CHILD_ALL:-3}; export SG_GATE_SLOT_WAIT=${SG_GATE_SLOT_WAIT:-1};;
+  esac
+fi
 # (#1436, #1865, #1527) A child's own gate takes one gate slot, so three children land at once on a three-slot budget; an entry
 # or a tip gate keeps the full count. The count never rides on SG_GATE_WORKERS: env.sh exports it for the whole loop, so a child
 # would inherit six and hold the whole budget, and `:-` substitutes only an unset name. A caller that wants another count names
 # SG_GATE_WORKERS_CHILD. It is set before the battery command is built, so the memo key read before the lock names the same
 # count as the key stored inside it.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
-  *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=${SG_GATE_WORKERS_CHILD:-1};; esac
+  *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=$child_count;; esac
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
 # (#1557) The retry keeps the serial 2 s line: it lifts no cap, so it cannot clear the slow unmarked call the serial pass found.
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist"}
@@ -128,7 +140,7 @@ fi
 # child's own; the count env.sh exports for the loop never does.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
   *) export SG_GATE_CALLER=${SG_GATE_CALLER:-child}
-     if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=${SG_GATE_WORKERS_CHILD:-1}; fi
+     if [ "$SG_GATE_CALLER" = child ]; then export SG_GATE_WORKERS=$child_count; fi
      # (ADR-0166) A child waits for a free slot inside its deadline; the wait is gate wait, never run time, because the gate
      # starts its clock only once it holds the lock and its slots.
      slot_by=$(( $(date +%s) + ${SG_CALL_DEADLINE_SECONDS:-1800} )); waited=0

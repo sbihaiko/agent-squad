@@ -646,6 +646,29 @@ ccase() {  # <env assignment>...: field 14 of the one history row a fresh state 
 }
 c=$(ccase); [ "$c" = child ] && ok "a gate that names no caller is recorded as the child's" || ko "unnamed caller recorded as '$c', want child"
 c=$(ccase SG_GATE_CALLER=entry); [ "$c" = entry ] && ok "a named caller is recorded as named" || ko "entry caller recorded as '$c', want entry"
+# (#1872) The scope decides the child's count: a delta takes one slot, and a full battery takes the full count and queues as a
+# priority waiter at the gate lock, so a run of one-slot gates cannot starve it. The stub gate.sh records the values that
+# reached the lock, so the case reads what a slot take would see, never a word in the script.
+ps=$T/pscripts; mkdir -p "$ps"
+cp "$d/fast-gate.sh" "$d/base-battery.sh" "$d/caps.sh" "$ps"/
+printf '#!/bin/bash\nprintf "wait=%%s caller=%%s workers=%%s\\n" "${SG_GATE_SLOT_WAIT:-}" "${SG_GATE_CALLER:-}" "${SG_GATE_WORKERS:-}" >> "%s/gate.log"\nexit 0\n' "$T" > "$ps/gate.sh"
+psel() {  # <selector answer> [env assignment]...: one child gate, the values its lock call carried, read back
+  rm -f "$T/gate.log"
+  printf '#!/bin/bash\necho "$*" >> "%s/pargv.log"\ncase "$*" in *squad.testselect*) echo "%s";; esac\nexit 0\n' "$T" "$1" > "$T/pselpy"; chmod +x "$T/pselpy"; shift
+  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_WORKERS_CHILD -u SG_GATE_WORKERS_CHILD_ALL -u SG_GATE_CALLER -u SG_SERIAL_PRIORITY -u SG_FAST_CMD "$@" SG_STATE="$(mktemp -d "$T/ps.XXXXXX")" SG_FAST_BASE=dev SG_GATE_PY="$T/pselpy" SG_FAST_RETRY_CMD=false bash "$ps/fast-gate.sh" >/dev/null 2>&1)
+  /usr/bin/tail -1 "$T/gate.log" 2>/dev/null
+}
+o=$(psel "$(printf 'tests/test_a.py\ntests/test_b.py')")
+case "$o" in "wait= "*) ok "a delta child takes one slot and waits for no slot inside the lock";; *) ko "delta child: '$o', want workers=1 and no slot wait";; esac
+case "$o" in *"workers=1"*) ok "a delta child takes one slot";; *) ko "delta child: '$o', want workers=1";; esac
+o=$(psel "all: the delta cannot place the change")
+case "$o" in *"workers=3"*) ok "an all child takes the full count";; *) ko "all child: '$o', want workers=3";; esac
+case "$o" in "wait=1"*) ok "an all child waits for its slots inside the lock";; *) ko "all child: '$o', want wait=1";; esac
+o=$(psel "all: the delta cannot place the change" SG_GATE_WORKERS_CHILD_ALL=2)
+case "$o" in *"workers=2"*) ok "a caller names the count a full-battery child takes";; *) ko "named all count: '$o', want workers=2";; esac
+o=$(psel "all: the delta cannot place the change" SG_GATE_CALLER=entry)
+case "$o" in *"workers=1"*) ko "an entry gate took the child's scope count: '$o'";; *) ok "an entry gate keeps its own count";; esac
+case "$o" in "wait= "*) ok "an entry gate waits for no slot inside the lock";; *) ko "entry wait: '$o', want none";; esac
 
 # (#1557, #1726) The gate proves the serial 2 s line end to end: a test whose unmarked call sits over the project's heavy
 # line is recorded by the parallel pass, at that line, and red when only it runs again serially. The retry keeps the line, so

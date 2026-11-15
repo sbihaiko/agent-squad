@@ -39,3 +39,24 @@ rotation: while its gate waits, the children stand aside at the lock, so the slo
 
 Guard: `contrib/squad-goal/scripts/test-fast-gate.sh` runs a child gate in the loop's own environment (the inherited
 count already set) and reads the count that reached the lease, never a stub that accepts any argument.
+
+## The scope decides the count
+
+One slot is the right count for a delta and the wrong one for a full battery. The selector answers `all` for a third of
+the gates — a change to a test helper, a shared module, an uncommitted tree — and a battery of three thousand tests at
+one worker passes the proof's own bound (ADR-0163). The gate then ends unproven, which is a gate that measured nothing
+(ADR-0018), and the run spends its attempt on the machine rather than on the tree.
+
+So the scope decides: a delta takes one slot, and a full battery takes the whole budget. The selector is asked once
+before the slot take, so the count is known when the lease is written, and the battery asks it again over the same tree
+and answers the same. A caller that wants another count names `SG_GATE_WORKERS_CHILD_ALL`. The worker total never passes
+the ceiling: three one-slot gates or one full-battery gate are the same budget.
+
+A full battery needs every slot, and a run of one-slot gates is always leaving one free. So this gate waits for its
+slots while it holds the gate lock, bounded by `SG_GATE_SLOT_WAIT_SECONDS`. Nothing new can start while it waits, the
+gates already running end, and the slots drain to it: the same order the landing gets, for the same reason. The wait is
+gate wait, never run time (ADR-0166), because the gate's clock starts in `--run`, once the slots are held. Every other
+gate keeps the one-try take and the 73 it answers.
+
+Guard: `contrib/squad-goal/scripts/test-fast-gate.sh` runs a delta child, an `all` child and an entry gate through a stub
+`gate.sh`, and reads the count and the slot-wait flag that reached the lock.

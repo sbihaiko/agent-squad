@@ -234,12 +234,22 @@ case "${1:-}" in
   --inner)  # inside the lock: take the slots, then run the gate. The take is one try, never a wait: a gate that cannot take its
             # slots exits 73 at once with none, and serial.sh releases the lock on that exit, so it holds neither resource while
             # it waits for the other. Every later exit path runs the EXIT trap and gives the slots back.
+            # (#1872) A full-battery gate is the exception: it waits for its slots while it holds the lock, bounded by
+            # SG_GATE_SLOT_WAIT_SECONDS, so a run of one-slot gates cannot starve it. The wait is gate wait, never run time
+            # (ADR-0166), because the clock starts in --run once the slots are held.
     shift
     # caps.sh is sourced once, at the top, and this branch and its `--run` child read that one source (#1510): a second
     # source here ran the interpreter lookup again for a reader this shell already has.
     # The lease names the lock holder, this process's parent: a waiter that reaps the lock holder past its deadline then also
     # frees the lease, so a stopped run never leaves a child's gate holding slots (ADR-0051).
-    SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try) || exit $?
+    slot_by=$(( $(date +%s) + ${SG_GATE_SLOT_WAIT_SECONDS:-120} )); slot_rc=0
+    while :; do
+      SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try); slot_rc=$?
+      [ "$slot_rc" = 0 ] && break
+      [ "${SG_GATE_SLOT_WAIT:-0}" = 1 ] && [ "$slot_rc" = 73 ] && [ "$(date +%s)" -lt "$slot_by" ] || exit "$slot_rc"
+      echo "gate: holding the lock for its slots: a full battery needs the whole count, so it waits for the running gates to end" >&2
+      sleep 2
+    done
     export SQUAD_GATE_WORKERS
     trap 'exit 143' TERM; trap 'exit 130' INT   # a stop past the hold deadline still runs the EXIT trap below
     trap 'sg_caps release gates "gate-$$"' EXIT
