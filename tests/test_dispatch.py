@@ -136,6 +136,32 @@ async def test_a_child_that_errors_out_names_the_error_on_the_record(tmp_path): 
 
 
 @pytest.mark.anyio
+async def test_a_final_gate_that_could_not_run_completes_the_run_and_names_the_node(tmp_path):    # #1825
+    """The child listed its own gate in ac_commands and that gate answered exit 4 with no pytest summary: nothing is
+    red and nothing was proved, so the run is completed with `unproven:final_gate`, never failed and left to a person
+    (ADR-0164)."""
+    child = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["sh -c 'exit 4'"]}, "spend": 0.2, "turns": 3}
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": child})
+    v = await eng.run()
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert v.reasons == ["unproven:final_gate"]
+
+
+@pytest.mark.anyio
+async def test_a_child_that_could_not_measure_is_no_failing_child(tmp_path):    # #1825
+    """A child that answers `unproven` proves nothing false: the run completes and names the child's proof as
+    unproven, and no node fails for it (ADR-0164)."""
+    gate = ("fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; "
+            "unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)")
+    child = {"output": {"diff": {"files": [{"path": "a.py"}]}, "status": "unproven", "reasons": [gate]}, "spend": 0.2, "turns": 3}
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": child})
+    v = await eng.run()
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert "unproven:route.router.1" in v.reasons
+    assert child_outs(tmp_path)["route.router.1"]["outcome"] == "unproven"
+
+
+@pytest.mark.anyio
 async def test_a_child_that_writes_its_artifact_carries_no_artifact_missing(tmp_path):    # #1066
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": CHILD})
     v = await eng.run()

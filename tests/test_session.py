@@ -189,6 +189,16 @@ def test_an_ac_commands_mapping_without_a_command_string_stays_malformed():    #
         assert session.ac_commands({"ac_commands": [bad]}) == ([], False), bad
 
 
+def test_a_child_whose_gate_could_not_run_reports_unproven_and_is_no_failing_child():    # #1825
+    """ADR-0164: the child artifact carries the third outcome, so a child that measured nothing says so instead of
+    saying `fail`. The gate line is the evidence it reports; the outcome is read from the artifact, not from the text."""
+    out = {"status": "unproven",
+           "reasons": ["fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; "
+                       "unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)"]}
+    outcome, reasons, _ = session.agent_outcome({}, type("R", (), {"output": out})(), None)
+    assert outcome == "unproven" and reasons == out["reasons"]
+
+
 def test_an_artifact_with_the_command_and_expected_form_does_not_fail_as_ac_commands_invalid():    # #1346
     out = {"status": "pass", "ac_commands": [{"command": "true", "expected": "x"}]}
     assert session.agent_outcome({}, type("R", (), {"output": out})(), None)[1] != ["ac_commands_invalid"]

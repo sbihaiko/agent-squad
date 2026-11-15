@@ -94,7 +94,7 @@ class Children:
                 res[g] = "pass"
                 continue
             r = run_check(gn["check"], gn["params"], inp)
-            res[g] = "pass" if r.ok else "fail"
+            res[g] = r.outcome     # a check that could not run is unproven, never a failed child (ADR-0164, #1825)
             if key and tree:
                 e.record.append("gate_result", node=g, entry=entry, item=None, sha=tree[0], dirt=tree[1], suite=key,
                                 outcome=res[g], source=f"{g}:{child}.{entry}" if child else f"{g}.{entry}")
@@ -342,11 +342,15 @@ class Children:
         return self.outcome(name, outcome, reasons, rel, {"spend": r.spend, "turns": r.turns, "cap": res.amount, "elapsed": out.elapsed, **extra}, entry)
 
     def check(self, disp, output, ws, outcome, reasons, extra, child=None, entry=1):
-        """Run the `checks` gates over a child's artifact. A failed gate fails a passing child. Write the gate results into `extra`."""
+        """Run the `checks` gates over a child's artifact. A failed gate fails a passing child; a gate that could not run
+        makes it unproven, never failed (ADR-0164, #1825). Write the gate results into `extra`."""
         checks = self.run_checks(disp, output, ws, child, entry)
         failed = [g for g in disp["checks"] if checks[g] == "fail"]
         if failed and outcome == "pass":
             outcome, reasons = "fail", [f"check:{g}:{f}" for g in failed for f in checks[f"{g}:findings"]] or [f"check:{g}" for g in failed]
+        unproven = [g for g in disp["checks"] if checks[g] == "unproven"]
+        if unproven and outcome == "pass":     # a red beats it above: a measured failure still fails the child
+            outcome, reasons = "unproven", [f"check:{g}:{f}" for g in unproven for f in checks.get(f"{g}:findings", [])] or [f"check:{g}" for g in unproven]
         extra["checks"] = {k: v for k, v in checks.items() if not k.endswith((":findings", ":evidence"))}
         evidence = {f"{g}:{k}": v for g in disp["checks"] for k, v in checks.get(f"{g}:evidence", {}).items()}
         if evidence:      # the record keeps it; the ledger reads `checks` only, so no router prompt carries it

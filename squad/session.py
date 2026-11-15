@@ -406,17 +406,22 @@ def missing_artifact_reason(res, cap_reason, granted=None):
 
 
 def agent_outcome(node, res, cap_reason, granted=None):
-    """Derive the outcome from the declared artifact. An agent node and a dispatch child share it."""
+    """Derive the outcome from the declared artifact. An agent node and a dispatch child share it.
+
+    The artifact carries the three outcomes of ADR-0164: `pass`, `fail`, and `unproven` for work no check could measure
+    (#1825). An `unproven` artifact is no failing child: it names the check that could not run, and the run carries that
+    obligation instead of holding the work for a person.
+    """
     out = res.output
     if not isinstance(out, dict):
         return "fail", [missing_artifact_reason(res, cap_reason, granted)], None
     key = node.get("output_key")
-    if key and key not in out and out.get("status") not in ("needs-human", "fail"):    # an explicit stop answer needs no `output_key`
+    if key and key not in out and out.get("status") not in ("needs-human", "fail", "unproven"):    # an explicit stop answer needs no `output_key`
         return "fail", [missing_artifact_reason(res, cap_reason, granted)], None
     if "ac_commands" in out and not ac_commands(out)[1]:
         return "fail", ["ac_commands_invalid"], None      # the child's contract is malformed: it fails, so the router repairs it
     status = out.get("status", "pass")
-    if status not in ("pass", "fail", "needs-human"):
+    if status not in ("pass", "fail", "needs-human", "unproven"):
         return "fail", ["artifact_invalid"], None
     if status == "pass":      # a pass keeps only its provisional decisions; every other reason on a pass is dropped as before
         return status, [r for r in out.get("reasons", []) if isinstance(r, str) and r.startswith(PROVISIONAL)], cap_reason

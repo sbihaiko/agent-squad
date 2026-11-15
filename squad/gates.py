@@ -37,6 +37,18 @@ class GateResult:
     findings: list = field(default_factory=list)
     evidence: dict = field(default_factory=dict)    # finding -> the output that explains it; the record keeps it, no prompt reads it
     counts: dict = field(default_factory=dict)      # command -> the counts of the last pytest summary it printed (#80); a reading, never a threshold
+    unproven: list = field(default_factory=list)    # the findings nothing was measured for: the check could not run (ADR-0164, #1825)
+
+    @property
+    def outcome(self):
+        """The three outcomes of ADR-0164: a measured red is `fail`, nothing measured is `unproven`, else `pass`.
+
+        A finding nothing was measured for never fails the gate, and it never passes it either: the record says
+        `unproven`, so the run carries the obligation the entry leaves.
+        """
+        if not self.ok:
+            return "fail"
+        return "unproven" if self.unproven else "pass"
 
 
 @dataclass
@@ -259,12 +271,14 @@ def ac_verify(params, inp):
 
     A `malformed` command (prose in it, or a program that cannot start) is recorded and answers unproven for that command:
     nothing ran, so nothing was proved false, and a run whose findings are all malformed is not failed for them (ADR-0164,
-    delivery outranks the proof). One measured `ac_failed` still fails the gate (#1803).
+    delivery outranks the proof). So does an `unproven` command: a gate that answered its unproven exit with no summary
+    line measured nothing (#1825). Both are recorded in `unproven`, so the gate result says `unproven` and never a silent
+    pass. One measured `ac_failed` still fails the gate (#1803, #1825).
     """
     runs, dispatch = suite_runs(params, inp)
     if not runs:
         return GateResult(False, ["no_ac_commands"])
-    findings, failing, evidence, counts = [], [], {}, {}
+    findings, failing, unproven, evidence, counts = [], [], [], {}, {}
     for c, tree in dict.fromkeys(runs):     # each (command, tree) runs once, however many children named it
         held_out = dispatch and (inp.fix_run or workcmd.reads_history(c))
         label = f"{c} @{Path(tree).name}" if held_out and tree else c     # a held-out command's result names the tree it ran in
@@ -280,12 +294,14 @@ def ac_verify(params, inp):
         if r.counts:
             counts[label] = r.counts
         if not r.ok:
-            kind = "malformed" if r.malformed else "ac_failed"     # prose in a command is a bad check, not a failed one
+            kind = "malformed" if r.malformed else "unproven" if r.unproven else "ac_failed"   # the typed flag decides, never the text
             findings.append(f"{kind}:{label}")
             evidence[f"{kind}:{label}"] = r.evidence
-            if kind != "malformed":
-                failing.append(f"{kind}:{label}")   # only a measured failure holds the run; the kind decides, not the text (#1803)
-    return GateResult(not failing, findings, evidence, counts)
+            if kind == "ac_failed":
+                failing.append(f"{kind}:{label}")   # only a measured failure holds the run (#1803, #1825)
+            else:
+                unproven.append(f"{kind}:{label}")
+    return GateResult(not failing, findings, evidence, counts, unproven)
 
 
 def visual_guard(_params, inp):

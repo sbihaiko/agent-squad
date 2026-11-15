@@ -116,6 +116,22 @@ def test_the_gate_filters_a_stubbed_result_by_its_kind_not_by_its_label(tmp_path
     assert r.findings == ["malformed:malformed: looking command", "ac_failed:measured red command"]
 
 
+def test_a_gate_that_could_not_run_is_unproven_not_a_failed_check(tmp_path):     # #1825
+    # The fast gate answers exit 4 when it measured nothing: no battery ran, nothing is red, and no pytest summary
+    # line proves a red (ADR-0164). The gate result says unproven, never a failing finding that holds the run.
+    r = run(tmp_path, "sh -c 'exit 4'")
+    assert r.ok and r.outcome == "unproven"
+    assert r.findings == ["unproven:sh -c 'exit 4'"]
+
+
+def test_one_measured_red_beside_an_unproven_check_still_fails_the_gate(tmp_path):     # #1825
+    # A measured red wins: the unproven command never releases the defect another command measured (ADR-0164).
+    r = gates.ac_verify({"commands_from": "spec"},
+                        gates.GateInput(artifacts={"spec": {"ac_commands": ["sh -c 'exit 4'", "exit 3"]}}, facts={}, cwd=str(tmp_path)))
+    assert r.outcome == "fail"
+    assert "ac_failed:exit 3" in r.findings and "unproven:sh -c 'exit 4'" in r.findings
+
+
 def test_a_clean_ac_command_still_passes_on_its_exit_code(tmp_path):
     assert run(tmp_path, "true").ok
     assert run(tmp_path, "exit 3").findings == ["ac_failed:exit 3"]

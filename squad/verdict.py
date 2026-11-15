@@ -7,9 +7,14 @@ import shlex
 from dataclasses import dataclass, field
 
 EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30}
-WORST = ("fail", "deadline", "needs-human", "pass")  # the join order of `each` and `dispatch`
+# The join order of `each` and `dispatch`: an unfinished proof is worse than a pass and better than a hold, because
+# delivery outranks the proof (ADR-0164).
+WORST = ("fail", "deadline", "needs-human", "unproven", "pass")
 LEDGER_HOLDS = ("ledger_held", "after_held", "review_needs_human")  # a child its issue ledger held, a child that runs after one (ADR-0149 rule 4), and a child whose review streak ended the issue (ADR-0151, #1574)
-DEFAULT_ROUTE = {"pass": "continue", "fail": "exit:fail", "deadline": "exit:deadline", "needs-human": "exit:needs-human"}
+# An `unproven` outcome ends the step it proves, the way a deadline does, and the fold turns it into a completed run whose
+# reasons name the node whose proof did not finish (ADR-0164).
+DEFAULT_ROUTE = {"pass": "continue", "fail": "exit:fail", "deadline": "exit:deadline", "needs-human": "exit:needs-human",
+                 "unproven": "exit:unproven"}
 
 
 @dataclass(frozen=True)
@@ -81,20 +86,25 @@ def _dedupe(xs):
     return list(dict.fromkeys(xs))
 
 
+UNFINISHED = ("deadline", "unproven")   # the outcomes whose proof did not finish, so the work they hold is kept (ADR-0164)
+
+
 def _kept_after_deadline(events, failing):
-    """The last commit a passed node wrote before the first deadline, when every failing outcome is a deadline: the branch the
-    deadline keeps (ADR-0164). None when the run failed for another reason or no commit came first."""
-    if not failing or any(e["outcome"] != "deadline" for e in failing):
+    """The last commit a passed node wrote before the first unfinished proof, when every failing outcome is a deadline or
+    unproven: the branch the run keeps (ADR-0164). None when the run failed for another reason or no commit came first."""
+    if not failing or any(e["outcome"] not in UNFINISHED for e in failing):
         return None
     first = min(e["pos"] for e in failing)
     commits = [e for e in events if e["event"] == "workspace_commit" and e.get("status") == "committed" and e["pos"] < first]
     return commits[-1] if commits else None
 
 
-def _unproven(kept, failing):
-    """The reasons a kept branch carries: the node whose proof the deadline cut short, and the branch's commit."""
-    node = min(failing, key=lambda e: e["pos"])["node"]
-    return [f"unproven:{node}", f"kept:{kept['workspace']}@{str(kept.get('head') or '')[:9]}"]
+def _unproven(failing, kept, root=None):
+    """The reasons an unfinished proof carries: each node whose proof did not finish, and the branch's commit when one was kept.
+
+    The root is not named when another node's proof is the cause: an unproven root only says the step it holds ended that way."""
+    nodes = _dedupe([e["node"] for e in failing if e["node"] != root]) or ([root] if root else [])
+    return [f"unproven:{n}" for n in nodes] + ([f"kept:{kept['workspace']}@{str(kept.get('head') or '')[:9]}"] if kept else [])
 
 
 def fold(events, observation=None, run_id=None, run_folder=None):
@@ -113,7 +123,10 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     root_ev = last.get((root, None))
     folded = sorted(e["pos"] for e in last.values())
     contrib = [(k, _route(e), e) for k, e in last.items()]
-    failing = [e for _, r, e in contrib if r in ("exit:fail", "exit:deadline") and e["outcome"] in ("fail", "deadline")]
+    # An unproven outcome is a failing outcome that holds nothing: the work it covers is still delivered (ADR-0164), and
+    # the reasons name the node whose proof did not finish, so it is never silently unproven.
+    failing = sorted([e for _, r, e in contrib if r in ("exit:fail", "exit:deadline") and e["outcome"] in ("fail", "deadline")]
+                     + [e for e in last.values() if e["outcome"] == "unproven"], key=lambda e: e["pos"])
     reasons = _dedupe([r for e in failing for r in e["reasons"]] + [f"{e['node']}:{e['outcome']}" for e in failing if not e["reasons"]])
     waits = _open_waits(events)
     since = max(e["pos"] for e in invocations)
@@ -122,7 +135,10 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     remains = [n for n in plan if n not in ran]
     conflict = list(obs.get("conflict", [])) + ([pre["reason"]] if pre.get("status") == "conflict" else [])
     kept = _kept_after_deadline(events, failing)
-    unproven = _unproven(kept, failing) if kept else None
+    # A run completes when its proof did not finish and no check measured a red: every failing outcome is unproven, or a
+    # deadline whose branch was committed first. A measured red is never in `unproven`, so it still fails the run.
+    only_unproven = bool(failing) and all(e["outcome"] == "unproven" for e in failing)
+    unproven = _unproven(failing, kept, root) if failing and (kept or only_unproven) else None
 
     def make(v, rs, rem=True):
         rem_list = remains if v != "completed" and rem else []
@@ -139,6 +155,8 @@ def fold(events, observation=None, run_id=None, run_folder=None):
             base, rs = "completed", unproven
         elif o == "deadline":
             base, rs = "failed", _dedupe(["deadline", *reasons])
+        elif o == "unproven":
+            base, rs = "completed", (unproven or [f"unproven:{root}"])
         elif o == "fail":
             base, rs = "failed", _dedupe(root_ev["reasons"] + reasons)
         elif o == "needs-human":
@@ -157,6 +175,8 @@ def fold(events, observation=None, run_id=None, run_folder=None):
         base, rs = None, ["no_root_outcome"]
     if base == "failed":
         return make("failed", rs)
+    if base == "completed" and unproven:      # a step passed, but a node's proof did not finish: the run says so (ADR-0164)
+        rs = _dedupe(rs + unproven)
     if conflict:
         return make("conflict", conflict)
     return make(base or "failed", rs)

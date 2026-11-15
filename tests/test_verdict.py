@@ -158,6 +158,23 @@ def test_a_deadline_before_any_commit_is_still_failed_with_the_deadline_reason()
     assert v.reasons == ["deadline"]
 
 
+def test_a_run_whose_only_failures_are_unproven_completes_and_names_the_node():    # #1825
+    """ADR-0164: an unfinished proof never holds delivery. When every failing outcome is unproven, the run is
+    completed and the reasons name the node whose proof did not finish."""
+    rows = [out("code"), out("final_gate", "unproven", ["ac-verify:unproven:bash contrib/squad-goal/scripts/fast-gate.sh"]), out("main")]
+    v = V.fold(events(*rows, plan=["main", "code", "final_gate"]))
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert v.reasons == ["unproven:final_gate"]
+
+
+def test_a_measured_red_beside_an_unproven_outcome_still_fails():    # #1825
+    """A measured red wins: the unproven sibling never releases it (ADR-0164)."""
+    rows = [out("final_gate", "unproven"), out("main", "fail", ["ac-verify:ac_failed:exit 3"])]
+    v = V.fold(events(*rows, plan=["main", "final_gate"]))
+    assert (v.verdict, v.exit_code) == ("failed", 1)
+    assert "ac-verify:ac_failed:exit 3" in v.reasons
+
+
 def test_a_commit_written_after_the_deadline_keeps_nothing():
     rows = [out("code", "deadline", ["deadline"]), commit("code"), out("main", "deadline", ["deadline"])]
     v = V.fold(events(*rows, plan=["main", "code"]))
