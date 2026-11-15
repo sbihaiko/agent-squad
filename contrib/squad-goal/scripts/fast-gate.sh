@@ -23,6 +23,12 @@
 # battery's tree is stopped and the log decides: a class it already named is the gate's answer, so a failing test printed before
 # the hang ends fail, and an attempt that reported nothing is bounded and unproven, never a pass. A retry spends the same clock,
 # and a retry the deadline stops never clears the red the battery named (#1170).
+# The gate carries a ceiling of its own (#1839, ADR-0051): whatever clock the caller hands down -- a proof's bound, a run's call
+# deadline, or a long one -- a gate never runs past SG_GATE_MAX_SECONDS (900 by default), so a caller that never answers cannot
+# park the gate and hold its worker slots. The gate takes the smaller of the two clocks and never widens the caller's, so a bounded
+# proof stays bounded where it was and a bounded gate never widens a proof (ADR-0163, the same rule at two layers). Past the
+# ceiling the battery's or a suite's whole tree is killed, one line names the bound and that tree, the outcome is unproven, and
+# the lease goes back as on any other exit.
 here="$(cd "$(dirname "$0")" && pwd)"
 base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 # The base battery is one definition (base-battery.sh), the one branchland.sh's landing check and wave.sh's tip check run
@@ -184,7 +190,14 @@ log=$logdir/fast-gate-$(printf '%s' "${gcd:-$top}" | cksum | cut -d' ' -f1)-$(gi
 # decides: a class it already named is the gate's answer (a red a check reported survives the kill), and an attempt that
 # reported nothing is bounded and unproven, never a pass.
 bound=${GATE_BOUND_SECONDS:-${SG_GATE_BOUND_SECONDS:-900}}; case $bound in ''|*[!0-9]*|0) bound=900;; esac
-deadline=${GATE_DEADLINE_EPOCH:-$(( $(date +%s) + bound ))}
+# (#1839) The gate's own ceiling (ADR-0051), taken beside the caller's clock and never in place of a shorter one: SG_GATE_MAX_SECONDS,
+# 900 by default. A gate_max attempt is one the ceiling ended, and its line names that bound and the killed tree.
+now0=$(date +%s)
+maxb=${SG_GATE_MAX_SECONDS:-900}; case $maxb in ''|*[!0-9]*|0) maxb=900;; esac
+deadline=${GATE_DEADLINE_EPOCH:-$(( now0 + bound ))}
+gate_max=0
+if [ "$deadline" -gt $(( now0 + maxb )) ]; then deadline=$(( now0 + maxb )); gate_max=1; fi
+[ "$bound" -gt "$maxb" ] && bound=$maxb
 left() { local l=$(( deadline - $(date +%s) )); [ "$l" -lt 1 ] && l=1; echo "$l"; }
 tree_pids() {  # <pid>: the pid and every descendant it started, children first
   local c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done; printf '%s\n' "$1"
@@ -202,17 +215,19 @@ stop_tree() {  # <pid>: the tree as it stands now, TERM then KILL, so a child th
 reap_wd() { local p; [ "$($SG_PS -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
   for p in $(pgrep -P "$1" 2>/dev/null); do kill "$p" 2>/dev/null; done; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
 bounded() {  # <seconds> <command...>: 124 says the deadline stopped it and its whole tree; 0 or less runs with no bound
-  local b=$1 p w mark s rc; shift; s=$(date +%s)
+  local b=$1 p w mark s rc; shift; s=$(date +%s); BTREE=
   if [ "$b" -le 0 ] 2>/dev/null; then "$@"; return $?; fi
   mark=$(mktemp "${TMPDIR:-/tmp}/fg-bound.XXXXXX" 2>/dev/null) || { "$@"; return $?; }; rm -f "$mark"
   "$@" & p=$!
   set -m   # the watchdog leads its own process group, so reap_wd reaches the sleep it forks
-  ( sleep "$b"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - s )) -ge "$b" ] || exit 0; : > "$mark"
+  # (#1839) The mark carries the tree the deadline kills, so the line the gate answers can name it; its existence alone is the
+  # flag that the deadline fired, as before.
+  ( sleep "$b"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - s )) -ge "$b" ] || exit 0; tree_pids "$p" > "$mark"
     stop_tree "$p" ) >/dev/null 2>&1 & w=$!
   set +m
   wait "$p" 2>/dev/null; rc=$?
   reap_wd "$w"
-  if [ -e "$mark" ]; then rm -f "$mark"; return 124; fi
+  if [ -e "$mark" ]; then BTREE=$(tr '\n' ' ' < "$mark" 2>/dev/null | sed 's/ *$//'); rm -f "$mark"; return 124; fi
   rm -f "$mark"; return $rc
 }
 for try in 1 2; do
@@ -230,6 +245,12 @@ for try in 1 2; do
         verdict fail "$detail" "$r" "$n"
         echo "fast-gate: $cls: $detail; the battery passed its ${bound}s deadline with the defect already reported ($lg)"; exit 1;;
       *)
+        # (#1839) A battery the gate's own ceiling ended answers on the ceiling: the one line names the bound and the tree it killed.
+        if [ "$gate_max" = 1 ]; then
+          verdict unproven "bounded: the gate passed its ${maxb}s ceiling and killed the battery's tree (${BTREE:-unknown})" unknown unknown
+          [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
+          echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling (SG_GATE_MAX_SECONDS) and killed the battery's tree (${BTREE:-unknown}); unproven (exit 4) ($lg)"; exit 4
+        fi
         verdict unproven "bounded: the battery passed its ${bound}s deadline and named no defect" unknown unknown
         [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
         echo "fast-gate: bounded: the battery passed its ${bound}s deadline and named no defect, so the gate does not pass ($lg)"; exit 4;;
@@ -275,11 +296,25 @@ bran="ruff mypy pytest"; bnot=-
 # (#1249) A battery whose selection was empty ran no pytest, so it proves nothing: the line it logged names why.
 empty=$(/usr/bin/grep -m 1 '^no pytest ran' "$lg")
 [ -z "$empty" ] || { bran="ruff mypy"; bnot=pytest; }
-failed=""; ranS=""
+failed=""; ranS=""; hitmax=
+# (#1839) A suite spends the gate's clock too: past it its whole tree is killed, as the battery's, so a suite that parks holds the
+# gate slot no longer than the ceiling allows.
+run_suite() {  # <script> <home>: the suite in its own home, from the repository top, with no SG_* variable
+  ( cd "$top" && env $(compgen -e | /usr/bin/grep '^SG_' | sed 's/^/-u /') HOME="$2" bash "$1" )
+}
 for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] || continue
   echo "=== test-$n.sh"; ranS="$ranS test-$n.sh"
-  hm=$(mktemp -d); if (cd "$top" && env $(compgen -e | grep '^SG_' | sed 's/^/-u /') HOME="$hm" bash "$s"); then echo "--- ok: test-$n.sh"
-  else echo "--- FAILED: test-$n.sh"; failed="$failed test-$n.sh"; fi; rm -rf "$hm"; done
+  hm=$(mktemp -d); bounded "$(left)" run_suite "$s" "$hm"; src=$?
+  if [ "$src" = 0 ]; then echo "--- ok: test-$n.sh"; else
+    [ "$src" != 124 ] || hitmax=test-$n.sh
+    echo "--- FAILED: test-$n.sh"; failed="$failed test-$n.sh"; fi; rm -rf "$hm"; done
+[ -z "$hitmax" ] || {
+  if [ "$gate_max" = 1 ]; then
+    verdict unproven "bounded: the gate passed its ${maxb}s ceiling and killed ${hitmax}'s tree (${BTREE:-unknown})" "$bran$ranS" "$bnot"
+    echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling (SG_GATE_MAX_SECONDS) and killed ${hitmax}'s tree (${BTREE:-unknown}); unproven (exit 4)"; exit 4
+  fi
+  verdict unproven "bounded: the gate passed its ${bound}s deadline and killed ${hitmax}'s tree (${BTREE:-unknown})" "$bran$ranS" "$bnot"
+  echo "fast-gate: bounded: the gate passed its ${bound}s deadline and killed ${hitmax}'s tree (${BTREE:-unknown}), so the gate does not pass"; exit 4; }
 [ -z "$failed" ] || { verdict fail "failed suite:$failed" "$bran$ranS" "$bnot"; echo "fast-gate: FAILED:$failed"; exit 1; }
 # A gate that ran no test is never a pass: the empty selection is unproven, with the selector's reason, and is never kept.
 if [ -n "$empty" ]; then

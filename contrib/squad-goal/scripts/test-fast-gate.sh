@@ -540,6 +540,34 @@ rm -rf "$wk/st/locks/gate"
   && ok "a child's repeat on the default battery finds its bound before the lock: the key carries the child's 2 workers (#1527)" \
   || ko "a child's repeat on the default battery missed its bound: first rc $rc1, repeat rc $rc, last '$(last "$out")'"
 
+# (#1839) The gate carries a ceiling of its own (ADR-0051): whatever clock the caller names -- a proof's bound, a run's call
+# deadline, or a long one -- a gate never runs past SG_GATE_MAX_SECONDS, so a caller that never answers cannot park the gate and
+# hold its worker slots for hours. Past the ceiling the suite's whole tree is killed, one line names that bound and the killed
+# tree, the outcome is unproven, and the lease goes back as it would on any other exit. A caller's shorter bound still wins.
+printf '#!/bin/bash\necho "battery" >> "%s/ran.log"\nsleep $HANG_NAP & echo "hang=$!" >> "%s/ran.log"; wait\n' "$T" "$T" > "$T/gmhang.sh"
+gm=$T/gatemax; gmcap=$T/gmcaps; mkdir -p "$gm" "$gmcap"
+gmax() {  # <bound> <ceiling>: one gate whose battery hangs, on that case's own state, lock and slot budget
+  (cd "$R" && SG_STATE="$gm" SQUAD_CAPS_DIR="$gmcap" SG_FAST_BASE=dev SG_GATE_BOUND_SECONDS="$1" SG_GATE_MAX_SECONDS="$2" \
+     SG_FAST_CMD="bash $T/gmhang.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1)
+}
+go=$T/gm.out
+gmax 600 3 > "$go" 2>&1 & gp=$!
+s0=$(date +%s); gkilled=
+while [ $(( $(date +%s) - s0 )) -lt 60 ]; do kill -0 "$gp" 2>/dev/null || break; sleep 1; done
+kill -0 "$gp" 2>/dev/null && { gkilled=1; kill "$gp" 2>/dev/null; }   # a gate past its ceiling: end it here, not in ten minutes
+wait "$gp" 2>/dev/null; grc=$?; gel=$(( $(date +%s) - s0 ))
+hpid=$(sed -n 's/^hang=//p' "$T/ran.log" 2>/dev/null | tail -1)
+[ -z "$gkilled" ] && [ $grc = 4 ] && [ "$gel" -lt 20 ] \
+  && case "$(last "$(cat "$go" 2>/dev/null)")" in "fast-gate: gate max:"*"3s"*"${hpid:-no-pid}"*) true;; *) false;; esac \
+  && ok "a caller's 600s bound is capped at the gate's own 3s ceiling: unproven, one line naming the bound and the killed tree (${gel}s)" \
+  || ko "gate ceiling: rc $grc in ${gel}s killed=$gkilled last '$(last "$(cat "$go" 2>/dev/null)")'"
+pkill -f "sleep $HANG_NAP" 2>/dev/null
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the suite's tree survived the gate's ceiling" || ok "the gate's ceiling kills the suite's whole tree"
+[ -z "$(ls -A "$gmcap/gates" 2>/dev/null)" ] && ok "the gate gives its slot lease back at the ceiling, as on any other exit" \
+  || ko "lease survived the ceiling: '$(ls -A "$gmcap/gates" 2>/dev/null | tr '\n' ' ')'"
+[ "$(tail -n 1 "$gm/gate-history" | cut -f8)" = unproven ] && ok "the ceiling is recorded as unproven, never a pass" || ko "ceiling history: '$(tail -n 1 "$gm/gate-history" 2>/dev/null)'"
+rm -rf "$gmcap"
+
 # (#1086) The gate's interpreter is sg_gate_python's answer (caps.sh): SG_GATE_PY, else the checkout's venv, else the venv
 # beside the worktree's common git directory, else python3. The gate calls it for the code-quality reading, so a stub in the
 # venv logs the exact interpreter the gate used. A checkout with no venv of its own must reach the venv beside it, never a

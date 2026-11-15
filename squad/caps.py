@@ -20,7 +20,9 @@ The loop's free run slots are one count (`free_runs`, `Ceiling.run_holders`): ev
 loop's active list names whose last invocation has no final verdict, each run once. A finished run frees its slot at once, and
 its folder and record stay listed for the readers that close its issues; the counter is a reader and never rewrites the list.
 The reading is ADR-0105's, the one the dashboard, `wave.sh` and `wtclean.sh` use: a verdict before a later `run_start` or
-`resume` is history, and the run is live again.
+`resume` is history, and the run is live again. A listed run whose record names a process that is gone holds no slot, the
+question the janitor and `reap.run_live` ask: a run killed with no verdict must not keep a slot until the takeover bound
+reaches it. A record that names no process is no proof of death, so that run keeps its slot.
 This is the dispatcher's side (ADR-0167): the engine's admission still counts raw leases, and the dispatcher never shows more
 free slots than that admission holds.
 
@@ -102,10 +104,23 @@ def folder():
     return Path(os.environ.get("SQUAD_CAPS_DIR") or Path.home() / ".cache" / "agent-squad" / "caps")
 
 
-def _procs(pids):
+def _ask(pids):
     """{pid: (the wall time it started, its command line, its state)} for every pid the system answers for, in ONE call for
-    all of them. The state is the first letter `ps stat=` prints: `Z` names a zombie, a holder that exited and that its
-    parent has not reaped (#1573).
+    all of them, or None when the read failed: an answer the system did not give is unknown, and the caller holds instead of
+    reading it as "no process". The state is `Z` for a zombie, a holder that exited and that its parent has not reaped
+    (#1573)."""
+    want = sorted({int(p) for p in pids if isinstance(p, int) and not isinstance(p, bool) and p > 0})
+    if not want:
+        return {}
+    try:
+        table = procs.snapshot(want)
+    except procs.ReadError:
+        return None
+    return {pid: (p.start, p.command, p.stat) for pid, p in table.items()}
+
+
+def _procs(pids):
+    """`_ask`, with a failed read as no process: the lease read reclaims a holder it cannot ask about, as it always has.
 
     The slots are counted on every poll of every wait, and a wait polls until a slot frees, so one `ps` per lease is a fork
     storm: a worker spins in a subprocess loop and holds what the rest of the suite needs, and on a two-core runner the
@@ -113,14 +128,7 @@ def _procs(pids):
     number of leases; the answer is the same one. The command comes in that same call, so the dashboard rule below costs
     no second process (#1389).
     """
-    want = sorted({int(p) for p in pids if isinstance(p, int) and not isinstance(p, bool) and p > 0})
-    if not want:
-        return {}
-    try:
-        table = procs.snapshot(want)
-    except procs.ReadError:
-        return {}
-    return {pid: (p.start, p.command, p.stat) for pid, p in table.items()}
+    return _ask(pids) or {}
 
 
 def started_at(pids):
@@ -227,7 +235,10 @@ class Ceiling:
         or `resume` is over: it holds no slot, though its folder and record stay listed for the readers that close its issues
         (the janitor and childcc read the same file). A listed entry with no readable record holds its slot through its launch
         window only: past `LAUNCH_GRACE` the janitor drops a launch that never started, so it never pins a slot, and a listed
-        folder that is gone holds no slot at all.
+        folder that is gone holds no slot at all. A listed run with no verdict whose record names its own process holds no
+        slot when that process is gone (`run_liveness.engine_process`, the pid-reuse rule the janitor reads): a run killed
+        with no verdict frees its slot at the next count, and the janitor keeps its surgery. A record that names no process
+        keeps its slot: a missing pid is no proof of death.
         A live lease always counts, even when its run is finished: the engine's admission counts raw leases, and a dispatcher
         that freed a lingering lease would start a run the engine refuses (ADR-0167). The engine releases its lease before it
         writes the verdict, so a finished run normally holds none.
@@ -242,6 +253,7 @@ class Ceiling:
             folder = Path(r) if r.startswith("/") else Path(root) / "runs" / r
             listed[folder.name] = folder
         over = set()   # a listed run that holds no slot
+        pending = {}   # a listed run with no verdict whose own process the record names: {name: (pid, since)}
         for name, folder in listed.items():
             try:
                 text = (folder / "record.jsonl").read_text()
@@ -251,6 +263,10 @@ class Ceiling:
                 continue
             if final_verdict(text) is not None:
                 over.add(name)
+                continue
+            proc = RL.engine_process(RL.invocation(text))
+            if proc is not None:   # a record that names no pid is no proof of death: the run keeps its slot
+                pending[name] = proc
         with self._lock():   # a writer holds this lock while it writes a lease, so a lease mid-write is never read as absent
             leases = self._live("runs")
         holders = []
@@ -258,6 +274,13 @@ class Ceiling:
             holder = lease.get("holder")
             if holder not in holders:
                 holders.append(holder)
+        asked = _ask([pid for pid, _since in pending.values()])
+        for name, (pid, since) in pending.items():
+            if name in holders or asked is None:
+                continue   # a live lease already counts, and an unreadable table is unknown, never "no process"
+            seen = asked.get(pid)
+            if seen is None or seen[2] == "Z" or not alive(pid, since, started={pid: seen[0]}):
+                over.add(name)   # the process the record names is gone: the run holds no slot
         for name in listed:
             if name not in over and name not in holders:
                 holders.append(name)
