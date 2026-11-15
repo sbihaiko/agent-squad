@@ -46,7 +46,10 @@
 # pushed `fix/` and `gui/` branches never sees it, and the entry held every child for good.
 # A review that asked for CHANGES puts its issue back in the queue (`requeue`) instead of holding it, live run or not
 # (childcc.py): a child's branch is pushed nowhere, so nothing behind a hold could fix it.
-# A wave with nothing ahead of the base landed empty: its ref and marker go and `land` exits 0. A landing that fails on a rebase
+# A wave with nothing ahead of the base landed empty: its ref and marker go and `land` exits 0. A wave whose tip the base already
+# carries, with a child that entered it, has landed in an earlier cycle: its books are written, its ref and markers go as a kept
+# landing branch's do (#1826), and a child that never entered it goes back to the queue (#1833). A child commit of a wave the base
+# does not carry, on a local branch only, still refuses the landing. A landing that fails on a rebase
 # conflict, a push refused twice, or a start it cannot make (the base or the wave branch is gone, the checkout fails: exit 2)
 # is counted per run (SG_WAVE_LAND_TRIES, default 3); at the cap each issue the wave carries
 # gets the label frozen:owner and one queued comment, and the run's wave marker is cleared so the cycle stops retrying.
@@ -1288,7 +1291,15 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # of its other children stayed on their branches too.
       requeued_here() { [ -n "$(python3 "$here/issue_ledger.py" requeued "$SG_REPO#$1" "$run" 2>/dev/null)" ]; }
       for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) requeued_here "$n" || undel="${undel:+$undel }$n";; esac; done
-      if [ "$capped" != 1 ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
+      # (#1833) A wave whose tip the base already carries has landed: its children's work reached the base in an earlier landing,
+      # and only the wave branch stayed behind (its deletion did not reach it). A child that never entered such a wave is no
+      # orphan to hold the wave: nothing can change on a later pass, so the pass writes its books and drops its markers as a kept
+      # landing branch does (#1826). The entered fact is the proof that the wave carried a child, as the marker is the proof for a
+      # kept landing branch: a wave cut from the base that no child ever entered is not this case, and its child commit still
+      # refuses the landing (#836). The refusal itself is unchanged.
+      local landed=""
+      if [ "$capped" != 1 ] && [ -n "$ent" ] && sc merge-base --is-ancestor "origin/$w" "origin/$base"; then landed=1; fi
+      if [ -z "$landed" ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
         if [ "$(cat "$refused" 2>/dev/null)" != "${orph% *}" ]; then
           mkdir -p "$SG_STATE/auto" && printf '%s\n' "${orph% *}" > "$refused"
           echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
@@ -1297,11 +1308,23 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       fi
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
       sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$refused"
-      echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
+      if [ -n "$landed" ]; then
+        echo "WAVE $w already landed in $base (its tip is in the base; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
+      else
+        echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
+      fi
       # An empty wave past its age cap follows the capped landing's rule too (#591): every issue of the run that `dev` does
       # not hold goes back to the queue, so a child that never entered is built into a later wave instead of staying in Doing.
       # An issue whose non-RED commit the base holds is delivered below, never requeued.
-      if [ "$capped" = 1 ]; then
+      if [ "$landed" = 1 ]; then
+        # (#1833) A child that never entered a landed wave is a requeue for its own pass: its commit stays on the run's branch by
+        # design (#1106), and the landing pass never re-reads it. The requeue is no failure of the child (the landing's delay,
+        # `cap`): the wave it was built into landed without it, and the loop builds it into a later wave.
+        for n in $undel; do
+          wave_fact "$run" "$n" refused "the run's wave landed in $base of an earlier landing and this child never entered it" keep
+          requeue "$n" "the run's wave landed in $base of an earlier landing without this child: it is back in the queue" cap
+        done
+      elif [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
           wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child" keep
           requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue" cap;; esac; done

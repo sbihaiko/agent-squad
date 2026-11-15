@@ -887,7 +887,7 @@ case "$r" in *refused*) ko "T: a working board write is named refused: '$r'";; *
 
 # U (#620): a child that ENTERED its wave (its ledger's entered fact) whose commit reached dev by another route makes the wave land
 # empty, and dev holds no `Refs #N` line for it (a squash rewrote the message). The entry is the proof: the issue is
-# delivered, never requeued, even past the age cap.
+# delivered, never requeued, even past the age cap. The cap decides first (#1833): a capped wave keeps its own landing line.
 W15=wave/run-15; start2 run-15 >/dev/null
 printf 'run-15\n' > "$T/st/auto/disp-231"; SG_STATE=$T/st python3 "$T/s/issue_ledger.py" wave 'x/y#231' run-15 entered 'entered wave/run-15' >/dev/null
 mkdir -p "$T/co/runs/run-15"
