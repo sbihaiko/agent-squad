@@ -1382,9 +1382,10 @@ def test_an_unanswered_subject_rests_at_the_tick_after_the_startup_window(hub, m
     assert pauses and pauses[0] == 7.0, f"the reader asked {pauses[:2]} s: the fast first-read period never ended"
 
 
-def test_a_subject_whose_read_costs_hundreds_of_milliseconds_rests_at_its_own_period(hub, monkeypatch):
-    """#1879: `board_served` costs 428 ms and `run_list` 262 ms on this machine, so reading them once a tick is ~70 % of a
-    core. A slow subject answers at SLOW_SUBJECT_SECS, while a cheap one keeps the tick."""
+def test_every_subject_answers_at_the_tick_whatever_its_read_costs(hub, monkeypatch):
+    """#1896: `board_served` costs hundreds of milliseconds, and #1879 made it rest 5 s to save them. A rest longer than
+    the page's own wait is a page that shows an old board: two stream tests hold a change to a 4 s budget. So every
+    subject answers at the tick, and the cost is fixed in the read itself, never in the period that delays the page."""
     mod = hub[0]
 
     class Versions:
@@ -1397,7 +1398,6 @@ def test_a_subject_whose_read_costs_hundreds_of_milliseconds_rests_at_its_own_pe
 
     monkeypatch.setattr(mod, "VERSIONS", Versions())
     monkeypatch.setattr(mod.hubstream, "TICK_SECONDS", 1.0)
-    monkeypatch.setattr(mod, "SLOW_SUBJECT_SECS", 5.0)
     monkeypatch.setattr(mod.hubstream, "FIRST_EVENT_SECONDS", 0.0)   # the startup window is over before the first tick
     monkeypatch.setattr(mod, "READ_GATE", None)                      # a page reads the profile: read_wanted() is true
     monkeypatch.setattr(threading, "excepthook", lambda _: None)
@@ -1415,8 +1415,8 @@ def test_a_subject_whose_read_costs_hundreds_of_milliseconds_rests_at_its_own_pe
         wait(lambda: not t.is_alive(), 2)
         return pauses[0]
 
-    assert first_period("board") == 5.0, "the board read costs hundreds of milliseconds and must not run at the tick"
-    assert first_period("runs") == 5.0, "the run list costs 262 ms and rests with the board"
+    assert first_period("board") == 1.0, "the board answers at the tick: a page holding an old board is the defect"
+    assert first_period("runs") == 1.0, "the run list answers at the tick with the board"
     assert first_period("sessions") == 1.0, "a subject that reads in milliseconds keeps the tick"
 
 
