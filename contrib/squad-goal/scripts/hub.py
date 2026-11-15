@@ -9084,13 +9084,23 @@ def _ticker(name):
     t = _TICKERS.get(name)
     if t is not None and t.is_alive(): return t
     def run(n=name):
+        fast_until = time.monotonic() + hubstream.FIRST_EVENT_SECONDS
+        was_wanted = False
         while True:
-            if read_wanted():
+            want = read_wanted()
+            # (#1875) The fast period is a startup window, opened again when a page comes back: a subject whose reader
+            # answers None never publishes, and the period used to stay at 20 ms for as long as a page read the profile,
+            # reading fifty times a second and burning a whole core.
+            if want and not was_wanted: fast_until = time.monotonic() + hubstream.FIRST_EVENT_SECONDS
+            was_wanted = want
+            if want:
                 try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
                 except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
-            # a subject with no answer yet is asked again quickly: its first read may land mid-tick, and the page waits
-            period = hubstream.TICK_SECONDS if VERSIONS.newer({}).get(n) else hubstream.FIRST_POLL_SECONDS
-            read_pause(period if read_wanted() else max(period, hubstream.TICK_SECONDS))
+            # a subject with no answer yet is asked again quickly inside that window: its first read may land mid-tick, and
+            # the page waits; past the window it rests at the tick like every other subject
+            answered = bool(VERSIONS.newer({}).get(n))
+            period = hubstream.FIRST_POLL_SECONDS if (not answered and time.monotonic() < fast_until) else hubstream.TICK_SECONDS
+            read_pause(period if want else max(period, hubstream.TICK_SECONDS))
     t = _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
     t.start()
     return t
