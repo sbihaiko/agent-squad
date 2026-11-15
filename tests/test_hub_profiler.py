@@ -1391,7 +1391,8 @@ def test_each_profile_s_tab_keeps_its_own_switch_and_window_over_one_shared_scan
     """Two profiles of one hub share the machine's process table, never their switch, their window or their scope: one
     scan answers both ticks, and each tab names the other profile's loop in its context row (#1746, #1753)."""
     prof, co_a, co_z = tmp_path / "profiles", tmp_path / "a", tmp_path / "z"
-    for d in (prof, co_a, co_z): d.mkdir()
+    for d in (prof, co_a, co_z):
+        d.mkdir()
     for slug, co in (("alpha", co_a), ("zesty", co_z)):
         (prof / f"{slug}.sh").write_text(
             f': "${{SG_REPO:=x/{slug}}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=3}}"; : "${{SG_CHECKOUT:={co}}}"\n')
