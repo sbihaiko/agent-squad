@@ -8,6 +8,7 @@ the fields asked for answers them.
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -86,3 +87,15 @@ def test_a_release_the_read_does_not_carry_is_named(tmp_path):
 
     with pytest.raises(issue_state.NotCarried, match="issue 241.*run-abc"):
         state.release(241)
+
+
+def test_a_board_read_takes_the_numeric_field_ids_the_rest_route_answers(tmp_path, monkeypatch):
+    """The REST fields route answers each field id as a number; the one board read joins them into its query (#1747)."""
+    monkeypatch.setattr(sys.modules[__name__], "FIELDS", [
+        {"id": 101, "name": "Status", "options": [{"id": "O_IP", "name": {"raw": "In Progress"}}]},
+        {"id": 102, "name": "Run"},
+        {"id": 103, "name": "Run started"},
+    ])
+    board = Board()
+    states, held = seam(tmp_path, board).board()
+    assert "241" in states and held == {}
