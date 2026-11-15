@@ -753,7 +753,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\+"&sw="\+profStripWin\)', src), "the read carries the windows the owner chose"
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\+"&sw="\+profStripWin\)', src), "the read carries the profiler and strip windows"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -851,38 +851,6 @@ RUNS = {"label": "Time in failed runs", "window_s": 3600, "runs": 3, "total_seco
         "rows": [{"verdict": "failed", "reason": "gate:red", "count": 2, "seconds": 1200.0, "share": 0.667},
                  {"verdict": "failed", "reason": "review:changes", "count": 1, "seconds": 600.0, "share": 0.333},
                  {"verdict": "completed", "reason": "", "count": 1, "seconds": 600.0, "share": 0.333}]}
-
-
-def runs_part(out):
-    at = out.index("<table id=profr")
-    return out[at:out.index("</table>", at) + 8]
-
-
-def test_the_view_draws_the_time_in_failed_runs_table_by_verdict_and_reason():
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
-    part = runs_part(out)
-    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", part)] == ["Verdict", "Runs", "Run time", "Share"]
-    rows = re.findall(r"<td><b>([^<]*)</b>(?: <span class=prr>([^<]*)</span>)?</td><td>(\d+)</td><td>([^<]*)</td><td>([^<]*)</td>", part)
-    assert rows == [("failed", "gate:red", "2", "20.0 min", "66.7%"), ("failed", "review:changes", "1", "10.0 min", "33.3%"),
-                    ("completed", "", "1", "10.0 min", "33.3%")], "a failed run shows one row for each reason it names"
-    assert "Time in failed runs" in out and "waste" not in out.lower(), "the view names time, never waste"
-    assert "20.0 min in failed runs of 30.0 min of run time, 3 runs." in out
-
-
-def test_the_view_offers_the_three_windows_and_marks_the_one_chosen():
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'runs': RUNS})},new Set())")
-    opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", out)
-    assert [(v, bool(sel), label) for v, sel, label in opts] == [("3600", False, "1 hour"), ("86400", True, "24 hours"),
-                                                                ("172800", False, "48 hours")]
-    assert re.search(r'<select data-profwin aria-label="The window of the Loop tab\'s file views">', out)
-
-
-def test_the_table_shows_with_the_switch_off_and_states_an_empty_window():
-    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': RUNS})},new Set())")
-    assert "id=profr" in off and "id=proft" not in off and "gate:red" in off
-    empty = {"label": "Time in failed runs", "window_s": 3600, "runs": 0, "total_seconds": 0, "failed_seconds": 0, "rows": []}
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'runs': empty})},new Set())")
-    assert "No run in this window." in out
 
 
 def test_the_route_answers_the_table_of_the_window_the_page_asked_for(hub):
@@ -1066,9 +1034,9 @@ def test_a_window_with_fewer_than_three_deliveries_says_so_and_draws_no_bar():
     assert "1 delivery in " in trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': one})},new Set())"))
 
 
-def test_the_trip_shows_with_the_switch_off_and_beside_the_failed_run_table():
-    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'trip': TRIP, 'runs': RUNS})},new Set())")
-    assert "id=proftrip" in off and "id=proftt" in off and "id=profr" in off and "<table id=proft " not in off
+def test_the_trip_shows_with_the_switch_off():
+    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'trip': TRIP})},new Set())")
+    assert "id=proftrip" in off and "id=proftt" in off and "<table id=proft " not in off
     on = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())")
     assert on.index("id=proftrip") < on.index("<table id=proft "), "the bar is the summary above the hot-spot tree"
 
@@ -1078,13 +1046,6 @@ def test_the_file_views_refresh_on_the_slow_cadence_with_the_switch_off():
                             'profFileDue("flow",false,{on:false}),profFileDue("prof",true,{on:false}),'
                             'profFileDue("prof",false,null)])'))
     assert out == [True, False, False, False, False]
-
-
-def test_the_window_picker_names_every_file_view_of_the_tab():
-    """One window choice moves the bar and the failed-run table alike, so its name says so (#1769)."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'runs': RUNS})},new Set())")
-    assert re.search(r"<select data-profwin aria-label=\"The window of the Loop tab's file views\">", out)
-    assert len(re.findall(r"<select data-profwin", out)) == 1, "one window choice serves both file views"
 
 
 def test_the_route_answers_the_trip_of_the_window_the_page_asked_for(hub):
@@ -1804,6 +1765,16 @@ def test_the_strip_draws_a_gap_with_its_reason_and_names_each_mark():
     assert re.search(r'title="[^"]*loop[^"]*restart[^"]*#1234', part), "a switch change names writer, origin and issue"
     assert re.search(r'title="[^"]*#7', part), "a landing names the issue it carries"
     assert re.search(r'title="[^"]*stg', part) and re.search(r'title="[^"]*main', part) is None, "a promotion names its branch"
+
+
+def test_the_page_names_no_gap_sentence_and_draws_no_failed_runs_table():
+    """The owner read the gap sentence and the rows of long verdict reasons as noise: the gaps still draw as gaps, and the
+    smaller share note stays inside the strip's aria label."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'runs': RUNS})},new Set())")
+    assert "of the window has no source data" not in out, "the gap sentence is gone"
+    assert "id=profr" not in out and "Time in failed runs" not in out, "the failed-runs panel is gone"
+    assert "with no source data" in out, "the share note stays with the strip"
+    assert "no step record in this stretch" in out, "a gap still draws as a gap with its reason"
 
 
 def test_the_strip_offers_four_eight_and_twenty_four_hours():

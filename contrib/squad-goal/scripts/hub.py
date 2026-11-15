@@ -6031,7 +6031,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profstrip .lss li{display:flex;align-items:center;gap:6px;white-space:nowrap}#profstrip .lss i{display:inline-block;flex:none;width:10px;height:10px;border-radius:var(--radius-full)}
 #profstrip .lss .ls-active i{background:var(--ok)}#profstrip .lss .ls-draining i{background:var(--warn)}#profstrip .lss .ls-off i{background:var(--mute)}#profstrip .lss .ls-down i{background:var(--err)}
 #profstrip .lss b{color:var(--fg);font-weight:600}#profstrip .lss span{font-variant-numeric:tabular-nums}
-#profb .lpr{margin-top:20px}#profb .lpr h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}#profb .lpr .lpn{margin:2px 0 8px}#profb .lpw{float:right;font-size:var(--fs-caption)}#profr{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb #profr td:first-child{text-align:left;white-space:normal}#profb #profr .prr{color:var(--err);margin-left:6px}
+#profb .lpw{float:right;font-size:var(--fs-caption)}
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
@@ -7452,13 +7452,7 @@ function profCtx(c,open){const kids=c.children||[],isOpen=kids.length>0&&open.ha
  const row=(p,level,name,n,tw)=>`<tr data-p="${esc(p)}"${tw?` aria-expanded=${isOpen}`:""} aria-level=${level} class="pk-other"><td class=pn style="padding-left:${(level-1)*18+6}px">${tw?profTw(name,1,isOpen):`<span class=ptw></span>`}<span class=pnm>${esc(name)}</span></td><td>${profSecs(n.total_s||0)}</td><td>${n.events||0}</td></tr>`;
  return `<table id=profc role=treegrid aria-label="Every process outside the loop"><thead><tr><th title="every process that is not the loop of this profile, by application: a loaded machine shows here, a costly loop in the tree">Context</th><th title="CPU seconds in the window">Total time</th><th title="processes first seen in the window">Starts</th></tr></thead><tbody>`
   +row("context",1,c.name,c,kids.length>0)+(isOpen?kids.map(k=>row("context/"+k.name,2,k.name,k,false)).join(""):"")+`</tbody></table>`}
-// Time in failed runs (#1751): the runs of a window by verdict and, for a failed run, by reason. The hub folds it from the
-// run records; the page draws it and keeps the window the owner chose. It reads files only, so it draws with the switch off.
-const PROF_WIN=[[3600,"1 hour"],[86400,"24 hours"],[172800,"48 hours"]];
-const profWinGet=()=>{try{const s=JSON.parse(localStorage.getItem("squad-prof")||"{}")||{};return PROF_WIN.some(([x])=>x===s.w)?s.w:86400}catch(e){return 86400}};
-let profWin=profWinGet();
-const profWinSave=()=>{try{localStorage.setItem("squad-prof",JSON.stringify({w:profWin}))}catch(e){}};
-const profWinPick=()=>`<label class=lpw>Window <select data-profwin aria-label="The window of the Loop tab's file views">${PROF_WIN.map(([s,l])=>`<option value=${s}${s===profWin?" selected":""}>${l}</option>`).join("")}</select></label>`;
+let profWin=86400;   // the profiler read's window: the page draws no picker for it, so it reads the hub's 24 hour default
 const profTime=s=>s>=3600?(s/3600).toFixed(1)+" h":s>=60?(s/60).toFixed(1)+" min":s>=1?s.toFixed(1)+" s":Math.round(s*1000)+" ms";
 const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
 // The loop state strip (#1765): the switch audit and the dated step records as one strip at the top of the tab. The hub
@@ -7499,12 +7493,11 @@ function profStrip(v){
  const marks=(v.marks||[]).map(m=>`<span class="lsm lsm-${esc(m.kind)}" style="left:${pct(m.at-v.start)}%" title="${profMarkText(m)}"></span>`).join("");
  const shares=PROF_STATE_ORDER.map(k=>{const s=(v.shares||{})[k]||0;
   return `<li class=ls-${k}><i aria-hidden=true></i><b>${esc(lab(k))}</b> ${profTime(s)} <span>${(100*s/span).toFixed(1)}%</span></li>`}).join("");
- const gaps=v.rows.filter(r=>r.state==="gap"),gap=gaps.length
-  ?`<p class=lpn>${profTime(v.gap_s||0)} of the window has no source data, drawn as a gap: ${esc([...new Set(gaps.map(r=>r.reason||"no record"))].join("; "))}</p>`:"";
+ const gaps=v.rows.filter(r=>r.state==="gap");
  const aria=`The loop over the last ${profTime(span)}: ${PROF_STATE_ORDER.map(k=>lab(k)+" "+(100*((v.shares||{})[k]||0)/span).toFixed(1)+"%").join(", ")}`
   +(gaps.length?`, ${(100*(v.gap_s||0)/span).toFixed(1)}% with no source data`:"");
  return `<section id=profstrip><div class=lsh><h3>Loop state</h3>${profStripPick(v)}</div>`
-  +`<div class=lsb role=img aria-label="${esc(aria)}">${bars}${marks}</div>${profGates(v.gates,v)}<ul class=lss>${shares}</ul>${gap}</section>`}
+  +`<div class=lsb role=img aria-label="${esc(aria)}">${bars}${marks}</div>${profGates(v.gates,v)}<ul class=lss>${shares}</ul></section>`}
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
@@ -7519,12 +7512,6 @@ function profTrip(t){
  const rows=stages.map(s=>`<tr data-p="trip/${esc(s.stage)}"><td class=pn><i class="ptk ptk-${esc(s.stage)}${s.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(s.label)}</span></td><td>${profTripNum(s.median_s)}</td><td>${profTripNum(s.p90_s)}</td><td>${s.observations||0}</td></tr>`).join("");
  return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds their median time in each stage, in the order of the rows below.</p>${bar}`
   +`<table id=proftt aria-label="The trip of an issue, a stage a row"><thead><tr><th>Stage</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
-function profRuns(r){
- if(!r||!r.rows)return "";
- const rows=r.rows.map(x=>`<tr class="pr-${esc(x.verdict)}"><td><b>${esc(x.verdict)}</b>${x.reason?` <span class=prr>${esc(x.reason)}</span>`:""}</td><td>${x.count}</td><td>${profTime(x.seconds)}</td><td>${profPct(x.share)}</td></tr>`).join("");
- const note=r.rows.length?`${profTime(r.failed_seconds)} in failed runs of ${profTime(r.total_seconds)} of run time, ${r.runs} run${r.runs===1?"":"s"}.`:"No run in this window.";
- return `<div class=lpr><h3>${esc(r.label||"Time in failed runs")}</h3>${profWinPick()}<p class=lpn>${note}</p>`
-  +`<table id=profr aria-label="Time in failed runs"><thead><tr><th title="the run's verdict; a failed run shows one row for each reason its verdict names">Verdict</th><th title="the runs in the row">Runs</th><th title="the run seconds the row covers">Run time</th><th title="the row's seconds as a share of every run second of the window">Share</th></tr></thead><tbody>${rows}</tbody></table></div>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
@@ -7533,22 +7520,21 @@ function profNote(v){
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
  const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,strip=profStrip(v.strip),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+strip+trip+profRuns(v.runs);   // the file views read files only, so the switch does not gate them
+ if(!v.on||!v.tree)return head+strip+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
  return head+strip+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
-  +(v.context?profCtx(v.context,open):"")+profRuns(v.runs)}
+  +(v.context?profCtx(v.context,open):"")}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),win=!!a&&a.hasAttribute&&a.hasAttribute("data-profwin"),swin=!!a&&a.hasAttribute&&a.hasAttribute("data-stripwin");
+function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),swin=!!a&&a.hasAttribute&&a.hasAttribute("data-stripwin");
  b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):win?b.querySelector("select[data-profwin]"):swin?b.querySelector("select[data-stripwin]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+ const t=sw?b.querySelector("[data-prof]"):swin?b.querySelector("select[data-stripwin]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
 async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin+"&sw="+profStripWin)).json();profDraw()}catch(e){}}
 async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 $("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
-$("#profb").addEventListener("change",e=>{const s=e.target.closest("select[data-profwin]");if(s){profWin=Number(s.value)||86400;profWinSave();profPoll();return}
- const w=e.target.closest("select[data-stripwin]");if(!w)return;profStripWin=Number(w.value)||86400;profStripSave();profPoll()});   // each window is the page's own choice, kept on this device
+$("#profb").addEventListener("change",e=>{const w=e.target.closest("select[data-stripwin]");if(!w)return;profStripWin=Number(w.value)||86400;profStripSave();profPoll()});   // the strip's window is the page's own choice, kept on this device
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
 /*BOARD_LANES*/
