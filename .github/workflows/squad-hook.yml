@@ -1,0 +1,42 @@
+name: squad-hook
+# The loop host's entry into a CI event (#1837): a self-hosted runner on that host runs one fixed command when a `ci` run
+# completes, so a promotion starts on the event and the watch cycle stays the redundancy.
+#
+# It is safe on a public repository because the job holds no checkout and reads no branch: the only code it runs is the
+# published loop copy under $HOME, which no branch of this repository can reach. The event's branch picks the pass, and
+# the pass fetches the remote and reads its own facts. A run from a fork, or from any branch this repository does not
+# promote, starts no job at all.
+on:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  # One group per branch: GitHub keeps one pending job per group, so a shared group would drop a dev event behind an stg one.
+  group: squad-hook-${{ github.event.workflow_run.head_branch || 'manual' }}
+  cancel-in-progress: false
+jobs:
+  fire:
+    # A cancelled run proves nothing (each push cancels the older fast tier), and a fork's run never reaches the loop host.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.actor == 'sbihaiko') ||
+      (github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.conclusion != 'cancelled' &&
+       (github.event.workflow_run.head_branch == 'dev' || github.event.workflow_run.head_branch == 'stg'))
+    runs-on: [self-hosted, squad-hook]
+    timeout-minutes: 20
+    steps:
+      - name: fire the loop pass for this tip
+        env:
+          SG_PROFILE: agent-squad
+          SG_HOOK_BRANCH: ${{ github.event_name == 'workflow_dispatch' && 'both' || github.event.workflow_run.head_branch }}
+        run: |
+          set -eu
+          hook="$HOME/.claude/skills/squad-goal/scripts/hookfire.sh"
+          if [ ! -f "$hook" ]; then
+            echo "squad-hook: $hook is not published on this host; no pass runs, the watch cycle carries it" >&2
+            exit 0
+          fi
+          echo "squad-hook: firing for '$SG_HOOK_BRANCH'"
+          exec bash "$hook" "$SG_HOOK_BRANCH"

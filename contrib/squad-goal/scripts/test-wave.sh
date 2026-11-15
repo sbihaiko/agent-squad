@@ -887,7 +887,7 @@ case "$r" in *refused*) ko "T: a working board write is named refused: '$r'";; *
 
 # U (#620): a child that ENTERED its wave (its ledger's entered fact) whose commit reached dev by another route makes the wave land
 # empty, and dev holds no `Refs #N` line for it (a squash rewrote the message). The entry is the proof: the issue is
-# delivered, never requeued, even past the age cap.
+# delivered, never requeued, even past the age cap. The cap decides first (#1833): a capped wave keeps its own landing line.
 W15=wave/run-15; start2 run-15 >/dev/null
 printf 'run-15\n' > "$T/st/auto/disp-231"; SG_STATE=$T/st python3 "$T/s/issue_ledger.py" wave 'x/y#231' run-15 entered 'entered wave/run-15' >/dev/null
 mkdir -p "$T/co/runs/run-15"
@@ -1183,6 +1183,36 @@ SG_STATE=$T/st python3 "$T/s/issue_ledger.py" requeue "x/y#761" run-1106 "$X7SHA
 r=$(land2 run-1106 2>&1); rc=$?
 [ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Y5: a commit of an issue the run requeued does not hold the wave";; *) ko "Y5: not an empty landing: '$r'";; esac || ko "Y5: exit $rc: '$r'"
 case "$r" in *"WAVE REFUSE"*) ko "Y5: the wave was refused: '$r'";; *) ok "Y5: no WAVE REFUSE line";; esac
+# Y6 (#1833): a wave already in the base keeps refusing its landing every cycle. The run's wave landed in an earlier cycle: its
+# tip is dev's now, and one of its children entered it. One child of the run never entered, so its commit sits on the run's own
+# branch only. The wave landed, so the pass writes its books and drops its markers as a kept landing branch does (#1826): the
+# entered child is delivered, the child that never entered goes back to the queue, and no WAVE REFUSE line holds the run. The
+# refusal for an unlanded wave with such a commit stays (Y2).
+W29=wave/run-1833; start2 run-1833 >/dev/null
+mkdir -p "$T/co/runs/run-1833"
+printf '%s\n' 'CHILD — GitHub issue(s) 1752, 1753 (bug; one root cause, one branch):' > "$T/co/runs/run-1833/request.txt"
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-1833/record.jsonl"
+child 1752 g1752 "origin/$W29"; en2 run-1833 1752 >/dev/null
+# The wave lands: dev carries its tip, and the wave branch stays behind (an earlier landing left it, its deletion unmet).
+$O update-ref refs/heads/dev "$($G -C "$T/c1752" rev-parse HEAD)"
+# The child that never entered: a commit of this run naming #1753, on a local branch of the checkout only.
+x9=$(mktemp -d); $G clone -q "$T/origin.git" "$x9/c" 2>/dev/null
+(cd "$x9/c" && $G checkout -q -b tmp dev && echo fix > f1753 && $G add f1753 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 1753" -m "Refs #1753")
+X9SHA=$($G -C "$x9/c" rev-parse HEAD); $G -C "$T/co" fetch -q "$x9/c" HEAD:refs/heads/squad/run/run-1833 2>/dev/null
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/auto/orphan-refused-run-1833"
+r=$(land2 run-1833 2>&1); rc=$?
+[ $rc = 0 ] && ok "Y6: a wave whose tip the base already carries lands (exit 0)" || ko "Y6: exit $rc: '$r'"
+case "$r" in *"WAVE REFUSE"*) ko "Y6: the landed wave is still refused: '$r'";; *) ok "Y6: no WAVE REFUSE line";; esac
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^WAVE .* already landed')" = 1 ] && ok "Y6: the landing names the wave as already landed, once" || ko "Y6: no single already-landed line: '$r'"
+$O rev-parse -q --verify "refs/heads/$W29" >/dev/null && ko "Y6: the landed wave branch is kept" || ok "Y6: the landed wave branch goes"
+[ ! -e "$T/st/auto/wave-run-1833" ] && ok "Y6: the run's wave marker goes" || ko "Y6: the run's wave marker is kept: '$(cat "$T/st/auto/wave-run-1833" 2>/dev/null)'"
+[ ! -e "$T/st/auto/orphan-refused-run-1833" ] && ok "Y6: no orphan-refused marker is written" || ko "Y6: an orphan-refused marker was written"
+/usr/bin/grep -q 'issues/1752 -f state=closed' "$T/gh.log" && ok "Y6: the child that entered the landed wave is delivered" || ko "Y6: #1752 is not closed: $(cat "$T/gh.log")"
+/usr/bin/grep -q 'issues/1753 -f state=closed' "$T/gh.log" && ko "Y6: the child that never entered is closed" || ok "Y6: the child that never entered is not delivered"
+case "$r" in *"WAVE REQUEUE #1753"*landed*) ok "Y6: the child that never entered goes back to the queue, its wave landed without it";; *) ko "Y6: #1753 is not requeued: '$r'";; esac
+/usr/bin/grep -qx 'o 3 Todo 1753' "$T/board.log" && ok "Y6: the card of the requeued issue reads Todo" || ko "Y6: no Todo card for #1753: $(cat "$T/board.log" 2>/dev/null)"
+[ -z "$(tries 1753 run-1833)" ] && ok "Y6: the requeue counts no landing try" || ko "Y6: tries of #1753: $(tries 1753 run-1833)"
+rm -rf "$x9"
 
 # (#845) The orphan-commit refusal applies only to a run whose verdict is completed. A failed, needs-human, stopped or verdict-less
 # run's child commit never holds its wave: the wave takes its normal path (an empty landing here, with no requeue).
