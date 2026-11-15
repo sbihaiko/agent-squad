@@ -511,10 +511,13 @@ class BoardBinding:
         return self._cached(f"rest-fields-{self.owner}-{self.project}.json", 86400, read_field)
 
     def text_fields(self):
-        """The two text fields a run is named in: {name: id}."""
+        """The two text fields a run is named in: {name: id}. A carrier that answers no field list (the Status field's id
+        alone, as status_field reads it) names no text field, so a board read still answers its Status column."""
         def read_fields():
-            fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
-            return {x.get("name"): x.get("id") for x in fs if x.get("name") in HOLDER_FIELDS}
+            try: fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
+            except ValueError: fs = None
+            if not isinstance(fs, list): return {}
+            return {x.get("name"): x.get("id") for x in fs if isinstance(x, dict) and x.get("name") in HOLDER_FIELDS}
         return self._cached(f"rest-text-fields-{self.owner}-{self.project}.json", 86400, read_fields)
 
     def number_field(self):
