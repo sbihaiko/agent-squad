@@ -15,6 +15,7 @@ message id folds to one row.
 import json
 import os
 import pathlib
+import tempfile
 
 LOOP_MATCH_S = 300   # the slack around a loop call's own span: a transcript call and a loop call of the same model and counts are the same call within it
 
@@ -108,19 +109,74 @@ def calls(rows, loop=(), canon=None):
     return out
 
 
+STATE_VERSION = 1   # the saved fold's shape: {root, version, files: {path: [stamp, rows]}} (#1888)
+
+
 class Cache:
     """The bounded read of one project folder: each transcript is folded once per stamp (mtime and size), a changed file is
     folded again in full (a rewrite folds like a fresh read), a vanished file is dropped, and the rows are kept between
     polls. A poll that finds no directory and no file changed walks nothing: the folder's own stamp and its subfolders'
     stamps bound the walk as the file stamps bound the parse. `parsed` counts the files folded so far and `walks` the
-    directory walks, so a test proves an unchanged folder parses nothing and walks nothing."""
+    directory walks, so a test proves an unchanged folder parses nothing and walks nothing.
 
-    def __init__(self):
+    A `state` path makes the fold outlive the process (#1888): the first read for a root loads the document the last
+    process saved when it names that root, and a read that changed the fold writes it back through a temp file and a
+    rename, so a new hub process reads the fold instead of re-parsing every transcript. A corrupt or absent document,
+    or one written for another folder, is no fold: the read starts empty and never raises."""
+
+    def __init__(self, state=None):
         self.files = {}   # path: [(mtime_ns, size), rows]
         self.dirs = {}    # path: mtime_ns, every folder the last walk saw, the root included
         self.root = None
+        self.state = str(state) if state is not None else None   # the saved fold's path, None keeps the fold in memory only
         self.parsed = 0
         self.walks = 0
+
+    def _load(self):
+        """The fold the last process saved for this root. A corrupt or absent document, or one for another root or an old
+        shape, is no fold: it starts empty and never raises. One unreadable entry is one file to read again."""
+        if not self.state:
+            return
+        try:
+            doc = json.loads(pathlib.Path(self.state).read_text())
+        except (OSError, ValueError, TypeError):
+            return
+        if not isinstance(doc, dict) or doc.get("version") != STATE_VERSION or doc.get("root") != self.root:
+            return
+        files = doc.get("files")
+        if not isinstance(files, dict):
+            return
+        for p, ent in files.items():
+            try:
+                stamp, rows = ent
+                stamp = (int(stamp[0]), int(stamp[1]))
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            if isinstance(rows, list):
+                self.files[str(p)] = [stamp, rows]
+
+    def _save(self):
+        """Write the fold beside its path through a temp file and a rename (ADR-0030): a reader sees a whole document or
+        the last one, never half. A write that fails leaves the last document in place."""
+        if not self.state:
+            return
+        path = pathlib.Path(self.state)
+        doc = {"root": self.root, "version": STATE_VERSION,
+               "files": {p: [[int(v[0][0]), int(v[0][1])], v[1]] for p, v in self.files.items()}}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")   # one name per write, so two threads never meet
+        except OSError:
+            return
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(doc))
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     def _walk_needed(self):
         """True when the last walk's folders may have gained or lost a file: a folder's mtime moves on a create and a delete,
@@ -157,13 +213,17 @@ class Cache:
         root = str(folder)
         if self.root != root:
             self.root, self.files, self.dirs = root, {}, {}
+            self._load()   # the last process's fold for this root, when it left one (#1888)
+        dropped = False
         if self._walk_needed():
             found = self._walk(root)
             here = set(found)
             for k in [k for k in self.files if k not in here]:   # a file that is gone is never kept
                 del self.files[k]
+                dropped = True
         else:
             found = list(self.files)
+        before = self.parsed
         for f in found:
             try:
                 st = os.stat(f)
@@ -179,6 +239,8 @@ class Cache:
                 continue
             self.files[f] = [stamp, usage_rows(lines)]
             self.parsed += 1
+        if self.parsed != before or dropped:   # a read that parsed a file or dropped one changed the fold
+            self._save()
         rows, seen = [], set()
         for k in sorted(self.files):
             for r in self.files[k][1]:

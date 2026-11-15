@@ -3395,7 +3395,7 @@ def operator_calls(runs=None, src="both"):
         log_once(f"hub: operator usage unavailable, none is counted: {type(e).__name__}: {' '.join(str(e).split())}")
         return []
     if OPERATOR is None or not isinstance(OPERATOR, OU.Cache):
-        OPERATOR = OU.Cache()
+        OPERATOR = OU.Cache(STATE / "operator-usage.json")   # the fold outlives this process, so a restart re-parses nothing (#1888)
     rows = OPERATOR.read(folder)
     keep = lambda m: _src_keeps(src, m)   # noqa: E731  the panel's own filter, so the two readings never disagree
     loop = [c for c in ledger_calls() if isinstance(c, dict) and keep(c.get("model") or "")]
