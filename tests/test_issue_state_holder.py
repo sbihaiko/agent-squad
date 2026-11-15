@@ -126,7 +126,8 @@ def test_a_field_list_the_board_cannot_read_answers_status_and_an_unknown_holder
         if "/fields?" in s:
             calls["fields"] += 1
             if calls["fields"] > 1:   # the Status field's own read is the first; every text-field read after it fails
-                if isinstance(answer, Exception): return subprocess.CompletedProcess(cmd, 1, "", str(answer))
+                if isinstance(answer, Exception):
+                    return subprocess.CompletedProcess(cmd, 1, "", str(answer))
                 return subprocess.CompletedProcess(cmd, 0, answer, "")
         return board(cmd, input=input, **kw)
     st = seam(tmp_path, stub)
