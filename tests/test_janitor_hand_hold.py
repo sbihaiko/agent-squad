@@ -115,13 +115,18 @@ def test_a_release_moves_the_card_once_and_its_record_goes(tmp_path, column, car
     assert not (st / f"auto/release-{N}").exists(), "the record stayed: it would apply twice"
 
 
-def closed_issue(tmp_path: Path) -> None:
-    """The sandbox's stub `gh` answers the issue as closed, completed: the release record is read on an issue whose card
-    cannot move back along the axis (ADR-0143)."""
-    gh = tmp_path / "bin/gh"
-    text = gh.read_text()
-    assert "*issues/*) echo -e 'open\\t\\tIssue';;" in text, "the stub's issue read changed shape"
-    gh.write_text(text.replace("*issues/*) echo -e 'open\\t\\tIssue';;", "*issues/*) echo -e 'closed\\tcompleted\\tIssue';;"))
+def gh_answer(tmp_path: Path, *argv: str) -> str:
+    """The sandbox's stub `gh` answer to one read, asked through the stub's own PATH: the pass reads the issue and the
+    board this way, so a case states what the board answers before the pass runs."""
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ.get('PATH', '')}"}
+    return subprocess.run(["gh", *argv], capture_output=True, text=True, env=env, check=False).stdout
+
+
+def card_column(tmp_path: Path) -> str:
+    """The column the board answers for the issue's card: the stub's one item line is `<n>\\t<column>\\t<url>`."""
+    line = next((row for row in gh_answer(tmp_path, "api", "projectsV2/1/items").splitlines()
+                 if row.startswith(f"{N}\t")), "")
+    return line.split("\t")[1] if line.count("\t") >= 2 else ""
 
 
 @pytest.mark.heavy
@@ -129,14 +134,17 @@ def test_a_release_record_for_a_closed_issue_is_dropped_never_refused(tmp_path):
     """#1869: the release record outranks the closed-issue rule, so it asked for Todo on a card a closed issue holds. The
     board refuses a move back (ADR-0143), and the record stayed for every pass to refuse again. A release for a closed
     issue is dropped: it writes nothing, and it goes."""
-    st = bare(tmp_path, "Closed")
-    closed_issue(tmp_path)
+    st = bare(tmp_path, "Closed", closed=True)
+    assert gh_answer(tmp_path, "api", f"repos/x/y/issues/{N}", "-q", ".state").strip() == "closed", "the issue is not closed"
+    assert card_column(tmp_path) == "Closed", "the card is not in the Closed column before the pass runs"
     assert hand(tmp_path, "hold", str(N)).returncode == 0
     assert hand(tmp_path, "release", str(N), "--to", "Todo").returncode == 0
     janitor(tmp_path, **SHIPPED)
     janitor(tmp_path, **SHIPPED)
     assert moves(tmp_path) == [], writes(tmp_path)
     assert not (st / f"auto/release-{N}").exists(), "the record stayed: every pass asks for the move again"
+    log = (st / "cycle.log").read_text()
+    assert "HAND-RELEASE-DROPPED" in log, f"the pass did not say it dropped the record: {log}"
 
 
 @pytest.mark.heavy
