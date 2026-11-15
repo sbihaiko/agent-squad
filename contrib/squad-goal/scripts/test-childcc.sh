@@ -561,8 +561,9 @@ out=$(lpass pick); rc=$?
 [ "$rc" = 3 ] && ok "the child its run did not approve holds the pass, so the wave waits for it" || ko "pick: exit $rc: $out"
 
 # A deferral is diagnosable: every pass names each child it leaves and the cause, one line per child (#931). A child a
-# finished run never approved is held by missing review evidence, and ADR-0151 rule 5 says that hold is not a requeue: the
-# wave's age cap owns it. So the pass names it every time and never requeues it, and the cap is what frees the wave.
+# finished run never approved can never be approved: no actor reviews that head again, so the hold loses its path to one
+# and the deferral deadline owns it (ADR-0151 rule 5). The deadline runs, names the cause every pass, and the issue goes
+# back to the queue at its bound; childcc still never reviews or fixes the child.
 dpass() { echo "$T/co/runs/$1" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_BOARD_VOCAB=shipped python3 "$T/childcc.py.run" 2>&1); }
 frun() { # name issue: a finished run whose one child passed and whose record holds no review (not run-owned)
   local n=$1 i=$2 rd="$T/co/runs/$1"; wtree "$n"
@@ -570,15 +571,41 @@ frun() { # name issue: a finished run whose one child passed and whose record ho
     echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
     echo '{"event": "verdict"}'; } > "$rd/record.jsonl"
   echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; }
+live() { # name issue started|resumed: a run-owned child whose run is still live, so its last start or resume is not a verdict before it
+  local n=$1 i=$2 rd="$T/co/runs/$1" h; wtree "$n"; h=$(/usr/bin/git -C "$rd/ws/target-c" rev-parse HEAD)
+  { echo '{"event": "run_start", "run_id": "'$n'"}'
+    echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
+    echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+    echo '{"event": "review_round", "node": "c", "round": 1, "head": "'$h'", "verdict": "hold", "offered": false, "review": {"verdict": "hold", "findings": "x"}}'
+    [ "$3" = resumed ] && { echo '{"event": "verdict", "verdict": "needs-human"}'; echo '{"event": "resume", "run_id": "'$n'"}'; }
+    true; } > "$rd/record.jsonl"
+  echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; }
 export GH_NUMS="6400:Doing"; orun dfr 6400 hold >/dev/null
 rm -f "$T/st/alerts.log" "$T"/st/cq/*ccdefer* "$T"/st/auto/dwait-*; : > "$T/dfr.out"; : > "$WAVE_CALLS"
-rc=0; for i in 1 2 3 4 5 6; do lpass dfr >> "$T/dfr.out" || rc=$?; done
-[ "$rc" = 3 ] && ok "a run-owned child its run never approved holds the wave, pass after pass" || ko "dfr: exit $rc"
-[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED dfr c #6400: its run approved no head for it' "$T/dfr.out")" = 6 ] && ok "every pass names the run-owned child and its cause (#931)" || ko "named $(/usr/bin/grep -c 'CHILDCC DEFERRED dfr c' "$T/dfr.out") times: $(cat "$T/dfr.out")"
-! /usr/bin/grep -q '^requeue 6400' "$WAVE_CALLS" && ok "a run-owned child its run never approved is never requeued: the age cap owns it (ADR-0151 rule 5)" || ko "requeued a run-owned, unapproved child: $(cat "$WAVE_CALLS")"
-[ ! -e "$T/st/auto/dwait-dfr-c" ] && ok "a run-owned child its run never approved gets no deferral deadline" || ko "dwait written: $(cat "$T/st/auto/dwait-dfr-c" 2>/dev/null)"
-: > "$WAVE_CALLS.expired-dfr"; rc=0; out=$(lpass dfr) || rc=$?; rm -f "$WAVE_CALLS.expired-dfr"
-[ "$rc" = 0 ] && ! /usr/bin/grep -q '^requeue 6400' "$WAVE_CALLS" && ok "the wave's age cap frees the run-owned child it held" || ko "expired wave: exit $rc, calls $(cat "$WAVE_CALLS")"
+rc=0; for i in 1 2 3 4 5; do lpass dfr >> "$T/dfr.out" || rc=$?; done
+[ "$rc" = 3 ] && ok "a finished run's unapproved child holds the wave inside its deadline" || ko "dfr: exit $rc"
+[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED dfr c #6400: its run approved no head for it' "$T/dfr.out")" = 5 ] && ok "every pass names the run-owned child and its cause (#931)" || ko "named $(/usr/bin/grep -c 'CHILDCC DEFERRED dfr c' "$T/dfr.out") times: $(cat "$T/dfr.out")"
+! /usr/bin/grep -q '^requeue 6400' "$WAVE_CALLS" && ok "a finished run's unapproved child is not requeued before its deadline" || ko "requeued before its deadline: $(cat "$WAVE_CALLS")"
+[ -e "$T/st/auto/dwait-dfr-c" ] && ok "a finished run's unapproved child runs the deferral deadline (ADR-0151 rule 5)" || ko "no dwait: the deadline never started"
+rc=0; lpass dfr >> "$T/dfr.out" || rc=$?
+/usr/bin/grep -q '^requeue 6400' "$WAVE_CALLS" && ok "at the deadline the child's issue goes back to the queue" || ko "no requeue at the deadline: exit $rc, $(cat "$WAVE_CALLS")"
+/usr/bin/grep -q 'requeue 6400 .*its run approved no head for it' "$WAVE_CALLS" && ok "the requeue names the cause that held it" || ko "requeue line: $(cat "$WAVE_CALLS")"
+[ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "the deadline never reviews or fixes the child here (ADR-0151 rule 5)" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
+for i in 1 2 3 4 5 6; do lpass dfr >> "$T/dfr.out" || true; done
+[ "$(/usr/bin/grep -c '^requeue 6400' "$WAVE_CALLS")" = 1 ] && ok "a head already sent back is never sent back twice (ADR-0149)" || ko "requeued $(/usr/bin/grep -c '^requeue 6400' "$WAVE_CALLS") times"
+
+# A live run still owns its child: the pass leaves that child to its run, so it is never requeued and never gets a deadline,
+# because the run may yet review that head (ADR-0151 rule 5). The pass does not wait for it, so it exits 0.
+export GH_NUMS="6450:Doing"; orun lv2 6450 hold >/dev/null; live lv2 6450 started
+rm -f "$T"/st/auto/dwait-lv2-*; : > "$WAVE_CALLS"; rc=0
+for i in 1 2 3 4 5 6 7 8; do out=$(lpass lv2) || rc=$?; done
+[ "$rc" = 0 ] && ! /usr/bin/grep -q '^requeue 6450' "$WAVE_CALLS" && ok "a live run's unapproved child is never requeued, past every deadline" || ko "live run: exit $rc, calls $(cat "$WAVE_CALLS"), out $out"
+[ ! -e "$T/st/auto/dwait-lv2-c" ] && ok "a live run's child gets no deferral deadline" || ko "dwait written: $(cat "$T/st/auto/dwait-lv2-c" 2>/dev/null)"
+# A record that holds a verdict and then a resume is live again: its earlier verdict no longer reads it as finished (ADR-0167).
+export GH_NUMS="6451:Doing"; orun rs 6451 hold >/dev/null; live rs 6451 resumed
+rm -f "$T"/st/auto/dwait-rs-*; : > "$WAVE_CALLS"; rc=0
+for i in 1 2 3 4 5 6 7 8; do out=$(lpass rs) || rc=$?; done
+[ "$rc" = 0 ] && ! /usr/bin/grep -q '^requeue 6451' "$WAVE_CALLS" && [ ! -e "$T/st/auto/dwait-rs-c" ] && ok "a run resumed after its verdict is live again, so its child keeps the unbounded hold" || ko "resumed run: exit $rc, dwait $(cat "$T/st/auto/dwait-rs-c" 2>/dev/null), calls $(cat "$WAVE_CALLS")"
 
 # A machine-wide gate hold clears by itself, so it is never counted toward a deadline and never requeues good work (#931): an
 # approved child retries the entry on every pass and enters the one after the lock frees.

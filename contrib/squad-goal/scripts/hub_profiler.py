@@ -10,7 +10,8 @@ orphan from a temp folder. Each is filed under the loop parts its ancestry names
 a call tree: a driver, the run it started, the gate below it. A process that names no part of its own counts as its
 nearest named ancestor's own time. Every other process counts in one context row, apart from the tree.
 
-A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim.
+A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim. The whole line is read, with
+no head cap: a script past a long argument list still names its process.
 
 A process that started and ended between two readings is never seen, so each node's event count, and the starts a second
 it answers, is a lower bound.
@@ -36,8 +37,10 @@ _APP = re.compile(r"/Applications/(?:[^/]+/)*?([^/]+)\.app/")
 _PYTHON = re.compile(r"[Pp]ython[\d.]*$")
 _SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
 _SHELL_CODE = re.compile(r"-[A-Za-z]*c[A-Za-z]*$")
+_WORD = re.compile(r"""(?:[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*"|['"])+""", re.S)   # an unclosed quote is one character
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-_BREAK = " \t\n;&|(){}"   # what ends a word in shell code; all but the blanks end a command too
+_BREAK = " \t\n;&|(){}<>"   # what ends a word in shell code; all but the blanks end a command too
+_OPERATOR = re.compile(r"\d*[;&|()<>]")   # a shell operator after a word; the digits are a redirect's file descriptor
 _PYTESTS = frozenset(("pytest", "py.test"))
 _ENGINE_VERBS = frozenset(("start", "resume", "work", "task"))
 _ENGINE_MODULES = frozenset(("squad", "squad.cli"))
@@ -57,7 +60,6 @@ OTHER = ("other", "other")       # the head of every path outside the loop: the 
 UNKNOWN = ("unknown", "unknown")  # a process of the loop whose program cannot be told, and no ancestor names one
 FOREIGN = "another loop"         # a supervisor that is not this profile's, with its descendants
 CONTEXT = "outside the loop"
-_HEAD = 400    # a command's head names what it runs; its tail is arguments, and some run to kilobytes
 _IN, _OUT, _OTHER_LOOP = "in", "out", "foreign"
 
 Scope = collections.namedtuple("Scope", "supervisor marks")   # the supervisor's pid or None; the folders of the profile
@@ -107,10 +109,41 @@ def _classify(script):
     return None
 
 
-def _after(raw, flag):
-    """The text of a command line after its shell code flag, quotes kept: the code as the shell reads it."""
-    _, found, rest = raw.partition(f" {flag} ")
-    return rest if found else ""
+class _Word(str):
+    """A word of a command line: its value, the offsets its text starts and ends at, and whether its text opens with a
+    quote."""
+
+
+def _words(command):
+    """The words of a command line, with their offsets kept: a line's shape is read from the text, never guessed."""
+    out = []
+    for m in _WORD.finditer(command):
+        text = m.group()
+        try: value = "".join(shlex.split(text))
+        except ValueError: value = text   # an unclosed quote is one word, read as it is
+        w = _Word(value)
+        w.start, w.end, w.quoted = m.start(), m.end(), text[0] in "'\""
+        out.append(w)
+    return out
+
+
+def _typed(word, raw):
+    """True when a shell's code is one quoted word, the shell-typed shape: its quotes were read, and what follows is only
+    parameters. A code followed by any shell operator, a redirection included, is the start of a longer line, not a typed
+    code: the shell reads that line as the process table prints it, so a redirected script still names its process."""
+    if not word.quoted: return False
+    after = raw[word.end:].lstrip()
+    return not after or not _OPERATOR.match(after)
+
+
+def _shell_code(t, i, raw, depth):
+    """The code of a shell's `-c` at t[i], found at its own word: a shell-typed code reads its one quoted word, and a
+    process table line reads the rest of the line after the flag, as ps prints it (arguments joined, no outer quotes)."""
+    rest = t[i + 1:]
+    if not rest: return None, None
+    if raw is None or _typed(rest[0], raw):
+        return _code(str(rest[0]), depth)   # the shell-typed code: the words after it are its parameters
+    return _code(raw[t[i].end:].lstrip(), depth)   # the process table's line: the code runs from after the flag
 
 
 def _run(t, depth=0, raw=None):
@@ -128,11 +161,8 @@ def _run(t, depth=0, raw=None):
     if name in _SHELLS:
         i = 1
         while i < len(t) and t[i].startswith("-"):
-            if _SHELL_CODE.match(t[i]):   # the process table joins the arguments, so the code is the rest of the line
-                rest = t[i + 1:]   # one word is the code itself, its own quotes kept; more words are a process table line, read raw
-                if not rest:
-                    return None, None
-                return _code(_after(raw, t[i]) if raw and len(rest) > 1 else rest[0], depth)   # words of shell code are a true argument list: the code is the first, the rest are its parameters
+            if _SHELL_CODE.match(t[i]):
+                return _shell_code(t, i, raw, depth)
             i += 2 if t[i] in ("-o", "+o") else 1
         return (_classify(t[i]), t[i]) if i < len(t) else (None, None)
     if _PYTHON.match(name):
@@ -197,14 +227,11 @@ def _code(code, depth):
     return None, None
 
 
-@functools.lru_cache(maxsize=8192)
 def _parse(command):
-    head = command[:_HEAD]
-    try:
-        tokens = shlex.split(head)
-    except ValueError:   # a quote the cut left open
-        tokens = head.split()
-    return _run(tokens, raw=head)
+    """Every shape reads the whole line: there is no head cap, so a script past a long argument list still names its
+    process. The line is not cached either, since a cache would hold the whole argument list of every process and a
+    process table churns it: a reading parses each line once or twice."""
+    return _run(_words(command), raw=command)
 
 
 def label(command):
@@ -224,7 +251,7 @@ def _orphan(command, marks):
 @functools.lru_cache(maxsize=8192)
 def _plain(command):
     """The name the context row files a command under: the application, else the program's file name."""
-    m = _APP.search(command[:_HEAD])
+    m = _APP.search(command)
     if m:
         return m.group(1)
     return (command.split(None, 1) or ["?"])[0].rsplit("/", 1)[-1] or "?"
@@ -232,7 +259,7 @@ def _plain(command):
 
 @functools.lru_cache(maxsize=8192)
 def _names(command, marks):
-    return any(m in command[:4 * _HEAD] for m in marks)
+    return any(m in command for m in marks)
 
 
 def _paths(rows, scope):

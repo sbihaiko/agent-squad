@@ -105,3 +105,24 @@ def test_cards_of_one_run_share_one_read_of_its_record(hub, monkeypatch):
     mod.HOLDER_CHECK_SECS = 0.0
     mod.holder_fact({"n": 0, "h": {"run": "run-7", "started": "1700000000"}})
     assert len(reads) == 2, "a fact past the bound is read again"
+
+
+def test_a_board_build_never_answers_a_holder_from_an_earlier_build(hub, monkeypatch):
+    """The fact is the run's liveness, and a run starts or dies with no board read. A memo that outlived its build answered
+    a later one with a liveness it no longer had: a build that followed one where the run had ended read `ended` for a
+    live run (#1790). One board build is the memo's bound."""
+    mod, co = hub
+    folder = _run(co / "runs", "run-7")
+    live = {"v": False}
+
+    class _R:
+        def run_live(self, f, now=None):
+            return live["v"]
+    monkeypatch.setattr(mod, "reaper", lambda: _R())
+    monkeypatch.setattr(mod, "run_folder", lambda r: folder)
+    card = {"n": 0, "h": {"run": "run-7", "started": "1700000000"}}
+    assert mod.holder_fact(card)[1] == "ended"
+    live["v"] = True
+    assert mod.holder_fact(card)[1] == "ended", "the memo answers inside one build"
+    mod.board_served()
+    assert mod.holder_fact(card)[1] == "running", "a later build asks again instead of answering from the memo"

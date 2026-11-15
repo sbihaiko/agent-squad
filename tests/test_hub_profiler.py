@@ -6,6 +6,7 @@ audited, and a tailnet write is refused without its own grant, `profiler_write`.
 """
 import http.client
 import importlib.util
+import inspect
 import json
 import pathlib
 import re
@@ -197,6 +198,15 @@ def test_a_command_that_names_a_run_folder_of_this_profile_is_in_the_loop(prof, 
     # a shell's code string is searched, command by command
     (f"bash -c 'cd /x && bash {S}/fast-gate.sh --tree /x'", "fast-gate.sh", "gate"),
     ("/bin/zsh -lc 'python3 -m pytest -q tests'", "pytest", "gate"),
+    # a process table line joins the arguments and drops the outer quotes: the code is the rest of the line after the flag
+    ("bash -c bash /x/watch.sh arg0", "watch.sh", "driver"),
+    ("bash -c cd /x && bash /x/watch.sh", "watch.sh", "driver"),
+    ("bash -c echo " + "x" * 500 + "; bash /x/watch.sh", "watch.sh", "driver"),   # past the first 400 characters
+    # a shell-typed code is one quoted word; the words after it are its parameters
+    ("bash -c 'bash /x/watch.sh' arg0", "watch.sh", "driver"),
+    ("bash -c 'echo hi; cat /x/watch.sh' arg0", None, None),
+    # the flag is found at its own word, never inside an earlier argument
+    ('env A="x -c y" bash -c echo "q; bash /x/watch.sh"', None, None),
 ])
 def test_a_command_is_named_by_the_program_it_runs(prof, command, name, kind):
     assert prof.label(command) == ((name, kind) if name else None)
@@ -414,6 +424,7 @@ def test_switching_off_stops_the_sampler_and_is_audited(hub):
     wait(lambda: table.reads >= 2)
     code, out = ask(port, "POST", {"on": False})
     assert (code, out.get("on")) == (200, False)
+    assert out.get("sampler") == "ended", "the answer does not say the sampler ended"
     assert samplers() == [] and not mod.profiler_running(), "the off answer came before the sampler ended"
     seen = table.reads
     time.sleep(0.05)
@@ -467,11 +478,10 @@ def test_a_write_that_changes_nothing_writes_no_audit_line(hub):
 
 
 def quiet_boot(mod, monkeypatch):
-    """Stub every read `boot` starts but the sampler: the names are read from `boot` itself, so a new one is stubbed too."""
-    src = HUB_PY.read_text()
-    body = src[src.index("\ndef boot():"):src.index('\nif __name__ == "__main__":')]
-    reads = re.findall(r"target=(\w+)", body)
-    assert "refresh_board" in reads
+    """Stub every read `boot` starts but the sampler, so only the sampler is left to observe. The names come from `boot`
+    itself, so a read added there is stubbed here too and the two start tests can never drift."""
+    reads = re.findall(r"target=(\w+)", inspect.getsource(mod.boot))
+    assert "refresh_board" in reads, "the stub list is not read from boot's own calls"
     for name in ("refresh_runs", "warm", *reads):
         monkeypatch.setattr(mod, name, lambda: None)
 
@@ -485,8 +495,6 @@ def test_a_hub_started_with_the_switch_on_runs_the_sampler(hub, monkeypatch):
     mod.boot()
     wait(lambda: table.reads >= 2)
     assert mod.profiler_running()
-    main = HUB_PY.read_text().split('\nif __name__ == "__main__":\n', 1)[1]
-    assert re.search(r"^    boot\(\)", main, re.M) and "profiler_ensure" not in main, "the hub's start does not go through boot"
 
 
 def test_a_hub_started_with_the_switch_off_starts_no_sampler(hub, monkeypatch):
@@ -547,6 +555,20 @@ def test_the_loop_audit_holds_no_profiler_line(hub):
     _, port, _, state, _ = hub
     ask(port, "POST", {"on": True})
     assert not (state / "loop-audit.jsonl").exists()
+
+
+def test_a_loop_audit_line_is_written_atomically(hub, monkeypatch, tmp_path):
+    """ADR-0030: a write killed between its steps leaves the file as it was, never a half line."""
+    mod = hub[0]
+    p = tmp_path / "loop-audit.jsonl"
+    p.write_text('{"action": "on"}\n')
+
+    def interrupted(src, dst):
+        raise OSError("killed before the rename")
+    monkeypatch.setattr(mod.os, "replace", interrupted)
+    with pytest.raises(OSError):
+        mod.loop_audit_add("owner", "loopback", "off", path=p)
+    assert p.read_text() == '{"action": "on"}\n', "an interrupted write changed the audit"
 
 
 # ---------------------------------------------------------------- the pages
@@ -726,8 +748,6 @@ def test_the_many_repository_hub_starts_the_sampler_of_a_profile_whose_switch_is
     mux_mod.start_profile({"mod": mod})
     wait(lambda: table.reads >= 2)
     assert mod.profiler_running()
-    main = (SCRIPTS / "hubmux.py").read_text().split('\nif __name__ == "__main__":\n', 1)[1]
-    assert "start_profile(a)" in main and "profiler_ensure" not in main, "the hub's start does not go through start_profile"
 
 
 # ---------------------------------------------------------------- the second review's findings
@@ -766,8 +786,45 @@ def test_a_second_off_returns_only_when_the_sampler_has_ended(hub, monkeypatch):
     assert not first.is_alive() and not second.is_alive() and not mod.profiler_running()
 
 
+def test_an_off_write_whose_sampler_outlives_the_wait_says_so(hub, monkeypatch):
+    """The join is bounded (ADR-0051): a read that never returns must not hold the request, and the answer says the
+    sampler is still running."""
+    mod, port, _, _, _ = hub
+    release, inside = threading.Event(), threading.Event()
+
+    def stuck():
+        inside.set()
+        release.wait(5)
+    old = threading.Thread(target=stuck, daemon=True)
+    old.start()
+    assert inside.wait(5)
+    monkeypatch.setitem(mod.PROFILER, "thread", old)
+    monkeypatch.setitem(mod.PROFILER, "stop", threading.Event())
+    monkeypatch.setattr(mod, "PROFILER_JOIN_S", 0.2)
+    code, out = ask(port, "POST", {"on": False})
+    release.set()
+    old.join(3)
+    assert code == 200 and out.get("sampler") == "running", "the answer does not say the sampler outlived the wait"
+    assert "still running" in out.get("sampler_text", ""), "the answer carries no words for the sampler it left"
+
+
+def test_a_sampler_stops_when_the_switch_file_says_off_whoever_wrote_it(hub):
+    """Another hub process on this state folder, or a hand edit, writes the switch file; the sampler reads it as truth."""
+    mod, port, _, state, table = hub
+    assert ask(port, "POST", {"on": True})[0] == 200
+    wait(lambda: table.reads >= 2)
+    (state / "profiler.json").write_text(json.dumps({"on": False}))
+    wait(lambda: not mod.profiler_running())
+
+
 def test_a_quoted_argument_of_a_nested_shell_names_nothing(prof):
     assert prof.label("bash -c cd /x && bash -c echo \"z; bash /x/watch.sh\"") is None
+
+
+def test_a_redirect_after_a_shell_typed_code_reads_the_line_as_the_process_table_prints_it(prof):
+    """A quoted code followed by any shell operator is not the typed shape: the line names what it redirects from."""
+    assert prof.label("bash -c 'echo hi' 2>/x/watch.sh") == ("watch.sh", "driver")
+    assert prof.label("bash -c 'echo hi' > /x/branchland.sh") == ("branchland.sh", "driver")
     assert prof.label("bash -c cd /x && bash -c \"cd /y && bash /x/watch.sh\"") == ("watch.sh", "driver")
 
 

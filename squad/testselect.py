@@ -15,6 +15,10 @@ LISTERS = {"glob", "rglob", "iterdir", "listdir", "walk", "scandir"}
 DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
 # The shard guard names every top-level test file, so a file added or deleted reaches it and no other test.
 SHARD_GUARD = "tests/test_tooling.py"
+# The measured-line guard reads every `test-*.sh` beside the scripts and fails a suite with no line in
+# tests/shell_suites_seconds.txt, so a suite added there reaches it and no other test (#1799).
+SHELL_SUITES = "contrib/squad-goal/scripts"
+MEASURED_LINE_GUARD = "tests/test_shell_suite_runner.py"
 # The gate stages that may run the delta: the tests a change reaches. The landing, the promotion proof and the nightly
 # always run the full battery, so a cheaper check never weakens the gate a delivery stands on (ADR-0018). A stage this
 # list does not name is full too: a typo in a stage never narrows a gate.
@@ -43,6 +47,11 @@ def _git(root, *args):
 
 def _is_test(rel):
     return rel.startswith("tests/") and rel.endswith(".py") and Path(rel).name.startswith("test_")
+
+
+def _is_shell_suite(rel):
+    path = Path(rel)
+    return path.parent.as_posix() == SHELL_SUITES and path.name.startswith("test-") and path.suffix == ".sh"
 
 
 def _module(rel):
@@ -226,6 +235,11 @@ def _answer(root, base):
     changed = [p for p in diff.stdout.split("\0") if p]
     if not changed:
         _none(f"the tip changes no file against {base}")
+    # A suite the delta adds has no line the repo measured yet, so it selects the guard that reads the list (#1799).
+    added = _git(root, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=A", merge_base.stdout.strip(), "HEAD")
+    if added.returncode:
+        _all(f"the diff against {base} failed")
+    added_paths = {p for p in added.stdout.split("\0") if p}
 
     inert = _inert(root)
     live = []
@@ -270,6 +284,8 @@ def _answer(root, base):
         hits = _named_by(named, listed, rel)
         if _is_test(rel):
             hits.add(rel)
+        elif rel in added_paths and _is_shell_suite(rel):
+            hits.add(MEASURED_LINE_GUARD)
         elif (rel.startswith("squad/") or rel in DATA_READERS.values()) and rel.endswith(".py"):
             hits |= _reach(_module(rel), rel, importers, dynamic)
         if not hits:

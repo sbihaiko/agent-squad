@@ -2044,7 +2044,8 @@ def loop_audit_add(who, frm, action, killed=None, client=None, path=None, **extr
     line.update(extra)   # a failed start's reason, or a stop-now's survivors
     p = pathlib.Path(path or LOOP_AUDIT)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a") as f: f.write(json.dumps(line) + "\n")
+    old = p.read_bytes() if p.is_file() else b""   # atomic (ADR-0030): an interruption leaves the audit as it was
+    tmp = _temp_name(p); tmp.write_bytes(old + (json.dumps(line) + "\n").encode()); os.replace(tmp, p)
 
 def loop_audit_last(n, path=None):
     out = []
@@ -2391,6 +2392,7 @@ PROFILER_AUDIT = STATE / "profiler-audit.jsonl"
 PROFILER_SECS = 1.0   # the cadence of the process-table read, start to start: a second resolves a fork storm, and the read runs only while the switch is on
 PROFILER_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pass
+PROFILER_STILL_RUNNING = "still running: the sampler ends after its current read of the process table"
 PROFILER = {"window": hub_profiler.Window(), "thread": None, "stop": None}
 PROFILER_LOCK = threading.RLock()   # it starts and ends the sampler, and the switch is read and written under it
 
@@ -2422,7 +2424,7 @@ def profiler_sampler(stop):
         try: scope = profiler_scope() if reading else None
         except Exception: reading = None
         with PROFILER_LOCK:
-            if stop.is_set(): break
+            if stop.is_set() or not profiler_on(): break   # the switch file is the truth, whoever wrote it
             if reading: PROFILER["window"].add(time.time(), reading, scope)
             else: PROFILER["window"].fail()
         stop.wait(max(0.0, PROFILER_SECS - (time.monotonic() - began)))
@@ -2440,9 +2442,10 @@ def profiler_ensure():
         PROFILER["thread"].start()
 
 def profiler_set(on, who, frm, client=None):
-    """Write the switch and its audit line; a write that changes nothing writes neither. An off write returns only when
-    the sampler has ended: it is told to stop under the lock and joined outside it, since its last pass takes the lock."""
-    old = None
+    """Write the switch and its audit line; a write that changes nothing writes neither. An off write returns when the
+    sampler has ended, or the wait bound has passed: it is told to stop under the lock and joined outside it, since its
+    last pass takes the lock. Returns whether the sampler has ended."""
+    old, ended = None, True
     with PROFILER_LOCK:
         if on and PROFILER["thread"] is not None and PROFILER["stop"] is not None and PROFILER["stop"].is_set() and not PROFILER["thread"].is_alive():
             PROFILER["thread"] = None
@@ -2455,9 +2458,11 @@ def profiler_set(on, who, frm, client=None):
             if PROFILER["stop"] is not None: PROFILER["stop"].set()
     if old is not None and old is not threading.current_thread():
         old.join(PROFILER_JOIN_S)   # bounded: a read of the process table that never returns must not hold the request for ever
+        ended = not old.is_alive()
         with PROFILER_LOCK:
-            if PROFILER["thread"] is old and not old.is_alive(): PROFILER["thread"] = None
+            if PROFILER["thread"] is old and ended: PROFILER["thread"] = None
     if on: profiler_ensure()
+    return ended
 
 def profiler_refusal(a, origin_ok, tn):
     """The reason a profiler switch write is refused, or '' when it may run: the access rule, then the switch's own
@@ -2482,13 +2487,16 @@ def profiler_view(a):
 
 def profiler_switch(a, body, origin_ok):
     """The profiler switch's write, shaped as the loop switch's (ADR-0162): the access rule, its own tailnet grant, the
-    origin and a JSON body `{"on": true|false}`."""
+    origin and a JSON body `{"on": true|false}`. The answer carries `sampler: "running"|"ended"`, and on a sampler that
+    outlived the off write's wait, its words beside it in `sampler_text`."""
     why = profiler_refusal(a, origin_ok, tailnet_block())
     if why: return 403, {"err": "forbidden", "reason": why}
     if not isinstance(body, dict) or not isinstance(body.get("on"), bool): return 400, {"err": "bad request"}
     client = body.get("client") if body.get("client") in LOOP_CLIENTS else None
-    profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
-    return 200, {"ok": True, "on": body["on"]}
+    ended = profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
+    out = {"ok": True, "on": body["on"], "sampler": "ended" if ended else "running"}   # a word a page tests, not prose
+    if not ended: out["sampler_text"] = PROFILER_STILL_RUNNING   # the off answer tells the truth about the sampler it left
+    return 200, out
 
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
@@ -4973,6 +4981,7 @@ def spec_plan_parents(items):
     return {i["pa"] for i in items if isinstance(i.get("pa"), int) and str(i.get("s") or "").lower() != "closed"
             and _columns_module.SPEC_LABEL not in (i.get("l") or []) and not set(i.get("l") or []) & set(TICKET_HOLD_LABELS)}
 def board(moves=None):
+    _HOLDER_CACHE.clear()   # the memo answers for one board build, never across two: its fact is the run's liveness, which changes with no board read, so a later build asks again (#1790)
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     if moves is None: moves = read_moves() if overlay else {}   # the serve passes the record it already read, so one serve reads it once (#973); the record is read on every serve, so a page reload sees the same overlay (#650)
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
@@ -5089,6 +5098,7 @@ def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
     overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
     moves = read_moves() if overlay_on() else {}
+    _HOLDER_CACHE.clear()   # the key reads the same facts the body will: a memo from an earlier build would key this board on a liveness it no longer has (#1790)
     holders = [(i["n"], holder_fact(i)[1]) for i in board_cache["items"] if (i.get("h") or {}).get("run")]   # a holder's process moves with no board read (#1661)
     key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
