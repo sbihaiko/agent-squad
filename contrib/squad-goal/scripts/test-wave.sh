@@ -1097,12 +1097,20 @@ case "$r" in *"WAVE-ERROR the push of wave/run-1340 to dev was refused: error: f
 
 # (#646) The wave tip's check is the base battery over origin/$SG_BASE, and its pytest runs over the selection. The check's command
 # is built from the shared definition and run in a clone of the remote, as wave.sh runs it; a stub python logs each call's argv.
+# (#1873, #1865) The count follows the caller: wave.sh runs its tip check with SG_GATE_CALLER=tip, so the gate keeps the full
+# count; a gate that names no caller reads as a child's own and takes one slot. The fixture names the caller the wave names,
+# else it proves a count the landing never runs.
 printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in *squad.testselect*) cat "%s/select.out" 2>/dev/null;; esac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
 tipcmd=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" "$T/selpy" wave-tip 2>/dev/null)
 rm -rf "$T/tipclone"; $G clone -q "$T/origin.git" "$T/tipclone" 2>/dev/null
 printf 'tests/test_a.py\n' > "$T/select.out"; rm -f "$T/argv.log"
-r=$(cd "$T/tipclone" && SG_GATE_WORKERS=3 SG_STATE="$T/st" bash -c "$tipcmd" 2>&1); rc=$?
+r=$(cd "$T/tipclone" && SG_GATE_CALLER=tip SG_GATE_WORKERS=3 SG_STATE="$T/st" bash -c "$tipcmd" 2>&1); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -n 3 -m not heavy tests/test_a.py" "$T/argv.log" && ok "the wave tip check passes the selection to pytest" || ko "tip check argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $r"
+rm -rf "$T/tipclone2"; $G clone -q "$T/origin.git" "$T/tipclone2" 2>/dev/null
+printf '#!/bin/bash\necho "$*" >> "%s/argv2.log"\ncase "$*" in *squad.testselect*) cat "%s/select.out" 2>/dev/null;; esac\nexit 0\n' "$T" "$T" > "$T/selpy2"; chmod +x "$T/selpy2"
+tipcmd2=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" "$T/selpy2" wave-tip 2>/dev/null)
+( cd "$T/tipclone2" && SG_GATE_WORKERS=3 SG_STATE="$T/st" bash -c "$tipcmd2" ) >/dev/null 2>&1
+/usr/bin/grep -qx -- "-m pytest -p no:deepeval -n 1 -m not heavy tests/test_a.py" "$T/argv2.log" && ok "a tip check that names no caller reads as a child's and takes one slot (#1865)" || ko "no-caller tip check argv: '$(cat "$T/argv2.log" 2>&1)'"
 /usr/bin/grep -q -- "squad.testselect --stage wave-tip --base origin/dev" "$T/argv.log" && ok "the wave tip check selects the delta at the wave-tip stage" || ko "wave-tip stage: '$(cat "$T/argv.log" 2>&1)'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass selected 1 files delta" ] && ok "the wave tip check's status line states the selected file count and the delta scope" || ko "tip check status: '$(cat "$T/st/gate-status" 2>&1)'"

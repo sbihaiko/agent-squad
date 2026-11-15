@@ -2582,19 +2582,13 @@ def trip_stages(path):
     TRIP_SPANS[key] = (st.st_mtime, st.st_size, spans)
     return spans
 
-# A gate-history row's fields, in the order `gate.sh` writes them. The reason is free text and may hold a tab, so on a
-# whole row the field is rejoined: the seven columns after it keep their own names, never an index.
-GATE_HISTORY_FIELDS = ("finish", "kind", "result", "sha", "start", "selection", "scope", "outcome", "reason", "ran",
-                       "not_run", "slots", "red", "caller", "load_start", "load_finish")
+# A gate-history row's fields, in the order `gate.sh` writes them; the one grammar lives in the rule layer (ADR-0137).
+GATE_HISTORY_FIELDS = hub_profiler.GATE_HISTORY_FIELDS
 
 def gate_row(line):
-    """One gate-history line as named fields, or None when it is too short to hold a finish and a start. A reason that
-    holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields."""
-    parts = line.split("\t")
-    if len(parts) < 5: return None
-    if len(parts) >= 16:
-        parts = parts[:8] + ["\t".join(parts[8:-7])] + parts[-7:]
-    return dict(zip(GATE_HISTORY_FIELDS, parts))
+    """One gate-history line as named fields, or None when it is too short to hold a finish and a start. The reason is
+    free text and may hold a tab, so on a whole row the field is rejoined; the fold itself lives in the rule layer."""
+    return hub_profiler.gate_row(line)
 
 def trip_gates(since):
     """The gate-history rows of the window, `start` and `finish` in seconds beside their kind, outcome and caller."""
@@ -2677,11 +2671,20 @@ def strip_promotions():
                 out.append({"at": at, "branch": branch, "sha": m.group(1)})
     return out
 
+def strip_gates(start, end):
+    """The gate-history lines of the strip's window, folded by the rule layer: one mark per finished gate."""
+    try: lines = (STATE / "gate-history").read_text(errors="replace").splitlines()
+    except OSError: lines = []
+    return hub_profiler.gate_marks(lines, start, end)
+
 def strip_view(w=None, now=None):
     """The loop state strip of the window `w` the page chose, from the records the loop already writes: the switch audit,
-    the dated step records, the landing ledger and the promotion log. No GitHub read, and no process table."""
-    return hub_profiler.strip(strip_audit(), strip_steps(), strip_landings(), strip_promotions(), w,
-                              time.time() if now is None else now)
+    the dated step records, the landing ledger, the promotion log and the gate history. No GitHub read, and no process
+    table."""
+    out = hub_profiler.strip(strip_audit(), strip_steps(), strip_landings(), strip_promotions(), w,
+                             time.time() if now is None else now)
+    out["gates"] = strip_gates(out["start"], out["end"])   # the gates under the bar share the strip's own window
+    return out
 
 def profiler_view(a, w=None, sw=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
@@ -6014,6 +6017,16 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profstrip .lsc{display:block;height:100%}#profstrip .ls-active{background:var(--ok)}#profstrip .ls-draining{background:var(--warn)}#profstrip .ls-off{background:var(--mute)}#profstrip .ls-down{background:var(--err)}
 #profstrip .ls-gap{background:repeating-linear-gradient(45deg,transparent 0 4px,var(--line) 4px 8px)}
 #profstrip .lsm{position:absolute;top:0;bottom:0;width:2px;background:var(--fg);opacity:.75}#profstrip .lsm-landing{background:var(--acc)}#profstrip .lsm-promotion{background:var(--run,var(--acc))}
+#profstrip .lsgr{display:flex;align-items:center;gap:12px;margin-top:5px}
+#profstrip .lsga{position:relative;flex:1 1 auto;height:10px;background:var(--edge);border-radius:var(--radius-full)}
+#profstrip .lsg{position:absolute;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px}
+#profstrip .lsgo-pass{background:var(--ok)}#profstrip .lsgo-fail{background:var(--err)}#profstrip .lsgo-unproven{background:var(--warn)}
+#profstrip .sh-circle{border-radius:var(--radius-full)}#profstrip .sh-square{border-radius:var(--radius-sm)}#profstrip .sh-diamond{border-radius:0;transform:rotate(45deg)}
+#profstrip .lsgc{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;padding:0;list-style:none;font-size:var(--fs-caption);color:var(--mute)}
+#profstrip .lsgc li{display:flex;align-items:center;gap:5px;white-space:nowrap}
+#profstrip .lsgc i{display:inline-block;flex:none;width:9px;height:9px}
+#profstrip .lsgc b{color:var(--fg);font-weight:600}
+#profstrip .lsgc-pass i{border-radius:var(--radius-full);background:var(--ok)}#profstrip .lsgc-fail i{border-radius:var(--radius-sm);background:var(--err)}#profstrip .lsgc-unproven i{border-radius:0;transform:rotate(45deg);background:var(--warn)}
 #profstrip .lss{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0 0;padding:0;list-style:none;font-size:var(--fs-caption);color:var(--mute)}
 #profstrip .lss li{display:flex;align-items:center;gap:6px;white-space:nowrap}#profstrip .lss i{display:inline-block;flex:none;width:10px;height:10px;border-radius:var(--radius-full)}
 #profstrip .lss .ls-active i{background:var(--ok)}#profstrip .lss .ls-draining i{background:var(--warn)}#profstrip .lss .ls-off i{background:var(--mute)}#profstrip .lss .ls-down i{background:var(--err)}
@@ -7461,6 +7474,22 @@ const profStripPick=v=>`<label class=lpw>Window <select data-stripwin aria-label
 const profMarkText=m=>m.kind==="switch"?`${esc(String(m.action||"switch"))} by ${esc(m.who||"unknown author")} from ${esc(m.from||"unknown origin")}${m.issue!=null?" · #"+esc(m.issue):""}`
  :m.kind==="landing"?`Landing in dev: ${esc(m.branch||"unknown branch")}${m.issue!=null?" · #"+esc(m.issue):""}`
  :`Promotion to ${esc(m.branch||"unknown branch")}: ${esc((m.sha||"").slice(0,9))}`;
+// The gates under the strip (#1767): each finished gate of the same window as one mark at its finish, on the strip's own
+// axis. The outcome is told by shape, never by colour alone: a pass a circle, a fail a square, an unproven a diamond. The
+// hover names the kind, the scope, the seconds, the reason of a fail or unproven outcome and the load at its start and its
+// finish; the count of each outcome of the window stands beside the chart. The hub folds the marks; the page draws them.
+const GATE_OUTCOMES=[["pass","Pass","circle"],["fail","Fail","square"],["unproven","Unproven","diamond"]];
+const profGateLabel=o=>(GATE_OUTCOMES.find(([k])=>k===o)||["","Other"])[1];
+const profLoadText=v=>v==null?"unknown load":"load "+Number(v).toFixed(1);
+const profGateText=m=>`${esc(m.kind||"gate")} gate · ${esc(m.scope||"no scope")} · ${profTime(m.seconds||0)} · ${profGateLabel(m.outcome)}`
+ +(m.reason?` · ${esc(m.reason)}`:"")+` · ${profLoadText(m.load_start)} at the start, ${profLoadText(m.load_finish)} at the finish`;
+function profGates(g,v){
+ if(!g)return "";
+ const span=(v.end-v.start)||1,pct=s=>(100*s/span).toFixed(2),shape=o=>(GATE_OUTCOMES.find(([k])=>k===o)||["","","dot"])[2];
+ const marks=(g.marks||[]).map(m=>`<span class="lsg lsgo-${esc(m.outcome)} sh-${shape(m.outcome)}" style="left:${pct(m.at-v.start)}%" title="${profGateText(m)}"></span>`).join("");
+ const counts=GATE_OUTCOMES.map(([k,lab])=>`<li class=lsgc-${k}><i aria-hidden=true></i><b>${lab}</b> ${(g.counts||{})[k]||0}</li>`).join("");
+ const aria=`Gates of the window: ${GATE_OUTCOMES.map(([k,lab])=>lab+" "+((g.counts||{})[k]||0)).join(", ")}`;
+ return `<div class=lsgr><div class=lsga role=img aria-label="${esc(aria)}">${marks}</div><ul class=lsgc>${counts}</ul></div>`}
 function profStrip(v){
  if(!v||!v.rows||!v.rows.length)return "";
  const span=(v.end-v.start)||1,pct=s=>(100*s/span).toFixed(2),lab=k=>(v.labels||{})[k]||k;
@@ -7475,7 +7504,7 @@ function profStrip(v){
  const aria=`The loop over the last ${profTime(span)}: ${PROF_STATE_ORDER.map(k=>lab(k)+" "+(100*((v.shares||{})[k]||0)/span).toFixed(1)+"%").join(", ")}`
   +(gaps.length?`, ${(100*(v.gap_s||0)/span).toFixed(1)}% with no source data`:"");
  return `<section id=profstrip><div class=lsh><h3>Loop state</h3>${profStripPick(v)}</div>`
-  +`<div class=lsb role=img aria-label="${esc(aria)}">${bars}${marks}</div><ul class=lss>${shares}</ul>${gap}</section>`}
+  +`<div class=lsb role=img aria-label="${esc(aria)}">${bars}${marks}</div>${profGates(v.gates,v)}<ul class=lss>${shares}</ul>${gap}</section>`}
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);

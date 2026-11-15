@@ -804,6 +804,67 @@ def strip_marks(audit, landings, promotions, start, end):
     return _marks([e for e in audit if _audit_state(e) and start <= e["at"] < end], landings, promotions, start, end)
 
 
+# The gates under the strip (#1767): one mark for each finished gate of the strip's window, folded from the gate-history
+# lines `gate.sh` writes. The mark sits at the finish, on the strip's own axis, and carries the kind, the scope, the
+# seconds, the reason of a fail or unproven outcome and the load at the start and at the finish. The fold is pure: it
+# reads the lines a caller folded from the file, never a file, a clock or GitHub.
+GATE_OUTCOMES = ("pass", "fail", "unproven")
+GATE_HISTORY_FIELDS = ("finish", "kind", "result", "sha", "start", "selection", "scope", "outcome", "reason", "ran",
+                       "not_run", "slots", "red", "caller", "load_start", "load_finish")
+
+
+def gate_row(line):
+    """One gate-history line as named fields, or None when it is too short to hold a finish and a start. A reason that
+    holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields."""
+    parts = line.split("\t")
+    if len(parts) < 5:
+        return None
+    if len(parts) >= 16:
+        parts = parts[:8] + ["\t".join(parts[8:-7])] + parts[-7:]
+    return dict(zip(GATE_HISTORY_FIELDS, parts))
+
+
+def _load(v):
+    """A load reading as a number, None for `-` and for a value the record cannot hold."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def gate_marks(lines, start, end):
+    """The gate-history lines of `[start, end)` -> one mark per finished gate, in time order, and one count per outcome.
+
+    A mark answers `at` (its finish), `kind`, `scope`, `seconds`, `outcome`, `reason` (the fail's or the unproven's,
+    None on a pass) and the load at its start and its finish, None where the row has no reading. A line the fold cannot
+    read -- a short line, a finish or a start that is no number, a finish before its start, an outcome the chart cannot
+    place -- is no mark and no count: a point drawn on a guess is worse than no point.
+    """
+    marks = []
+    counts = {o: 0 for o in GATE_OUTCOMES}
+    for line in lines:
+        row = gate_row(line)
+        if row is None:
+            continue
+        try:
+            finish, began = float(row["finish"]), float(row["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if finish < began or not start <= finish < end:
+            continue
+        outcome = row.get("outcome") or ""
+        if outcome not in GATE_OUTCOMES:
+            continue
+        reason = (row.get("reason") or "").strip()
+        marks.append({"at": finish, "kind": row.get("kind") or "", "scope": row.get("scope") or "",
+                      "outcome": outcome, "seconds": round(finish - began, 3),
+                      "reason": reason if outcome != "pass" and reason and reason != "-" else None,
+                      "load_start": _load(row.get("load_start")), "load_finish": _load(row.get("load_finish"))})
+        counts[outcome] += 1
+    marks.sort(key=lambda m: m["at"])
+    return {"marks": marks, "counts": counts}
+
+
 def _marks(events, landings, promotions, start, end):
     """The marks of the already-filtered switch changes, the landings and the promotions of the window."""
     out = []
