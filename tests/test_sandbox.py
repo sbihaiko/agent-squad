@@ -302,3 +302,30 @@ def test_the_sdk_child_is_started_through_the_signal_wall(tmp_path):
     assert kw["cli_path"] == str(SIGNAL_WRAPPER)
     assert kw["env"]["SQUAD_SIGNAL_PROFILE"] == sandbox.SIGNAL_PROFILE
     assert Path(kw["env"]["SQUAD_CLAUDE_CLI"]).name == "claude"
+
+
+@pytest.mark.parametrize("command", [
+    "bash contrib/squad-goal/scripts/test-wave.sh",
+    "./contrib/squad-goal/scripts/test-fast-gate.sh",
+    "bash contrib/squad-goal/scripts/test-wave.sh && echo done",
+    "bash -x contrib/squad-goal/scripts/test-wave.sh",
+    "bash -eu contrib/squad-goal/scripts/test-wave.sh",
+    "bash -c 'bash contrib/squad-goal/scripts/test-wave.sh'",
+    "bash contrib/squad-goal/scripts/shell-suites.sh",
+])
+def test_a_child_runs_a_suite_only_through_the_gate_wrapper(tmp_path, command):
+    """#1762: a suite a child ran outside the gates ceiling loaded the machine to 67 on 8 cores; the wall names the wrapper."""
+    reason = sandbox.deny_reason("Bash", {"command": command}, str(tmp_path))
+    assert reason and "child-gate.sh" in reason, reason
+
+
+@pytest.mark.parametrize("command", [
+    "bash contrib/squad-goal/scripts/child-gate.sh contrib/squad-goal/scripts/test-wave.sh",
+    "bash contrib/squad-goal/scripts/fast-gate.sh",
+    "grep test-wave.sh contrib/squad-goal/scripts/gate.sh",
+    "ls contrib/squad-goal/scripts/test-wave.sh",
+    "bash -c 'echo contrib/squad-goal/scripts/test-wave.sh'",
+    "bash -n contrib/squad-goal/scripts/test-wave.sh",
+])
+def test_a_child_may_read_a_suite_or_gate_through_the_wrapper(tmp_path, command):
+    assert sandbox.deny_reason("Bash", {"command": command}, str(tmp_path)) is None

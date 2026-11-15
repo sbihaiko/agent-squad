@@ -1,0 +1,45 @@
+#!/bin/bash
+# Regression test for child-gate.sh (#1762): a suite a child starts takes the machine's gates slot and waits when the
+# ceiling is full, a second copy of the same suite is refused with a reason, and each run is named with its load.
+# usage: bash test-child-gate.sh [scripts dir]
+# mirrors: child-gate.sh
+d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SG_STATE=$T/state SQUAD_CAPS_POLL=0.2
+mkdir -p "$T/proj/docs/squad" "$T/caps/gates" "$T/state"; printf 'caps:\n  gates: 1\n' > "$T/proj/docs/squad/defaults.yaml"   # one gate slot
+for s in test-a test-b; do
+  printf '#!/bin/bash\necho "%s start $(date +%%s)" >> "%s/log"\nsleep 2\necho "%s end $(date +%%s)" >> "%s/log"\n' "$s" "$T" "$s" "$T" > "$T/proj/$s.sh"
+done
+cd "$T/proj" || exit 2
+
+# two child suites, bound at one: the second waits for the first
+bash "$d/child-gate.sh" ./test-a.sh > "$T/a.out" 2>&1 & pa=$!
+sleep 0.5
+bash "$d/child-gate.sh" ./test-b.sh > "$T/b.out" 2>&1 & pb=$!
+wait "$pa"; ra=$?; wait "$pb"; rb=$?
+[ "$ra" = 0 ] && [ "$rb" = 0 ] && ok "both child suites finish green" || ko "exit a=$ra b=$rb: $(cat "$T/a.out" "$T/b.out")"
+ta_end=$(/usr/bin/grep '^test-a end' "$T/log" | cut -d' ' -f3); tb_start=$(/usr/bin/grep '^test-b start' "$T/log" | cut -d' ' -f3)
+[ -n "$ta_end" ] && [ -n "$tb_start" ] && [ "$tb_start" -ge "$ta_end" ] && ok "the second suite starts after the first one ends" || ko "a ended ${ta_end:-?}, b started ${tb_start:-?}"
+hist="$T/state/child-suite-history"
+bw=$(/usr/bin/grep -F "$T/proj/test-b.sh" "$hist" 2>/dev/null | cut -f3)
+[ "${bw:-0}" -ge 1 ] && ok "the second suite's wait is recorded as wait, not run time ($bw s)" || ko "b wait: ${bw:-none}; history: $(cat "$hist" 2>/dev/null)"
+[ "$(/usr/bin/grep -c . "$hist" 2>/dev/null)" = 2 ] && ok "each child suite run has one history line" || ko "history: $(cat "$hist" 2>/dev/null)"
+/usr/bin/grep -qE '	[0-9.]+	[0-9.]+	[0-9]+	' "$hist" 2>/dev/null && ok "each history line names its load at start and finish" || ko "no load fields: $(cat "$hist" 2>/dev/null)"
+
+# a second copy of one suite is refused at once, with a reason the child reads
+bash "$d/child-gate.sh" ./test-a.sh > "$T/c1.out" 2>&1 & pc=$!
+sleep 0.5
+bash "$d/child-gate.sh" ./test-a.sh > "$T/c2.out" 2>&1; rc2=$?
+wait "$pc"
+[ "$rc2" = 73 ] && /usr/bin/grep -q 'already running' "$T/c2.out" && ok "a second copy of one suite is refused with a reason" || ko "second copy rc=$rc2: $(cat "$T/c2.out")"
+
+# a wait past its own bound names the ceiling and runs nothing: no history line, since no suite ran
+nb0=$(/usr/bin/grep -cF "$T/proj/test-b.sh" "$hist" 2>/dev/null)
+bash "$d/child-gate.sh" ./test-a.sh > "$T/h.out" 2>&1 & ph=$!
+sleep 0.3
+SG_CHILD_GATE_WAIT=1 bash "$d/child-gate.sh" ./test-b.sh > "$T/w.out" 2>&1; rcw=$?
+wait "$ph"
+[ "$rcw" = 75 ] && /usr/bin/grep -q 'no caps.gates slot' "$T/w.out" && ok "a wait past its bound names the full ceiling" || ko "wait bound rc=$rcw: $(cat "$T/w.out")"
+[ "$(/usr/bin/grep -cF "$T/proj/test-b.sh" "$hist" 2>/dev/null)" = "$nb0" ] && ok "a suite that never ran writes no history line" || ko "history after the expired wait: $(cat "$hist" 2>/dev/null)"
+
+[ "$fail" = 0 ] && echo "child-suite: all green" || echo "child-suite: FAILED"
+exit "$fail"

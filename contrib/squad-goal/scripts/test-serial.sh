@@ -153,4 +153,44 @@ mkdir -p "$T/ta" "$T/tb"
 a=$(env -u SG_STATE TMPDIR="$T/ta" bash "$src" tmpdir-probe sh -c 'ls -d /tmp/sg-state/locks/tmpdir-probe 2>&1')
 b=$(env -u SG_STATE TMPDIR="$T/tb" bash "$src" tmpdir-probe sh -c 'ls -d /tmp/sg-state/locks/tmpdir-probe 2>&1')
 [ "$a" = /tmp/sg-state/locks/tmpdir-probe ] && [ "$b" = "$a" ] && [ ! -e "$T/ta/sg-state" ] && [ ! -e "$T/tb/sg-state" ] && ok "the lock directory does not depend on TMPDIR" || ko "the lock directory follows TMPDIR ('$a' / '$b')"
+# (#1858) The landing's gate is first out of the queue. A waiter carrying SG_SERIAL_PRIORITY=1 says so in field 4 of its queue
+# marker, and a waiter that carries none stands aside while a live priority waiter is queued for the same lock. The order is proved
+# without timing the queue: the holder is released only after both waiters have recorded their markers, so the waiter that runs
+# first is the one the rule chose. A marker names nobody once its pid is gone or its epoch is past SERIAL_PRIORITY_MAX.
+q=$T/q; mkdir -p "$q"; rm -rf "$SG_STATE/locks/gui"
+bash "$src" gui sh -c "while [ ! -e '$q/go' ]; do sleep 0.05; done" >/dev/null 2>&1 & qh=$!
+for i in $(seq 1 60); do [ -s "$SG_STATE/locks/gui/pid" ] && break; sleep 0.05; done
+SERIAL_POLL_SECONDS=0.5 SERIAL_WAIT_SECONDS=30 bash "$src" gui sh -c "echo child >> '$q/order'" 2>"$q/child.err" & qc=$!
+for i in $(seq 1 60); do [ -e "$SG_STATE/locks/waiting/gui-$qc" ] && break; sleep 0.05; done
+SG_SERIAL_PRIORITY=1 SERIAL_POLL_SECONDS=0.05 SERIAL_WAIT_SECONDS=30 bash "$src" gui sh -c "echo landing >> '$q/order'" 2>"$q/pri.err" & qp=$!
+for i in $(seq 1 60); do [ -e "$SG_STATE/locks/waiting/gui-$qp" ] && break; sleep 0.05; done
+[ "$(cut -f4 "$SG_STATE/locks/waiting/gui-$qp" 2>/dev/null)" = 1 ] && [ "$(cut -f4 "$SG_STATE/locks/waiting/gui-$qc" 2>/dev/null)" = 0 ] \
+  && ok "a priority waiter says so in its queue marker, and a child's marker carries no priority" || ko "markers: '$(cat "$SG_STATE/locks/waiting/gui-$qp" 2>/dev/null)' / '$(cat "$SG_STATE/locks/waiting/gui-$qc" 2>/dev/null)'"
+: > "$q/go"; wait "$qh"; wait "$qc"; wait "$qp"
+[ "$(tr '\n' ' ' < "$q/order")" = "landing child " ] && ok "the landing's gate runs before a child's gate that queued first" || ko "order: '$(tr '\n' ' ' < "$q/order")'"
+rm -rf "$SG_STATE/locks/gui"
+# The child names the yield, once, and says the landing held it up: a gate that stands aside silently reads as a hang. The marker
+# is written by hand here, so whether the child ever meets a *queued* landing is not a race in this case.
+sleep 300 >/dev/null 2>&1 & hp=$!; mkdir -p "$SG_STATE/locks/gui" "$SG_STATE/locks/waiting"; echo $$ > "$SG_STATE/locks/gui/pid"
+printf '%s\tgui\t%s\t1\n' "$(date +%s)" "$hp" > "$SG_STATE/locks/waiting/gui-$hp"
+out=$(SERIAL_WAIT_SECONDS=2 SERIAL_POLL_SECONDS=0.2 bash "$src" gui sh -c 'echo ran' 2>"$q/yield.err"); rc=$?
+[ "$rc" = 75 ] && [ "$out" = "" ] && [ "$(/usr/bin/grep -c "the landing's gate is queued ahead of this one" "$q/yield.err")" = 1 ] \
+  && [ "$(/usr/bin/grep -c 'behind the landing.s gate' "$q/yield.err")" = 1 ] \
+  && ok "a waiter says once that it stands aside, and gives up naming the landing" || ko "yield lines: $(cat "$q/yield.err")"
+rm -f "$SG_STATE/locks/waiting/gui-$hp"; kill -9 "$hp" 2>/dev/null; wait "$hp" 2>/dev/null
+rm -rf "$SG_STATE/locks/gui"   # the lock the yield case held; the cases below take it free
+# Try mode never queues, so it neither runs ahead of a queued landing nor waits for one: it answers 73 at once and says why.
+sleep 300 >/dev/null 2>&1 & hp=$!; mkdir -p "$SG_STATE/locks/waiting"; printf '%s\tgui\t%s\t1\n' "$(date +%s)" "$hp" > "$SG_STATE/locks/waiting/gui-$hp"
+out=$(SERIAL_TRY=1 SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo ran' 2>"$q/try.err"); rc=$?
+[ "$rc" = 73 ] && [ "$out" = "" ] && [ "$(/usr/bin/grep -c 'landing.s gate is queued ahead' "$q/try.err")" = 1 ] \
+  && ok "try mode skips at once while the landing's gate is queued, and says why" || ko "try mode ran ahead of a queued landing (rc=$rc out=$out err=$(cat "$q/try.err"))"
+# A marker whose pid is gone names nobody, and so does one past SERIAL_PRIORITY_MAX: a killed waiter leaves its marker behind.
+kill -9 "$hp" 2>/dev/null; wait "$hp" 2>/dev/null
+out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo ran' 2>"$q/dead.err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = ran ] && ok "a priority marker whose pid is gone names nobody" || ko "a dead priority marker blocked the gate (rc=$rc out=$out)"
+printf '%s\tgui\t%s\t1\n' "$(( $(date +%s) - 1000 ))" "$$" > "$SG_STATE/locks/waiting/gui-old"
+out=$(SERIAL_PRIORITY_MAX=900 SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo ran' 2>"$q/old.err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = ran ] && ok "a priority marker older than SERIAL_PRIORITY_MAX names nobody" || ko "a stale priority marker blocked the gate (rc=$rc out=$out)"
+rm -f "$SG_STATE/locks/waiting/gui-old"; rm -rf "$SG_STATE/locks/gui"
+
 rm -rf "$T"; exit $fail

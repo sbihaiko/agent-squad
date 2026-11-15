@@ -31,6 +31,7 @@ test-cap-edit.sh 4.95
 test-caps.sh 1.16
 test-check-gh-interface.sh 0.22
 test-check-tdd-red.sh 5.05
+test-child-gate.sh 9.63
 test-childcc.sh 17.10
 test-childfix.sh 0.58
 test-cluster.sh 7.87

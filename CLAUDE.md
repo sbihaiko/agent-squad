@@ -33,7 +33,9 @@ This file and the ADRs are never ledgers: no dates, counts, statuses, issue numb
   A PreToolUse hook on every adapter session denies the call with a reason and records `sandbox_deny` (`bypassPermissions` skips `can_use_tool`).
   The child's CLI runs under `sandbox-exec` (`contrib/squad-goal/scripts/claude-sandboxed.sh`), so the kernel refuses a signal to any process outside the session, whatever spells it; no child starts without it (macOS).
   The janitor alerts when the live copy changes with no publish. A child that runs the fast gate reads one printed verdict line and a log outside the state directory.
-  Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`, `contrib/squad-goal/scripts/test-fast-gate.sh`.
+  A suite a child starts runs through `contrib/squad-goal/scripts/child-gate.sh`: it takes one `caps.gates` slot, its wait is gate wait and not run time (ADR-0166),
+  a second copy of the same suite is refused, and each run lands in `$SG_STATE/child-suite-history` with its load at start and at finish.
+  Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-child-gate.sh`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`, `contrib/squad-goal/scripts/test-fast-gate.sh`.
 - **A project settings file overlays the plugin defaults** (`docs/squad/defaults.yaml`, `squad/project_settings.py`).
   Order: plugin defaults, project file, roles, graph run block, node; only the project file may raise a default.
   `run_start` records its path and hash, and a resume refuses when it changed. Guard: `tests/test_project_settings.py`.
@@ -57,6 +59,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **`/implement` works in its own worktree and lands in `dev` by a fast-forward push, with no pull request; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
 - **Three branches: `dev` takes landings, `dev` reaches `stg` by one pull request, `main` moves by a fast-forward** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_no_pr_path.py`, `contrib/squad-goal/scripts/test-promote.sh`; the rest is a draft.
 - **The loop moves `main` to the `stg` sha whose complete tier is green; a red files one bug, an unproven tier is an alert** ([ADR-0173](docs/adr/0173-the-complete-tier-runs-on-the-promotion-request.md)). Guard: `contrib/squad-goal/scripts/test-promote-main-pass.sh`.
+- **The landing's gate is first in the queue: a child's queued fast gate stands aside, a try-mode gate answers 73 at once, a stale marker names nobody** ([ADR-0174](docs/adr/0174-the-landings-gate-is-first-in-the-queue.md)). Guard: `contrib/squad-goal/scripts/test-serial.sh`.
 - **A premise is checked, never assumed: a round proves what reading proves, probes what runs settle, asks the owner at most five; a named proxy answers when the owner is away; the owner wins** ([ADR-0155](docs/adr/0155-a-premise-is-checked-never-assumed.md)). Guard: `tests/test_premise_check.py`.
 
 ### Run engine
