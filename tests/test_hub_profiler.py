@@ -767,18 +767,22 @@ def gated(mod, idle):
     cut to 20 ms: the read's own minute is the real cadence, which a test never waits."""
     class Gate(mod.ReadGate):
         def pause(self, secs):
-            if getattr(self, "done", False): raise StopSampling
+            if getattr(self, "done", False):
+                raise StopSampling
             if self.wanted():
                 time.sleep(min(secs, 0.02))
             else:
                 super().pause(secs)
-            if getattr(self, "done", False): raise StopSampling
+            if getattr(self, "done", False):
+                raise StopSampling
     g = Gate(idle=idle); g.done = False; return g
 
 
 def drive(fn):
-    try: fn()
-    except StopSampling: pass
+    try:
+        fn()
+    except StopSampling:
+        pass
 
 
 def mux_get(port, path):
