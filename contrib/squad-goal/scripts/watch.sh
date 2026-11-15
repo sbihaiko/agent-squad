@@ -36,17 +36,7 @@ verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r
 # first cycle the window held leaves its stamp in promote-defer, and a pass starts once that stamp is older than
 # SG_PROMOTE_MAX_DEFER (default: twice the window), so a stream of landings that never quiets postpones the proof by that
 # bound and no longer. A bound of 0 keeps no bound.
-promote_quiet() { local q d last now started stamp
-  q=${SG_PROMOTE_QUIET_SECONDS:-900}; case "$q" in ''|*[!0-9]*) q=900;; esac
-  d=${SG_PROMOTE_MAX_DEFER:-$(( q * 2 ))}; case "$d" in ''|*[!0-9]*) d=$(( q * 2 ));; esac
-  now=$(date +%s); stamp=$SG_STATE/promote-defer
-  last=$(awk -F'\t' '$1 > m { m = $1 } END { printf "%d", m }' "$SG_STATE/landed.tsv" 2>/dev/null); last=${last:-0}
-  [ $(( now - last )) -ge "$q" ] && { rm -f "$stamp"; return 0; }   # the burst ended: the window is open again
-  [ "$d" -gt 0 ] || return 1                                        # no bound named: a continuing stream keeps the step held
-  [ -e "$stamp" ] || : > "$stamp"                                   # the first blocked cycle starts the bound: the stamp's mtime
-  started=$(mtime "$stamp"); case "$started" in ''|*[!0-9]*|0) started=$now;; esac
-  [ $(( now - started )) -lt "$d" ] && return 1
-  rm -f "$stamp"; return 0; }
+. "$(dirname "$0")/promotequiet.sh"   # the debounce, one definition, read here and by the CI event hook (#1837)
 # land_wave <run>: the completion of one finished run -- the run's finished children enter its wave, and then the wave lands
 # (#375, ADR-0145 rules 9, 10 and 12). The order is the point: a child enters the wave in childcc's pass, which this cycle
 # reaches after this loop, so a landing attempted first finds a wave without the child in it, refuses it, and -- the run

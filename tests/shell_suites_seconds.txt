@@ -37,8 +37,8 @@ test-cluster.sh 7.87
 test-codex-reset.sh 0.15
 test-consult.sh 0.57
 test-cqflush-address.sh 1.82
-test-cqflush-interval.sh 0.13
 test-cqflush-home.sh 1.15
+test-cqflush-interval.sh 0.13
 test-cqflush-orphan.sh 3.18
 test-cqflush-status.sh 1.54
 test-cqflush-term.sh 3.28
@@ -67,6 +67,7 @@ test-ghspend.sh 6.27
 test-hand-gate.sh 1.86
 test-health.sh 141.70
 test-heartbeat.sh 0.86
+test-hookfire.sh 0.66
 test-hub-adapter-errors.sh 0.14
 test-hub-attachment.sh 0.61
 test-hub-caps.sh 3.33
