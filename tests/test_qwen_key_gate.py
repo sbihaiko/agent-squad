@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.gitrepo import with_origin
+from tests.launchdeps import LAUNCH_MODULES
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
@@ -132,7 +133,7 @@ def _launch(tmp_path, cfg, coding_model):
     s, co, st, bin_ = tmp_path / "s", tmp_path / "co", tmp_path / "st", tmp_path / "bin"
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
         d.mkdir(parents=True, exist_ok=True)
-    for f in ("launch.py", "router_envelope.py", "provkey.py", "modelreg.py", "registry.json"):
+    for f in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / f, s / f)
     (s / "models.json").write_text(json.dumps({"coding_models": [QWEN, "test-model"], "review_models": [], "vision_models": []}))
     (s / "hub.py").write_text("print('hub')\n")

@@ -5,4 +5,4 @@ copies it into a throwaway folder, so the copy list must hold every one of them.
 lists went stale, so three module's launch tests died with FileNotFoundError on every tier. One constant names the list;
 tests/test_launch_modules.py fails when launch.py gains a load this constant lacks.
 """
-LAUNCH_MODULES = ("modelreg.py", "provkey.py", "router_envelope.py")
+LAUNCH_MODULES = ("liveholds.py", "modelreg.py", "provkey.py", "router_envelope.py")
