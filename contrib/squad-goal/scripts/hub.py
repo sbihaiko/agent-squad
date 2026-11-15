@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, procscan, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, procscan, provkey, session_card, session_send, sessions, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -2625,8 +2625,9 @@ def trip_view(window_s, now=None):
             **hub_profiler.trip([trip_stages(p) for p in files], trip_gates(since), since)}
 
 
-PROMOTED_STG = re.compile(r"^(\S+)\s+promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
-PROMOTED_MAIN = re.compile(r"^(\S+)\s+promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
+PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
+PROMOTED_MAIN = re.compile(r"promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
+PROMOTE_ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")   # the date the writer puts before its marker
 
 def strip_audit():
     """The switch audit's lines, each with its epoch, action, writer, origin and the issue a loop drain names."""
@@ -2640,9 +2641,12 @@ def strip_audit():
     return out
 
 def strip_steps():
-    """The dated step records, folded by the one reader #1750 ships: this tab adds no second reader of the file."""
-    import steprec
-    return steprec.fold(_read(STATE / "steps.tsv").splitlines())
+    """The dated step records, folded by the one reader #1750 ships: this tab adds no second reader of the file. None when
+    the file is absent, so the strip draws a gap with its reason rather than reading an absent source as a dead loop."""
+    path = STATE / "steps.tsv"
+    if not path.is_file():
+        return None
+    return steprec.fold(_read(path).splitlines())
 
 def strip_landings():
     """The landing ledger's rows, `<epoch> TAB <branch> TAB <sha> TAB <issue>`: a row this reader cannot read is skipped."""
@@ -2658,17 +2662,19 @@ def strip_landings():
     return out
 
 def strip_promotions():
-    """The promotion log's success lines: a line that says `promoted:` at its own date, never a refusal's line."""
+    """The promotion log's success lines: a line that says `promoted:` after its marker, never a refusal's line. The mark
+    takes the nearest date in front of the marker, so a writer that wraps or prefixes its line still names its delivery."""
     stg = os.environ.get("SG_STG_BRANCH") or "stg"
     main = os.environ.get("SG_MAIN_BRANCH") or "main"
     out = []
     for raw in _read(STATE / "promote.log").splitlines():
         for rx, branch in ((PROMOTED_MAIN, main), (PROMOTED_STG, stg)):
-            m = rx.match(raw)
+            m = rx.search(raw)
             if not m: continue
-            at = _epoch(m.group(1))
+            dates = PROMOTE_ISO.findall(raw[:m.start()])
+            at = _epoch(dates[-1]) if dates else None
             if at is not None:
-                out.append({"at": at, "branch": branch, "sha": m.group(2)})
+                out.append({"at": at, "branch": branch, "sha": m.group(1)})
     return out
 
 def strip_view(w=None, now=None):
@@ -2686,7 +2692,8 @@ def profiler_view(a, w=None, sw=None):
     window_s = hub_profiler.run_window(w)
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
-           "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s, "strip": strip_view(sw),
+           "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
+           "strip": strip_view(sw) if a.allowed else None,   # no loop record read for a caller the hub already refused
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out

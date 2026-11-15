@@ -1693,6 +1693,45 @@ def test_the_route_answers_the_strip_from_the_files_with_the_switch_off(hub):
     assert table.reads == 0, "the strip reads files only"
 
 
+def test_a_draining_stretch_that_stops_stepping_is_down(prof):
+    """The switch still says on while draining, so a drain whose steps stop is down past the bound, never draining."""
+    audit = [sw(W0 - 4 * H, "start"), sw(W0 - 2 * H, "drain", who="loop", frm="restart", issue=7)]
+    steps = beat(W0 - 4 * H, W0 - 2 * H) + [stp("janitor", W0 - 2 * H + 120, W0 - 2 * H + 125)]
+    out = prof.strip(audit, steps, [], [], 4 * H, W0)
+    assert states(out["rows"]) == [("active", W0 - 4 * H, W0 - 2 * H),
+                                   ("draining", W0 - 2 * H, W0 - 2 * H + 720),
+                                   ("down", W0 - 2 * H + 720, W0)]
+    assert out["shares"]["down"] == W0 - (W0 - 2 * H + 720)
+
+
+def test_a_drain_that_never_steps_again_is_down_not_draining(prof):
+    """A drain line followed by silence is a loop that died, drawn down for the whole stretch."""
+    out = prof.strip([sw(0, "drain", who="loop", frm="restart")], [], [], [], 4 * H, 4 * H)
+    assert any(r["state"] == "down" for r in out["rows"]), out["rows"]
+    assert out["shares"]["draining"] == 0
+
+
+def test_a_missing_step_record_is_a_gap_never_down(prof):
+    """No step record at all is no source data: the stretch is a gap with its reason, apart from the four shares."""
+    out = prof.strip([sw(W0 - 4 * H, "start")], None, [], [], 4 * H, W0)
+    assert out["rows"] == [{"start": W0 - 4 * H, "end": W0, "state": "gap", "reason": "no step record"}]
+    assert out["gap_s"] == 4 * H and sum(out["shares"].values()) == 0
+
+
+def test_a_prefixed_promotion_line_still_marks_its_delivery(hub, monkeypatch):
+    """A writer that wraps the line must not hide the promotion: the nearest date before the marker is the mark's own."""
+    mod, _, _, state, _ = hub
+    monkeypatch.setenv("SG_MAIN_BRANCH", "trunk")
+    monkeypatch.setenv("SG_STG_BRANCH", "stage")
+    now = int(time.time())
+    (state / "promote.log").write_text(
+        f"[{iso(now - 300)}] promote-pass: aaa111 promoted: the CI checks carried the full pass\n"
+        f"note: {iso(now - 240)} promote-main-pass: bbb222 promoted: main moved to bbb222\n"
+        f"{iso(now - 180)} promote-pass: ccc333 not promoted: CI is red\n")
+    out = mod.strip_promotions()
+    assert [(p["branch"], p["sha"]) for p in out] == [("stage", "aaa111"), ("trunk", "bbb222")], "each marker names its branch, a refusal is no mark"
+
+
 STRIP = {"window_s": 14400, "start": W0 - 14400, "end": W0,
          "windows": [{"s": 14400, "label": "4 hours"}, {"s": 28800, "label": "8 hours"},
                      {"s": 86400, "label": "24 hours"}],
