@@ -9204,11 +9204,6 @@ TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NA
 
 _TICKERS = {}
 _TICKERS_LOCK = threading.Lock()   # the reader threads are started once, however many pages ask (#1217)
-# (#1879) A subject whose read costs hundreds of milliseconds answers at this period, never at the tick: `board_served`
-# costs 428 ms and `run_list` 262 ms on this machine, so reading them once a tick held a whole core. The first read of a
-# page's subject is still made at once, so a page opening is never behind.
-SLOW_SUBJECT_SECS = 5.0
-SLOW_SUBJECTS = {"board", "runs"}
 
 def _ticker(name):
     """One subject's reader thread, alive or started here. The caller holds _TICKERS_LOCK, so two pages opening together
@@ -9234,8 +9229,6 @@ def _ticker(name):
             # the page waits; past the window it rests at the tick like every other subject
             answered = bool(VERSIONS.newer({}).get(n))
             period = hubstream.FIRST_POLL_SECONDS if (not answered and time.monotonic() < fast_until) else hubstream.TICK_SECONDS
-            if n in SLOW_SUBJECTS and time.monotonic() >= fast_until:
-                period = max(period, SLOW_SUBJECT_SECS)
             read_pause(period if want else max(period, hubstream.TICK_SECONDS))
     t = _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
     t.start()
