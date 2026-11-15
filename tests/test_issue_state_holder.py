@@ -99,3 +99,40 @@ def test_a_board_read_takes_the_numeric_field_ids_the_rest_route_answers(tmp_pat
     board = Board()
     states, held = seam(tmp_path, board).board()
     assert "241" in states and held == {}
+
+
+def test_the_one_board_read_asks_for_every_numeric_field_id(tmp_path, monkeypatch):
+    """The query names the Status, Run and Run started ids, as text, in the one items read (#1747)."""
+    monkeypatch.setattr(sys.modules[__name__], "FIELDS", [
+        {"id": 101, "name": "Status", "options": []}, {"id": 102, "name": "Run"}, {"id": 103, "name": "Run started"},
+    ])
+    board = Board()
+    sent = []
+    def spy(cmd, input=None, **kw):
+        sent.append(" ".join(cmd))
+        return board(cmd, input=input, **kw)
+    seam(tmp_path, spy).board()
+    assert any("fields[]=101,102,103" in s for s in sent), sent
+
+
+@pytest.mark.parametrize("answer", ["F_STATUS\n", RuntimeError("API rate limit exceeded")])
+def test_a_field_list_the_board_cannot_read_answers_status_and_an_unknown_holder(tmp_path, answer):
+    """No text-field list (a bare id, or a refusal): Status still answers, the holder map is unknown (None, so nothing reads
+    as unheld), and the miss is not cached, so the next read asks again."""
+    board = Board()
+    calls = {"fields": 0}
+    def stub(cmd, input=None, **kw):
+        s = " ".join(cmd)
+        if "/fields?" in s:
+            calls["fields"] += 1
+            if calls["fields"] > 1:   # the Status field's own read is the first; every text-field read after it fails
+                if isinstance(answer, Exception): return subprocess.CompletedProcess(cmd, 1, "", str(answer))
+                return subprocess.CompletedProcess(cmd, 0, answer, "")
+        return board(cmd, input=input, **kw)
+    st = seam(tmp_path, stub)
+    st.binding.status_field()   # the Status field is read and cached first, so every /fields read after it is a text-field read
+    states, held = st.board()
+    assert "241" in states and held is None
+    before = calls["fields"]
+    st.board()
+    assert calls["fields"] > before, "the miss was cached"
