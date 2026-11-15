@@ -12,6 +12,7 @@ d=$(dirname "$0"); src=${1:-$d/watch.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st
 mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export STEPS=$T/steps.log REC_SLEEP=5
 cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
+cp "$d/steprec.sh" "$S/"   # the step record writer the cycle sources, as the real scripts folder holds it (#1750)
 cat > "$S/env.sh" <<EOF
 export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug
@@ -53,12 +54,14 @@ exit 0
 EOF
   chmod +x "$S/$s.sh"; done
 # the cycle's last step ends the run: the case asks for N cycles and this counts the cycles the body actually ran (works with or
-# without the once-mode, so a RED run against the base terminates too)
+# without the once-mode, so a RED run against the base terminates too). It reads the supervisor's pid from the file run_cycles
+# writes, never the process table: a child session runs under the kernel wall, and /bin/ps there answers EPERM, so a stub that
+# read the parent that way never ended a run and every case waited out its bound.
 cat > "$S/vendor-guard.sh" <<EOF
 #!/bin/bash
 echo vendorguard >> "$STEPS"
 c=\$(( \$(cat "$T/cyc" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$T/cyc"
-[ "\$c" -ge "\${SG_TEST_CYCLES:-1}" ] && kill -TERM "\$(/bin/ps -o ppid= -p "\$PPID" | tr -d ' ')" 2>/dev/null
+[ "\$c" -ge "\${SG_TEST_CYCLES:-1}" ] && kill -TERM "\$(cat "$T/watchpid" 2>/dev/null)" 2>/dev/null
 exit 0
 EOF
 count() { local c; c=$(/usr/bin/grep -cx "$1" "$STEPS" 2>/dev/null); echo "${c:-0}"; }
@@ -66,6 +69,7 @@ waitfor() { local i=0; while [ $i -lt "$2" ]; do /usr/bin/grep -q "$1" "$STEPS" 
 run_cycles() { # run_cycles <n> [VAR=val...]  starts watch.sh; the vendor-guard stub ends it after <n> cycles
   local n=$1; shift; : > "$STEPS"; echo 0 > "$T/cyc"
   env "$@" SG_TEST_CYCLES=$n bash "$S/watch.sh" > "$T/watch.out" 2>&1 & local p=$! i=0
+  echo "$p" > "$T/watchpid"
   while kill -0 "$p" 2>/dev/null && [ $i -lt 400 ]; do /bin/sleep 0.1; i=$((i+1)); done
   kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$ST/fastloop.pid" 2>/dev/null; return 0
 }
@@ -97,7 +101,7 @@ for _ in $(seq 1 150); do /usr/bin/grep -q 'BOARD MOVE' "$ST/reconcile.log" 2>/d
 /usr/bin/grep -q 'BOARD' "$ST/cycle.log" 2>/dev/null && ko "reconcile output still lands in cycle.log" || ok "cycle.log no longer carries the reconcile pass"
 
 # 5) the fast lane dispatches, and a second pass does not overlap the first
-F2=$T/fastscripts; mkdir -p "$F2"; cp "$d/fastloop.sh" "$d/single.sh" "$F2/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$S/loopbug.sh" "$F2/"
+F2=$T/fastscripts; mkdir -p "$F2"; cp "$d/fastloop.sh" "$d/single.sh" "$d/steprec.sh" "$F2/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$S/loopbug.sh" "$F2/"
 : > "$STEPS"; rm -f "$ST/fastloop.pid"
 AF_HOLD=3 SG_FASTLOOP_ONCE=1 bash "$F2/fastloop.sh" > "$T/fast.out" 2>&1
 AF_HOLD=3 SG_FASTLOOP_ONCE=1 bash "$F2/fastloop.sh" > "$T/fast2.out" 2>&1
@@ -322,6 +326,42 @@ for _ in $(seq 1 120); do [ -d "$ST/locks/single-janitor" ] || break; /bin/sleep
 for _ in $(seq 1 30); do /usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log" && break; /bin/sleep 0.1; done
 /usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log" && ok "17 the pass writes its own time when it ends" || ko "17 no janitor.sh time line: $(tr '\n' '|' < "$ST/cycle.log")"
 printf '#!/bin/bash\necho janitor >> "%s"\n' "$STEPS" > "$S/janitor.sh"; rm -rf "$ST/locks/single-janitor"
+
+# 19) (#1750) Both lanes write one dated record for every step they start, in $ST/steps.tsv, whatever the step's length: a
+# start line, then a finish line carrying the state (`done` with the exit status, or `skipped` with the reason). A step under
+# 5 s takes no line in cycle.log, and it still takes its record -- the log says where the cycle went, the records say what ran
+# at all. A pass the fast lane starts detached writes its start at the fork and its finish at its real end, so a pass still in
+# flight holds a start with no finish. cycle.log keeps its own shape (case 10 reads its CYCLE line).
+recs() { awk -F'\t' -v k="$1" -v n="$2" '$1 == k && $3 == n { c++ } END { print c + 0 }' "$ST/steps.tsv" 2>/dev/null; }
+lane_down; rm -f "$ST/steps.tsv" "$ST/cycle.log"; run_cycles 1
+[ "$(recs start heartbeat.sh)" = 1 ] && ok "19 a step under 5 s writes its start record" || ko "19 heartbeat.sh starts: $(recs start heartbeat.sh) in '$(cat "$ST/steps.tsv" 2>/dev/null | tr '\n' '|')'"
+awk -F'\t' '$1 == "start" && $3 == "heartbeat.sh" { s = $4 } $1 == "end" && $3 == "heartbeat.sh" { e = $4; st = $5; d = $6 }
+  END { exit !(s ~ /^[0-9]+$/ && e ~ /^[0-9]+$/ && e >= s && st == "done" && d == "0") }' "$ST/steps.tsv" 2>/dev/null \
+  && ok "19 its finish carries the state done, exit status 0, and an epoch after its start" || ko "19 heartbeat.sh records: $(/usr/bin/grep heartbeat.sh "$ST/steps.tsv" 2>/dev/null | tr '\n' '|')"
+/usr/bin/grep -q heartbeat "$ST/cycle.log" 2>/dev/null && ko "19 a step under 5 s took a cycle.log line" || ok "19 cycle.log keeps its 5 s rule, so the record is the only account of that step"
+# a pass the fast lane starts detached: its start lands before the pass ends, and its finish lands when it really ends
+rm -f "$ST/steps.tsv"; : > "$STEPS"; F3=$T/fastrec; mkdir -p "$F3"
+cp "$d/fastloop.sh" "$d/single.sh" "$d/steprec.sh" "$F3/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$F3/"
+rm -f "$ST/fastloop.pid"
+AF_HOLD=5 SG_FASTLOOP_ONCE=1 bash "$F3/fastloop.sh" > "$T/fastrec.out" 2>&1 & rp=$!
+for _ in $(seq 1 150); do [ "$(recs start autofrontier)" = 1 ] && break; /bin/sleep 0.1; done
+[ "$(recs start autofrontier)" = 1 ] && [ "$(recs end autofrontier)" = 0 ] \
+  && ok "19 a detached pass in flight holds a start and no finish, so it reads as running" \
+  || ko "19 autofrontier records while it holds: '$(cat "$ST/steps.tsv" 2>/dev/null | tr '\n' '|')'"
+wait "$rp" 2>/dev/null; kill "$rp" 2>/dev/null
+for _ in $(seq 1 150); do [ "$(recs end autofrontier)" = 1 ] && break; /bin/sleep 0.1; done
+awk -F'\t' '$1 == "end" && $3 == "autofrontier" && $5 == "done" && $6 == "0" { c++ } END { exit !(c == 1) }' "$ST/steps.tsv" 2>/dev/null \
+  && ok "19 the detached pass writes its finish at its real end" || ko "19 no done record for the detached pass: '$(cat "$ST/steps.tsv" 2>/dev/null | tr '\n' '|')'"
+[ "$(recs start childcc)" = 1 ] && [ "$(recs end childcc)" = 1 ] && ok "19 the lane's childcc pass writes its pair" || ko "19 childcc records: $(recs start childcc)/$(recs end childcc)"
+# the file is cut by size, so it never grows without bound: a cap the cycle's own steps pass in one run trims it to its
+# newest half, and the records it keeps are still whole lines
+rm -f "$ST/steps.tsv"; run_cycles 1 SG_STEPREC_MAX=200
+for _ in $(seq 1 50); do [ "$(wc -c < "$ST/steps.tsv" 2>/dev/null || echo 0)" -le 200 ] && break; /bin/sleep 0.1; done
+sz=$(wc -c < "$ST/steps.tsv" 2>/dev/null || echo 0)
+[ "$sz" -le 200 ] && [ "$sz" -gt 0 ] && ok "19 a file past its cap is cut by size (${sz} bytes held)" || ko "19 the step file grew to ${sz} bytes past a 200 byte cap"
+# The case started a cycle, and a cycle leaves passes detached behind it. Wait until no process of this fixture is alive, so
+# nothing this case started is still there when case 18 asks whether a process of this fixture outlived the suite (#527).
+for _ in $(seq 1 60); do [ -z "$(/usr/bin/pgrep -f "$S/" 2>/dev/null)" ] && break; /bin/sleep 0.1; done
 
 # 18) No process of this fixture outlives the suite. A step that outlived its stub kept watch.sh alive and orphaned, and a
 # leaked lane ran full cycles against this temp state for up to 41 minutes, burning CPU and GitHub calls until the owner
