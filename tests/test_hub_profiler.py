@@ -423,6 +423,7 @@ def test_switching_off_stops_the_sampler_and_is_audited(hub):
     wait(lambda: table.reads >= 2)
     code, out = ask(port, "POST", {"on": False})
     assert (code, out.get("on")) == (200, False)
+    assert out.get("sampler") == "ended", "the answer does not say the sampler ended"
     assert samplers() == [] and not mod.profiler_running(), "the off answer came before the sampler ended"
     seen = table.reads
     time.sleep(0.05)
@@ -803,7 +804,8 @@ def test_an_off_write_whose_sampler_outlives_the_wait_says_so(hub, monkeypatch):
     code, out = ask(port, "POST", {"on": False})
     release.set()
     old.join(3)
-    assert code == 200 and "still running" in out.get("sampler", ""), "the answer does not say the sampler outlived the wait"
+    assert code == 200 and out.get("sampler") == "running", "the answer does not say the sampler outlived the wait"
+    assert "still running" in out.get("sampler_text", ""), "the answer carries no words for the sampler it left"
 
 
 def test_a_sampler_stops_when_the_switch_file_says_off_whoever_wrote_it(hub):
@@ -817,6 +819,12 @@ def test_a_sampler_stops_when_the_switch_file_says_off_whoever_wrote_it(hub):
 
 def test_a_quoted_argument_of_a_nested_shell_names_nothing(prof):
     assert prof.label("bash -c cd /x && bash -c echo \"z; bash /x/watch.sh\"") is None
+
+
+def test_a_redirect_after_a_shell_typed_code_reads_the_line_as_the_process_table_prints_it(prof):
+    """A quoted code followed by any shell operator is not the typed shape: the line names what it redirects from."""
+    assert prof.label("bash -c 'echo hi' 2>/x/watch.sh") == ("watch.sh", "driver")
+    assert prof.label("bash -c 'echo hi' > /x/branchland.sh") == ("branchland.sh", "driver")
     assert prof.label("bash -c cd /x && bash -c \"cd /y && bash /x/watch.sh\"") == ("watch.sh", "driver")
 
 
