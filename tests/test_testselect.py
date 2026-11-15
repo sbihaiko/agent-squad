@@ -478,3 +478,30 @@ def test_a_delta_that_deletes_a_test_file_selects_the_shard_guard(tmp_path):
 def test_a_delta_that_only_edits_a_test_file_does_not_select_the_shard_guard(tmp_path):
     repo = tip(tmp_path, {"tests/test_alpha.py": "from squad import alpha\nX = 1\n"}, extra=SHARD_GUARD_BASE)
     assert select(repo) == ["tests/test_alpha.py"]
+
+
+MEASURED_LINE_GUARD_BASE = {
+    "tests/test_shell_suite_runner.py": "def test_every_suite_has_a_measured_line_so_none_lands_unmeasured():\n    pass\n",
+}
+
+
+def test_a_delta_that_adds_a_shell_suite_selects_the_measured_line_guard(tmp_path):
+    """The measured-line guard reads every `test-*.sh` beside the scripts and fails a suite with no line in
+    tests/shell_suites_seconds.txt, so a delta that adds one reaches it."""
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/test-new-suite.sh": "true\n"},
+        extra=MEASURED_LINE_GUARD_BASE,
+    )
+    assert select(repo) == ["tests/test_shell_suite_runner.py"]
+
+
+def test_a_delta_that_only_edits_a_shell_suite_does_not_select_the_measured_line_guard(tmp_path):
+    """An edited suite keeps the line it already has, so only the test that names it is the delta."""
+    suite = "contrib/squad-goal/scripts/test-alpha.sh"
+    repo = tip(
+        tmp_path,
+        {suite: "true\necho alpha\n"},
+        extra={**MEASURED_LINE_GUARD_BASE, suite: "true\n", "tests/test_namer.py": "SUITE = 'test-alpha.sh'\n"},
+    )
+    assert select(repo) == ["tests/test_namer.py"]
