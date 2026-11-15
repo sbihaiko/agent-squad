@@ -758,7 +758,7 @@ for n, i in live.items():
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
         if not dry: mk.touch()
 owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
-_cards = {}
+_boards = {}
 class _Done:   # the shape the seam's runner answers: the binding reads returncode and stdout, and stderr is never kept (no pipe, see _run)
     def __init__(self, rc, out): self.returncode, self.stdout, self.stderr = rc, out, ""
 def _seam_run(a, input=None, capture_output=True, text=True, timeout=None):   # the seam's calls go through this module's one runner and its deadline; the binding never writes here, so no input is sent
@@ -771,12 +771,13 @@ def board_seam(p):   # the one seam instance a pass asks for project p, so its r
         from issue_state import board_state
         _seams[p] = board_state(owner=owner, project=p, repo=repo0, state_dir=st, run=_seam_run)
     return _seams[p]
-def cards(p):   # every card of project p, read once per pass, asked of the seam (#236): (answered, {issue: Status}). answered is False when GitHub did not answer (a refusal, a deadline miss), and then nothing is moved on a guess; an issue missing from an answered map is a card that does not exist, or one the route omitted -- fill_missing asks those of the GraphQL read (#1463)
-    if p not in _cards:
+def board_read(p):   # one items read per pass for every card's Status and holder (#236, #327): (answered, {issue: Status}, {issue: holder} or None); answered is False when GitHub did not answer, and nothing is moved then
+    if p not in _boards:
         seam = board_seam(p)
-        try: _cards[p] = (bool(seam.binding.status_field()["id"]), seam.read_all())
-        except (RuntimeError, ValueError): _cards[p] = (False, {})
-    return _cards[p]
+        try: _boards[p] = (bool(seam.binding.status_field()["id"]), *seam.board())
+        except (RuntimeError, ValueError): _boards[p] = (False, {}, None)
+    return _boards[p]
+def cards(p): return board_read(p)[:2]
 def fill_missing(p, known):   # an issue the pass's REST read omitted is asked once of the GraphQL projectItems read (#1463), and the card it finds rides the pass's map: a card the route never carried stops being named absent. One call per omitted issue per pass, never one per item; the id it finds also seeds the item map the writer reads, so the write path spends no second read on the omission
     if not cards(p)[0]: return
     m = cards(p)[1]
@@ -794,14 +795,8 @@ def fill_missing(p, known):   # an issue the pass's REST read omitted is asked o
                 except (OSError, ValueError): cached = {}
             if not cached.get(n):
                 b.items_map = {**cached, n: fb["id"]}; b._save_items()   # the writer's map carries the found id, never a second read for it
-_holders = {}
-def holders(p):   # the Run and Run started every card carries, read once per pass (never once per card), asked of the seam (#327): {issue: {"run", "started"}}; None when the read did not answer, and then every holder is written
-    if p not in _holders:
-        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-        from issue_state import board_state
-        try: _holders[p] = board_state(owner=owner, project=p, repo=repo0, state_dir=st, run=_seam_run).holders()
-        except Exception: _holders[p] = None
-    return _holders[p]
+def holders(p):   # the pass's holder map, from board_read; None when the read did not answer. The writer updates it in place
+    return board_read(p)[2]
 def card_status(p, n):   # the card's Status on project p, "" when unreadable or absent (childcc.py reads it the same way)
     if not p: return ""
     return cards(p)[1].get(str(n), "")
@@ -927,7 +922,7 @@ def board_write(args, n, why, reason=None):   # the one writer of a card: a stat
         if not dry: refuse_comment(n, "BOARD-WRITE-FAILED", err, why)   # a dry run acts on nothing, so it queues nothing
         return False
     a = args[1:] if args and args[0] == "--add" else args
-    if len(a) == 4 and not a[0].startswith("--") and a[1] in _cards: _cards[a[1]][1][str(a[3])] = a[2]
+    if len(a) == 4 and not a[0].startswith("--") and a[1] in _boards: _boards[a[1]][1][str(a[3])] = a[2]
     return True
 def door_read(route, q):   # one read through the door (gh_api, ADR-0277): (answered, the projection as text); a refusal or a deadline miss is not answered
     r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_api", route, "-q", q])
@@ -1235,8 +1230,7 @@ def reconcile_board():
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
         if n not in specs and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") == "Code Complete":   # a fresh branch is in dev too, so only a card that reached the wave is delivered by it, and a spec's branch is its children's (#665)
             set_expected(n, "Closed" if shipped else "Done", "its work branch is in dev", "", "", 80)
-    answered, have_all = cards(proj)
-    if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
+    answered, have_all = cards(proj)   # no answer from the board: no card is moved or created on a guess, and the Run fields still go (#1747)
     # The hand hold (#1664): an issue a takeover marker or a hand hold names is somebody's, so its Todo card goes to Doing once and
     # no lower rule moves it back while the marker or hold lives. A release record names the column the card moves to, once: the
     # card moves through the same loop below, and the record goes when the card carries the column. No marker, no hold and no
@@ -1277,17 +1271,17 @@ def reconcile_board():
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
         have = have_all.get(str(n))
         note = None
-        if shipped and want in TERMINAL and have != want:   # the guard (#245): no terminal write without the comment that states its condition
+        if shipped and answered and want in TERMINAL and have != want:   # the guard (#245): no terminal write without the comment that states its condition
             note = terminal_comment(want, terminal_facts(n, want))
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
         if shipped and want in (doing, CODE_REVIEW, "Code Complete", GATING) and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
-        if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
+        if answered and have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
             if note: queue_terminal(n, want, note)
-        elif have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None):
+        elif answered and have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None):
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:

@@ -201,6 +201,7 @@ test-watch-cycle.sh 61.41
 test-watch-land.sh 10.13
 test-watch-orphan.sh 2.59
 test-watch-single-exec.sh 0.02
+test-watch-tm.sh 0.11
 test-watchd-death.sh 5.04
 test-watchd-drain.sh 92.14
 test-watchd-driver-sha.sh 2.30
