@@ -18,7 +18,9 @@ children never start one pytest worker per core each. A full budget makes it wai
 Guards: `tests/test_workcmd.py`.
 """
 import contextlib
+import hashlib
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -294,6 +296,22 @@ def _cannot_start(cmd, cwd, env, stderr):
     return _refused_shebang(path) or any(phrase in stderr for phrase in EXEC_REFUSAL)
 
 
+def _timeout_memo(cwd, cmd):
+    """The marker of one (tree, command) timeout under `$SG_STATE`, or None when the tree has no sha to name it.
+
+    The same tree and the same command timing out twice is not the machine: it is a hang the change brought, so the
+    second timeout is a measured red (#1874, ADR-0164).
+    """
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not sha:
+        return None
+    key = hashlib.sha1(f"{sha}\0{cmd}".encode()).hexdigest()
+    return pathlib.Path(os.environ.get("SG_STATE") or "/tmp") / "ac-timeouts" / key
+
+
 def run(cmd, cwd, timeout=None):
     """Run a shell command in `cwd`. Exit code 0 is ok; any other exit or a timeout is a failure with evidence.
     A command the shell cannot parse is `malformed`, not a failed check: nothing ran, so nothing was proved false.
@@ -305,7 +323,10 @@ def run(cmd, cwd, timeout=None):
     all measured or may have measured its answer, and stays a failure.
     `timeout` None takes the cap of `ac_timeout()` at call time, so `SG_AC_TIMEOUT` reaches the gate and the landing check.
     The counts of the output's last pytest summary are reported beside the exit code, on a green command and a red one
-    alike (#80). A timeout and a command the shell cannot parse report none: nothing was measured."""
+    alike (#80). A timeout and a command the shell cannot parse report none: nothing was measured.
+    A timeout is `unproven`, because a command the machine could not finish proved nothing false (ADR-0164, #1874), and a
+    marker under `$SG_STATE` names the (tree, command) that timed out: the same pair timing out again is a measured red,
+    so a hang the change brought cannot pass by omission."""
     timeout = ac_timeout() if timeout is None else timeout
     syntax = subprocess.run(["/bin/sh", "-n", "-c", cmd], capture_output=True, cwd=cwd)
     if syntax.returncode != 0:
@@ -315,7 +336,17 @@ def run(cmd, cwd, timeout=None):
         try:
             r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
-            return CmdResult(False, f"timeout after {timeout:g} s")
+            evidence = f"timeout after {timeout:g} s"
+            memo = _timeout_memo(cwd, cmd)
+            if memo is not None and memo.exists():
+                return CmdResult(False, f"{evidence}: the same tree and command timed out before, so this is a measured red")
+            if memo is not None:
+                try:
+                    memo.parent.mkdir(parents=True, exist_ok=True)
+                    memo.write_text(evidence)
+                except OSError:
+                    pass   # no record, no red: the first timeout still proved nothing
+            return CmdResult(False, evidence, unproven=True)
     if r.returncode == 0:
         return CmdResult(True, counts=counts_of(r.stdout + r.stderr))
     stderr = r.stderr.decode("utf-8", "replace")
