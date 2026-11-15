@@ -753,7 +753,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\+"&sw="\+profStripWin\)', src), "the read carries the profiler and strip windows"
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', src), "the read carries the profiler window"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -1746,65 +1746,23 @@ STRIP = {"window_s": 14400, "start": W0 - 14400, "end": W0,
                    {"at": W0 - 4000, "kind": "promotion", "branch": "stg", "sha": "def456"}]}
 
 
-def strip_part(out):
-    at = out.index("<section id=profstrip>")
-    return out[at:out.index("</section>", at) + 10]
-
-
-def test_the_strip_is_drawn_above_the_trip_bar_and_shows_four_shares():
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'trip': TRIP, 'runs': RUNS})},new Set())")
-    assert out.index("id=profstrip") < out.index("id=proftrip"), "the strip is the tab's first view"
-    part = strip_part(out)
-    assert re.findall(r"<b>([A-Za-z]+)</b>", part) == ["Active", "Draining", "Off", "Down"]
-    assert "62.5%" in part and "25.0%" in part, "the share is of the window"
-
-
-def test_the_strip_draws_a_gap_with_its_reason_and_names_each_mark():
-    part = strip_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP})},new Set())"))
-    assert "no source data" in part and "no step record in this stretch" in part
-    assert re.search(r'title="[^"]*loop[^"]*restart[^"]*#1234', part), "a switch change names writer, origin and issue"
-    assert re.search(r'title="[^"]*#7', part), "a landing names the issue it carries"
-    assert re.search(r'title="[^"]*stg', part) and re.search(r'title="[^"]*main', part) is None, "a promotion names its branch"
-
-
 def test_the_page_names_no_gap_sentence_and_draws_no_failed_runs_table():
-    """The owner read the gap sentence and the rows of long verdict reasons as noise: the gaps still draw as gaps, and the
-    smaller share note stays inside the strip's aria label."""
+    """The owner read the gap sentence and the rows of long verdict reasons as noise, and the loop state panel as noise with
+    them, so the page draws none of it: the hub still folds the strip's rows for its own readers."""
     out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'runs': RUNS})},new Set())")
     assert "of the window has no source data" not in out, "the gap sentence is gone"
     assert "id=profr" not in out and "Time in failed runs" not in out, "the failed-runs panel is gone"
-    assert "with no source data" in out, "the share note stays with the strip"
-    assert "no step record in this stretch" in out, "a gap still draws as a gap with its reason"
+    assert "id=profstrip" not in out and "Loop state" not in out, "the loop state panel is gone"
 
 
-def test_the_strip_offers_four_eight_and_twenty_four_hours():
-    part = strip_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP})},new Set())"))
-    opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", part)
-    assert [(v, bool(sel), lab) for v, sel, lab in opts] == [
-        ("14400", True, "4 hours"), ("28800", False, "8 hours"), ("86400", False, "24 hours")]
-    assert len(re.findall(r"<select data-stripwin", part)) == 1
-
-
-def test_the_strip_keeps_its_own_window_on_this_device_and_sends_it():
-    src = page()
-    assert re.search(r'localStorage\.setItem\("squad-prof-strip"', src), "the window survives a reload"
-    assert re.search(r"&sw=\"\+profStripWin", src), "the read carries the strip's window"
-
-
-def test_the_strip_shows_with_the_switch_off():
-    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'strip': STRIP})},new Set())")
-    assert "id=profstrip" in off and "<table id=proft " not in off
-
-
-def test_the_phone_reaches_the_strip_and_the_shares_wrap_under_the_bar():
-    """The phone's More menu opens the Loop tab of this page, and the strip's shares wrap, so no fixed width overflows it."""
+def test_the_phone_reaches_the_loop_tab():
+    """The phone's More menu opens the Loop tab of this page."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
     assert re.search(r'id="more-loop" href="\./#loop"', html), "the phone opens the Loop tab of the same page"
-    assert re.search(r"#profstrip \.lss\{display:flex;flex-wrap:wrap", page()), "the shares wrap under the bar at phone width"
 
 
-# The gates under the strip (#1767): one mark per finished gate of the same window, on the same axis. The fold from the
-# gate-history lines is a pure function of this rule layer, so its tests feed lines in and read no file.
+# The gates of the strip were folded for the same window (#1767): the fold stays in the route, and the page draws it no more.
+# The fold from the gate-history lines is a pure function of this rule layer, so its tests feed lines in and read no file.
 GATE_LINES = [
     f"{W0 - 12000}\tgate\tpass\tabc\t{W0 - 12060}\tall\troot\tpass\t-\truff mypy pytest\t-\t2\t-\tchild\t1.2\t3.4\n",
     f"{W0 - 9000}\tfast\tfail\tdef\t{W0 - 9060}\tdelta\troot\tfail\texit 1\tpytest\t-\t1\tred\ttip\t4.0\t-\n",
@@ -1853,34 +1811,3 @@ def test_the_route_carries_the_gate_marks_of_the_strip_window(hub):
     assert gates["marks"][1]["reason"] == "exit 1"
     assert table.reads == 0, "the gate marks read files only"
 
-
-GATES = {"counts": {"pass": 3, "fail": 1, "unproven": 2},
-         "marks": [{"at": W0 - 5000, "kind": "gate", "scope": "all", "outcome": "pass", "seconds": 60.0,
-                    "reason": None, "load_start": 1.0, "load_finish": 2.0},
-                   {"at": W0 - 3000, "kind": "fast", "scope": "delta", "outcome": "fail", "seconds": 30.0,
-                    "reason": "exit 1", "load_start": 5.0, "load_finish": 6.5},
-                   {"at": W0 - 1000, "kind": "gate", "scope": "delta", "outcome": "unproven", "seconds": 900.0,
-                    "reason": "bounded by 900 s", "load_start": None, "load_finish": 3.0}]}
-
-
-def test_the_strip_draws_gate_marks_whose_shapes_differ_without_color_with_their_counts():
-    """Under the bar, on the same axis and window: one mark a gate, its shape per outcome, its hover naming the facts, and
-    beside the chart the count of each outcome."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': {**STRIP, 'gates': GATES}})},new Set())")
-    part = strip_part(out)
-    shapes = re.findall(r'class="lsg lsgo-(\w+) sh-(\w+)"', part)
-    assert shapes == [("pass", "circle"), ("fail", "square"), ("unproven", "diamond")], \
-        "the three outcomes differ by shape, never by colour alone"
-    lefts = re.findall(r'class="lsg [^"]*" style="left:([\d.]+)%"', part)
-    assert [round(float(x), 1) for x in lefts] == [round(100 * (W0 - 5000 - (W0 - 14400)) / 14400, 1),
-                                                   round(100 * (W0 - 3000 - (W0 - 14400)) / 14400, 1),
-                                                   round(100 * (W0 - 1000 - (W0 - 14400)) / 14400, 1)], \
-        "each mark sits at its finish on the strip's own axis"
-    fail = re.search(r'title="([^"]*)"[^>]*></span>', part[part.index("lsgo-fail"):]).group(1)
-    assert "fast" in fail and "delta" in fail and "30" in fail and "exit 1" in fail, "the hover names kind, scope, seconds and the reason"
-    assert "5.0" in fail and "6.5" in fail, "the hover names the load at the start and at the finish"
-    pass_mark = re.search(r'title="([^"]*)"[^>]*></span>', part[part.index("lsgo-pass"):]).group(1)
-    assert "exit" not in pass_mark and "1.0" in pass_mark and "2.0" in pass_mark, "a pass carries no reason and still its loads"
-    assert "bounded by 900 s" in part
-    assert re.search(r"<b>Pass</b> 3", part) and re.search(r"<b>Fail</b> 1", part) and re.search(r"<b>Unproven</b> 2", part), \
-        "the counts of the window stand beside the chart"
