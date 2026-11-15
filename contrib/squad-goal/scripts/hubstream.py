@@ -73,7 +73,10 @@ class Versions:
         answer yet and publishes nothing, so a cold subject never paints an empty value."""
         content = self._subjects[name]()
         if content is None: return
-        digest = hashlib.sha1(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
+        if isinstance(content, tuple) and len(content) == 2 and isinstance(content[1], str):
+            content, digest = content   # the subject names its own digest: a body whose reader already costs it a hash is never serialized again to compare it (#1790). A string digest is the tell; a tuple whose second item is not a string is content, as a chart input that answers (read time, history key)
+        else:
+            digest = hashlib.sha1(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
         with self._lock:
             if name not in self._version or digest != self._digest[name]:
                 self._version[name] = max(self._version.get(name, 0) + 1, time.time_ns())

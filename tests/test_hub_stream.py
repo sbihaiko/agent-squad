@@ -209,6 +209,36 @@ def test_versions_rise_only_when_content_changes():
     assert hubstream.held_from("held=runs:7,board:x") == {"runs": 7}
 
 
+class _Walked(dict):
+    """A body that counts how often its items are walked: json.dumps(sort_keys=True) sorts them, so a walk here is one
+    full serialization of the body."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.walks = 0
+    def items(self):
+        self.walks += 1
+        return super().items()
+
+
+def test_a_subject_that_names_its_digest_is_never_serialized():
+    """A subject may answer (content, digest) instead of content: the stream compares the digest it was handed and never
+    serializes the body to compare it. The board is a thousand cards, and dumping it to a hash on every tick was most of
+    the hub's CPU (#1790). The body sent to the page is still the content, never the digest."""
+    hubstream = _hubstream()
+    body, digests = _Walked(rows=[1, 2]), ["a"]
+    v = hubstream.Versions({"board": lambda: (body, digests[0])})
+    v.refresh()
+    one = v.newer({})["board"]
+    assert v.fresh({})["board"][1]["rows"] == [1, 2], "the page is sent the content, never the digest"
+    for _ in range(5):
+        v.refresh()
+    assert body.walks == 0, "a subject that names its digest is never walked to compare it"
+    assert v.newer({"board": one}) == {}, "an unchanged digest publishes nothing"
+    digests[0] = "b"
+    v.refresh()
+    assert v.newer({"board": one})["board"] > one, "a new digest is a new version"
+
+
 def test_one_read_per_subject_per_tick_whatever_the_pages():
     hubstream = _hubstream()
     reads = []
