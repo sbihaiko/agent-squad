@@ -662,18 +662,54 @@ def test_two_readings_of_one_window_are_never_closer_than_one_period(hub, monkey
 
 def test_the_scope_names_each_other_profile_s_loop_by_its_supervisor_and_run_folders(hub, tmp_path, monkeypatch):
     """The hub serves every profile, so this tab's context row names each other profile's loop: its supervisor's pid from
-    that profile's own state folder, and the run folders only that profile's work names."""
+    that profile's own state folder, and the folders only that profile's work names."""
     mod, *_ = hub
     state = tmp_path / "zesty-state"
     state.mkdir()
     (state / "watchd.pid").write_text("4243 supervise\n")
+    (mod.STATE / "watchd.pid").write_text("7777 supervise\n")
     monkeypatch.setattr(mod, "project_contexts", lambda: [
         {"slug": "alpha", "state": str(mod.STATE), "checkout": mod.CHECKOUT, "own": True},
         {"slug": "zesty", "state": str(state), "checkout": "/Users/o/zesty", "own": False}])
     mod.PROFILER_OTHERS.update(at=0.0, rows=())
     sc = mod.profiler_scope()
-    assert sc.supervisor != 4243 and sc.others == (
-        ("zesty", 4243, ("/Users/o/zesty/runs/", "/Users/o/zesty/worktrees/run/", "/Users/o/zesty/worktrees/child/")),)
+    assert sc.supervisor == 7777, "this profile's own supervisor is the pid in its own state folder"
+    assert [name for name, _, _ in sc.others] == ["zesty"], "this profile is never one of the others"
+    assert 7777 not in [pid for _, pid, _ in sc.others]
+    assert sc.others == (
+        ("zesty", 4243, ("/Users/o/zesty/", "/Users/o/zesty/runs/", "/Users/o/zesty/worktrees/run/",
+                         "/Users/o/zesty/worktrees/child/", "/Users/o/zesty/contrib/squad-goal/scripts/")),)
+
+
+def test_a_seam_that_refuses_keeps_the_last_good_other_loops(hub, monkeypatch):
+    """A transient refusal is never answered as one profile on the machine: the rows last read stand."""
+    mod, *_ = hub
+    good = (("zesty", 4243, ("/Users/o/zesty/",)),)
+
+    def refuse():
+        raise OSError("the seam refused")
+
+    monkeypatch.setattr(mod, "project_contexts", refuse)
+    mod.PROFILER_OTHERS.update(at=0.0, rows=good)
+    assert mod.profiler_others(now=1e9) == good
+
+
+def test_an_other_profile_s_work_is_named_by_its_checkout_and_its_scripts(hub, tmp_path, monkeypatch):
+    """Two profiles run the same scripts from their own checkouts: a process that names the other checkout is that
+    profile's loop, never the row for the rest of the machine."""
+    mod, *_ = hub
+    state = tmp_path / "zesty-state"
+    state.mkdir()
+    (state / "watchd.pid").write_text("50\n")
+    monkeypatch.setattr(mod, "project_contexts", lambda: [
+        {"slug": "zesty", "state": str(state), "checkout": "/Users/o/zesty", "own": False}])
+    mod.PROFILER_OTHERS.update(at=0.0, rows=())
+    scope = mod.profiler_scope()
+    script = "/Users/o/zesty/contrib/squad-goal/scripts/watch.sh"
+    a = {(90, 1.0): (1, 0.0, f"bash {script}")}
+    b = {(90, 1.0): (1, 2.0, f"bash {script}")}
+    ctx = mod.hub_profiler.context(mod.hub_profiler.fold(a, b, scope))
+    assert [(c["name"], c["kind"], c["total_s"]) for c in ctx["children"]] == [("loop zesty", "loop", 2.0)]
 
 
 def test_the_answer_splits_the_context_row_by_each_other_profile_s_loop(hub, tmp_path, monkeypatch):

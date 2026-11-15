@@ -2561,7 +2561,7 @@ PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pa
 PROFILER_STILL_RUNNING = "still running: the sampler ends after its current read of the process table"
 PROFILER = {"window": hub_profiler.Window(), "thread": None, "stop": None}
 PROFILER_LOCK = threading.RLock()   # it starts and ends the sampler, and the switch is read and written under it
-# The other profiles of this hub, each with its supervisor pid and the run folders only its work names (#1753). The seam
+# The other profiles of this hub, each with its supervisor pid and the folders only its work names (#1753). The seam
 # answers them, so they are read once a minute, never on the sampler's tick.
 PROFILER_OTHERS = {"at": None, "rows": ()}
 PROFILER_OTHERS_SECS = 60.0
@@ -2585,9 +2585,11 @@ def profiler_scope():
     return hub_profiler.Scope(pid, tuple(marks), profiler_others())
 
 def profiler_others(now=None):
-    """(name, supervisor pid, run folders) for every other profile this hub serves, so the context row tells one loop from
-    another: the pid from that profile's own state folder, the folders its work names. Off a page's read the list is a
-    minute old at most; a seam that refuses answers no other loop and never the wrong one."""
+    """(name, supervisor pid, marks) for every other profile this hub serves, so the context row tells one loop from
+    another: the pid from that profile's own state folder, the folders its work names. The marks are that profile's
+    checkout and the folders under it, so two profiles that run the same scripts from their own checkouts are told apart.
+    Off a page's read the list is a minute old at most; a seam that refuses keeps the rows it last read, since an empty
+    answer would read as a machine with one profile."""
     now = time.time() if now is None else now
     if PROFILER_OTHERS["at"] is not None and 0 <= now - PROFILER_OTHERS["at"] < PROFILER_OTHERS_SECS:
         return PROFILER_OTHERS["rows"]
@@ -2600,9 +2602,10 @@ def profiler_others(now=None):
             except (ValueError, IndexError, OSError): pid = None
             co = pathlib.Path(r["checkout"])
             rows.append((r.get("slug") or "a profile", pid,
-                         tuple(f"{d}/" for d in (co / "runs", co / "worktrees" / "run", co / "worktrees" / "child"))))
+                         tuple(f"{d}/" for d in (co, co / "runs", co / "worktrees" / "run", co / "worktrees" / "child",
+                                                 co / "contrib" / "squad-goal" / "scripts"))))
     except Exception:
-        rows = []
+        rows = list(PROFILER_OTHERS["rows"])
     PROFILER_OTHERS.update(at=now, rows=tuple(rows))
     return PROFILER_OTHERS["rows"]
 

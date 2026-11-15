@@ -107,9 +107,9 @@ class Proc:
     pgid: int
     start: float | None   # epoch seconds, or None where the system gives none
     command: str
-    cpu: float = 0.0      # user plus system CPU seconds, as ps `time=` reports them; 0.0 where the system gives none
+    cpu: float | None = 0.0   # user plus system CPU seconds, as ps `time=` reports them; None where the read was refused
     stat: str = "S"       # the first letter ps `stat=` prints: Z for a zombie, S for any other state
-    cpu_known: bool = True   # False where the CPU read was refused: the process was seen, and its seconds are no zero
+    cpu_known: bool = True   # False where the CPU read was refused: the process was seen, and its seconds are unknown, never zero
 
 
 class _BsdInfo(ctypes.Structure):
@@ -275,7 +275,7 @@ def _darwin_proc(pid: int) -> Proc | None:
             return None   # gone
         start, ppid, pgid, stat = known
         cpu = None   # the task read is refused for another user's process
-    return Proc(pid, ppid, pgid, start, _darwin_command(pid, ours), cpu or 0.0, stat, cpu is not None)
+    return Proc(pid, ppid, pgid, start, _darwin_command(pid, ours), cpu, stat, cpu is not None)   # a refused read stays None, never a zero cost
 
 
 def _linux_listing() -> list[int]:
@@ -375,8 +375,10 @@ def format_lstart(start: float | None) -> str:
     return "" if start is None else time.strftime(LSTART_FMT, time.localtime(start))
 
 
-def format_cputime(cpu: float) -> str:
-    """ps `time=`: [dd-][hh:]mm:ss.cc."""
+def format_cputime(cpu: float | None) -> str:
+    """ps `time=`: [dd-][hh:]mm:ss.cc. A refused CPU read prints `-`: no zero stands for a time the system did not give."""
+    if cpu is None:
+        return "-"
     cs = int(cpu * 100)
     s, cc = divmod(cs, 100)
     m, s = divmod(s, 60)
