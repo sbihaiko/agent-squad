@@ -199,6 +199,20 @@ def test_a_child_whose_gate_could_not_run_reports_unproven_and_is_no_failing_chi
     assert outcome == "unproven" and reasons == out["reasons"]
 
 
+def test_an_unproven_artifact_with_no_work_and_no_check_evidence_fails():    # #1825
+    """`unproven` is for work that is done and a proof that could not run. A child that names no diff, no commit and no
+    check that could not run proves nothing at all, so it fails instead of being carried (ADR-0164)."""
+    out = {"status": "unproven"}
+    outcome, reasons, _ = session.agent_outcome({}, type("R", (), {"output": out})(), None)
+    assert outcome == "fail" and reasons == ["unproven_without_evidence"]
+
+
+def test_an_unproven_artifact_that_names_the_check_that_could_not_run_is_kept():    # #1825
+    out = {"status": "unproven", "reasons": ["check:final_gate: the gate budget was full, so no battery ran"]}
+    outcome, reasons, _ = session.agent_outcome({}, type("R", (), {"output": out})(), None)
+    assert outcome == "unproven" and reasons == out["reasons"]
+
+
 def test_an_artifact_with_the_command_and_expected_form_does_not_fail_as_ac_commands_invalid():    # #1346
     out = {"status": "pass", "ac_commands": [{"command": "true", "expected": "x"}]}
     assert session.agent_outcome({}, type("R", (), {"output": out})(), None)[1] != ["ac_commands_invalid"]

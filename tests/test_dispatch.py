@@ -1,6 +1,8 @@
 """Tickets #38 to #40: the dispatch node."""
 import json
+import shlex
 import shutil
+import subprocess
 from pathlib import Path
 
 import anyio
@@ -140,7 +142,9 @@ async def test_a_final_gate_that_could_not_run_completes_the_run_and_names_the_n
     """The child listed its own gate in ac_commands and that gate answered exit 4 with no pytest summary: nothing is
     red and nothing was proved, so the run is completed with `unproven:final_gate`, never failed and left to a person
     (ADR-0164)."""
-    child = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["sh -c 'exit 4'"]}, "spend": 0.2, "turns": 3}
+    line = ("fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; "
+            "unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)")
+    child = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": [f"echo {shlex.quote(line)}; exit 4"]}, "spend": 0.2, "turns": 3}
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": child})
     v = await eng.run()
     assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
@@ -159,6 +163,29 @@ async def test_a_child_that_could_not_measure_is_no_failing_child(tmp_path):    
     assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
     assert "unproven:route.router.1" in v.reasons
     assert child_outs(tmp_path)["route.router.1"]["outcome"] == "unproven"
+
+
+@pytest.mark.anyio
+async def test_a_landing_command_the_gate_could_not_run_records_its_obligation(tmp_path):    # #1825
+    """A held-out command that ends on the gate's own unproven line measured nothing, so it is no regression of the landing
+    (ADR-0164). The obligation it leaves rides the landing result, never dropped, and a measured red never does."""
+    from types import SimpleNamespace
+
+    from squad.runners.dispatch import Dispatch
+    target = tmp_path / "target"
+    target.mkdir()
+    subprocess.run(["git", "init", "-q", str(target)], check=True)
+    line = ("fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; "
+            "unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)")
+    cmd = f"echo {shlex.quote(line)}; exit 4"
+    d = Dispatch(SimpleNamespace(target=str(target), fix_run=False))
+    d.landed_commands = lambda extra=None: [("kid", [cmd])]
+    d.child_tree = lambda name: None
+    d.ac_before = {}
+    got, evidence = await d.ac_survey()
+    assert got["kid"] is True and evidence["kid"] == {f"unproven:{cmd}": line}
+    r = await d.landing_check("kid", None)
+    assert r.ok and r.extra["unproven"] == [cmd]
 
 
 @pytest.mark.anyio

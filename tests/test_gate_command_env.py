@@ -5,6 +5,7 @@ inside a command reaches the project's python3 instead of ours. Without it, `uv 
 python3, which holds no pytest, and the gate fails a correct patch.
 """
 import os
+import shlex
 
 from squad import gates
 
@@ -116,20 +117,42 @@ def test_the_gate_filters_a_stubbed_result_by_its_kind_not_by_its_label(tmp_path
     assert r.findings == ["malformed:malformed: looking command", "ac_failed:measured red command"]
 
 
+GATE_UNPROVEN_LINE = ("fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; "
+                      "unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)")
+UNPROVEN_CMD = f"echo {shlex.quote(GATE_UNPROVEN_LINE)}; exit 4"
+
+
 def test_a_gate_that_could_not_run_is_unproven_not_a_failed_check(tmp_path):     # #1825
-    # The fast gate answers exit 4 when it measured nothing: no battery ran, nothing is red, and no pytest summary
-    # line proves a red (ADR-0164). The gate result says unproven, never a failing finding that holds the run.
-    r = run(tmp_path, "sh -c 'exit 4'")
+    # The fast gate answers exit 4 with its own unproven line when it measured nothing: no battery ran and nothing is
+    # red (ADR-0164). The gate result says unproven, never a failing finding that holds the run. The evidence decides,
+    # so the line must be on the output: the exit code alone proves nothing.
+    r = run(tmp_path, UNPROVEN_CMD)
     assert r.ok and r.outcome == "unproven"
-    assert r.findings == ["unproven:sh -c 'exit 4'"]
+    assert r.findings == [f"unproven:{UNPROVEN_CMD}"]
+
+
+def test_an_exit_four_with_no_unproven_line_is_no_unproven_check(tmp_path):     # #1825
+    # The exit code alone never proves that nothing ran: a command that answers 4 and says nothing of the gate is a
+    # measured failure, so the run holds it instead of carrying it (ADR-0164).
+    r = run(tmp_path, "sh -c 'exit 4'")
+    assert r.outcome == "fail"
+    assert r.findings == ["ac_failed:sh -c 'exit 4'"]
+
+
+def test_a_measured_shell_red_at_exit_four_is_not_unproven(tmp_path):     # #1825
+    # A battery that ran and failed a shell suite names the defect. It prints no pytest summary, so the counts are
+    # empty; the red is still measured and must never be released as unproven (ADR-0164).
+    r = run(tmp_path, "printf 'FAIL contrib/squad-goal/scripts/test-x.sh::case\\n'; exit 4")
+    assert r.outcome == "fail" and not r.unproven
+    assert r.findings[0].startswith("ac_failed:")
 
 
 def test_one_measured_red_beside_an_unproven_check_still_fails_the_gate(tmp_path):     # #1825
     # A measured red wins: the unproven command never releases the defect another command measured (ADR-0164).
     r = gates.ac_verify({"commands_from": "spec"},
-                        gates.GateInput(artifacts={"spec": {"ac_commands": ["sh -c 'exit 4'", "exit 3"]}}, facts={}, cwd=str(tmp_path)))
+                        gates.GateInput(artifacts={"spec": {"ac_commands": [UNPROVEN_CMD, "exit 3"]}}, facts={}, cwd=str(tmp_path)))
     assert r.outcome == "fail"
-    assert "ac_failed:exit 3" in r.findings and "unproven:sh -c 'exit 4'" in r.findings
+    assert "ac_failed:exit 3" in r.findings and f"unproven:{UNPROVEN_CMD}" in r.findings
 
 
 def test_a_clean_ac_command_still_passes_on_its_exit_code(tmp_path):

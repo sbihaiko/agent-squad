@@ -405,12 +405,32 @@ def missing_artifact_reason(res, cap_reason, granted=None):
     return "child_ended_early"
 
 
+# The words a reason uses to name the check that could not run: a gate line, a check of the run, or a held-out command.
+CHECK_NAMED = re.compile(r"\b(unproven|gate|check|ac-verify|ac_failed|fast-gate)\b", re.IGNORECASE)
+
+
+def _unproven_evidence(out):
+    """True when an `unproven` artifact names work that exists or the check that could not run it.
+
+    `unproven` says the work is done and the proof could not finish (ADR-0164), so a bare status proves nothing: the
+    artifact carries a diff with a file, a commit, or a reason naming the check that could not run (#1825).
+    """
+    diff = out.get("diff")
+    files = diff.get("files") if isinstance(diff, dict) else None
+    if isinstance(files, list) and files:
+        return True
+    if out.get("commit") or out.get("head"):
+        return True
+    return any(isinstance(r, str) and CHECK_NAMED.search(r) for r in out.get("reasons", []))
+
+
 def agent_outcome(node, res, cap_reason, granted=None):
     """Derive the outcome from the declared artifact. An agent node and a dispatch child share it.
 
     The artifact carries the three outcomes of ADR-0164: `pass`, `fail`, and `unproven` for work no check could measure
     (#1825). An `unproven` artifact is no failing child: it names the check that could not run, and the run carries that
-    obligation instead of holding the work for a person.
+    obligation instead of holding the work for a person. It carries evidence of the work or of that check, though: a bare
+    `unproven` status proves nothing, so it fails.
     """
     out = res.output
     if not isinstance(out, dict):
@@ -425,5 +445,7 @@ def agent_outcome(node, res, cap_reason, granted=None):
         return "fail", ["artifact_invalid"], None
     if status == "pass":      # a pass keeps only its provisional decisions; every other reason on a pass is dropped as before
         return status, [r for r in out.get("reasons", []) if isinstance(r, str) and r.startswith(PROVISIONAL)], cap_reason
+    if status == "unproven" and not _unproven_evidence(out):
+        return "fail", ["unproven_without_evidence"], None    # nothing done and nothing named: it proved nothing at all (#1825)
     reasons = [_claim(r) for r in out.get("reasons", [status])]
     return status, reasons, cap_reason

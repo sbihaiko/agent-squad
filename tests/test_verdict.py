@@ -167,6 +167,21 @@ def test_a_run_whose_only_failures_are_unproven_completes_and_names_the_node(): 
     assert v.reasons == ["unproven:final_gate"]
 
 
+def test_an_unproven_outcome_routed_to_continue_is_no_failing_outcome():    # #1825
+    """Only an unproven outcome that exits its step is a failing outcome. A node that answered unproven but was routed
+    to continue did not fail the run, so the fold never counts it: a completed run is not relabelled by it (ADR-0164)."""
+    rows = [out("a", "unproven", routed="continue"), out("main")]
+    v = V.fold(events(*rows))
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert not any(r.startswith("unproven:") for r in v.reasons)
+
+
+def test_a_needs_human_sibling_outranks_an_unproven_one_in_the_join():    # #1825
+    """A person's decision is never turned into a completed run by an unfinished proof beside it: needs-human is the
+    worse join, so the run surfaces the hold."""
+    assert V.join(["unproven", "needs-human"], "all") == "needs-human"
+
+
 def test_a_measured_red_beside_an_unproven_outcome_still_fails():    # #1825
     """A measured red wins: the unproven sibling never releases it (ADR-0164)."""
     rows = [out("final_gate", "unproven"), out("main", "fail", ["ac-verify:ac_failed:exit 3"])]

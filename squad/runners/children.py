@@ -98,7 +98,7 @@ class Children:
             if key and tree:
                 e.record.append("gate_result", node=g, entry=entry, item=None, sha=tree[0], dirt=tree[1], suite=key,
                                 outcome=res[g], source=f"{g}:{child}.{entry}" if child else f"{g}.{entry}")
-            if not r.ok:
+            if r.outcome != "pass":     # a red's findings and an unproven check's findings both land in the record (#1825)
                 res[f"{g}:findings"] = r.findings
                 if r.evidence:
                     res[f"{g}:evidence"] = r.evidence

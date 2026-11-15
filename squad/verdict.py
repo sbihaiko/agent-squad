@@ -124,9 +124,12 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     folded = sorted(e["pos"] for e in last.values())
     contrib = [(k, _route(e), e) for k, e in last.items()]
     # An unproven outcome is a failing outcome that holds nothing: the work it covers is still delivered (ADR-0164), and
-    # the reasons name the node whose proof did not finish, so it is never silently unproven.
+    # the reasons name the node whose proof did not finish, so it is never silently unproven. It counts only when it
+    # exited its step, symmetric with fail and deadline: a node that answered unproven but was routed to continue failed
+    # nothing, so it never enters the fold as a failure (#1825).
     failing = sorted([e for _, r, e in contrib if r in ("exit:fail", "exit:deadline") and e["outcome"] in ("fail", "deadline")]
-                     + [e for e in last.values() if e["outcome"] == "unproven"], key=lambda e: e["pos"])
+                     + [e for _, r, e in contrib if r == "exit:unproven" and e["outcome"] == "unproven"],
+                     key=lambda e: e["pos"])
     reasons = _dedupe([r for e in failing for r in e["reasons"]] + [f"{e['node']}:{e['outcome']}" for e in failing if not e["reasons"]])
     waits = _open_waits(events)
     since = max(e["pos"] for e in invocations)
