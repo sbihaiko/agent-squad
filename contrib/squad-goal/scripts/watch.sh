@@ -2,6 +2,10 @@
 # Monitor stream: one line per run verdict. Run from the target checkout.
 # active-runs.txt holds a run id (under ./runs) or an absolute run folder (launch.py writes absolute paths).
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"
+# One dated record for every step this cycle starts (#1750), in $SG_STATE/steps.tsv: a start line, then a finish line that
+# names the state it ended in. A copy of this script that travels without the writer (a fixture) runs as before: a missing
+# record never stops a step.
+. "$(dirname "$0")/steprec.sh" 2>/dev/null || { srec_start() { srec_id=; }; srec_end() { :; }; srec_skip() { :; }; }
 orphaned() { [ "$($SG_PS -o ppid= -p $$ | tr -d ' ')" = 1 ]; }   # the supervisor is gone (#959): this lane runs no further step
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
@@ -27,7 +31,10 @@ W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
 seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes).
 # The step's own exit code comes back unchanged, so a caller tells a held lock (single.sh exits 76, #1290) from a step that failed.
-tm() { orphaned && exit 0; local s=$(date +%s) r n; "$@"; r=$?; local e=$(( $(date +%s) - s )); n=${1##*/}; [ "$n" = bash ] && { n=${2##*/}; [ "$n" = single.sh ] && n=$3; }; [ "$e" -ge 5 ] && echo "$(date +%T) ${n##*/} ${e}s" >> "$SG_STATE/cycle.log"; return $r; }
+# Whatever its length, a step also writes its dated record (#1750): cycle.log's 5 s rule is where the cycle's time went, and
+# the record is what says the step ran at all. The finish reads the epoch the step began at plus its own length, so a step
+# costs one date call, never two. One line: test-watch-tm.sh evals this line alone.
+tm() { orphaned && exit 0; local s r n e sid; n=${1##*/}; [ "$n" = bash ] && { n=${2##*/}; [ "$n" = single.sh ] && n=$3; }; n=${n##*/}; s=$(date +%s); srec_start "$n" "$s"; sid=$srec_id; "$@"; r=$?; e=$(( $(date +%s) - s )); srec_end "$sid" "$n" "$r" $(( s + e )); [ "$e" -ge 5 ] && echo "$(date +%T) ${n##*/} ${e}s" >> "$SG_STATE/cycle.log"; return $r; }
 # verdicts: the runs of active-runs.txt whose record carries a verdict, one a line. The closing wait reads local files only (#569).
 verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
   grep -q '"event": *"verdict"' "$f" 2>/dev/null && echo "$r"; done | sort; }
@@ -165,11 +172,11 @@ if v:
   # reconcile.py is the most expensive step of the cycle by a wide margin (137 runs, 22,902 s, ~167 s each) and all it does is move cards
   # from GitHub facts: detached under its own single.sh lock, filing its stream in $SG_STATE/reconcile.log
   # instead of holding the cycle (#1845). A pass already running is skipped, not doubled.
-  [ $((tick % 8)) -eq 1 ] && ( bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log" & ) 2>/dev/null   # card Status from GitHub facts, every ~12 min (GraphQL budget)
+  [ $((tick % 8)) -eq 1 ] && { srec_start reconcile; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log"; srec_end "$drec" reconcile $? ) 2>/dev/null & }   # card Status from GitHub facts, every ~12 min (GraphQL budget)
   # The full suite runs nightly in both modes, heavy included (#704). It is detached under its own single-flight stage and
   # its own log: a suite of hours must never hold this cycle, and it takes its own `nightly` lock, never the landing one.
   # nightly.sh runs at most once a day by its own marker; each later cycle's start costs one file read and exits.
-  ( bash "$(dirname "$0")/single.sh" nightly bash "$(dirname "$0")/nightly.sh" 2>&1 | sed "s/^/NIGHTLY /" >> "$SG_STATE/nightly.log" & ) 2>/dev/null
+  { srec_start nightly; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" nightly bash "$(dirname "$0")/nightly.sh" 2>&1 | sed "s/^/NIGHTLY /" >> "$SG_STATE/nightly.log"; srec_end "$drec" nightly $? ) 2>/dev/null & }
   # The base's own check (#790): read once per cycle, so a red head that no landing reads is reported. It holds nothing.
   ( tm bash "$(dirname "$0")/single.sh" basecheck bash "$(dirname "$0")/basecheckpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch landing (#355): a pushed work branch with a green check lands in dev by a fast-forward push.
@@ -186,16 +193,16 @@ if v:
   # loaded box and a nightly that owns the machine refuse it nothing, and it takes no gate slot, so no landing waits on it.
   # The merge itself runs through promote-stg.sh, which holds the gate lock as every promotion does, for one pull-request
   # merge and never for a suite. Its own lines go to promote.log, its outcome to this cycle log.
-  promote_quiet && ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?
+  promote_quiet && { srec_start promote; drec=$srec_id; ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?; srec_end "$drec" promote "$rc"
     if [ "$rc" = 76 ]; then echo "$(date +%T) PROMOTE waits: a pass in flight holds the promote lock (pid $(cat "$SG_STATE/locks/single-promote/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
-    else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null &
+    else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null & }
   # The stg-to-main step (ADR-0173): every cycle, detached under its own single-flight lock, and outside the quiet window
   # above. It asks for the complete CI tier on the stg tip once stg is quiet or its oldest unpromoted commit is old, reads
   # the request it left, and moves main by a fast-forward when the tier is green. A landing costs a job on the runner
   # nothing, so no burst postpones the read. The pass says nothing on a cycle with nothing to do; its outcome goes to this
   # cycle log, its reasons to promote.log and alerts.log. SG_PROMOTE=off makes the pass exit 0 at once.
-  ( o=$(bash "$(dirname "$0")/single.sh" promote-main bash "$(dirname "$0")/promote-main-pass.sh" 2>&1); rc=$?
-    [ "$rc" = 76 ] || { [ "$rc" = 0 ] && [ -z "$o" ]; } || echo "$(date +%T) PROMOTE-MAIN pass rc=$rc: $(printf '%s' "$o" | tail -n 1)" >> "$SG_STATE/cycle.log" ) 2>/dev/null &
+  { srec_start promote-main; drec=$srec_id; ( o=$(bash "$(dirname "$0")/single.sh" promote-main bash "$(dirname "$0")/promote-main-pass.sh" 2>&1); rc=$?; srec_end "$drec" promote-main "$rc"
+    [ "$rc" = 76 ] || { [ "$rc" = 0 ] && [ -z "$o" ]; } || echo "$(date +%T) PROMOTE-MAIN pass rc=$rc: $(printf '%s' "$o" | tail -n 1)" >> "$SG_STATE/cycle.log" ) 2>/dev/null & }
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up
@@ -214,10 +221,10 @@ if v:
   # its own single-flight lock, as the promotion does (#1774): one pass of 5046 s held this cycle, and every landing read with
   # it, for 2 h 40 min. A held lock is named, never waited for; the pass bounds itself (SG_JANITOR_DEADLINE in janitor.py) and
   # writes its own time here when it ends. Its summary line still goes to this log's stdout.
-  ( j0=$SECONDS; o=$(bash "$(dirname "$0")/single.sh" janitor "$(dirname "$0")/janitor.sh" 2>&1); rc=$?; je=$((SECONDS - j0))
+  { srec_start janitor; drec=$srec_id; ( j0=$SECONDS; o=$(bash "$(dirname "$0")/single.sh" janitor "$(dirname "$0")/janitor.sh" 2>&1); rc=$?; je=$((SECONDS - j0)); srec_end "$drec" janitor "$rc"
     if [ "$rc" = 76 ]; then echo "$(date +%T) JANITOR skipped: a pass in flight holds the janitor lock (pid $(cat "$SG_STATE/locks/single-janitor/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
     else [ -n "$o" ] && printf '%s\n' "$o"
-      { [ "$je" -ge 5 ] || [ "$rc" != 0 ]; } && echo "$(date +%T) janitor.sh ${je}s$([ "$rc" = 0 ] || echo " rc=$rc")" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null &
+      { [ "$je" -ge 5 ] || [ "$rc" != 0 ]; } && echo "$(date +%T) janitor.sh ${je}s$([ "$rc" = 0 ] || echo " rc=$rc")" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null & }
   # The live skill -- the copy this cycle and the owner's info bar actually run -- follows the repository copy through live-guard.sh
   # (publish-live.sh, one explicit file list). It runs before the vendorguard step, so a drift is read, published and named in the same cycle.
   tm bash "$(dirname "$0")/single.sh" liveguard bash "$(dirname "$0")/live-guard.sh" 2>&1   # the live skill follows the repository copy: the difference is read, published, and named
