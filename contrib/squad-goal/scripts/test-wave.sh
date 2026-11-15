@@ -1160,6 +1160,8 @@ r=$(land2 run-836c 2>&1); rc=$?
 # to the queue, as the capped landing requires (ADR-0145 rule 13).
 W26=wave/run-836d; start2 run-836d >/dev/null
 mkdir -p "$T/co/runs/run-836d"; printf '%s\n' 'CHILD — GitHub issue #741 (bug; one root cause, one branch):' > "$T/co/runs/run-836d/request.txt"
+# A run that ended keeps its record: without it `orphan_child` finds no issue of the run and the capped case never runs (#1835).
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-836d/record.jsonl"
 x4=$(mktemp -d); $G clone -q "$T/origin.git" "$x4/c" 2>/dev/null
 (cd "$x4/c" && $G checkout -q -b tmp dev && echo cap > f741 && $G add f741 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 741" -m "Refs #741")
 $G -C "$T/co" fetch -q "$x4/c" HEAD:refs/heads/squad/run/run-836d 2>/dev/null

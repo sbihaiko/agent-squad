@@ -1299,7 +1299,10 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # refuses the landing (#836). The refusal itself is unchanged.
       local landed=""
       if [ "$capped" != 1 ] && [ -n "$ent" ] && sc merge-base --is-ancestor "origin/$w" "origin/$base"; then landed=1; fi
-      if [ -z "$landed" ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
+      # (#1835) A wave past its age cap never refuses on an orphan: `5816aa2b` dropped this guard and a capped wave with a child
+      # commit on a local branch only refused on every cycle, so its issues stayed held by the wave forever. The branch below
+      # (`capped = 1`) writes the books, drops the markers and sends the child back to the queue without counting a failure.
+      if [ "$capped" != 1 ] && [ -z "$landed" ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
         if [ "$(cat "$refused" 2>/dev/null)" != "${orph% *}" ]; then
           mkdir -p "$SG_STATE/auto" && printf '%s\n' "${orph% *}" > "$refused"
           echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
