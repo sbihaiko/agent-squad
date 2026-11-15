@@ -115,6 +115,41 @@ def test_a_release_moves_the_card_once_and_its_record_goes(tmp_path, column, car
     assert not (st / f"auto/release-{N}").exists(), "the record stayed: it would apply twice"
 
 
+def closed_issue(tmp_path: Path) -> None:
+    """The sandbox's stub `gh` answers the issue as closed, completed: the release record is read on an issue whose card
+    cannot move back along the axis (ADR-0143)."""
+    gh = tmp_path / "bin/gh"
+    text = gh.read_text()
+    assert "*issues/*) echo -e 'open\\t\\tIssue';;" in text, "the stub's issue read changed shape"
+    gh.write_text(text.replace("*issues/*) echo -e 'open\\t\\tIssue';;", "*issues/*) echo -e 'closed\\tcompleted\\tIssue';;"))
+
+
+@pytest.mark.heavy
+def test_a_release_record_for_a_closed_issue_is_dropped_never_refused(tmp_path):
+    """#1869: the release record outranks the closed-issue rule, so it asked for Todo on a card a closed issue holds. The
+    board refuses a move back (ADR-0143), and the record stayed for every pass to refuse again. A release for a closed
+    issue is dropped: it writes nothing, and it goes."""
+    st = bare(tmp_path, "Closed")
+    closed_issue(tmp_path)
+    assert hand(tmp_path, "hold", str(N)).returncode == 0
+    assert hand(tmp_path, "release", str(N), "--to", "Todo").returncode == 0
+    janitor(tmp_path, **SHIPPED)
+    janitor(tmp_path, **SHIPPED)
+    assert moves(tmp_path) == [], writes(tmp_path)
+    assert not (st / f"auto/release-{N}").exists(), "the record stayed: every pass asks for the move again"
+
+
+@pytest.mark.heavy
+def test_a_release_record_for_an_open_issue_still_moves_its_card(tmp_path):
+    """The drop is the closed issue's: a release for an open issue keeps its one move."""
+    st = bare(tmp_path, "Doing")
+    assert hand(tmp_path, "hold", str(N)).returncode == 0
+    assert hand(tmp_path, "release", str(N), "--to", "Code Complete").returncode == 0
+    janitor(tmp_path, **SHIPPED)
+    assert moves(tmp_path) == [f"STATUS o 4 Code Complete {N}"], writes(tmp_path)
+    assert not (st / f"auto/release-{N}").exists()
+
+
 @pytest.mark.heavy
 def test_a_released_todo_card_is_never_moved_again_by_the_pass(tmp_path):
     """After the release's own move there is no hold and no record: a second pass over a Todo card writes nothing."""
