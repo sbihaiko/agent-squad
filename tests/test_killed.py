@@ -138,3 +138,26 @@ def test_the_reaper_keeps_evidence_beside_a_record_it_marks_killed(tmp_path):
     assert ev["found_gone_at"] == now
     assert [c["pid"] for c in ev["kill_commands"]] == [101, 102]
     assert [c["pid"] for c in ev["temp_orphans"]] == [103]
+
+
+def test_the_evidence_names_what_the_run_was_doing_when_it_stopped(tmp_path):
+    """A `killed/no-process` verdict says the process went; it never says why. The record's own tail is the cause a reader
+    needs, and the tree that holds it is culled once the run is over, so the reaper keeps it beside the verdict (#1816)."""
+    now = time.time()
+    run = tmp_path / "runs" / "run-dead"
+    rec = record.Record(run / "record.jsonl")
+    rec.append("run_start", **START)
+    rec.append("outcome", **OUTCOME)
+    rec.append("outcome", **{**OUTCOME, "node": "route", "outcome": "fail", "reasons": ["adapter_error"]})
+    os.utime(run / "record.jsonl", (now - 600, now - 600))
+    act = tmp_path / "active-runs.txt"
+    act.write_text(f"{run}\n")
+    done = reap.reap(act, tmp_path, ceiling=caps.Ceiling({k: 1 for k in caps.KINDS}, tmp_path / "leases"), procs=[], now=now, table={})
+    assert done == ["run-dead"]
+    ev = json.loads((run / "reap-evidence.json").read_text())
+    assert ev["record_idle_s"] == 600, "the idle time is measured from the record the run left"
+    assert ev["record_moved_at"] == pytest.approx(now - 600, abs=1)
+    last = ev["last_events"][-1]
+    assert last["event"] == "outcome" and last["node"] == "route" and last["reasons"] == ["adapter_error"], \
+        "the cause the run stopped on is kept, never only the reaper's own verdict"
+    assert all(e.get("event") != "verdict" for e in ev["last_events"]), "the reaper's verdict is the fact already read, not the cause"

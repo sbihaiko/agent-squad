@@ -73,13 +73,44 @@ def _table():
         return None
 
 
-def _keep_evidence(folder, now, table):
-    """Write `reap-evidence.json` beside the record: when the reaper found the run gone, and the live kill commands and the
-    parentless temp-folder scripts of that moment. The verdict stays the one fact; this file is what a reader reads after it."""
+LAST_EVENTS = 6   # the tail a post-mortem reads: the node outcomes that led to the run's last breath
+
+
+def _tail(folder):
+    """The record's last events, the trailing verdict dropped, and when the record last moved. A killed run's cause is the
+    work that stopped, never the reaper's own verdict: without this tail a `killed/no-process` names no cause, and the tree
+    that held the record is culled, so the loss cannot be read afterwards (#1816)."""
+    try:
+        text = (folder / "record.jsonl").read_text()
+        moved = (folder / "record.jsonl").stat().st_mtime
+    except OSError:
+        return [], None
+    events = []
+    for line in text.splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue   # a half-written line is no event
+    if events and events[-1].get("event") == "verdict":
+        events = events[:-1]   # the reaper's own verdict is the fact the reader already has
+    keys = ("ts", "event", "node", "model", "outcome", "reasons", "child", "signal")
+    return [{k: e[k] for k in keys if k in e} for e in events[-LAST_EVENTS:]], moved
+
+
+def _keep_evidence(folder, now, table, tail=None, moved=None):
+    """Write `reap-evidence.json` beside the record: when the reaper found the run gone, the record's own last events and
+    idle time, and the live kill commands and parentless temp-folder scripts of that moment. The verdict stays the one fact;
+    this file is what a reader reads after it. The tail and its clock are read by the caller before it writes the verdict,
+    because that write is itself a record event and would make the run look as if it had just moved."""
     rows = list(table.values()) if table is not None else []
+    if tail is None and moved is None:
+        tail, moved = _tail(folder)
     evidence = {
         "found_gone_at": now,
         "processes_read": table is not None,
+        "record_moved_at": moved,
+        "record_idle_s": None if moved is None else round(now - moved, 1),
+        "last_events": tail,
         "kill_commands": [{"pid": p.pid, "command": p.command} for p in rows if KILL_CMD.search(p.command)],
         "temp_orphans": [{"pid": p.pid, "ppid": p.ppid, "command": p.command} for p in rows
                          if p.ppid == 1 and SCRIPT_CMD.search(p.command) and any(t in p.command for t in TEMP_ROOTS)],
@@ -161,12 +192,13 @@ def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, s
         if any((cwd == here or cwd.startswith(here + "/")) and LIVE_PROC.search(c) for _, cwd, c in procs):
             continue
         if not dry:
+            tail, tail_moved = _tail(folder)   # read before the verdict is written: that write moves the record's own clock
             try:
                 if not K.mark_killed(folder):
                     continue
             except record.RecordError:
                 continue   # a corrupt record is not ours to rewrite
-            _keep_evidence(folder, now, table if table is not None else _table())
+            _keep_evidence(folder, now, table if table is not None else _table(), tail, tail_moved)
         why =f"its process {proc[0]} is gone" if proc is not None else "it named no process and none works in its folder"
         say(f"REAPED {folder.name}: no verdict and {why}; killed verdict written, active-runs line kept")
         done.append(folder.name)
