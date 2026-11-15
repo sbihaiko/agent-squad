@@ -4993,8 +4993,9 @@ def spec_plan_parents(items):
     ticket (#1128). The board draws its start control from this cache fact, so a render never reads the sub-issues."""
     return {i["pa"] for i in items if isinstance(i.get("pa"), int) and str(i.get("s") or "").lower() != "closed"
             and _columns_module.SPEC_LABEL not in (i.get("l") or []) and not set(i.get("l") or []) & set(TICKET_HOLD_LABELS)}
-def board(moves=None, fresh=True):
-    if fresh: _HOLDER_CACHE.clear(); _ACTIVE_RUNS.clear()   # the memo answers for one board build, never across two: its fact is the run's liveness, which changes with no board read, so a later build asks again (#1790). The served board reads the same facts for its key just before, so it asks this build not to read them again.
+_HOLDERS_READ = {}   # the served board read every holder for its key just before this build, so the build reads none again
+def board(moves=None):
+    if not _HOLDERS_READ.get("v"): _HOLDER_CACHE.clear(); _ACTIVE_RUNS.clear()   # the memo answers for one board build, never across two: its fact is the run's liveness, which changes with no board read, so a later build asks again (#1790)
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     if moves is None: moves = read_moves() if overlay else {}   # the serve passes the record it already read, so one serve reads it once (#973); the record is read on every serve, so a page reload sees the same overlay (#650)
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
@@ -5115,8 +5116,11 @@ def board_served():
     holders = [(i["n"], holder_fact(i)[1]) for i in board_cache["items"] if (i.get("h") or {}).get("run")]   # a holder's process moves with no board read (#1661)
     key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
-    try: body = json.dumps(board(moves, fresh=False)).encode()   # every card: the page filters the board by the bar (#899); the holders it needs were read for the key
+    try:
+        _HOLDERS_READ["v"] = True   # the key read every holder a moment ago: this build asks for none of them again
+        body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
     except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
+    finally: _HOLDERS_READ["v"] = False
     etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
     if _served_board.pop("settling", False): _served_board.pop("key", None); return body, etag
     _served_board.update(key=key, body=body, etag=etag)
