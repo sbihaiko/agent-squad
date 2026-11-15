@@ -314,7 +314,7 @@ EOF
 chmod +x "$S/janitor.sh"
 lane_down; rm -rf "$ST/locks/single-janitor"; : > "$ST/cycle.log"; : > "$ST/active-runs.txt"
 t0=$(date +%s); run_cycles 2 JAN_HOLD=8; el=$(( $(date +%s) - t0 ))
-[ "$el" -lt 7 ] && ok "17 the cycle does not wait for a slow janitor pass (${el}s for two cycles with an 8 s pass)" || ko "17 the cycle waited for the janitor (${el}s)"
+[ "$el" -lt 8 ] && ok "17 the cycle does not wait for a slow janitor pass (${el}s for two cycles beside an 8 s pass)" || ko "17 the cycle waited for the janitor (${el}s)"   # the bound is the work it observes, the pass's own 8 s hold: a one-second margin made the case red at load 70 on a cycle that never waited, so it fails only when two cycles outlast one hold
 /usr/bin/grep -Eq ' CYCLE [0-9]+s$' "$ST/cycle.log" && ! /usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log" && ok "17 the cycle wrote CYCLE while the pass still ran" || ko "17 cycle.log: $(tr '\n' '|' < "$ST/cycle.log")"
 [ "$(count janitor)" = 1 ] && ok "17 a pass in flight is never doubled" || ko "17 the janitor ran $(count janitor)x in two cycles beside a held pass"
 /usr/bin/grep -q "JANITOR skipped: a pass in flight holds the janitor lock (pid [0-9]" "$ST/cycle.log" && ok "17 the skip names the holder" || ko "17 no JANITOR skipped line: $(tr '\n' '|' < "$ST/cycle.log")"
@@ -323,4 +323,12 @@ for _ in $(seq 1 30); do /usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log
 /usr/bin/grep -Eq ' janitor.sh [0-9]+s$' "$ST/cycle.log" && ok "17 the pass writes its own time when it ends" || ko "17 no janitor.sh time line: $(tr '\n' '|' < "$ST/cycle.log")"
 printf '#!/bin/bash\necho janitor >> "%s"\n' "$STEPS" > "$S/janitor.sh"; rm -rf "$ST/locks/single-janitor"
 
+# 18) No process of this fixture outlives the suite. A step that outlived its stub kept watch.sh alive and orphaned, and a
+# leaked lane ran full cycles against this temp state for up to 41 minutes, burning CPU and GitHub calls until the owner
+# reaped it by hand. The reap names this fixture's own scripts folder, so no other suite and no live loop can be reached.
+leaked=$(/usr/bin/pgrep -f "$S/" 2>/dev/null)
+if [ -n "$leaked" ]; then
+  ko "18 a process of this fixture outlived the suite: $(echo "$leaked" | wc -l | tr -d ' ') alive, first: $(/usr/bin/pgrep -fl "$S/" | head -1)"
+  /usr/bin/pkill -KILL -f "$S/" 2>/dev/null   # the machine is still protected: the case reports the leak, the reap ends it
+else ok "18 no process of this fixture outlived the suite"; fi
 rm -rf "$T"; exit $fail
