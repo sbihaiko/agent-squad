@@ -5,6 +5,7 @@
 # One consult per run (marker consult.done in the run folder). CONSULT_DRY=1 prints the answer and relaunches nothing.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; run=$1
 [ -f "$run/consult.done" ] && exit 0; : > "$run/consult.done"
+[ ! -e "$SG_STATE/auto/off" ] || { echo "consult ${run##*/}: the loop is paused (auto/off), no run starts"; exit 0; }   # (#1792) as branchfixpass.sh (#1789)
 req="$run/request.txt"; [ -s "$req" ] || { echo "consult: no request.txt in ${run##*/} (run predates the copy)"; exit 0; }
 # The model the consult asks is the first coding model that may run now: one the hub's models panel switched off (#1819),
 # or one outside its `hours` window, is skipped exactly as mkreq.sh and launch.py skip it, so the consult never wakes a

@@ -11,6 +11,7 @@ run=$1 iss=$2
 br=$(git symbolic-ref --quiet --short HEAD) || { echo "CHILDFIX $PWD is on no branch (#$iss)" >&2; exit 2; }
 wt=$(pwd -P); sha=$(git rev-parse HEAD); f="$SG_STATE/review-$(printf '%s' "$br" | tr / _).md"
 head -1 "$f" 2>/dev/null | /usr/bin/grep -q CHANGES || { echo "CHILDFIX $br: no CHANGES review to fix (#$iss)" >&2; exit 2; }
+[ ! -e "$SG_STATE/auto/off" ] || { echo "CHILDFIX $br @ ${sha:0:9}: the loop is paused (auto/off), no run starts (#$iss)" >&2; exit 0; }   # (#1792) as branchfixpass.sh (#1789)
 b=$(mktemp)
 { echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for the child below; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. The child's spend: $(bash "$here/envelope-spend.sh" 2>/dev/null)."
   echo "One child, a FIX RUN for GitHub issue #$iss (repo $SG_REPO), fixing the child's branch $br of run $run at ${sha:0:9}. Work where you stand: the run cut you a worktree of your own from that branch, so your own working directory is where the fix goes and you name no path for it. Commit there, on top of that HEAD. Never write in the kept worktree $wt (the run's target) or the owner's checkout: the loop folds your commits onto $br there. Push no branch, and open no pull request. Never run publish-live.sh and never touch ~/.claude/skills (#658). Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
