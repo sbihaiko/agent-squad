@@ -27,5 +27,13 @@ mark $(( $(date +%s) - 10 )); pass env; [ "$(alerts)" = 2 ] && ok "a streak that
 printf 'no line here\n' > "$T/st/frontier-idle"; pass env; [ "$(alerts)" = 2 ] && ok "a marker with no idle line raises nothing" || ko "a marker with no line alerted ($(alerts))"
 rm -f "$T/st/frontier-idle-alert"; mark $(( $(date +%s) - 7201 )); JANITOR_DRY=1 pass env
 [ "$(alerts)" = 2 ] && [ ! -e "$T/st/frontier-idle-alert" ] && ok "a dry pass raises no alert and writes no bound" || ko "a dry pass wrote the bound: $(alerts), $(/bin/ls "$T/st")"
+# A frontier whose every unstartable reason is `no slot` is at its cap: the alert says backpressure, never NEEDS OWNER. A
+# frontier held for another reason still asks for the owner.
+rm -f "$T/st/alerts.log" "$T/st/frontier-idle-alert"; mark $(( $(date +%s) - 7201 )); pass env
+/usr/bin/grep -q 'NEEDS OWNER' "$T/st/alerts.log" && ok "a frontier held for another reason asks for the owner" || ko "a blocked frontier asked for nobody: $(cat "$T/st/alerts.log")"
+line='FRONTIER idle: 19 todo, 0 startable (0 triage failed, 0 held, 0 sibling, 19 no slot, 0 blocked, 0 claimed, 0 busy, 0 not startable, 0 skip label, 0 ac paths, 0 not listed)'
+rm -f "$T/st/alerts.log" "$T/st/frontier-idle-alert"; mark $(( $(date +%s) - 7201 )); pass env
+/usr/bin/grep -q 'backpressure' "$T/st/alerts.log" && ok "a frontier at its cap alerts as backpressure" || ko "a full queue read as a stuck loop: $(cat "$T/st/alerts.log")"
+/usr/bin/grep -q 'NEEDS OWNER' "$T/st/alerts.log" && ko "backpressure asked for the owner" || ok "backpressure asks for no owner"
 [ "$fail" = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 exit $fail
