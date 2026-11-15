@@ -922,6 +922,47 @@ def test_the_identity_check_starts_no_read(mux):
     assert not apps["alpha"]["gate"].wanted(), "the identity check started the profile's reads"
 
 
+def test_the_push_stream_subject_does_no_work_while_no_page_reads_the_profile(hub, monkeypatch):
+    """The stream's subjects are read by one thread each, and the sessions one starts with the hub. With no page open it
+    reads nothing: the session folders were scanned every 30 s around the clock, which is the cost #1790 measured."""
+    mod = hub[0]
+    reads = []
+
+    class Versions:
+        stop = False
+        @classmethod
+        def refresh_one(cls, name):
+            if cls.stop:
+                raise StopSampling
+            reads.append(name)
+        @classmethod
+        def newer(cls, _):
+            if cls.stop:
+                raise StopSampling
+            return {}
+    monkeypatch.setattr(mod, "VERSIONS", Versions())
+    monkeypatch.setattr(mod.hubstream, "TICK_SECONDS", 0.02)
+    monkeypatch.setattr(mod.hubstream, "FIRST_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(threading, "excepthook", lambda _: None)   # the stop below ends the thread by an exception
+    gate = gated(mod, 0.15)
+    monkeypatch.setattr(mod, "READ_GATE", gate)
+    t = mod._ticker("probe")
+    try:
+        wait(lambda: t.is_alive())
+        time.sleep(0.2)
+        assert reads == [], f"{len(reads)} reads with no page reading the profile"
+        gate.touch()
+        wait(lambda: len(reads) >= 2)                        # a page read puts the subject back to work at once
+        time.sleep(0.4)                                      # the page stops reading: the idle window passes
+        parked = len(reads)
+        time.sleep(0.2)
+        assert len(reads) == parked, "the subject went on reading after the page stopped"
+    finally:
+        gate.done = True; gate.touch(); Versions.stop = True
+        wait(lambda: not t.is_alive(), 2)
+    assert not t.is_alive()
+
+
 # ---------------------------------------------------------------- the second review's findings
 def test_the_supervisor_above_the_pid_file_s_process_is_this_loop(prof):
     """watchd.pid names the `run` child; its `supervise` parent is the same loop, never another one."""

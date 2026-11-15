@@ -8826,15 +8826,19 @@ _TICKERS_LOCK = threading.Lock()   # the reader threads are started once, howeve
 
 def _ticker(name):
     """One subject's reader thread, alive or started here. The caller holds _TICKERS_LOCK, so two pages opening together
-    find one reader and never start two reads of the same subject."""
+    find one reader and never start two reads of the same subject. It reads only while a page reads this profile: a
+    subject streamed to no page has no reader to keep current, and the sessions subject scanned the session folders every
+    30 s around the clock (#1790). A page read wakes a parked reader at once."""
     t = _TICKERS.get(name)
     if t is not None and t.is_alive(): return t
     def run(n=name):
         while True:
-            try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
-            except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
+            if read_wanted():
+                try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
+                except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
             # a subject with no answer yet is asked again quickly: its first read may land mid-tick, and the page waits
-            time.sleep(hubstream.TICK_SECONDS if VERSIONS.newer({}).get(n) else hubstream.FIRST_POLL_SECONDS)
+            period = hubstream.TICK_SECONDS if VERSIONS.newer({}).get(n) else hubstream.FIRST_POLL_SECONDS
+            read_pause(period if read_wanted() else max(period, hubstream.TICK_SECONDS))
     t = _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
     t.start()
     return t
@@ -8850,9 +8854,12 @@ def versions_ticker():
         return dict(_TICKERS)
 
 def warm():
-    """Start the hub's slowest reader with the hub, before it serves a page: the session folders cost seconds, and a page
+    """Start the hub's slowest read with the hub, before it serves a page: the session folders cost seconds, and a page
     opened after a start finds that scan already running. The other subjects read in well under a tick, so the first
-    stream starts them, never a page's wait (#1217)."""
+    stream starts them, never a page's wait (#1217). The read is this one, at boot: the subject's reader parks until a page
+    reads the profile, so the scan runs once and not around the clock (#1790)."""
+    try: sessions_refresh_soon()
+    except Exception: pass
     with _TICKERS_LOCK: _ticker("sessions")
 
 def stream_origin_ok(h, tailnet):
