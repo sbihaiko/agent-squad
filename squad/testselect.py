@@ -15,6 +15,9 @@ LISTERS = {"glob", "rglob", "iterdir", "listdir", "walk", "scandir"}
 DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
 # The shard guard names every top-level test file, so a file added or deleted reaches it and no other test.
 SHARD_GUARD = "tests/test_tooling.py"
+# A helper that is not a test file is read by the tests that name it; the one whose reader is known is the shard map, which
+# every card edits to give a new test file its shard line (#1870).
+HELPER_READERS = {"tests/ci_shards.py": SHARD_GUARD}
 # The measured-line guard reads every `test-*.sh` beside the scripts and fails a suite with no line in
 # tests/shell_suites_seconds.txt, so a suite added there reaches it and no other test (#1799).
 SHELL_SUITES = "contrib/squad-goal/scripts"
@@ -250,6 +253,9 @@ def _answer(root, base):
             live.append(DATA_READERS[rel])
             continue
         if rel.startswith("tests/") and not _is_test(rel):
+            if rel in HELPER_READERS:
+                live.append(HELPER_READERS[rel])
+                continue
             _all(f"{rel} is a test helper, not a test file")
         if rel not in inert:
             live.append(rel)
