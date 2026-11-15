@@ -31,6 +31,13 @@ out=$(ask)
 case "$out" in *"(claude-sonnet-5-5): GO"*) ok "a v1 chain still asks its first model";;
   *) ko "v1 chain asks: ${out:-nothing} $(cat "$T/err")";; esac
 
+printf '#!/usr/bin/env python3\nimport os, sys\nopen(os.environ["LAUNCHED"], "a").write(sys.argv[1] + "\\n")\n' > "$S/launch.py"
+printf '#!/bin/bash\necho req-consult\n' > "$S/mkreq.sh"; chmod +x "$S/mkreq.sh"
+mkdir -p "$T/state/auto"; : > "$T/state/auto/off"; rm -f "$T/run/consult.done" "$T/launched"
+out=$(env -u CONSULT_DRY LAUNCHED="$T/launched" bash "$S/consult.sh" "$T/run" 2>"$T/err")
+[ ! -s "$T/launched" ] && ok "with auto/off a GO answer relaunches nothing" || ko "auto/off relaunched: $(cat "$T/launched")"
+[ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] && printf '%s' "$out" | grep -q 'no run starts' && ok "with auto/off consult prints one skip line" || ko "auto/off consult printed: '$out'"
+
 cat "$log"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

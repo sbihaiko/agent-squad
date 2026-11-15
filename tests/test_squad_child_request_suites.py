@@ -18,9 +18,10 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "s
 # The line every generated request carries. `bash`/`uv` open their inline spans, which is also what keeps the paths in
 # them out of the slice guard's reading of a request (#44): they are commands a child RUNS, not files it edits.
 SUITES_LINE = (
-    "SUITES: run what you touched -- the shell suite beside the script you changed "
-    "(`bash contrib/squad-goal/scripts/test-<script>.sh`) and the targeted pytest cases "
-    "(`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>`). "
+    "SUITES: run what you touched -- the targeted pytest cases "
+    "(`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>`) and the shell suite beside the script you changed "
+    "(`bash contrib/squad-goal/scripts/test-<script>.sh`), unless the SUITE COST line names that suite: the fast gate runs it once "
+    "per head, so a suite the SUITE COST line names is never run by you. "
     "Then run `bash contrib/squad-goal/scripts/fast-gate.sh` in your worktree before you report done: "
     "it is the gate your commit must pass to enter the wave, its pytest takes the bounded worker count it carries. "
     "Run it once per commit: exit 0 is a pass; exit 4 is unproven whatever its line names (a bounded battery, an "
@@ -65,6 +66,31 @@ def test_a_child_request_names_the_suites_it_runs_and_the_full_gate_as_the_loops
     assert SUITES_LINE in text, text
     lines = [ln for ln in text.splitlines() if ln.startswith("SUITES:")]
     assert lines == [SUITES_LINE], f"the request carries one SUITES line: {lines}"
+
+
+def _mkreq_real(tmp_path, name, body):
+    """The request the repository's own mkreq.sh writes, so the measured suite costs of this checkout are read."""
+    src = tmp_path / f"{name}.body"
+    src.write_text(body)
+    (tmp_path / "home").mkdir(exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "FG_"))}
+    env["HOME"] = str(tmp_path / "home")
+    env["SG_STATE"] = str(tmp_path / "st")
+    env["PATH"] = "/usr/bin:/bin"
+    r = subprocess.run(["bash", str(SCRIPTS / "mkreq.sh"), name, str(src)], capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return (tmp_path / "st" / "req" / f"{name}.txt").read_text()
+
+
+def test_the_request_names_the_measured_cost_of_each_long_suite_and_no_short_one(tmp_path):
+    """#1761: a child that re-runs a long suite spends its deadline in its own proofs, so the request names what each costs."""
+    text = _mkreq_real(tmp_path, "cost", PR_BODY)
+    cost = [ln for ln in text.splitlines() if ln.startswith("SUITE COST:")]
+    assert len(cost) == 1, text
+    assert "test-branchland.sh 86.83 s" in cost[0], cost[0]
+    assert "test-autobug.sh 20.37 s" in cost[0], cost[0]
+    assert "test-board-fast.sh" not in cost[0], cost[0]
+    assert "a proof that cannot finish before your deadline is not a failure" in text.lower(), text
 
 
 def test_the_checklist_names_a_resolved_interpreter_and_never_a_shell_variable():
