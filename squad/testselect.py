@@ -56,7 +56,8 @@ def _with_ancestors(name):
 
 
 def _norm(text):
-    return text.removeprefix("./").rstrip("/")
+    # A joined tail such as SCRIPTS + "/watchd.sh" names the file by its basename, so a leading slash is dropped too.
+    return text.removeprefix("./").strip("/")
 
 
 def _operands(node):

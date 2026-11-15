@@ -61,7 +61,8 @@ def test_an_intermediate_stage_runs_the_delta_and_records_it(tmp_path):
 def test_a_change_to_one_script_runs_the_tests_the_delta_reaches(tmp_path):
     """(a') The hand gate and the child final gate share this battery at the `fast` stage. A change to one loop script also
     edits the measured line of its suite, and a test that imports that line's reader also loads a script by a computed path:
-    the delta still names the reached tests, and the record says `delta` (ADR-0169)."""
+    the delta still names the reached tests, and the record says `delta` (ADR-0169). A test that names only the scripts
+    directory is not reached: a directory selects a test only with the file's name or a listing of it (#1784)."""
     extra = {
         "contrib/squad-goal/scripts/watchd.sh": "old\n",
         "tests/shell_suites.py": "def run(p):\n    return None\n",
@@ -79,8 +80,8 @@ def test_a_change_to_one_script_runs_the_tests_the_delta_reaches(tmp_path):
     repo = tip(tmp_path, {"contrib/squad-goal/scripts/watchd.sh": "new\n",
                           "tests/shell_suites_seconds.txt": "suite 1\nsuite 2\n"}, extra=extra)
     sel, scope, argv = battery(tmp_path, repo, "fast")
-    assert sel == "selected 3 files" and scope == "delta"
-    assert pytest_line(argv).endswith("tests/test_loader.py tests/test_names.py tests/test_reader.py")
+    assert sel == "selected 2 files" and scope == "delta"
+    assert pytest_line(argv).endswith("tests/test_loader.py tests/test_reader.py")
 
 
 def test_an_uncovered_path_falls_back_to_the_full_battery_and_the_record_says_why(tmp_path):
