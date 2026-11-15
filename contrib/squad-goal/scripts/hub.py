@@ -191,7 +191,7 @@ def run_label(r):
     if is_: return run_action(r) + " " + is_ + (f" · on PR #{r['stack']}" if r.get("stack") else "")
     return "run " + str(r.get("id") or "")[-6:]
 
-CLAUDE_PROJECTS = pathlib.Path.home() / ".claude" / "projects"   # where Claude Code keeps each session's transcript, in a folder named for its working directory
+CLAUDE_PROJECTS = pathlib.Path(os.environ.get("SG_CLAUDE_PROJECTS") or (pathlib.Path.home() / ".claude" / "projects"))   # where Claude Code keeps each session's transcript, in a folder named for its working directory; SG_CLAUDE_PROJECTS is the test seam, so no test reads the owner's transcripts
 PROJECT_NAME_MAX = 200   # Claude Code cuts a longer sanitized working directory to this length and adds a hash suffix (#796)
 FOLDERS = {}             # (run record, child): (working directory, transcript folder) once found (#802)
 USAGE_FILES = {}         # one transcript file's messages, cached by (path, mtime, size): {key: [(message id, model, usage)]}
@@ -375,15 +375,16 @@ def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
     try: st = os.stat(p)
-    except OSError: return hist[p] if p in hist and "v18" in hist[p] else None
+    except OSError: return hist[p] if p in hist and "v19" in hist[p] else None
     h = hist.get(p)
-    if h and "v18" in h and h.get("rec") == [st.st_mtime_ns, st.st_size]: return h   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802); v18 keeps the record's write time and size, so a record that grew after its verdict (a resume) is read again, and reads the last invocation's verdict only (#1229)
+    if h and "v19" in h and h.get("rec") == [st.st_mtime_ns, st.st_size]: return h   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802); v18 keeps the record's write time and size, so a record that grew after its verdict (a resume) is read again, and reads the last invocation's verdict only (#1229); v19 keeps each outcome as a call, so a transcript call a record already holds is never counted twice (#1756)
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
     node = None; model_cur = None
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
     accepted, done_kids, wts, defs, outs = set(), set(), set(), {}, {}
+    ocalls = []   # one entry per outcome: the per-call shape a transcript call is matched against (#1756)
     try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
     except OSError: req_issues = set(); has_req = False
     with open(p) as f:
@@ -421,6 +422,12 @@ def scan(p):
                 if SUBSCRIPTION.match(canon_model(d.get("model"))): sub += d["spend"]   # the canonical id, as stats() splits it (#791)
                 else: api += d["spend"]
             if e == "outcome":
+                # The call's own span, not the outcome's write time: `elapsed` is its duration, so a gate or a commit that
+                # runs between the call and the write moves nothing a transcript call is matched against (#1756).
+                el = d.get("elapsed")
+                start = ts - el if isinstance(ts, (int, float)) and isinstance(el, (int, float)) else ts
+                ocalls.append({"t0": start, "t1": ts, "model": d.get("model") or "unknown", "tokens_in": d.get("tokens_in") or 0,
+                               "tokens_out": d.get("tokens_out") or 0, "cache_read": d.get("cache_read") or 0})
                 x = mod.setdefault(d.get("model") or "unknown", {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
                 x["in"] += d.get("tokens_in") or 0; x["out"] += d.get("tokens_out") or 0; x["cache"] += d.get("cache_read") or 0
                 x["spend"] += d.get("spend") or 0; x["calls"] += 1
@@ -460,7 +467,7 @@ def scan(p):
             else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "model": model_cur, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at, "node": node}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "calls": ocalls, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "v19": 1, "model": model_cur, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at, "node": node}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None or p in hist:   # a finished run is cached; a cached run that resumed leaves the cache
@@ -508,7 +515,7 @@ def all_runs():
                 m = re.match(r"run-(\d{8})-(\d{6})", rd.name)
                 t0 = time.mktime(time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")) if m else 0
             t1 = r["t1"] or time.time()
-            out.append({"id": rd.name, "dir": str(rd), "t0": t0, "t1": t1, "spend": r["spend"], "sub": r["sub"], "api": r["api"], "mod": r["mod"], "dur": (t1 - t0) / 60, "done": r["verdict"] is not None})
+            out.append({"id": rd.name, "dir": str(rd), "t0": t0, "t1": t1, "spend": r["spend"], "sub": r["sub"], "api": r["api"], "mod": r["mod"], "calls": r.get("calls") or [], "dur": (t1 - t0) / 60, "done": r["verdict"] is not None})
     return out
 
 TITLE = {}   # issue number -> short title, refreshed from the board cache (no extra API calls)
@@ -3302,6 +3309,37 @@ def ledger_calls():
         out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4), "unpriced": unpriced, "uncounted": uncounted})
     return out
 
+OPERATOR = None   # squad.operator_usage.Cache: the operator transcripts' fold, kept between polls (#1756)
+
+def operator_calls(runs=None, src="both"):
+    """The operator session's model calls, its agents and workflows included (#1756): this checkout's Claude Code project
+    folder (~/.claude/projects, subagent transcripts in subfolders), folded by squad.operator_usage. A call the token usage
+    ledger or a run record already names is dropped, so a loop call is never counted twice. The match set follows the
+    panel's billing filter: a loop call `src` drops is not on the chart, so it must not hide its transcript twin either.
+    The read is bounded: only a transcript whose stamp changed is parsed again, the fold is kept, and an unchanged folder
+    is not walked. This is the Spend panel's third source and no guard's: a missing package or folder is no call, never a
+    guess. `runs` is the stats' own list, so one poll reads the run folders once; the operator rows are
+    {id, model, in, out, cache, t0}."""
+    global OPERATOR
+    co = str(CHECKOUT) if CHECKOUT else ""
+    folder = transcript_folder(os.path.realpath(co)) if co else None
+    if folder is None:
+        return []
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    try:
+        (OU,) = load_squad(roots, ("operator_usage",))
+    except Exception as e:
+        log_once(f"hub: operator usage unavailable, none is counted: {type(e).__name__}: {' '.join(str(e).split())}")
+        return []
+    if OPERATOR is None or not isinstance(OPERATOR, OU.Cache):
+        OPERATOR = OU.Cache()
+    rows = OPERATOR.read(folder)
+    keep = lambda m: _src_keeps(src, m)   # noqa: E731  the panel's own filter, so the two readings never disagree
+    loop = [c for c in ledger_calls() if isinstance(c, dict) and keep(c.get("model") or "")]
+    for r in (all_runs() if runs is None else runs):
+        loop.extend(c for c in (r.get("calls") or []) if isinstance(c, dict) and keep(c.get("model") or ""))
+    return OU.calls(rows, loop, canon=canon_model)
+
 def _billed(src, model, spend):
     """A call's spend under the stats' billing filter: both, the subscriptions only, or the API only (as `stats` filters runs)."""
     if src == "both": return spend
@@ -3351,17 +3389,22 @@ def stats(period, src="both"):
     b = {}; amt = (lambda r: r["spend"]) if src == "both" else (lambda r: r["sub"] if src == "sub" else r["api"])
     allr = [dict(r, spend=amt(r)) for r in all_runs()]
     calls = ledger_calls()   # review calls: they carry spend and tokens, never a run
+    op = operator_calls(allr, src)   # the operator session's calls, its own consumer: they ride beside the loop, never inside it (#1756)
     def _tok(r):   # a run's tokens: in + out over every model it called, the count the token ring draws (#1073)
         return sum(v["in"] + v["out"] for v in r["mod"].values())
     for r in allr:
-        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "op": 0, "runs": 0, "durs": []})
         x["spend"] += r["spend"]; x["tokens"] += _tok(r); x["runs"] += 1
         if r["done"]: x["durs"].append(r["dur"])
     for c in calls:
-        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "op": 0, "runs": 0, "durs": []})
         x["spend"] += _billed(src, c["model"], c["spend"]); x["tokens"] += c["in"] + c["out"]
+    for c in op:
+        if c["t0"] is None: continue
+        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "op": 0, "runs": 0, "durs": []})
+        x["op"] += c["in"] + c["out"]
     ks = sorted(b)[-48:]
-    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "tokens": int(b[k]["tokens"]), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
+    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "tokens": int(b[k]["tokens"]), "op": int(b[k]["op"]), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
     now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0, "unpriced": sum(1 for c in calls if c["unpriced"]),
            "uncounted": sum(1 for c in calls if c["uncounted"]),
            "tok_today": 0, "tok_month": 0, "tok_all": 0}
@@ -3377,7 +3420,7 @@ def stats(period, src="both"):
         for raw, v in r["mod"].items():   # keyed on the canonical id, as the review calls are, so one model is one slice (#789)
             m = canon_model(raw)
             if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
+            x = mt.setdefault(("loop", m), {"model": m, "consumer": "loop", "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
             if raw not in x["srcs"]: x["srcs"].append(raw)
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
@@ -3385,18 +3428,37 @@ def stats(period, src="both"):
     for c in calls:
         m = c["model"]
         if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": m, "srcs": []})
+        x = mt.setdefault(("loop", m), {"model": m, "consumer": "loop", "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": m, "srcs": []})
         if m not in x["srcs"]: x["srcs"].append(m)
         x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += c["spend"]
         if time.localtime(c["t0"])[:2] == now[:2]: x["month_cost"] += c["spend"]; x["month_tokens"] += c["in"] + c["out"]
+    for c in op:
+        m = canon_model(c["model"])
+        if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
+        spend, _ = _usage_spend(m, c["in"], c["out"], c["cache"])
+        x = mt.setdefault(("operator", m), {"model": m, "consumer": "operator", "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": m, "srcs": []})
+        if m not in x["srcs"]: x["srcs"].append(m)
+        x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += spend
+        if c["t0"] is not None and time.localtime(c["t0"])[:2] == now[:2]: x["month_cost"] += spend; x["month_tokens"] += c["in"] + c["out"]
     def _box(x):
         box = model_box(x["src"])
         box["routes"] = sorted({model_box(s)["route"] for s in x["srcs"]} - {None})   # every route the model was called by (#791)
         return box
     models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
-    pace = spend_pace(allr, calls, time.time(), src)
-    return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
+    opt = {"calls": len(op), "models": len({canon_model(c["model"]) for c in op}), "unpriced": 0,
+           "tokens_today": 0, "tokens_month": 0, "tokens_all": 0, "cost_today": 0.0, "cost_month": 0.0, "cost_all": 0.0}
+    for c in op:
+        n = c["in"] + c["out"]; opt["tokens_all"] += n
+        spend, unpriced = _usage_spend(canon_model(c["model"]), c["in"], c["out"], c["cache"])
+        opt["unpriced"] += bool(unpriced); opt["cost_all"] += spend   # a list price, never the owner's bill: the session runs on a subscription
+        if c["t0"] is None: continue
+        lt = time.localtime(c["t0"])
+        if lt[:2] == now[:2]: opt["tokens_month"] += n; opt["cost_month"] += spend
+        if lt[:3] == now[:3]: opt["tokens_today"] += n; opt["cost_today"] += spend
+    for k in ("cost_today", "cost_month", "cost_all"): opt[k] = round(opt[k], 4)
+    pace = spend_pace(allr, calls, time.time(), src)   # the token guard's readings: the loop sources only (#1756)
+    return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models, "operator": opt}
 
 def spend_today(now=None):
     """Today's spend for the status tab, read without the history `stats` parses: a run's bucket is its start, and a run
@@ -6399,14 +6461,15 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh()}catch(e){}livePoll()}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the Live heading stays honestly empty (#1277); the live read is its own statement, so a failed runs read never skips it (#1697)
-function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
-  const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
-  const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
+function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens==null?null:(r.tokens||0)+(r.op||0)).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
+  const y=v=>base-v/mx*H,wd=Math.max(bw-2,1),tot=r=>(r.tokens||0)+(r.op||0);
+  const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,op=r.op||0,loop=r.tokens==null?0:r.tokens;
+    const title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(loop)+" tokens"+(op?` \u00b7 ${tk(op)} operator`:"")} \u00b7 ${r.runs} runs`;   // the loop's own count stays readable, the operator's names itself (#1756)
     if(r.tokens==null)return{kind:"missing",i,x,w:wd,cx,y:base,h:0,title};
-    if(r.tokens===0)return{kind:"zero",i,x,w:wd,cx,y:base-2,h:2,title};
-    return{kind:"bar",i,x,w:wd,cx,y:y(r.tokens),h:r.tokens/mx*H,top:r.tokens>=mx,title}});
-  const im=vals.length?rows.findIndex(r=>r.tokens===mx):-1,named=im>=0?bars[im]:null;
-  return{W,H,L,base,bars,ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:tk(v)})),
+    if(r.tokens===0&&!op)return{kind:"zero",i,x,w:wd,cx,y:base-2,h:2,title};
+    return{kind:"bar",i,x,w:wd,cx,y:y(tot(r)),h:tot(r)/mx*H,op,oy:y(loop),oh:loop?loop/mx*H:0,zeroLoop:loop===0,top:tot(r)>=mx,title}});
+  const im=vals.length?rows.findIndex(r=>r.tokens!=null&&tot(r)===mx):-1,named=im>=0?bars[im]:null;
+  return{W,H,L,base,bars,hasOp:rows.some(r=>(r.op||0)>0),ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:tk(v)})),
     max:named?{bar:im,x:named.cx,y:named.y-4,anchor:named.cx>L+W*.75?"end":named.cx<L+W*.25?"start":"middle",text:"max "+tk(mx)}:null,
     first:n?xl(rows[0].t):"",now:"now"}}
 function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;   // tokens are the work: the chart never counts dollars
@@ -6415,9 +6478,12 @@ function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}
     +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="var(--chart-grid)" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${t.label}</text>`).join("")
     +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="var(--chart-axis)" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
       :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--chart-axis)"><title>${esc(b.title)}</title></rect>`
-      :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"var(--chart-bar-max)":"var(--chart-bar)"}"><title>${esc(b.title)}</title></rect>`).join("")
+      :`<rect class=bar x="${b.x}" y="${b.oy}" width="${b.w}" height="${b.oh}" fill="${b.top?"var(--chart-bar-max)":"var(--chart-bar)"}"><title>${esc(b.title)}</title></rect>`   // the loop's segment
+       +(b.zeroLoop?`<rect class=zero x="${b.x}" y="${base-2}" width="${b.w}" height="2" style="fill:var(--chart-axis)"><title>${esc(b.title)}</title></rect>`:"")   // the loop worked none of it: its zero still shows under the operator's segment (#1756)
+       +(b.op?`<rect class="bar op" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h-b.oh}" fill="var(--chart-series-2)"><title>${esc(b.title)}</title></rect>`:"")).join("")   // the operator's segment, stacked above it (#1756)
     +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--chart-ok)" style="font-size:var(--fs-body)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
-    +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${c.now}</text></svg>`}
+    +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${c.now}</text></svg>`
+    +(c.hasOp?`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>loop</span><span><i style="background:var(--chart-series-2)"></i>operator</span></p>`:"")}   // the legend tells the two consumers apart, and only when a bucket draws the operator's series (#1756)
 function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
   return {text:pct?`${head} \u00b7 ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
@@ -6660,7 +6726,8 @@ function pie(ms){
  // claude-deepseek-flash), and keying the rows on the raw id drew the same label three times (#1750).
  const byName=new Map();
  for(const m of ms){const v=m.month_tokens;if(!(v>0))continue;
-  const k=m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model;
+  const nm=m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model;
+  const k=(m.consumer==="operator"?"operator · ":"")+nm;   // the operator session's calls are their own slices, never the loop's (#1756)
   const r=byName.get(k)||{n:k,v:0,ids:[],routes:[]};
   r.v+=v;
   if(!r.ids.includes(m.model))r.ids.push(m.model);
@@ -6732,8 +6799,9 @@ async function pollStats(){try{pollSubs();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
   {const p=st.pace,u=n=>n==null?"no runs":tk(n);   // the hub computed the readings; the page prints them in tokens (#1267)
-   $("#stsr").textContent=`${u(p.median_tokens)} tokens/h median, ${p.active_hours} of ${p.window_hours} h with runs (last ${p.window_hours} h) · ${u(p.last60_tokens)} tokens last 60 min`+(p.unpriced?` · ${p.unpriced} unpriced call${p.unpriced>1?"s":""} (tokens counted)`:"")+` · ${tk(st.totals.tok_today)} tokens today`}
-  $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
+   // the loop's own reading says so; the operator session's rides beside it (#1756)
+   $("#stsr").textContent=`${u(p.median_tokens)} tokens/h median, ${p.active_hours} of ${p.window_hours} h with runs (last ${p.window_hours} h) · ${u(p.last60_tokens)} tokens last 60 min`+(p.unpriced?` · ${p.unpriced} unpriced call${p.unpriced>1?"s":""} (tokens counted)`:"")+` · ${tk(st.totals.tok_today)} loop tokens today`+(st.operator&&st.operator.tokens_today?` · operator ${tk(st.operator.tokens_today)} tokens today`:``);
+  $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);}
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
 }catch(e){console.warn("stats panel:",e)}}

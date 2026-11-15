@@ -68,7 +68,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_check_board.py", "tests/test_hub_ci_queued_chip.py", "tests/test_hub_history_writer.py", "tests/test_hub_host_guard.py", "tests/test_hub_lane_render.py",
         "tests/test_hub_live_card.py", "tests/test_hub_mobile_chat.py", "tests/test_hub_mobile_link.py", "tests/test_hub_mobile_photo.py", "tests/test_hub_mobile_refresh.py", "tests/test_hub_mobile_terminals.py",
         "tests/test_hub_mobile_usage.py",
-        "tests/test_hub_model_boxes.py", "tests/test_hub_models_save_keeps_other_chains.py", "tests/test_hub_needs_human_handled.py", "tests/test_hub_overlay.py", "tests/test_hub_promote.py",
+        "tests/test_hub_model_boxes.py", "tests/test_hub_models_save_keeps_other_chains.py", "tests/test_operator_usage.py", "tests/test_hub_needs_human_handled.py", "tests/test_hub_overlay.py", "tests/test_hub_promote.py",
         "tests/test_hub_prs_two_repos.py", "tests/test_hub_quota.py", "tests/test_hub_run_highlight.py", "tests/test_hub_run_watch.py", "tests/test_hub_sidebar_bar.py",
         "tests/test_hub_spend_hourly.py", "tests/test_hub_test_pass_lost.py", "tests/test_hub_token_ledger.py", "tests/test_issue_state_kind.py", "tests/test_issue_state_log_dir.py",
         "tests/test_issue_state_unread.py", "tests/test_janitor_card_done_base.py", "tests/test_janitor_rearm_freeze.py", "tests/test_janitor_zombie_line.py", "tests/test_loop_review_gate.py", "tests/test_models_v2.py",

@@ -106,7 +106,7 @@ def test_a_registry_cache_rate_prices_a_non_anthropic_review_call(hub, state):
 
 
 def test_a_finished_run_cached_under_v14_is_read_again(hub, tmp_path, monkeypatch):
-    """#793, #796, #1229: the scan cache marker is v18, so a finished run cached under v14 or v15 is read again. A v18 entry
+    """#793, #796, #1229: the scan cache marker is v19, so a finished run cached under v14 or v15 is read again. A v19 entry
     is served while the record keeps the write time and size it names."""
     run = tmp_path / "run-20261001-100000"
     run.mkdir()
@@ -117,7 +117,7 @@ def test_a_finished_run_cached_under_v14_is_read_again(hub, tmp_path, monkeypatc
     got = hub.scan(run / "record.jsonl")
     assert got is not stale and "sentinel" not in (got or {}), got
     st = (run / "record.jsonl").stat()
-    fresh = {"v18": 1, "rec": [st.st_mtime_ns, st.st_size], "sentinel": True}
+    fresh = {"v19": 1, "rec": [st.st_mtime_ns, st.st_size], "sentinel": True}
     monkeypatch.setattr(hub, "hist", {str(run / "record.jsonl"): fresh})
     assert hub.scan(run / "record.jsonl") is fresh
 
@@ -154,7 +154,7 @@ def test_every_priced_model_names_its_hub_hit_rate(hub):
 
 
 def test_the_scan_marker_comment_lists_each_version_once_in_order(hub):
-    """#795, #796, #1229: the comment beside the scan marker names v10 to v18, each once, in order."""
-    line = next(s for s in HUB_PY.read_text().splitlines() if 'if h and "v18" in h and' in s)
+    """#795, #796, #1229: the comment beside the scan marker names v10 to v19, each once, in order."""
+    line = next(s for s in HUB_PY.read_text().splitlines() if 'if h and "v19" in h and' in s)
     versions = re.findall(r"\bv(\d+)\b", line.split("#", 1)[1])
-    assert versions == [str(n) for n in range(10, 19)], versions
+    assert versions == [str(n) for n in range(10, 20)], versions

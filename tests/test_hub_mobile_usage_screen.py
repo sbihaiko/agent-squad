@@ -44,6 +44,19 @@ def test_runs_usage_draws_one_bar_per_bucket_and_the_model_legend(hub):  # noqa:
     assert out["legend"] == LEGEND, out
 
 
+def test_the_phone_draws_the_operator_segment_in_the_charts_own_colour(hub):  # noqa: F811
+    """#1756: the phone and the desktop name the operator consumer in one colour, so the two readings agree."""
+    stats = dict(STATS, buckets=[{"t": "2026-11-08 10:00", "spend": 2.0, "tokens": 1000000, "op": 3000000, "runs": 1, "median_dur": None}])
+    out = move.run_page(hub.MOBILE_PAGE, """
+      await openLayer("usage");
+      await loadUsage();
+      const rs = [...$("usage-bars").querySelectorAll("rect")];
+      return {fills: rs.map(r => r.getAttribute("fill")), titles: rs.map(r => r.querySelector("title").textContent)};
+    """, routes={"/api/stats": [{"body": json.dumps(stats)}]})
+    assert out["fills"] == ["var(--acc)", "var(--chart-series-2)"], out
+    assert "operator" in out["titles"][1], out
+
+
 def test_the_period_buttons_select_hour_day_or_month_and_mark_the_one_picked(hub):  # noqa: F811
     out = boot(hub, """
       await openLayer("usage");

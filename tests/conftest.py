@@ -33,6 +33,8 @@ def _hub_seam_defaults(tmp_path_factory):
         os.environ["SG_CHECKOUT"] = str(tmp_path_factory.mktemp("checkout"))
     old_base = os.environ.get("SG_STATE_BASE")
     os.environ["SG_STATE_BASE"] = str(tmp_path_factory.mktemp("state_base"))   # a loaded profile's board cache is never the machine's (#1000)
+    old_projects = os.environ.get("SG_CLAUDE_PROJECTS")
+    os.environ["SG_CLAUDE_PROJECTS"] = str(tmp_path_factory.mktemp("claude_projects"))   # the hub's operator source reads no real transcript (#1756)
     yield
     if old is None:
         os.environ.pop("SG_CHECKOUT", None)
@@ -42,6 +44,10 @@ def _hub_seam_defaults(tmp_path_factory):
         os.environ.pop("SG_STATE_BASE", None)
     else:
         os.environ["SG_STATE_BASE"] = old_base
+    if old_projects is None:
+        os.environ.pop("SG_CLAUDE_PROJECTS", None)
+    else:
+        os.environ["SG_CLAUDE_PROJECTS"] = old_projects
 
 
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"

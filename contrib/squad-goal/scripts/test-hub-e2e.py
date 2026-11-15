@@ -105,7 +105,8 @@ p = subprocess.Popen([sys.executable, str(S / "skill/scripts/hub.py"), str(PORT)
                      # variable under test is pinned here, and nothing of the caller but the platform is passed on.
                      env=dict({k: v for k, v in os.environ.items() if not k.startswith("SG_")},
                               SG_HUB_DIR=str(S / "hubdir"), SG_STATE=str(ST),
-                              SG_REPO="squad-hub-e2e/none", SG_OWNER="squad-hub-e2e", SG_PROJECT="0", SG_CHECKOUT=REPO))
+                              SG_REPO="squad-hub-e2e/none", SG_OWNER="squad-hub-e2e", SG_PROJECT="0", SG_CHECKOUT=REPO,
+                              SG_CLAUDE_PROJECTS=str(S / "projects")))   # the operator source reads this fixture folder, never the owner's transcripts (#1756)
 try:
     ck(wait_up(), "hub answers /api/version")
     st, b = req("/api/version")
