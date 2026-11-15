@@ -511,13 +511,10 @@ class BoardBinding:
         return self._cached(f"rest-fields-{self.owner}-{self.project}.json", 86400, read_field)
 
     def text_fields(self):
-        """The two text fields a run is named in: {name: id}. A carrier that answers no field list (the Status field's id
-        alone, as status_field reads it) names no text field, so a board read still answers its Status column."""
+        """The two text fields a run is named in: {name: id}."""
         def read_fields():
-            try: fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
-            except ValueError: fs = None
-            if not isinstance(fs, list): return {}
-            return {x.get("name"): x.get("id") for x in fs if isinstance(x, dict) and x.get("name") in HOLDER_FIELDS}
+            fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
+            return {x.get("name"): x.get("id") for x in fs if x.get("name") in HOLDER_FIELDS}
         return self._cached(f"rest-text-fields-{self.owner}-{self.project}.json", 86400, read_fields)
 
     def number_field(self):
@@ -779,7 +776,9 @@ class BoardBinding:
     def board(self):
         """Every card's state and holder, in ONE read: ({issue: state}, {issue: {"run", "started"}}). The Status and the Run
         fields ride the same items read, so a caller that needs both asks once. The repository url filters as in `read_all`."""
-        tf = self.text_fields()
+        try: tf = self.text_fields()
+        except (ValueError, TypeError, AttributeError): tf = {}   # a carrier that answers no field list names no text field; the
+        # Status column still answers, and the miss is never cached, so the next pass asks again
         ids = [x for x in (self.status_field()["id"], tf.get("Run"), tf.get("Run started")) if x]
         fq = f"&fields[]={','.join(ids)}" if ids else ""
         val = 'if type=="object" then (.raw//.text//"") else (.//"") end'
