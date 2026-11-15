@@ -234,6 +234,22 @@ def test_bang_command_inside_the_working_directory_is_allowed(tmp_path, command)
     assert sandbox.bang_reason(command, str(tmp_path)) is None
 
 
+# #1855: the kernel wall hides the process table from a child session -- /bin/ps answers a bare "operation not permitted"
+# at exec, so a child that ran a suite reading the process table read the wall as its own defect. The Bash wall names the
+# tool and the rule instead, which is the same reading ADR-0139 gives a pytest case it deselects for the missing binary.
+@pytest.mark.parametrize("command", ["ps -p $$", "/bin/ps -axwwo pid=,command=", "ps aux | grep watch.sh",
+                                     "bash -c 'ps -ax'", "/usr/bin/env SG_A=1 ps -o pid=", "cd /tmp && ps"])
+def test_a_process_table_read_is_denied_by_name(tmp_path, command):
+    reason = sandbox.deny_reason("Bash", {"command": command}, str(tmp_path), env={}, home=str(tmp_path / "h"))
+    assert reason and reason.startswith("sandbox: ps ") and "process table" in reason, reason
+
+
+@pytest.mark.parametrize("command", ["pgrep -f watch.sh", "/usr/bin/pgrep -fl bash", "grep -c ps steps.log",
+                                     "echo 'ps -ax' >> note", "cat ps.txt", "xargs -n1 echo < ps.txt"])
+def test_a_read_that_is_not_the_process_table_is_allowed(tmp_path, command):
+    assert sandbox.deny_reason("Bash", {"command": command}, str(tmp_path), env={}, home=str(tmp_path / "h")) is None, command
+
+
 SIGNAL_WRAPPER = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts" / "claude-sandboxed.sh"
 
 

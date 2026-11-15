@@ -13,6 +13,7 @@ mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; ok() { echo "ok   $1"; }; ko
 export STEPS=$T/steps.log REC_SLEEP=5
 cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
 cp "$d/steprec.sh" "$S/"   # the step record writer the cycle sources, as the real scripts folder holds it (#1750)
+cp "$d/promotequiet.sh" "$S/"   # the promotion's debounce, sourced before its step (#1837): without it no promotion starts and no case reads one
 cat > "$S/env.sh" <<EOF
 export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug
@@ -138,8 +139,11 @@ rm -rf "$WL"
 # publish-live.sh --check, publishes it and names what it read. A cycle that skips it leaves the copies a day apart in
 # silence -- the bar kept printing the footer the repository had dropped.
 lane_down; run_cycles 1
-[ "$(count live-guard)" = 1 ] && ok "8 the cycle runs the live-guard pass once" || ko "8 the cycle ran $(count live-guard) live-guard pass(es)"
-[ ! -e "$ST/locks/single-liveguard" ] && ok "8 the pass's single-flight lock is released when it ends" || ko "8 the live-guard lock stayed behind"
+# the case asks for one cycle, and the seam that ends it is the supervisor's pid the fixture recorded -- never a read of
+# the process table, which the kernel wall hides from a child session (#1855). A seam that does not reach the supervisor
+# leaves the run going until the case's bound, so the cycle count is the seam's own proof.
+[ "$(count vendorguard)" = 1 ] && ok "8 one asked-for cycle ends through the pid seam after one cycle" || ko "8 one asked-for cycle ran $(count vendorguard) cycles: the seam that ends it did not reach the supervisor"
+[ "$(count live-guard)" = 1 ] && ok "8 the cycle runs the live-guard pass once" || ko "8 the cycle ran $(count live-guard) live-guard pass(es)"[ ! -e "$ST/locks/single-liveguard" ] && ok "8 the pass's single-flight lock is released when it ends" || ko "8 the live-guard lock stayed behind"
 run_cycles 2
 [ "$(count live-guard)" = 2 ] && ok "8 a per-cycle step keeps its cadence (two cycles, two reads)" || ko "8 live-guard ran $(count live-guard)× in 2 cycles"
 

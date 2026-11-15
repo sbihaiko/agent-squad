@@ -189,7 +189,7 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
                 return f"sandbox: a command that names {needle} is denied; the live skill copy and the loop state are not this session's to touch"
         if (reason := suite_reason(cmd, root)) is not None:
             return reason
-        return signal_reason(cmd)
+        return table_reason(cmd) or signal_reason(cmd)
     return None
 
 
@@ -209,7 +209,7 @@ def _segment_words(seg):
         words = shlex.split(seg, posix=True)
     except ValueError:
         words = [w.strip("'\"") for w in seg.split()]
-    while words and (words[0] in _PREFIX or re.fullmatch(r"[A-Za-z_]\w*=.*", words[0])):
+    while words and (os.path.basename(words[0]) in _PREFIX or re.fullmatch(r"[A-Za-z_]\w*=.*", words[0])):
         words = words[1:]
     return words
 
@@ -279,6 +279,30 @@ def signal_reason(cmd, depth=0):
             return "sandbox: kill of pid 1 or -1 is denied; it signals every process of this user, the loop supervisor among them"
     if killing and (m := _LOOP_NAMES.search(cmd)):
         return f"sandbox: a signal to {m.group(1)} is denied; that process is the loop's, not this session's"
+    return None
+
+
+# #1855: the kernel wall hides the process table from a child session -- /bin/ps answers a bare "operation not permitted"
+# at exec, and a child that ran a suite reading it read the wall as its own defect. The Bash wall names the tool and the
+# rule, so an unrunnable suite reads as an environment limit, as ADR-0139 reads the same denial for a pytest case.
+_TABLE_READER = "ps"
+
+
+def table_reason(cmd, depth=0):
+    """Why a Bash command that reads the process table is denied, or None (#1855)."""
+    for seg in _SEGMENT.split(cmd):
+        words = _segment_words(seg)
+        if not words:
+            continue
+        verb, args = os.path.basename(words[0]), words[1:]
+        if verb in ("sh", "bash", "zsh", "dash") and "-c" in args and depth < 3:
+            body = args[args.index("-c") + 1] if args.index("-c") + 1 < len(args) else ""
+            if inner := table_reason(body, depth + 1):
+                return inner
+            continue
+        if verb == _TABLE_READER:
+            return ("sandbox: ps is denied; the kernel wall hides the process table from this session, so a suite that "
+                    "reads it cannot run here -- a fixture ends its processes through the pids it recorded (ADR-0139)")
     return None
 
 
