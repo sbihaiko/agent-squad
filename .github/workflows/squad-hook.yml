@@ -20,7 +20,7 @@ jobs:
   fire:
     # A cancelled run proves nothing (each push cancels the older fast tier), and a fork's run never reaches the loop host.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.actor == 'sbihaiko') ||
       (github.event.workflow_run.head_repository.full_name == github.repository &&
        github.event.workflow_run.conclusion != 'cancelled' &&
        (github.event.workflow_run.head_branch == 'dev' || github.event.workflow_run.head_branch == 'stg'))
