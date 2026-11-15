@@ -1421,6 +1421,44 @@ def test_an_unanswered_subject_rests_at_the_tick_after_the_startup_window(hub, m
     assert pauses and pauses[0] == 7.0, f"the reader asked {pauses[:2]} s: the fast first-read period never ended"
 
 
+def test_a_subject_whose_read_costs_hundreds_of_milliseconds_rests_at_its_own_period(hub, monkeypatch):
+    """#1879: `board_served` costs 428 ms and `run_list` 262 ms on this machine, so reading them once a tick is ~70 % of a
+    core. A slow subject answers at SLOW_SUBJECT_SECS, while a cheap one keeps the tick."""
+    mod = hub[0]
+
+    class Versions:
+        @classmethod
+        def refresh_one(cls, name):
+            pass
+        @classmethod
+        def newer(cls, _):
+            return {}
+
+    monkeypatch.setattr(mod, "VERSIONS", Versions())
+    monkeypatch.setattr(mod.hubstream, "TICK_SECONDS", 1.0)
+    monkeypatch.setattr(mod, "SLOW_SUBJECT_SECS", 5.0)
+    monkeypatch.setattr(mod.hubstream, "FIRST_EVENT_SECONDS", 0.0)   # the startup window is over before the first tick
+    monkeypatch.setattr(mod, "READ_GATE", None)                      # a page reads the profile: read_wanted() is true
+    monkeypatch.setattr(threading, "excepthook", lambda _: None)
+
+    def first_period(name):
+        pauses = []
+
+        def pause(secs):
+            pauses.append(secs)
+            if len(pauses) >= 2:
+                raise StopSampling
+        monkeypatch.setattr(mod, "read_pause", pause)
+        monkeypatch.setitem(mod._TICKERS, name, None)
+        t = mod._ticker(name)
+        wait(lambda: not t.is_alive(), 2)
+        return pauses[0]
+
+    assert first_period("board") == 5.0, "the board read costs hundreds of milliseconds and must not run at the tick"
+    assert first_period("runs") == 5.0, "the run list costs 262 ms and rests with the board"
+    assert first_period("sessions") == 1.0, "a subject that reads in milliseconds keeps the tick"
+
+
 # ---------------------------------------------------------------- the second review's findings
 def test_the_supervisor_above_the_pid_file_s_process_is_this_loop(prof):
     """watchd.pid names the `run` child; its `supervise` parent is the same loop, never another one."""
