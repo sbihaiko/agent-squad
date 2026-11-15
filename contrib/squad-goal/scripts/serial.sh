@@ -14,6 +14,12 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # written when the wait begins and removed when the lock is taken or the waiter exits. It is the only reading of "queued for
 # the lock" the live check has (spec 1163): a slot waiter whose every slot holder sits in that queue is a child starved by a
 # queued slot holder, and the check reports it. Guard: test-serial.sh, test-live-check.sh.
+# A fourth field carries the waiter's priority (`SG_SERIAL_PRIORITY=1`): the landing's gate is the delivery that ends a run, so a
+# waiter that carries one is first out of the queue (ADR-0164, #1858). A waiter with no priority stands aside -- it skips its
+# take for that round -- while a live priority waiter is queued for the same lock and its marker is younger than
+# SERIAL_PRIORITY_MAX (default 900 s, the landing's own lock budget), so a marker left by a killed waiter stops naming anybody.
+# Try mode never queues, so it exits 73 at once instead of running ahead of a queued landing. A waiter still gives up at its own
+# SERIAL_WAIT_SECONDS. Guard: test-serial.sh.
 #
 # A gate that outlives its run is found without a caller (ADR-0051). The holder records the deadline it keeps (SERIAL_HOLD_SECONDS,
 # else the run's own SG_CALL_DEADLINE_SECONDS, else 1800) and its command name beside its pid, stops its own command at that
@@ -35,7 +41,7 @@ case "$n" in gui-suite)
   k=""; [ "${SG_GUI_TESTS:-}" = no ] && k="SG_GUI_TESTS=no"; [ -e "$st/auto/gui-tests-off" ] && k="${k:-$st/auto/gui-tests-off}"
   [ -e "$HOME/.squad-gui-tests-off" ] && k="${k:-$HOME/.squad-gui-tests-off}"   # the durable copy: a suite that inherits SG_STATE can clean it
   [ -n "$k" ] && { echo "serial: gui-suite NOT run ($k); re-enable with scripts/gui-tests.sh on" >&2; exit 0; };; esac
-case ":${SG_SERIAL_HELD:-}:" in *":$n:"*) exec "$@";; esac; L="$st/locks/$n"; mkdir -p "$st/locks"; w=${SERIAL_WAIT_SECONDS:-1800}; t0=$(date +%s); said=0
+case ":${SG_SERIAL_HELD:-}:" in *":$n:"*) exec "$@";; esac; L="$st/locks/$n"; mkdir -p "$st/locks"; w=${SERIAL_WAIT_SECONDS:-1800}; t0=$(date +%s); said=0; ysaid=0
 hold=${SERIAL_HOLD_SECONDS:-${SG_CALL_DEADLINE_SECONDS:-1800}}; cmdn=$(basename "${1:-command}")
 ppid_of() { $ps_ -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 runs_as() { $ps_ -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
@@ -51,7 +57,29 @@ reap() { echo "serial: reaping stale lock $n: holder pid $1 is dead, lock age $(
 # it was written for, so one stable form of it is enough: the fields are squeezed to one space apiece.
 inc_of() { $ps_ -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1};1'; }
 wmark="$st/locks/waiting/$n-$$"; trap 'rm -f "$wmark"' EXIT   # the queue marker: only while this process waits
-until mkdir "$L" 2>/dev/null; do
+prio=${SG_SERIAL_PRIORITY:-0}; pmax=${SERIAL_PRIORITY_MAX:-900}
+queued() {  # the marker and the one line naming the wait; both written once, when the wait begins
+  mkdir -p "$st/locks/waiting"; printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$n" "$$" "$prio" > "$wmark"; }
+# a_priority_waiter: another live process is queued for this lock as the landing's gate, and its marker is young enough to name
+# one. A marker whose pid is gone, or whose epoch is past SERIAL_PRIORITY_MAX, names nobody: a killed waiter leaves its marker.
+a_priority_waiter() { local f w0 wl wp wpr; for f in "$st/locks/waiting/$n-"*; do
+    [ -e "$f" ] || continue
+    IFS=$'\t' read -r w0 wl wp wpr < "$f" 2>/dev/null || continue
+    [ "$wpr" = 1 ] && [ "$wl" = "$n" ] && [ "$wp" != "$$" ] && alive "$wp" \
+      && [ $(( $(date +%s) - ${w0:-0} )) -le "$pmax" ] && return 0
+  done; return 1; }
+while :; do
+  # The landing's gate first (#1858): a waiter that is not one stands aside for that round, so the delivery the run ends with is
+  # never the last in the queue behind children that spin for the lock every poll. It still counts its own wait and gives up at
+  # its own budget, and it writes the same marker, so a priority waiter queued behind it stands aside in turn.
+  if [ "$prio" != 1 ] && a_priority_waiter; then
+    # Try mode never queues, so it yields at once rather than run a battery ahead of a queued landing: the caller reads 73 as it
+    # reads a held lock, and its retry is the later pass that meets no landing.
+    [ -n "${SERIAL_TRY:-}" ] && { echo "serial: lock $n: the landing's gate is queued ahead: skipped, not queued (SERIAL_TRY)" >&2; exit 73; }
+    [ $ysaid = 1 ] || { echo "serial: waiting for lock $n: the landing's gate is queued ahead of this one" >&2; ysaid=1; queued; }
+    [ $(( $(date +%s) - t0 )) -gt "$w" ] && { echo "serial: waited ${w}s for lock $n behind the landing's gate" >&2; exit 75; }
+    sleep "${SERIAL_POLL_SECONDS:-3}"; continue; fi
+  mkdir "$L" 2>/dev/null && break
   h=$(cat "$L/pid" 2>/dev/null); hi=$(cat "$L/inc" 2>/dev/null | awk '{$1=$1};1')
   if [ -n "$h" ] && ! alive "$h"; then reap "$h"; continue; fi
   # The pid lives, but the process wearing it may have started after the lock was written: the token settles that. A lock in the
@@ -71,8 +99,7 @@ until mkdir "$L" 2>/dev/null; do
   # One line, the first time this process has to wait, naming what it waits for: a gate that waits for another gate has to say so
   # once -- silence reads as a hang. `said` keeps it to one line however long the wait runs.
   [ -n "${SERIAL_TRY:-}" ] && { echo "serial: lock $n held by pid ${h:-?}: skipped, not queued (SERIAL_TRY)" >&2; exit 73; }
-  [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1
-                     mkdir -p "$st/locks/waiting"; printf '%s\t%s\t%s\n' "$(date +%s)" "$n" "$$" > "$wmark"; }
+  [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1; queued; }
   [ $(( $(date +%s) - t0 )) -gt "$w" ] && { echo "serial: waited ${w}s for lock $n held by pid ${h:-?}" >&2; exit 75; }
   sleep "${SERIAL_POLL_SECONDS:-3}"; done
 hpid=$$; due=$(( $(date +%s) + hold ))

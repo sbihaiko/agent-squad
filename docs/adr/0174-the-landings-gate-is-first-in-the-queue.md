@@ -1,0 +1,25 @@
+# The landing's gate is first in the queue
+
+A run ends with a delivery: the wave's landing pushes the tip and closes the cards. The landing's own gate — the tip
+check — competes for the same machine-wide gate lock as every child's fast gate, and a wave finishes its children
+together, so the landing arrives exactly when the queue is longest. The gate lock has no order: a waiter is whoever
+calls `mkdir` first after the holder leaves, and a child that retries every second wins that race more often than a
+landing that asked once. So the landing waits behind the work its own delivery produced.
+
+The lock gives the queue an order. A waiter that carries `SG_SERIAL_PRIORITY=1` says so in its queue marker, and a
+waiter that carries none stands aside for that round while a live priority waiter is queued for the same lock. The
+landing's gate is the only priority waiter: it is the delivery, and delivery outranks the proof (ADR-0164). A child
+stands aside; it does not leave. It keeps its own wait budget, and it records the same marker. A try-mode gate answers
+73 at once instead of running a battery ahead of a queued landing, which is what try mode already means for a held lock.
+
+A priority marker names nobody once its pid is gone or its marker is older than `SERIAL_PRIORITY_MAX`, because a killed
+waiter leaves its marker behind and a landing that is no longer waiting must never hold the queue. A marker whose
+reading cannot be trusted is the same as no marker: the queue never stalls on it.
+
+The priority orders the queue; it never widens a bound. A landing still gives up at its own `SERIAL_WAIT_SECONDS`, and
+the wait it spends queued is gate wait (ADR-0166): the gate starts its clock when it holds the lock and its slots, so
+no run time is charged for a queue it does not control.
+
+Guard: `contrib/squad-goal/scripts/test-serial.sh` proves the order by state, never by timing: two waiters queue behind
+one holder, the holder is released only after both markers exist, and the waiter that runs first is the one the rule
+chose.

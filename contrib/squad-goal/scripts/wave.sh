@@ -684,6 +684,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     obl=""; gwhy=""; gnot=""
     if [ $grc = 73 ] && h=$(held_by "$out"); then
       case "$h" in slots:*) hold "the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
+        landing) hold "the landing's gate is queued ahead of this one (#1858); the child enters on a later pass";;
         *) hold "the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
     [ $grc = 75 ] && waited_out "$out" && { hold "the local gates waited for the gate lock past their bound; the child enters on a later pass"; return 1; }
     case "$oc" in
@@ -748,7 +749,7 @@ child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | refs_in_message | 
 
 # held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575); a try-mode skip of
 # the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the holders it names (#567).
-held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^caps: caps\.gates is full ([0-9]* slots), held by \(.*\): .* skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
+held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^serial: lock gate: the landing.s gate is queued ahead: skipped, not queued.*/landing/p' -e 's/^caps: caps\.gates is full ([0-9]* slots), held by \(.*\): .* skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
 # waited_out <output>: the bounded wait for the gate lock or the gate slots ran out (serial.sh and caps.py both exit 75 then, and
 # name it). A 75 without that line is the check's own hold deadline, which is a failed check, not a hold (#955).
 waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* waited [0-9.]+s for caps\.gates'; }
@@ -815,7 +816,10 @@ wave_check() {
     # Each gate round marks the held landing lock (#1290): health.sh reads the last mark as the landing's progress, so a landing
     # that runs several rounds (a red tip, the child that broke it leaves, the tip again) is busy, not held past its bounds.
     touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
-    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${w#wave/}" SG_GATE_CALLER=tip && eval "$tipgate") >"$clog" 2>&1; rc=$?
+    # SG_SERIAL_PRIORITY=1 (#1858): the tip check is the landing's gate, the delivery that ends the run, so the gate lock queues
+    # it ahead of every child's fast gate that waits for the same lock (ADR-0164). The wait it still spends in the queue is gate
+    # wait, named in its log, and it never counts as run time: the gate's own clock starts when it holds the lock and its slots.
+    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${w#wave/}" SG_GATE_CALLER=tip && eval "$tipgate") >"$clog" 2>&1; rc=$?
     oc=
     [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null
     [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null && { rm -f "$clog" "$of"; return 3; }   # 3: the gate lock is held, so the check did not run
