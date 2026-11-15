@@ -5875,8 +5875,11 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profb .psw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true] i{transform:translateX(20px)}
 #profb .psw:disabled{opacity:.6;cursor:default}#profb .psw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #proftrip{margin:0 0 16px}#proftrip h3{margin:0 0 4px;font-size:var(--fs-caption);font-weight:600}#proftrip .tpn{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
-#proftrip .ptb{display:flex;width:100%;height:14px;margin:0 0 8px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}#proftrip .ptb-seg{display:block;height:100%}
+#proftrip .ptb{display:flex;gap:1px;width:100%;height:14px;margin:0 0 8px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}#proftrip .ptb-seg{display:block;height:100%;min-width:4px}
+#proftrip .ptk{display:inline-block;width:10px;height:10px;margin-right:8px;border-radius:var(--radius-sm);vertical-align:-1px;background:currentColor}
 #proftrip .pts-wait{background:var(--mute)}#proftrip .pts-coding{background:var(--run)}#proftrip .pts-review{background:var(--acc)}#proftrip .pts-gates{background:var(--warn)}#proftrip .pts-landing{background:var(--ok)}
+#proftrip .ptk-wait{color:var(--mute)}#proftrip .ptk-coding{color:var(--run)}#proftrip .ptk-review{color:var(--acc)}#proftrip .ptk-gates{color:var(--warn)}#proftrip .ptk-landing{color:var(--ok)}
+#proftrip .ptk.ptk-none{background:none;box-shadow:inset 0 0 0 1px currentColor}
 #proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#proftt th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#proftt th:first-child{text-align:left}#proftt td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#proftt td:first-child{text-align:left}
 #profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}
 #profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
@@ -7316,9 +7319,9 @@ function profTrip(t){
  const stages=t.stages||[],total=stages.reduce((a,s)=>a+(s.median_s||0),0);
  const seg=s=>{const pct=total&&s.median_s?100*s.median_s/total:0;
   return `<i class="ptb-seg pts-${esc(s.stage)}" style="width:${pct.toFixed(2)}%" title="${esc(`${s.label}: median ${profTripNum(s.median_s)}, p90 ${profTripNum(s.p90_s)} (${s.observations} observation${s.observations===1?"":"s"})`)}"></i>`};
- const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each stage`)}">${stages.filter(s=>s.median_s!=null).map(seg).join("")}</div>`;
- const rows=stages.map(s=>`<tr data-p="trip/${esc(s.stage)}"><td class=pn><span class=pnm>${esc(s.label)}</span></td><td>${profTripNum(s.median_s)}</td><td>${profTripNum(s.p90_s)}</td><td>${s.observations||0}</td></tr>`).join("");
- return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds their median time in each stage.</p>${bar}`
+ const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each stage`)}">${stages.filter(s=>s.median_s>0).map(seg).join("")}</div>`;
+ const rows=stages.map(s=>`<tr data-p="trip/${esc(s.stage)}"><td class=pn><i class="ptk ptk-${esc(s.stage)}${s.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(s.label)}</span></td><td>${profTripNum(s.median_s)}</td><td>${profTripNum(s.p90_s)}</td><td>${s.observations||0}</td></tr>`).join("");
+ return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds their median time in each stage, in the order of the rows below.</p>${bar}`
   +`<table id=proftt aria-label="The trip of an issue, a stage a row"><thead><tr><th>Stage</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
 function profRuns(r){
  if(!r||!r.rows)return "";
