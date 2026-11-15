@@ -44,7 +44,7 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
 # The dispatchers share one claim namespace and one read of the live requests (startability.sh, #428), so the stand-in
 # carries the real file's own reads and fakes only what this suite fixes by hand.
-cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(dirname "$src")/skiplabels.sh" "$T/scripts/skiplabels.sh"; cp "$(dirname "$src")/issue_ledger.py" "$T/scripts/"
+cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(dirname "$src")/skiplabels.sh" "$T/scripts/skiplabels.sh"; cp "$(dirname "$src")/issue_ledger.py" "$T/scripts/"; cp "$(dirname "$src")/liveholds.py" "$T/scripts/"
 printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 # mkreq.sh appends the body it was handed (one pass may build several requests, #728) and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
 printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
@@ -234,6 +234,20 @@ echo live > "$d/st/active-runs.txt"
 five; r=$(run)
 [ "$(marked 11)" = 0 ] && ok "an issue a live run holds with no hash is not dispatched a second time" || ko "an issue a live run holds with no hash was dispatched again: $(marked 11) marker(s)"
 [ "$(marked 12 13 14 15)" -gt 0 ] && ok "the issues no live run holds still go out" || ko "no other startable issue went out"
+
+# 4d) (#1829) A live dispatch run holds every issue its request names from the start, and a record written in the router's
+#     own words holds its children too. The frontier read only `spawn_accepted`, and only in the forms "GitHub issue #N" and
+#     "GitHub issues N, M": a run whose router declined one child, and whose accepted children are written "issue o/r #N" and
+#     "Refs #N", held nothing, so the pass sent the declined issue out on every cycle and the start refused it every time.
+scene heldrequest 24 4
+mkdir -p "$d/co/runs/live"
+printf 'CHILD - GitHub issue(s) 1734 (bug; one root cause, one branch):\n--- issue #1734\nheld by the router\n\nCHILD - GitHub issue(s) 1750:\n--- issue #1750\n\nCHILD - GitHub issue(s) 1798:\n--- issue #1798\n' > "$d/co/runs/live/request.txt"
+printf '{"event":"spawn_accepted","child":"c1","definition":"work on issue o/r #1750"}\n{"event":"spawn_accepted","child":"c2","definition":"Refs #1798"}\n' > "$d/co/runs/live/record.jsonl"
+echo live > "$d/st/active-runs.txt"
+issues '[{"number":1734,"title":"a","body":"b"},{"number":1750,"title":"a","body":"b"},{"number":1798,"title":"a","body":"b"},{"number":12,"title":"a","body":"b"}]'
+r=$(run)
+[ "$(marked 1734 1750 1798)" = 0 ] && ok "the issues a live run's request names are not dispatched again" || ko "a live run's request names 1734, 1750 and 1798 and the pass dispatched $(marked 1734 1750 1798) of them"
+[ "$(marked 12)" -gt 0 ] && ok "the issue no live run names still goes out" || ko "no other startable issue went out: '$r'"
 
 # 4c) (#948) A live run's accepted children never count against the run slots. The leases of every repository and the
 #     children the live runs of this one hold are two different counts, and the pass read the first as both: three runs

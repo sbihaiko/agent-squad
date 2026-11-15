@@ -161,24 +161,13 @@ if co and pathlib.Path(co).resolve() != cwd and not os.environ.get("SG_ALLOW_OTH
 # worktree gets its own linked worktree, cut from origin/$SG_BASE as fetched now; a fetch that fails refuses the start.
 FALLBACK = "its own run worktree"   # the target a run gets when no issue worktree is resolved
 
-def _issue_named(txt):
-    """The issues a request names, across every `CHILD` block: each block's header list (`GitHub issue(s) N, M`), else the first
-    header anywhere, else the plain `issue #N` mention. A frontier request holds one block per child, so the first block alone
-    would hide the other issues and the run would target one issue's worktree (#470)."""
-    head = r"GitHub issue\(?s?\)? ?#? ?([0-9][0-9, ]*)"
-    for pat in (r"^CHILD[^\n]*?" + head, head, r"\bissue #([0-9]+)"):
-        found = []
-        for m in re.finditer(pat, txt, re.M):
-            found += [int(x) for x in re.split(r"[^0-9]+", m.group(1)) if x and int(x) not in found]
-        if found: return found
-    return []
-
-def _issue_child_request(txt):
-    """True when the deliverable is a local commit on the branch the land reads: the dispatch builders mark those runs with a
-    `CHILD - GitHub issue` block (`autofrontier.sh`, `autobug.sh`) or a `FORK-ONLY` line, which the retired local land route
-    wrote and a run record from before its retirement still carries. A fix run on a PR branch names an issue too, and its
-    child commits on the PR branch: that run gets its own run worktree (#580)."""
-    return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
+# #1829: the rule that says which issues a live run holds is one module (liveholds.py), read here and by the dispatchers
+# (startability.sh). The start enforced one answer and the frontier read a weaker one, so one issue was sent out every
+# cycle and refused every time (ADR-0149: one writer per loop fact).
+_lh_spec = importlib.util.spec_from_file_location("liveholds", here / "liveholds.py")
+liveholds = importlib.util.module_from_spec(_lh_spec); _lh_spec.loader.exec_module(liveholds)
+_issue_named = liveholds.issue_named
+_issue_child_request = liveholds.issue_child_request
 
 def _wave_request(txt):
     """The request of a run whose children enter a wave (#375, ADR-0145 rules 9 and 10): a child keeps its branch local, and the
@@ -292,24 +281,7 @@ issues = _issue_named(req_text) if _issue_child_request(req_text) else []   # a 
 # nothing starts; the caller's refusal path frees the request's dispatch marker. The check reads the loop's own state (active-runs.txt
 # and each live run's request.txt), never GitHub, which is eventually consistent. A run with a verdict holds nothing.
 def _live_holders():   # {issue: run folder name} of each issue a live child run of this checkout works
-    held = {}
-    try:
-        rows = (state / "active-runs.txt").read_text().split()
-    except OSError:
-        return held
-    base = pathlib.Path(co or cwd) / "runs"
-    for row in rows:
-        f = pathlib.Path(row) if row.startswith("/") else base / row
-        rec, rq = f / "record.jsonl", f / "request.txt"
-        if rec.exists():
-            if '"event": "verdict"' in rec.read_text():
-                continue
-        elif not rq.exists() or time.time() - rq.stat().st_mtime > 300:   # no record yet: live only in its launch window
-            continue
-        if rq.exists() and _issue_child_request(rq.read_text()):
-            for n in _issue_named(rq.read_text()):
-                held.setdefault(n, f.name)
-    return held
+    return liveholds.live_holders(state / "active-runs.txt", base=pathlib.Path(co or cwd))
 _held = _live_holders() if issues else {}
 _clash = [(n, _held[n]) for n in issues if n in _held]
 if _clash:
