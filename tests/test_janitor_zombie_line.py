@@ -1,11 +1,17 @@
-"""Rule C and the health pass's reap leave the same active-runs state for the same dead run (#1230, ADR-0149).
+"""A run whose process is gone leaves `active-runs.txt` on the pass that ends it (#1854, ADR-0149, ADR-0167).
 
-Both passes write the killed verdict for a run whose process is gone. The readers of `active-runs.txt` need the finished
-line after that verdict: `watch.sh` lands the wave of a run whose listed record carries a verdict, `childcc.py` enters its
-finished children into that wave, and janitor rules O and R release the run's issues and rank their cards from it. A line
-dropped with the verdict hides the run from all of them. `caps.run_holders` frees the slot from the verdict, so the line
-costs no slot. One writer removes a finished line: `wtclean.sh` rule A, once the verdict is an hour old and the wave is
-closed. Rule C keeps the line, as `squad/reap.py` does.
+The listing and the run leases read the same fact two ways: a listed run whose process is gone and which no lease counts is
+no live work, and keeping its line made the janitor say HELD-BY-WAVE and the hub show a dead run as the loop's work. The
+line leaves on the pass that ends the run, and the log names it, so a listing that outlives its run is visible in
+`cycle.log` rather than inferred from a count.
+
+Rule C ends the run itself (`squad.killed`, the one writer), frees its leases and drops its line in one pass. The health
+pass's reap ends a run before the janitor reaches it, and keeps the line: rules O and R read the run from the listing on the
+pass after the reap, so dropping it there would starve the run's dispatch markers. The janitor's next pass sees the killed
+verdict, no process and no lease, and drops the line then.
+
+The line stays while one of the run's waves is open: `childcc` enters its children from the listing until the wave lands,
+the reason `wtclean.sh` rule A holds a finished run's line while `wave-<run>` stands.
 
 The janitor runs end to end in the sandbox of test_janitor_card_done_base: a stub `gh`, a stub board.sh, a temp state dir.
 """
@@ -20,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from squad import caps, record
+from squad import caps, reap, record
 from tests.test_janitor_card_done_base import janitor, sandbox
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,34 +55,48 @@ def listed(act: Path) -> list[str]:
     return [Path(r).name for r in act.read_text().split()]
 
 
+def last_event(rec: Path) -> dict:
+    return json.loads(rec.read_text().splitlines()[-1])
+
+
 @pytest.mark.heavy
-def test_rule_c_and_reap_leave_the_same_active_runs_state_for_the_same_dead_run(tmp_path):
+def test_rule_c_drops_the_line_of_the_run_it_reaps(tmp_path):
     pid = dead_pid()
-    jan = tmp_path / "janitor"
-    jan.mkdir()
-    sandbox(jan, "echo 0", live=True)
-    dead_run(jan, jan / "co/runs" / RUN, pid)
-    rp = tmp_path / "reap"
-    (rp / "runs" / RUN).mkdir(parents=True)
-    (rp / "runs" / RUN / "request.txt").write_text((jan / "co/runs" / RUN / "request.txt").read_text())
-    dead_run(rp, rp / "runs" / RUN, pid)
-    (rp / "st").mkdir()
-    (rp / "st/active-runs.txt").write_text(f"{rp / 'runs' / RUN}\n")
+    sandbox(tmp_path, "echo 0", live=True)
+    dead_run(tmp_path, tmp_path / "co/runs" / RUN, pid)
 
-    r = janitor(jan, SG_SQUAD=str(ROOT), SG_TAKEOVER_SECONDS="1000000000000")
-    log = (jan / "st/cycle.log").read_text() if (jan / "st/cycle.log").exists() else ""
-    assert f"zombie run {RUN}" in log, r.stdout + r.stderr + log
-    from squad import reap
-    assert reap.reap(rp / "st/active-runs.txt", rp, ceiling=caps.Ceiling({k: 1 for k in caps.KINDS}, rp / "leases"),
+    r = janitor(tmp_path, SG_SQUAD=str(ROOT), SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
+    log = (tmp_path / "st/cycle.log").read_text() if (tmp_path / "st/cycle.log").exists() else ""
+    assert f"zombie run {RUN} " in log and "dropped from active-runs" in log, r.stdout + r.stderr + log
+    assert listed(tmp_path / "st/active-runs.txt") == [], listed(tmp_path / "st/active-runs.txt")
+    assert last_event(tmp_path / "co/runs" / RUN / "record.jsonl")["reasons"] == ["killed/no-process"]
+
+
+@pytest.mark.heavy
+def test_the_janitor_drops_the_line_of_a_run_the_reap_ended(tmp_path):
+    pid = dead_pid()
+    sandbox(tmp_path, "echo 0", live=True)
+    dead_run(tmp_path, tmp_path / "co/runs" / RUN, pid)
+    act = tmp_path / "st/active-runs.txt"
+    assert reap.reap(act, tmp_path / "co", ceiling=caps.Ceiling({k: 1 for k in caps.KINDS}, tmp_path / "leases"),
                      procs=[], say=lambda _: None) == [RUN]
+    assert listed(act) == [RUN], f"the health pass dropped the line before the janitor's rules read it: {listed(act)}"
 
-    j_act, r_act = jan / "st/active-runs.txt", rp / "st/active-runs.txt"
-    assert listed(j_act) == listed(r_act) == [RUN], f"rule C {listed(j_act)} and reap {listed(r_act)} disagree on the line"
-    for rec in (jan / "co/runs" / RUN / "record.jsonl", rp / "runs" / RUN / "record.jsonl"):
-        ev = json.loads(rec.read_text().splitlines()[-1])
-        assert ev["event"] == "verdict" and ev["reasons"] == ["killed/no-process"], ev
-    janitor(jan, SG_SQUAD=str(ROOT), SG_TAKEOVER_SECONDS="1000000000000")   # the next pass reads a finished run: the line stays
-    assert listed(j_act) == [RUN], f"the next janitor pass dropped the finished line: {listed(j_act)}"
+    r = janitor(tmp_path, SG_SQUAD=str(ROOT), SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
+    log = (tmp_path / "st/cycle.log").read_text() if (tmp_path / "st/cycle.log").exists() else ""
+    assert f"killed run {RUN} " in log and "dropped from active-runs" in log, r.stdout + r.stderr + log
+    assert listed(act) == [], f"a run gone from the leases kept its listing line: {listed(act)}"
+
+
+@pytest.mark.heavy
+def test_a_reaped_run_whose_wave_is_open_keeps_its_line(tmp_path):
+    pid = dead_pid()
+    sandbox(tmp_path, "echo 0", live=True)
+    dead_run(tmp_path, tmp_path / "co/runs" / RUN, pid)
+    (tmp_path / "st/auto" / f"wave-{RUN}").touch()
+
+    janitor(tmp_path, SG_SQUAD=str(ROOT), SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
+    assert listed(tmp_path / "st/active-runs.txt") == [RUN], listed(tmp_path / "st/active-runs.txt")
 
 
 @pytest.mark.heavy

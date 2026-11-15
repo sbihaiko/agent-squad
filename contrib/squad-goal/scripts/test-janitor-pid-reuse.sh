@@ -13,7 +13,7 @@ printf '{"holder": "run-reused:route.router.1", "pid": %s, "since": 1}\n' "$reus
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main SQUAD_CAPS_DIR="$T/caps" python3 -I "$T/s/janitor.py" 2>&1)
 kill "$reused" 2>/dev/null
 wait "$reused" 2>/dev/null
-# A reaped run keeps its active-runs line, as squad/reap.py keeps it (#1230); the reap itself is what this case proves.
+# The reap itself is what this case proves: the reused pid neither keeps the run live nor keeps its leases (#1854 leaves the line to test-janitor-killed.sh).
 /usr/bin/grep -q 'zombie run run-reused' "$T/st/cycle.log" 2>/dev/null && ok "C: reused pid does not keep a dead run active" || ko "C dead run not reaped: $o"
 [ ! -e "$T/st/auto/disp-62" ] && ok "C: reaped run releases its dispatch marker" || ko "C dispatch marker kept: $o"
 [ ! -e "$T/caps/runs/run-reused.json" ] && [ ! -e "$T/caps/children/run-reused_route.router.1.json" ] && ok "C: reaped run releases its leases" || ko "C leases kept: $o"

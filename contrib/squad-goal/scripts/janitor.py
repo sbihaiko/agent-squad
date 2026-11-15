@@ -9,7 +9,7 @@
     dashboard serves, and kills the oldest one the pass cannot tie to a live run, down to the ceiling. A live run's own dashboard is never a
     victim, a dashboard another project started is not this pass's to count, and JANITOR_DRY=1 reports without killing.
  C  zombie run (no verdict, record.jsonl idle 20 min, no run process inside its folder -- the engine, a gate or a session, never a dashboard server -- last started call dead): write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
-    Its active-runs.txt line stays, as squad/reap.py keeps it (#1230): the readers of a finished run need it, and wtclean.sh rule A alone drops it.
+    It leaves active-runs.txt on the same pass, and the line says so, so the listing and the leases agree in one sample (#1854): a run no lease counts is no live work. Its line stays only while one of its waves is open, which still lands it (wave-<run>, as wtclean.sh rule A holds a finished run's line).
  T  taken-over run (no verdict, its record has not moved for SG_TAKEOVER_SECONDS, default 1800, no gate process is alive in its folder, and no open call is still inside the deadline that call recorded): end it and keep its issues claimed (ADR-0166). A run waiting its turn in the machine-wide gate queue is not stuck: that wait is no run time, so it never reaches the bound (#1191). A call writes no event until it ends, so a run inside one long call is inside that call's own deadline: the deadline ends the call, and a takeover before it would kill the call short of its cap (#1842). The pass writes the killed
     verdict, kills every process inside the run folder and its dashboard, drops it from active-runs and writes auto/taken-<run>, which names the run and its issues.
     It never frees auto/disp-<n> or auto/bug-<n>, so no fresh child starts the same work with none of the context: a person or an agent takes it over.
@@ -458,7 +458,7 @@ def marker_live(m):   # #1586: a dispatch marker's named run or request is still
         if mine == req: return True
     return (co / "runs" / m).exists()
 pending = []   # markers of a reaped run, dropped after rule Q has read them
-reaped = set()   # C: the active-runs lines of the zombies this pass reaped; they stay in the file (#1230)
+reaped = set()   # C: the active-runs lines of the zombies this pass reaped whose wave is still open; they stay in the file (#1854)
 def free_reaped(f, i):
     """C: a reaped run frees its leases now, and its dispatch markers after rule Q. Rule Q reads a marker to find the card a
     dead run left In Progress and puts that card back (#62): a marker dropped here, before the read, left the card In
@@ -483,6 +483,19 @@ def ccdefer_owner(fname):   # the run a `ccdefer-<run>-<child>` marker belongs t
     # own name may carry dashes, and one run's name may only start with another's, so the marker is never read as another run's (#945).
     # active-runs.txt holds the run's folder, which launch.py writes absolute, and the marker carries the folder's name: compare that name.
     return next((m for m in sorted({pathlib.Path(x).name for x in names}, key=len, reverse=True) if fname.startswith(f"ccdefer-{m}-")), None)
+def open_wave(*ids):   # the run's wave marker while it stands: its children still land through it, so its line is still read (#1854)
+    return next((x for x in ids if x and (st / "auto" / f"wave-{x}").exists()), None)
+def holds_lease(name):
+    """True while a lease of the caps folders names the run or one of its children and its holder pid lives: such a run is no
+    run gone from the leases, so its line is not dropped on that evidence (#1854). A lease whose pid is dead holds nothing:
+    the next count reclaims it (`caps.Ceiling._live`)."""
+    for kind in ("runs", "children"):
+        for p in (pathlib.Path(os.environ.get("SQUAD_CAPS_DIR") or pathlib.Path.home() / ".cache" / "agent-squad" / "caps") / kind).glob("*.json"):
+            try: lease = json.loads(p.read_text())
+            except (OSError, ValueError): continue
+            h = str(lease.get("holder", ""))
+            if (h == name or h.startswith(name + ":")) and lease.get("pid") in procs: return True
+    return False
 
 
 for p in (st / "auto").glob("taken-*") if (st / "auto").is_dir() else []:   # T: a taken-over run's issues stay held until the hand fix drops the marker
@@ -530,6 +543,18 @@ for r in names:
             say(f"CCDEFER-DROPPED {n}: {len(mks)} deferral marker(s) of a finished run dropped ({', '.join(sorted(p.name for p in mks))}); the run is over, so no wave waits on it")
             if not dry:
                 for p in mks: p.unlink(missing_ok=True)
+        # #1854: the health pass's reap ends a run whose engine died and cannot drop its line, since rules O and R read the
+        # run from the listing on the pass after the reap. This pass has read it, from `names`, and the reoffer marker
+        # carries its issues to the card pass, as a rule-C zombie's do. So a run the reap ended (a killed verdict), with no
+        # process and no lease naming it any more, is gone from the leases: its line leaves here, and the line says so. An
+        # open wave holds it (its children still land through it) and so does a live lease (the run is not gone from them).
+        if i["failed"] and any(str(x).startswith("killed/") for x in i["reasons"]) \
+                and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not open_wave(n, i["run_id"]) \
+                and not holds_lease(n):
+            say(f"killed run {n} (its process and its leases are gone) dropped from active-runs")
+            if not dry:
+                for x in req_issues(f) | i["acc"]: (st / "auto" / f"reoffer-{x}").write_text(n + "\n")
+            continue
         if i["landed"]: landed_n |= req_issues(f)
         keep.append(r); continue
     # A live run is one whose own process is inside its folder: its engine (`squad start`), a gate, or a session it started. A
@@ -570,10 +595,15 @@ for r in names:
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of taken-over run {n}")
         continue
     if not alive and i["idle"] > 1200 and not (i["pid"] and same_process(i["pid"], i["started_at"])):
-        # Its active-runs line stays, as the health pass's reap keeps it (#1230, ADR-0149): a listed run whose record carries
-        # a verdict is what watch.sh lands, childcc enters into its wave and rules O and R release and rank, and the verdict
-        # frees its slot (caps.run_holders). wtclean.sh rule A is the one writer that drops a finished line.
-        say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) gets the killed verdict; its active-runs line stays")
+        # A reaped run leaves active-runs.txt on this same pass, so the listing and the leases agree in one sample (#1854):
+        # this pass frees the dead run's leases, and a run no lease counts is no live work for the janitor or the hub that
+        # read the list. Its line stays only while one of its waves is open: childcc enters a run's children from the
+        # listing until the wave lands, the reason wtclean.sh rule A holds a finished run's line while wave-<run> stands.
+        # wtclean.sh rule A drops the line of a run that ended by its own verdict; this pass drops the one whose process is
+        # gone, so the line never outlives its run by the hour rule A waits.
+        wv = open_wave(n, i["run_id"])
+        say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) gets the killed verdict; "
+            + (f"its wave {wv} is open, so its active-runs line stays until the wave lands" if wv else "dropped from active-runs"))
         if not dry:
             mark_killed(f)
             for x in req_issues(f) | i["acc"]: (st / "auto" / f"reoffer-{x}").write_text(n + "\n")   # the card's way back, read by the board pass (#1034)
@@ -583,7 +613,8 @@ for r in names:
             kill(q, f"leftover of zombie run {n}")
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
-        reaped.add(r); continue   # the line stays in the file; this pass's card rules read the reoffer marker, not the run
+        if wv: reaped.add(r)   # an open wave still lands this run: the line stays until the wave marker goes
+        continue   # with no open wave the line leaves the list here; this pass's card rules still read the run's markers
     held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i; livef[n] = f
 lines = [r for r in names if r in reaped or r in keep]
 if not dry and lines != names: act.write_text("\n".join(lines) + "\n")
