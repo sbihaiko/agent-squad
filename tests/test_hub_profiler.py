@@ -2535,11 +2535,36 @@ def test_a_window_with_no_run_record_is_a_gap_with_its_reason(prof):
     assert [c["cap"] for c in out["ceilings"]] == [3], "the ceiling is drawn even where no run record exists"
 
 
-def test_a_record_that_cannot_be_read_is_a_gap_with_its_reason(prof):
-    out = prof.run_slots([inv(W0 - H, W0)], [capmark(W0 - 4 * H, 3)], 4 * H, W0, unreadable=["run-1", "run-2"])
+def test_a_record_that_cannot_be_read_gaps_only_its_own_stretch(prof):
+    """A part of the window with no readable record is a gap: the stretch the unreadable run covers, never the whole
+    window where another run's readable record draws its slots."""
+    out = prof.run_slots([inv(W0 - H, W0)], [capmark(W0 - 4 * H, 3)], 4 * H, W0,
+                         unreadable=[{"start": W0 - 3 * H, "reason": "run-1: record unreadable"}])
     assert [(g["start"], g["end"], g["reason"]) for g in out["gaps"]] == [
-        (W0 - 4 * H, W0, "2 run records could not be read")]
+        (W0 - 3 * H, W0, "run-1: record unreadable")]
     assert steps_of(out) == [(0, W0 - 4 * H, W0 - H), (1, W0 - H, W0)], "the records that did read still draw their slots"
+
+
+def test_an_unreadable_record_with_no_known_start_gaps_the_whole_window(prof):
+    out = prof.run_slots([], [], 4 * H, W0, unreadable=[{"start": None, "reason": "run-1: record unreadable"}])
+    assert out["gaps"] == [{"start": W0 - 4 * H, "end": W0, "reason": "run-1: record unreadable"}]
+
+
+def test_cap_marks_and_slots_share_one_half_open_window(prof):
+    """`[start, end)`: a mark at the window's own start anchors it; a mark at its end is outside the window, so the
+    value in force before the end runs to the end."""
+    out = prof.run_slots([], [capmark(W0 - 4 * H, 2), capmark(W0 - 2 * H, 5), capmark(W0, 9)], 4 * H, W0)
+    assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [
+        (2, W0 - 4 * H, W0 - 2 * H), (5, W0 - 2 * H, W0)]
+
+
+def test_the_current_cap_anchors_the_ceiling_only_where_no_mark_speaks(prof):
+    """The cap in force now is no evidence of the cap before the first recorded mark: a head row of it would draw a
+    step at that mark that never happened."""
+    out = prof.run_slots([], [capmark(W0 - 2 * H, 2)], 4 * H, W0, cap=6)
+    assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [(2, W0 - 4 * H, W0)]
+    only = prof.run_slots([], [], 4 * H, W0, cap=6)
+    assert only["ceilings"] == [{"start": W0 - 4 * H, "end": W0, "cap": 6}], "with no mark at all it anchors the window"
 
 
 def test_a_resumed_run_is_two_invocations_so_the_verdict_before_the_resume_frees_the_slot(records):
@@ -2567,6 +2592,50 @@ def test_slot_view_folds_the_runs_of_this_checkout(records):
     assert out["window_s"] == 14400 and steps_of(out)[-1][0] == 0
     assert any(r["slots"] == 1 for r in out["rows"]), "the run's own stretch holds one slot"
     assert [c["cap"] for c in out["ceilings"]] == [2], "the cap the run_start recorded is the ceiling"
+
+
+def test_an_unrelated_project_settings_edit_adds_no_cap_step(records, tmp_path):
+    """A cap change shows at the time a `run_start` recorded it. The project settings file's write time is no cap
+    change: an edit to another key, with an older cap value in the file, draws no step."""
+    mod, runs = records
+    record(runs / "run-20261115-020606-hhhhhh",
+           ev("run_start", NOW - 1800, caps={"runs": 2}), ev("verdict", NOW - 900, verdict="completed", exit_code=0))
+    p = tmp_path / "docs" / "squad" / "defaults.yaml"
+    p.parent.mkdir(parents=True)
+    p.write_text("caps:\n  runs: 6\n")
+    os.utime(p, (NOW - 600, NOW - 600))
+    out = mod.slot_view(14400, NOW)
+    assert [c["cap"] for c in out["ceilings"]] == [2], "the recorded cap anchors; the file's mtime is no cap change"
+
+
+def test_an_orphan_resume_still_records_a_slot(records):
+    """A record truncated before its `run_start` names no cap, so the resume's own stretch is the only evidence: the
+    slot shows from the resume, and the caller's current cap anchors the ceiling."""
+    mod, runs = records
+    d = runs / "run-20261115-020404-eeeeee"
+    record(d, ev("resume", NOW - 1800), ev("call_start", NOW - 60))
+    invs, caps = mod.run_invocations(d / "record.jsonl")
+    assert [(x["start"], x["end"]) for x in invs] == [(NOW - 1800, None)], "the slot shows from the resume"
+    assert caps == [], "a resume records no caps: no cap evidence"
+
+
+def test_a_lost_record_is_a_gap_and_a_launching_run_is_not(records):
+    """A folder past its launch window with no record is a lost record, a gap with its name; a folder still launching
+    has no record yet, and no slot drawn is no gap."""
+    mod, runs = records
+    record(runs / "run-20261115-020505-aaaaaa",
+           ev("run_start", NOW - 1800), ev("verdict", NOW - 900, verdict="completed", exit_code=0))
+    lost = runs / "run-20261115-020606-ffffff"
+    lost.mkdir(parents=True)
+    os.utime(lost, (NOW - 86400, NOW - 86400))
+    fresh = runs / "run-20261115-020707-gggggg"
+    fresh.mkdir(parents=True)
+    os.utime(fresh, (NOW - 60, NOW - 60))
+    out = mod.slot_view(14400, NOW)
+    reasons = [g["reason"] for g in out["gaps"]]
+    assert any("ffffff" in r for r in reasons), "a lost record past its launch window is a gap with its name"
+    assert not any("gggggg" in r for r in reasons), "a run still launching is never a gap"
+    assert not any("aaaaaa" in r for r in reasons), "a readable record is no gap"
 
 
 def test_the_route_answers_the_slots_on_the_strip_s_own_axis(hub):

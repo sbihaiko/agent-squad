@@ -2853,10 +2853,11 @@ def load_view(st):
         LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), stamp
     return hub_profiler.load_chart(LOAD_STATE["record_rows"], st["start"], st["end"], os.cpu_count() or 1)
 
-# The run slots in use (#1766): the step line under the strip, folded by the rule layer from the run records. One record
+# The run slots in use (#1766): the step line of the Loop tab, folded by the rule layer from the run records. One record
 # is read tolerantly: an event that is not JSON is skipped, and a record that is there and cannot be opened is a gap with
-# its reason, never a run of zero slots. The cap's marks are the caps each `run_start` recorded and the cap the project
-# settings file holds now, at that file's own write time: a change inside the window shows at its time.
+# its reason, never a run of zero slots. The cap's marks are the caps each `run_start` recorded, so a change shows at the
+# time a record names it; the cap in force now anchors a window no record speaks for, and no file's mtime is a cap change.
+NEVER_STARTED_S = 300   # the janitor's bound: past it a run folder with no record is a lost record, not a launch
 def run_invocations(path):
     """One run's invocations and the caps its starts recorded: each invocation is `{"start", "end"}` from a `run_start` or
     `resume` to the verdict after it (`end` None while it has none), and each mark `{"at", "runs"}` the cap that start
@@ -2882,25 +2883,17 @@ def run_invocations(path):
     if cur is not None: out.append(cur)
     return out, caps
 
-def slot_project_cap(checkout=None):
-    """The cap the project settings file holds now and that file's write time: `(at, runs)`, or `(None, None)` when the
-    file, the package or the key is not there. The file is the one layer that may lower `caps.runs` for this project."""
-    co = checkout or CHECKOUT or "."
-    try:
-        if "ps" not in _PROJECT:
-            (_PROJECT["ps"],) = load_squad(tailnet_roots(), ("project_settings",))
-        data, info = _PROJECT["ps"].load(co)
-        path = (info or {}).get("path") or str(_PROJECT["ps"].path_for(co))
-        at = pathlib.Path(path).stat().st_mtime
-    except Exception as e:
-        log_once(f"hub: the project settings file is unavailable, the slots chart reads the recorded caps only: {type(e).__name__}")
-        return None, None
-    runs = ((data or {}).get("caps") or {}).get("runs")
-    return (at, runs) if isinstance(runs, int) and not isinstance(runs, bool) else (None, None)
+def run_dir_time(d):
+    """A run folder's own write time, or None when the folder is gone: the best evidence of its start when its record
+    cannot be read, and never a reason to fail the read."""
+    try: return d.stat().st_mtime
+    except OSError: return None
 
 def slot_view(window_s, now=None, cap=None):
     """The run slots in use of the window `window_s` and the instant `now`: the records of every run under this profile's
-    run roots, folded by the rule layer. No GitHub read, and no process table, so it shows with the CPU switch off."""
+    run roots, folded by the rule layer. `cap` is the run cap in force now, read once by the caller. A folder past its
+    launch window with no record, and a record that exists but cannot be read, are gaps with their reason: the chart says
+    what it cannot see, never a silent zero. No GitHub read, and no process table, so it shows with the CPU switch off."""
     now = time.time() if now is None else now
     invs, caps, bad, readable = [], [], [], 0
     for root in run_roots(CHECKOUT):
@@ -2909,21 +2902,26 @@ def slot_view(window_s, now=None, cap=None):
         for d in ds:
             rec = d / "record.jsonl"
             got = run_invocations(rec)
-            if got is None:   # a run that is still launching has no record yet: no slot drawn, never a failed read
-                if rec.exists(): bad.append(d.name)
-                continue
+            if got is None:
+                at = run_dir_time(d)
+                if rec.exists():
+                    bad.append({"start": at, "reason": f"{d.name}: record unreadable"})
+                elif at is not None and now - at > NEVER_STARTED_S:
+                    bad.append({"start": at, "reason": f"{d.name}: no record"})
+                continue   # a run still launching has no record yet: no slot drawn, never a gap
             readable += 1
             inv, marks = got
             invs.extend(inv); caps.extend(marks)
-    at, proj = slot_project_cap()
-    if at is not None: caps.append({"at": at, "runs": proj})
     return hub_profiler.run_slots(None if readable == 0 and not bad else invs, caps, window_s, now, cap=cap, unreadable=bad)
 
 def profiler_view(a, w=None, sw=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
-    it, the facts of the reading, the loop state strip of its own window `sw` with the run slots in use and the machine
-    load on the same window, the trip bar and the time in failed runs table of the window `w` the page chose; no tree
-    while the switch is off, and the file views read files only, so they show with the switch off."""
+    it, the facts of the reading, the loop state strip of its own window `sw`, the run slots in use and the machine load
+    under it, the trip bar and the time in failed runs table of the window `w` the page chose; no tree while the switch is
+    off, and the file views read files only, so they show with the switch off. The strip, the slots and the load are
+    folded from one `now`, so a column of the page is the same instant in each. All three are null for a caller the hub
+    refused, as the records are not read for one; the cap is read once, so the chart's ceiling and the rest of the page
+    name the same value."""
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
     now = time.time()

@@ -974,33 +974,42 @@ def load_chart(rows, start, end, cores, cadence=LOAD_CADENCE_S):
             "gap_s": round(sum(max(0.0, g["end"] - g["start"]) for g in gaps), 3)}
 
 
-# The run slots in use (#1766): the step line under the loop state strip, on the strip's own time axis and window. A run
+# The run slots in use (#1766): the step line of the Loop tab, on the strip's own time axis and window. A run
 # holds a slot from its start to its verdict; a verdict before a later start is history, so a resumed run is a second
-# invocation (ADR-0167). The cap is a step too: a `run_start` records the caps in force at its own start, and the project
-# file that may lower it is a mark at its write time. A count above the cap in force is lowered to it, as `squad/caps.py`
-# counts, and the line draws the same bound. A window no run record covers is a gap with its reason, never a line of zeros
-# that claims a silent machine. The fold is pure: it reads the lists a caller folded from the files.
+# invocation (ADR-0167). The cap is a step too: each `run_start` records the caps in force at its own start, so a change
+# shows at the time a record names it, and the cap in force now only anchors a window no record speaks for. A file's write
+# time is no cap change. A count above the cap in force is lowered to it, as `squad/caps.py` counts, and the line draws
+# the same bound. A stretch no readable record covers is a gap with its reason, never a line of zeros that claims a silent
+# machine. The fold is pure: it reads the lists a caller folded from the files.
 SLOTS_LABEL = "Run slots in use"
 
 
 def _cap_marks(caps, cap, start, end):
-    """The cap as one row per value in force, covering `[start, end)`: a mark at or before the start anchors the first
-    row, and `cap` anchors it when no mark does."""
+    """The cap as one row per value in force, covering `[start, end)`, half-open as `_cap_at` reads it.
+
+    The last mark at or before the start anchors the first row; with no such mark the first mark in the window anchors
+    it back to the start, because a cap in force before the first record is unknown. A mark exactly at the start is that
+    anchor; a mark at the end is outside the window. `cap`, the value in force now, anchors the window only when no mark
+    speaks at all: it is no evidence of the cap before the first recorded change, and a head row of it would draw a step
+    at the first mark that never happened.
+    """
     marks = sorted(((m["at"], m["runs"]) for m in (caps or ())
                     if isinstance(m, dict) and isinstance(m.get("at"), (int, float)) and not isinstance(m.get("at"), bool)
                     and isinstance(m.get("runs"), int) and not isinstance(m.get("runs"), bool)),
                    key=lambda m: m[0])
-    rows, cur, cur_at = [], None, start
+    if not marks:
+        if isinstance(cap, int) and not isinstance(cap, bool) and end > start:
+            return [{"start": start, "end": end, "cap": cap}]
+        return []
     before = [v for at, v in marks if at <= start]
-    if before: cur = before[-1]
-    elif isinstance(cap, int) and not isinstance(cap, bool): cur = cap
+    cur, cur_at = (before[-1] if before else marks[0][1]), start
+    rows = []
     for at, v in marks:
-        if not (start < at < end): continue
-        if cur is None: cur, cur_at = v, start; continue
+        if not (start < at < end): continue   # a mark at the start is the anchor above; a mark at the end is outside
         if v != cur:
             if at > cur_at: rows.append({"start": cur_at, "end": at, "cap": cur})
             cur, cur_at = v, at
-    if cur is not None and end > cur_at: rows.append({"start": cur_at, "end": end, "cap": cur})
+    if end > cur_at: rows.append({"start": cur_at, "end": end, "cap": cur})
     return rows
 
 
@@ -1016,9 +1025,10 @@ def run_slots(invocations, caps, window_s, now, cap=None, unreadable=()):
     `invocations` holds one dict per invocation (`start`, `end`; `end` None while the run is live), or None when no run
     record exists at all: that is a gap over the whole window, never a line that says the machine was idle. `caps` holds
     one dict per cap observation (`at`, `runs`), and `cap` the run cap in force now, which anchors the ceiling where no
-    mark does. `unreadable` names the run records the caller could not read: their stretch is a gap too, because a record
-    that cannot be read is no evidence of an idle slot. The rows cover the window in order, `ceilings` is the cap as a
-    step line, and `top` is the scale the page draws, which holds the highest ceiling and the peak.
+    mark speaks at all. `unreadable` holds one dict per run record the caller could not read (`start` of the stretch it covers, or
+    None when unknown; `reason`): its stretch is a gap too, because a record that cannot be read is no evidence of an idle
+    slot, and the rest of the window keeps its line. The rows cover the window in order, `ceilings` is the cap as a step
+    line, and `top` is the scale the page draws, which holds the highest ceiling and the peak.
     """
     w = strip_window(window_s)
     start, end = now - w, now
@@ -1033,10 +1043,13 @@ def run_slots(invocations, caps, window_s, now, cap=None, unreadable=()):
     gaps = []
     if invocations is None:
         gaps.append({"start": start, "end": end, "reason": "no run record"})
-    bad = list(unreadable or ())
-    if bad:
-        gaps.append({"start": start, "end": end,
-                     "reason": f"{len(bad)} run record{'s' if len(bad) != 1 else ''} could not be read"})
+    for u in unreadable or ():
+        if not isinstance(u, dict): continue
+        a = u.get("start")
+        a = max(a, start) if isinstance(a, (int, float)) and not isinstance(a, bool) else start
+        if end > a:
+            gaps.append({"start": a, "end": end, "reason": u.get("reason") or "no readable record"})
+    gaps.sort(key=lambda g: g["start"])
     ceilings = _cap_marks(caps, cap, start, end)
     rows = []
     if invocations is not None:
