@@ -131,6 +131,37 @@ def test_a_loop_call_is_matched_against_its_own_span_not_one_point(OU):
     assert [r["id"] for r in OU.calls(rows, loop)] == ["b"]
 
 
+def test_the_spend_read_answers_a_window_and_never_walks_the_past(OU):
+    """#1897: the panel reads a window, so the matching may not scale with the history. A row older than the window is
+    not a candidate, a loop call that ended before it is not a mark, and the count of both is what the cost is made of."""
+    since = T
+    rows = [{"id": f"old{i}", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T - 86_400 - i} for i in range(20_000)]
+    rows += [{"id": "now1", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T + 10},
+             {"id": "now2", "model": "m", "in": 99, "out": 9, "cache": 0, "t0": T + 20}]
+    loop = [{"t0": T - 86_400 - i, "model": "m", "tokens_in": 10, "tokens_out": 5} for i in range(2_000)]
+    loop += [{"t0": T, "model": "m", "tokens_in": 10, "tokens_out": 5}]
+    t = time.perf_counter()
+    got = OU.calls(rows, loop, since=since)
+    spent = time.perf_counter() - t
+    assert [r["id"] for r in got] == ["now2"], "the old rows are outside the window and the recent twin is hidden"
+    assert spent < 1.0, f"the window bounds the match: {spent:.2f}s for a 20 000-row history"
+
+
+def test_the_resolver_runs_once_per_row_and_once_per_mark(OU):
+    """#1897: `canon` is a resolver, not a per-comparison check. Two rows against three marks resolve five times."""
+    rows = [{"id": "a", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T},
+            {"id": "b", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T + 60}]
+    loop = [{"t0": T, "model": "m", "tokens_in": 10, "tokens_out": 5},
+            {"t0": T, "model": "other", "tokens_in": 1, "tokens_out": 1},
+            {"t0": T, "model": "third", "tokens_in": 2, "tokens_out": 2}]
+    seen = []
+    def canon(m):
+        seen.append(m)
+        return m
+    OU.calls(rows, loop, canon=canon)
+    assert len(seen) == 5, f"two rows and three marks resolve five times, not {len(seen)}"
+
+
 def test_a_loop_call_under_another_spelling_and_a_far_in_time_call_hide_nothing(OU):
     rows = [{"id": "a", "model": "claude-opus-5-5[1m]", "in": 100, "out": 20, "cache": 0, "t0": T},
             {"id": "b", "model": "claude-opus-5-5", "in": 100, "out": 20, "cache": 0, "t0": T + 7200}]

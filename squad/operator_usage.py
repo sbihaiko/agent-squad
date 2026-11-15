@@ -65,7 +65,7 @@ def usage_rows(lines):
     return rows
 
 
-def calls(rows, loop=(), canon=None):
+def calls(rows, loop=(), canon=None, since=None):
     """The rows no loop source names. `loop` is the token usage ledger's calls and the run records' outcomes, each {t0, model,
     in, out} where `in` counts the cache reads (the ledger's form), or {t0, model, tokens_in, tokens_out}, plus the optional
     `t1` that ends the span the call ran in. A row is the same call when the canonical model and the output count match, the
@@ -73,9 +73,14 @@ def calls(rows, loop=(), canon=None):
     of the call's span (`t0` when it names no `t1`); a time a side lacks matches nothing. One loop call hides at most one
     row, so two distinct calls that share a model and its counts both stay: the match is a heuristic, and the over-match it
     can still make is named here rather than silently shrinking a busy day. `canon` maps a raw spelling to its canonical id
-    (the hub passes its one resolver, ADR-0147)."""
+    (the hub passes its one resolver, ADR-0147) and is resolved once per row and once per mark, never per comparison.
+
+    `since` bounds the pass to the window a panel reads (#1897): a row whose time is before it is no candidate and a loop
+    call whose span ended before it is no mark, so the cost follows the window and never the history behind it. A row or a
+    call with no time is kept, because no window can place it."""
     canon = canon or (lambda m: m)
-    marks = []
+    marks = {}
+    seq = 0
     for c in loop or ():
         if not isinstance(c, dict):
             continue
@@ -89,23 +94,34 @@ def calls(rows, loop=(), canon=None):
             continue
         start = t if isinstance(t, (int, float)) else None
         end = e if isinstance(e, (int, float)) else start
-        marks.append([canon(m), i, cr if isinstance(cr, int) else 0, o, start, end, False])
+        if since is not None and end is not None and end < since:
+            continue   # this call ended before the window, so it hides nothing in it
+        mark = [canon(m), i, cr if isinstance(cr, int) else 0, o, start, end, False, seq]
+        seq += 1
+        marks.setdefault((mark[0], mark[3], mark[1]), []).append(mark)   # one key per loop input the row may equal
     out = []
     for r in rows:
-        for mark in marks:
-            m, i, _cr, o, start, end, used = mark
-            if used or canon(r["model"]) != m or r["out"] != o:
-                continue
-            if not (r["in"] + r["cache"] == i or r["in"] == i):
-                continue
-            if (start is None) != (r["t0"] is None):
-                continue
-            if start is not None and not start - LOOP_MATCH_S <= r["t0"] <= end + LOOP_MATCH_S:
-                continue
-            mark[6] = True
-            break
-        else:
+        t0 = r["t0"]
+        if since is not None and t0 is not None and t0 < since:
+            continue   # outside the window: not a candidate
+        m = canon(r["model"])
+        o = r["out"]
+        best = None
+        for i in {(m, o, r["in"] + r["cache"]), (m, o, r["in"])}:   # the row's input, with and without its cache reads
+            for mark in marks.get(i, ()):
+                if mark[6]:
+                    continue
+                start, end = mark[4], mark[5]
+                if (start is None) != (t0 is None):
+                    continue
+                if start is not None and not start - LOOP_MATCH_S <= t0 <= end + LOOP_MATCH_S:
+                    continue
+                if best is None or mark[7] < best[7]:
+                    best = mark
+        if best is None:
             out.append(r)
+        else:
+            best[6] = True
     return out
 
 
