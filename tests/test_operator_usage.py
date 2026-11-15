@@ -12,14 +12,20 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 
+from tests.test_hub_cost_usage_panel import _chart
+
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 SRC = HUB_PY.read_text()
+TOKENS_PY = ROOT / "contrib/squad-goal/scripts/tokens.py"
 T = 1_800_000_000.0   # one fixture call time, in epoch seconds
 
 
@@ -108,6 +114,23 @@ def test_a_ledger_call_and_a_run_outcome_hide_their_transcript_call(OU):
     assert len(OU.calls(rows, [], canon=lambda m: m)) == 3
 
 
+def test_one_loop_call_hides_at_most_one_transcript_call(OU):
+    """#1756: the match is a heuristic, so a loop call may swallow only one row. Two distinct operator calls that share a
+    model and its counts both stay; the loop's own twin is the first one."""
+    rows = [{"id": "op1", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T},
+            {"id": "op2", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T + 60}]
+    loop = [{"t0": T, "model": "m", "tokens_in": 10, "tokens_out": 5}]
+    assert [r["id"] for r in OU.calls(rows, loop)] == ["op2"]
+
+
+def test_a_loop_call_is_matched_against_its_own_span_not_one_point(OU):
+    """#1756: a long call's transcript message lands anywhere in the call, so the match reads the span (`t0` to `t1`)."""
+    rows = [{"id": "a", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T + 900},
+            {"id": "b", "model": "m", "in": 10, "out": 5, "cache": 0, "t0": T + 1500}]
+    loop = [{"t0": T, "t1": T + 1200, "model": "m", "tokens_in": 10, "tokens_out": 5}]
+    assert [r["id"] for r in OU.calls(rows, loop)] == ["b"]
+
+
 def test_a_loop_call_under_another_spelling_and_a_far_in_time_call_hide_nothing(OU):
     rows = [{"id": "a", "model": "claude-opus-5-5[1m]", "in": 100, "out": 20, "cache": 0, "t0": T},
             {"id": "b", "model": "claude-opus-5-5", "in": 100, "out": 20, "cache": 0, "t0": T + 7200}]
@@ -139,6 +162,17 @@ def test_a_resumed_and_a_compacted_session_add_nothing_twice(OU, tmp_path):
     _write(folder, "s2.jsonl", _line("m2", "m", 2, 2, 0), _line("m3", "m", 3, 3, 0))
     _write(folder, "sub/agent.jsonl", _line("m3", "m", 3, 3, 0), _line("m4", "m", 4, 4, 0))
     assert [r["id"] for r in OU.Cache().read(folder)] == ["m1", "m2", "m3", "m4"]
+
+
+def test_an_unchanged_folder_is_not_walked_again(OU, tmp_path):
+    """#1756: the read is bounded -- a poll that finds nothing changed walks no directory, and a new folder is seen."""
+    folder = tmp_path / "p"
+    _write(folder, "a.jsonl", _line("m1", "m", 1, 1, 0))
+    c = OU.Cache()
+    assert [r["id"] for r in c.read(folder)] == ["m1"] and c.walks == 1
+    assert [r["id"] for r in c.read(folder)] == ["m1"] and c.walks == 1 and c.parsed == 1
+    _write(folder, "sub/b.jsonl", _line("m2", "m", 2, 2, 0))   # a new folder under the root moves the root's stamp
+    assert sorted(r["id"] for r in c.read(folder)) == ["m1", "m2"] and c.walks == 2
 
 
 def test_a_rewritten_transcript_folds_like_a_fresh_read(OU, tmp_path):
@@ -184,12 +218,94 @@ def test_the_chart_and_the_pie_include_operator_as_its_own_consumer(hub, tmp_pat
     assert s["totals"]["tok_today"] == 10                     # the loop-only totals are unchanged by the operator source
 
 
-def test_the_token_guard_and_the_caps_read_the_loop_sources_only(hub):
-    """The operator source changes no stop and no pause: it is read in one place, the Spend panel's stats."""
-    for f in ("contrib/squad-goal/scripts/token-guard.sh", "contrib/squad-goal/scripts/tokens.py"):
-        t = (ROOT / f).read_text()
-        assert "operator_usage" not in t and "CLAUDE_PROJECTS" not in t
-    assert SRC.count("operator_calls(") == 2   # its definition and one call, in the Spend panel's stats; no guard reads it
+def test_the_token_guard_reads_the_loop_sources_only(tmp_path):
+    """#1756: a day of operator calls changes no stop and no pause. The guard's own burn computation answers the same
+    verdict, to the byte, whether or not this checkout holds a huge operator transcript."""
+    state = tmp_path / "state"
+    state.mkdir()
+    checkout = tmp_path / "co"
+    (checkout / "runs").mkdir(parents=True)
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 60))
+    (state / "token-usage.tsv").write_text(f"{ts}\treview:x\tclaude-opus-5-5\t2000000\t0\t0\n")
+
+    def verdict(projects):
+        p = subprocess.run([sys.executable, str(TOKENS_PY), "verdict", str(state), "--checkout", str(checkout),
+                            "--hours", "2"], capture_output=True, text=True, timeout=30,
+                           env={**os.environ, "SG_CLAUDE_PROJECTS": str(projects)})
+        return p.returncode, p.stdout
+
+    before = verdict(tmp_path / "no-projects")
+    folder = tmp_path / "projects" / "-co"
+    folder.mkdir(parents=True)
+    (folder / "s.jsonl").write_text("".join(_line(f"m{i}", "claude-opus-5-5", 100000, 50000, 0,
+                                                  ts=time.time() - 60) for i in range(50)))
+    after = verdict(tmp_path / "projects")
+    assert before == after, (before, after)
+    assert before[0] == 1, before   # the loop's own review call is over the cap and is the top burner
+
+
+def test_a_late_outcome_still_names_the_calls_own_time(hub, tmp_path, monkeypatch):
+    """#1756: the record writes an outcome after the call, so the call's own span (`t0` = ts - elapsed, `t1` = ts) is
+    what a transcript call is matched against; a gate that runs between the call and the write changes nothing."""
+    folder = _setup(hub, tmp_path, monkeypatch)
+    _write(folder, "s.jsonl", _line("m1", "claude-opus-5-5", 10, 5, 0, ts=T + 1))
+    rec = tmp_path / "runs" / "run-1" / "record.jsonl"
+    rec.parent.mkdir(parents=True)
+    rec.write_text(json.dumps({"ts": T, "event": "run_start", "node": "router", "entry": 1}) + "\n"
+                   + json.dumps({"ts": T + 600, "event": "outcome", "node": "router", "entry": 1, "outcome": "pass",
+                                 "model": "claude-opus-5-5", "spend": 0.0, "tokens_in": 10, "tokens_out": 5,
+                                 "elapsed": 600.0}) + "\n")
+    r = hub.scan(rec)
+    assert (r["calls"][0]["t0"], r["calls"][0]["t1"]) == (T, T + 600)
+    monkeypatch.setattr(hub, "all_runs", lambda: [r])
+    assert hub.operator_calls() == []
+
+
+def test_the_loop_match_set_follows_the_panels_billing_filter(hub, tmp_path, monkeypatch):
+    """#1756: a loop call the current src filter drops must not hide its transcript twin, or the operator side of the
+    panel understates the day."""
+    now = hub.time.time()
+    folder = _setup(hub, tmp_path, monkeypatch)
+    ts = now - 120
+    _write(folder, "s.jsonl", _line("m1", "claude-opus-5-5", 10, 5, 0, ts=ts))
+    run = {"id": "r", "t0": now - 600, "t1": now - 60, "spend": 0.0, "sub": 0.0, "api": 0.0, "dur": 9.0, "done": True,
+           "mod": {}, "calls": [{"t0": ts, "model": "claude-opus-5-5", "tokens_in": 10, "tokens_out": 5}]}
+    monkeypatch.setattr(hub, "all_runs", lambda: [run])
+    assert hub.stats("day")["operator"]["calls"] == 0          # the record already holds this call: never twice
+    assert hub.stats("day", src="api")["operator"]["calls"] == 1   # filtered out of the panel, so its twin is operator
+
+
+def test_the_operator_summary_prices_its_calls(hub, tmp_path, monkeypatch):
+    """#1756: the operator tokens carry a list price, so a token count beside a loop-only figure never reads as free."""
+    now = hub.time.time()
+    folder = _setup(hub, tmp_path, monkeypatch)
+    _write(folder, "s.jsonl", _line("m1", "claude-opus-5-5", 100, 50, 900, ts=now - 30))
+    s = hub.stats("day")
+    assert s["operator"]["cost_today"] > 0 and s["operator"]["cost_month"] > 0
+    assert s["operator"]["unpriced"] == 0
+
+
+def test_an_operator_only_bucket_keeps_the_loops_zero():
+    """#1756: a bucket the loop did not work still draws the loop's own zero under the operator segment."""
+    out = _chart("""
+const rows=[{t:'2026-10-09',tokens:0,op:500,runs:0},{t:'2026-10-10',tokens:null,op:0,runs:0}];
+const c=barChart(rows);
+const out={bar:c.bars[0],html:bars(rows)};
+""")
+    assert out["bar"]["kind"] == "bar" and out["bar"]["zeroLoop"], out
+    assert "<rect class=zero" in out["html"], out["html"]
+    assert 'fill="var(--chart-series-2)"' in out["html"], out["html"]
+
+
+def test_the_legend_names_operator_only_when_a_bucket_draws_it():
+    """#1756: the legend never claims a series the chart does not draw."""
+    out = _chart("""
+const out={plain:bars([{t:'2026-10-09',tokens:500,runs:1}]),
+  absent:bars([{t:'2026-10-09',tokens:null,runs:0}]),
+  withop:bars([{t:'2026-10-09',tokens:500,op:100,runs:1}])};
+""")
+    assert "operator" not in out["plain"] and "operator" not in out["absent"]
+    assert "operator" in out["withop"]
 
 
 def test_the_pie_labels_the_operator_slice_and_the_chart_draws_its_segment(hub):

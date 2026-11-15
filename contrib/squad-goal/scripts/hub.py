@@ -422,7 +422,11 @@ def scan(p):
                 if SUBSCRIPTION.match(canon_model(d.get("model"))): sub += d["spend"]   # the canonical id, as stats() splits it (#791)
                 else: api += d["spend"]
             if e == "outcome":
-                ocalls.append({"t0": ts, "model": d.get("model") or "unknown", "tokens_in": d.get("tokens_in") or 0,
+                # The call's own span, not the outcome's write time: `elapsed` is its duration, so a gate or a commit that
+                # runs between the call and the write moves nothing a transcript call is matched against (#1756).
+                el = d.get("elapsed")
+                start = ts - el if isinstance(ts, (int, float)) and isinstance(el, (int, float)) else ts
+                ocalls.append({"t0": start, "t1": ts, "model": d.get("model") or "unknown", "tokens_in": d.get("tokens_in") or 0,
                                "tokens_out": d.get("tokens_out") or 0, "cache_read": d.get("cache_read") or 0})
                 x = mod.setdefault(d.get("model") or "unknown", {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
                 x["in"] += d.get("tokens_in") or 0; x["out"] += d.get("tokens_out") or 0; x["cache"] += d.get("cache_read") or 0
@@ -3307,13 +3311,15 @@ def ledger_calls():
 
 OPERATOR = None   # squad.operator_usage.Cache: the operator transcripts' fold, kept between polls (#1756)
 
-def operator_calls(runs=None):
+def operator_calls(runs=None, src="both"):
     """The operator session's model calls, its agents and workflows included (#1756): this checkout's Claude Code project
     folder (~/.claude/projects, subagent transcripts in subfolders), folded by squad.operator_usage. A call the token usage
-    ledger or a run record already names is dropped, so a loop call is never counted twice. The read is bounded: only a
-    transcript whose stamp changed is parsed again, and the fold is kept. This is the Spend panel's third source and no
-    guard's: a missing package or folder is no call, never a guess. `runs` is the stats' own list, so one poll reads the
-    run folders once; the operator rows are {id, model, in, out, cache, t0}."""
+    ledger or a run record already names is dropped, so a loop call is never counted twice. The match set follows the
+    panel's billing filter: a loop call `src` drops is not on the chart, so it must not hide its transcript twin either.
+    The read is bounded: only a transcript whose stamp changed is parsed again, the fold is kept, and an unchanged folder
+    is not walked. This is the Spend panel's third source and no guard's: a missing package or folder is no call, never a
+    guess. `runs` is the stats' own list, so one poll reads the run folders once; the operator rows are
+    {id, model, in, out, cache, t0}."""
     global OPERATOR
     co = str(CHECKOUT) if CHECKOUT else ""
     folder = transcript_folder(os.path.realpath(co)) if co else None
@@ -3328,9 +3334,10 @@ def operator_calls(runs=None):
     if OPERATOR is None or not isinstance(OPERATOR, OU.Cache):
         OPERATOR = OU.Cache()
     rows = OPERATOR.read(folder)
-    loop = list(ledger_calls())
+    keep = lambda m: _src_keeps(src, m)   # noqa: E731  the panel's own filter, so the two readings never disagree
+    loop = [c for c in ledger_calls() if isinstance(c, dict) and keep(c.get("model") or "")]
     for r in (all_runs() if runs is None else runs):
-        loop.extend(r.get("calls") or [])
+        loop.extend(c for c in (r.get("calls") or []) if isinstance(c, dict) and keep(c.get("model") or ""))
     return OU.calls(rows, loop, canon=canon_model)
 
 def _billed(src, model, spend):
@@ -3382,7 +3389,7 @@ def stats(period, src="both"):
     b = {}; amt = (lambda r: r["spend"]) if src == "both" else (lambda r: r["sub"] if src == "sub" else r["api"])
     allr = [dict(r, spend=amt(r)) for r in all_runs()]
     calls = ledger_calls()   # review calls: they carry spend and tokens, never a run
-    op = operator_calls(allr)   # the operator session's calls, its own consumer: they ride beside the loop, never inside it (#1756)
+    op = operator_calls(allr, src)   # the operator session's calls, its own consumer: they ride beside the loop, never inside it (#1756)
     def _tok(r):   # a run's tokens: in + out over every model it called, the count the token ring draws (#1073)
         return sum(v["in"] + v["out"] for v in r["mod"].values())
     for r in allr:
@@ -3440,14 +3447,16 @@ def stats(period, src="both"):
     models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
     opt = {"calls": len(op), "models": len({canon_model(c["model"]) for c in op}), "unpriced": 0,
-           "tokens_today": 0, "tokens_month": 0, "tokens_all": 0}
+           "tokens_today": 0, "tokens_month": 0, "tokens_all": 0, "cost_today": 0.0, "cost_month": 0.0, "cost_all": 0.0}
     for c in op:
         n = c["in"] + c["out"]; opt["tokens_all"] += n
-        opt["unpriced"] += bool(_usage_spend(canon_model(c["model"]), c["in"], c["out"], c["cache"])[1])
+        spend, unpriced = _usage_spend(canon_model(c["model"]), c["in"], c["out"], c["cache"])
+        opt["unpriced"] += bool(unpriced); opt["cost_all"] += spend   # a list price, never the owner's bill: the session runs on a subscription
         if c["t0"] is None: continue
         lt = time.localtime(c["t0"])
-        if lt[:2] == now[:2]: opt["tokens_month"] += n
-        if lt[:3] == now[:3]: opt["tokens_today"] += n
+        if lt[:2] == now[:2]: opt["tokens_month"] += n; opt["cost_month"] += spend
+        if lt[:3] == now[:3]: opt["tokens_today"] += n; opt["cost_today"] += spend
+    for k in ("cost_today", "cost_month", "cost_all"): opt[k] = round(opt[k], 4)
     pace = spend_pace(allr, calls, time.time(), src)   # the token guard's readings: the loop sources only (#1756)
     return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models, "operator": opt}
 
@@ -6458,9 +6467,9 @@ function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.t
     const title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(loop)+" tokens"+(op?` \u00b7 ${tk(op)} operator`:"")} \u00b7 ${r.runs} runs`;   // the loop's own count stays readable, the operator's names itself (#1756)
     if(r.tokens==null)return{kind:"missing",i,x,w:wd,cx,y:base,h:0,title};
     if(r.tokens===0&&!op)return{kind:"zero",i,x,w:wd,cx,y:base-2,h:2,title};
-    return{kind:"bar",i,x,w:wd,cx,y:y(tot(r)),h:tot(r)/mx*H,op,oy:y(loop),oh:loop?loop/mx*H:0,top:tot(r)>=mx,title}});
+    return{kind:"bar",i,x,w:wd,cx,y:y(tot(r)),h:tot(r)/mx*H,op,oy:y(loop),oh:loop?loop/mx*H:0,zeroLoop:loop===0,top:tot(r)>=mx,title}});
   const im=vals.length?rows.findIndex(r=>r.tokens!=null&&tot(r)===mx):-1,named=im>=0?bars[im]:null;
-  return{W,H,L,base,bars,ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:tk(v)})),
+  return{W,H,L,base,bars,hasOp:rows.some(r=>(r.op||0)>0),ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:tk(v)})),
     max:named?{bar:im,x:named.cx,y:named.y-4,anchor:named.cx>L+W*.75?"end":named.cx<L+W*.25?"start":"middle",text:"max "+tk(mx)}:null,
     first:n?xl(rows[0].t):"",now:"now"}}
 function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;   // tokens are the work: the chart never counts dollars
@@ -6470,10 +6479,11 @@ function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}
     +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="var(--chart-axis)" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
       :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--chart-axis)"><title>${esc(b.title)}</title></rect>`
       :`<rect class=bar x="${b.x}" y="${b.oy}" width="${b.w}" height="${b.oh}" fill="${b.top?"var(--chart-bar-max)":"var(--chart-bar)"}"><title>${esc(b.title)}</title></rect>`   // the loop's segment
+       +(b.zeroLoop?`<rect class=zero x="${b.x}" y="${base-2}" width="${b.w}" height="2" style="fill:var(--chart-axis)"><title>${esc(b.title)}</title></rect>`:"")   // the loop worked none of it: its zero still shows under the operator's segment (#1756)
        +(b.op?`<rect class="bar op" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h-b.oh}" fill="var(--chart-series-2)"><title>${esc(b.title)}</title></rect>`:"")).join("")   // the operator's segment, stacked above it (#1756)
     +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--chart-ok)" style="font-size:var(--fs-body)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
     +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${c.now}</text></svg>`
-    +`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>loop</span><span><i style="background:var(--chart-series-2)"></i>operator</span></p>`}   // the legend tells the two consumers apart (#1756)
+    +(c.hasOp?`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>loop</span><span><i style="background:var(--chart-series-2)"></i>operator</span></p>`:"")}   // the legend tells the two consumers apart, and only when a bucket draws the operator's series (#1756)
 function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
   return {text:pct?`${head} \u00b7 ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
@@ -6789,8 +6799,9 @@ async function pollStats(){try{pollSubs();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
   {const p=st.pace,u=n=>n==null?"no runs":tk(n);   // the hub computed the readings; the page prints them in tokens (#1267)
-   $("#stsr").textContent=`${u(p.median_tokens)} tokens/h median, ${p.active_hours} of ${p.window_hours} h with runs (last ${p.window_hours} h) · ${u(p.last60_tokens)} tokens last 60 min`+(p.unpriced?` · ${p.unpriced} unpriced call${p.unpriced>1?"s":""} (tokens counted)`:"")+` · ${tk(st.totals.tok_today)} tokens today`}
-  $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
+   // the loop's own reading says so; the operator session's rides beside it (#1756)
+   $("#stsr").textContent=`${u(p.median_tokens)} tokens/h median, ${p.active_hours} of ${p.window_hours} h with runs (last ${p.window_hours} h) · ${u(p.last60_tokens)} tokens last 60 min`+(p.unpriced?` · ${p.unpriced} unpriced call${p.unpriced>1?"s":""} (tokens counted)`:"")+` · ${tk(st.totals.tok_today)} loop tokens today`+(st.operator&&st.operator.tokens_today?` · operator ${tk(st.operator.tokens_today)} tokens today`:``);
+  $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);}
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
 }catch(e){console.warn("stats panel:",e)}}

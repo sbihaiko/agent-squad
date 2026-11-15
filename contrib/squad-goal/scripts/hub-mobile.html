@@ -2136,8 +2136,7 @@ function usageBarsEl(bars) {
       o.setAttribute("y", CH_H - h);
       o.setAttribute("width", Math.max(1, bw - 2));
       o.setAttribute("height", h - hl);
-      o.setAttribute("fill", "var(--acc)");
-      o.setAttribute("opacity", ".45");
+      o.setAttribute("fill", "var(--chart-series-2)");   // the desktop chart's operator series, so both renderers agree (#1756)
       ot.textContent = `${b.label}: ${usageCount(b.op)} operator`;
       o.append(ot);
       svg.append(o);
@@ -2191,8 +2190,8 @@ function showUsage() { $("usage-screen").hidden = false; drawUsagePeriod(); load
 function hideUsage() { $("usage-screen").hidden = true; }
 async function loadNowToday() {
   try {
-    const t = (await call("/api/stats?period=day")).totals || {};
-    $("now-today").textContent = "Today · " + usageTodayLine(t);
+    const d = await call("/api/stats?period=day");
+    $("now-today").textContent = "Today · " + usageTodayLine(d.totals || {}, d.operator);
     $("now-today").hidden = false;
   } catch (e) {
     $("now-today").hidden = true;

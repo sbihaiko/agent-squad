@@ -37,4 +37,5 @@ function usagePeak(buckets, period) {
   const top = buckets.reduce((a, b) => all(b) > all(a) ? b : a, buckets[0]);
   return usageMillions(all(top)) + " at " + usageLabel(top.t, period);
 }
-const usageTodayLine = totals => usageMillions(totals.tok_today || 0) + " tokens · $" + Number(totals.today || 0).toFixed(2);
+const usageTodayLine = (totals, op) => usageMillions(totals.tok_today || 0) + " tokens · $" + Number(totals.today || 0).toFixed(2)   // the dollar figure is the loop's own
+  + (op && op.tokens_today ? " · +" + usageMillions(op.tokens_today) + " operator" : "");   // so a day of operator calls is named beside it, never hidden (#1756)

@@ -76,6 +76,12 @@ def test_today_line_reads_the_served_totals():
     assert js("usageTodayLine({tok_today: 1000000, today: 1})") == "1.0M tokens · $1.00"
 
 
+def test_today_line_names_the_operator_session_beside_the_loops_own():
+    """#1756: the dollar figure is the loop's, so a day of operator calls is named beside it, never hidden."""
+    assert js("usageTodayLine({tok_today: 1000000, today: 1}, {tokens_today: 2000000})") == "1.0M tokens · $1.00 · +2.0M operator"
+    assert js("usageTodayLine({tok_today: 1000000, today: 1}, {tokens_today: 0})") == "1.0M tokens · $1.00"
+
+
 def test_the_phone_names_the_operator_session_as_its_own_slice_and_segment():
     """#1756: the operator session's calls are their own slice and their own bar segment, never merged into the loop's model."""
     models = MODELS + [{"model": "claude-opus", "consumer": "operator", "month_tokens": 100, "spend": 0.0}]

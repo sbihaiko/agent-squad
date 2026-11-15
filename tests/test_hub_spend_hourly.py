@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_hub_cost_usage_panel import _render, _stmt
+
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 SRC = HUB_PY.read_text()
@@ -78,6 +80,16 @@ def test_pace_keeps_src_as_its_fourth_argument(hub):
     assert hub.spend_pace(runs, calls, NOW, "sub")["last60_tokens"] == 8    # a positional fourth argument is the src
     assert hub.spend_pace(runs, calls, NOW, src="api")["last60_tokens"] == 11
     assert hub.spend_pace(runs, calls, NOW, window_h=48)["window_hours"] == 48
+
+
+def test_the_summary_names_the_operator_tokens_beside_the_loops_own():
+    """#1756: the operator session's tokens ride beside the loop's own reading, and the loop's count says it is the
+    loop's; the summary still carries no dollar figure (the readings are tokens, #1267)."""
+    line = _render("const p={median_tokens:100,active_hours:2,window_hours:24,last60_tokens:50,unpriced:0},"
+                   "u=n=>n==null?'no runs':tk(n),st={totals:{tok_today:1000},operator:{tokens_today:500}};",
+                   _stmt('$("#stsr").textContent=')).strip()
+    assert "1K loop tokens today" in line and "operator 500 tokens today" in line, line
+    assert "$" not in line and "toFixed" not in line, line
 
 
 def test_stats_carries_pace_and_page_only_prints_it(hub, monkeypatch):

@@ -7,15 +7,16 @@ transcripts in subfolders, and that is the third source.
 
 The fold is pure and reads lines, never a file: `usage_rows` turns transcript lines into rows of model, tokens and call
 time, and nothing else leaves it -- no prompt, no answer, no working directory. `calls` drops a row a loop source
-already names. `Cache` is the bounded read: a file whose stamp did not change is never parsed again, and the fold is
-kept between polls. A message read twice, a resumed session that copies it into a new file, and a compaction that
-copies it again are one call: one message id folds to one row.
+already names, one row per loop call at most. `Cache` is the bounded read: a folder whose stamps did not change is not
+walked again, a file whose stamp did not change is never parsed again, and the fold is kept between polls. A message
+read twice, a resumed session that copies it into a new file, and a compaction that copies it again are one call: one
+message id folds to one row.
 """
 import json
 import os
 import pathlib
 
-LOOP_MATCH_S = 300   # a transcript call and a loop call of the same model and counts are the same call within this span
+LOOP_MATCH_S = 300   # the slack around a loop call's own span: a transcript call and a loop call of the same model and counts are the same call within it
 
 
 def _n(v):
@@ -65,10 +66,13 @@ def usage_rows(lines):
 
 def calls(rows, loop=(), canon=None):
     """The rows no loop source names. `loop` is the token usage ledger's calls and the run records' outcomes, each {t0, model,
-    in, out} where `in` counts the cache reads (the ledger's form), or {t0, model, tokens_in, tokens_out}. A row is the same
-    call when the canonical model and the output count match, the row's input plus cache reads (or its input alone) is the
-    loop call's input, and the two times are within LOOP_MATCH_S; a time a side lacks matches nothing. `canon` maps a raw
-    spelling to its canonical id (the hub passes its one resolver, ADR-0147)."""
+    in, out} where `in` counts the cache reads (the ledger's form), or {t0, model, tokens_in, tokens_out}, plus the optional
+    `t1` that ends the span the call ran in. A row is the same call when the canonical model and the output count match, the
+    row's input plus cache reads (or its input alone) is the loop call's input, and the row's time lies within LOOP_MATCH_S
+    of the call's span (`t0` when it names no `t1`); a time a side lacks matches nothing. One loop call hides at most one
+    row, so two distinct calls that share a model and its counts both stay: the match is a heuristic, and the over-match it
+    can still make is named here rather than silently shrinking a busy day. `canon` maps a raw spelling to its canonical id
+    (the hub passes its one resolver, ADR-0147)."""
     canon = canon or (lambda m: m)
     marks = []
     for c in loop or ():
@@ -79,20 +83,25 @@ def calls(rows, loop=(), canon=None):
         o = c.get("out", c.get("tokens_out"))
         cr = c.get("cache", c.get("cache_read")) or 0
         t = c.get("t0", c.get("ts"))
+        e = c.get("t1", t)
         if not isinstance(m, str) or not isinstance(i, int) or not isinstance(o, int):
             continue
-        marks.append((canon(m), i, cr if isinstance(cr, int) else 0, o, t if isinstance(t, (int, float)) else None))
+        start = t if isinstance(t, (int, float)) else None
+        end = e if isinstance(e, (int, float)) else start
+        marks.append([canon(m), i, cr if isinstance(cr, int) else 0, o, start, end, False])
     out = []
     for r in rows:
-        for m, i, _cr, o, t in marks:
-            if canon(r["model"]) != m or r["out"] != o:
+        for mark in marks:
+            m, i, _cr, o, start, end, used = mark
+            if used or canon(r["model"]) != m or r["out"] != o:
                 continue
             if not (r["in"] + r["cache"] == i or r["in"] == i):
                 continue
-            if (t is None) != (r["t0"] is None):
+            if (start is None) != (r["t0"] is None):
                 continue
-            if t is not None and abs(r["t0"] - t) > LOOP_MATCH_S:
+            if start is not None and not start - LOOP_MATCH_S <= r["t0"] <= end + LOOP_MATCH_S:
                 continue
+            mark[6] = True
             break
         else:
             out.append(r)
@@ -102,37 +111,74 @@ def calls(rows, loop=(), canon=None):
 class Cache:
     """The bounded read of one project folder: each transcript is folded once per stamp (mtime and size), a changed file is
     folded again in full (a rewrite folds like a fresh read), a vanished file is dropped, and the rows are kept between
-    polls. `parsed` counts the files folded so far, so a test proves an unchanged folder parses nothing."""
+    polls. A poll that finds no directory and no file changed walks nothing: the folder's own stamp and its subfolders'
+    stamps bound the walk as the file stamps bound the parse. `parsed` counts the files folded so far and `walks` the
+    directory walks, so a test proves an unchanged folder parses nothing and walks nothing."""
 
     def __init__(self):
         self.files = {}   # path: [(mtime_ns, size), rows]
+        self.dirs = {}    # path: mtime_ns, every folder the last walk saw, the root included
+        self.root = None
         self.parsed = 0
+        self.walks = 0
+
+    def _walk_needed(self):
+        """True when the last walk's folders may have gained or lost a file: a folder's mtime moves on a create and a delete,
+        never on an append, which the file stamps catch."""
+        if not self.dirs:
+            return True
+        for d, m in self.dirs.items():
+            try:
+                if os.stat(d).st_mtime_ns != m:
+                    return True
+            except OSError:
+                return True
+        return False
+
+    def _walk(self, root):
+        try:
+            found = sorted(str(p) for p in pathlib.Path(root).rglob("*.jsonl"))
+        except OSError:
+            found = []
+        dirs = {}
+        for d in [root] + [os.path.dirname(f) for f in found]:
+            while d and d.startswith(root) and d not in dirs:   # every folder from the file up to the root
+                try:
+                    dirs[d] = os.stat(d).st_mtime_ns
+                except OSError:
+                    pass
+                d = os.path.dirname(d)
+        self.dirs = dirs
+        self.walks += 1
+        return found
 
     def read(self, folder):
         """Every transcript under `folder` (a subagent's sits in a subfolder), one row per message id across all of them."""
-        here = set()
-        try:
-            found = sorted(pathlib.Path(folder).rglob("*.jsonl"))
-        except OSError:
-            found = []
+        root = str(folder)
+        if self.root != root:
+            self.root, self.files, self.dirs = root, {}, {}
+        if self._walk_needed():
+            found = self._walk(root)
+            here = set(found)
+            for k in [k for k in self.files if k not in here]:   # a file that is gone is never kept
+                del self.files[k]
+        else:
+            found = list(self.files)
         for f in found:
-            here.add(str(f))
             try:
                 st = os.stat(f)
             except OSError:
                 continue
             stamp = (st.st_mtime_ns, st.st_size)
-            ent = self.files.get(str(f))
+            ent = self.files.get(f)
             if ent and ent[0] == stamp:
                 continue
             try:
-                lines = f.read_text(errors="replace").splitlines()
+                lines = pathlib.Path(f).read_text(errors="replace").splitlines()
             except OSError:
                 continue
-            self.files[str(f)] = [stamp, usage_rows(lines)]
+            self.files[f] = [stamp, usage_rows(lines)]
             self.parsed += 1
-        for k in [k for k in self.files if k not in here]:   # a file that is gone is never kept
-            del self.files[k]
         rows, seen = [], set()
         for k in sorted(self.files):
             for r in self.files[k][1]:
