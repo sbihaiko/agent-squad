@@ -267,7 +267,10 @@ def _answer(root, base):
             if rel in HELPER_READERS:
                 live.append(HELPER_READERS[rel])
                 continue
-            _all(f"{rel} is a test helper, not a test file")
+            # (#1883) A helper is reached by the tests that import it, like a module of the package; one no test imports
+            # answers the full battery below, because that reach is not in the graph.
+            live.append(rel)
+            continue
         if rel not in inert:
             live.append(rel)
     if not live:
@@ -325,7 +328,7 @@ def _answer(root, base):
             hits.add(rel)
         elif rel in added_paths and _is_shell_suite(rel):
             hits.add(MEASURED_LINE_GUARD)
-        elif (rel.startswith("squad/") or rel in DATA_READERS.values()) and rel.endswith(".py"):
+        elif (rel.startswith(("squad/", "tests/")) or rel in DATA_READERS.values()) and rel.endswith(".py"):
             hits |= _reach(_module(rel), rel, importers, dynamic, resolved)
         if not hits:
             _all(f"{rel} is reached by no test: no import, no path literal, not inert")

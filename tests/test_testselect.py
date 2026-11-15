@@ -530,7 +530,29 @@ def test_an_edited_shard_map_beside_a_changed_module_selects_the_guard_and_the_m
     extra = {**SHARD_GUARD_BASE, "tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a'}\n"}
     repo = tip(tmp_path, {"tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a', 'test_beta.py': 'b'}\n",
                           "squad/alpha.py": "VALUE = 2\n"}, extra=extra)
-    assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_tooling.py"]
+    assert sorted(select(repo)) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_tooling.py"]
+
+
+def test_an_edited_helper_answers_the_tests_that_import_it(tmp_path):
+    """#1883: a helper under `tests/` answered `all` for any delta that touched it, though only the tests importing it reach
+    it. Two gates in 3 h ran the full battery for `tests/launchdeps.py`."""
+    repo = tip(
+        tmp_path,
+        {"tests/launchdeps.py": "DEPS = ('a', 'b')\n"},
+        extra={"tests/launchdeps.py": "DEPS = ('a',)\n", "tests/test_uses_helper.py": "from tests import launchdeps\n"},
+    )
+    assert select(repo) == ["tests/test_uses_helper.py"]
+
+
+def test_an_edited_helper_no_test_imports_still_answers_all(tmp_path):
+    """A helper nothing imports — `conftest.py`, a fake application — is a reach the selector cannot see, so it answers the
+    full battery and never a narrower list (ADR-0169)."""
+    repo = tip(
+        tmp_path,
+        {"tests/fake_app.py": "APP = 2\n"},
+        extra={"tests/fake_app.py": "APP = 1\n"},
+    )
+    assert select(repo)[0].startswith("all:")
 
 
 MEASURED_LINE_GUARD_BASE = {
