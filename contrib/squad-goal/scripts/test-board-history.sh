@@ -33,11 +33,23 @@ grep -q '^other 0$' "$T/out.txt" && ok "the second repository's file holds nothi
 grep -q "board_history" "$here/hub.py" && ok "the hub loads the module" || ko "hub.py does not load board_history"
 "$py" - "$here/hubmux.py" <<'PY' && ok "the live server starts the history writer" || ko "the live server starts no history writer (hubmux read threads)"
 import ast, sys
-for n in ast.walk(ast.parse(open(sys.argv[1]).read())):
-    if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple):
-        names = [e.value for e in n.iter.elts if isinstance(e, ast.Constant)]
-        if "refresh_board" in names:
-            sys.exit(0 if "refresh_history" in names else 1)
+# The two reads start from one loop. The tuple may sit in the loop or in a constant it iterates (#1790 moved it).
+tree = ast.parse(open(sys.argv[1]).read())
+both = set()
+for n in ast.walk(tree):
+    if isinstance(n, ast.Assign) and isinstance(n.value, ast.Tuple):
+        names = {e.value for e in n.value.elts if isinstance(e, ast.Constant)}
+        if {"refresh_board", "refresh_history"} <= names:
+            both |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+for n in ast.walk(tree):
+    if not isinstance(n, ast.For):
+        continue
+    if isinstance(n.iter, ast.Tuple):
+        names = {e.value for e in n.iter.elts if isinstance(e, ast.Constant)}
+        if {"refresh_board", "refresh_history"} <= names:
+            sys.exit(0)
+    if isinstance(n.iter, ast.Name) and n.iter.id in both:
+        sys.exit(0)
 sys.exit(1)
 PY
 grep -q 'budget_fact(_hist.history_path' "$here/hub.py" \
