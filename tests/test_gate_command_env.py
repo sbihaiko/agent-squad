@@ -127,8 +127,9 @@ def test_the_shells_own_words_for_a_missing_program_agree(tmp_path):
     from squad import workcmd
     (tmp_path / "sub").mkdir()
     missing = str(tmp_path / "sub" / "missing")
-    assert workcmd._cannot_start(f"cd sub && ./missing", str(tmp_path), {}, f"/bin/bash: {missing}: No such file or directory\n")
-    assert workcmd._cannot_start(f"cd sub && ./missing", str(tmp_path), {}, f"/bin/dash: 1: {missing}: not found\n")
+    cmd = "cd sub && ./missing"
+    assert workcmd._cannot_start(cmd, str(tmp_path), {}, f"/bin/bash: {missing}: No such file or directory\n")
+    assert workcmd._cannot_start(cmd, str(tmp_path), {}, f"/bin/dash: 1: {missing}: not found\n")
 
 
 def test_a_shebang_interpreter_that_is_not_there_is_read_from_the_file(tmp_path):
