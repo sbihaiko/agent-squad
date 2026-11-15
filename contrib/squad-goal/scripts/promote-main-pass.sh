@@ -24,9 +24,10 @@
 #      must not be the sha of the last red verdict; then promote-stg.sh opens or reuses the pull request, removes the
 #      label, sends it, and writes R only after the label is accepted.
 # The rule reads the first-parent chain of stg by committer date, with no local record:
-#   quiet    now - committer date of the stg tip >= SG_PROMOTE_MAIN_QUIET_S (3600)
+#   quiet    now - committer date of the stg tip >= SG_PROMOTE_MAIN_QUIET_S (600)
 #   ceiling  now - committer date of the oldest first-parent commit main lacks >= SG_PROMOTE_MAIN_MAX_S (14400)
-# After a red, an unproven verdict or a refused move, the next request also waits SG_PROMOTE_MAIN_QUIET_S from the hold time.
+# After a red, an unproven verdict or a refused move, the next request also waits SG_PROMOTE_MAIN_REARM_S (3600) from the
+# hold time: the re-arm is its own wait, not the short quiet window.
 # A workflow that names no complete tier job proves nothing: one alert, no request, never green.
 # The live copy is published from stg and never waits for this pass. SG_PROMOTE=off does nothing. Exit 0: nothing to do, a
 # wait, a request or a move. Exit 1: main was held or a write failed; the reason is in promote.log or alerts.log.
@@ -39,7 +40,8 @@ remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}; tree=${SG_PROMOTE_
 export GIT_TERMINAL_PROMPT=0 SG_GH_PASS=${SG_GH_PASS:-promote-main}   # the pass the call log names (ADR-0277)
 rec=$state/promote-main-requested; bugrec=$state/promote-main-bug; hold=$state/promote-main-hold; redrec=$state/promote-main-red
 secs() { case "$1" in ''|*[!0-9]*) echo "$2";; *) echo "$1";; esac; }   # <value> <default>: a setting that is not a number is the default
-quiet=$(secs "${SG_PROMOTE_MAIN_QUIET_S:-}" 3600); ceiling=$(secs "${SG_PROMOTE_MAIN_MAX_S:-}" 14400)
+quiet=$(secs "${SG_PROMOTE_MAIN_QUIET_S:-}" 600); ceiling=$(secs "${SG_PROMOTE_MAIN_MAX_S:-}" 14400)
+rearm=$(secs "${SG_PROMOTE_MAIN_REARM_S:-}" 3600)
 flight=$(secs "${SG_PROMOTE_MAIN_FLIGHT_S:-}" 3600); grace=$(secs "${SG_PROMOTE_MAIN_GRACE_S:-}" 300)
 g() { /usr/bin/git -C "$tree" "$@"; }
 say() { echo "$(date -u +%FT%TZ) promote-main-pass: $*" >> "$log"; echo "promote-main-pass: $*"; }
@@ -48,7 +50,7 @@ alert_once() {  # <key> <text>: one alerts.log line per key
   local m=$state/auto/promote-main-$1
   [ -e "$m" ] && return 0
   : > "$m"; printf '%s PROMOTE MAIN %s\n' "$(date '+%F %T')" "$2" >> "$state/alerts.log"; }
-held() { put "$hold" "$(date +%s)"; }   # the next request waits the quiet window from here
+held() { put "$hold" "$(date +%s)"; }   # the next request waits the re-arm window from here
 . "$d/ghcall.sh"; . "$d/basecheck.sh"
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
 g remote set-url origin "$remote"
@@ -177,7 +179,7 @@ Filed by promote-main-pass.sh."
       held; put "$redrec" "$R"; rm -f "$rec"
       say "$R red: $why; $main stays at ${mtip:0:9}, bug #$n"; exit 1;;
     unproven)
-      alert_once "unproven-${R:0:12}" "the complete tier proved nothing on $stg at ${R:0:9}: $why; $main stays at ${mtip:0:9}, and the next request waits ${quiet}s"
+      alert_once "unproven-${R:0:12}" "the complete tier proved nothing on $stg at ${R:0:9}: $why; $main stays at ${mtip:0:9}, and the next request waits ${rearm}s"
       held; rm -f "$rec"
       say "$R unproven: $why; $main stays at ${mtip:0:9}"; exit 1;;
   esac
@@ -190,7 +192,7 @@ oldest=$(g rev-list --first-parent "origin/$main..origin/$stg" | tail -n 1); [ -
 tage=$(( now - $(g show -s --format=%ct "$stip") )); oage=$(( now - $(g show -s --format=%ct "$oldest") ))
 { [ "$tage" -ge "$quiet" ] || [ "$oage" -ge "$ceiling" ]; } || exit 0
 h=$(secs "$(cat "$hold" 2>/dev/null)" 0)
-[ $(( now - h )) -ge "$quiet" ] || exit 0   # a red, an unproven verdict or a refused move re-arms only after the quiet window
+[ $(( now - h )) -ge "$rearm" ] || exit 0   # a red, an unproven verdict or a refused move re-arms only after its own wait
 if ! g merge-base --is-ancestor "$mtip" "$stip"; then
   alert_once "diverged-${mtip:0:12}" "$main at ${mtip:0:9} is not an ancestor of $stg at ${stip:0:9}: $main holds work $stg lacks, so no complete tier is requested; the owner resolves it"
   exit 0
