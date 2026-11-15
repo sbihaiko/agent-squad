@@ -6,6 +6,7 @@ audited, and a tailnet write is refused without its own grant, `profiler_write`.
 """
 import http.client
 import importlib.util
+import inspect
 import json
 import pathlib
 import re
@@ -476,13 +477,12 @@ def test_a_write_that_changes_nothing_writes_no_audit_line(hub):
     assert audit(state) == []
 
 
-BOOT_READS = ("refresh_runs", "warm", "start_terminal_supervisor", "refresh_prs", "refresh_quota", "watch_self",
-              "refresh_board", "refresh_history", "refresh_fast", "load_sampler", "watch_runs")
-
-
 def quiet_boot(mod, monkeypatch):
-    """Stub every read `boot` starts but the sampler, so only the sampler is left to observe."""
-    for name in BOOT_READS:
+    """Stub every read `boot` starts but the sampler, so only the sampler is left to observe. The names come from `boot`
+    itself, so a read added there is stubbed here too and the two start tests can never drift."""
+    reads = re.findall(r"target=(\w+)", inspect.getsource(mod.boot))
+    assert "refresh_board" in reads, "the stub list is not read from boot's own calls"
+    for name in ("refresh_runs", "warm", *reads):
         monkeypatch.setattr(mod, name, lambda: None)
 
 

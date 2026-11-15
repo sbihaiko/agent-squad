@@ -2487,14 +2487,15 @@ def profiler_view(a):
 
 def profiler_switch(a, body, origin_ok):
     """The profiler switch's write, shaped as the loop switch's (ADR-0162): the access rule, its own tailnet grant, the
-    origin and a JSON body `{"on": true|false}`."""
+    origin and a JSON body `{"on": true|false}`. The answer carries `sampler: "running"|"ended"`, and on a sampler that
+    outlived the off write's wait, its words beside it in `sampler_text`."""
     why = profiler_refusal(a, origin_ok, tailnet_block())
     if why: return 403, {"err": "forbidden", "reason": why}
     if not isinstance(body, dict) or not isinstance(body.get("on"), bool): return 400, {"err": "bad request"}
     client = body.get("client") if body.get("client") in LOOP_CLIENTS else None
     ended = profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
-    out = {"ok": True, "on": body["on"]}
-    if not ended: out["sampler"] = PROFILER_STILL_RUNNING   # the off answer tells the truth about the sampler it left
+    out = {"ok": True, "on": body["on"], "sampler": "ended" if ended else "running"}   # a word a page tests, not prose
+    if not ended: out["sampler_text"] = PROFILER_STILL_RUNNING   # the off answer tells the truth about the sampler it left
     return 200, out
 
 def foot_sources(now=None):

@@ -10,7 +10,8 @@ orphan from a temp folder. Each is filed under the loop parts its ancestry names
 a call tree: a driver, the run it started, the gate below it. A process that names no part of its own counts as its
 nearest named ancestor's own time. Every other process counts in one context row, apart from the tree.
 
-A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim.
+A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim. The whole line is read, with
+no head cap: a script past a long argument list still names its process.
 
 A process that started and ended between two readings is never seen, so each node's event count, and the starts a second
 it answers, is a lower bound.
@@ -38,7 +39,8 @@ _SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
 _SHELL_CODE = re.compile(r"-[A-Za-z]*c[A-Za-z]*$")
 _WORD = re.compile(r"""(?:[^\s'"\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*"|['"])+""", re.S)   # an unclosed quote is one character
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-_BREAK = " \t\n;&|(){}"   # what ends a word in shell code; all but the blanks end a command too
+_BREAK = " \t\n;&|(){}<>"   # what ends a word in shell code; all but the blanks end a command too
+_OPERATOR = re.compile(r"\d*[;&|()<>]")   # a shell operator after a word; the digits are a redirect's file descriptor
 _PYTESTS = frozenset(("pytest", "py.test"))
 _ENGINE_VERBS = frozenset(("start", "resume", "work", "task"))
 _ENGINE_MODULES = frozenset(("squad", "squad.cli"))
@@ -58,7 +60,6 @@ OTHER = ("other", "other")       # the head of every path outside the loop: the 
 UNKNOWN = ("unknown", "unknown")  # a process of the loop whose program cannot be told, and no ancestor names one
 FOREIGN = "another loop"         # a supervisor that is not this profile's, with its descendants
 CONTEXT = "outside the loop"
-_HEAD = 400    # a command's head names what it runs; its tail is arguments, and some run to kilobytes
 _IN, _OUT, _OTHER_LOOP = "in", "out", "foreign"
 
 Scope = collections.namedtuple("Scope", "supervisor marks")   # the supervisor's pid or None; the folders of the profile
@@ -128,10 +129,11 @@ def _words(command):
 
 def _typed(word, raw):
     """True when a shell's code is one quoted word, the shell-typed shape: its quotes were read, and what follows is only
-    parameters. A code followed by a separator is the start of a longer line, not a typed code."""
+    parameters. A code followed by any shell operator, a redirection included, is the start of a longer line, not a typed
+    code: the shell reads that line as the process table prints it, so a redirected script still names its process."""
     if not word.quoted: return False
     after = raw[word.end:].lstrip()
-    return not after or after[0] not in ";&|()"
+    return not after or not _OPERATOR.match(after)
 
 
 def _shell_code(t, i, raw, depth):
@@ -225,9 +227,11 @@ def _code(code, depth):
     return None, None
 
 
-@functools.lru_cache(maxsize=8192)
 def _parse(command):
-    return _run(_words(command), raw=command)   # the whole line: a script past the head still names its process
+    """Every shape reads the whole line: there is no head cap, so a script past a long argument list still names its
+    process. The line is not cached either, since a cache would hold the whole argument list of every process and a
+    process table churns it: a reading parses each line once or twice."""
+    return _run(_words(command), raw=command)
 
 
 def label(command):
@@ -247,7 +251,7 @@ def _orphan(command, marks):
 @functools.lru_cache(maxsize=8192)
 def _plain(command):
     """The name the context row files a command under: the application, else the program's file name."""
-    m = _APP.search(command[:_HEAD])
+    m = _APP.search(command)
     if m:
         return m.group(1)
     return (command.split(None, 1) or ["?"])[0].rsplit("/", 1)[-1] or "?"
@@ -255,7 +259,7 @@ def _plain(command):
 
 @functools.lru_cache(maxsize=8192)
 def _names(command, marks):
-    return any(m in command[:4 * _HEAD] for m in marks)
+    return any(m in command for m in marks)
 
 
 def _paths(rows, scope):
