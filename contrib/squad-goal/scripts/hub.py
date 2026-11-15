@@ -761,6 +761,22 @@ def run_rank(st, live=True):
 # become part of the load it reports. CPU and RAM are read from this process (Mach's own counters, else psutil); the GPU
 # counter is the one exception — an unprivileged `ioreg` read per sample, the only source macOS offers without root.
 LOAD_SAMPLE_SECS = 5      # one sample per interval; the page polls the cached reading on this same cadence
+# A page read this profile at this instant; the samplers run only while one read it recently (#1790). The profiler named the
+# cost: `history_pass` was 4.5 % of a core and `foot_refresh` 2.7 %, both paid with no page open, per profile.
+LAST_READ = {"t": 0.0}
+HUB_IDLE_SECS = float(os.environ.get("SG_HUB_IDLE_SECS") or 600)   # a page that reads once a minute keeps a profile warm
+
+
+def page_read(now=None):
+    """Stamp a page read: the request handler calls this, and the samplers ask `sampling`."""
+    LAST_READ["t"] = time.time() if now is None else now
+
+
+def sampling(now=None):
+    """True while a page has read this profile within HUB_IDLE_SECS: the one rule every background pass asks before it runs.
+    A hub nobody reads costs no CPU, and the first read of a page wakes the passes at their next tick."""
+    now = time.time() if now is None else now
+    return now - LAST_READ["t"] <= HUB_IDLE_SECS
 LOAD_WARN_PCT = 80.0      # machine CPU % at or above which the strip warns and a card may be blamed
 LOAD_WARN_SAMPLES = 2     # consecutive samples above the threshold: one hot sample is not machine load
 LOAD_ERR_PCT = 95.0       # machine % at or above which that ONE reading is red: the machine is at its ceiling right now
@@ -2785,6 +2801,8 @@ def worst_alert():
 def load_sampler():
     """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
     while True:
+        if not sampling():
+            time.sleep(LOAD_SAMPLE_SECS); continue   # no page has read this profile: it reports nothing (#1790)
         try: load_tick()
         except Exception: pass
         try: foot_refresh()
@@ -4913,8 +4931,11 @@ def history_pass(read_issue=None, read_search=None, now=None):
 
 
 def refresh_history():
-    """history_pass() every HISTORY_EVERY seconds; one failed pass never ends the loop (#1024)."""
+    """history_pass() every HISTORY_EVERY seconds while a page reads this profile; one failed pass never ends the loop
+    (#1024). A hub nobody reads keeps the last timeline it built and builds no new one (#1790)."""
     while True:
+        if not sampling():
+            time.sleep(HISTORY_EVERY); continue
         try: history_pass()
         except Exception as e: print(f"history pass failed: {e}", file=sys.stderr)
         time.sleep(HISTORY_EVERY)
@@ -8877,6 +8898,7 @@ class H(BaseHTTPRequestHandler):
             for sid in watched: TRANSCRIPTS.unwatch(sid)
 
     def do_GET(self):
+        page_read()   # the samplers run while a page reads this profile (#1790)
         a = access(self, route_action("GET", self.path))
         if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
         if self.path.split("?", 1)[0] == hubstream.PATH and hubstream.enabled(): return self.stream(a)
