@@ -902,3 +902,72 @@ def _marks(events, landings, promotions, start, end):
             out.append({"at": p["at"], "kind": "promotion", "branch": p.get("branch"), "sha": p.get("sha")})
     out.sort(key=lambda m: m["at"])
     return out
+
+
+# ---------------------------------------------------------------- the machine load (#1768)
+# Under the strip and on the strip's own window, the machine's load average as one line, from the minute record the hub's
+# load monitor appends (time, load average, CPU share). Each record covers the minute that ends at its own time, so a
+# stretch no record covers is a `gap` with its reason, never a zero: an idle machine and an unread minute are different
+# facts. The core count is drawn as the reference line, because a load above it is more work than the machine has cores.
+# The fold is pure: rows in, no file, no clock and no process table.
+LOAD_LABEL = "Machine load"
+LOAD_CADENCE_S = 60   # one record line a minute, the monitor's own cadence
+LOAD_GAP_NO_RECORD = "no load record"
+LOAD_GAP_BEFORE = "no load record before the first one in this stretch"
+
+
+def load_row(raw):
+    """One record line as the chart reads it: `{at, load, cpu}`, where a field the writer could not read is None. None
+    for a line that names no time: a malformed line is not a point and draws no load of its own."""
+    fields = str(raw).split("\t")
+    try:
+        at = float(fields[0])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+    def num(i):
+        try:
+            v = float(fields[i])
+        except (IndexError, TypeError, ValueError):
+            return None
+        return v
+    return {"at": at, "load": num(1), "cpu": num(2)}
+
+
+def load_chart(rows, start, end, cores, cadence=LOAD_CADENCE_S):
+    """`(rows, start, end, cores)` -> the machine load of the window: the line's `segments`, the `gaps` no minute record
+    covers, the `peak` and the `cores` the page draws as its reference line.
+
+    `rows` is one `load_row` answer per record line, or None when the source cannot be read. A row whose load is None is
+    no point: its minute falls to a gap. A gap is a stretch no record covers: before the first record, between two
+    records further apart than the cadence, and after the last record once the tail is longer than the cadence (the
+    minute in progress is not a gap yet).
+    """
+    start, end = float(start), float(end)
+    cad = max(float(cadence), 1.0)
+    pts = sorted((r for r in (rows or [])
+                  if isinstance(r, dict) and isinstance(r.get("at"), (int, float)) and not isinstance(r.get("at"), bool)
+                  and isinstance(r.get("load"), (int, float)) and not isinstance(r.get("load"), bool)
+                  and start <= r["at"] <= end), key=lambda r: r["at"])
+    segments, gaps = [], []
+    if not pts:
+        gaps = [{"start": start, "end": end, "reason": LOAD_GAP_NO_RECORD}]
+    else:
+        head = pts[0]["at"] - cad
+        if head > start:
+            gaps.append({"start": start, "end": min(head, end), "reason": LOAD_GAP_BEFORE})
+        cur = [pts[0]]
+        for prev, p in zip(pts, pts[1:], strict=False):
+            if p["at"] - prev["at"] > cad:
+                segments.append(cur)
+                gaps.append({"start": prev["at"], "end": p["at"] - cad, "reason": LOAD_GAP_NO_RECORD})
+                cur = [p]
+            else:
+                cur.append(p)
+        segments.append(cur)
+        if end - pts[-1]["at"] > cad:
+            gaps.append({"start": pts[-1]["at"], "end": end, "reason": LOAD_GAP_NO_RECORD})
+    return {"label": LOAD_LABEL, "start": start, "end": end, "window_s": max(0.0, end - start),
+            "cores": max(int(cores or 1), 1), "cadence": cad, "segments": segments, "gaps": gaps,
+            "peak": max((p["load"] for p in pts), default=0.0),
+            "gap_s": round(sum(max(0.0, g["end"] - g["start"]) for g in gaps), 3)}

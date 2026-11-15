@@ -983,7 +983,8 @@ def sample_load(src=None):
         except Exception: out[k] = None
     return out
 
-LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {}}
+LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {},
+              "record_at": None, "record_cpu": []}   # the minute record's last line and the samples since it (#1768)
 LOAD_RUNS = []            # the light rows the last /api/runs served: id, folder and worktrees, for owners_of
 _PROC_PREV, _PROC_AT = None, 0.0
 
@@ -1021,14 +1022,60 @@ def attribute_pass(now=None):
     ncpu = os.cpu_count() or 1
     return {k: share_pct(v, window, ncpu) for k, v in attribute(prev, cur, owners_of(LOAD_RUNS)).items()}
 
-def load_tick(sample=None, now=None):
-    """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, and — only while the
-    machine is warned — work out which run owns that CPU."""
+# The minute record (#1768): the machine's load average and CPU share, one line a minute, in the profile's state folder.
+# The Loop tab's chart reads it on the strip's own window. It is this monitor's record, never the Loop tab's: it is
+# written with the CPU sampling switch on or off. The file is bounded to a fixed age and rewritten atomically (ADR-0030),
+# so an interrupted hub leaves the record as it was, never a partial line.
+LOAD_RECORD = STATE / "load-record.tsv"   # one line a minute: `<epoch> TAB <1-minute load average> TAB <CPU share>`
+LOAD_RECORD_SECS = 60                     # the record's cadence
+LOAD_RECORD_MAX_AGE = 24 * 3600           # the largest strip window, and the whole file's bound
+
+def _loadavg():
+    """The machine's one-minute load average, or None where the system does not answer: a missing value is no zero."""
+    try: return float(os.getloadavg()[0])
+    except (AttributeError, OSError): return None
+
+def load_average(now=None):
+    """The one-minute load average, read once a tick for every profile of this hub: `procscan` keeps the read for one
+    tick as it keeps the process table, so three profiles cost one read. The minute record adds no reader of its own."""
+    now = time.time() if now is None else now
+    return procscan.table(_loadavg, LOAD_SAMPLE_SECS, now)[0]
+
+def load_record_add(now, load, cpu):
+    """Append the minute record's line and drop the lines past LOAD_RECORD_MAX_AGE, in one atomic write (ADR-0030): the
+    destination holds the old record or the finished one, never half a line."""
+    keep = []
+    for raw in _read(LOAD_RECORD).splitlines():
+        fields = raw.split("\t")
+        try: at = float(fields[0])
+        except (IndexError, ValueError): continue
+        if at >= now - LOAD_RECORD_MAX_AGE: keep.append(raw)
+    keep.append("\t".join((f"{now:.3f}", "-" if load is None else f"{load:.2f}", "-" if cpu is None else f"{cpu:.1f}")))
+    LOAD_RECORD.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _temp_name(LOAD_RECORD); tmp.write_text("\n".join(keep) + "\n"); os.replace(tmp, LOAD_RECORD)
+
+def load_record_tick(sample, now, load=None):
+    """Take this tick into the minute record: keep its CPU reading, and write the minute's line when the minute has
+    turned. The first tick writes at once, so a page never waits a minute for the chart's first point."""
+    pending = LOAD_STATE.setdefault("record_cpu", [])
+    if sample.get("cpu") is not None: pending.append(sample["cpu"])
+    last = LOAD_STATE.get("record_at")
+    if last is not None and now - last < LOAD_RECORD_SECS: return
+    cpu = round(sum(pending) / len(pending), 1) if pending else None
+    try: load_record_add(now, load_average(now) if load is None else load, cpu)
+    except OSError: return   # a state folder this hub cannot write: the chart draws a gap, never a broken sampler
+    LOAD_STATE["record_at"], LOAD_STATE["record_cpu"] = now, []
+
+def load_tick(sample=None, now=None, load=None):
+    """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, append the minute
+    record's line when the minute has turned, and — only while the machine is warned — work out which run owns that CPU.
+    The record takes this tick's own sample and load read: it adds no second reader of the machine."""
     s = sample if sample is not None else sample_load()
     now = time.time() if now is None else now
     LOAD_STATE["cpu"] = (LOAD_STATE["cpu"] + [s["cpu"]])[-LOAD_HISTORY:]
     LOAD_STATE["ram"], LOAD_STATE["gpu"], LOAD_STATE["asof"] = s["ram"], s["gpu"], now
     LOAD_STATE["runs"] = attribute_pass(now) if sustained(LOAD_STATE["cpu"]) else {}
+    load_record_tick(s, now, load)
     return LOAD_STATE
 
 # ---------------------------------------------------------------- the footer's facts (#1797)
@@ -2712,17 +2759,32 @@ def strip_view(w=None, now=None):
     out["gates"] = strip_gates(out["start"], out["end"])   # the gates under the bar share the strip's own window
     return out
 
+def load_record_rows():
+    """The minute record's lines as the chart reads them: `{at, load, cpu}`, a field the writer could not read as None.
+    A line that names no time is no record: it never draws."""
+    out = []
+    for raw in _read(LOAD_RECORD).splitlines():
+        row = hub_profiler.load_row(raw)
+        if row is not None: out.append(row)
+    return out
+
+def load_view(st):
+    """The machine load over the strip's own window `st`, folded by the rule layer: a file read, no process table. The
+    line shares the strip's time axis, so one column of the page is one instant in both."""
+    return hub_profiler.load_chart(load_record_rows(), st["start"], st["end"], os.cpu_count() or 1)
+
 def profiler_view(a, w=None, sw=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
-    it, the facts of the reading, the loop state strip of its own window `sw`, the trip bar and the time in failed runs
-    table of the window `w` the page chose; no tree while the switch is off, and the file views read files only, so they
-    show with the switch off."""
+    it, the facts of the reading, the loop state strip of its own window `sw` with the machine load on the same window,
+    the trip bar and the time in failed runs table of the window `w` the page chose; no tree while the switch is off, and
+    the file views read files only, so they show with the switch off."""
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
+    st = strip_view(sw) if a.allowed else None   # no loop record read for a caller the hub already refused
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
            "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
-           "strip": strip_view(sw) if a.allowed else None,   # no loop record read for a caller the hub already refused
+           "strip": st, "load": load_view(st) if st else None,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out
@@ -6034,6 +6096,9 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #proftrip .ptk-wait{color:var(--mute)}#proftrip .ptk-coding{color:var(--run)}#proftrip .ptk-review{color:var(--acc)}#proftrip .ptk-gates{color:var(--warn)}#proftrip .ptk-landing{color:var(--ok)}
 #proftrip .pts-queue{background:var(--s5)}#proftrip .pts-between{background:var(--s3)}#proftrip .pts-after{background:var(--drop)}
 #proftrip .ptk-queue{color:var(--s5)}#proftrip .ptk-between{color:var(--s3)}#proftrip .ptk-after{color:var(--drop)}
+#profload{margin:0 0 18px}#profload .lsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 6px}#profload h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+#profload svg{display:block;width:100%;height:120px}#profload .plg{fill:var(--edge)}#profload .pll{fill:none;stroke:var(--acc);stroke-width:1.5;vector-effect:non-scaling-stroke}#profload .pld{fill:var(--acc)}
+#profload .plc{stroke:var(--mute);stroke-width:1;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
 #proftrip .ptk.ptk-none{background:none;box-shadow:inset 0 0 0 1px currentColor}
 #proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#proftt th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#proftt th:first-child{text-align:left}#proftt td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#proftt td:first-child{text-align:left}
 #profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}
@@ -7463,6 +7528,68 @@ function profCtx(c,open){const kids=c.children||[],isOpen=kids.length>0&&open.ha
 let profWin=86400;   // the profiler read's window: the page draws no picker for it, so it reads the hub's 24 hour default
 const profTime=s=>s>=3600?(s/3600).toFixed(1)+" h":s>=60?(s/60).toFixed(1)+" min":s>=1?s.toFixed(1)+" s":Math.round(s*1000)+" ms";
 const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
+// The loop state strip (#1765): the switch audit and the dated step records as one strip at the top of the tab. The hub
+// folds the four states, their shares and the marks; the page draws them and keeps the window the owner chose on the
+// device. The strip's window is the tab's own (4, 8 or 24 hours), apart from the file views' window below it.
+const PROF_STRIP_WIN=[[14400,"4 hours"],[28800,"8 hours"],[86400,"24 hours"]];
+const profStripGet=()=>{try{const s=JSON.parse(localStorage.getItem("squad-prof-strip")||"{}")||{};return PROF_STRIP_WIN.some(([x])=>x===s.w)?s.w:86400}catch(e){return 86400}};
+let profStripWin=profStripGet();
+const profStripSave=()=>{try{localStorage.setItem("squad-prof-strip",JSON.stringify({w:profStripWin}))}catch(e){}};
+const PROF_STATE_ORDER=["active","draining","off","down"];
+const profStamp=t=>new Date(t*1000).toLocaleString();
+const profStripPick=v=>`<label class=lpw>Window <select data-stripwin aria-label="The window of the loop state strip">${PROF_STRIP_WIN.map(([s,l])=>`<option value=${s}${s===(v&&v.window_s)?" selected":""}>${l}</option>`).join("")}</select></label>`;
+const profMarkText=m=>m.kind==="switch"?`${esc(String(m.action||"switch"))} by ${esc(m.who||"unknown author")} from ${esc(m.from||"unknown origin")}${m.issue!=null?" · #"+esc(m.issue):""}`
+ :m.kind==="landing"?`Landing in dev: ${esc(m.branch||"unknown branch")}${m.issue!=null?" · #"+esc(m.issue):""}`
+ :`Promotion to ${esc(m.branch||"unknown branch")}: ${esc((m.sha||"").slice(0,9))}`;
+// The gates under the strip (#1767): each finished gate of the same window as one mark at its finish, on the strip's own
+// axis. The outcome is told by shape, never by colour alone: a pass a circle, a fail a square, an unproven a diamond. The
+// hover names the kind, the scope, the seconds, the reason of a fail or unproven outcome and the load at its start and its
+// finish; the count of each outcome of the window stands beside the chart. The hub folds the marks; the page draws them.
+const GATE_OUTCOMES=[["pass","Pass","circle"],["fail","Fail","square"],["unproven","Unproven","diamond"]];
+const profGateLabel=o=>(GATE_OUTCOMES.find(([k])=>k===o)||["","Other"])[1];
+const profLoadText=v=>v==null?"unknown load":"load "+Number(v).toFixed(1);
+const profGateText=m=>`${esc(m.kind||"gate")} gate · ${esc(m.scope||"no scope")} · ${profTime(m.seconds||0)} · ${profGateLabel(m.outcome)}`
+ +(m.reason?` · ${esc(m.reason)}`:"")+` · ${profLoadText(m.load_start)} at the start, ${profLoadText(m.load_finish)} at the finish`;
+function profGates(g,v){
+ if(!g)return "";
+ const span=(v.end-v.start)||1,pct=s=>(100*s/span).toFixed(2),shape=o=>(GATE_OUTCOMES.find(([k])=>k===o)||["","","dot"])[2];
+ const marks=(g.marks||[]).map(m=>`<span class="lsg lsgo-${esc(m.outcome)} sh-${shape(m.outcome)}" style="left:${pct(m.at-v.start)}%" title="${profGateText(m)}"></span>`).join("");
+ const counts=GATE_OUTCOMES.map(([k,lab])=>`<li class=lsgc-${k}><i aria-hidden=true></i><b>${lab}</b> ${(g.counts||{})[k]||0}</li>`).join("");
+ const aria=`Gates of the window: ${GATE_OUTCOMES.map(([k,lab])=>lab+" "+((g.counts||{})[k]||0)).join(", ")}`;
+ return `<div class=lsgr><div class=lsga role=img aria-label="${esc(aria)}">${marks}</div><ul class=lsgc>${counts}</ul></div>`}
+function profStrip(v){
+ if(!v||!v.rows||!v.rows.length)return "";
+ const span=(v.end-v.start)||1,pct=s=>(100*s/span).toFixed(2),lab=k=>(v.labels||{})[k]||k;
+ const bars=v.rows.map(r=>r.state==="gap"
+  ?`<i class="lsc ls-gap" style="width:${pct(r.end-r.start)}%" title="${esc("No source data: "+(r.reason||"no record"))}"></i>`
+  :`<i class="lsc ls-${esc(r.state)}" style="width:${pct(r.end-r.start)}%" title="${esc(lab(r.state)+" · "+profStamp(r.start)+" to "+profStamp(r.end))}"></i>`).join("");
+ const marks=(v.marks||[]).map(m=>`<span class="lsm lsm-${esc(m.kind)}" style="left:${pct(m.at-v.start)}%" title="${profMarkText(m)}"></span>`).join("");
+ const shares=PROF_STATE_ORDER.map(k=>{const s=(v.shares||{})[k]||0;
+  return `<li class=ls-${k}><i aria-hidden=true></i><b>${esc(lab(k))}</b> ${profTime(s)} <span>${(100*s/span).toFixed(1)}%</span></li>`}).join("");
+ const gaps=v.rows.filter(r=>r.state==="gap"),gap=gaps.length
+  ?`<p class=lpn>${profTime(v.gap_s||0)} of the window has no source data, drawn as a gap: ${esc([...new Set(gaps.map(r=>r.reason||"no record"))].join("; "))}</p>`:"";
+ const aria=`The loop over the last ${profTime(span)}: ${PROF_STATE_ORDER.map(k=>lab(k)+" "+(100*((v.shares||{})[k]||0)/span).toFixed(1)+"%").join(", ")}`
+  +(gaps.length?`, ${(100*(v.gap_s||0)/span).toFixed(1)}% with no source data`:"");
+ return `<section id=profstrip><div class=lsh><h3>Loop state</h3>${profStripPick(v)}</div>`
+  +`<div class=lsb role=img aria-label="${esc(aria)}">${bars}${marks}</div>${profGates(v.gates,v)}<ul class=lss>${shares}</ul>${gap}</section>`}
+// The machine load (#1768): under the strip, on the strip's own window and time axis, the line of the machine's
+// one-minute load average from the hub's minute record. A minute the record does not cover is a gap, never a zero, and
+// the core count is a dashed reference line: above it the machine holds more work than its cores can run at once.
+const PROF_LOAD_W=1000,PROF_LOAD_H=120;
+function profLoad(v,strip){
+ if(!v)return "";
+ const s=strip||{},start=s.start!=null?s.start:v.start,end=s.end!=null?s.end:v.end,span=(end-start)||1;
+ const px=at=>(PROF_LOAD_W*(at-start)/span).toFixed(1),top=Math.max(v.peak||0,v.cores||1)||1,py=load=>(PROF_LOAD_H*(1-Math.max(0,Math.min(load,top))/top)).toFixed(1);
+ const gaps=(v.gaps||[]).map(g=>{const a=Math.max(g.start,start),b=Math.min(g.end,end);
+  return b>a?`<rect class=plg x="${px(a)}" y="0" width="${(PROF_LOAD_W*(b-a)/span).toFixed(1)}" height="${PROF_LOAD_H}" title="${esc(String(g.reason||"no load record"))}"></rect>`:""}).join("");
+ const segs=(v.segments||[]).map(seg=>seg.length>1?`<polyline class=pll points="${seg.map(p=>px(p.at)+","+py(p.load)).join(" ")}"></polyline>`
+  :seg.length?`<circle class=pld cx="${px(seg[0].at)}" cy="${py(seg[0].load)}" r="2.5" title="${esc("load "+Number(seg[0].load).toFixed(2)+" at "+profStamp(seg[0].at))}"></circle>`:"").join("");
+ const cores=v.cores||1,core=`<line class=plc x1="0" y1="${py(cores)}" x2="${PROF_LOAD_W}" y2="${py(cores)}"><title>The machine's ${cores} cores</title></line>`;
+ const gap=(v.gap_s||0)>0?`, ${profTime(v.gap_s)} with no load record, drawn as a gap`:"";
+ const aria=`Machine load over the last ${profTime(span)}: peak ${Number(v.peak||0).toFixed(2)} against ${cores} cores${gap}`;
+ return `<section id=profload><div class=lsh><h3>${esc(v.label||"Machine load")}</h3></div>`
+  +`<svg viewBox="0 0 ${PROF_LOAD_W} ${PROF_LOAD_H}" role=img aria-label="${esc(aria)}" preserveAspectRatio=none>${gaps}${segs}${core}</svg>`
+  +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window${gap}.</p></section>`}
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
@@ -7484,10 +7611,10 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+trip;   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,strip=profStrip(v.strip),load=profLoad(v.load,v.strip),trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+strip+load+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+strip+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
