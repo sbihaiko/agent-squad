@@ -188,6 +188,20 @@ def _procs_module():
     spec.loader.exec_module(mod)
     return mod
 PR = _procs_module()
+def _active_runs_module():
+    """squad/active_runs.py, the one writer protocol of the active-runs list (#1862), loaded by the same roots as procs.py:
+    the repository this script sits in first, then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. It imports no squad
+    module, so it loads alone under any python3. It is loaded at the write, so a pass that rewrites nothing needs it not."""
+    name = "squad_active_runs"
+    if hasattr(sys.modules.get(name), "rewrite"): return sys.modules[name]
+    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
+    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "active_runs.py").is_file()), roots[-1])
+    spec = importlib.util.spec_from_file_location(name, pathlib.Path(root) / "squad" / "active_runs.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 def _handhold_module():
     """squad/handhold.py, the one reader and writer of a hand hold (loop-bug #1664), imported from the repository this script sits in
     first, then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. The janitor carries no second copy of the hold's format."""
@@ -617,7 +631,10 @@ for r in names:
         continue   # with no open wave the line leaves the list here; this pass's card rules still read the run's markers
     held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i; livef[n] = f
 lines = [r for r in names if r in reaped or r in keep]
-if not dry and lines != names: act.write_text("\n".join(lines) + "\n")
+# #1862: the list is rewritten through its one writer protocol, under the lock the launcher's append takes. It re-reads the
+# list, keeps every line this pass's read did not name (a run a launch started while the pass ran), writes a temporary file
+# beside the list and renames it into place (ADR-0030). A rewrite with nothing to change writes nothing.
+if not dry: _active_runs_module().rewrite(act, names, lines)
 # S: the counted ceiling beside the per-run reap. B, J and C each kill the dashboard of one run the pass knows about, so when any of
 # them stops working for any other reason -- a run that left active-runs.txt, a record the pass cannot read -- nothing bounds the
 # count and the dashboards of finished runs accumulate (the freeze of 2026-10-13 left 41 alive). This reads the process table the
