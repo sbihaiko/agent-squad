@@ -3456,13 +3456,26 @@ def holder_fact(i, now=None):
         _HOLDER_CACHE[key] = (clock, fact)
         return fact
     return _holder_fact_now(i, run, now)   # an explicit instant is asked by a test or a probe: it is answered exactly, never from a cache
+_ACTIVE_RUNS = {}   # the active-runs list read once per board build: a card's run is looked up here before the process table is read for it
+def active_run_names():
+    """The runs the loop's own list names as active, read once per board build. A board carries four hundred held cards over
+    four hundred runs, most of them long ended, and `run_live` reads a whole record and scans the process table for each: a
+    run this list does not name has ended, so its record is never read (#1790). The list is the loop's own claim, and the
+    process table still proves the ones it does name."""
+    if "names" not in _ACTIVE_RUNS:
+        try: names = {pathlib.Path(p).name for p in (STATE / "active-runs.txt").read_text().split()}
+        except OSError: names = set()
+        _ACTIVE_RUNS["names"] = names
+    return _ACTIVE_RUNS["names"]
 def _holder_fact_now(i, run, now):
     folder = run_folder(run)
-    if folder is not None and reaper().run_live(folder, now):
-        return holder_text(i), "running"
     try: moved = (folder / "record.jsonl").stat().st_mtime if folder is not None else None
     except OSError: moved = None
     if moved is None: return f"held · run {run}, no record", "ended"
+    # Only a run the loop's list names, or one still writing its record, is proven by the process table: a board carries four
+    # hundred held cards over four hundred runs and most ended days ago, and `run_live` reads a whole record for each (#1790).
+    if (run in active_run_names() or now - moved < reaper().NO_PID_IDLE_S) and reaper().run_live(folder, now):
+        return holder_text(i), "running"
     return f"held · run {run} ended " + dt.datetime.fromtimestamp(moved, dt.timezone.utc).strftime("%Y-%m-%d %H:%M") + " UTC", "ended"
 def board_read_overdue(t, now=None):
     """True when the board item read began more than BOARD_OVERDUE_SECS ago: a stalled pass is marked, never printed as normal
@@ -4980,8 +4993,9 @@ def spec_plan_parents(items):
     ticket (#1128). The board draws its start control from this cache fact, so a render never reads the sub-issues."""
     return {i["pa"] for i in items if isinstance(i.get("pa"), int) and str(i.get("s") or "").lower() != "closed"
             and _columns_module.SPEC_LABEL not in (i.get("l") or []) and not set(i.get("l") or []) & set(TICKET_HOLD_LABELS)}
+_HOLDERS_READ = {}   # the served board read every holder for its key just before this build, so the build reads none again
 def board(moves=None):
-    _HOLDER_CACHE.clear()   # the memo answers for one board build, never across two: its fact is the run's liveness, which changes with no board read, so a later build asks again (#1790)
+    if not _HOLDERS_READ.get("v"): _HOLDER_CACHE.clear(); _ACTIVE_RUNS.clear()   # the memo answers for one board build, never across two: its fact is the run's liveness, which changes with no board read, so a later build asks again (#1790)
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     if moves is None: moves = read_moves() if overlay else {}   # the serve passes the record it already read, so one serve reads it once (#973); the record is read on every serve, so a page reload sees the same overlay (#650)
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
@@ -5098,12 +5112,15 @@ def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
     overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
     moves = read_moves() if overlay_on() else {}
-    _HOLDER_CACHE.clear()   # the key reads the same facts the body will: a memo from an earlier build would key this board on a liveness it no longer has (#1790)
+    _HOLDER_CACHE.clear(); _ACTIVE_RUNS.clear()   # the key reads the same facts the body will: a memo from an earlier build would key this board on a liveness it no longer has (#1790)
     holders = [(i["n"], holder_fact(i)[1]) for i in board_cache["items"] if (i.get("h") or {}).get("run")]   # a holder's process moves with no board read (#1661)
     key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
-    try: body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
+    try:
+        _HOLDERS_READ["v"] = True   # the key read every holder a moment ago: this build asks for none of them again
+        body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
     except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
+    finally: _HOLDERS_READ["v"] = False
     etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
     if _served_board.pop("settling", False): _served_board.pop("key", None); return body, etag
     _served_board.update(key=key, body=body, etag=etag)

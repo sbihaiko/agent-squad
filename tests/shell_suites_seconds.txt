@@ -38,6 +38,7 @@ test-codex-reset.sh 0.15
 test-consult.sh 0.57
 test-cqflush-address.sh 1.82
 test-cqflush-interval.sh 0.13
+test-cqflush-home.sh 1.15
 test-cqflush-orphan.sh 3.18
 test-cqflush-status.sh 1.54
 test-cqflush-term.sh 3.28
