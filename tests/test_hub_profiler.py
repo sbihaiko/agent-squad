@@ -411,7 +411,10 @@ def test_the_answer_carries_the_last_reading_and_the_measured_interval(hub):
 def test_a_failed_reading_is_counted_and_never_moves_the_last_reading(hub, monkeypatch):
     mod, port, _, _, _ = hub
     reads = []
-    monkeypatch.setattr(mod, "process_table", lambda: reads.append(1) or {})   # what the hub's reader returns when the read fails
+    # The sampler's own reader is stubbed, never `process_table`: one shared tick keeps its snapshot for the profiler's interval
+    # (#1746), so a stub under it is read once in a window and a cached tick answers the rest -- the count then depends on how
+    # long the test takes. The failure this asserts is the sampler's, and it must be seen at every tick (#1790).
+    monkeypatch.setattr(mod, "profiling_table", lambda: reads.append(1) or {})
     ask(port, "POST", {"on": True})
     wait(lambda: len(reads) >= 3)
     v = ask(port, "GET")[1]
