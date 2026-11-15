@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from tests.gitrepo import with_origin
-from tests.launchdeps import LAUNCH_MODULES
+from tests.launchdeps import LAUNCH_MODULES, install_squad_modules
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
@@ -45,6 +45,7 @@ def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=Non
         d.mkdir(parents=True, exist_ok=True)
     for name in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / name, s / name)
+    install_squad_modules(tmp_path / "squad")   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
     models = {"coding_models": ["claude-sonnet-5-5", "test-model"], "review_models": ["claude:claude-opus-5-5"],
               "vision_models": ["claude-sonnet-5-5"], "hours": hours or {}}
     if off:

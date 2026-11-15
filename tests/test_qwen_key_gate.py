@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.gitrepo import with_origin
-from tests.launchdeps import LAUNCH_MODULES
+from tests.launchdeps import LAUNCH_MODULES, install_squad_modules
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
@@ -135,6 +135,7 @@ def _launch(tmp_path, cfg, coding_model):
         d.mkdir(parents=True, exist_ok=True)
     for f in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / f, s / f)
+    install_squad_modules(tmp_path / "squad")   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
     (s / "models.json").write_text(json.dumps({"coding_models": [QWEN, "test-model"], "review_models": [], "vision_models": []}))
     (s / "hub.py").write_text("print('hub')\n")
     doc = {"schema_version": 1, "name": "g", "root": "main", "nodes": [

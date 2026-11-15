@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from tests.gitrepo import with_origin
-from tests.launchdeps import LAUNCH_MODULES
+from tests.launchdeps import LAUNCH_MODULES, install_squad_modules
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"))
 import router_envelope  # noqa: E402
@@ -50,6 +50,7 @@ def _launch(tmp_path, coding, envelope, shared=None, hours=None):
         d.mkdir(parents=True, exist_ok=True)
     for name in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / name, s / name)
+    install_squad_modules(tmp_path / "squad")   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
     (s / "models.json").write_text(json.dumps({"coding_models": coding, "review_models": [], "vision_models": [], "hours": {"coding_models": hours or {}}}))
     (s / "hub.py").write_text("print('hub')\n")
     doc = {"schema_version": 1, "name": "g", "root": "main", "nodes": [
