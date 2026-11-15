@@ -1026,9 +1026,35 @@ def test_the_view_draws_the_trip_as_one_stacked_bar_with_its_hover_and_table():
     assert [float(s[1]) for s in segs] == [5.26, 52.63, 10.53, 15.79, 15.79], "each segment's width is its share of the medians"
     assert segs[1][2] == "Coding: median 3.3 min, p90 4.7 min (4 observations)", "the hover names the median and the p90"
     assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Stage", "Median", "p90", "Observations"]
-    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
-    assert rows[1] == ("coding", "Coding", "3.3 min", "4.7 min", "4")
-    assert rows[4] == ("landing", "Landing", "1.0 min", "1.4 min", "2")
+    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
+    assert rows[1] == ("coding", "coding", "", "Coding", "3.3 min", "4.7 min", "4")
+    assert rows[4] == ("landing", "landing", "", "Landing", "1.0 min", "1.4 min", "2")
+    assert [r[1] for r in rows] == [s[0] for s in segs], "a row's swatch is the color of its segment, in the same order: the table is the bar's legend"
+    assert all(r[0] == r[1] for r in rows), "the swatch of a row names the stage the row names"
+
+
+def test_a_stage_with_no_median_draws_a_hollow_swatch_so_the_row_still_reads_as_its_stage():
+    none = {**TRIP, "stages": [{**s, "median_s": None} if s["stage"] == "review" else s for s in TRIP["stages"]]}
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': none})},new Set())"))
+    row = re.search(r'<tr data-p="trip/review"><td class=pn><i class="([^"]*)" aria-hidden=true></i>', out)
+    assert row and "ptk-review" in row.group(1) and "ptk-none" in row.group(1), "a stage with no median keeps its color as an outline, never a segment"
+    assert "pts-review" not in out, "a stage with no median draws no segment, so no 4 px ghost shows a colour it has no time for"
+    assert out.count("ptk-none") == 1, "only the stage without a median is hollow"
+
+
+def test_a_zero_median_draws_no_ghost_segment_either():
+    zero = {**TRIP, "stages": [{**s, "median_s": 0.0} if s["stage"] == "review" else s for s in TRIP["stages"]]}
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': zero})},new Set())"))
+    assert "pts-review" not in out, "the bar's own min-width would draw 4 px of a stage that has no time in it"
+    row = re.search(r'<tr data-p="trip/review"><td class=pn><i class="([^"]*)" aria-hidden=true></i>', out)
+    assert row and "ptk-none" in row.group(1), "a zero median reads as hollow in the legend too"
+
+
+def test_the_swatch_rules_are_shipped_with_the_widget():
+    src = (ROOT / "contrib/squad-goal/scripts/hub.py").read_text()
+    for rule in ("#proftrip .ptk{", "background:currentColor", "min-width:4px", "gap:1px",
+                 "#proftrip .ptk.ptk-none{background:none", "box-shadow:inset 0 0 0 1px currentColor"):
+        assert rule in src, f"the trip's swatch rules are what makes a colour readable: {rule} is missing"
 
 
 def test_a_window_with_fewer_than_three_deliveries_says_so_and_draws_no_bar():
