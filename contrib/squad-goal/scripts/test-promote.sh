@@ -254,7 +254,8 @@ out=$(bash "$d/promote-stg.sh" 2>&1); wait
 adv dev mg; tmg=$(tip dev); rm -f "$T/pr"; : > "$T/gh.log"; line full pass "$tmg"; export SG_PROMOTE_PROOF=local
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 /usr/bin/grep -q -- "-X PUT repos/x/emu/pulls/7/merge.* sha=$tmg" "$T/gh.log" && ok "the merge call carries the proven head sha" \
-  || ko "merge without the sha: rc $rc, out '$out', gh '$(/usr/bin/grep merge "$T/gh.log")'"# A 409 on the merge means the head moved. The pull request now names another head, so the pass exits 75 and the next pass reads it.
+  || ko "merge without the sha: rc $rc, out '$out', gh '$(/usr/bin/grep merge "$T/gh.log")'"
+# A 409 on the merge means the head moved. The pull request now names another head, so the pass exits 75 and the next pass reads it.
 mkdir -p "$T/bin409"; export GH_REAL=$T/bin/gh
 cat > "$T/bin409/gh" <<'EOF'
 #!/bin/bash
