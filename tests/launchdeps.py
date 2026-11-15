@@ -18,8 +18,9 @@ SQUAD = Path(__file__).resolve().parents[1] / "squad"
 
 
 def install_squad_modules(squad_root):
-    """Copy every `squad/` module launch.py loads into `<squad_root>/squad/`, where its root search finds it."""
+    """Copy every `squad/` module launch.py loads into `<squad_root>/squad/`; return the root, to set `SG_SQUAD` to."""
     dest = Path(squad_root) / "squad"
     dest.mkdir(parents=True, exist_ok=True)
     for name in SQUAD_MODULES:
         shutil.copy(SQUAD / name, dest / name)
+    return str(squad_root)

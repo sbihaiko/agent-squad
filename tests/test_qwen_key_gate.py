@@ -135,7 +135,7 @@ def _launch(tmp_path, cfg, coding_model):
         d.mkdir(parents=True, exist_ok=True)
     for f in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / f, s / f)
-    install_squad_modules(tmp_path / "squad")   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
+    squad_root = install_squad_modules(tmp_path)   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
     (s / "models.json").write_text(json.dumps({"coding_models": [QWEN, "test-model"], "review_models": [], "vision_models": []}))
     (s / "hub.py").write_text("print('hub')\n")
     doc = {"schema_version": 1, "name": "g", "root": "main", "nodes": [
@@ -152,7 +152,7 @@ def _launch(tmp_path, cfg, coding_model):
     req = tmp_path / "req.txt"
     req.write_text(f"Coding model: {coding_model}\n--- issue #482\n")
     e = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "CCP_"))}
-    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"),
+    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=squad_root,
              SG_SHARED=str(tmp_path / "sh"), SG_CCP_CONFIG=str(cfg))
     with_origin(co)   # launch.py fetches origin/main before a run (#580)
     r = subprocess.run([sys.executable, "-I", str(s / "launch.py"), str(req)], cwd=co, env=e, capture_output=True, text=True, timeout=60)

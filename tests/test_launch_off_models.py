@@ -45,7 +45,7 @@ def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=Non
         d.mkdir(parents=True, exist_ok=True)
     for name in ("launch.py", *LAUNCH_MODULES, "registry.json"):
         shutil.copy(SCRIPTS / name, s / name)
-    install_squad_modules(tmp_path / "squad")   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
+    squad_root = install_squad_modules(tmp_path)   # the list's writer protocol, which launch.py loads from $SG_SQUAD (#1862)
     models = {"coding_models": ["claude-sonnet-5-5", "test-model"], "review_models": ["claude:claude-opus-5-5"],
               "vision_models": ["claude-sonnet-5-5"], "hours": hours or {}}
     if off:
@@ -62,7 +62,7 @@ def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=Non
     # the existing gate wants the request to name the first coding entry that may run: `test-model` once sonnet is off
     req.write_text(f"Coding model: {'test-model' if off else 'claude-sonnet-5-5'}\n--- issue #60\n")
     e = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
-    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"),
+    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=squad_root,
              **(env or {}))
     with_origin(co)   # launch.py fetches origin/main before a run (#580)
     r = subprocess.run([sys.executable, "-I", str(s / "launch.py"), str(req)], cwd=co, env=e, capture_output=True, text=True, timeout=60)
