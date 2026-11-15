@@ -832,7 +832,7 @@ def test_the_view_offers_the_three_windows_and_marks_the_one_chosen():
     opts = re.findall(r"<option value=(\d+)( selected)?>([^<]+)</option>", out)
     assert [(v, bool(sel), label) for v, sel, label in opts] == [("3600", False, "1 hour"), ("86400", True, "24 hours"),
                                                                 ("172800", False, "48 hours")]
-    assert re.search(r'<select data-profwin aria-label="The window of the time in failed runs table">', out)
+    assert re.search(r'<select data-profwin aria-label="The window of the Loop tab\'s file views">', out)
 
 
 def test_the_table_shows_with_the_switch_off_and_states_an_empty_window():
@@ -879,6 +879,181 @@ def test_the_route_folds_every_run_record_through_the_one_reader(hub, monkeypatc
     assert str(d / "record.jsonl") in seen, "the route reads every run record through the hub's one reader"
     assert ("failed", "folded:only") in [(r["verdict"], r["reason"]) for r in v["runs"]["rows"]], \
         "the route renders the reader's answer, never a second parse of the record"
+
+
+# ---------------------------------------------------------------- the trip of one issue (#1769)
+# A delivery is a run whose record holds a passed land and a verdict. The stages are the record's own spans: the wait for
+# a slot before the first call, the child's coding, each review round's wait, each gate's start to its result, and the time
+# from the last answer or review to the merge. The gates stage also takes every gate row of the window from gate-history.
+def rec(start=1000.0, child="code.1", land_outcome="pass", verdict="completed", gates=True):
+    """One fixture record of a delivery: every stage a known length, so the fold's answer is a worked example."""
+    out = [ev("run_start", start),
+           ev("call_start", start + 30, node="router", entry=1),           # wait: 30 s to the first call
+           ev("spawn_accepted", start + 40, child=child),
+           ev("call_start", start + 44, node=child, entry=1),
+           ev("outcome", start + 244, node=child, entry=1, outcome="pass", elapsed=200.0),   # coding: 244 - 44 = 200 s
+           ev("review_round", start + 300, node=child, round=1),           # review: 300 - 244 = 56 s
+           ev("land", start + 450, node=child, outcome=land_outcome),
+           ev("verdict", start + 500, verdict=verdict, exit_code=0, reasons=[])]
+    if gates:
+        out.insert(6, ev("gate_result", start + 400, node="final_gate", entry=1, item=None, outcome="pass"))
+        out.insert(6, ev("gate_start", start + 310, node="final_gate", entry=1, item=None))   # gates: 400 - 310 = 90 s
+    return out
+
+
+def test_the_trip_spans_of_a_fixture_record_are_its_five_stages(prof):
+    spans = prof.trip_spans(rec())
+    assert spans == {"wait": 30.0, "coding": 200.0, "review": 56.0, "gates": 90.0, "landing": 150.0, "end": 1500.0}
+
+
+def test_a_run_that_landed_nothing_is_no_delivery(prof):
+    assert prof.trip_spans(rec(land_outcome="fail")) is None, "a run whose land failed delivered nothing"
+    no_land = [e for e in rec() if e["event"] != "land"]
+    assert prof.trip_spans(no_land) is None
+    no_verdict = [e for e in rec() if e["event"] != "verdict"]
+    assert prof.trip_spans(no_verdict) is None
+
+
+def test_a_child_that_failed_and_retried_counts_its_whole_span_as_coding(prof):
+    """A failed attempt is retried as another entry of the same child; its time is coding time, never a gap."""
+    evs = [ev("run_start", 2000.0), ev("spawn_accepted", 2000.0, child="code.1"),
+           ev("call_start", 2010.0, node="code.1", entry=1), ev("outcome", 2110.0, node="code.1", entry=1, outcome="fail"),
+           ev("call_start", 2200.0, node="code.1", entry=2), ev("outcome", 2500.0, node="code.1", entry=2, outcome="pass"),
+           ev("land", 2600.0, node="code.1", outcome="pass"), ev("verdict", 2610.0, verdict="completed", exit_code=0, reasons=[])]
+    assert prof.trip_spans(evs)["coding"] == 490.0     # 2500 - 2010: the retry's wait and both entries
+
+
+def test_the_percentile_is_the_linear_rule_the_doc_names(prof):
+    assert prof.percentile([], 90) is None
+    assert prof.percentile([10], 50) == 10
+    assert prof.percentile([10, 20, 30], 50) == 20
+    assert prof.percentile([10, 20, 30], 90) == pytest.approx(28.0), "the (n - 1) weight the trip table's p90 uses"
+    assert prof.percentile([4, 1, 3, 2], 90) == pytest.approx(3.7)   # sorted 1,2,3,4: 1 + 3 * 0.9
+
+
+TRIP_SPANS = [{"wait": 10.0, "coding": 100.0, "review": 20.0, "gates": None, "landing": 30.0, "end": NOW - 100},
+              {"wait": 20.0, "coding": 200.0, "review": 40.0, "gates": 60.0, "landing": 60.0, "end": NOW - 200},
+              {"wait": 30.0, "coding": 300.0, "review": 60.0, "gates": 120.0, "landing": 90.0, "end": NOW - 300}]
+
+
+def test_each_stage_answers_its_median_and_p90_over_the_deliveries(prof):
+    gates = [{"start": NOW - 500, "finish": NOW - 440},                    # 60 s, inside the window
+             {"start": NOW - 9000, "finish": NOW - 8000}]                  # outside it: no observation
+    t = prof.trip(TRIP_SPANS, gates, since=NOW - 3600)
+    assert t["deliveries"] == 3 and t["bar"] is True
+    rows = {r["stage"]: r for r in t["stages"]}
+    assert list(rows) == ["wait", "coding", "review", "gates", "landing"]
+    assert rows["wait"]["median_s"] == 20.0 and rows["wait"]["p90_s"] == pytest.approx(28.0)
+    assert rows["coding"]["median_s"] == 200.0 and rows["coding"]["p90_s"] == pytest.approx(280.0)
+    assert rows["review"]["median_s"] == 40.0 and rows["review"]["observations"] == 3
+    assert rows["gates"]["median_s"] == 60.0 and rows["gates"]["observations"] == 3, \
+        "the two deliveries that hold a gate and the one gate-history row of the window"
+    assert rows["landing"]["p90_s"] == pytest.approx(84.0)
+    assert [r["label"] for r in t["stages"]] == ["Wait for a dispatch", "Coding", "Review", "Gates", "Landing"]
+    assert rows["coding"]["share"] == pytest.approx(0.526, abs=1e-3), "the share is the median over the sum of medians"
+
+
+def test_fewer_than_three_deliveries_draw_no_bar(prof):
+    t = prof.trip(TRIP_SPANS[:2], [], since=NOW - 3600)
+    assert t["deliveries"] == 2 and t["bar"] is False, "a median of two is no profile"
+
+
+def test_a_delivery_that_ended_before_the_window_is_not_folded(prof):
+    old = {"wait": 10.0, "coding": 10.0, "review": 10.0, "gates": 10.0, "landing": 10.0, "end": NOW - 7200}
+    assert prof.trip([*TRIP_SPANS, old], [], since=NOW - 3600)["deliveries"] == 3
+
+
+TRIP = {"window_s": 3600, "since": NOW - 3600, "deliveries": 4, "bar": True,
+        "stages": [{"stage": "wait", "label": "Wait for a dispatch", "observations": 4, "median_s": 20.0, "p90_s": 28.0, "share": 0.0526},
+                   {"stage": "coding", "label": "Coding", "observations": 4, "median_s": 200.0, "p90_s": 280.0, "share": 0.5263},
+                   {"stage": "review", "label": "Review", "observations": 3, "median_s": 40.0, "p90_s": 56.0, "share": 0.1053},
+                   {"stage": "gates", "label": "Gates", "observations": 4, "median_s": 60.0, "p90_s": 60.0, "share": 0.1579},
+                   {"stage": "landing", "label": "Landing", "observations": 2, "median_s": 60.0, "p90_s": 84.0, "share": 0.1579}]}
+
+
+def trip_part(out):
+    at = out.index("<section id=proftrip>")
+    return out[at:out.index("</section>", at) + 10]
+
+
+def test_the_view_draws_the_trip_as_one_stacked_bar_with_its_hover_and_table():
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())"))
+    assert "<h3>The trip of an issue</h3>" in out and "4 deliveries in the last 1.0 h" in out
+    segs = re.findall(r'<i class="ptb-seg pts-(\w+)" style="width:([\d.]+)%" title="([^"]*)"', out)
+    assert [s[0] for s in segs] == ["wait", "coding", "review", "gates", "landing"]
+    assert [float(s[1]) for s in segs] == [5.26, 52.63, 10.53, 15.79, 15.79], "each segment's width is its share of the medians"
+    assert segs[1][2] == "Coding: median 3.3 min, p90 4.7 min (4 observations)", "the hover names the median and the p90"
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Stage", "Median", "p90", "Observations"]
+    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
+    assert rows[1] == ("coding", "Coding", "3.3 min", "4.7 min", "4")
+    assert rows[4] == ("landing", "Landing", "1.0 min", "1.4 min", "2")
+
+
+def test_a_window_with_fewer_than_three_deliveries_says_so_and_draws_no_bar():
+    thin = {**TRIP, "deliveries": 2, "bar": False}
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': thin})},new Set())"))
+    assert "2 deliveries in the last 1.0 h: fewer than three, so no bar is drawn." in out
+    assert "class=ptb " not in out and "ptb-seg" not in out, "fewer than three deliveries draw no bar"
+    one = {**TRIP, "deliveries": 1, "bar": False}
+    assert "1 delivery in " in trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': one})},new Set())"))
+
+
+def test_the_trip_shows_with_the_switch_off_and_beside_the_failed_run_table():
+    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'trip': TRIP, 'runs': RUNS})},new Set())")
+    assert "id=proftrip" in off and "id=proftt" in off and "id=profr" in off and "<table id=proft " not in off
+    on = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())")
+    assert on.index("id=proftrip") < on.index("<table id=proft "), "the bar is the summary above the hot-spot tree"
+
+
+def test_the_file_views_refresh_on_the_slow_cadence_with_the_switch_off():
+    out = json.loads(run_js('JSON.stringify([profFileDue("prof",false,{on:false}),profFileDue("prof",false,{on:true}),'
+                            'profFileDue("flow",false,{on:false}),profFileDue("prof",true,{on:false}),'
+                            'profFileDue("prof",false,null)])'))
+    assert out == [True, False, False, False, False]
+
+
+def test_the_window_picker_names_every_file_view_of_the_tab():
+    """One window choice moves the bar and the failed-run table alike, so its name says so (#1769)."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'runs': RUNS})},new Set())")
+    assert re.search(r"<select data-profwin aria-label=\"The window of the Loop tab's file views\">", out)
+    assert len(re.findall(r"<select data-profwin", out)) == 1, "one window choice serves both file views"
+
+
+def test_the_route_answers_the_trip_of_the_window_the_page_asked_for(hub):
+    mod, port, _, state, table = hub
+    now = time.time()
+    runs = state.parent / "runs"
+    for i, start in enumerate((now - 1000, now - 2000, now - 3000, now - 200_000)):   # the fourth ended two days ago
+        record(runs / f"run-20261115-03030{i}-aaaaa{i}", *[dict(e, ts=e["ts"] - 1000 + start) for e in rec()])
+    (state / "gate-history").write_text(
+        "".join(f"{now - 200}\tfast\tpass\tabc\t{now - 260}\tall\troot\tpass\t-\t1\t0\t0\t0\tchild\t0.1\t0.2\n"
+                for _ in range(2)))
+    code, v = ask(port, "GET")
+    assert code == 200 and v["trip"]["window_s"] == 86400 and v["trip"]["bar"] is True
+    assert v["trip"]["deliveries"] == 3, "the delivery two days back is outside the day the page asked for"
+    assert [s["stage"] for s in v["trip"]["stages"]] == ["wait", "coding", "review", "gates", "landing"]
+    assert {r["stage"]: r["observations"] for r in v["trip"]["stages"]}["gates"] == 5, \
+        "three deliveries hold a gate each, and the gate history adds its two rows of the window"
+    assert table.reads == 0, "the trip reads files only, so it shows with the switch off"
+    assert ask(port, "GET", path="/api/profiler?w=3600")[1]["trip"]["window_s"] == 3600
+
+
+def test_the_trip_reads_the_gate_history_by_column_name(hub):
+    """A gate row's reason may hold a tab; the columns after it keep their own names, never an index."""
+    mod = hub[0]
+    line = "100\tfast\tpass\tabc\t90\tall\troot\tpass\twhy\twith\ttabs\t1\t0\t0\t0\tchild\t0.1\t0.2"
+    row = mod.gate_row(line)
+    assert (row["start"], row["finish"], row["outcome"], row["caller"]) == ("90", "100", "pass", "child")
+    assert row["reason"] == "why\twith\ttabs", "the free-text reason is rejoined, so later columns keep their place"
+    assert mod.gate_row("100\tfast\tpass") is None, "a row too short to hold a start and a finish is no row"
+
+
+def test_the_profile_doc_names_the_bar_as_the_live_form_of_its_trip_table():
+    doc = (ROOT / "docs/loop-sequence.md").read_text()
+    section = doc[doc.index("## 0."):doc.index("### Hot spots")]
+    assert "trip bar" in section and "live form" in section, "the doc names the bar as the live form of its trip table"
+    assert "hub_profiler.trip" in section and "gate-history" in section
+    assert "fewer than three deliveries" in section
 
 
 # ---------------------------------------------------------------- behind the many-repository hub
