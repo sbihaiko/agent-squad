@@ -2853,21 +2853,88 @@ def load_view(st):
         LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), stamp
     return hub_profiler.load_chart(LOAD_STATE["record_rows"], st["start"], st["end"], os.cpu_count() or 1)
 
+# The run slots in use (#1766): the step line under the strip, folded by the rule layer from the run records. One record
+# is read tolerantly: an event that is not JSON is skipped, and a record that is there and cannot be opened is a gap with
+# its reason, never a run of zero slots. The cap's marks are the caps each `run_start` recorded and the cap the project
+# settings file holds now, at that file's own write time: a change inside the window shows at its time.
+def run_invocations(path):
+    """One run's invocations and the caps its starts recorded: each invocation is `{"start", "end"}` from a `run_start` or
+    `resume` to the verdict after it (`end` None while it has none), and each mark `{"at", "runs"}` the cap that start
+    recorded. None when the record cannot be read. A verdict before a later start is history (ADR-0167)."""
+    try: text = path.read_text(errors="replace")
+    except OSError: return None
+    out, caps, cur = [], [], None
+    for line in text.splitlines():
+        if '"ts"' not in line: continue
+        try: e = json.loads(line)
+        except ValueError: continue
+        if not isinstance(e, dict): continue
+        ts, name = e.get("ts"), e.get("event")
+        if not isinstance(ts, (int, float)) or isinstance(ts, bool): continue
+        if name in ("run_start", "resume"):
+            if cur is not None: out.append(cur)
+            cur = {"start": ts, "end": None}
+            c = e.get("caps") if isinstance(e.get("caps"), dict) else None
+            if name == "run_start" and isinstance((c or {}).get("runs"), int) and not isinstance(c["runs"], bool):
+                caps.append({"at": ts, "runs": c["runs"]})
+        elif name == "verdict" and cur is not None and cur["end"] is None:
+            cur["end"] = ts
+    if cur is not None: out.append(cur)
+    return out, caps
+
+def slot_project_cap(checkout=None):
+    """The cap the project settings file holds now and that file's write time: `(at, runs)`, or `(None, None)` when the
+    file, the package or the key is not there. The file is the one layer that may lower `caps.runs` for this project."""
+    co = checkout or CHECKOUT or "."
+    try:
+        if "ps" not in _PROJECT:
+            (_PROJECT["ps"],) = load_squad(tailnet_roots(), ("project_settings",))
+        data, info = _PROJECT["ps"].load(co)
+        path = (info or {}).get("path") or str(_PROJECT["ps"].path_for(co))
+        at = pathlib.Path(path).stat().st_mtime
+    except Exception as e:
+        log_once(f"hub: the project settings file is unavailable, the slots chart reads the recorded caps only: {type(e).__name__}")
+        return None, None
+    runs = ((data or {}).get("caps") or {}).get("runs")
+    return (at, runs) if isinstance(runs, int) and not isinstance(runs, bool) else (None, None)
+
+def slot_view(window_s, now=None, cap=None):
+    """The run slots in use of the window `window_s` and the instant `now`: the records of every run under this profile's
+    run roots, folded by the rule layer. No GitHub read, and no process table, so it shows with the CPU switch off."""
+    now = time.time() if now is None else now
+    invs, caps, bad, readable = [], [], [], 0
+    for root in run_roots(CHECKOUT):
+        try: ds = sorted(root.glob("run-*"))
+        except OSError: continue
+        for d in ds:
+            rec = d / "record.jsonl"
+            got = run_invocations(rec)
+            if got is None:   # a run that is still launching has no record yet: no slot drawn, never a failed read
+                if rec.exists(): bad.append(d.name)
+                continue
+            readable += 1
+            inv, marks = got
+            invs.extend(inv); caps.extend(marks)
+    at, proj = slot_project_cap()
+    if at is not None: caps.append({"at": at, "runs": proj})
+    return hub_profiler.run_slots(None if readable == 0 and not bad else invs, caps, window_s, now, cap=cap, unreadable=bad)
+
 def profiler_view(a, w=None, sw=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
-    it, the facts of the reading, the loop state strip of its own window `sw` with the machine load on the same window,
-    the trip bar and the time in failed runs table of the window `w` the page chose; no tree while the switch is off, and
-    the file views read files only, so they show with the switch off."""
+    it, the facts of the reading, the loop state strip of its own window `sw` with the run slots in use and the machine
+    load on the same window, the trip bar and the time in failed runs table of the window `w` the page chose; no tree
+    while the switch is off, and the file views read files only, so they show with the switch off."""
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
-    st = strip_view(sw) if a.allowed else None   # no loop record read for a caller the hub already refused
+    now = time.time()
+    st = strip_view(sw, now) if a.allowed else None   # no loop record read for a caller the hub already refused
     # The load chart is drawn only with the strip, and the page draws it with the switch off as it draws the strip, so
     # the one stat of the record is the cost of a drawn chart: a refused poll stats nothing (#1768).
     load = load_view(st) if st else None
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
            "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
-           "strip": st, "load": load,
+           "strip": st, "slots": slot_view(sw, now, (loop_caps() or {}).get("runs")) if a.allowed else None, "load": load,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out
@@ -6188,6 +6255,14 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
 #profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}
 #profb table .pbar{display:block;height:100%;background:var(--err)}#profb table .pnm{margin-left:6px}#profb table .pk-orphan .pnm{color:var(--err)}#profb table .pk-other .pnm,#profb table .pk-unknown .pnm{color:var(--mute)}#profb .lerr{color:var(--err)}
+/* The run slots in use (#1766): a step line of the slots a run holds and the cap as its dashed ceiling, on the window the
+   route folds the loop state for, so a column of the page is one instant in both views. A gap is the hatched band. */
+#profslots{margin:0 0 18px}#profslots .lslotsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 4px}
+#profslots h4{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+#profslots .lslwrap{position:relative;display:block;width:100%;height:56px;background:var(--edge);border-radius:var(--radius-sm);overflow:hidden}
+#profslots .lsl{display:block;width:100%;height:100%}#profslots .lsline{fill:none;stroke:var(--acc);stroke-width:2}
+#profslots .lscap{fill:none;stroke:var(--err);stroke-width:1.5;stroke-dasharray:3 3}
+#profslots .lsg{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(45deg,transparent 0 4px,var(--line) 4px 8px)}
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
@@ -7630,6 +7705,25 @@ function profLoad(v){
  return `<section id=profload><div class=lsh><h3>${esc(v.label||"Machine load")}</h3></div>`
   +`<svg viewBox="0 0 ${PROF_LOAD_W} ${PROF_LOAD_H}" role=img aria-label="${esc(aria)}" preserveAspectRatio=none>${gaps}${segs}${core}</svg>`
   +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window${gap}.</p></section>`}
+// The run slots in use (#1766): a step line of the slots a run holds against the cap as its dashed ceiling. The hub folds
+// the line, its ceiling steps and its gaps on the window the route folds the loop state for; the page draws them at the
+// same percentages of the same start and end, so a column of the page is one instant in both views.
+function profSlots(s){
+ if(!s||((!s.rows||!s.rows.length)&&(!s.gaps||!s.gaps.length)))return "";
+ const span=(s.end-s.start)||1,x=t=>(100*(t-s.start)/span).toFixed(2),top=Math.max(1,s.top||1);
+ const y=n=>(100*(1-(n||0)/top)).toFixed(2),rows=s.rows||[],caps=s.ceilings||[],gaps=s.gaps||[];
+ const step=rs=>rs.length?`M${x(rs[0].start)} ${y(rs[0].slots!=null?rs[0].slots:rs[0].cap)}`
+  +rs.map((r,i)=>`${i?`V${y(r.slots!=null?r.slots:r.cap)}`:""}H${x(r.end)}`).join(""):"";
+ const peak=s.peak||0,capText=s.cap!=null?`a ceiling of ${s.cap}`:"no run cap read";
+ const band=gaps.map(g=>`<i class="lsg" style="left:${x(g.start)}%;width:${(100*(g.end-g.start)/span).toFixed(2)}%" title="${esc("No readable record: "+(g.reason||"no record"))}"></i>`).join("");
+ const why=[...new Set(gaps.map(g=>g.reason||"no record"))];
+ const aria=`The run slots in use over the last ${profTime(span)}: at most ${peak} of ${capText}`
+  +(gaps.length?", with a stretch that has no readable record.":".");
+ return `<section id=profslots><div class=lslotsh><h4>${esc(s.label||"Run slots in use")}</h4></div>`
+  +`<div class=lslwrap>${band}<svg class=lsl viewBox="0 0 100 100" preserveAspectRatio=none role=img aria-label="${esc(aria)}">`
+  +(caps.length?`<path class="lscap" vector-effect=non-scaling-stroke d="${step(caps)}"></path>`:"")
+  +(rows.length?`<path class="lsline" vector-effect=non-scaling-stroke d="${step(rows)}"></path>`:"")+`</svg></div>`
+  +`<p class=lpn>at most ${peak} of ${capText}${why.length?` · no readable record: ${esc(why.join("; "))}`:""}</p></section>`}
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
@@ -7651,10 +7745,10 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,load=profLoad(v.load),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+load+trip;   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,slots=profSlots(v.slots),load=profLoad(v.load),trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+slots+load+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+slots+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();

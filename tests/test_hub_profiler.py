@@ -1884,7 +1884,6 @@ def test_the_route_carries_the_gate_marks_of_the_strip_window(hub):
     assert table.reads == 0, "the gate marks read files only"
 
 
-
 # ---------------------------------------------------------------- the machine load (#1768)
 # Under the tab's header, on its own window, the line of the machine's one-minute load average, from the record the
 # hub's load monitor appends once a minute (time, load average, CPU share). The fold is pure: fixture rows in, no clock
@@ -2475,3 +2474,147 @@ def test_a_window_with_no_load_record_says_so_in_the_line():
              "gaps": [{"start": LOAD["start"], "end": LOAD["end"], "reason": "no load record"}]}
     part = load_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'load': empty})},new Set())"))
     assert re.search(r'title="[^"]*no load record', part) and "class=pll" not in part
+
+
+# ---------------------------------------------------------------- the run slots in use (#1766)
+# The step line of the run slots in use, from zero to the run cap, folded from the run records. A
+# run holds a slot from its start to its verdict; a verdict before a later start is history, so a resumed run is a second
+# invocation (ADR-0167). The cap is a step too: each `run_start` records the caps in force at its own start, and the project
+# file that may lower it is a mark at its write time. The fold is pure: fixture lists in, rows out, no clock and no file.
+def inv(a, b=None):
+    return {"start": a, "end": b}
+
+
+def capmark(at, runs):
+    return {"at": at, "runs": runs}
+
+
+def steps_of(out):
+    return [(r["slots"], r["start"], r["end"]) for r in out["rows"]]
+
+
+def test_the_slots_fold_draws_a_step_line_from_zero_to_the_cap(prof):
+    invs = [inv(W0 - 3 * H, W0 - 2 * H), inv(W0 - 2 * H + 600, W0 - 5400), inv(W0 - 1800)]
+    out = prof.run_slots(invs, [capmark(W0 - 4 * H, 3)], 4 * H, W0)
+    assert steps_of(out) == [
+        (0, W0 - 4 * H, W0 - 3 * H),
+        (1, W0 - 3 * H, W0 - 2 * H),
+        (0, W0 - 2 * H, W0 - 2 * H + 600),
+        (1, W0 - 2 * H + 600, W0 - 5400),
+        (0, W0 - 5400, W0 - 1800),
+        (1, W0 - 1800, W0)], "a run holds its slot from its start to its verdict; a run with no verdict holds it to now"
+    assert out["window_s"] == 4 * H and out["start"] == W0 - 4 * H and out["end"] == W0
+    assert out["peak"] == 1 and out["top"] == 3
+    assert [c["cap"] for c in out["ceilings"]] == [3] and out["label"] == "Run slots in use"
+
+
+def test_two_runs_at_once_count_two_slots_and_a_count_above_the_cap_is_lowered_to_it(prof):
+    invs = [inv(W0 - 3 * H, W0 - H) for _ in range(4)]
+    assert [r["slots"] for r in prof.run_slots(invs, [capmark(W0 - 4 * H, 4)], 4 * H, W0)["rows"]] == [0, 4, 0]
+    out = prof.run_slots(invs, [capmark(W0 - 4 * H, 2)], 4 * H, W0)
+    assert [r["slots"] for r in out["rows"]] == [0, 2, 0], "a count above the ceiling is lowered to it, as squad/caps counts"
+    assert out["peak"] == 2 and out["top"] == 2
+
+
+def test_a_cap_change_in_the_window_is_a_step_at_its_own_time(prof):
+    out = prof.run_slots([inv(W0 - 3 * H, W0 - H)], [capmark(W0 - 4 * H, 6), capmark(W0 - 90 * 60, 2)], 4 * H, W0)
+    assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [
+        (6, W0 - 4 * H, W0 - 90 * 60), (2, W0 - 90 * 60, W0)], "the ceiling is a step at the time the cap changed"
+    assert out["top"] == 6, "the line's scale holds the highest ceiling of the window"
+
+
+def test_a_cap_mark_before_the_window_anchors_the_ceiling_at_its_start(prof):
+    out = prof.run_slots([], [capmark(W0 - 8 * H, 4)], 4 * H, W0)
+    assert out["ceilings"] == [{"start": W0 - 4 * H, "end": W0, "cap": 4}]
+    assert steps_of(out) == [(0, W0 - 4 * H, W0)]
+
+
+def test_a_window_with_no_run_record_is_a_gap_with_its_reason(prof):
+    out = prof.run_slots(None, [capmark(W0 - 4 * H, 3)], 4 * H, W0)
+    assert out["rows"] == [] and out["gaps"] == [{"start": W0 - 4 * H, "end": W0, "reason": "no run record"}]
+    assert [c["cap"] for c in out["ceilings"]] == [3], "the ceiling is drawn even where no run record exists"
+
+
+def test_a_record_that_cannot_be_read_is_a_gap_with_its_reason(prof):
+    out = prof.run_slots([inv(W0 - H, W0)], [capmark(W0 - 4 * H, 3)], 4 * H, W0, unreadable=["run-1", "run-2"])
+    assert [(g["start"], g["end"], g["reason"]) for g in out["gaps"]] == [
+        (W0 - 4 * H, W0, "2 run records could not be read")]
+    assert steps_of(out) == [(0, W0 - 4 * H, W0 - H), (1, W0 - H, W0)], "the records that did read still draw their slots"
+
+
+def test_a_resumed_run_is_two_invocations_so_the_verdict_before_the_resume_frees_the_slot(records):
+    mod, runs = records
+    d = runs / "run-20261115-020101-aaaaaa"
+    record(d, ev("run_start", NOW - 3600, caps={"runs": 3}), ev("verdict", NOW - 3000, verdict="failed", exit_code=1),
+           ev("resume", NOW - 1800), ev("verdict", NOW - 600, verdict="completed", exit_code=0))
+    invs, caps = mod.run_invocations(d / "record.jsonl")
+    assert [(x["start"], x["end"]) for x in invs] == [(NOW - 3600, NOW - 3000), (NOW - 1800, NOW - 600)]
+    assert caps == [{"at": NOW - 3600, "runs": 3}], "the caps a run_start records mark the ceiling at that run's start"
+
+
+def test_a_record_with_no_final_verdict_is_live_to_now(records):
+    mod, runs = records
+    d = runs / "run-20261115-020202-bbbbbb"
+    record(d, ev("run_start", NOW - 600), ev("call_start", NOW - 60))
+    assert [(x["start"], x["end"]) for x in mod.run_invocations(d / "record.jsonl")[0]] == [(NOW - 600, None)]
+
+
+def test_slot_view_folds_the_runs_of_this_checkout(records):
+    mod, runs = records
+    record(runs / "run-20261115-020303-cccccc",
+           ev("run_start", NOW - 1800, caps={"runs": 2}), ev("verdict", NOW - 900, verdict="completed", exit_code=0))
+    out = mod.slot_view(14400, NOW)
+    assert out["window_s"] == 14400 and steps_of(out)[-1][0] == 0
+    assert any(r["slots"] == 1 for r in out["rows"]), "the run's own stretch holds one slot"
+    assert [c["cap"] for c in out["ceilings"]] == [2], "the cap the run_start recorded is the ceiling"
+
+
+def test_the_route_answers_the_slots_on_the_strip_s_own_axis(hub):
+    """One instant is one column: the strip and the slots are folded from one `now`, so they share their window's ends."""
+    mod, port, _, _, table = hub
+    now = time.time()
+    d = pathlib.Path(mod.CHECKOUT) / "runs" / "run-20261115-030303-dddddd"
+    try:
+        record(d, ev("run_start", now - 1800), ev("call_start", now - 60))
+        code, v = ask(port, "GET", path="/api/profiler?sw=14400")
+        assert code == 200 and v["on"] is False
+        slots, strip = v["slots"], v["strip"]
+        assert slots["start"] == strip["start"] and slots["end"] == strip["end"], "a column is one instant in both"
+        assert slots["window_s"] == strip["window_s"] == 14400
+        assert [r["slots"] for r in slots["rows"]][-1] == 1, "the running run holds its slot to now"
+        assert table.reads == 0, "the slots read run records only"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+SLOTS = {"window_s": 14400, "start": W0 - 14400, "end": W0, "label": "Run slots in use", "cap": 3, "peak": 2, "top": 3,
+         "rows": [{"start": W0 - 14400, "end": W0 - 5400, "slots": 0},
+                  {"start": W0 - 5400, "end": W0 - 1800, "slots": 2},
+                  {"start": W0 - 1800, "end": W0, "slots": 1}],
+         "ceilings": [{"start": W0 - 14400, "end": W0 - 3600, "cap": 3}, {"start": W0 - 3600, "end": W0, "cap": 2}],
+         "gaps": [{"start": W0 - 1800, "end": W0, "reason": "no run record"}]}
+
+
+def test_the_slots_chart_is_drawn_as_its_own_panel_above_the_trip_bar():
+    """The loop state panel is gone, so the chart stands on its own: it is the tab's first view, and its column at 62.5% of
+    the window is the window's own."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'slots': SLOTS, 'trip': TRIP})},new Set())")
+    assert "id=profslots" in out, "the chart draws with no loop state panel above it"
+    assert "id=profstrip" not in out, "the chart does not bring the loop state panel back"
+    assert out.index("id=profslots") < out.index("id=proftrip"), "the chart stands above the trip bar"
+    assert "H62.50" in out, "the boundary at 62.5% of the window is the chart's own column"
+
+
+def test_the_slots_chart_draws_the_ceiling_and_names_its_gap():
+    part = run_js(f"profHtml({json.dumps({**VIEW, 'slots': SLOTS})},new Set())")
+    assert re.search(r'class="lscap"', part), "the run cap is drawn as the ceiling"
+    assert re.search(r"#profslots \.lscap\{[^}]*stroke-dasharray", page()), "the ceiling is dashed, so it never reads as the line"
+    assert "H75.00" in part, "a change of the cap is a step at its own time"
+    assert "no run record" in part, "a part with no readable record names its reason"
+    assert "at most 2 of a ceiling of 3" in part, "the caption names the peak and the ceiling"
+
+
+def test_the_slots_chart_draws_its_zero_line_with_no_run_in_the_window():
+    empty = {**SLOTS, "rows": [], "peak": 0}
+    part = run_js(f"profHtml({json.dumps({**VIEW, 'slots': empty})},new Set())")
+    assert "id=profslots" in part and "no run record" in part, "a window with no run still draws its gap and its ceiling"
