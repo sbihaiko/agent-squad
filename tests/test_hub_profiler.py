@@ -1947,6 +1947,17 @@ def test_a_minute_with_no_record_is_a_gap_never_zero(prof):
     assert out["gap_s"] == 180 + 240, "the two uncovered stretches, and nothing else"
 
 
+def test_a_record_one_cadence_apart_leaves_no_hole_and_two_leaves_one_minute(prof):
+    """A line covers the minute before it: the next line one cadence later leaves no hole, and a line two cadences later
+    leaves exactly the minute between them a gap, never a zero (AC3)."""
+    one = prof.load_chart([lrow(LBASE - 120, 1.0), lrow(LBASE - 60, 2.0)], LBASE - 120, LBASE, cores=4)
+    assert [p["load"] for p in flat(one)] == [1.0, 2.0] and one["gaps"] == [], "a minute apart is continuous"
+    two = prof.load_chart([lrow(LBASE - 120, 1.0), lrow(LBASE, 2.0)], LBASE - 120, LBASE, cores=4)
+    assert [[p["load"] for p in s] for s in two["segments"]] == [[1.0], [2.0]], "the missing minute draws no point"
+    assert two["gaps"] == [{"start": LBASE - 120, "end": LBASE - 60, "reason": "no load record"}]
+    assert two["gap_s"] == 60
+
+
 def test_a_record_with_no_load_breaks_the_line_and_draws_no_value(prof):
     rows = [lrow(LBASE - 600, 1.0), lrow(LBASE - 540, None), lrow(LBASE - 480, 3.0)]
     out = prof.load_chart(rows, LBASE - 600, LBASE, cores=4)
@@ -1978,6 +1989,16 @@ def test_the_core_count_is_the_reference_line_and_one_core_is_the_floor(prof):
     out = prof.load_chart([lrow(LBASE - 90, 16.0)], LBASE - 600, LBASE, cores=16)
     assert out["cores"] == 16 and out["peak"] == 16.0
     assert prof.load_chart([], LBASE - 600, LBASE, cores=0)["cores"] == 1, "a machine that cannot say its cores still draws one"
+
+
+def test_a_load_above_the_core_count_is_drawn_at_its_own_height_never_clipped():
+    """The y axis scales to the window's peak, so a machine at four times its core count draws its magnitude and the core
+    line sits below it as the reference (AC3)."""
+    over = {**LOAD, "peak": 32.0, "cores": 8, "gap_s": 0, "gaps": [],
+            "segments": [[{"at": LOAD["start"], "load": 32.0, "cpu": 90.0}]]}
+    part = load_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'load': over})},new Set())"))
+    assert 'cy="0.0"' in part, "the peak is the top of the scale, never clipped above it"
+    assert re.search(r'class=plc[^>]*y1="90.0"', part), "the core reference sits at its own share of the peak"
 
 
 def test_the_route_answers_the_machine_load_on_the_strips_own_window(hub):
@@ -2062,6 +2083,82 @@ def test_the_record_takes_the_tick_s_own_sample_and_load_read(hub, monkeypatch):
     assert path.read_text().split("\t")[1:] == ["1.50", "42.0\n"]
 
 
+def test_a_failed_write_keeps_the_pending_window_one_minute(hub, monkeypatch):
+    """A state folder this hub cannot write degrades to a gap: the failed minute still advances, and the next line's share
+    is the mean of the ticks since it, never a mean over the whole failed stretch (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu=[], record_rows=None)
+    real = mod.os.replace
+
+    def boom(*a, **k):
+        raise OSError("read-only state folder")
+    monkeypatch.setattr(mod.os, "replace", boom)
+    mod.load_tick({"cpu": 90.0, "ram": None, "gpu": None}, now=LBASE, load=9.0)
+    assert mod.LOAD_STATE["record_at"] == LBASE, "the failed minute advanced"
+    assert mod.LOAD_STATE["record_cpu"] == [], "the failed minute's samples never join the next line"
+    monkeypatch.setattr(mod.os, "replace", real)
+    mod.load_tick({"cpu": 30.0, "ram": None, "gpu": None}, now=LBASE + 60, load=3.0)
+    assert path.read_text().splitlines()[0].split("\t")[2] == "30.0", "the share is the ticks since the failed minute"
+
+
+def test_a_restarted_hub_writes_no_second_line_for_a_minute_the_record_holds(hub):
+    """A hub restarted inside a minute the record already holds writes no second line for it: the cadence stays one line
+    a minute across a restart (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.write_text(f"{LBASE - 30:.3f}\t1.00\t10.0\n")
+    mod.LOAD_STATE.update(record_at=None, record_cpu=[], record_rows=None)
+    mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE, load=2.0)
+    assert len(path.read_text().splitlines()) == 1, "the minute is already written"
+
+
+def test_a_clock_that_steps_back_never_leaves_the_record_out_of_order(hub):
+    """A line after `now` is a leftover of a clock that stepped back: it leaves with the next write, so the chart's
+    minutes run forward (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.write_text(f"{LBASE + 3600:.3f}\t9.00\t90.0\n{LBASE - 120:.3f}\t1.00\t10.0\n")
+    mod.LOAD_STATE.update(record_at=None, record_cpu=[], record_rows=None)
+    mod.load_tick({"cpu": 30.0, "ram": None, "gpu": None}, now=LBASE, load=2.0)
+    ats = [float(ln.split("\t")[0]) for ln in path.read_text().splitlines()]
+    assert ats == [LBASE - 120, LBASE], "the line after now left and the record stays in time order"
+
+
+def test_one_load_read_a_tick_serves_every_profile_and_the_record(hub, monkeypatch):
+    """The sampler's own tick, given no load, reads the average once: the other profiles' reads and the record's line
+    all take that one read, so the record adds no reader of the machine (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu=[], record_rows=None)
+    reads = []
+
+    def loadavg():
+        reads.append(1)
+        return 2.5
+    monkeypatch.setattr(mod, "_loadavg", loadavg)
+    monkeypatch.setattr(mod, "SOURCES", {"cpu": lambda: 30.0, "ram": None, "gpu": None})
+    assert [mod.load_average(LBASE) for _ in range(3)] == [2.5, 2.5, 2.5], "three profiles read in one tick"
+    mod.load_tick(now=LBASE)
+    assert len(reads) == 1, "the record's line took the tick's one read"
+    assert path.read_text().split("\t")[1] == "2.50"
+
+
+def test_the_load_view_folds_the_rows_the_sampler_kept(hub, monkeypatch):
+    """The view takes the rows the sampler parsed and kept: it adds no second read of the record file per page poll
+    (#1768)."""
+    mod, _, _, state, _ = hub
+    (state / "load-record.tsv").unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu=[], record_rows=None)
+    mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE, load=3.0)
+    monkeypatch.setattr(mod, "load_record_rows",
+                        lambda: (_ for _ in ()).throw(AssertionError("a second read of the record")))
+    out = mod.load_view({"start": LBASE - 300, "end": LBASE})
+    assert [p["load"] for seg in out["segments"] for p in seg] == [3.0]
+
+
 def test_a_check_hub_on_a_scratch_state_folder_writes_the_record_s_first_line(tmp_path, monkeypatch):
     """A check hub is hubmux.py on any port but the live one, and it keeps its state out of the live hub: a scratch state
     folder proves the load monitor appends the record's first line by itself, with no page and no profiler switch."""
@@ -2085,8 +2182,10 @@ def test_a_check_hub_on_a_scratch_state_folder_writes_the_record_s_first_line(tm
     mod.foot_refresh = lambda: None                       # the record is the only pass this test asks for
     mod.SOURCES = {"cpu": lambda: 40.0, "ram": lambda: 50.0, "gpu": lambda: None}
 
+    done = threading.Event()
+
     def pause(secs):
-        if mod.LOAD_RECORD.is_file():
+        if done.is_set() or mod.LOAD_RECORD.is_file():
             raise StopSampling
         time.sleep(min(secs, 0.01))
     monkeypatch.setattr(mod, "read_pause", pause)
@@ -2094,12 +2193,23 @@ def test_a_check_hub_on_a_scratch_state_folder_writes_the_record_s_first_line(tm
     for name in mux.SAMPLERS:
         if name != "load_sampler":
             monkeypatch.setattr(mod, name, lambda: None)
+
+    def samplers():
+        return [t for t in threading.enumerate() if t.name.endswith(":load_sampler")]
+    before = set(samplers())
     mux.start_profile(apps["alpha"])
-    mux.touch_profile(apps["alpha"])                        # a page read: the profile's own reads run
-    wait(lambda: mod.LOAD_RECORD.is_file() and mod.LOAD_RECORD.read_text().strip())
-    assert str(mod.LOAD_RECORD).startswith(str(base)), "the record lands in the profile's own state folder"
-    first = mod.LOAD_RECORD.read_text().splitlines()[0].split("\t")
-    assert len(first) == 3 and float(first[0]) > 0 and float(first[1]) >= 0 and float(first[2]) == 40.0
+    started = [t for t in samplers() if t not in before]
+    try:
+        mux.touch_profile(apps["alpha"])                    # a page read: the profile's own reads run
+        wait(lambda: mod.LOAD_RECORD.is_file() and mod.LOAD_RECORD.read_text().strip())
+        assert str(mod.LOAD_RECORD).startswith(str(base)), "the record lands in the profile's own state folder"
+        first = mod.LOAD_RECORD.read_text().splitlines()[0].split("\t")
+        assert len(first) == 3 and float(first[0]) > 0 and float(first[1]) >= 0 and float(first[2]) == 40.0
+    finally:
+        done.set()                                          # the loop ends at its next pause, whatever this test saw
+        for t in started:
+            t.join(5)
+        assert not [t for t in started if t.is_alive()], "the test leaves no sampler thread behind"
 
 
 LOAD = {"label": "Machine load", "start": W0 - 14400, "end": W0, "window_s": 14400, "cores": 8, "cadence": 60,

@@ -941,7 +941,8 @@ def load_chart(rows, start, end, cores, cadence=LOAD_CADENCE_S):
     `rows` is one `load_row` answer per record line, or None when the source cannot be read. A row whose load is None is
     no point: its minute falls to a gap. A gap is a stretch no record covers: before the first record, between two
     records further apart than the cadence, and after the last record once the tail is longer than the cadence (the
-    minute in progress is not a gap yet).
+    minute in progress is not a gap yet). A line covers the minute before its own time, so two records exactly one
+    cadence apart leave no hole, and the minute between two records two cadences apart is a gap, never a zero.
     """
     start, end = float(start), float(end)
     cad = max(float(cadence), 1.0)

@@ -984,7 +984,8 @@ def sample_load(src=None):
     return out
 
 LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {},
-              "record_at": None, "record_cpu": []}   # the minute record's last line and the samples since it (#1768)
+              "record_at": None, "record_cpu": [], "record_rows": None, "record_stamp": None}
+              # the minute record's last line, the tick samples since it, and the rows and file identity the view folds (#1768)
 LOAD_RUNS = []            # the light rows the last /api/runs served: id, folder and worktrees, for owners_of
 _PROC_PREV, _PROC_AT = None, 0.0
 
@@ -1043,28 +1044,49 @@ def load_average(now=None):
 
 def load_record_add(now, load, cpu):
     """Append the minute record's line and drop the lines past LOAD_RECORD_MAX_AGE, in one atomic write (ADR-0030): the
-    destination holds the old record or the finished one, never half a line."""
-    keep = []
+    destination holds the old record or the finished one, never half a line. A line at or after `now` is a leftover of a
+    clock that stepped back: it leaves with this write, so the record's minutes run forward. Returns the rows the chart
+    folds, so one write serves the page and one file read serves the write."""
+    keep = {}
     for raw in _read(LOAD_RECORD).splitlines():
         fields = raw.split("\t")
         try: at = float(fields[0])
         except (IndexError, ValueError): continue
-        if at >= now - LOAD_RECORD_MAX_AGE: keep.append(raw)
-    keep.append("\t".join((f"{now:.3f}", "-" if load is None else f"{load:.2f}", "-" if cpu is None else f"{cpu:.1f}")))
+        if now - LOAD_RECORD_MAX_AGE <= at < now: keep[at] = raw
+    keep[now] = "\t".join((f"{now:.3f}", "-" if load is None else f"{load:.2f}",
+                           "-" if cpu is None else f"{cpu:.1f}"))
+    lines = sorted(keep.items())
     LOAD_RECORD.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _temp_name(LOAD_RECORD); tmp.write_text("\n".join(keep) + "\n"); os.replace(tmp, LOAD_RECORD)
+    tmp = _temp_name(LOAD_RECORD); tmp.write_text("\n".join(raw for _, raw in lines) + "\n")
+    os.replace(tmp, LOAD_RECORD)
+    return [hub_profiler.load_row(raw) for _, raw in lines]
+
+def load_record_warm(now):
+    """The minute record as the file holds it, read once when this hub's state is cold: its rows, and the time of its
+    last line at or before `now`. A line later than `now` is no anchor, so a clock that stepped back never holds the
+    next write out, and a restart inside a minute the record already holds writes no second line for it (#1768)."""
+    rows = load_record_rows()
+    LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = rows, load_record_stamp()
+    return max((r["at"] for r in rows if r["at"] <= now), default=None)
 
 def load_record_tick(sample, now, load=None):
     """Take this tick into the minute record: keep its CPU reading, and write the minute's line when the minute has
-    turned. The first tick writes at once, so a page never waits a minute for the chart's first point."""
+    turned. The first tick writes at once unless the record already holds this minute, so a page never waits a minute
+    for the chart's first point and a restarted hub appends no duplicate line. A write this hub cannot make keeps the
+    window one minute long: the minute still advances and its samples leave, so the chart draws a gap and the next
+    line's share is never a mean over the failed stretch."""
     pending = LOAD_STATE.setdefault("record_cpu", [])
     if sample.get("cpu") is not None: pending.append(sample["cpu"])
     last = LOAD_STATE.get("record_at")
+    if last is None: last = LOAD_STATE["record_at"] = load_record_warm(now)
     if last is not None and now - last < LOAD_RECORD_SECS: return
     cpu = round(sum(pending) / len(pending), 1) if pending else None
-    try: load_record_add(now, load_average(now) if load is None else load, cpu)
-    except OSError: return   # a state folder this hub cannot write: the chart draws a gap, never a broken sampler
-    LOAD_STATE["record_at"], LOAD_STATE["record_cpu"] = now, []
+    try: rows = load_record_add(now, load_average(now) if load is None else load, cpu)
+    except OSError:
+        LOAD_STATE["record_at"], LOAD_STATE["record_cpu"] = now, []   # a gap, never a broken sampler
+        return
+    LOAD_STATE["record_at"], LOAD_STATE["record_cpu"], LOAD_STATE["record_rows"] = now, [], rows
+    LOAD_STATE["record_stamp"] = load_record_stamp()
 
 def load_tick(sample=None, now=None, load=None):
     """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, append the minute
@@ -2768,10 +2790,22 @@ def load_record_rows():
         if row is not None: out.append(row)
     return out
 
+def load_record_stamp():
+    """The record file's identity for the row cache: any write changes it, so the view reads the file only when it did."""
+    try:
+        s = LOAD_RECORD.stat()
+    except OSError:
+        return None
+    return (s.st_mtime_ns, s.st_size)
+
 def load_view(st):
-    """The machine load over the strip's own window `st`, folded by the rule layer: a file read, no process table. The
-    line shares the strip's time axis, so one column of the page is one instant in both."""
-    return hub_profiler.load_chart(load_record_rows(), st["start"], st["end"], os.cpu_count() or 1)
+    """The machine load over the strip's own window `st`, folded by the rule layer from the rows the sampler kept: one
+    stat per page poll, and a file read only when the state is cold or the record's identity changed. No process table.
+    The line shares the strip's time axis, so one column of the page is one instant in both."""
+    stamp = load_record_stamp()
+    if LOAD_STATE.get("record_rows") is None or LOAD_STATE.get("record_stamp") != stamp:
+        LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), stamp
+    return hub_profiler.load_chart(LOAD_STATE["record_rows"], st["start"], st["end"], os.cpu_count() or 1)
 
 def profiler_view(a, w=None, sw=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
