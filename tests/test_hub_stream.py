@@ -145,6 +145,30 @@ def test_reconnect_repeating_a_held_version_sees_no_duplicate(on):
     assert second > first
 
 
+@pytest.mark.heavy
+def test_each_run_list_change_reaches_an_open_stream_at_the_tick(on, monkeypatch):
+    """#1891: the stg tip rested the run list 5 s (#1879), so a change reached an open page only after the page's own
+    wait was over. A subject answers at the tick. The second change comes right after the first landed, so its wait is
+    the tick itself and never a rest: the wait is measured in ticks, as the promise is."""
+    mod = on["mod"]
+    tick = 0.5
+    monkeypatch.setattr(mod.hubstream, "TICK_SECONDS", tick)
+    monkeypatch.setattr(mod.hubstream, "FIRST_EVENT_SECONDS", 0.0)   # the startup window is over: only the tick counts
+    end = time.monotonic() + 10 * tick   # a read already in flight at the former tick lands before this window ends
+    while mod.VERSIONS.fresh({}).get("runs", (None, None))[1] != on["rows"] and time.monotonic() < end:
+        time.sleep(tick / 10)   # the fixture's reset is held only once the subject has published it
+    s = _open(on["port"], "/alpha/api/stream")
+    first = _version(_read_until(s, b"event: runs"))
+    s.close()
+    s = _open(on["port"], f"/alpha/api/stream?held=runs:{first}")
+    on["rows"].append({"id": "run-b"})
+    second = _version(_read_until(s, b"event: runs", budget=6 * tick))
+    on["rows"].append({"id": "run-c"})
+    third = _version(_read_until(s, b"event: runs", budget=6 * tick))
+    s.close()
+    assert second > first and third > second, "a changed run list waited past the tick before it reached the page"
+
+
 def test_stream_off_serves_the_page_as_today(hub, monkeypatch):
     monkeypatch.delenv("SQUAD_HUB_STREAM", raising=False)
     port = hub["port"]
