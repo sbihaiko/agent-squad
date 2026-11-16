@@ -152,6 +152,20 @@ o=$(hold); rc=$?
 case "$o" in *bounded*) ok "the dispatch note names the stopped leg, so the reader tells it from a red";; *) ko "the dispatch note does not name the stopped leg: '$o'";; esac
 o2=$(hold); [ -z "$o2" ] && ok "the bounded note is said once for the record, not on every pass" || ko "the bounded note repeated: '$o2'"
 
+# 4c2) (#2005) A pass record writes no stopped note: only a record whose suite was stopped before it measured anything says
+#      the suite was stopped. The reader answers a pass like no reading -- nothing to say -- so the pass goes on in silence,
+#      and the bounded record above still names its stopped leg.
+rm -f "$ST/nightly-result" "$ST/nightly-bounded-noted" "$ST/nightly-red-noted"
+printf '%s\tpass\t%s\tpass\tpass\t[]\n' "$(date +%s)" "$sha" > "$ST/nightly-result"
+o=$(hold); rc=$?
+[ $rc = 1 ] && ok "a pass record holds no dispatch" || ko "a pass record held dispatch: rc $rc, '$o'"
+case "$o" in *"stopped before it measured"*) ko "a pass record wrote the stopped note: '$o'";; *) ok "a pass record in both modes writes no stopped note";; esac
+printf '%s\tbounded\t%s\tbounded:signal-15\tpass\t[]\n' "$(date +%s)" "$sha" > "$ST/nightly-result"
+o=$(hold); rc=$?
+[ $rc = 1 ] && case "$o" in *"stopped before it measured"*) ok "a stopped record still writes the stopped note";; *) ko "a stopped record wrote no stopped note: '$o'";; esac \
+  || ko "a stopped record held dispatch: rc $rc, '$o'"
+rm -f "$ST/nightly-result"
+
 # 4d) (#1183) A leg that named a failing test and was then killed is still red, unchanged: its ids are carried, the alert
 #     fires and delivery holds. Its mode also names the signal that stopped it, so the record keeps the stop reason.
 rm -f "$ST/alerts.log" "$ST/nightly-result"; mark

@@ -183,7 +183,7 @@ sg_nightly_red() { case "$1" in fail|fail:signal-[0-9]*) return 0;; esac; return
 # failing test, because the leg that was stopped measured none: a bounded record that carries an id is no reading. The hub
 # drops the same lines, so the two readers never disagree about which record they are looking at. Answers 0 and prints the
 # failing ids when the record is RED; 2 and prints the two legs when it is BOUNDED, an attempt the suite never finished, so
-# it holds nothing (ADR-0164); 1 when there is no reading.
+# it holds nothing (ADR-0164); 3 when it is PASS, a reading with no delivery fact to say (#2005); 1 when there is no reading.
 sg_nightly_state() {
   local rec nf ts res sha par ser ids ids_read
   [ -r "$1" ] || return 1
@@ -214,6 +214,9 @@ except Exception: sys.exit(1)
 if type(v) is not list or not all(type(x) is str for x in v): sys.exit(1)
 print(", ".join(v) if v else "")' 2>/dev/null) || return 1
   if [ "$res" = fail ]; then printf '%s\n' "${ids_read:-no test named}"; return 0; fi
+  # (#2005) A pass measured both modes green: there is nothing to say, and it is never a stopped note. It answers 3, a
+  # reading that carries no delivery fact, so the caller says nothing and the pass goes on.
+  [ "$res" = pass ] && return 3
   # A bounded leg measured nothing, so it names no failing test. An id here contradicts the mode, and it is no reading.
   [ -z "$ids_read" ] || return 1
   printf 'parallel %s, serial %s\n' "$par" "$ser"
