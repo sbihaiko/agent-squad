@@ -26,17 +26,36 @@ NODE = shutil.which("node")
 
 CARD_MIN_PX = 340
 COL_MIN_PX = 320
+# The lane rule the page shipped before #2018, copied from 90422e0b5c77c1e521653638c690222d7792dcfd: the card's
+# 340 px floor is fixed, so a lane narrower than 340 px plus its padding and divider lets its card run past the border.
+BASE_CELL_RULE = (
+    "#bbody .cell{min-width:0;min-height:48px;display:grid;"
+    "grid-template-columns:repeat(auto-fill,minmax(340px,1fr));align-items:stretch;align-content:start;gap:8px;"
+    "padding:8px;background:color-mix(in srgb,var(--cc,var(--mute)) 6%,var(--panel));"
+    "border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}"
+)
+EPS = 1e-6   # the track widths are fractional; a card that fills its lane equals the lane inside this
 
 
 def _css():
     return re.sub(r"/\*.*?\*/", "", LANES_CSS.read_text(), flags=re.S)
 
 
-def _rule(selector):
-    """One rule of the stylesheet, without the whitespace around its declarations."""
-    m = re.search(re.escape(selector) + r"\{([^}]*)\}", _css())
+def _rule_in(text, selector):
+    """One rule of this stylesheet text, without the whitespace around its declarations."""
+    m = re.search(re.escape(selector) + r"\{([^}]*)\}", re.sub(r"/\*.*?\*/", "", text, flags=re.S))
     assert m, f"no rule for {selector}"
     return re.sub(r"\s+", "", m.group(1))
+
+
+def _rule(selector):
+    return _rule_in(LANES_CSS.read_text(), selector)
+
+
+def _rule_opt(text, selector):
+    """One rule of this page text, or an empty string when the page holds no rule for the selector."""
+    m = re.search(re.escape(selector) + r"\{([^}]*)\}", re.sub(r"/\*.*?\*/", "", text, flags=re.S))
+    return re.sub(r"\s+", "", m.group(1)) if m else ""
 
 
 def _lanes_rule(script):
@@ -76,8 +95,11 @@ def _board(groups):
 
 
 def test_a_lane_fills_a_grid_of_cards():
-    """The cards of one column are a grid, so a wide lane shows several cards on one line."""
-    assert "grid-template-columns:repeat(auto-fill,minmax(340px,1fr))" in _rule("#bbody .cell")
+    """The cards of one column are a grid, so a wide lane shows several cards on one line.
+
+    The card's floor yields to the lane (`minmax(min(340px,100%),1fr)`), so a lane narrower than one card still
+    holds its card inside its own border (#2018)."""
+    assert "grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr))" in _rule("#bbody .cell")
 
 
 def _cards_per_line(lane_px):
@@ -90,7 +112,7 @@ def _cards_per_line(lane_px):
     page = HUB_PY.read_text()
     assert "*{box-sizing:border-box}" in page, "the page does not size its boxes by the border"
     rule = _rule("#bbody .cell")
-    card = int(re.search(r"minmax\((\d+)px,", rule).group(1))
+    card = int(re.search(r"minmax\((?:min\()?(\d+)px,", rule).group(1))   # the floor, inside `min(...)` when it yields to the lane
     gap = int(re.search(r"gap:(\d+)px", rule).group(1))
     pad = int(re.search(r"padding:(\d+)px", rule).group(1))
     border = int(re.search(r"border-right:(\d+)px", rule).group(1))
@@ -213,3 +235,82 @@ def test_the_mobile_page_keeps_one_card_per_line():
     assert "auto-fill" not in mobile, "the phone page takes no grid of cards"
     card = re.search(r"\.card\{([^}]*)\}", mobile).group(1)
     assert "display:block" in card and "width:100%" in card, card
+
+
+def _track_widths(tracks, board_px):
+    """The width each column track takes on a board of this width, from the track list the page draws.
+
+    A track's floor is its `minmax` minimum; the room left over is shared by the tracks' weights, as the grid does.
+    """
+    parts = [(int(a), int(b)) for a, b in re.findall(r"minmax\((\d+)px,(\d+)fr\)", tracks)]
+    assert parts, tracks
+    mins = [a for a, _ in parts]
+    if sum(mins) >= board_px:
+        return mins
+    unit = (board_px - sum(mins)) / sum(b for _, b in parts)
+    return [a + b * unit for a, b in parts]
+
+
+def _lane_box(css_text):
+    """The card grid of a lane, read from its rule: the card's floor, whether the floor yields to the lane, whether
+    the lane may take a track narrower than its content (`min-width:0`), and the room its padding and divider take."""
+    rule = _rule_in(css_text, "#bbody .cell")
+    m = re.search(r"grid-template-columns:repeat\(auto-fill,minmax\((min\()?(\d+)px,(?:100%\),)?1fr\)\)", rule)
+    assert m, rule
+    pad = int(re.search(r"padding:(\d+)px", rule).group(1))
+    border = int(re.search(r"border-right:(\d+)px", rule).group(1))
+    return int(m.group(2)), bool(m.group(1)), "min-width:0;" in rule, pad, border
+
+
+def _card_min_width():
+    """The floor a card's own rule gives it outside the lane grid: a card wider than its lane overflows it too."""
+    found = [int(x) for text in (LANES_CSS.read_text(), HUB_PY.read_text())
+             for sel in ("#bbody .cell .it", "#bbody .it")
+             for x in re.findall(r"min-width:(\d+)px", _rule_opt(text, sel))]
+    return max(found, default=0)
+
+
+def _lane_card_extent(css_text, lane_px):
+    """The width a lane's card takes from the lane's left edge, both paddings and the divider included.
+
+    No browser runs in this suite (ADR-0137: the rule layer is read as text here), so this reads the lane's own
+    rule. The page sizes every box by its border, so the lane's content box is its track width less both paddings
+    and the divider. `minmax(min(340px,100%),1fr)` makes the card yield to that content box; a bare
+    `minmax(340px,1fr)` holds its floor and runs past the lane when the floor is wider than the content box
+    (#2018). A lane with no content box holds no card, so this fails there instead of reporting a fitting card.
+    """
+    floor, yields, min0, pad, border = _lane_box(css_text)
+    assert not yields or min0, "the lane takes its own track width only with `min-width:0`; without it its content widens the track"
+    inner = lane_px - 2 * pad - border
+    assert inner > 0, f"the lane of {lane_px:.0f} px has no room for a card ({inner:.0f} px inside its padding)"
+    card = min(floor, inner) if yields else floor   # the lane grid's floor, which yields to the content box
+    card = max(card, _card_min_width())             # a card's own min-width never yields
+    return card + 2 * pad + border
+
+
+def _no_spec_lane_widths(board_px=2000):
+    counts = [3, 6, 9, 2, 1]   # Backlog, Todo, Doing, Code Review, Code Complete: the No spec group's drawn cards
+    tracks = _lanes_rule(f"console.log(JSON.stringify(colTracks({json.dumps(counts)})));")
+    return _track_widths(tracks, board_px)
+
+
+def test_the_last_lane_of_a_group_stays_inside_the_groups_right_edge():
+    """#2018: at about 2000 px the No spec group drew five lanes, and the card of its last lane (Code Complete)
+    ran past the group's right border while Backlog and Doing stayed inside. The card's 340 px floor plus the
+    lane's padding and divider is 357 px, wider than the 320 px floor a lane's track can take, and the last lane
+    is the one whose weight leaves it under 357 px. The card's extent stays inside the lane, and the lanes' right
+    edges stay inside the board."""
+    widths = _no_spec_lane_widths()
+    extent = _lane_card_extent(LANES_CSS.read_text(), widths[-1])
+    assert extent <= widths[-1] + EPS, (f"the last lane's card is {extent - widths[-1]:.0f} px past the lane's right "
+                                       f"edge ({extent:.0f} px of card for a lane of {widths[-1]:.0f} px)")
+    assert sum(widths) <= 2000 + EPS, f"the group's right edge is {sum(widths):.0f} px past the board"
+
+
+def test_the_lane_check_catches_the_fixed_floor_that_overflows_2018():
+    """The check above guards #2018 only if it fails on the lane rule that shipped before the fix: a fixed 340 px
+    floor is 357 px with the lane's padding, past a 320 px track and past the last lane's own width too."""
+    widths = _no_spec_lane_widths()
+    base = _lane_card_extent(BASE_CELL_RULE, widths[-1])
+    assert base > widths[-1] + EPS, ("the lane check cannot see the fixed floor that ran the last lane's card past "
+                                     f"the group's border ({base:.0f} px of card for a lane of {widths[-1]:.0f} px)")

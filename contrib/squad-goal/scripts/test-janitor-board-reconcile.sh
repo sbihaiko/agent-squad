@@ -302,6 +302,13 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 ! /usr/bin/grep -q '^STATUS .* 2008$' "$T/board.calls" 2>/dev/null && ok "card already in the expected status is not written again" || ko "#2008 status was rewritten: $(bc)"
 /usr/bin/grep -q '^CLEAR o 4 2005$' "$T/board.calls" 2>/dev/null && ok "leaving In Progress clears Run fields" || ko "#2005 Run fields not cleared: $(bc)"
 /usr/bin/grep -q 'BOARD-WRITE-FAILED #2009' "$T/st/cycle.log" 2>/dev/null && ok "failed board write is named in cycle.log" || ko "board failure not logged: $(cat "$T/st/cycle.log" 2>/dev/null) $o"
+# Every card write is a ledger event (#1841): the janitor records the column it writes before it calls the writer, and the
+# writer's own proof ends the prediction. A write the board refused is unproven, so its event stays pending and the hub
+# names it as a defect once its bound passes.
+fact=$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" read "x/y#2001" board 2>/dev/null)
+case "$fact" in *'"by": "janitor"'*'"column": "In Progress"'*'"state": "written"'*) ok "a landed card write is a ledger fact its writer proved";; *) ko "#2001's card write is no ledger fact: '$fact'";; esac
+fact=$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" read "x/y#2009" board 2>/dev/null)
+case "$fact" in *'"by": "janitor"'*'"state": "pending"'*) ok "a refused card write keeps its pending ledger event";; *) ko "#2009's refused write is no pending fact: '$fact'";; esac
 # The same refusal is a comment on the issue the write was about (#141): the card says why it did not move, through the
 # queue whose one flusher posts it, and the comment carries the refusal's name and GitHub's error.
 cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"

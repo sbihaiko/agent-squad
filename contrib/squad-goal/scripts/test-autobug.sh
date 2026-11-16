@@ -1305,7 +1305,7 @@ rm -f "$PL/st/auto/off"
 # costs no write, a bug that already carries the label costs none either, and bugs-waiting counts an untriaged Todo bug.
 # The fixture records one call order: every GitHub call, every ledger call and the launch land in the same file.
 TR=$T/triage; mkdir -p "$TR/bin" "$TR/st/auto" "$TR/st/req" "$TR/st/cq" "$TR/st/locks" "$TR/co/docs/squad/workflows" "$TR/s"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$TR/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/slicecut.py" "$d/liveholds.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$TR/s/"
 : > "$TR/st/active-runs.txt"
 printf 'caps:\n  runs: 2\n' > "$TR/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$TR/st" "$TR/co" > "$TR/s/env.sh"
@@ -1346,6 +1346,7 @@ case "\$*" in
   *"issues?state=open"*labels=bug*) jq -c '[.[]|select((.labels // [])|index("bug"))|.labels=[(.labels//[])[]|{name:.}]]' "$TR/issues.json" ;;
   *"issues?state=open"*labels=debt*) jq -c '[.[]|select((.labels // [])|index("debt"))|.labels=[(.labels//[])[]|{name:.}]]' "$TR/issues.json" ;;
   *"issues?state=open"*) jq -c '[.[]|.labels=[(.labels//[])[]|{name:.}]]' "$TR/issues.json" ;;
+  *issues/*/comments*) echo "[]" ;;   # a comments list is a list: the issue stub below is for the issue itself
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$TR/issues.json" ;;
   *) echo "[]" ;;
 esac
@@ -1422,5 +1423,26 @@ r=$(AB_DRY=1 PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" ba
 [ "$(cat "$TR/st/bugs-waiting" 2>/dev/null)" = 0 ] && ok "39 a bug a holder label keeps back is not counted as waiting" \
   || ko "39 bugs-waiting '$(cat "$TR/st/bugs-waiting" 2>/dev/null)': '$r'"
 printf 'print("-")\n' > "$TR/s/fundroom.py"
+
+# 40) (#2016, ADR-0150 across runs) the bug lane reads the files a live run holds, with the frontier's own issue-to-file map
+# (slicecut.py over cluster.paths, never a second copy). A bug whose body names a file a live run holds waits for a later
+# pass, and the line names the holding run. On 2026-11-16 the pass dispatched #2015 beside the live run of #1841, and both
+# changed janitor.py and its board-reconcile suite. A live run on another file holds nothing.
+tr_fresh
+mkdir -p "$TR/co/runs/run-1741"
+printf 'CHILD — GitHub issue(s) 1741 (bug; one root cause, one branch):\n' > "$TR/co/runs/run-1741/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "task": "GitHub issue #1741"}\n' > "$TR/co/runs/run-1741/record.jsonl"
+printf '%s\n' run-1741 > "$TR/st/active-runs.txt"
+printf '[{"number":1740,"title":"Bug on the held file","body":"fix contrib/squad-goal/scripts/janitor.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},{"number":1741,"title":"Live work","body":"edit contrib/squad-goal/scripts/janitor.py","created_at":"2026-10-10T15:01:00Z","labels":["bug","ready-for-agent"]}]\n' > "$TR/issues.json"
+printf '1740\tTodo\n1741\tTodo\n' > "$TR/cards.tsv"
+r=$(AB_DRY=1 PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" bash "$TR/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG skip #1740: contrib/squad-goal/scripts/janitor.py is held by run run-1741"*)
+  ok "40 a bug whose file a live run holds says so, and names the holding run";; *) ko "40 no hold line naming the run: '$r'";; esac
+case "$r" in *"[1740]"*) ko "40 the bug a live run's file holds was dispatched: '$r'";; *) ok "40 the held bug is not dispatched";; esac
+printf '[{"number":1740,"title":"Bug on the held file","body":"fix contrib/squad-goal/scripts/janitor.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},{"number":1741,"title":"Live work","body":"edit docs/adr/0149-one-writer-per-loop-fact.md","created_at":"2026-10-10T15:01:00Z","labels":["bug","ready-for-agent"]}]\n' > "$TR/issues.json"
+r=$(AB_DRY=1 PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" bash "$TR/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG skip #1740"*) ko "40 a live run on another file held the bug: '$r'";; *) ok "40 a live run on another file holds nothing";; esac
+case "$r" in *"[1740]"*) ok "40 the bug is dispatched when no live run holds its file";; *) ko "40 the bug stayed held with no holder: '$r'";; esac
+: > "$TR/st/active-runs.txt"; rm -rf "$TR/co/runs/run-1741"
 
 rm -rf "$T"; exit $fail

@@ -35,8 +35,10 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .lh-counts b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
 #bbody .lane.alarm .lh .lid{color:var(--err)}
 /* A column is a lane of a card grid (#1994): the cards fill the lane's width on several per line, the lane wears a
-   light tint of its column colour, and its label names the column and the group's count of that column. */
-#bbody .cell{min-width:0;min-height:48px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));align-items:stretch;align-content:start;gap:8px;padding:8px;background:color-mix(in srgb,var(--cc,var(--mute)) 6%,var(--panel));border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}
+   light tint of its column colour, and its label names the column and the group's count of that column. A card's
+   340 px floor yields to a lane narrower than it (#2018): a lane's track can take 320 px, and a fixed floor ran the
+   last lane's card past the group's right border. */
+#bbody .cell{min-width:0;min-height:48px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));align-items:stretch;align-content:start;gap:8px;padding:8px;background:color-mix(in srgb,var(--cc,var(--mute)) 6%,var(--panel));border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}
 #bbody .cell .clh{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 2px 2px;font-size:var(--fs-caption);font-weight:600;color:var(--mute)}
 #bbody .cell .clh b{color:var(--fg);font-variant-numeric:tabular-nums}
 #bbody .cell>.more{grid-column:1/-1}

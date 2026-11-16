@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """usage: slicecut.py decide <issues.json> <issue> [<issue>...]
           slicecut.py release <issues.json>
+          slicecut.py holds <issues.json>
 The cross-run half of ADR-0150 (#1504): a run never holds two issues of one file, and now two runs never cut two branches
 of one file from the base either. The first issue of a file takes the branch it needs (cut from the base); every later
 issue of that file is cut from THAT branch -- stacked -- so the file is edited by one line of commits, and only the first
@@ -28,6 +29,10 @@ the first one's branch and stacks on it. A branch that another launch makes firs
 release runs after a landing: a branch of an open issue that no live run and no worktree holds, and whose commits are all
 in the base now (by sha, or by patch after the wave rebased them), moves onto the base. A held issue needs no release:
 it has no branch, so the next decide cuts it from the base.
+
+holds is the same map, read across the live runs alone, for a dispatcher that starts a bug on the base and never stacks one:
+it prints one line per issue the map puts on a file a live run holds, `<issue> <TAB> <file> <TAB> <run>`. The dispatcher
+holds such an issue for a later pass (#2016); an issue no live run's file names prints nothing.
 
 No persisted state of its own: the inputs are the issue list, the dispatch markers, the run requests and records, and
 git. The lock is transient and a branch is the only thing this writes.
@@ -275,6 +280,25 @@ def decide(by, n):
     return 0
 
 
+def holds(by):
+    """The issues whose files a live run holds, as `<issue> <TAB> <file> <TAB> <run>`, one line per shared file (#2016).
+    The map is `files`, the one ADR-0150 already uses, and live means a run whose delivery has not ended (live_runs): a
+    dispatcher reads one line and holds the issue for a later pass. A run that holds its own issue's file is no hold on
+    that issue. Nothing is cut and nothing is written, so no branch answers and the lock is not taken."""
+    runs = live_runs()
+    held = {}   # file -> [(run, issue)]
+    for run in sorted(runs):
+        for h in sorted(runs[run]):
+            for f in files(h, by):
+                held.setdefault(f, []).append((run, h))
+    for n in sorted(by):
+        for f in sorted(files(n, by)):
+            for run, h in held.get(f, ()):
+                if h != n:
+                    print(f"{n}\t{f}\t{run}")
+    return 0
+
+
 def branches_with_worktree():
     """{branch name} of the local branches some worktree holds: a child may be running there, so nothing rebases them."""
     out = set()
@@ -355,13 +379,15 @@ def release(by):
 
 
 def main(argv):
-    if len(argv) < 2 or argv[0] not in ("decide", "release"):
+    if len(argv) < 2 or argv[0] not in ("decide", "release", "holds"):
         print(__doc__, file=sys.stderr)
         return 2
     by = load(argv[1:])
     if not isinstance(by, dict):
         print("slicecut: the issue list is not readable", file=sys.stderr)
         return 2
+    if argv[0] == "holds":   # a read: no branch is cut, so it takes no lock
+        return holds(by)
     if not take_lock():
         print(f"NOTE the slice-cut lock is held past its bound: nothing decided this pass ({LOCK})", file=sys.stderr)
         return 3

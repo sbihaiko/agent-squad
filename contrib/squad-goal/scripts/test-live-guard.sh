@@ -198,6 +198,8 @@ case "$out" in *LIVE-GUARD*"copy scripts/hub.py"*) ok "a hand edit of the live c
 # --- the drivers keep the sha they started on: a publish to another sha is a restart the owner makes (#700) ---
 # watchd start records driver.sha; the guard names the pending restart once per publish and never kills or starts a process.
 mk restart; str=$T/st.restart; mkdir -p "$str"; old=$(G -C "$T/restart" rev-parse HEAD); printf '%s\n' "$old" > "$str/driver.sha"
+w=$T/restart.work; printf 'watchd v1\n' > "$w/contrib/squad-goal/scripts/watchd.sh"   # a file the running loop holds in memory
+G -C "$w" add -A; G -C "$w" commit -qm "the driver file"; G -C "$w" push -q origin HEAD:stg
 printf '#!/bin/bash\necho "$*" >> "%s"\n' "$T/restart.watchd" > "$S/watchd.sh"
 rpass() { SG_STATE=$str SG_CHECKOUT=$T/restart SG_LIVE_DIR=$T/restart.live bash "$S/live-guard.sh" 2>&1; }
 out=$(rpass); new=$(G -C "$T/restart" rev-parse HEAD)
@@ -208,11 +210,32 @@ out=$(rpass); new=$(G -C "$T/restart" rev-parse HEAD)
 out=$(rpass); [ -z "$out" ] && ok "the restart-pending line is not repeated for the same publish" || ko "the next cycle printed: $out"
 printf 'hand\n' > "$T/restart.live/SKILL.md"; out=$(rpass)
 case "$out" in *"restart pending"*) ko "a republish of the same sha named the restart again: $out";; *) ok "a republish of the same sha names no second restart";; esac
-printf '%s\n' "$new" > "$str/driver.sha"; w=$T/restart.work; printf 'skill v3\n' > "$w/contrib/squad-goal/SKILL.md"
+printf '%s\n' "$new" > "$str/driver.sha"; printf 'watchd v2\n' > "$w/contrib/squad-goal/scripts/watchd.sh"
 G -C "$w" commit -qam v3; G -C "$w" push -q origin HEAD:stg; out=$(rpass)
 v3=$(G -C "$T/restart" rev-parse HEAD)
 case "$out" in *"drivers run ${new:0:8}, published ${v3:0:8}"*) ok "each new publish names its own restart";; *) ko "the second publish named no restart: $out";; esac
 rm -f "$S/watchd.sh"
+
+# --- only a file the long-lived loop holds in memory asks for a restart (#2019) -------------------
+# A per-call script starts a new process each call, so the publish already reaches it: a publish that changes only such a
+# script asks for no restart, and the guard records the new build as current. The lanes and the files they source once
+# stay in memory, so a change there is the restart only the owner makes, named with the file that changed.
+mk percall; sta=$T/st.percall; mkdir -p "$sta"; w=$T/percall.work
+printf 'watchd\n' > "$w/contrib/squad-goal/scripts/watchd.sh"
+G -C "$w" add -A; G -C "$w" commit -qm "the driver file"; G -C "$w" push -q origin HEAD:stg
+ppass() { SG_STATE=$sta SG_CHECKOUT=$T/percall SG_LIVE_DIR=$T/percall.live bash "$S/live-guard.sh" 2>&1; }
+out=$(ppass); v=$(G -C "$T/percall" rev-parse HEAD); printf '%s\n' "$v" > "$sta/driver.sha"   # the drivers start on this build
+printf 'janitor\n' > "$w/contrib/squad-goal/scripts/janitor.py"                             # a script that starts per call
+G -C "$w" add -A; G -C "$w" commit -qm "a per-call script"; G -C "$w" push -q origin HEAD:stg
+out=$(ppass); vj=$(G -C "$T/percall" rev-parse HEAD)
+case "$out" in *"restart pending"*) ko "a per-call-only publish asked for a restart: $out";; *) ok "a publish that changes only a per-call script asks for no restart";; esac
+[ "$(cut -d' ' -f1 "$T/percall.live/PUBLISHED" 2>/dev/null)" = "$vj" ] && ok "the per-call-only publish lands" || ko "the per-call-only publish did not land: $out"
+[ "$(cat "$sta/live-guard.driver" 2>/dev/null)" = "$vj" ] && ok "the guard records the new build as current" || ko "the new build is not recorded as current: $(cat "$sta/live-guard.driver" 2>&1)"
+out=$(ppass); [ -z "$out" ] && ok "the per-call-only publish asks for no restart a second time" || ko "the next cycle printed: $out"
+printf 'watchd v2\n' > "$w/contrib/squad-goal/scripts/watchd.sh"
+G -C "$w" commit -qam "the driver file again"; G -C "$w" push -q origin HEAD:stg
+out=$(ppass); vd=$(G -C "$T/percall" rev-parse HEAD)
+case "$out" in *"drivers run ${v:0:8}, published ${vd:0:8}: restart pending (owner)"*"scripts/watchd.sh"*) ok "a driver-file change names the restart and the file";; *) ko "the driver-file change was not named: $out";; esac
 
 # --- the publish closes the loop-bug issue its fix names, so the stop lifts by itself (#732) --------
 # The stop reads the issue state and nothing else (ADR-0149), so the step that makes the fix live is the one that

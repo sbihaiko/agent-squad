@@ -7,6 +7,7 @@ unset SG_GH_PASS   # the reconciler names its own reads; a pass name the enclosi
 src=${1:-$(dirname "$0")/reconcile.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/bin" "$T/st"; test -f "$(dirname "$src")/board_columns.py" || exit 1; cp "$src" "$T/s/reconcile.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/issue_state.py" "$T/s/"; cp "$(dirname "$src")/board-definition.json" "$T/s/"   # the shipped axis the flow order reads lives in the pinned definition beside the module
 cp "$(dirname "$src")/ghread.py" "$(dirname "$src")/ghthrottle.py" "$(dirname "$src")/board_archive.py" "$T/s/"   # the door reader, the quota floor reader and the archive pass reconcile imports (#847, #1931)
+cp "$(dirname "$src")/issue_ledger.py" "$T/s/"   # the one ledger a card write is recorded in before it lands (#1841)
 printf '#!/bin/bash\necho "$*" >> "%s/moves"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -118,6 +119,16 @@ printf '#!/bin/bash\necho "no Status option $3" >&2; exit 1\n' > "$T/s/board.sh"
 r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); rc=$?
 case "$r" in *"WRITE REFUSED #1090"*"no Status option"*) ok "a refused write is named with the carrier's own text";; *) ko "a refused write was swallowed: '$r'";; esac
 [ "$rc" != 0 ] && ok "a pass whose write was refused ends non-zero" || ko "the refused write still ended the pass 0"
+# Every card write is a ledger event (#1841): the reconciler records the column it writes before it calls the writer, and
+# the writer's own proof ends the prediction. A write the carrier refused is unproven, so its event stays pending, and the
+# hub names it as a defect once its bound passes.
+fact=$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" read "x/y#1090" board 2>/dev/null)
+case "$fact" in *'"by": "reconcile"'*'"column": "Done"'*'"state": "pending"'*) ok "a refused card write keeps its pending ledger event";; *) ko "a refused card write has no pending fact: '$fact'";; esac
+printf '#!/bin/bash\necho "$*" >> "%s/moves"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+rm -rf "$T/st/state"; r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1)
+fact=$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" read "x/y#1090" board 2>/dev/null)
+case "$fact" in *'"by": "reconcile"'*'"column": "Done"'*'"state": "written"'*) ok "a card write that landed is a ledger fact its writer proved";; *) ko "a landed card write is no written fact: '$fact'";; esac
+[ -z "$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y 2>/dev/null)" ] && ok "a proven card write leaves no pending event" || ko "a proven card write stayed pending"
 # The call count of one dry pass (#853): the open issues come from one aggregate read, an open card the aggregate covers is never
 # read one by one (below RECONCILE_MIN or not), and two cards on one branch tip cost one compare. A closed card is not in the
 # open aggregate, so its state is still read one card at a time.

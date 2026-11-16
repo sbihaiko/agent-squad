@@ -345,3 +345,14 @@ def test_a_child_runs_a_suite_only_through_the_gate_wrapper(tmp_path, command):
 ])
 def test_a_child_may_read_a_suite_or_gate_through_the_wrapper(tmp_path, command):
     assert sandbox.deny_reason("Bash", {"command": command}, str(tmp_path)) is None
+
+
+def test_the_session_contract_states_every_rule_the_sandbox_enforces():
+    """A session reads the sandbox rules before its first call, never only from a denial (#2022): one day held 131 denials,
+    up to five of one kind in one session. Each rule `deny_reason` enforces has its line in the contract every session gets."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parent.parent / "prompts" / "_contract.md").read_text()
+    assert "## Sandbox" in text
+    sect = text[text.index("## Sandbox"):]
+    for needle in ("contrib/squad-goal/scripts/child-gate.sh", "inside your worktree", "/tmp", "$SG_STATE", "live skill copy", "`ps`"):
+        assert needle in sect, needle

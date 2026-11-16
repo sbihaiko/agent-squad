@@ -9,8 +9,11 @@
 # a fact the cycle cannot leave unread, and it is named as one.
 #
 # A publish records the tested sha, the source HEAD, in the live PUBLISHED file, and the pass names it (#700). The
-# drivers keep running the sha watchd recorded at start until the owner restarts them, so the pass names that restart
-# once per publish and never starts or stops a process. Live models.json is owner config: the pass never compares it
+# drivers keep running the files they loaded at start until the owner restarts them, so the pass compares that build with
+# the published tree for those files only: the lanes and the files they source once (#2019). A per-call script starts a
+# new process each call, so the publish already reaches it. A changed in-memory file names the restart once per publish,
+# with the file; with none changed the pass records the new build as current and names no restart. It never starts or
+# stops a process. Live models.json is owner config: the pass never compares it
 # with the repository, and names a hand edit once (see notes below).
 #
 # The rule of the publish is untouched: an explicit FILE LIST, never a mirror. Only the names the repository ships cross
@@ -47,8 +50,17 @@ live_state() { # every file the live copy holds, by name, mode and content: a ha
 # - live models.json is owner config the publish never writes; the hub panel edits it. A change of its digest is named
 #   once. The first digest a state dir sees is kept with no line.
 # - a stray .bak-* copy in live scripts/ is clutter: the list is named once, and never removed.
-# - the drivers run the sha watchd recorded at start ($SG_STATE/driver.sha); a PUBLISHED sha that differs is a restart
-#   only the owner makes, named once per published sha.
+# - the drivers run the sha watchd recorded at start ($SG_STATE/driver.sha); the pass compares that build with the
+#   published tree for the files the long-lived loop holds in memory only (#2019). A per-call script starts a new process
+#   each call, so the publish already reaches it. A changed in-memory file is a restart only the owner makes, named once
+#   per published sha with the file; with none changed the pass records the new build as current and asks for no restart.
+driver_paths=(scripts/watchd.sh scripts/watch.sh scripts/fastloop.sh scripts/cqflush.sh scripts/env.sh scripts/caps.sh
+  scripts/ghcall.sh scripts/steprec.sh scripts/promotequiet.sh scripts/address.sh scripts/skiplabels.sh scripts/profiles)
+driver_changed() { # driver_changed FROM TO: the in-memory files that differ between two builds, one a line; rc 3 = cannot tell
+  local p
+  git -C "${SG_CHECKOUT:-}" cat-file -e "$1^{commit}" 2>/dev/null && git -C "${SG_CHECKOUT:-}" cat-file -e "$2^{commit}" 2>/dev/null || return 3
+  for p in "${driver_paths[@]}"; do git -C "$SG_CHECKOUT" diff --quiet "$1" "$2" -- "contrib/squad-goal/$p" 2>/dev/null || printf '%s\n' "$p"; done
+  return 0; }
 once() { # once NAME VALUE LINE: print LINE when VALUE differs from the value kept under NAME; keep VALUE
   local f=$SG_STATE/live-guard.$1; [ "$(cat "$f" 2>/dev/null)" = "$2" ] && return 0
   mkdir -p "$SG_STATE" && printf '%s\n' "$2" > "$f.$$" && mv "$f.$$" "$f"; [ -n "$3" ] && echo "$3"; return 0; }
@@ -62,7 +74,13 @@ notes() {
   cl=$( cd "$live/scripts" 2>/dev/null && find . -maxdepth 1 -type f -name '*.bak-*' | sed 's|^\./|scripts/|' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
   if [ -n "$cl" ]; then once clutter "$cl" "LIVE-GUARD live clutter, not shipped: $cl"; else rm -f "$SG_STATE/live-guard.clutter"; fi
   ds=$(cat "$SG_STATE/driver.sha" 2>/dev/null); ps=$(cut -d' ' -f1 "$live/PUBLISHED" 2>/dev/null)
-  [ -n "$ds" ] && [ -n "$ps" ] && [ "$ds" != "$ps" ] && once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner)"
+  if [ -n "$ds" ] && [ -n "$ps" ] && [ "$ds" != "$ps" ]; then
+    db=$(cat "$SG_STATE/live-guard.driver" 2>/dev/null); [ -n "$db" ] || db=$ds   # the build the drivers effectively run
+    ch=$(driver_changed "$db" "$ps"); cr=$?
+    if [ "$cr" = 3 ]; then once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner)"
+    elif [ -n "$ch" ]; then once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner): $(printf '%s' "$ch" | tr '\n' ' ' | sed 's/ $//')"
+    else printf '%s\n' "$ps" > "$SG_STATE/live-guard.driver.$$" && mv "$SG_STATE/live-guard.driver.$$" "$SG_STATE/live-guard.driver"; fi
+  fi
   return 0; }
 key_now() { { git -C "$tree" rev-parse HEAD; git -C "$tree" status --porcelain --untracked-files=no
   git -C "$tree" rev-parse "origin/$base"; live_state; } 2>/dev/null | digest; }
