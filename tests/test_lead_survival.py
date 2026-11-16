@@ -203,13 +203,13 @@ def _page_line(hub, prefix):  # noqa: F811
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_view_opens_on_the_past_week_bugs_and_todo_on_a_fresh_page(hub):  # noqa: F811
+def test_the_view_opens_on_the_past_12_hours_bugs_and_todo_on_a_fresh_page(hub):  # noqa: F811
     block = _flow_block(hub).split("const drawFlow")[0]
     for stored in ({}, {"lt": {"ty": "task", "tf": "30", "log": False}}):
         out = _node("\n".join([f"const ls={json.dumps(stored)};", "const esc=s=>String(s);", block,
                                _page_line(hub, "const ltQ="),
                                "process.stdout.write(JSON.stringify({tf:LT.tf,ty:LT.ty,a:LT.a,own:ltOwn()}));"]))
-        assert json.loads(out) == {"tf": "7", "ty": "bug", "a": "Todo", "own": False}, \
+        assert json.loads(out) == {"tf": "12h", "ty": "bug", "a": "Todo", "own": False}, \
             "a fresh page opens on its defaults, whatever an older visit stored"
 
 
