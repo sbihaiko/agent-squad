@@ -555,7 +555,7 @@ nopush; r=$(OPEN="7 9" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' b
 case "$r" in *"wave/run-z"*) [ -n "$($O rev-parse -q --verify refs/heads/wave/run-z)" ] && ok "1960 the salvage ref is named and stays on the remote" || ko "1960 wave/run-z is gone";; *) ko "1960 no salvage ref named: '$r'";; esac
 for k in running undispatched; do
   nopush "$k"; r=$(OPEN="7 9" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
-  ! /usr/bin/grep -q 'labels\[\]=rework' "$T/gh.log" && [ -s "$LKM" ] && ok "1960 a $k round is not requeued" || ko "1960 a $k round was requeued: '$r'"
+  ! /usr/bin/grep -q 'labels\[\]=rework' "$T/gh.log" && [ -s "$LKM" ] && ok "1960 a round that is $k is not requeued" || ko "1960 a round that is $k was requeued: '$r'"
 done
 # The round review the lander writes for a kept #1344 branch is the one writer's shape: it reads as changes, never malformed.
 reset; hand8; hs=$($O rev-parse fix/8-rebase-hand); printf 'origin/dev\n' > "$T/st/auto/kept-fix_8-rebase-hand"

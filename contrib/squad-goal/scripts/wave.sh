@@ -603,8 +603,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     # actually conflicted with, never dev, which the held child keeps the wave from reaching (#1344).
     khead=$rhead
     printf 'origin/%s\n' "$w" > "$SG_STATE/auto/kept-$kkey"
-    printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on origin/%s, resolve the conflict in each file, keep the work, and push.\n' \
-      "$w" "$1" "$w" > "$SG_STATE/review-$kkey.md"
+    python3 "$here/revformat.py" --round-review "$w" "origin/$w" "$1" > "$SG_STATE/review-$kkey.md"   # the one writer of the round review (#1960)
     printf '%s\n' "$khead" > "$SG_STATE/review-$kkey.sha"; rm -f "$SG_STATE/review-$kkey.base"
     hold "the rebase on $w conflicts: $1; its commits are kept on $kb for one rebase round, not requeued"; return 1
   }
@@ -1206,8 +1205,7 @@ land_marker() { local f; for f in "$SG_STATE"/auto/kept-fix_*-land-"$1"; do [ -s
 remote_git() { local t rc; t=$(mktemp -d) || return 1; $G -C "$t" init -q . >/dev/null 2>&1; $G -C "$t" push -q "$remote" "$@" >/dev/null 2>&1; rc=$?; rm -rf "$t"; return $rc; }
 # round_review <review key> <branch head> <files>: the CHANGES review that asks the one rebase round, read at the kept head.
 round_review() {
-  printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on origin/%s, resolve the conflict in each file, keep the work, and push.\n' \
-    "$base" "${3:-no path named by git}" "$base" > "$SG_STATE/review-$1.md"
+  python3 "$here/revformat.py" --round-review "$base" "origin/$base" "${3:-}" > "$SG_STATE/review-$1.md"   # the one writer, in the shape the lander reads (#1960)
   printf '%s\n' "$2" > "$SG_STATE/review-$1.sha"; rm -f "$SG_STATE/review-$1.base"
   printf '%s\n' "$2" > "$SG_STATE/landround-$1.head"   # the kept head this round started at: the lander reads a head that moved as a round that pushed
 }
@@ -1240,6 +1238,23 @@ land_round() {
   printf 'round %s %s\n' "$((rounds + 1))" "$bsha" >> "$m"
   [ -n "$head" ] && round_review "$key" "$head" "$files"
   echo "WAVE CONFLICT $kb: the rebase on $base conflicts at $at${files:+ in $files}; round $((rounds + 1)) of 2 asked on the moved base ${bsha:0:9}, nothing requeued"
+  return 1
+}
+# landempty <kept branch> <why> (#1960): a kept landing round whose fix run ended with no pushed head. No conflict comes back to
+# land_round for it, so the round is bounded here: each issue line is requeued as a fresh build (Todo, rework), the wave branch
+# that keeps the work is named for salvage and stays on the remote, and the marker, the round review and the kept branch go.
+landempty() {
+  local br=$1 why=$2 key run m w issues n
+  key=$(printf '%s' "$br" | tr / _); run=${br#fix/*-land-}; m="$SG_STATE/auto/kept-$key"; w=$(wave_of "$run")
+  [ -s "$m" ] || { echo "WAVE-ERROR landempty: $br has no kept marker"; return 2; }
+  issues=$(sed -n 's/^issue //p' "$m")
+  echo "WAVE ROUND $br: $why; ${issues//$'\n'/, } requeued as a fresh build; salvage the work from $w"
+  for n in $issues; do
+    SG_REQUEUE_RUN=$run requeue "$n" "the rebase round on $br pushed no head ($why): requeued as a fresh build; salvage the work from $w"
+    gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=rework" >/dev/null 2>&1 || echo "WAVE-LABEL #$n rework refused"
+  done
+  rm -f "$m" "$SG_STATE/review-${key}".* "$SG_STATE/landround-$key.head"
+  remote_git --delete "$br" || echo "WAVE-NOTE the delete of $br from $remote was refused"
   return 1
 }
 # keep_landing <run> <wave> <clone> <keep set> <files> <at>: the first landing conflict of a wave keeps the wave head on its work branch.
@@ -1635,6 +1650,7 @@ case "${1:-}" in
   land) shift; land "$@";;
   expired) shift; expired "$@";;
   landconflict) shift; landconflict "$@";;
+  landempty) shift; landempty "$@";;
   requeue) shift; requeue "$@";;
   fail) shift; fail "$@";;
   probe-retry) shift; probe_retry "$@";;
