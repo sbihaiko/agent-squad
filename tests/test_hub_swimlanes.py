@@ -410,7 +410,7 @@ def _lane_header(hub, lane):
 
 def test_the_no_spec_lane_draws_the_spec_bar(hub):
     html = _lane_header(hub, {"id": "none", "kind": "none", "title": "No spec", "closed": 3, "total": 4})
-    assert '<span class="lf lf-bar" style="width:120px;justify-content:flex-start"><span class=bar title="3 of 4 closed"><i style="width:75%"></i></span></span>' in html
+    assert '<span class="lf lf-bar" style="justify-content:flex-start"><span class=bar title="3 of 4 closed"><i style="width:75%"></i></span></span>' in html
     assert '<span class=pc>3/4</span>' in html
     spec = _lane_header(hub, {"id": "s9", "kind": "s", "num": 9, "title": "t", "closed": 1, "total": 2})
     assert "<span class=pc>1/2</span>" in spec

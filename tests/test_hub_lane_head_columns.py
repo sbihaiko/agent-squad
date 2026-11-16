@@ -20,8 +20,7 @@ HUB_PY = SCRIPTS / "hub.py"
 LANES_JS = SCRIPTS / "board-lanes.js"
 LANES_CSS = SCRIPTS / "board-lanes.css"
 NODE = shutil.which("node")
-ROWS = [["id", "title"], ["bar", "frac", "chip", "gh", "sync"], ["counts"]]
-FIXED = {"bar": "120px", "frac": "4em", "chip": "6.5em", "gh": "16px", "sync": "6em"}
+ROWS = [["id", "title", "chip", "gh", "sync"], ["bar", "frac", "counts"]]
 SYNC_TITLE = "re-read only SPEC"
 
 LANE_A = {"kind": "s", "num": 12, "title": "Short title", "closed": 2, "total": 3, "doing": 0, "review": 0,
@@ -83,29 +82,33 @@ def _drawn_headers(page, lanes):
     return grid, headers
 
 
-def _layout(header):
-    """A drawn header read by layout row: row 1 before the facts row, row 2 in it, row 3 in the counts row."""
-    assert '<span class="lh-facts">' in header and '<span class="lh-counts">' in header, header
-    head, rest = header.split('<span class="lh-facts">', 1)
-    facts, counts = rest.split('<span class="lh-counts">', 1)
+def _two_row_layout(header):
+    """A drawn header read by layout row: row 1 holds the id, title and Sync facts, row 2 the bar, fraction and counts (#2026)."""
+    assert "<span class=lh-r1>" in header and "<span class=lh-r2>" in header, header
+    row1, row2 = header.split("<span class=lh-r2>", 1)
+    row1 = row1.split("<span class=lh-r1>", 1)[1]
     keys = lambda s: re.findall(r'<span class="lf lf-(\w+)', s)  # noqa: E731
-    return [keys(head), keys(facts), keys(counts)]
+    return [keys(row1), keys(row2)]
 
 
-def _widths(header):
-    return dict(re.findall(r'<span class="lf lf-(\w+)" style="width:([^";]+)', header))
-
-
-def test_every_lane_header_takes_the_same_three_rows():
+def test_every_lane_header_takes_the_same_two_rows():
     out = _header_rule([LANE_A, LANE_B])
     for header in out["headers"]:
         assert [[c["k"] for c in row] for row in header["rows"]] == ROWS, header
 
 
+def test_a_spec_lane_head_draws_in_two_rows(page):
+    """#2026: a spec lane head takes two rows, not three, on a board 1100 px or wider."""
+    _, headers = _drawn_headers(page, [LANE_A, LANE_B])
+    assert len(headers) == 2, headers
+    for header in headers:
+        assert _two_row_layout(header) == [["id", "title", "chip", "gh", "sync"], ["bar", "frac", "counts"]], header
+
+
 def test_a_zero_count_is_an_en_dash_and_the_three_counts_always_stand():
     out = _header_rule([LANE_A, LANE_B])
-    items_a = out["headers"][0]["rows"][2][0]["items"]
-    items_b = out["headers"][1]["rows"][2][0]["items"]
+    items_a = out["headers"][0]["rows"][1][2]["items"]
+    items_b = out["headers"][1]["rows"][1][2]["items"]
     assert items_a == [["Todo", "5"], ["Doing", "1"], ["Code Review", "1"]], items_a
     assert items_b == [["Todo", "–"], ["Doing", "1"], ["Code Review", "–"]], items_b
 
@@ -117,15 +120,6 @@ def test_the_fraction_and_the_chip_hold_their_own_text():
     assert cells[0]["chip"]["text"] == "Todo" and cells[1]["chip"]["text"] == "Backlog"
 
 
-def test_the_fixed_facts_share_one_width_list_and_the_bar_is_fixed():
-    out = _header_rule([LANE_A, LANE_B])
-    widths = {c["k"]: c["w"] for c in out["cols"]}
-    assert widths["bar"] == "120px", widths
-    for header in out["headers"]:
-        for row in header["rows"][1:2]:
-            assert {c["k"]: c["w"] for c in row} == {k: widths[k] for k in ("bar", "frac", "chip", "gh", "sync")}
-
-
 def test_a_wave_lane_name_spans_the_whole_header_and_is_never_clipped(page):
     out = _header_rule([LANE_WAVE])
     row1 = out["headers"][0]["rows"][0]
@@ -135,18 +129,9 @@ def test_a_wave_lane_name_spans_the_whole_header_and_is_never_clipped(page):
     assert "SPEC 1158</span> · Wave 2" in headers[0], headers[0]
 
 
-def test_two_lanes_draw_each_fact_at_one_track_of_one_shared_grid(page):
-    grid, headers = _drawn_headers(page, [LANE_A, LANE_B])
-    assert grid, "the lanes are not drawn on a grid"
-    assert "--lh-cols:7em minmax(0,1fr)" in grid.group(1), grid.group(1)
-    assert len(headers) == 2, headers
-    assert [_layout(h) for h in headers] == [[["id", "title"], ["bar", "frac", "chip", "gh", "sync"], ["counts"]]] * 2
-    assert _widths(headers[0]) == _widths(headers[1]) == FIXED
-
-
 def test_the_counts_draw_one_line_in_fixed_order_joined_by_a_middle_dot(page):
     _, headers = _drawn_headers(page, [LANE_A, LANE_B])
-    counts = headers[1].split('<span class="lh-counts">', 1)[1]
+    counts = headers[1].split('<span class="lf lf-counts"', 1)[1]
     assert "<span>Todo <b>–</b></span> · <span>Doing <b>1</b></span> · <span>Code Review <b>–</b></span>" in counts, counts
     assert "class=cnt" not in headers[1]
 
@@ -156,22 +141,54 @@ def test_the_title_keeps_its_whole_text_in_a_tooltip(page):
     assert 'title="A much longer spec title that wraps across the title column"' in headers[0], headers[0]
 
 
-def test_the_title_css_clamps_to_two_lines_and_states_so(page):
+def test_the_title_css_ends_a_long_title_in_an_ellipsis_on_one_line():
     css = LANES_CSS.read_text()
-    rule = re.search(r"#bbody \.lh \.ltt\{[^}]*\}[^\n]*", css).group(0)
-    assert "-webkit-line-clamp:2" in rule, rule
-    assert "read whole" not in rule, rule
+    rule = re.search(r"#bbody \.lh \.ltt\{[^}]*\}", css).group(0)
+    assert "text-overflow:ellipsis" in rule and "white-space:nowrap" in rule, rule
 
 
-def test_the_facts_row_wraps_on_a_narrow_lane_instead_of_clipping():
+def _lane_head_rules():
+    css = re.sub(r"/\*.*?\*/", "", LANES_CSS.read_text(), flags=re.S)
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    return [(sel.strip(), body) for sel, body in rules if re.search(r"\.lh\b|\.lf\b", sel)]
+
+
+def test_the_lane_head_sets_no_fixed_gap_between_its_items():
+    rules = _lane_head_rules()
+    assert rules, "the lane head has no rules to check"
+    for sel, body in rules:
+        assert not re.search(r"(?<![\w-])gap\s*:|column-gap\s*:", body), (sel, body)
+    for sel, body in rules:
+        if re.search(r"(?<![\w-])row-gap\s*:", body):
+            assert sel == "#bbody .lh", (sel, body)
+
+
+def test_the_lane_head_rows_span_the_header_and_stay_on_one_line_each():
     css = LANES_CSS.read_text()
-    rule = re.search(r"#bbody \.lh \.lh-facts\{[^}]*\}", css).group(0)
-    assert "flex-wrap:wrap" in rule, rule
+    rows = re.search(r"#bbody \.lh \.lh-r1,#bbody \.lh \.lh-r2\{[^}]*\}", css).group(0)
+    assert "width:100%" in rows and "flex-wrap:nowrap" in rows, rows
+    title = re.search(r"#bbody \.lh \.lf-title\{[^}]*\}", css).group(0)
+    assert "flex:1 1 0" in title, title
+    counts = re.search(r"#bbody \.lh \.lf-counts\{[^}]*\}", css).group(0)
+    assert "margin-left:auto" in counts, counts
+
+
+def test_a_wave_lane_name_ends_in_an_ellipsis_and_keeps_its_full_text_in_a_tooltip(page):
+    css = LANES_CSS.read_text()
+    label = re.search(r"#bbody \.lh \.lf-id\.full \.lid\{[^}]*\}", css).group(0)
+    assert "text-overflow:ellipsis" in label and "overflow:hidden" in label and "min-width:0" in label, label
+    _, headers = _drawn_headers(page, [LANE_WAVE])
+    assert 'title="SPEC 1158 · Wave 2"' in headers[0], headers[0]
+
+
+def test_the_bar_cell_sizes_from_its_rule_not_from_an_inline_width():
+    rule = re.search(r"#bbody \.lh \.lf-bar\{[^}]*\}", LANES_CSS.read_text()).group(0)
+    assert "flex:0 1 8em" in rule and "min-width:4em" in rule, rule
 
 
 def test_the_page_draws_every_header_from_the_rule_layer_on_one_grid(page):
     assert "laneHead(l," in page, "the header no longer takes its facts from the rule layer"
-    assert "--lh-cols:${laneHeadGrid}" in page, "the lanes do not share one grid template"
+    assert "--lh-cols" not in page, "the header still sets a fixed column track list"
     assert "${cl?m.cols.filter" not in page, "the counts are still drawn only for a collapsed lane"
 
 

@@ -109,16 +109,15 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   return{cols,vc,hc,lanes:list};
 }
 
-// The lane header is a table read down the column (#1158). Row 1 holds the spec number and the title; row 2 holds the
-// progress bar, fraction, chip and GitHub mark on fixed widths; row 3 holds the counts on one line. Every lane takes the
-// same widths, so two specs compare down the page. A wave lane's name spans the whole header, so it is never clipped.
-const laneHeadCols=[{k:"id",w:"7em",al:"flex-end"},{k:"title",w:"minmax(0,1fr)",al:"flex-start"},{k:"bar",w:"120px",al:"flex-start"},
-  {k:"frac",w:"4em",al:"flex-end"},{k:"chip",w:"6.5em",al:"center"},{k:"gh",w:"16px",al:"flex-end"},{k:"sync",w:"6em",al:"flex-end"},
-  {k:"counts",w:"auto",al:"flex-end"}];
+// The lane header takes two rows of flex items (#2026). Row 1 holds the spec number, the title, the column chip, the GitHub
+// mark and the Sync press, the title taking the free space. Row 2 holds the progress bar, the fraction and the counts, the
+// counts at the right edge. A wave lane's name takes the free space of row 1 and ends in an ellipsis.
+const laneHeadCols=[{k:"id",al:"flex-end"},{k:"title",al:"flex-start"},{k:"bar",al:"flex-start"},
+  {k:"frac",al:"flex-end"},{k:"chip",al:"center"},{k:"gh",al:"flex-end"},{k:"sync",al:"flex-end"},
+  {k:"counts",al:"flex-end"}];
 // A spec's header carries the same Sync press its tickets do (#1667): the spec is an issue on the same board, and its
 // title, column, sub-issue count and tree come from the same read.
-const laneHeadRows=[["id","title"],["bar","frac","chip","gh","sync"],["counts"]];
-const laneHeadGrid=laneHeadRows[0].map(k=>laneHeadCols.find(c=>c.k===k).w).join(" ");
+const laneHeadRows=[["id","title","chip","gh","sync"],["bar","frac","counts"]];
 // v names the three counted columns: { todo, doing, review }. A zero count is an en dash, so its row still stands.
 // Every lane keeps its counts row: a collapsed lane's only summary, and a zero dash keeps the row from moving.
 function laneHead(l,v){
