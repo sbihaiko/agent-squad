@@ -94,7 +94,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 ANSWER = "answer"
 DONE = "done"
@@ -388,6 +388,44 @@ def _check_rollup(commits: Any) -> dict[str, Any]:
         "failed": verdicts.count("failed"),
         "pending": verdicts.count("pending"),
     }
+
+
+FAST_TIER_CHECKS = ("ruff", "mypy", "fast-battery")
+_RUN_URL = re.compile(r"/actions/runs/(\d+)")
+
+
+@dataclass(frozen=True)
+class FastTier:
+    verdict: Literal["pass", "fail", "unproven"]
+    run_id: int | None
+
+
+def _run_id(check: dict[str, Any]) -> int | None:
+    match = _RUN_URL.search(str(check.get("details_url") or ""))
+    return int(match[1]) if match else None
+
+
+def fast_tier_verdict(sha: str, transport: TransportFn | None = None) -> FastTier:
+    """The fast-tier verdict of one sha from its check runs, and the Actions run that carries them."""
+    out = read(f"repos/sbihaiko/agent-squad/commits/{sha}/check-runs?per_page=100", transport)
+    if not out.is_answer or not isinstance(out.answer, dict):
+        return FastTier("unproven", None)
+    latest: dict[str, dict[str, Any]] = {}
+    for check in out.answer.get("check_runs") or []:
+        if not isinstance(check, dict) or check.get("name") not in FAST_TIER_CHECKS:
+            continue
+        # A re-run is a newer check run of the same name, and it replaces the failed one it re-ran.
+        kept = latest.get(check["name"])
+        if kept is None or check.get("id", 0) > kept.get("id", 0):
+            latest[check["name"]] = check
+    concluded = [latest.get(name, {}).get("conclusion") for name in FAST_TIER_CHECKS]
+    run_ids = [i for i in map(_run_id, latest.values()) if i is not None]
+    run_id = run_ids[0] if run_ids else None
+    if "failure" in concluded:
+        return FastTier("fail", run_id)
+    if all(conclusion == "success" for conclusion in concluded):
+        return FastTier("pass", run_id)
+    return FastTier("unproven", run_id)
 
 
 def _pull(node: Any) -> dict[str, Any]:
