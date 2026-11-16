@@ -2856,7 +2856,7 @@ def load_view(st):
 # The run slots in use (#1766): the step line of the Loop tab, folded by the rule layer from the run records. One record
 # is read tolerantly: an event that is not JSON is skipped, and a record that is there and cannot be opened is a gap with
 # its reason, never a run of zero slots. The cap's marks are the caps each `run_start` recorded, so a change shows at the
-# time a record names it; the cap in force now anchors a window no record speaks for, and no file's mtime is a cap change.
+# time a record names it; the cap in force now heads a window no earlier record speaks for, and no file's mtime is a cap change.
 NEVER_STARTED_S = 300   # squad/caps.py LAUNCH_GRACE, the janitor's rule-J bound: past it a folder with no record is lost, not a launch
 def run_invocations(path):
     """One run's invocations and the caps its starts recorded: each invocation is `{"start", "end"}` from a `run_start` or
@@ -2873,12 +2873,14 @@ def run_invocations(path):
         ts, name = e.get("ts"), e.get("event")
         if not isinstance(ts, (int, float)) or isinstance(ts, bool): continue
         if name in ("run_start", "resume"):
-            if cur is not None: out.append(cur)
+            if cur is not None:
+                if cur["end"] is None: cur["end"] = ts
+                out.append(cur)
             cur = {"start": ts, "end": None}
             c = e.get("caps") if isinstance(e.get("caps"), dict) else None
             if name == "run_start" and isinstance((c or {}).get("runs"), int) and not isinstance(c["runs"], bool):
                 caps.append({"at": ts, "runs": c["runs"]})
-        elif name == "verdict" and cur is not None and cur["end"] is None:
+        elif name == "verdict" and cur is not None:
             cur["end"] = ts
     if cur is not None: out.append(cur)
     return out, caps

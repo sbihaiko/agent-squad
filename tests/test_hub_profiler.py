@@ -2576,13 +2576,24 @@ def test_cap_marks_and_slots_share_one_half_open_window(prof):
         (2, W0 - 4 * H, W0 - 2 * H), (5, W0 - 2 * H, W0)]
 
 
-def test_the_current_cap_anchors_the_ceiling_only_where_no_mark_speaks(prof):
-    """With no mark at all, the current cap anchors the whole window; a mark at or after the start overrides it. A head
-    row of the current cap before a recorded mark would draw a step that never happened."""
+def test_the_current_cap_heads_the_ceiling_until_a_mark_in_the_window_steps_it(prof):
+    """With no mark before the window, the current cap heads it; each in-window mark steps the ceiling at its own time."""
     out = prof.run_slots([], [capmark(W0 - 2 * H, 2)], 4 * H, W0, cap=6)
-    assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [(2, W0 - 4 * H, W0)]
+    assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [
+        (6, W0 - 4 * H, W0 - 2 * H), (2, W0 - 2 * H, W0)]
     only = prof.run_slots([], [], 4 * H, W0, cap=6)
     assert only["ceilings"] == [{"start": W0 - 4 * H, "end": W0, "cap": 6}], "with no mark at all it anchors the window"
+
+
+def test_a_mid_window_cap_change_steps_at_its_own_mark(prof):
+    out = prof.run_slots([], [capmark(W0 - 2 * H, 5)], 4 * H, W0, cap=3)
+    assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [
+        (3, W0 - 4 * H, W0 - 2 * H), (5, W0 - 2 * H, W0)]
+
+
+def test_a_mark_in_the_window_with_no_current_cap_starts_its_row_at_the_mark(prof):
+    out = prof.run_slots([], [capmark(W0 - 2 * H, 5)], 4 * H, W0)
+    assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [(5, W0 - 2 * H, W0)], "no head is invented before it"
 
 
 def test_a_resumed_run_is_two_invocations_so_the_verdict_before_the_resume_frees_the_slot(records):
@@ -2593,6 +2604,24 @@ def test_a_resumed_run_is_two_invocations_so_the_verdict_before_the_resume_frees
     invs, caps = mod.run_invocations(d / "record.jsonl")
     assert [(x["start"], x["end"]) for x in invs] == [(NOW - 3600, NOW - 3000), (NOW - 1800, NOW - 600)]
     assert caps == [{"at": NOW - 3600, "runs": 3}], "the caps a run_start records mark the ceiling at that run's start"
+
+
+def test_a_resume_closes_the_open_run_at_its_own_time(records):
+    mod, runs = records
+    d = runs / "run-20261115-020909-kkkkkk"
+    record(d, ev("run_start", 100, caps={"runs": 2}), ev("resume", 200))
+    invs, _ = mod.run_invocations(d / "record.jsonl")
+    assert [(x["start"], x["end"]) for x in invs] == [(100, 200), (200, None)], "one open invocation, closed at the resume"
+
+
+def test_the_last_verdict_before_the_next_start_ends_the_invocation(records):
+    mod, runs = records
+    d = runs / "run-20261115-021010-llllll"
+    record(d, ev("run_start", 100), ev("verdict", 150, verdict="failed", exit_code=1),
+           ev("verdict", 180, verdict="failed", exit_code=1), ev("resume", 300),
+           ev("verdict", 400, verdict="completed", exit_code=0))
+    invs, _ = mod.run_invocations(d / "record.jsonl")
+    assert [(x["start"], x["end"]) for x in invs] == [(100, 180), (300, 400)], "the latest verdict before a start ends it"
 
 
 def test_a_record_with_no_final_verdict_is_live_to_now(records):

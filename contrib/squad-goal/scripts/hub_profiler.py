@@ -977,7 +977,7 @@ def load_chart(rows, start, end, cores, cadence=LOAD_CADENCE_S):
 # The run slots in use (#1766): the step line of the Loop tab, on the strip's own time axis and window. A run
 # holds a slot from its start to its verdict; a verdict before a later start is history, so a resumed run is a second
 # invocation (ADR-0167). The cap is a step too: each `run_start` records the caps in force at its own start, so a change
-# shows at the time a record names it, and the cap in force now only anchors a window no record speaks for. A file's write
+# shows at the time a record names it, and the cap in force now heads a window no earlier record speaks for. A file's write
 # time is no cap change. The line draws the raw slots in use, so a run queued at the cap stays visible, and the cap is
 # drawn apart as its own step line. A stretch no readable record covers is a gap with its reason, never a line of zeros
 # that claims a silent machine; a gap runs to the window end only where no readable record covers that tail. The fold is
@@ -988,29 +988,24 @@ SLOTS_LABEL = "Run slots in use"
 def _cap_marks(caps, cap, start, end):
     """The cap as one row per value in force, covering `[start, end)`, half-open as the rows are.
 
-    The last mark at or before the start anchors the first row; with no such mark the first mark in the window anchors
-    it back to the start, because a cap in force before the first record is unknown. A mark exactly at the start is that
-    anchor; a mark at the end is outside the window. With no mark at all, `cap`, the value in force now, anchors the
-    whole window; a mark at or after the start overrides it, and a head row of `cap` before that mark would draw a step
-    that never happened.
+    The head is the last mark at or before the start, else `cap`, the value in force now; with neither, no row is drawn
+    before the first in-window mark. Each in-window mark starts its own row at its timestamp.
     """
     marks = sorted(((m["at"], m["runs"]) for m in (caps or ())
                     if isinstance(m, dict) and isinstance(m.get("at"), (int, float)) and not isinstance(m.get("at"), bool)
                     and isinstance(m.get("runs"), int) and not isinstance(m.get("runs"), bool)),
                    key=lambda m: m[0])
-    if not marks:
-        if isinstance(cap, int) and not isinstance(cap, bool) and end > start:
-            return [{"start": start, "end": end, "cap": cap}]
-        return []
     before = [v for at, v in marks if at <= start]
-    cur, cur_at = (before[-1] if before else marks[0][1]), start
-    rows = []
+    head = before[-1] if before else (cap if isinstance(cap, int) and not isinstance(cap, bool) else None)
+    cur, cur_at, rows = head, start, []
     for at, v in marks:
-        if not (start < at < end): continue   # a mark at the start is the anchor above; a mark at the end is outside
-        if v != cur:
+        if not (start < at < end): continue
+        if cur is None:
+            cur, cur_at = v, at
+        elif v != cur:
             if at > cur_at: rows.append({"start": cur_at, "end": at, "cap": cur})
             cur, cur_at = v, at
-    if end > cur_at: rows.append({"start": cur_at, "end": end, "cap": cur})
+    if cur is not None and end > cur_at: rows.append({"start": cur_at, "end": end, "cap": cur})
     return rows
 
 
