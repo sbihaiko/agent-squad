@@ -480,8 +480,9 @@ class Window:
     def stats(self):
         """The time of the last good reading, the measured interval between the last two, the failed readings, and the
         coverage of the window: the processes read with their CPU over every process seen. A refused read lowers it."""
-        read = sum(r for _, r, _ in self.cov)
-        seen = sum(s for _, _, s in self.cov)
+        cov = list(self.cov)   # one copy: the sampler thread prunes the window while a GET reads it (#1956's CI red)
+        read = sum(r for _, r, _ in cov)
+        seen = sum(s for _, _, s in cov)
         return {"last_reading": self.last, "interval_s": self.interval, "failed_readings": self.failed,
                 "processes_read": read, "processes_seen": seen,
                 "coverage": round(read / seen, 3) if seen else None}

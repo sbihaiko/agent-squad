@@ -227,7 +227,8 @@ def test_the_coverage_reads_one_snapshot_of_the_window_while_the_sampler_prunes_
     class Pruning(collections.deque):
         def __iter__(self):   # the sampler prunes the oldest reading between two walks of the window
             items = list(super().__iter__())
-            if len(self) > 1: self.popleft()
+            if len(self) > 1:
+                self.popleft()
             return iter(items)
 
     w = prof.Window()
