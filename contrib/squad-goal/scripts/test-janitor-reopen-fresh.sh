@@ -8,9 +8,18 @@
 # usage: bash test-janitor-reopen-fresh.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 here="$(cd "$(dirname "$src")" && pwd)"
+GREP=$(command -v grep) || { echo "FAIL no grep on PATH" >&2; rm -rf "$T"; exit 1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
 cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
+# subst <file>: replace the TMPDIR placeholder with this run's temp dir, in place, with no sed -i and its BSD/GNU split.
+subst() { python3 - "$1" "$T" <<'P'
+import sys
+p, t = sys.argv[1], sys.argv[2]
+s = open(p).read()
+open(p, "w").write(s.replace("TMPDIR", t))
+P
+}
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$1" in
@@ -19,7 +28,7 @@ case "$1" in
   *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls"; if [ -n "$SG_MOVE_REASON" ]; then echo "REASON $SG_MOVE_REASON $4" >> "TMPDIR/board.calls"; fi;;
 esac
 J
-sed -i '' "s|TMPDIR|$T|g" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+subst "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; printf '%s\n' "$a" >> "TMPDIR/gh.calls"
@@ -28,7 +37,7 @@ case "$a" in
   *projectsV2/4/fields*) printf 'FID4\n';;
   *projectsV2/4/items*)
     printf '6001\tClosed\thttps://api.github.com/repos/x/y\n'
-    /usr/bin/grep -q '^STATUS o 4 Todo 6002$' "TMPDIR/board.calls" 2>/dev/null && c2=Todo || c2=Closed   # the board keeps the move: a second pass reads Todo
+    if [ -f "TMPDIR/board.calls" ] && grep -q '^STATUS o 4 Todo 6002$' "TMPDIR/board.calls"; then c2=Todo; else c2=Closed; fi   # the board keeps the move: a second pass reads Todo
     printf '6002\t%s\thttps://api.github.com/repos/x/y\n' "$c2";;
   *graphql*)
     printf '%s\n' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
@@ -41,7 +50,7 @@ case "$a" in
   *search/issues*) printf '0\n';;
 esac
 J
-sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+subst "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 git -C "$T/co" init -q
 # The one cached read (#1744) holds the stale open state for both issues, written seconds ago so its age never excuses a
 # second read: GitHub's answer to the pass is the file, never the issue itself.
@@ -52,20 +61,25 @@ json.dump({"repo": "x/y", "synced": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmt
     "6002": {"f": ["open", "", "Issue 6002", "", ""], "at": time.time()}}}, open(sys.argv[1], "w"))
 P
 run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
-has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
-live() { /usr/bin/grep -c "repos/x/y/issues/$1 -q" "$T/gh.calls" 2>/dev/null; }
-fact() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["issues"].get(sys.argv[2]) or {}).get("f", ["none"])[0])' "$T/st/issue-facts.json" "$1" 2>/dev/null; }
+# A helper never answers "no match" for a missing file or a missing tool: both are loud, since a silent no-match made an
+# assertion pass without reading anything.
+has() { [ -f "$T/board.calls" ] && "$GREP" -q "$1" "$T/board.calls"; }
+live() { if [ -f "$T/gh.calls" ]; then "$GREP" -c "repos/x/y/issues/$1 -q" "$T/gh.calls"; else printf '0\n'; fi; }
+moves() { if [ -f "$T/board.calls" ]; then "$GREP" -c "^STATUS o 4 Todo $1\$" "$T/board.calls"; else printf '0\n'; fi; }
+loghas() { [ -f "$T/st/cycle.log" ] && "$GREP" -q "$1" "$T/st/cycle.log"; }
+logof() { [ -f "$T/st/cycle.log" ] && "$GREP" "$1" "$T/st/cycle.log"; }
+fact() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["issues"].get(sys.argv[2]) or {}).get("f", ["none"])[0])' "$T/st/issue-facts.json" "$1"; }
 o=$(run); l1=$(live 6001); : > "$T/gh.calls"; o2=$(run); l2=$(live 6001)
 # The closed issue's card never moves, and the rule never claims it did.
-! has '^STATUS o 4 Todo 6001$' && ok "a stale cached open state never sends a closed issue's Closed card to Todo" || ko "#6001 moved: $(/usr/bin/grep ' 6001$' "$T/board.calls")"
-! /usr/bin/grep -q 'TERMINAL-REOPENED #6001' "$T/st/cycle.log" && ok "the closed issue is never named reopened" || ko "#6001 named: $(/usr/bin/grep 6001 "$T/st/cycle.log")$o$o2"
+! has '^STATUS o 4 Todo 6001$' && ok "a stale cached open state never sends a closed issue's Closed card to Todo" || ko "#6001 moved: $(logof ' 6001$')"
+! loghas 'TERMINAL-REOPENED #6001' && ok "the closed issue is never named reopened" || ko "#6001 named: $(logof 6001)$o$o2"
 # The state check reads GitHub itself: one live read of the issue per pass, never the cache's answer.
 [ "$l1" -ge 1 ] && [ "$l2" -ge 1 ] && ok "the state check before the reopen write reads GitHub live on every pass" || ko "#6001 live reads: first pass $l1, second pass $l2: $o$o2"
 [ "$(fact 6001)" = closed ] && ok "the live answer corrects the cached open state" || ko "#6001 fact after the pass: '$(fact 6001)'"
 # The control: an issue open on the live read still returns its Closed card to Todo, once.
-[ "$(/usr/bin/grep -c '^STATUS o 4 Todo 6002$' "$T/board.calls")" = 1 ] && ok "an issue GitHub reports open still moves Closed to Todo once over two passes" || ko "#6002 moves: $(cat "$T/board.calls")"
-/usr/bin/grep -q '^REASON reopened 6002$' "$T/board.calls" && ok "the control's move names SG_MOVE_REASON=reopened" || ko "#6002 move has no reopened reason"
-/usr/bin/grep -q 'TERMINAL-REOPENED #6002' "$T/st/cycle.log" && ok "the control's reopen is named in cycle.log" || ko "#6002 not named: $(/usr/bin/grep 6002 "$T/st/cycle.log")"
+[ "$(moves 6002)" = 1 ] && ok "an issue GitHub reports open still moves Closed to Todo once over two passes" || ko "#6002 moves: $(moves 6002), board: $(cat "$T/board.calls" 2>/dev/null)"
+has '^REASON reopened 6002$' && ok "the control's move names SG_MOVE_REASON=reopened" || ko "#6002 move has no reopened reason"
+loghas 'TERMINAL-REOPENED #6002' && ok "the control's reopen is named in cycle.log" || ko "#6002 not named: $(logof 6002)"
 rm -rf "$T"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 exit $fail

@@ -131,7 +131,7 @@ test-janitor-probe-retry.sh 4.19
 test-janitor-rearm-floor.sh 1.08
 test-janitor-rearm-unfreeze.sh 3.60
 test-janitor-reoffer.sh 2.94
-test-janitor-reopen-fresh.sh 2.08
+test-janitor-reopen-fresh.sh 2.48
 test-janitor-rule-o.sh 1.24
 test-janitor-rule-p.sh 1.48
 test-janitor-run-fields-unchanged.sh 1.75
