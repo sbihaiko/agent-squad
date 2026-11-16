@@ -1437,6 +1437,8 @@ def test_each_profile_s_tab_keeps_its_own_switch_and_window_over_one_shared_scan
     apps = load("hubmux_profiler_two", SCRIPTS / "hubmux.py").load_apps()
     a, z = apps["alpha"]["mod"], apps["zesty"]["mod"]
     table = Table()
+    monkeypatch.setitem(sys.modules["procscan"]._STATE, "snap", None)   # no scan a test before this one left behind
+    monkeypatch.setitem(sys.modules["procscan"]._STATE, "at", None)
     for m in (a, z):
         m.runs = lambda: []
         m.process_table = table
