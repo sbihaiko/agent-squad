@@ -7753,6 +7753,20 @@ function profSlots(s){
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
+// The wall time of the loop's steps and gates (#1748): the slow cycle's time at the top, each lane's steps by total, the steps
+// still in flight with their age, and the gates by kind and outcome with their mean load at the start and at the finish.
+let wallWin=3600;   // the wall-time view's window: its own three controls choose it, and the poll names it
+const profLoadNum=x=>x==null?"&#8212;":x.toFixed(2);
+function profWall(w,windows){
+ if(!w)return "";
+ const picks=(windows||[]).map(s=>`<button type=button data-wall="${s.s}" aria-pressed=${s.s===w.window_s}>${esc(s.label)}</button>`).join("");
+ const c=w.cycle||{},cyc=c.n>0?`The slow cycle takes a median of ${profTime(c.median_s)} and a p90 of ${profTime(c.p90_s)}, over ${c.n} cycle${c.n===1?"":"s"}.`:"Fewer than two heartbeats in the window: no cycle time.";
+ const steps=[...(w.slow||[]),...(w.fast||[])].map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td>${r.count}</td><td>${profSecs(r.total_s)}</td><td>${profSecs(r.median_s)}</td><td>${profSecs(r.p90_s)}</td></tr>`)
+  .concat((w.running||[]).map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td colspan=4>running for ${profSecs(r.age_s)}</td></tr>`));
+ const gates=(w.gates||[]).map(g=>`<tr><td class=pn><span class=pnm>${esc(g.kind)}</span></td><td>${esc(g.outcome)}</td><td>${g.count}</td><td>${profSecs(g.total_s)}</td><td>${profSecs(g.median_s)}</td><td>${profSecs(g.p90_s)}</td><td>${profLoadNum(g.load_start)}</td><td>${profLoadNum(g.load_finish)}</td></tr>`);
+ return `<section id=profwall><h3>Wall time of each step</h3><div role=group aria-label="Wall time window">${picks}</div><p class=tpn>${cyc}</p>`
+  +`<table id=profsteps aria-label="Wall time of each loop step, by lane"><thead><tr><th>Lane</th><th>Step</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th></tr></thead><tbody>${steps.join("")||`<tr><td colspan=6>no step finished in this window</td></tr>`}</tbody></table>`
+  +`<table id=profgates aria-label="Wall time of each gate run, by kind and outcome"><thead><tr><th>Kind</th><th>Outcome</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th><th>Load at start</th><th>Load at finish</th></tr></thead><tbody>${gates.join("")||`<tr><td colspan=8>no gate run in this window</td></tr>`}</tbody></table></section>`}
 function profTrip(t){
  if(!t)return "";
  const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
@@ -7771,20 +7785,21 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,slots=profSlots(v.slots),load=profLoad(v.load),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+slots+load+trip;   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,slots=profSlots(v.slots),load=profLoad(v.load),wall=profWall(v.wall,v.wall_windows),trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+slots+load+wall+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+slots+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+slots+load+wall+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
+function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),wb=!!a&&a.hasAttribute&&a.hasAttribute("data-wall");
  b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
+ const t=sw?b.querySelector("[data-prof]"):wb?b.querySelector(`[data-wall="${a.dataset.wall}"]`):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin+"&ww="+wallWin)).json();profDraw()}catch(e){}}
 async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 $("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
+ const wb=e.target.closest("button[data-wall]");if(wb){wallWin=Number(wb.dataset.wall);profPoll();return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence

@@ -757,7 +757,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', src), "the read carries the profiler window"
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\+"&ww="\+wallWin\)', src), "the read carries the profiler and the wall-time window"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -2928,7 +2928,7 @@ WALL_WINDOWS = [{"s": 600, "label": "10 minutes"}, {"s": 3600, "label": "1 hour"
 
 
 def test_the_wall_view_puts_the_slow_cycle_time_at_its_top_with_its_median_and_p90():
-    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
+    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS, 'trip': TRIP})},new Set())")
     assert "id=profwall" in part, "the wall-time view is drawn"
     assert part.index("id=profwall") < part.index("id=proftrip"), "the wall-time view stands above the trip bar"
     head = part[part.index("id=profwall"):part.index("janitor")]
