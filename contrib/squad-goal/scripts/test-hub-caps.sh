@@ -54,7 +54,7 @@ PY
 /usr/bin/grep -q '"unscheduled":"Backlog"' "$T/names" && ok "the live copy names its board columns from the table beside it" \
   || ko "the live copy names no board column: $(cat "$T/names") ($(head -2 "$T/names.err" | tr '\n' ' '))"
 
-# 5. the copy is the list the `# mirrors:` line states, and that list holds every local module hub.py imports (#1108): the gate
+# 5. the copy is the list the `# mirrors:` line states, and that list holds every local module hub.py imports or loads by path (#1108, #2011): the gate
 # reads the same line to pick this suite whenever a listed file changes, so a new import that the list misses fails here.
 imported=$(python3 - "$d/hub.py" "$d" <<'PY'
 import ast, os, sys
@@ -63,6 +63,8 @@ mods = set()
 for n in ast.walk(ast.parse(open(src).read())):
     if isinstance(n, ast.Import): mods |= {a.name.split(".")[0] for a in n.names}
     elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0: mods.add(n.module.split(".")[0])
+    elif isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "spec_from_file_location":   # a module loaded by its file path (#2011)
+        mods |= {c.value[:-3] for a in n.args for c in ast.walk(a) if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.endswith(".py")}
 print(" ".join(sorted(m + ".py" for m in mods if os.path.isfile(os.path.join(d, m + ".py")))))
 PY
 )
