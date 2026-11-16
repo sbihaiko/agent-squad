@@ -725,12 +725,33 @@ class BoardBinding:
         A row's repository url filters the map to this binding's repository, and a carrier that answers no
         url (a stub, a carrier without one) is not filtered.
 
-        The states ride the same window snapshot as `board` (#1796), so a reporting pass that asks for the
-        states seconds after another one sends no request."""
-        return self.board(fresh=fresh)[0]
+        The states keep their own window snapshot (#1796), the same window `board` reads: a reporting pass
+        that asks for the states seconds after another one sends no request. The snapshot is the Status-only
+        answer, never `board`'s: a carrier that names no Run field still answers this read."""
+        ttl = 0.0 if fresh else self._snapshot_ttl()
+        f = self.st / self._states_file
+        if ttl > 0:
+            try:
+                if time.time() - f.stat().st_mtime < ttl:
+                    return json.loads(f.read_text())
+            except (OSError, ValueError): pass
+        states = self._read_all_live()
+        tmp = f.with_suffix(f".{os.getpid()}.tmp")
+        try:
+            tmp.write_text(json.dumps(states))
+            os.replace(tmp, f)
+        except OSError:
+            pass
+        return states
+
+    @property
+    def _states_file(self):
+        """The state snapshot's file, named by the binding's repository as the item map is (#770)."""
+        tag = "-" + self.repo.replace("/", "_") if self.repo else ""
+        return f"board-states-{self.owner}-{self.project}{tag}.json"
 
     def _read_all_live(self):
-        """The live Status-only read behind `read_all`, kept for a caller that names the states alone."""
+        """The live Status-only read behind `read_all`."""
         out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={self.status_field()['id']}", "--jq",
                        '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name=="Status")|.value.name|if type=="object" then .raw else . end))//""),'
                        ' (.content.repository_url//"")]|@tsv')
@@ -790,7 +811,7 @@ class BoardBinding:
         return f"board-snapshot-{self.owner}-{self.project}{tag}.json"
 
     def _snapshot_ttl(self):   # the window one snapshot answers a reader that does not gate a write (#1796)
-        return max(0.0, self._num("SG_BOARD_SNAPSHOT_S", "120"))
+        return max(0.0, self._num("SG_BOARD_SNAPSHOT_S", "0"))   # off unless a reporting pass asks for it: a caller that writes never reads an old answer
 
     def board(self, fresh=False):
         """Every card's state and holder, in ONE read: ({issue: state}, {issue: {"run", "started"}}). The Status and the Run

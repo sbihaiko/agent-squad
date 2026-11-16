@@ -127,8 +127,9 @@ def board_state(sh, owner, project, repo):
 
 
 def board_items(state):
-    """The numbers of the repository's issues already on the board, in one read of the seam."""
-    return set(state.read_all())
+    """The numbers of the repository's issues already on the board, in one live read of the seam: this index decides a
+    write, so a card added seconds ago must be here (#1796)."""
+    return set(state.read_all(fresh=True))
 
 
 def card(state, number, items, status=BOARD_STATUS):
