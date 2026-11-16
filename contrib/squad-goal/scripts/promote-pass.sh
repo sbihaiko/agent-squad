@@ -4,7 +4,9 @@
 # full-proof serial hold means two passes never overlap, whatever started them. SG_STATE must be set: the pass never reads
 # the machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
 # Debounce: no suite for a tip already proved or refused ($SG_STATE/promote-pass.tips, last 50), nor while the latest landing in
-# $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof. A CI
+# $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof. The
+# window names a tip, and it never blocks a tip whose proof is already in (ADR-0164): a tip whose fast tier has completed
+# green is promotable at once, with no wait for the window and no local suite. A CI
 # proof of a hand run skips that window (a landing costs a job on the runner nothing); the watch cycle carries its own
 # debounce on that window for its step, bounded so a stream of landings cannot postpone the promotion for ever.
 # A full pass carries across a covered delta (ADR-0156): `delta-pass.sh` runs first, and any refusal or a held delta lock falls
@@ -97,9 +99,37 @@ fi
 [ -n "${SG_STATE:-}" ] || { echo "promote-pass: SG_STATE is not set; the pass never reads the machine-wide default" >&2; exit 2; }
 state=$SG_STATE; export SG_STATE; mkdir -p "$state"; log=$state/promote.log; marks=$state/promote-pass.tips
 tree=${SG_PROMOTE_TREE:-$state/promote-tree}; remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}; ctx=squad/full-proof
-export GIT_TERMINAL_PROMPT=0
+export GIT_TERMINAL_PROMPT=0 SG_GH_PASS=${SG_GH_PASS:-promote}   # the pass the call log names (ADR-0277)
 g() { /usr/bin/git -C "$tree" "$@"; }
 . "$d/caps.sh"
+. "$d/ghcall.sh"   # the one door to GitHub, for the window guard below as for the proof
+# SG_CI_WORKFLOW names the workflow file the check names are read from: the repository's own by default, a fixture in a test.
+# The workflow file lives in the checkout the profile names, never beside the live copy: a live copy holds no
+# .github, so the old default read nothing and every tip waited for checks that were never named (#1646). A value
+# with a slash is a path as it stands, which is how a test names its fixture. Both shells read it: the proof below, and the
+# window guard that reads a tip's proof before it waits.
+case "${SG_CI_WORKFLOW:-}" in
+  "") ci_file=${SG_CHECKOUT:-$SG_SQUAD}/.github/workflows/ci.yml;;
+  */*) ci_file=$SG_CI_WORKFLOW;;
+  *) ci_file=${SG_CHECKOUT:-$SG_SQUAD}/.github/workflows/$SG_CI_WORKFLOW;;
+esac
+ci_tier_green() {  # <tip>: 0 every fast-tier job of the tip's check runs has completed green, 1 not green, 2 the checks could not be read
+  local ns=() n st c cr v=0 rc
+  while IFS= read -r n; do [ -n "$n" ] && ns+=("$n"); done < <(ci_job_names "$ci_file" fast)
+  [ "${#ns[@]}" -gt 0 ] || return 1
+  # A read that failed is its own outcome, never "not green": a caller that folds an outage into the answer cannot tell a
+  # silent pass from a quiet tip (#1837).
+  cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=all" 2>/dev/null); rc=$?
+  [ $rc = 0 ] || return 2
+  printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || return 2
+  for n in "${ns[@]}"; do
+    # The newest completed run that is not a skip answers for the name, as the proof's own verdict reads it (#1644).
+    read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" \
+      '[.check_runs[] | select(.name == $n) | select(.status == "completed") | select(.conclusion != "skipped")] | sort_by(.id) | last | "\(.status) \(.conclusion)"')
+    { [ "$st" = completed ] && [ "$c" = success ]; } || v=1
+  done
+  return "$v"
+}
 mark() {  # <tip> <reason>: one marker and one line per tip
   echo "$1 $2" >> "$marks"; tail -n 50 "$marks" > "$marks.tmp" && mv "$marks.tmp" "$marks"
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
@@ -165,15 +195,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # green. The complete tier runs on the stg-to-main pull request, so this pass reads none of it. Green writes the
   # full line and the squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job that
   # is missing, running or timed out holds nothing, and the proof below answers as before.
-  # SG_CI_WORKFLOW names the workflow file the check names are read from: the repository's own by default, a fixture in a test.
-  # The workflow file lives in the checkout the profile names, never beside the live copy: a live copy holds no
-  # .github, so the old default read nothing and every tip waited for checks that were never named (#1646). A value
-  # with a slash is a path as it stands, which is how a test names its fixture.
-  case "${SG_CI_WORKFLOW:-}" in
-    "") ci_file=${SG_CHECKOUT:-$SG_SQUAD}/.github/workflows/ci.yml;;
-    */*) ci_file=$SG_CI_WORKFLOW;;
-    *) ci_file=${SG_CHECKOUT:-$SG_SQUAD}/.github/workflows/$SG_CI_WORKFLOW;;
-  esac
+  # The workflow file is read once, in both shells: SG_CI_WORKFLOW names it, and ci_file above answers it.
   full_status() {  # <tip> <description>: the squad/full-proof status on the sha, read back; the reason is printed when it does not stand
     local o st
     o=$(gh_send -X POST "repos/$SG_REPO/statuses/$1" -f state=success -f "context=$ctx" -f "description=$2") \
@@ -412,8 +434,18 @@ last=$(awk -F'\t' '$1 > m {m = $1} END {print m + 0}' "$state/landed.tsv" 2>/dev
 # ADR-0164: the guards below protect a local suite from a loaded box. When SG_PROMOTE_PROOF=ci names the dev-to-stg check as
 # the proof, no local suite runs, so a recent landing, a loaded box, a low-memory box and a nightly that owns the machine
 # refuse nothing: a landing costs a local suite its measurement and costs a job on GitHub's runner nothing.
-[ "${SG_PROMOTE_PROOF:-}" = ci ] \
-  || [ $(( $(date +%s) - last )) -ge "${SG_PROMOTE_QUIET_SECONDS:-900}" ] || exit 0   # a landing is still recent: wait for the burst to end
+# A landing inside the quiet window waits for the burst to end, and it never holds a tip whose proof is already in
+# (ADR-0164): the window names a tip so a burst earns one request, and a fast tier that has completed green is promotable
+# at once. So the pass reads the tip's own checks before it waits, and a green tip runs no local suite at all. A read that
+# fails writes its own line: an outage holds the tip the same way, and it is visible in promote.log, never a quiet tip.
+if [ "${SG_PROMOTE_PROOF:-}" != ci ] && [ $(( $(date +%s) - last )) -lt "${SG_PROMOTE_QUIET_SECONDS:-900}" ]; then
+  ci_tier_green "$tip"; rc=$?
+  case $rc in
+    0) ;;
+    2) echo "$(date -u +%FT%TZ) promote-pass: $tip not proven: the checks could not be read; the quiet window holds the tip" >> "$log"; exit 0;;
+    *) exit 0;;
+  esac
+fi
 # The proof is a measurement (#738): the suite's assertions are the wall time of real scripts, so it never measures under the
 # loop's own load. A live run, or a load average at the bound, marks the tip "not proven: machine loaded" and writes no marker,
 # so a later pass takes the same tip once the machine is free. SG_PROMOTE_LOAD_LIMIT names the load average bound (default:

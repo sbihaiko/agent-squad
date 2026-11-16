@@ -4,11 +4,16 @@ A reading is {(pid, start time): (ppid, cpu seconds, command)}: a pid alone does
 again. `fold` turns two readings into what happened between them: the CPU seconds each process used and one event for each
 process the second reading saw first.
 
-A `Scope` names the loop of one profile: the supervisor's pid and the folders only that profile's work names. The loop is
-the supervisor and its descendants, each process whose command names one of those folders, with its descendants, and each
-orphan from a temp folder. Each is filed under the loop parts its ancestry names, outermost first, so the tree reads like
-a call tree: a driver, the run it started, the gate below it. A process that names no part of its own counts as its
-nearest named ancestor's own time. Every other process counts in one context row, apart from the tree.
+A `Scope` names the loop of one profile: the supervisor's pid and the folders only that profile's work names, plus the
+other profiles of the hub, each with its own supervisor pid and run folders. The loop is the supervisor and its
+descendants, each process whose command names one of those folders, with its descendants, and each orphan from a temp
+folder. Each is filed under the loop parts its ancestry names, outermost first, so the tree reads like a call tree: a
+driver, the run it started, the gate below it. A process that names no part of its own counts as its nearest named
+ancestor's own time. Every process outside the loop counts in the context row, apart from the tree: one row for each other
+profile's loop, and one row per application for the rest.
+
+A reading answers each process's CPU seconds, or None where the system refused the read. A refused process is seen and not
+read: it lowers the coverage the window answers and adds no row, since a zero there would be a guess.
 
 A command is named by the program it runs, never by an argument: `vim watch.sh` runs vim. The whole line is read, with
 no head cap: a script past a long argument list still names its process.
@@ -59,11 +64,14 @@ _WRAPPERS = {
 }
 OTHER = ("other", "other")       # the head of every path outside the loop: the context row
 UNKNOWN = ("unknown", "unknown")  # a process of the loop whose program cannot be told, and no ancestor names one
-FOREIGN = "another loop"         # a supervisor that is not this profile's, with its descendants
+FOREIGN = "another loop"         # a supervisor no other profile names, with its descendants
 CONTEXT = "outside the loop"
 _IN, _OUT, _OTHER_LOOP = "in", "out", "foreign"
 
-Scope = collections.namedtuple("Scope", "supervisor marks")   # the supervisor's pid or None; the folders of the profile
+# The supervisor's pid or None; the folders of the profile; and the other profiles' loops (name, supervisor pid or None,
+# the run folders only that profile's work names). The hub names every other profile it serves; a fold with no `others`
+# keeps the one row for every foreign loop.
+Scope = collections.namedtuple("Scope", "supervisor marks others", defaults=((),))
 
 
 def _base(path):
@@ -291,12 +299,25 @@ def _paths(rows, scope, starts=None, memo=None):
     `starts` is each pid's start time and `memo` the label memo, so a process is labelled once per argv."""
     seen = {}
     marks = tuple(scope.marks)
+    others = tuple(scope.others or ())
+    other_pids = {sup: name for name, sup, _ in others if sup is not None}
     parsed = _labeller(rows, starts or {}, memo)
     held = parsed(scope.supervisor)[0] if scope.supervisor in rows else None
     above = rows[scope.supervisor][0] if held and held[0] == SUPERVISOR else None   # the pid file names the loop the supervisor runs; the supervisor is its parent
 
+    def other_of(pid, command):
+        """The other profile whose loop this process names: its supervisor's pid first, then the run folders it names. None
+        when no other profile names it, so the loop stays the one row for the rest. A process naming this profile's own
+        folders is read as this profile's first, whoever else might name it: the hub calls this after that test."""
+        if pid in other_pids:
+            return other_pids[pid]
+        for name, _, omarks in others:
+            if omarks and _names(command, omarks):
+                return name
+        return None
+
     def place(pid):
-        """(in the loop, in another loop, or outside; the named parts; the top ancestor's command)."""
+        """(in the loop, in another loop named by `parts`, or outside; the named parts; the top ancestor's command)."""
         if pid in seen:
             return seen[pid]
         chain, base = [], None
@@ -314,6 +335,8 @@ def _paths(rows, scope, starts=None, memo=None):
             state, parts, top = base or (_OUT, (), command)
             if (p == scope.supervisor or p == above) and own and own[0] == SUPERVISOR:   # a stale pid file can name another program
                 state, parts = _IN, (own,)
+            elif state == _OTHER_LOOP:
+                pass   # a descendant stays in the loop its ancestry entered
             elif state == _IN:
                 if own and (not parts or parts[-1] != own):
                     parts = parts + (own,)
@@ -321,10 +344,14 @@ def _paths(rows, scope, starts=None, memo=None):
                 orphan = _orphan(script, marks) if ppid == 1 else None
                 if orphan:
                     state, parts = _IN, (orphan,)
-                elif own and own[0] == SUPERVISOR:   # the same scripts run another profile's loop: its pid tells it apart
-                    state = _OTHER_LOOP
+                elif own and own[0] == SUPERVISOR:   # the same scripts run another profile's loop: its pid or run folders tell it
+                    state, parts = _OTHER_LOOP, (other_of(p, command) or FOREIGN,)
                 elif _names(command, marks):
                     state, parts = _IN, ((own,) if own else ())
+                else:
+                    who = other_of(p, command)
+                    if who:
+                        state, parts = _OTHER_LOOP, (who,)
             base = seen[p] = (state, parts, top)
         return base
 
@@ -332,16 +359,19 @@ def _paths(rows, scope, starts=None, memo=None):
         state, parts, top = place(pid)
         if state == _IN:
             return parts or (UNKNOWN,)
-        return (OTHER, (FOREIGN if state == _OTHER_LOOP else _plain(top), "other"))
+        if state == _OTHER_LOOP:   # a named other profile's loop; an unnamed foreign one keeps the one row for the rest
+            return (OTHER, (parts[0] if parts[0] == FOREIGN else f"loop {parts[0]}", "loop"))
+        return (OTHER, (_plain(top), "other"))
     return path
 
 
 def fold(prev, cur, scope, memo=_LABELS):
     """{node path: [cpu seconds, events]} for what happened between two readings.
     A (pid, start time) the first reading does not hold is one event, and all its CPU time is new. So is one whose CPU
-    time went back, where the system gives no start time. `memo` keeps each process's label while the reading holds it,
-    so the next reading reuses it instead of parsing the line again; a process the reading no longer holds leaves the
-    memo, and with no memo every line is parsed."""
+    time went back, where the system gives no start time. A process whose CPU read the system refused carries `None` in
+    place of its seconds: it is seen and not read, so it is no row here, and it counts nothing anywhere. `memo` keeps
+    each process's label while the reading holds it, so the next reading reuses it instead of parsing the line again; a
+    process the reading no longer holds leaves the memo, and with no memo every line is parsed."""
     if memo is not None:
         live = set(cur)
         for key in list(memo):   # a snapshot: another profile's sampler can fold on its own thread in the same hub
@@ -353,8 +383,10 @@ def fold(prev, cur, scope, memo=_LABELS):
         rows[pid], starts[pid] = row, start
     path = _paths(rows, scope, starts, memo)
     for key, (_, cpu, _) in cur.items():
+        if cpu is None:
+            continue
         was = prev.get(key)
-        new = was is None or cpu < was[1]
+        new = was is None or was[1] is None or cpu < was[1]
         used = cpu if new else cpu - was[1]
         if not new and used <= 0:
             continue
@@ -362,6 +394,12 @@ def fold(prev, cur, scope, memo=_LABELS):
         cell[0] += used
         cell[1] += 1 if new else 0
     return out
+
+
+def coverage(reading):
+    """(processes read with their CPU, processes seen) in one reading: a refused CPU read is seen and not read."""
+    seen = len(reading)
+    return sum(1 for (_, cpu, _) in reading.values() if cpu is not None), seen
 
 
 def tree(acc, root="loop", window_s=None):
@@ -401,16 +439,21 @@ def tree(acc, root="loop", window_s=None):
 
 
 def context(acc):
-    """The one context row of a fold: the CPU seconds of every process outside the loop, by application, largest first."""
-    apps = {}
+    """The context row of a fold: the CPU seconds of every process outside the loop, largest first. A row per other
+    profile's loop, told apart by that profile's supervisor pid and run folders, then one row for each application of the
+    rest. A process of an other loop counts in that loop's row, never in the rest."""
+    cells = {}
     for parts, (cpu, events) in acc.items():
         if parts[0] == OTHER:
-            cell = apps.setdefault(parts[1][0], [0.0, 0])
+            name, kind = parts[1]
+            cell = cells.setdefault((name, kind), [0.0, 0])
             cell[0] += cpu
             cell[1] += events
-    rows = sorted(apps.items(), key=lambda kv: (-kv[1][0], kv[0]))
-    return {"name": CONTEXT, "total_s": round(sum(c for c, _ in apps.values()), 3), "events": sum(e for _, e in apps.values()),
-            "children": [{"name": name, "total_s": round(cpu, 3), "events": events} for name, (cpu, events) in rows]}
+    rows = sorted(cells.items(), key=lambda kv: (-kv[1][0], kv[0][0]))
+    return {"name": CONTEXT, "total_s": round(sum(c for c, _ in cells.values()), 3),
+            "events": sum(e for _, e in cells.values()),
+            "children": [{"name": name, "kind": kind, "total_s": round(cpu, 3), "events": events}
+                         for (name, kind), (cpu, events) in rows]}
 
 
 class Window:
@@ -420,6 +463,7 @@ class Window:
     def __init__(self, span=SPAN_S):
         self.span, self.since, self.prev = span, None, None
         self.steps = collections.deque()   # (time, delta) per reading, oldest first
+        self.cov = collections.deque()     # (time, read, seen) per reading, oldest first
         self.acc = {}
         self.last, self.interval, self.failed = None, None, 0
 
@@ -427,22 +471,32 @@ class Window:
         self.since, self.prev, self.acc = now, None, {}
         self.last, self.interval, self.failed = None, None, 0
         self.steps.clear()
+        self.cov.clear()
 
     def fail(self):
         """Count a reading that failed. It is not folded: the next good one is measured from the last good one."""
         self.failed += 1
 
     def stats(self):
-        """The time of the last good reading, the measured interval between the last two, and the failed readings."""
-        return {"last_reading": self.last, "interval_s": self.interval, "failed_readings": self.failed}
+        """The time of the last good reading, the measured interval between the last two, the failed readings, and the
+        coverage of the window: the processes read with their CPU over every process seen. A refused read lowers it."""
+        cov = list(self.cov)   # one copy: the sampler thread prunes the window while a GET reads it (#1956's CI red)
+        read = sum(r for _, r, _ in cov)
+        seen = sum(s for _, _, s in cov)
+        return {"last_reading": self.last, "interval_s": self.interval, "failed_readings": self.failed,
+                "processes_read": read, "processes_seen": seen,
+                "coverage": round(read / seen, 3) if seen else None}
 
     def add(self, now, reading, scope):
-        """Take one reading. The first is the baseline: it holds every process and says nothing about the window."""
+        """Take one reading. The first is the baseline: it holds every process and says nothing about the window. A
+        process whose CPU read was refused counts in the coverage and in no row."""
         if self.since is None:
             self.since = now
         if self.last is not None:
             self.interval = round(now - self.last, 3)
         self.last = now
+        read, seen = coverage(reading)
+        self.cov.append((now, read, seen))
         if self.prev is not None:
             delta = fold(self.prev, reading, scope)
             self.steps.append((now, delta))
@@ -458,6 +512,8 @@ class Window:
                 cell[1] -= events
                 if cell[0] < 1e-9 and cell[1] <= 0:
                     del self.acc[parts]
+        while self.cov and self.cov[0][0] < now - self.span:
+            self.cov.popleft()
 
     def window_s(self, now):
         return 0 if self.since is None or now is None else max(0.0, min(now - self.since, self.span))

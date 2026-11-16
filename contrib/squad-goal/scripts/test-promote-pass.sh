@@ -236,6 +236,7 @@ cat > "$T/bin/ghread" <<'EOF'
 #!/bin/bash
 case "$1" in
   *check-runs*) s=${1#*commits/}; s=${s%%/*}
+    [ -e "$CHECKS_DIR/checks-fail" ] && exit 1   # a read that fails, as a GitHub outage does
     if [ -f "$CHECKS_DIR/checks-$s" ]; then cat "$CHECKS_DIR/checks-$s"
     elif [ -f "$CHECKS_DIR/checks-default" ]; then cat "$CHECKS_DIR/checks-default"   # a tip no case named (#1495): the moved tip
     else echo '{"check_runs":[]}'; fi
@@ -432,17 +433,35 @@ rmdir "$SG_STATE/locks/nightly"
   && ok "a CI proof promotes on a loaded box while a nightly runs, and runs no local suite" \
   || ko "CI proof under load: rc $rc, stg $(tip stg), was $before, runs $(runs) was $n, out '$(cat "$T/out")'"
 
-# A landing inside the quiet window holds a local proof, and never a CI proof: a landing costs a local suite its measurement,
-# and costs a job on GitHub's runner nothing.
+# A landing inside the quiet window holds a local proof, and it never holds one whose proof is already in (ADR-0164): the
+# window names a tip so a burst earns one request, and a fast tier that has completed green is promotable at once, with no
+# wait for the window and no local suite. A landing costs a local suite its measurement, and a tip whose proof is already in
+# spends nothing.
 printf '%s\tlanded\n' "$(date +%s)" > "$SG_STATE/landed.tsv"
-adv dev ci-proof-quiet; tcq=$(tip dev); before=$(tip stg)
+adv dev ci-proof-quiet; tcq=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tcq" success success running running
+SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a tip inside the quiet window whose fast tier is unfinished runs no suite and promotes nothing" \
+  || ko "quiet window: rc $rc, stg $(tip stg), was $before, runs $(runs) was $n"
 shards "$tcq" success success success success
 SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$before" ] && ok "a recent landing still holds a local proof" \
-  || ko "quiet window: rc $rc, stg $(tip stg), was $before"
+[ $rc = 0 ] && [ "$(tip stg)" = "$tcq" ] && [ "$(runs)" = "$n" ] && ok "a green tip inside the quiet window is promoted at once, with no local suite" \
+  || ko "green in the quiet window: rc $rc, stg $(tip stg), was $before, runs $(runs) was $n"
+# A read that fails is its own fact, never "not green": a GitHub outage inside the quiet window is written to promote.log as a
+# distinct line, so a pass that never promotes under an outage is visible instead of silent.
+adv dev ci-proof-outage; tou=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tou" success success success success
+: > "$T/checks-fail"; SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+rm -f "$T/checks-fail"
+[ $rc = 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a check read that fails inside the quiet window promotes nothing and runs no suite" \
+  || ko "outage: rc $rc, stg $(tip stg), was $before, runs $(runs) was $n"
+/usr/bin/grep -q "promote-pass: $tou not proven: the checks could not be read" "$SG_STATE/promote.log" && ok "the failed check read is written as its own line" \
+  || ko "outage line: $(/usr/bin/grep "$tou" "$SG_STATE/promote.log")"
+# A CI proof never waits for the window either.
+adv dev ci-proof-quiet2; tcq2=$(tip dev); shards "$tcq2" success success success success
 SG_PROMOTE_PROOF=ci SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$tcq" ] && ok "a recent landing holds no CI proof" \
-  || ko "quiet window on a CI proof: rc $rc, stg $(tip stg), was $before, out '$(cat "$T/out")'"
+[ $rc = 0 ] && [ "$(tip stg)" = "$tcq2" ] && ok "a recent landing holds no CI proof" \
+  || ko "quiet window on a CI proof: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
 rm -f "$SG_STATE/landed.tsv"
 
 # The proof takes no gate slot: a CI proof beside a held gate lock still promotes, and runs no local suite. The holder is a

@@ -28,7 +28,7 @@ FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended", "/api/version",
           "/api/sessions", "/api/sessions/card", "/api/sessions/card/answer", "/api/sessions/conversation", "/api/sessions/send",
-          "/api/sessions/attach", "/api/sessions/image", "/api/sessions/clip", "/api/sessions/voice", "/api/promote", "/api/loop",
+          "/api/sessions/attach", "/api/sessions/image", "/api/sessions/clip", "/api/sessions/voice", "/api/promote", "/api/loop", "/api/profiler",
           "/api/load", "/api/chart/lead", "/api/leadtime"}
 # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the phone's photo takes the one
 # attach write (#1155); a bubble's thumbnail reads the image route the overlay already serves (#1602); the phone's voice
@@ -175,12 +175,13 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     found = set(re.findall(r'"(/api/[^"?]*)', hub.MOBILE_PAGE))
     assert found <= ROUTES, f"the mobile page reads routes the hub does not serve: {sorted(found - ROUTES)}"
     writes = set(re.findall(r'fetch\("(/api/[^"?]*)"[^)]*method:', hub.MOBILE_PAGE))
-    assert writes == {"/api/promote", "/api/sessions/send", "/api/sessions/card/answer"}, f"the mobile page writes other routes: {sorted(writes)}"
+    assert writes == {"/api/promote", "/api/sessions/send", "/api/sessions/card/answer", "/api/profiler"},f"the mobile page writes other routes: {sorted(writes)}"
     assert 'fetch(path, { method: "POST"' in hub.MOBILE_PAGE and 'p && p.own ? "/api/loop" : "/" + loopSlug + "/api/loop"' in hub.MOBILE_PAGE, \
         "the loop page's write is the one project's own loop route (#1599)"
-    # Seven writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
+    # Eight writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
     # the hub's forward route (#831), the session composer's send (#834), the loop switch (#923, ADR-0162), the answer
-    # to a session's question card (#1093), the composer's one photo (#1155), and the composer's one recording (#1603).
+    # to a session's question card (#1093), the composer's one photo (#1155), the composer's one recording (#1603), and
+    # the Loop tab's CPU sampling switch, which posts the profiler route (#1754).
     # Each carries the word once: a route
     # reached through a variable path, or a method set after the call's own `)`, carries it once too often, whatever the
     # shape of the call (#829).
@@ -195,7 +196,7 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     assert 'fetch(s.src.api + "/attach?" + q, { method: "POST"' in hub.OVERLAY_JS, "the overlay's attach write is not the one attach route"
     assert '"/terminals/attach", { method: "POST"' in hub.OVERLAY_JS and '"/terminals/write", { method: "POST"' in hub.OVERLAY_JS
     assert '"/terminals/start", { method: "POST"' in hub.OVERLAY_JS
-    assert hub.MOBILE_PAGE.count("method:") == 7 + overlay, "the mobile page holds an eighth write, or a method outside the seven fetches"
+    assert hub.MOBILE_PAGE.count("method:") == 8 + overlay, "the mobile page holds a ninth write, or a method outside the eight fetches"
 
 
 def test_the_sheet_links_to_the_issue_on_github(hub):

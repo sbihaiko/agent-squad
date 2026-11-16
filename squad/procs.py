@@ -107,8 +107,9 @@ class Proc:
     pgid: int
     start: float | None   # epoch seconds, or None where the system gives none
     command: str
-    cpu: float = 0.0      # user plus system CPU seconds, as ps `time=` reports them; 0.0 where the system gives none
+    cpu: float | None = 0.0   # user plus system CPU seconds, as ps `time=` reports them; None where the read was refused
     stat: str = "S"       # the first letter ps `stat=` prints: Z for a zombie, S for any other state
+    cpu_known: bool = True   # False where the CPU read was refused: the process was seen, and its seconds are unknown, never zero
 
 
 class _BsdInfo(ctypes.Structure):
@@ -158,12 +159,13 @@ def _mach_ratio():
     return tb[0] or 1, tb[1] or 1
 
 
-def _darwin_cpu(pid: int) -> float:
-    """User plus system CPU seconds from proc_pidinfo PROC_PIDTASKINFO; 0.0 when the system refuses the read."""
+def _darwin_cpu(pid: int) -> float | None:
+    """User plus system CPU seconds from proc_pidinfo PROC_PIDTASKINFO; None when the system refuses the read, so a
+    refused process is never read as one that used no CPU."""
     buf = ctypes.create_string_buffer(96)
     n = _libproc().proc_pidinfo(pid, PROC_PIDTASKINFO, 0, buf, 96)
     if n < 32:
-        return 0.0
+        return None
     user, system = struct.unpack_from("QQ", buf.raw, 16)
     numer, denom = _mach_ratio()
     return (user + system) * numer / denom / 1e9
@@ -264,7 +266,7 @@ def _darwin_proc(pid: int) -> Proc | None:
     if _libproc().proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, ctypes.byref(info), ctypes.sizeof(info)) == ctypes.sizeof(info):
         start = info.pbi_start_tvsec + info.pbi_start_tvusec / 1e6 if info.pbi_start_tvsec else None
         ppid, pgid = info.pbi_ppid, info.pbi_pgid
-        cpu = _darwin_cpu(pid)
+        cpu = _darwin_cpu(pid)   # None when the task read is refused for another user's process
         stat = "Z" if info.pbi_status == SZOMB else "S"
         ours = info.pbi_uid == os.getuid()
     else:
@@ -272,8 +274,8 @@ def _darwin_proc(pid: int) -> Proc | None:
         if known is None:
             return None   # gone
         start, ppid, pgid, stat = known
-        cpu = 0.0   # the task read is refused for another user's process
-    return Proc(pid, ppid, pgid, start, _darwin_command(pid, ours), cpu, stat)
+        cpu = None   # the task read is refused for another user's process
+    return Proc(pid, ppid, pgid, start, _darwin_command(pid, ours), cpu, stat, cpu is not None)   # a refused read stays None, never a zero cost
 
 
 def _linux_listing() -> list[int]:
@@ -373,8 +375,10 @@ def format_lstart(start: float | None) -> str:
     return "" if start is None else time.strftime(LSTART_FMT, time.localtime(start))
 
 
-def format_cputime(cpu: float) -> str:
-    """ps `time=`: [dd-][hh:]mm:ss.cc."""
+def format_cputime(cpu: float | None) -> str:
+    """ps `time=`: [dd-][hh:]mm:ss.cc. A refused CPU read prints `-`: no zero stands for a time the system did not give."""
+    if cpu is None:
+        return "-"
     cs = int(cpu * 100)
     s, cc = divmod(cs, 100)
     m, s = divmod(s, 60)

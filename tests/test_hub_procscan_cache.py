@@ -175,3 +175,27 @@ def test_runs_asks_lsof_only_for_this_profiles_dashboard(hub, tmp_path, monkeypa
         assert len(calls) == 1, "lsof ran again for a dashboard whose port this profile already knows"
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+class FakeTable:
+    """A process-table reader that is an object, as a test's fake is: it has no `__qualname__` of its own."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __call__(self):
+        return {"from": self.name}
+
+
+def test_two_fake_readers_in_one_tick_each_read_their_own_table():
+    """A reader with no name of its own keeps its own cell: a fake installed after another fake is never answered with
+    the other's scan inside one tick. A shared cell served one test the process table a test before it had left there,
+    so a refused CPU read counted as read (#1957)."""
+    spec = importlib.util.spec_from_file_location("procscan_two_fakes", SCRIPTS / "procscan.py")
+    scan = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scan)
+    old, new = FakeTable("old"), FakeTable("new")
+    assert scan.table(old, TICK, 100.0)[0] == {"from": "old"}
+    assert scan.table(new, TICK, 100.0)[0] == {"from": "new"}, "the new reader was answered with the old reader's scan"
+    assert scan.view("profiler", dict, TICK, 100.0, new)[0] == {"from": "new"}
+    assert scan.table(old, TICK, 100.0)[0] == {"from": "old"}, "one reader of the tick reads once"

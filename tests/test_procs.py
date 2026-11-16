@@ -178,3 +178,23 @@ def test_1635_the_wait_for_an_argv_is_bounded(monkeypatch):
     t = time.monotonic()
     assert procs._darwin_command(4321, ours=True) == "/usr/bin/python3"
     assert time.monotonic() - t < 1
+
+
+# (#1753) The profiler's coverage counts a process seen and not read. Another user's process answers no task info, so its
+# CPU seconds are unknown: the read keeps None, never a zero the fold would draw as a zero-cost row.
+@pytest.mark.skipif(sys.platform != "darwin", reason="the task-info read is the darwin seam")
+def test_1753_a_refused_task_info_read_keeps_none_as_the_cpu(monkeypatch):
+    import ctypes
+
+    def proc_pidinfo(pid, flavor, arg, buf, size):
+        info = ctypes.cast(buf, ctypes.POINTER(procs._BsdInfo)).contents
+        info.pbi_start_tvsec, info.pbi_start_tvusec = 1700000000, 0
+        info.pbi_ppid, info.pbi_pgid, info.pbi_uid, info.pbi_status = 1, pid, 4321, 2
+        return size
+
+    monkeypatch.setattr(procs, "_libproc", lambda: type("L", (), {"proc_pidinfo": staticmethod(proc_pidinfo)})())
+    monkeypatch.setattr(procs, "_darwin_cpu", lambda pid: None)   # the task read is refused
+    monkeypatch.setattr(procs, "_darwin_command", lambda pid, ours: "/usr/bin/login")
+    p = procs._darwin_proc(4321)
+    assert p.cpu is None and p.cpu_known is False
+    assert (p.pid, p.ppid, p.pgid, p.stat) == (4321, 1, 4321, "S")

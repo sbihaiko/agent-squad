@@ -148,6 +148,98 @@ def test_the_root_is_the_supervisor_of_this_profile_and_its_descendants(prof, sc
     assert [(c["name"], c["total_s"]) for c in prof.context(acc)["children"]] == [("another loop", 12.0)]
 
 
+# ---------------------------------------------------------------- the other profiles' loops (#1753)
+# With several profiles on one machine, the context row splits: one row for each other profile's loop, told by that
+# profile's supervisor pid and run folders, and one row for the rest, grouped by application.
+OTHERS = (("ariel", 50, ("/Users/o/ariel/runs/",)), ("zesty", 80, ("/Users/o/zesty/runs/",)))
+
+
+def test_two_profiles_that_run_the_same_script_give_two_rows_one_under_each_loop(prof):
+    scope = prof.Scope(10, (S + "/", CO + "/runs/"), OTHERS)
+    a = rd({10: (1, 0.0, f"bash {S}/watchd.sh supervise"),
+            50: (1, 0.0, f"bash {S}/watchd.sh supervise"), 51: (50, 0.0, f"bash {S}/watch.sh"),
+            80: (1, 0.0, f"bash {S}/watchd.sh supervise"), 81: (80, 0.0, f"bash {S}/watch.sh")})
+    b = rd({10: (1, 1.0, f"bash {S}/watchd.sh supervise"),
+            50: (1, 2.0, f"bash {S}/watchd.sh supervise"), 51: (50, 3.0, f"bash {S}/watch.sh"),
+            80: (1, 4.0, f"bash {S}/watchd.sh supervise"), 81: (80, 5.0, f"bash {S}/watch.sh")})
+    acc = prof.fold(a, b, scope)
+    assert names(prof.tree(acc)) == ["watchd.sh"], "the tree stays this profile's loop alone"
+    assert [(c["name"], c["kind"], c["total_s"]) for c in prof.context(acc)["children"]] == [
+        ("loop zesty", "loop", 9.0), ("loop ariel", "loop", 5.0)]
+
+
+def test_an_other_profile_s_loop_is_told_by_its_run_folders_alone(prof):
+    """The process names another profile's run folder, with no supervisor above it: it is that loop's work, not the rest."""
+    scope = prof.Scope(None, (), OTHERS)
+    ariel = "/x/.venv/bin/python -m squad start --graph /Users/o/ariel/runs/run-1/graph.json"
+    zesty = "node /Users/o/zesty/runs/run-2/x.js"
+    a = rd({60: (1, 0.0, ariel), 61: (1, 0.0, zesty)})
+    b = rd({60: (1, 1.0, ariel), 61: (1, 4.0, zesty)})
+    assert [(c["name"], c["total_s"]) for c in prof.context(prof.fold(a, b, scope))["children"]] == [
+        ("loop zesty", 4.0), ("loop ariel", 1.0)]
+
+
+def test_the_rest_of_the_context_row_stays_one_row_per_application(prof):
+    scope = prof.Scope(10, (S + "/", CO + "/runs/"), OTHERS)
+    a = rd({10: (1, 0.0, f"bash {S}/watchd.sh supervise"), 50: (1, 0.0, f"bash {S}/watchd.sh supervise"),
+            90: (1, 0.0, "bash /elsewhere/watchd.sh supervise"), 30: (1, 0.0, "/Applications/Foo Bar.app/Contents/Foo Bar"),
+            40: (1, 0.0, "/usr/bin/vim /tmp/x")})
+    b = rd({10: (1, 1.0, f"bash {S}/watchd.sh supervise"), 50: (1, 2.0, f"bash {S}/watchd.sh supervise"),
+            90: (1, 3.0, "bash /elsewhere/watchd.sh supervise"), 30: (1, 4.0, "/Applications/Foo Bar.app/Contents/Foo Bar"),
+            40: (1, 5.0, "/usr/bin/vim /tmp/x")})
+    assert [(c["name"], c["kind"], c["total_s"]) for c in prof.context(prof.fold(a, b, scope))["children"]] == [
+        ("vim", "other", 5.0), ("Foo Bar", "other", 4.0), ("another loop", "loop", 3.0), ("loop ariel", "loop", 2.0)]
+
+
+def test_a_refused_cpu_read_lowers_the_coverage_and_adds_no_zero_cost_row(prof, scope):
+    """A process whose CPU read the system refuses is seen and not read: it lowers the coverage, and it is no row."""
+    a = rd({10: (1, 0.0, f"bash {S}/watchd.sh supervise"), 11: (10, 0.0, f"bash {S}/watch.sh"),
+            30: (1, 1.0, "/Applications/Foo Bar.app/Contents/Foo Bar")})
+    b = rd({10: (1, 1.0, f"bash {S}/watchd.sh supervise"), 11: (10, 2.0, f"bash {S}/watch.sh"),
+            12: (11, None, f"python3 {S}/janitor.py"),                 # the task read is refused
+            30: (1, 1.5, "/Applications/Foo Bar.app/Contents/Foo Bar"),
+            40: (1, None, "/usr/bin/vim /tmp/watch.sh")})              # the task read is refused
+    acc = prof.fold(a, b, scope)
+    assert names(prof.tree(acc)) == ["watchd.sh"]
+    assert node(prof.tree(acc), "watchd.sh", "watch.sh")["children"] == [], "a refused process is no zero-cost row"
+    assert [c["name"] for c in prof.context(acc)["children"]] == ["Foo Bar"]
+    w = prof.Window()
+    w.add(1.0, a, scope)
+    w.add(2.0, b, scope)
+    s = w.stats()
+    assert (s["processes_read"], s["processes_seen"]) == (6, 8), "eight processes seen, six of them read with their CPU"
+    assert s["coverage"] == pytest.approx(0.75)
+
+
+def test_a_window_that_read_every_process_answers_the_full_coverage(prof, scope):
+    w = prof.Window()
+    w.add(1.0, FIRST, scope)
+    w.add(2.0, SECOND, scope)
+    s = w.stats()
+    assert s["processes_read"] == s["processes_seen"] == len(FIRST) + len(SECOND) and s["coverage"] == 1.0
+
+
+def test_the_coverage_reads_one_snapshot_of_the_window_while_the_sampler_prunes_it(prof, scope):
+    """The sampler thread drops readings past the span while a GET reads the stats: read and seen come from one copy
+    of the window, so the pair never mixes two window sizes (CI: 14 seen against 9 read)."""
+    import collections
+
+    class Pruning(collections.deque):
+        def __iter__(self):   # the sampler prunes the oldest reading between two walks of the window
+            items = list(super().__iter__())
+            if len(self) > 1:
+                self.popleft()
+            return iter(items)
+
+    w = prof.Window()
+    w.add(1.0, FIRST, scope)
+    w.add(2.0, SECOND, scope)
+    w.add(3.0, FIRST, scope)
+    w.cov = Pruning(w.cov)
+    s = w.stats()
+    assert s["coverage"] == 1.0 and s["processes_read"] == s["processes_seen"], s
+
+
 def test_a_pid_file_that_names_another_program_roots_nothing(prof):
     """A stale pid file can name a pid the system gave to another program."""
     a = rd({10: (1, 0.0, "/usr/bin/vim notes.txt"), 11: (10, 0.0, "sleep 5")})
@@ -301,14 +393,18 @@ def test_the_window_keeps_the_last_span_and_restarts_on_reset(prof, scope):
 def test_the_window_states_its_last_reading_the_measured_interval_and_the_failed_readings(prof, scope):
     w = prof.Window(span=10)
     w.reset(100.0)
-    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0}
+    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0,
+                         "processes_read": 0, "processes_seen": 0, "coverage": None}
     w.add(100.0, rd({9: (1, 1.0, "true")}), scope)
-    assert w.stats() == {"last_reading": 100.0, "interval_s": None, "failed_readings": 0}
+    assert w.stats() == {"last_reading": 100.0, "interval_s": None, "failed_readings": 0,
+                         "processes_read": 1, "processes_seen": 1, "coverage": 1.0}
     w.fail()
     w.add(102.5, rd({9: (1, 1.0, "true")}), scope)
-    assert w.stats() == {"last_reading": 102.5, "interval_s": 2.5, "failed_readings": 1}
+    assert w.stats() == {"last_reading": 102.5, "interval_s": 2.5, "failed_readings": 1,
+                         "processes_read": 2, "processes_seen": 2, "coverage": 1.0}
     w.reset(200.0)
-    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0}
+    assert w.stats() == {"last_reading": None, "interval_s": None, "failed_readings": 0,
+                         "processes_read": 0, "processes_seen": 0, "coverage": None}
 
 
 # ---------------------------------------------------------------- time in failed runs (#1751)
@@ -451,6 +547,7 @@ class Table:
     def __init__(self):
         self.reads = 0
         self.rows = {8: (1, f"bash {SCRIPTS}/watch.sh"), 9: (1, "/Applications/Foo.app/Contents/MacOS/Foo")}
+        self.refused = set()                               # the pids whose CPU read the system refuses
         self.before = None                                 # a hook a test sets: it runs inside each read
 
     def __call__(self):
@@ -462,6 +559,7 @@ class Table:
         for pid, (ppid, command) in self.rows.items():
             p = P()
             p.pid, p.ppid, p.cpu, p.command, p.start = pid, ppid, float(self.reads), command, 5.0
+            p.cpu_known = pid not in self.refused
             rows[pid] = p
         return rows
 
@@ -581,6 +679,88 @@ def test_two_readings_of_one_window_are_never_closer_than_one_period(hub, monkey
     ask(port, "POST", {"on": True})
     wait(lambda: len(intervals) >= 2)
     assert intervals[1] >= mod.PROFILER_SECS
+
+
+def test_the_scope_names_each_other_profile_s_loop_by_its_supervisor_and_run_folders(hub, tmp_path, monkeypatch):
+    """The hub serves every profile, so this tab's context row names each other profile's loop: its supervisor's pid from
+    that profile's own state folder, and the folders only that profile's work names."""
+    mod, *_ = hub
+    state = tmp_path / "zesty-state"
+    state.mkdir()
+    (state / "watchd.pid").write_text("4243 supervise\n")
+    (mod.STATE / "watchd.pid").write_text("7777 supervise\n")
+    monkeypatch.setattr(mod, "project_contexts", lambda: [
+        {"slug": "alpha", "state": str(mod.STATE), "checkout": mod.CHECKOUT, "own": True},
+        {"slug": "zesty", "state": str(state), "checkout": "/Users/o/zesty", "own": False}])
+    mod.PROFILER_OTHERS.update(at=0.0, rows=())
+    sc = mod.profiler_scope()
+    assert sc.supervisor == 7777, "this profile's own supervisor is the pid in its own state folder"
+    assert [name for name, _, _ in sc.others] == ["zesty"], "this profile is never one of the others"
+    assert 7777 not in [pid for _, pid, _ in sc.others]
+    assert sc.others == (
+        ("zesty", 4243, ("/Users/o/zesty/", "/Users/o/zesty/runs/", "/Users/o/zesty/worktrees/run/",
+                         "/Users/o/zesty/worktrees/child/", "/Users/o/zesty/contrib/squad-goal/scripts/")),)
+
+
+def test_a_seam_that_refuses_keeps_the_last_good_other_loops(hub, monkeypatch):
+    """A transient refusal is never answered as one profile on the machine: the rows last read stand."""
+    mod, *_ = hub
+    good = (("zesty", 4243, ("/Users/o/zesty/",)),)
+
+    def refuse():
+        raise OSError("the seam refused")
+
+    monkeypatch.setattr(mod, "project_contexts", refuse)
+    mod.PROFILER_OTHERS.update(at=0.0, rows=good)
+    assert mod.profiler_others(now=1e9) == good
+
+
+def test_an_other_profile_s_work_is_named_by_its_checkout_and_its_scripts(hub, tmp_path, monkeypatch):
+    """Two profiles run the same scripts from their own checkouts: a process that names the other checkout is that
+    profile's loop, never the row for the rest of the machine."""
+    mod, *_ = hub
+    state = tmp_path / "zesty-state"
+    state.mkdir()
+    (state / "watchd.pid").write_text("50\n")
+    monkeypatch.setattr(mod, "project_contexts", lambda: [
+        {"slug": "zesty", "state": str(state), "checkout": "/Users/o/zesty", "own": False}])
+    mod.PROFILER_OTHERS.update(at=0.0, rows=())
+    scope = mod.profiler_scope()
+    script = "/Users/o/zesty/contrib/squad-goal/scripts/watch.sh"
+    a = {(90, 1.0): (1, 0.0, f"bash {script}")}
+    b = {(90, 1.0): (1, 2.0, f"bash {script}")}
+    ctx = mod.hub_profiler.context(mod.hub_profiler.fold(a, b, scope))
+    assert [(c["name"], c["kind"], c["total_s"]) for c in ctx["children"]] == [("loop zesty", "loop", 2.0)]
+
+
+def test_the_answer_splits_the_context_row_by_each_other_profile_s_loop(hub, tmp_path, monkeypatch):
+    mod, port, _, state, table = hub
+    other = tmp_path / "zesty-state"
+    other.mkdir()
+    (other / "watchd.pid").write_text("50\n")
+    (state / "watchd.pid").write_text("8\n")
+    monkeypatch.setattr(mod, "project_contexts", lambda: [
+        {"slug": "zesty", "state": str(other), "checkout": "/Users/o/zesty", "own": False}])
+    mod.PROFILER_OTHERS.update(at=0.0, rows=())
+    table.rows = {8: (1, f"bash {SCRIPTS}/watchd.sh supervise"), 50: (1, f"bash {SCRIPTS}/watchd.sh supervise"),
+                  51: (50, f"bash {SCRIPTS}/watch.sh"), 9: (1, "/Applications/Foo.app/Contents/MacOS/Foo")}
+    ask(port, "POST", {"on": True})
+    wait(lambda: table.reads >= 3)
+    v = ask(port, "GET")[1]
+    assert [c["name"] for c in v["tree"]["children"]] == ["watchd.sh"], "another profile's loop is no node of this tree"
+    assert [(c["name"], c["kind"]) for c in v["context"]["children"]] == [("loop zesty", "loop"), ("Foo", "other")]
+
+
+def test_a_refused_cpu_read_lowers_the_coverage_in_the_answer(hub):
+    """The answer says how much of the machine it could read: the processes read with their CPU over every process seen."""
+    mod, port, _, _, table = hub
+    table.refused = {9}
+    ask(port, "POST", {"on": True})
+    wait(lambda: table.reads >= 3)
+    v = ask(port, "GET")[1]
+    assert v["processes_seen"] == 2 * v["processes_read"] and v["processes_read"] >= 1
+    assert v["coverage"] == pytest.approx(0.5)
+    assert [c["name"] for c in v["context"]["children"]] == [], "a refused read adds no zero-cost row"
 
 
 def test_a_failed_reading_is_counted_and_never_moves_the_last_reading(hub, monkeypatch):
@@ -751,7 +931,8 @@ def test_a_loop_audit_line_is_written_atomically(hub, monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- the pages
 def page():
-    return HUB_PY.read_text()
+    """The desktop page's source with the shared Loop view it inlines (#1754)."""
+    return HUB_PY.read_text() + (SCRIPTS / "hub-profiler.js").read_text() + (SCRIPTS / "hub-profiler.css").read_text()
 
 
 def test_the_tab_is_named_loop_and_stands_between_flow_and_settings_on_the_desktop_page(served):
@@ -768,13 +949,13 @@ def test_the_tab_is_named_loop_and_stands_between_flow_and_settings_on_the_deskt
 
 def test_the_entry_stands_before_settings_on_the_mobile_page():
     """The phone has no Flow tab: its More menu holds the Lead Time chart and the link to Settings, so the entry stands
-    between them. It names the desktop view before it navigates, as the Settings entry does (#1446)."""
+    between them. The entry opens the Loop layer on the phone (#1754); it is no link to the desktop view."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
     menu = html[html.index('<div id="more-menu">'):]
     menu = menu[:menu.index("</div>")]
     assert re.findall(r">([^<>\n]+)</(?:button|a)>", menu) == ["Cost and usage", "Lead time", "Loop", "Settings"]
-    assert re.search(r'<a class="more-link" id="more-loop" href="\./#loop">Loop</a>', menu)
-    assert re.search(r'\$\("more-loop"\)\.onclick\s*=\s*\(\)\s*=>\s*localStorage\.setItem\("squad-view","desktop"\)', html)
+    assert re.search(r'<button id="more-loop" data-more="profiler" type="button">Loop</button>', menu), "the entry opens a layer, not a link"
+    assert 'more-loop").onclick' not in html, "the entry is no longer a link to the desktop view"
 
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
@@ -787,9 +968,8 @@ def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
 def run_js(expr):
     if not shutil.which("node"):
         pytest.skip("node is not installed")
-    src = page()
     js = ("const esc=s=>String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]);\n"
-          + src[src.index("// profiler:start"):src.index("// profiler:end")] + f"\nprocess.stdout.write(String({expr}));")
+          + (SCRIPTS / "hub-profiler.js").read_text() + f"\nprocess.stdout.write(String({expr}));")
     r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -802,8 +982,10 @@ def leaf(name, self_s, **kw):
 
 VIEW = {"on": True, "since": 1.0, "window_s": 125, "write": True, "reason": "",
         "last_reading": 1700000000.0, "interval_s": 1.04, "failed_readings": 0,
+        "processes_read": 21, "processes_seen": 21, "coverage": 1.0,
         "context": {"name": "outside the loop", "total_s": 40.0, "events": 9, "children": [
-            {"name": "Foo Bar", "total_s": 30.0, "events": 2}, {"name": "another loop", "total_s": 10.0, "events": 7}]},
+            {"name": "Foo Bar", "kind": "other", "total_s": 30.0, "events": 2},
+            {"name": "another loop", "kind": "loop", "total_s": 10.0, "events": 7}]},
         "tree": {"name": "loop", "kind": "root", "self_s": 0, "total_s": 8.0, "share": 1, "events": 0, "total_events": 12,
                  "children": [
                      leaf("watchd.sh", 0.0, total_s=6.0, share=0.75, events=0,
@@ -860,6 +1042,13 @@ def test_the_view_states_the_reading_it_shows():
     bad = run_js(f"profHtml({json.dumps({**VIEW, 'failed_readings': 3, 'last_reading': None, 'interval_s': None})},new Set())")
     note = re.search(r"<span class=lpn>(.*?)</span>", bad, re.S).group(1)
     assert "3 readings failed" in note and "No good reading yet" in note
+
+
+def test_the_view_states_how_much_of_the_machine_it_could_read():
+    def note(v):
+        return re.search(r"<span class=lpn>(.*?)</span>", run_js(f"profHtml({json.dumps(v)},new Set())"), re.S).group(1)
+    assert "Read 94.0% of the processes." in note({**VIEW, "coverage": 0.94})
+    assert "Read every process." in note({**VIEW, "coverage": 1.0})
 
 
 def test_the_view_states_the_switch_and_an_off_switch_draws_no_tree():
@@ -1073,7 +1262,7 @@ def test_a_zero_median_draws_no_ghost_segment_either():
 
 
 def test_the_swatch_rules_are_shipped_with_the_widget():
-    src = (ROOT / "contrib/squad-goal/scripts/hub.py").read_text()
+    src = page()
     for rule in ("#proftrip .ptk{", "background:currentColor", "min-width:4px", "gap:1px",
                  "#proftrip .ptk.ptk-none{background:none", "box-shadow:inset 0 0 0 1px currentColor"):
         assert rule in src, f"the trip's swatch rules are what makes a colour readable: {rule} is missing"
@@ -1088,7 +1277,7 @@ def test_the_panel_names_the_waiting_stages_beside_the_five():
     out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': trip})},new Set())"))
     rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?"', out)
     assert [r[0] for r in rows] == ["wait", "coding", "review", "gates", "landing", "queue", "between", "after"]
-    src = HUB_PY.read_text()
+    src = page()
     for stage in ("queue", "between", "after"):
         assert f"#proftrip .pts-{stage}{{" in src and f"#proftrip .ptk-{stage}{{" in src, \
             f"the waiting stage {stage} draws its own colour, so its row and its segment read as one"
@@ -1253,6 +1442,39 @@ def test_the_many_repository_hub_starts_the_sampler_of_a_profile_only_when_a_pag
     assert not mod.profiler_running() and table.reads == 0, "a switch left on read the process table with no page open"
     mux_get(port, "/alpha/api/profiler")
     wait(lambda: table.reads >= 2)
+
+
+def test_each_profile_s_tab_keeps_its_own_switch_and_window_over_one_shared_scan(tmp_path, monkeypatch):
+    """Two profiles of one hub share the machine's process table, never their switch, their window or their scope: one
+    scan answers both ticks, and each tab names the other profile's loop in its context row (#1746, #1753)."""
+    prof, co_a, co_z = tmp_path / "profiles", tmp_path / "a", tmp_path / "z"
+    for d in (prof, co_a, co_z):
+        d.mkdir()
+    for slug, co in (("alpha", co_a), ("zesty", co_z)):
+        (prof / f"{slug}.sh").write_text(
+            f': "${{SG_REPO:=x/{slug}}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=3}}"; : "${{SG_CHECKOUT:={co}}}"\n')
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(tmp_path / "state"))
+    apps = load("hubmux_profiler_two", SCRIPTS / "hubmux.py").load_apps()
+    a, z = apps["alpha"]["mod"], apps["zesty"]["mod"]
+    table = Table()
+    monkeypatch.setitem(sys.modules["procscan"]._STATE, "snap", None)   # no scan a test before this one left behind
+    monkeypatch.setitem(sys.modules["procscan"]._STATE, "at", None)
+    for m in (a, z):
+        m.runs = lambda: []
+        m.process_table = table
+        m.PROFILER_OTHERS.update(at=0.0, rows=())
+    for m, pid in ((a, 10), (z, 20)):
+        pathlib.Path(m.STATE).mkdir(parents=True, exist_ok=True)
+        (pathlib.Path(m.STATE) / "watchd.pid").write_text(f"{pid}\n")
+    assert pathlib.Path(a.PROFILER_SWITCH).parent != pathlib.Path(z.PROFILER_SWITCH).parent, "each tab keeps its own switch"
+    assert a.PROFILER["window"] is not z.PROFILER["window"], "each tab folds its own window"
+    assert a.profiler_scope().others[0][:2] == ("zesty", 20) and z.profiler_scope().others[0][:2] == ("alpha", 10)
+    before = table.reads
+    now = time.time()
+    a.profiling_table(now)
+    z.profiling_table(now)
+    assert table.reads == before + 1, "one scan of the process table answers every profile of the tick"
 
 
 # ---------------------------------------------------------------- the background reads (#1790)
@@ -1868,9 +2090,10 @@ def test_the_page_names_no_gap_sentence_and_draws_no_failed_runs_table():
 
 
 def test_the_phone_reaches_the_loop_tab():
-    """The phone's More menu opens the Loop tab of this page."""
+    """The phone's More menu opens the Loop view on the phone itself (#1754), drawn by the desktop's render function."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
-    assert re.search(r'id="more-loop" href="\./#loop"', html), "the phone opens the Loop tab of the same page"
+    assert re.search(r'id="more-loop" data-more="profiler"', html), "the phone opens its own Loop layer"
+    assert "/*PROFILER_JS*/" in html, "the layer inlines the shared render function"
 
 
 # The gates of the strip were folded for the same window (#1767): the fold stays in the route, and the page draws it no more.
