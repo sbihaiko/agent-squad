@@ -2782,3 +2782,113 @@ def test_the_slots_chart_draws_its_zero_line_with_no_run_in_the_window():
     empty = {**SLOTS, "rows": [], "peak": 0}
     part = run_js(f"profHtml({json.dumps({**VIEW, 'slots': empty})},new Set())")
     assert "id=profslots" in part and "no run record" in part, "a window with no run still draws its gap and its ceiling"
+
+
+# ---------------------------------------------------------------- the wall time of the steps and the gates (#1748)
+
+@pytest.fixture(scope="module")
+def steprec():
+    return load("steprec_under_test", SCRIPTS / "steprec.py")
+
+
+WALL_NOW = 1_800_000_000
+
+
+def step_lines(*steps):
+    """(id, name, start, end-or-None, state, detail) -> the steps.tsv lines a loop writes for them."""
+    out = []
+    for sid, name, start, end, state, detail in steps:
+        out.append(f"start\t{sid}\t{name}\t{start}\t-\t-")
+        if end is not None:
+            out.append(f"end\t{sid}\t{name}\t{end}\t{state}\t{detail}")
+    return out
+
+
+def test_the_wall_window_is_one_of_ten_minutes_one_hour_or_a_day_and_defaults_to_an_hour(prof):
+    assert prof.wall_window(600) == 600 and prof.wall_window(86400) == 86400, "the three windows the page offers hold"
+    assert prof.wall_window(None) == 3600, "a missing window reads the hour"
+    assert prof.wall_window(999) == 3600, "a window the page does not offer reads the hour, never an arbitrary span"
+
+
+def test_the_step_wall_lists_each_lane_sorted_by_total_with_count_median_and_p90(prof, steprec):
+    lines = step_lines(
+        ("a", "childcc", WALL_NOW - 500, WALL_NOW - 490, "done", "0"),   # 10 s, fast lane
+        ("b", "childcc", WALL_NOW - 400, WALL_NOW - 370, "done", "0"),   # 30 s, fast lane
+        ("c", "janitor", WALL_NOW - 300, WALL_NOW - 200, "done", "0"),   # 100 s, slow lane
+        ("d", "promote", WALL_NOW - 100, WALL_NOW - 90, "done", "0"),    # 10 s, slow lane
+        ("e", "promote", WALL_NOW - 80, WALL_NOW - 70, "done", "1"),     # 10 s, slow lane
+    )
+    out = prof.step_wall(steprec.fold(lines), WALL_NOW - 600, WALL_NOW)
+    slow = {r["name"]: r for r in out["slow"]}
+    assert [r["name"] for r in out["slow"]] == ["janitor", "promote"], "the slow lane sorts by total, the largest first"
+    assert slow["janitor"] == {"lane": "slow", "name": "janitor", "count": 1, "total_s": 100.0, "median_s": 100.0, "p90_s": 100.0}
+    assert slow["promote"]["count"] == 2 and slow["promote"]["total_s"] == 20.0, "two runs of one step total together"
+    fast = out["fast"][0]
+    assert fast == {"lane": "fast", "name": "childcc", "count": 2, "total_s": 40.0, "median_s": 20.0, "p90_s": 28.0}, \
+        "the median and p90 are the linear interpolation over the two runs"
+
+
+def test_the_step_wall_shows_a_running_step_with_its_age_and_leaves_a_skipped_step_out(prof, steprec):
+    lines = step_lines(
+        ("r", "janitor", WALL_NOW - 42, None, "", ""),                  # still running: no finish line
+        ("s", "promote", WALL_NOW - 60, WALL_NOW - 59, "skipped", "a pass in flight holds its lock (exit 76)"),
+    )
+    out = prof.step_wall(steprec.fold(lines), WALL_NOW - 600, WALL_NOW)
+    assert out["running"] == [{"lane": "slow", "name": "janitor", "age_s": 42.0}], "a running step names its age"
+    assert out["slow"] == [] and out["fast"] == [], "a skipped step ran for no time and joins no row"
+
+
+def test_the_cycle_time_is_the_gap_between_heartbeat_starts_of_the_slow_lane(prof, steprec):
+    lines = step_lines(*[(f"h{t}", "heartbeat.sh", t, t + 1, "done", "0") for t in (1000, 1090, 1200)])
+    out = prof.cycle_time(steprec.fold(lines), 0)
+    assert out == {"n": 2, "median_s": 100.0, "p90_s": 108.0}, "two gaps of 90 s and 110 s give a median of 100 s and a p90 of 108 s"
+
+
+def test_the_cycle_time_says_nothing_with_fewer_than_two_heartbeats(prof, steprec):
+    out = prof.cycle_time(steprec.fold(step_lines(("h", "heartbeat.sh", 1000, 1001, "done", "0"))), 0)
+    assert out == {"n": 0, "median_s": None, "p90_s": None}, "one start gives no gap, and no gap is no cycle time"
+
+
+def test_the_gate_wall_groups_by_kind_and_outcome_with_the_mean_load_at_start_and_finish(prof):
+    gates = [
+        {"start": WALL_NOW - 30, "finish": WALL_NOW - 20, "kind": "gate", "outcome": "pass", "load_start": 1.0, "load_finish": 2.5},
+        {"start": WALL_NOW - 60, "finish": WALL_NOW - 40, "kind": "gate", "outcome": "pass", "load_start": 3.0, "load_finish": None},
+        {"start": WALL_NOW - 90, "finish": WALL_NOW - 80, "kind": "gate", "outcome": "fail", "load_start": None, "load_finish": None},
+    ]
+    out = prof.gate_wall(gates, WALL_NOW - 600)
+    passed = next(r for r in out if r["outcome"] == "pass")
+    assert passed == {"kind": "gate", "outcome": "pass", "count": 2, "total_s": 30.0, "median_s": 15.0, "p90_s": 19.0,
+                      "load_start": 2.0, "load_finish": 2.5}, "the mean load ignores a row with no reading"
+    failed = next(r for r in out if r["outcome"] == "fail")
+    assert failed["load_start"] is None and failed["load_finish"] is None, "no reading at all is no mean, never a zero"
+
+
+def test_the_gate_wall_drops_a_gate_that_finished_before_the_window(prof):
+    gates = [{"start": WALL_NOW - 5000, "finish": WALL_NOW - 4990, "kind": "gate", "outcome": "pass", "load_start": 1, "load_finish": 1}]
+    assert prof.gate_wall(gates, WALL_NOW - 600) == [], "a gate outside the window is no row"
+
+
+def gate_line(finish, start, kind="gate", outcome="fail", load_start="1.5", load_finish="2.25"):
+    """The sixteen fields gate.sh writes to the gate history, in the order hub_profiler.GATE_HISTORY_FIELDS names them."""
+    return "\t".join([str(finish), kind, "fail", "abc123", str(start), "full", "full", outcome, "reason text", "3", "0", "2", "0",
+                      "me", load_start, load_finish])
+
+
+def test_the_gate_rows_read_a_history_line_and_skip_a_line_that_is_no_whole_row(prof):
+    lines = [gate_line(WALL_NOW - 20, WALL_NOW - 30), "1\tgate", gate_line("x", WALL_NOW - 30),
+             gate_line(WALL_NOW - 20, WALL_NOW - 30, outcome="bogus")]
+    rows = prof.gate_rows(lines)
+    assert rows == [{"start": WALL_NOW - 30.0, "finish": WALL_NOW - 20.0, "kind": "gate", "outcome": "fail",
+                     "load_start": 1.5, "load_finish": 2.25}], "a short line, a finish that is no number and an unknown outcome are no row"
+
+
+def test_the_wall_view_folds_the_step_records_and_the_gate_history_into_one_answer(prof, steprec):
+    steps = steprec.fold(step_lines(("c", "janitor", WALL_NOW - 100, WALL_NOW - 70, "done", "0"),
+                                    ("h1", "heartbeat.sh", WALL_NOW - 300, WALL_NOW - 299, "done", "0"),
+                                    ("h2", "heartbeat.sh", WALL_NOW - 120, WALL_NOW - 119, "done", "0")))
+    out = prof.wall(steps, [gate_line(WALL_NOW - 20, WALL_NOW - 30, outcome="pass")], 600, WALL_NOW)
+    assert out["window_s"] == 600 and out["since"] == WALL_NOW - 600
+    assert out["cycle"] == {"n": 1, "median_s": 180.0, "p90_s": 180.0}, "two heartbeats in the window are one gap of 180 s"
+    assert [r["name"] for r in out["slow"]] == ["janitor", "heartbeat.sh"], "the slow lane sorts by total, the janitor first"
+    assert out["gates"][0]["outcome"] == "pass" and out["gates"][0]["count"] == 1
+    assert out["running"] == [], "no step is in flight"
