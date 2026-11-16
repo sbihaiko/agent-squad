@@ -134,4 +134,22 @@ out=$(SERIAL_POLL_SECONDS=0.5 SERIAL_WAIT_SECONDS=15 SG_GATE_WORKERS=1 bash "$T/
 [ "$(occ gates)" = 0 ] && ok "the orphan's slot is free after it exits" || ko "slots after the orphan: $(occ gates) held, want 0"
 /usr/bin/grep -q '^gate: orphan: ' "$T/og1.err" && ok "the orphan names itself on one line of its log" || ko "orphan line: $(cat "$T/og1.err")"
 og=$(cat "$T/ogid" 2>/dev/null); [ -z "$og" ] || ! kill -0 "$og" 2>/dev/null || kill_tree "$og"   # RED leaves the orphan running
+
+# (#2009, ADR-0174) A tip check and a landing gate wait for their slots while they hold the lock: a child gate that holds the
+# slots ends inside one gate bound, and no new child gate takes the lock meanwhile. A child gate that names no wait still
+# takes one try. The holder here is a lease the case gives back after two seconds.
+for c in tip landing child; do
+  rm -rf "$T/caps"
+  capsctl take gates holder --count 1 --target "$T/one" --pid "$live" >/dev/null 2>&1
+  ( sleep 2; capsctl release gates holder >/dev/null 2>&1 ) & rel=$!
+  t0=$(date +%s)
+  out=$(SG_GATE_CALLER=$c SG_GATE_WORKERS=1 bash "$T/s/gate.sh" sh -c 'echo took' 2>"$T/w.err"); rc=$?
+  wait "$rel" 2>/dev/null
+  if [ "$c" = child ]; then
+    [ $rc = 73 ] && ok "a child gate that names no wait takes one try at a full budget" || ko "child at a full budget: rc=$rc out='$out'"
+  else
+    [ $rc = 0 ] && [ "$out" = took ] && ok "a $c gate waits for the slot a running gate holds, and then runs" \
+      || ko "$c gate at a full budget: rc=$rc out='$out' in $(( $(date +%s) - t0 ))s: $(tr '\n' ' ' < "$T/w.err")"
+  fi
+done
 cd "$T"; rm -rf "$T"; exit $fail

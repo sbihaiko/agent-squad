@@ -304,6 +304,10 @@ case "${1:-}" in
     # source here ran the interpreter lookup again for a reader this shell already has.
     # The lease names the lock holder, this process's parent: a waiter that reaps the lock holder past its deadline then also
     # frees the lease, so a stopped run never leaves a child's gate holding slots (ADR-0051).
+    # (#2009, ADR-0174) A tip check or a landing gate waits for its slots too. The gates that hold them end inside one gate
+    # bound, and no new gate takes the lock this gate holds, so the wait is one bound plus a margin, never a single try.
+    case ${SG_GATE_CALLER:-} in tip|landing)
+      : "${SG_GATE_SLOT_WAIT:=1}"; : "${SG_GATE_SLOT_WAIT_SECONDS:=$(( ${SG_GATE_MAX_SECONDS:-900} + 60 ))}";; esac
     slot_by=$(( $(date +%s) + ${SG_GATE_SLOT_WAIT_SECONDS:-120} )); slot_rc=0
     while :; do
       SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try); slot_rc=$?
