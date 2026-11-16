@@ -63,7 +63,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -438,81 +437,6 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verdict
                          "debt": {"type": "array", "items": _FINDING},
                          "resolved": {"type": "array", "items": _FINDING}}}
 FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n?```", re.DOTALL)
-# #1548: a rule in this map exempts a class of paths from coverage, so a finding that asks to restore that coverage
-# contradicts the rule; it is a proposal to change the rule, never a defect the change caused. ADR-0156 rule 3 says the
-# delta map has no line for the promotion code, so a grep for the restored delta-guards.txt lines proves absence, which is
-# what the rule requires. No other rule is mapped: a finding may cite one the change does violate, and it stays Blocking.
-COVERAGE_EXEMPT = {("0156", "3"): ("contrib/squad-goal/scripts/delta-guards.txt",)}
-ADR_RULE = re.compile(r"\bADR[-\s]?(\d{3,4})\b", re.IGNORECASE)
-
-RESTORE = re.compile(r"\b(?:restore|re-?add|add\s+back|reinstate|put\s+back|bring\s+back|reintroduce)\b",
-                     re.IGNORECASE)
-GREP_CMD = re.compile(r"(?:^|[;&|]\s*)(/usr/bin/)?(?:git\s+)?grep\b([^;&|]*)")
-
-
-def _grep_literal(cmd):
-    """The literal a bare `grep` command searches for, or None when `cmd` is not one or is negated.
-
-    A negated grep (`! grep ...`) exits 0 where the text is absent, which ADR-0172 already reads as a passing repro. The
-    first non-flag argument is the pattern, or the argument after `-e`/`--regexp`; a pattern's regex escapes and anchors
-    are dropped, since the finding names the text, not its regex spelling.
-    """
-    m = GREP_CMD.search(cmd)
-    if not m or cmd[:m.start()].rstrip().endswith("!"):
-        return None
-    try:
-        args = shlex.split(m.group(2))
-    except ValueError:
-        return None
-    pattern, i = None, 0
-    while i < len(args):
-        if args[i] in ("-e", "--regexp"):
-            pattern = args[i + 1] if i + 1 < len(args) else None
-            break
-        if not args[i].startswith("-"):
-            pattern = args[i]
-            break
-        i += 1
-    if not pattern:
-        return None
-    return re.sub(r"[\^$]", "", pattern.replace("\\", ""))
-
-
-def _exempt_rule_paths(text):
-    """The paths a named coverage-exemption rule governs, or () when `text` names no such rule.
-
-    Only a rule in COVERAGE_EXEMPT counts. Any other ADR rule may be one the change violates, so its finding stays
-    Blocking. The rule is named by its ADR number followed by its rule number.
-    """
-    for (adr, rule), paths in COVERAGE_EXEMPT.items():
-        if re.search(rf"\bADR[-\s]?{adr}\b[^.]{{0,20}}?\brule\s+{rule}\b", text, re.IGNORECASE):
-            return paths
-    return ()
-
-
-def adr_proposal(item):
-    """True when a Blocking finding names an exempt ADR rule and only greps for the text it asks to restore (#1548).
-
-    The finding is a proposal to change that rule, never a defect the change caused: its repro proves the text is absent,
-    not that the change broke something. It is Debt (ADR-0172); a review that wants the rule changed quotes the ADR line
-    and files that as its own proposal. The finding must be about a path the rule governs, so a finding that merely names
-    the ADR number stays Blocking: it may report a rule the change does violate.
-    """
-    text = " ".join(item[f] for f in FIELDS)
-    paths = _exempt_rule_paths(text)
-    if not paths or not RESTORE.search(text):
-        return False
-    if not any(path in item["location"] for path in paths):
-        return False
-    pattern = _grep_literal(item[REPRO])
-    return bool(pattern) and pattern.lower() in text.lower()
-
-
-def _adr_note(item):
-    """The Debt mark of an ADR-naming restore finding: which rule, and that the grep is not a defect repro (#1548)."""
-    adr = ADR_RULE.search(" ".join(item[f] for f in FIELDS))
-    return (f"not a repro of a defect: the finding names ADR-{adr.group(1)} and only greps for the text it asks to "
-            f"restore, so it is a proposal to change that rule")
 
 
 def json_candidate(text):
@@ -566,8 +490,6 @@ def parse_answer(text, repro=True):
         for item in out["blocking"]:
             if not item[REPRO].strip():
                 demoted.append(item)                       # a finding with no repro is Debt (ADR-0172)
-            elif adr_proposal(item):
-                demoted.append(dict(item, failure=f"{_adr_note(item)}; {item['failure']}"))   # #1548
             else:
                 kept.append(item)
         out["debt"] = out["debt"] + demoted

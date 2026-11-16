@@ -199,9 +199,3 @@ def test_SG_PROOF_RUNNER_local_restores_todays_tip_gate(tmp_path):
     assert out.stdout.strip() == "local", out.stdout
 
 
-def test_the_promotion_pass_chooses_the_half_before_the_delta_proof():
-    """(b,g) promote-pass.sh asks the tip gate which half to run, and it asks before the delta spends the budget."""
-    body = PROMOTE_PASS.read_text()
-    assert 'tip-gate.sh" --choose' in body, "promote-pass.sh never asks the tip gate which half to run"
-    assert body.index('tip-gate.sh" --choose') < body.index('bash "$d/delta-pass.sh"'), \
-        "the promotion reads the CI half only after the delta proof already spent the budget"

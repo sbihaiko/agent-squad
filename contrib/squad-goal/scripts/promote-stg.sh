@@ -14,15 +14,8 @@
 #         SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>'
 #     stg moves only when the line says `full`, `pass`, and names the dev tip exactly. A missing proof, a failed proof and a
 #     proof for another sha each refuse in their own words.
-#     A delta record (ADR-0156, $SG_STATE/gate-status-delta) carries the full pass of an ancestor P across a covered change: stg
-#     moves on it when the record says pass for the dev tip, P has a full pass and the changed-file list still hashes to P..tip.
-#     Each carried P is appended to $SG_STATE/gate-carried after the merge, and a P already there refuses.
 #   fast: the fast proof word, $SG_STATE/gate-status-promote (#1723): `<epoch> TAB fast TAB pass TAB <sha>` for the dev tip. A
 #     record for another tip waits (exit 75); any other word or result refuses.
-#   bound: the bound-ended proof (ADR-0164). Only for the tip promote-pass.sh recorded in $SG_STATE/promote-indeterminate, and
-#     only while neither the full line nor the delta record says fail for that tip. Nothing else measured the tip, so a CI check
-#     that reported a defect on it refuses the merge by name (#1196); a check still running or absent holds nothing. The merge
-#     carries the marker's meaning: no test reached every part of the tip, and the nightly proves it later.
 # The script prints `promote-stg: tip <sha>` for the tip it evaluated, so a caller keys a refusal to that tip, never to a tip it
 # proved earlier (#1495). Under the ci proof a tip whose checks have not reported prints `promote-stg: pending <sha>` and exits 75
 # (EX_TEMPFAIL): a wait, no refusal, no marker. Any other non-zero exit is a refusal.
@@ -108,43 +101,15 @@ ci_state() {  # sha -> green | red | running | unproven | unknown, from the chec
   [ "$c" = none ] && c=running   # zero check runs is not yet green: promotion waits for them
   printf '%s\n' "$c"
 }
-hash_list() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal in its own words
   if [ "$proof" = local ]; then
     IFS=$'\t' read -r _ kind res sha < "$state/gate-status-full" 2>/dev/null
-    if [ "$kind" = full ] && [ "$sha" = "$1" ]; then
-      # The gate's own word (spec 1163, #1174): `pass` promotes, and a line that says `unproven` is named as such, never read
-      # as a pass or misnamed a fail. The bound-ended proof is the one route an unfinished proof takes, with its marker.
-      [ "$res" = pass ] || { local w; case "${res:-}" in fail) w="a fail";; '') w=none;; *) w=$res;; esac
-        refuse "$1" "not promoted: the local proof is $w, not a pass"; }
-      return
-    fi
-    if [ ! -s "$state/gate-status-delta" ]; then
-      [ "$kind" = full ] || refuse "$1" "not promoted: no local proof: no delta record and no full proof; $state/gate-status-full holds no full-gate result (run the promotion gate: SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>')"
-      refuse "$1" "not promoted: the local proof is for $sha, not the dev tip $1"
-    fi
-    # A delta (ADR-0156) carries a full pass across a covered change; every check is repeated here, on the tree this pass reads.
-    IFS=$'\t' read -r _ dk dres dP dT dh < "$state/gate-status-delta" 2>/dev/null
-    [ "$dk" = delta ] || refuse "$1" "not promoted: $state/gate-status-delta is not a delta record"
-    [ "$dres" = pass ] || { local w; case "${dres:-}" in fail) w="a fail";; '') w=none;; *) w=$dres;; esac
-      refuse "$1" "not promoted: the delta is $w, not a pass"; }
-    if [ "$dT" != "$1" ] && g merge-base --is-ancestor "$dT" "$1" 2>/dev/null; then refuse "$1" "not promoted: the record is stale because the tip moved from $dT to $1"; fi
-    [ "$dT" = "$1" ] || refuse "$1" "not promoted: the delta proved $dT, not the dev tip $1"
-    [ "$kind" = full ] && [ "$sha" = "$dP" ] && [ "$res" = pass ] || refuse "$1" "not promoted: its P $dP has no full pass"
-    g cat-file -e "$dP^{commit}" 2>/dev/null || g fetch -q origin "$dP" 2>/dev/null
-    g merge-base --is-ancestor "$dP" "$1" 2>/dev/null || refuse "$1" "not promoted: P $dP is not an ancestor of the dev tip $1"
-    grep -qxF "$dP" "$state/gate-carried" 2>/dev/null && refuse "$1" "not promoted: P $dP is already carried by a delta"
-    list=$(g diff --name-only "$dP..$1" | LC_ALL=C sort)
-    [ "$(printf '%s\n' "$list" | hash_list)" = "$dh" ] || refuse "$1" "not promoted: the proved changed-file list no longer hashes to P..T"
-    carried=$dP
-  elif [ "$proof" = bound ]; then
-    # ADR-0164 (#1046): the bound-ended proof is the tip promote-pass.sh recorded as the bound's, and never a tip a test measured red.
-    IFS=$'\t' read -r _ it _ 2>/dev/null < "$state/promote-indeterminate"
-    [ "$it" = "$1" ] || refuse "$1" "not promoted: no bound-ended proof: $state/promote-indeterminate holds no record for the dev tip $1"
-    IFS=$'\t' read -r _ kind res sha 2>/dev/null < "$state/gate-status-full"
-    [ "$kind" = full ] && [ "$sha" = "$1" ] && [ "$res" = fail ] && refuse "$1" "not promoted: the last full proof of the dev tip is a fail"
-    IFS=$'\t' read -r _ dk dres _ dT _ 2>/dev/null < "$state/gate-status-delta"
-    [ "$dk" = delta ] && [ "$dT" = "$1" ] && [ "$dres" = fail ] && refuse "$1" "not promoted: the delta proof of the dev tip is a fail"
+    [ "$kind" = full ] || refuse "$1" "not promoted: no local proof: $state/gate-status-full holds no full-gate result (run the promotion gate: SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>')"
+    [ "$sha" = "$1" ] || refuse "$1" "not promoted: the local proof is for $sha, not the dev tip $1"
+    # The gate's own word (spec 1163, #1174): `pass` promotes, and a line that says `unproven` is named as such, never read
+    # as a pass or misnamed a fail.
+    [ "$res" = pass ] || { local w; case "${res:-}" in fail) w="a fail";; '') w=none;; *) w=$res;; esac
+      refuse "$1" "not promoted: the local proof is $w, not a pass"; }
   elif [ "$proof" = fast ]; then
     # #1723: the fast proof word is one record for the exact tip. A record for another tip is a wait (#1495); any other word refuses.
     IFS=$'\t' read -r _ fk fres fsha < "$state/gate-status-promote" 2>/dev/null
@@ -169,17 +134,6 @@ o=$(g rev-list --no-merges "$tip..origin/$stg" 2>/dev/null) || o=
 [ -z "$o" ] || refuse "$tip" "not promoted: $stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the $dev tip lacks; the owner resolves it"
 prove "$tip"
 . "$d/ghcall.sh"
-# ADR-0164 (#1196): delivery outranks the proof, but only an unfinished proof. A failed one always holds. Under the bound proof
-# nothing else measured the tip, so the pull request's own CI check is the only evidence left: a red check on the tip refuses the
-# merge by name. Only a measured failure is red: a `cancelled` or `timed_out` check is an unfinished proof (#1517), and it holds
-# nothing, as a running or absent check does, and a job that never started measured nothing either (#1629). The refinement reads
-# that evidence, so this path and the base check cannot disagree. The ci proof already reads that check, and the local proof is
-# the owner's own full suite, which outranks a CI run of a narrower scope.
-if [ "$proof" = bound ]; then
-  . "$d/ghcall.sh"; . "$d/basecheck.sh"
-  ref=$(gh_api "repos/$SG_REPO/commits/$tip/check-runs" 2>/dev/null | sg_ci_refine 2>/dev/null) || ref=""
-  case "$ref" in red\ *) refuse "$tip" "not promoted: the CI check on the dev tip is red ($(printf '%s' "${ref#red }" | sed 's/ ended / /'))";; esac
-fi
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
 pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "'"$dev"'" and .base.ref == "'"$stg"'")][0].number // empty' 2>/dev/null) \
@@ -199,5 +153,4 @@ o=$(gh_send -X PUT "repos/$SG_REPO/pulls/$pr/merge" -f merge_method=merge -f sha
   refuse "$tip" "not promoted: pull request #$pr could not be merged: $(printf '%s' "$o" | tail -1)"; }
 printf '%s' "$o" | jq -e '.merged == true' >/dev/null 2>&1 \
   || refuse "$tip" "not promoted: pull request #$pr did not merge: $(printf '%s' "$o" | jq -r '.message // "no reason"' 2>/dev/null)"
-[ -n "${carried:-}" ] && echo "$carried" >> "$state/gate-carried"
 echo "PROMOTED $stg $tip via pull request #$pr"

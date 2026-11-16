@@ -10,7 +10,7 @@ export HANG_NAP=$(( 271800000 + $$ ))
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the hold is proved
 # The machine-wide gate a suite is often run under exports its own bound into every command it starts (#392): this suite reads
 # the gate's default bound, so an inherited one is dropped here, as a promotion gate's 1200 s would move the obligation's deadline.
-unset SG_GATE_BOUND_SECONDS SG_PROMOTE_BOUND_SECONDS
+unset SG_GATE_BOUND_SECONDS
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st; mkdir -p "$SG_STATE"
 # (#1166) The gate takes its worker slots from a throwaway budget, never the machine's live one.

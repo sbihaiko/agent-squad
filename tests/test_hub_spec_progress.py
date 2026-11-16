@@ -1,5 +1,6 @@
 """The Monitor card's spec bar: one bar totals the progress of every open spec. The hub counts it from the board cache
 (ADR-0137); the page only draws the served value."""
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -244,3 +245,10 @@ def test_the_board_summary_serves_the_no_spec_count(hub, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "rt": 1.0, "err": None, "lc": {}, "prs": [], "errs": [], "cases": [],
                                              "items": [dict(i, i=f"PVT_{i['n']}") for i in NOSPEC]})
     assert hub.board()["sum"]["none"] == {"closed": 2, "total": 4}
+
+
+def test_an_open_spec_shows_its_age_since_its_first_landed_ticket(hub):
+    now = dt.datetime(2026, 11, 11, tzinfo=dt.UTC).timestamp()
+    items = [_item(1, "Todo", si=(2, 5)), _item(6, "Closed", s="CLOSED", labels=("bug",), pa=1, c="2026-11-01T00:00:00Z")]
+    p = hub.spec_progress(items, moves={}, now=now)
+    assert p["tip"] == "#1 Spec 1 — 2/5 · open 10 d"

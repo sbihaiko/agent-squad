@@ -77,6 +77,9 @@ autonomy:                           # anything that needs a human or a decision 
   enabled: true                     # plugin default on; the owner turns it off per project
   max_resumes: 3                    # automatic resumes after a needs-human end; 0 to 10
 
+janitor:                            # the janitor's own bounds; a project may change them in docs/squad/defaults.yaml
+  spec_stall_seconds: 86400         # a spec whose open tickets make no dev commit for this long raises one SPEC-STALL alert per bound (one day)
+
 claude_md:                          # `squad setup --check` flags ledger content in CLAUDE.md. A project may change both in docs/squad/defaults.yaml.
   max_line_width: 300               # PROVISIONAL: a first guess, not measured. It holds until a labeled sample of real CLAUDE.md files supports a value.
   max_section_lines: 40             # PROVISIONAL, same status as max_line_width

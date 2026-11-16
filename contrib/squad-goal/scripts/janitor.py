@@ -382,7 +382,7 @@ def mark_killed(f, reason=None):
     _run(["python3", "-m", "squad.killed", str(f)] + ([str(reason)] if reason else []), env=env)
 TAKEOVER_SECONDS = float(os.environ.get("SG_TAKEOVER_SECONDS", "1800") or 1800)
 GATE = re.compile(r"gate\.sh\b")   # a gate process (`gate.sh`, `fast-gate.sh`): a run inside one is doing work or waiting its turn, never stuck (#1191)
-# A gate process older than this is itself overdue: every bound the loop gives a gate is shorter (ADR-0163, ADR-0157), so
+# A gate process older than this is itself overdue: every bound the loop gives a gate is shorter (ADR-0163), so
 # it is no evidence that the run is working, and the takeover bound applies again (#1390).
 GATE_STUCK_SECONDS = float(os.environ.get("SG_GATE_STUCK_SECONDS", "") or TAKEOVER_SECONDS)
 def age_of(t):   # T: seconds since a record stamp, or None when the pass cannot read it (an epoch, or an ISO UTC stamp)
@@ -443,11 +443,11 @@ def _facts_save():   # atomic (ADR-0030): a pass that dies in the write leaves t
     try: tmp.write_text(json.dumps(_facts)); os.replace(tmp, FACTS)
     except OSError as e: say(f"issue facts not written: {e}")
 import atexit; atexit.register(_facts_save)
-def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title, its labels and its close time (#1571)
+def issue_read(x, fresh=False):   # one read answers every fact the passes ask of an issue: its state, its reason, its title, its labels and its close time (#1571). fresh: a read that decides a write asks GitHub itself, and never the pass's cache nor the facts file, which can hold a state GitHub already changed (#1999)
     global _facts_dirty
-    if x not in _is:
+    if fresh or x not in _is:
         _facts_sync()
-        e = _facts["issues"].get(str(x)) if _facts else None
+        e = None if fresh else (_facts["issues"].get(str(x)) if _facts else None)
         if isinstance(e, dict) and isinstance(e.get("f"), list) and len(e["f"]) == 5 and time.time() - float(e.get("at") or 0) < FACTS_MAX_AGE:
             _is[x] = list(e["f"])
         else:
@@ -751,8 +751,8 @@ for r in names:
     if i and i["verdict"] and any((st / "auto" / f"wave-{x}").exists() for x in {f.name, i["run_id"]} if x): delivering |= req_issues(f) | i["acc"]
 def holding(n): return n in byissue or n in delivering   # a live run works it, or a run still lands its wave
 base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to count as delivery (#127)
-def issue_info(x):
-    return issue_read(x)[:3]
+def issue_info(x, fresh=False):
+    return issue_read(x, fresh)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
 _open = None
 def close_spec(n, why):   # the comment, then the close as completed, both through the door's write (gh_send)
@@ -772,8 +772,9 @@ def wave_outside():   # issue -> run: each `Refs #N` a landing named outside its
     return _outside
 _subs = {}   # issue -> REST's sub_issues_summary, from the same one read as the labels
 _kids = {}   # spec -> its sub-issues' numbers (the native relation), from the same one read as the labels
+_items = []  # the open issues' list entries, from the same one read (the spec rule reads their parent and creation)
 def open_issues():   # every open issue of the repository, ONE read per pass through the door's aggregate route (#92): (answered, {number: labels}). answered is False when the list did not answer (a refusal, a deadline miss, no door beside this module), and then no card is added on a guess. No call per issue: the one list carries every issue's number and labels.
-    global _open
+    global _open, _items
     if _open is None:
         r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_aggregate", f"repos/{repo0}/issues?state=open"])   # the read goes through ghcall.sh (gh_aggregate, the throttle), never a call site of this module's (ADR-0277)
         try: items = json.loads(out) if r == 0 else None
@@ -784,6 +785,7 @@ def open_issues():   # every open issue of the repository, ONE read per pass thr
                 m[str(i["number"])] = set(l.get("name") for l in i.get("labels") or [] if isinstance(l, dict))
                 if isinstance(i.get("sub_issues_summary"), dict): _subs[str(i["number"])] = i["sub_issues_summary"]
                 if isinstance(i.get("sub_issues"), list): _kids[str(i["number"])] = [str(k) for k in i["sub_issues"] if isinstance(k, int)]
+        _items = items if isinstance(items, list) else []
         _open = (isinstance(items, list), m)
     return _open
 def issue_closed(n):   # the pass's one open-issue list answers for the whole repository (#92, #1566): an issue absent from
@@ -1403,8 +1405,8 @@ def reconcile_board():
         for n in sorted(k for k in olabels if str(k) in have_all and have_all[str(k)] == "Closed" and not (RUN_PARENT in olabels[k])):
             if n in held_owner or owner_frozen(n): continue
             if n not in specs and (branch_in_dev_count(n) != "0" or str(n) in named_in_land()): continue   # its work is in dev: Closed is the landing's own write (rule above), so Todo would open a dispatch window and the later rules would cycle the card. A spec's own work is never a branch, so a spec never takes this skip (#1431)
-            _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775): a close GitHub reports late never sends a landed card back
-            if issue_info(n)[0] == "closed": continue
+            _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775), and that read is live (#1999): the open list is a snapshot and the facts file a cache, so a close GitHub already reported never sends a landed card back
+            if issue_info(n, fresh=True)[0] != "open": continue   # only a fresh open answer reopens the card: a close, a refusal or any other answer leaves it in Closed
             say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued; card -> Todo (reopened)")
             if board_write([owner, str(proj), "Todo", str(n)], n, "the issue is open again", "reopened"):
                 have_all[str(n)] = "Todo"; expected.pop(n, None)
@@ -1819,6 +1821,39 @@ def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts n
             else "the frontier holds this work and starts none; NEEDS OWNER")
     alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} ({tail})")
     mk.write_text(f"{now}\n")
+def _specstall():   # the spec rules beside this script (#1962); -I keeps the script's directory off sys.path, so the import names it itself
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import specstall
+    return specstall
+def spec_bound():   # janitor.spec_stall_seconds of the profile (#1962); the plugin default when the project file cannot be read
+    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
+    r, out = _run(["python3", "-m", "squad.project_settings", "spec-stall", str(co)], env={**os.environ, "PYTHONPATH": root})
+    return int(out) if r == 0 and out.strip().isdigit() else 86400
+def spec_stall():   # #1962: a spec whose open tickets made no dev commit for a bound names them, one alert per bound
+    bound = spec_bound()
+    answered, _ = open_issues()
+    r, out = _run(["git", "-C", str(co), "log", "--format=%ct\t%s", f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"])
+    if not answered or r != 0: return
+    sp = _specstall()
+    items = [i for i in _items if isinstance(i.get("number"), int) and not i.get("pull_request")]
+    commits = [(int(ts), subj) for ts, _, subj in (l.partition("\t") for l in out.splitlines()) if ts.isdigit()]
+    created = {i["number"]: t for i in items if (t := stamp_epoch(i.get("created_at"))) is not None}
+    stuck = sp.stalled(sp.kids_of(items), {i["number"] for i in items}, sp.landed_of(commits), created, now, bound)
+    if not stuck or dry: return
+    tickets = {t for ts in stuck.values() for t in ts}
+    _, cols = cards(proj) if proj else (False, {})
+    cols = {int(k): v for k, v in cols.items() if str(k).isdigit()}
+    holds = {t: holding(t) for t in tickets}
+    standing = {int(k): "diverged" for k, bs in work_branches().items() if any(s == "diverged" for _, s in bs)}
+    marker = {t for t in tickets if (st / "auto" / f"disp-{t}").exists()}
+    for spec_n, ts in sorted(stuck.items()):
+        mk = st / f"spec-stall-{spec_n}"
+        try: last = float(mk.read_text())
+        except (OSError, ValueError): last = 0.0
+        if now - last < bound: continue
+        parts = [f"#{t} {sp.state(t, cols, holds, standing, marker)}" for t in sorted(ts)]
+        alert(f"SPEC-STALL #{spec_n}: no dev progress for {bound // 3600} h; stuck tickets: {'; '.join(parts)} (NEEDS OWNER)")
+        mk.write_text(f"{now}\n")
 def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lane of this scripts dir still runs; one alert per episode
     here = os.path.dirname(os.path.abspath(__file__)); mk = st / "watchd-orphan-alert"
     try: sup = int((st / "watchd.pid").read_text().strip())
@@ -1856,6 +1891,7 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
     if changed:
         alert(f"LIVE-MTIME {live}: {len(changed)} file(s) changed with no publish: {', '.join(changed[:5])}")
 frontier_idle()
+spec_stall()
 watchd_orphan()
 live_mtime()
 if acts and not dry:

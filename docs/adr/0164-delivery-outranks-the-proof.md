@@ -27,8 +27,8 @@ A gate attempt ends in one of three outcomes, and the evidence is what tells the
   rerun releases it as a flake: the work lands, and the failing tests are filed as one bug, once per cause. A second red
   on the same tree with the same failing tests runs no third check until the tree changes; it is a counted failure, so
   the landing's try cap and the owner's alert apply. A red is the measurement of the tree, never the loop's own cause.
-- **An unfinished proof never holds delivery.** Past its bound (ADR-0163) the delta proof answers for the tip; past what
-  the delta can carry, the tip is promoted with a marker that names the unproven part.
+- **An unfinished proof never holds delivery.** Past its bound (ADR-0163) the local proof stops and the tip waits for a
+  retry; the CI tiers answer for the promotion ([ADR-0173](0173-the-complete-tier-runs-on-the-promotion-request.md)).
 - **A failed proof still holds delivery.** This decision never promotes a tip a test named.
 - **An `unproven` entry is a job, not a verdict.** It carries an obligation that settles it: the nightly runs the check
   the obligation names, over the tree it names, and writes `settled-green` or `settled-red`. A green settlement credits
@@ -39,7 +39,7 @@ A gate attempt ends in one of three outcomes, and the evidence is what tells the
 
 The same reading applies to a landing gate: a gate that measured a red holds everything until the red is fixed.
 
-- **The wave tip's check is the one exception.** A child enters its wave with no battery by default (spec 1797), so the
+- **The wave tip's check is the one exception.** A child enters its wave with no battery by default, so the
   check at the wave tip is the only proof its children get before they reach the base. An unproven tip check never
   lands the wave: the wave waits, no child is blamed, no try is counted, and the check runs again on a later pass. The
   wave's age cap bounds the wait.

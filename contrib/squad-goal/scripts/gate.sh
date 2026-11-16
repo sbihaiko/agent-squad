@@ -15,7 +15,7 @@
 # repository, the tree sha and the base; the base is what GATE_BASE_FILE carries (as GATE_SCOPE_FILE carries the scope),
 # else SG_BASE, else `-`. The checks are the outcome's not-run list, `all` when it named none; the scope is the gate's,
 # `full` when it named none, because a check that did not run cannot be said to cover less than the whole tree (ADR-0018).
-# The deadline is the proof bound past the gate (ADR-0163, SG_PROMOTE_BOUND_SECONDS, 900 s), never a new setting. A second
+# The deadline is the gate bound (ADR-0163, SG_GATE_BOUND_SECONDS, 900 s by default). A second
 # obligation for the same entry merges into its record: the checks join, the wider scope wins and the deadline never moves
 # later. A pass or a fail writes none, because each already answers the job.
 # The sha is the HEAD the gate ran at, read from the working directory. The lock lives in $SG_STATE/locks/gate. With SG_STATE
@@ -71,9 +71,9 @@
 # A caller that names GATE_OUTCOME_READ_FILE gets the same outcome line copied there inside the lock, so it decides on the word
 # the gate wrote, never on the exit code alone (spec 1163, #1174). The variable goes before the command runs, so a gate inside a
 # gate never overwrites the caller's copy.
-# One clock starts when the gate takes the lock (ADR-0163, #1171): SG_GATE_BOUND_SECONDS, else SG_PROMOTE_BOUND_SECONDS, else 900.
-# The command reads GATE_START_EPOCH, GATE_DEADLINE_EPOCH, GATE_BOUND_SECONDS and GATE_DELTA_RESERVE_SECONDS, so its checks, its
-# retry and the delta that follows spend one budget. A command that does not answer at the deadline is stopped with every
+# One clock starts when the gate takes the lock (ADR-0163, #1171): SG_GATE_BOUND_SECONDS, else 900.
+# The command reads GATE_START_EPOCH, GATE_DEADLINE_EPOCH and GATE_BOUND_SECONDS, so its checks and its retry spend one budget.
+# A command that does not answer at the deadline is stopped with every
 # descendant, five seconds past it so a command that is writing its record is not cut in half, and the outcome is unproven
 # with a reason that says bounded. A defect the command already wrote is fail, and so is any red that stands for the tree.
 # A gate watches the process that asked for it (#1576). The outermost gate exports that pid as SG_GATE_PARENT before the lock is
@@ -94,14 +94,10 @@ write_status() {  # <path> <line>
 # check the red names; the gate's history line then names which of the two cleared it, `cleared-green <sha>` for a pass on the
 # same tree or `cleared-fix <red sha>..<sha>` for a pass on a descendant, so the clearing is on the record forever and the
 # standing set holds only reds that still answer for a tree.
-# The one attempt bound (ADR-0163, #1171): SG_GATE_BOUND_SECONDS, else the promotion bound, else 900. The delta's share of
-# the same budget is SG_GATE_DELTA_RESERVE_SECONDS, else the promotion fallback share, else 240, and the gate command reads
-# both, so the attempt it makes -- its checks, its retry and the delta that follows -- spends one clock.
+# The one attempt bound (ADR-0163, #1171): SG_GATE_BOUND_SECONDS, else 900, and the gate command reads it, so the attempt it
+# makes -- its checks and its retry -- spends one clock.
 gate_bound() {
-  local b=${SG_GATE_BOUND_SECONDS:-${SG_PROMOTE_BOUND_SECONDS:-900}}; case $b in ''|*[!0-9]*|0) b=900;; esac; printf '%s\n' "$b"
-}
-gate_reserve() {
-  local r=${SG_GATE_DELTA_RESERVE_SECONDS:-${SG_PROMOTE_FALLBACK_SECONDS:-240}}; case $r in ''|*[!0-9]*) r=240;; esac; printf '%s\n' "$r"
+  local b=${SG_GATE_BOUND_SECONDS:-900}; case $b in ''|*[!0-9]*|0) b=900;; esac; printf '%s\n' "$b"
 }
 # The orphan watch (#1576). gate_parent_gone <pid> is true when the system no longer answers for the process, or answers Z: a
 # killed process its own parent has not reaped yet is gone, as serial.sh reads it. A pid of 1 or of nothing names no caller, and
@@ -206,7 +202,7 @@ obligation() {  # <repository> <tree sha> <base> <checks> <scope> <finish epoch>
   [ "$checks" = - ] && checks=all
   [ -n "$scope" ] || scope=full
   case $fin in ''|*[!0-9]*) fin=$(date +%s);; esac
-  bound=${SG_PROMOTE_BOUND_SECONDS:-900}; case $bound in ''|*[!0-9]*) bound=900;; esac
+  bound=$(gate_bound)
   dl=$((fin + bound))   # the deadline counts from the gate's finish, the epoch the history line carries
   mkdir -p "$dir" 2>/dev/null || return 0
   key=$(printf '%s\t%s\t%s' "$repo" "$sha" "$base" | cksum | cut -d' ' -f1)
@@ -347,7 +343,6 @@ case "${1:-}" in
     fi
     bound=$(gate_bound); deadline=$(( start + bound ))
     export GATE_START_EPOCH=$start GATE_DEADLINE_EPOCH=$deadline GATE_BOUND_SECONDS=$bound
-    export GATE_DELTA_RESERVE_SECONDS=$(gate_reserve)
     note() {  # <result> <outcome if the command wrote none> <reason if none>: one record, the red's precedence folded in
       note_rc=
       if [ "${SG_GATE_STATUS:-}" != self ]; then

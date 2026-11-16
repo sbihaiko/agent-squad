@@ -56,9 +56,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0153](0153-the-full-suite-runs-nightly-in-both-modes.md) | The full suite runs nightly in both modes, heavy included, in its own tree and its own lock, never the landing lock; one atomic result record carries the failing tests to the hub, a red result alerts, and a red result holds delivery until one green run |
 | [0154](0154-the-phone-sends-to-a-session-by-the-wire-protocol.md) | The hub writes the session wire protocol itself to send one phone message; the send is off until the profile sets `tailnet.terminals_send`, for every allowed login; the reservation is durable and exclusive, and the target is the recorded pid. |
 | [0155](0155-a-premise-is-checked-never-assumed.md) | A premise is checked, never assumed: one round proves what reading proves, sends what only running proves to a probe, and asks the owner at most five questions, each with a recommended answer that "yes" accepts; a question that depends on an open question waits a round, the check is one comment on the spec rewritten in place, and a model with no tools never reviews. |
-| [0156](0156-a-full-proof-carries-across-a-covered-delta.md) | A full proof carries across a covered delta: a declared guard map names every path a delta may hold, the full pass stays the base, and a delta record is checked again at promotion; the promotion code is never covered |
 
-| [0157](0157-a-proof-is-bounded.md) | A proof is bounded: it reserves the machine for 30 minutes, past which the reserve lifts and the loop works beside it; past two hours it is killed and its tip recorded indeterminate, not tested, with no promotion and no refusal |
 
 | [0158](0158-a-file-batch-is-capped.md) | A file batch is capped at two tickets by default: the cap splits a cluster in ascending number order and drops no ticket, so one large file never becomes one run that dies out_of_budget |
 | [0159](0159-a-not-startable-marker-names-its-build.md) | A not-startable marker names the build that wrote it: the same build keeps the stop, another build re-arms it, and a marker that names none keeps the stop |
@@ -66,7 +64,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0161](0161-a-chain-entry-shows-its-state-as-a-tag.md) | A chain entry shows its live state as a tag: one read joins the configuration and the state, so an omitted model keeps its place and names its cause |
 | [0162](0162-the-hub-writes-the-loop-switch-and-drains-by-default.md) | The hub writes the loop switch through one route: drain is the default and waits for live runs and gates, stop-now confirms what it kills, every change is audited, and a tailnet write needs `tailnet.loop_write` |
 
-| [0163](0163-a-proof-is-bounded-at-fifteen-minutes.md) | A proof is bounded at fifteen minutes: past it the full suite is killed and the delta proof answers, and what the delta does not cover is proven hot |
+| [0163](0163-a-proof-is-bounded-at-fifteen-minutes.md) | A proof is bounded at fifteen minutes and holds no dispatch: past the deadline the suite is stopped and the tip waits for a retry, a named reserve lifts past its bound, and the CI tiers and the nightly carry what the local proof does not reach |
 
 | [0164](0164-delivery-outranks-the-proof.md) | Delivery outranks the proof: an unfinished proof never holds a landing or a promotion, a failed one always does, and the record names which of the three a promotion was |
 | [0165](0165-a-dispatch-waits-for-its-card-write.md) | A dispatch's card write is an event held pending until it lands; no run starts while it is pending, and recovery writes it before anything launches |

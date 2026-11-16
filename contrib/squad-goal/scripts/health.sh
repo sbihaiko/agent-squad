@@ -326,7 +326,7 @@ held=
 lkd="$SG_STATE/locks/single-wland"; lhp=$(cat "$lkd/pid" 2>/dev/null)
 if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$($SG_PS -o stat= -p "$lhp" 2>/dev/null | cut -c1)" != Z ]; then
   lw=${SERIAL_WAIT_SECONDS:-900}; case $lw in ''|*[!0-9]*) lw=900;; esac
-  lb=${SG_GATE_BOUND_SECONDS:-${SG_PROMOTE_BOUND_SECONDS:-900}}; case $lb in ''|*[!0-9]*|0) lb=900;; esac
+  lb=${SG_GATE_BOUND_SECONDS:-900}; case $lb in ''|*[!0-9]*|0) lb=900;; esac
   ls=$(mtime "$lkd/pid"); rs=$(mtime "$lkd/round"); [ "$rs" -gt "$ls" ] && lp=$rs || lp=$ls   # the round mark, when a round has begun since the lock was taken
   la=$(( now - lp ))
   [ "$ls" -gt 0 ] && [ "$la" -gt $(( lw + lb )) ] && add landing-held "the landing lock has been held by pid $lhp since $(date -r "$ls" '+%F %T' 2>/dev/null || date -d "@$ls" '+%F %T' 2>/dev/null || printf '%s' "$ls") (no gate round began for ${la}s, past the ${lw}s gate wait plus the ${lb}s gate bound): the landing is stuck, not queued"

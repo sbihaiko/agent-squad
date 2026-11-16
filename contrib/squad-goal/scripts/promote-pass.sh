@@ -9,8 +9,6 @@
 # green is promotable at once, with no wait for the window and no local suite. A CI
 # proof of a hand run skips that window (a landing costs a job on the runner nothing); the watch cycle carries its own
 # debounce on that window for its step, bounded so a stream of landings cannot postpone the promotion for ever.
-# A full pass carries across a covered delta (ADR-0156): `delta-pass.sh` runs first, and any refusal or a held delta lock falls
-# through to the full suite, so a tip that moved by a covered path promotes in minutes and never by a weaker proof.
 # One hold of the proof's own lock, in try mode (serial.sh SERIAL_TRY, name `full-proof`): a held lock skips the tick, never
 # queues. The proof never takes the `gate` lock, which the landing gate, the wave entry and the promotion all wait on, so a proof
 # in flight holds no landing up and a landing holds no proof up (ADR-0145 rule 3, as the nightly of ADR-0153 does). Inside the
@@ -19,10 +17,10 @@
 # SG_PROMOTE_PROOF=local promote-stg.sh.
 # The tree is $SG_STATE/promote-tree (SG_PROMOTE_TREE), a plain clone, never a ~/wt-* worktree, so wtclean never removes it.
 # A red or missing proof: one marker and one line per tip in $SG_STATE/promote.log; the next tip is tried on a later pass.
-# One clock covers the whole attempt (#1171): from the proof lock, SG_PROMOTE_BOUND_SECONDS covers the suite, its retry and the
-# delta. SG_PROMOTE_FALLBACK_SECONDS is reserved for the delta before the suite starts and is never taken by the suite, and the
-# clock never restarts. Past the deadline every descendant is stopped, TERM then KILL. A defect a check reported before the
-# deadline is a fail the bound never turns into a pass (#1170); an attempt that reported nothing is recorded bounded.
+# One clock covers the whole attempt (#1171): from the proof lock, SG_PROMOTE_DEADLINE_SECONDS (default 900) covers the fast
+# battery and the suite. The clock never restarts. Past the deadline every descendant is stopped, TERM then KILL. A defect a
+# check reported before the deadline is a fail the bound never turns into a pass (#1170); an attempt that reported nothing
+# waits for a retry and writes no marker.
 # The pass reads stg again before a local battery starts and when it ends (#1723): another pass, or the owner, may have moved
 # stg while this one waited. A tip stg already holds runs no battery and gets no verdict: no line, no status, no marker.
 d=$(cd "$(dirname "$0")" && pwd)
@@ -137,23 +135,15 @@ refused() {  # <tip> <reason>: logged and answered, never a marker: a transient 
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
 if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
-  # The proof holds nothing by default (#739 with ADR-0157 rule 1 rewritten, owner decision 2026-10-31): the dispatchers read
+  # The proof holds nothing by default (#739 with ADR-0163, owner decision 2026-10-31): the dispatchers read
   # the marker (gh_dispatch_hold) and start no run while it stands, so a standing marker costs run slots. The owner named
   # parallelism as the priority, so the default bound is zero and no marker is written; an owner who wants the measurement
   # shielded names a bound in SG_PROMOTE_RESERVE_SECONDS. The trap removes a named marker on exit, INT and TERM.
-  # ADR-0163: one bound covers the whole attempt, never one step of it (Astra review, 2026-11-01). The delta proof, the
-  # fallback and the promotion all spend from the same fifteen minutes; a bound on the suite alone would let an attempt run
-  # the suite to its bound and only then start the fallback.
-  # ADR-0164: delivery outranks the proof. An unfinished proof never holds a landing; only a bound the delta cannot carry
-  # reaches the indeterminate branch below, and that branch never promotes a tip a test named red.
-  t0=$(date +%s); bound=${SG_PROMOTE_BOUND_SECONDS:-900}; keep=${SG_PROMOTE_FALLBACK_SECONDS:-240}
+  # ADR-0164: delivery outranks the proof. An unfinished proof never holds a landing, and a bound the attempt reaches writes
+  # no marker: the tip waits for a retry.
+  t0=$(date +%s); bound=${SG_PROMOTE_DEADLINE_SECONDS:-900}
   case $bound in ''|*[!0-9]*|0) bound=900;; esac
-  case $keep in ''|*[!0-9]*) keep=240;; esac
-  due=$(( t0 + bound ))   # one deadline for the whole attempt: the suite, its retry and the delta never restart the clock
-  # The delta's slice is taken from the one budget before the gate starts, so the gate can never spend it: the suite stops
-  # at due-keep, and the delta answers on what is left, which is its slice unless the suite ended early (ADR-0163, #1171).
-  echo "$(date -u +%FT%TZ) promote-pass: delta slice reserved: ${keep}s of the ${bound}s budget" >> "$log"
-  echo "promote-pass: the delta's ${keep}s slice of the ${bound}s budget is reserved"
+  due=$(( t0 + bound ))   # one deadline for the whole attempt: the fast battery, the suite and its retry never restart the clock
   reserve_s=${SG_PROMOTE_RESERVE_SECONDS:-0}
   [ "$reserve_s" -gt 0 ] && { printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"; }
   # The proof samples the load while it runs, not only at the start: a red taken with the box over its bound is no proof at all,
@@ -358,18 +348,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
     mark "$tip" "promoted: the local fast battery answered for the tip"; exit 0
   fi
-  # ADR-0156: a full pass carries across a covered delta. When one is on record and the tip moved only by covered paths, the
-  # delta proof runs instead of the full suite and the promotion reads its record. Any refusal (an uncovered path, a bound, no
-  # full pass) or a held delta lock falls through to the full suite below: the cheaper proof is an optimization, never a weaker gate.
   stood_down "read before the battery"
-  dleft=$(( due - $(date +%s) )); [ "$dleft" -lt 1 ] && dleft=1
-  if bounded "$dleft" bash "$d/delta-pass.sh" > "$state/delta-pass.log" 2>&1; then
-    stood_down "read when the delta battery ended"
-    o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
-    { [ $rc = 75 ] || [ $rc = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
-    [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-    mark "$tip" "promoted: the delta carried the full pass ($state/delta-pass.log)"; exit 0
-  fi
   # The interpreter holds the suite's tools (#1086, sg_gate_python in caps.sh). A default suite whose tool is missing refuses the
   # pass: the suite would die on a missing module, which reads as a red of the tip, a defect of the proof (ADR-0018). The
   # refusal writes no marker, so a later pass takes the same tip.
@@ -382,13 +361,11 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
   out=$state/promote-suite-${tip:0:12}.log
   cores2=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1); lim2=${SG_PROMOTE_LOAD_LIMIT:-$cores2}
-  # ADR-0163 (owner, 2026-11-01): no proof runs past fifteen minutes. Past its reserve bound the reserve lifts and the loop
-  # dispatches beside it; past its deadline the suite and every child it started are killed, and the delta proof answers for
-  # the tip instead. What the delta does not cover is proven hot: by the nightly and by the running system.
-  # The suite is bounded at what the attempt has left once the delta's reserved slice is kept; the delta answers on what is
-  # left then. Neither bound is ever rounded up: the whole attempt stays inside the one budget.
+  # ADR-0163 (owner, 2026-11-01): no proof runs past its deadline. Past its reserve bound the reserve lifts and the loop
+  # dispatches beside it; past its deadline the suite and every child it started are killed, and the tip waits for a retry.
+  # The suite is bounded at what the attempt has left, so the whole attempt stays inside the one budget.
   stood_down "read before the full battery"
-  rbound=$reserve_s; dline=$(( t0 + bound - keep - $(date +%s) )); [ "$dline" -lt 1 ] && dline=1
+  rbound=$reserve_s; dline=$(( due - $(date +%s) )); [ "$dline" -lt 1 ] && dline=1
   s0=$(date +%s); (cd "$tree" && bash -c "$suite") > "$out" 2>&1 & spid=$!
   rc=0; relieved=
   while kill -0 "$spid" 2>/dev/null; do
@@ -410,30 +387,8 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       ids=$(/usr/bin/grep -E '^(FAILED|ERROR) ' "$out" | head -n 3 | tr '\n' ' ' | sed 's/ $//')
       bash "$d/gate.sh" --status full fail "$tip"; mark "$tip" "not promoted: the full suite passed its ${dline}s bound with $([ -n "$ids" ] && echo "the defect $ids" || echo "a defect") already reported ($out)"; exit 1
     fi
-    # ADR-0163: the bound is not a verdict. The full suite is killed and the delta proof, which names the important part,
-    # answers for the tip; the part it does not cover is proven hot, by the nightly and by the running system. Only a tip
-    # the delta cannot carry stays indeterminate, and a later pass retries it.
-    echo "$(date -u +%FT%TZ) promote-pass: $tip passed its ${dline}s bound: the full suite is killed and the delta proof answers" >> "$log"
-    left=$(( due - $(date +%s) )); [ "$left" -lt 1 ] && left=1
-    if bounded "$left" bash "$d/delta-pass.sh" > "$state/delta-pass-over-bound.log" 2>&1; then
-      o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rcd=$?
-      { [ $rcd = 75 ] || [ $rcd = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
-      [ $rcd = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-      mark "$tip" "promoted: the full suite was killed by the ${bound}s bound, the delta carried the tip ($state/delta-pass-over-bound.log)"; exit 0
-    fi
-    # ADR-0164 (#1046): a red the delta measured holds the tip as the full suite's red does; only an unfinished proof ships.
-    IFS=$'\t' read -r _ dk dres _ dT _ 2>/dev/null < "$state/gate-status-delta"
-    [ "$dk" = delta ] && [ "$dT" = "$tip" ] && [ "$dres" = fail ] && { mark "$tip" "not promoted: the delta suite failed ($state/delta-pass-over-bound.log)"; exit 1; }
-    gap=$(sed -n 's/^delta-pass: uncovered paths: \(.*\); each needs a line.*/\1/p' "$state/delta-pass-over-bound.log" | tail -n 1)
-    [ -n "$gap" ] || gap="every part of the tip (delta: $(tail -n 1 "$state/delta-pass-over-bound.log" | sed 's/^delta-pass: //'))"
-    printf '%s\t%s\t%s\n' "$(date +%s)" "$tip" "$bound" > "$state/promote-indeterminate.$$" \
-      && mv "$state/promote-indeterminate.$$" "$state/promote-indeterminate"
-    echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${bound}s bound and the delta could not carry it" >> "$log"
-    o=$(SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" 2>&1); rcb=$?
-    { [ $rcb = 75 ] || [ $rcb = 73 ]; } && { refused "$tip" "not promoted yet: $(printf '%s' "$o" | tail -1)"; exit 0; }
-    [ $rcb = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$tip" "$bound" "$gap" >> "$state/promote-bound"
-    mark "$tip" "promoted: bound-ended: the ${bound}s bound ended the full suite and the delta could not carry the tip; not covered: $gap"; exit 0
+    # ADR-0163: the bound is not a verdict. The full suite is killed, and the tip waits for a retry with no marker.
+    refused "$tip" "not proven: the full suite passed its ${dline}s bound, retried later"; exit 0
   fi
   if [ "$rc" != 0 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
