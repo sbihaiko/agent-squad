@@ -443,11 +443,11 @@ def _facts_save():   # atomic (ADR-0030): a pass that dies in the write leaves t
     try: tmp.write_text(json.dumps(_facts)); os.replace(tmp, FACTS)
     except OSError as e: say(f"issue facts not written: {e}")
 import atexit; atexit.register(_facts_save)
-def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title, its labels and its close time (#1571)
+def issue_read(x, fresh=False):   # one read answers every fact the passes ask of an issue: its state, its reason, its title, its labels and its close time (#1571). fresh: a read that decides a write asks GitHub itself, and never the pass's cache nor the facts file, which can hold a state GitHub already changed (#1999)
     global _facts_dirty
-    if x not in _is:
+    if fresh or x not in _is:
         _facts_sync()
-        e = _facts["issues"].get(str(x)) if _facts else None
+        e = None if fresh else (_facts["issues"].get(str(x)) if _facts else None)
         if isinstance(e, dict) and isinstance(e.get("f"), list) and len(e["f"]) == 5 and time.time() - float(e.get("at") or 0) < FACTS_MAX_AGE:
             _is[x] = list(e["f"])
         else:
@@ -751,8 +751,8 @@ for r in names:
     if i and i["verdict"] and any((st / "auto" / f"wave-{x}").exists() for x in {f.name, i["run_id"]} if x): delivering |= req_issues(f) | i["acc"]
 def holding(n): return n in byissue or n in delivering   # a live run works it, or a run still lands its wave
 base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to count as delivery (#127)
-def issue_info(x):
-    return issue_read(x)[:3]
+def issue_info(x, fresh=False):
+    return issue_read(x, fresh)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
 _open = None
 def close_spec(n, why):   # the comment, then the close as completed, both through the door's write (gh_send)
@@ -1403,8 +1403,8 @@ def reconcile_board():
         for n in sorted(k for k in olabels if str(k) in have_all and have_all[str(k)] == "Closed" and not (RUN_PARENT in olabels[k])):
             if n in held_owner or owner_frozen(n): continue
             if n not in specs and (branch_in_dev_count(n) != "0" or str(n) in named_in_land()): continue   # its work is in dev: Closed is the landing's own write (rule above), so Todo would open a dispatch window and the later rules would cycle the card. A spec's own work is never a branch, so a spec never takes this skip (#1431)
-            _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775): a close GitHub reports late never sends a landed card back
-            if issue_info(n)[0] == "closed": continue
+            _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775), and that read is live (#1999): the open list is a snapshot and the facts file a cache, so a close GitHub already reported never sends a landed card back
+            if issue_info(n, fresh=True)[0] != "open": continue   # only a fresh open answer reopens the card: a close, a refusal or any other answer leaves it in Closed
             say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued; card -> Todo (reopened)")
             if board_write([owner, str(proj), "Todo", str(n)], n, "the issue is open again", "reopened"):
                 have_all[str(n)] = "Todo"; expected.pop(n, None)
