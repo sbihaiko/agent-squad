@@ -51,7 +51,7 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)   # one read answers every card: number, Status, repository
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
-    for n in 2002 2003 2005 2006 2009 2022 2023; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
+    for n in 2002 2003 2005 2006 2009 2022 2023 2098 2099; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2098 and #2099: the children of run-land-fail (#2015)
     for n in 2001 2007 2008 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2004 2010 2011 2032 2050; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2050: a spec card a work rule wrongly moved forward (#665)
     printf '2051\tIn Progress\thttps://api.github.com/repos/x/y\n2052\tClosed\thttps://api.github.com/repos/x/y\n2053\tBacklog\thttps://api.github.com/repos/x/y\n2054\tBacklog\thttps://api.github.com/repos/x/y\n'   # #2050's children, and spec #2053 with its queued child
@@ -70,7 +70,7 @@ case "$a" in
     esac;;
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2090 2091 2092 2093 2094 2095 2096 2097; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2090 2091 2092 2093 2094 2095 2096 2097 2098 2099; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -195,6 +195,17 @@ rec run-mixed '{"event":"run_start","run_id":"run-mixed","ts":"2026-10-13T08:13:
 {"event":"verdict","verdict":"failed","reasons":["child route.router.2 failed"],"exit_code":1}'
 # #2032 was fixed by hand in the landing branch (#519): no run and no work branch, but a commit in origin/dev names it. The
 # work reached dev, so the card keeps Code Complete; the floor never moves it back (ADR-0143).
+# #2015: the run landed through route.router.1, and route.router.2 PASSED its own entries while its own engine landing
+# failed with merge_conflict. Its outcome word is `pass`, but its work never reached the target, so the note must name the
+# landing failure and never call it a pass.
+mk run-land-fail 2098
+rec run-land-fail '{"event":"run_start","run_id":"run-land-fail","ts":"2026-10-13T08:13:30Z"}
+{"event":"spawn_accepted","child":"route.router.1","definition":"GitHub issue #2099 on fix/2099-x"}
+{"event":"spawn_accepted","child":"route.router.2","definition":"GitHub issue #2098 on fix/2098-x"}
+{"event":"outcome","node":"route.router.2","entry":1,"outcome":"pass","reasons":["tests green"]}
+{"event":"land","node":"route.router.2","entry":1,"outcome":"fail","reasons":["merge_conflict"],"effect":{"name":"merge_land","head":"b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"}}
+{"event":"land","node":"route.router.1","entry":1,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"a7df8f1ecff77bdb5833721121a7a50be4066053","held_out":"pass"}}
+{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
 git -C "$T/co" init -q
 # A fork inherits its upstream's history, whose subjects end with the upstream's PR numbers (#759). SG_LAND_SCAN_FROM names
 # the fork point, the last upstream commit, so the scan reads only commits made in this repository: #2019 stays in Backlog.
@@ -255,6 +266,9 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 ! /usr/bin/grep -q 'Code Complete 2023' "$T/board.calls" 2>/dev/null && ok "a child that landed nothing is never credited the run's landing" || ko "#2023 read Code Complete over its sibling's landing: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2023$' "$T/board.calls" 2>/dev/null && ok "a failed child with no branch and no PR stays in the loop's queue" || ko "#2023 did not stay in Todo: $(bc) $o"
 /usr/bin/grep -q 'BOARD-RECONCILE #2023: card -> Todo (run run-mixed child route.router.2 fail with nothing landed (red gate))' "$T/st/cycle.log" 2>/dev/null && ok "the reason names the child and its own outcome" || ko "child reason not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# #2015: a child whose own landing failed names that failure, never its `pass` outcome word.
+/usr/bin/grep -q 'BOARD-RECONCILE #2098: card -> Todo (run run-land-fail child route.router.2 with nothing landed (its landing failed: merge_conflict))' "$T/st/cycle.log" 2>/dev/null && ok "a child whose landing failed names the landing failure" || ko "landing failure not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q 'child route.router.2 pass with nothing landed' "$T/st/cycle.log" 2>/dev/null && ok "the note never calls a child whose work did not land a pass" || ko "the note says pass for a child that landed nothing: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2032$' "$T/board.calls" 2>/dev/null && ok "a card whose fix is a commit in dev keeps Code Complete" || ko "#2032 moved: $(/usr/bin/grep ' 2032$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone leaves the card in Code Complete" || ko "#2011 moved: $(bc)"
 ! /usr/bin/grep -q 'Done 2011' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone is not Done" || ko "#2011 read Done from a landed branch marker: $(bc)"
