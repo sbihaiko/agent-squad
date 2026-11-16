@@ -1244,21 +1244,25 @@ def reconcile_board():
                 kid_cols = [have_cards.get(k, "") for k in _kids.get(n, [])]
                 todo = os.environ.get("SG_TODO", "Todo")
                 col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), todo, spec=is_spec, todo=todo)   # a spec reads Todo while a ticket is in flight, and never a work column (#1131)
-                if is_spec and col == todo and not have_cards.get(n, ""): col = None   # a spec with no card is created by the floor, in Backlog (ADR-0142)
+                if is_spec and col == todo and have_cards.get(n, "") in ("", "Backlog"):   # only the owner starts a spec from Backlog or with no card (ADR-0142, #1909)
+                    col = None
+                    mk = st / "auto" / f"janitor-specheld-{n}"
+                    if not mk.exists():
+                        say(f"SPEC-HELD-IN-BACKLOG #{n}: a ticket is in flight but the spec is not in Todo; only the owner moves it there")
+                        if not dry: mk.touch()
                 if is_spec and reverted and shipped:   # an open spec never keeps a terminal column: its own work is never a branch, so the reopen rule below (ADR-0143 rule 2) returns it to Todo with the reason (#1431)
                     set_expected(n, col, f"spec folds over its sub-issues: a child reopened, the card keeps {col}", rank=15)   # the fold's own read still lands, so a pass whose reopen declines leaves the card where the fold found it
                     reverted = False   # the reopen loop lifts the card; it carries no reverted tag and no negative reason
                 elif col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Todo the fold writes nothing, and the spec keeps the owner's column (#550)
             if is_spec:
-                # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
-                # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold
-                # writes nothing below Doing, so the two rules never fight; every rule a run, a label or a closure raises outranks it.
-                # A child whose blockers are open stays held by the dispatch gate, never by its column.
+                # A spec in Todo lifts none of its tickets: the owner's door moves a spec with its Backlog tickets in one write
+                # (hub.py promote_write, #1909). The pass names the held tickets once per spec.
                 todo = os.environ.get("SG_TODO", "Todo")
-                if have_cards.get(n, "") == todo:
-                    for k in _kids.get(n, []):
-                        if k in olabels and have_cards.get(k, "") in ("", "Backlog"):
-                            set_expected(k, todo, f"its spec #{n} sits in {todo}: the owner started it", rank=12)
+                if have_cards.get(n, "") == todo and any(k in olabels and have_cards.get(k, "") in ("", "Backlog") for k in _kids.get(n, [])):
+                    mk = st / "auto" / f"janitor-specheld-todo-{n}"
+                    if not mk.exists():
+                        say(f"SPEC-HELD-IN-TODO #{n}: its Backlog tickets stay in Backlog; only the owner's move of the spec lifts them")
+                        if not dry: mk.touch()
                 # A spec with at least one sub-issue, every one closed, is done (the owner's rule): the loop closes it with one comment.
                 # A spec with no sub-issue proves nothing and stays open.
                 sub = _subs.get(n) or {}
