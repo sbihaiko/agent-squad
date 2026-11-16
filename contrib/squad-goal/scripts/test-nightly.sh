@@ -664,7 +664,7 @@ case "\$1" in
 esac
 EOF
 chmod +x "$T/ghread"
-vd() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" bash "$S/nightly.sh" --verdict >/dev/null 2>&1
+vd() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" --verdict >/dev/null 2>&1
   v_ts= v_res= v_sha= v_loc= v_gh= v_ghsha=
   [ -f "$ST/nightly-verdict" ] && IFS=$'\t' read -r v_ts v_res v_sha v_loc v_gh v_ghsha < "$ST/nightly-verdict"; }
 lrec() { printf '%s\t%s\t%s\t%s\t%s\t[]\n' "$(date +%s)" "$1" "$2" "$3" "$4" > "$ST/nightly-result"; }
@@ -697,5 +697,41 @@ vd GH_RUN="$running" GH_SHA="$sha"
 env FAKE_HOUR=05 SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" GH_RUN="$done_ok" GH_SHA="$sha" SG_NIGHTLY_VERDICT_EVERY=0 bash "$S/nightly.sh" >/dev/null 2>&1
 IFS=$'\t' read -r _ v_res _ < "$ST/nightly-verdict" 2>/dev/null
 [ "$v_res" = pass ] && ok "a later cycle settles an unproven verdict" || ko "a later cycle left the verdict '$v_res'"
+
+# 36) (#1975) A GitHub-half red is a red like a local one: one alert through the same path, said once per verdict, and one
+#     dispatch note, said once; the pass goes on, as it does for a local red (ADR-0153 rule 6).
+rm -f "$ST/alerts.log" "$T/notify.log" "$ST/nightly-gh-red-alerted" "$ST/nightly-gh-red-noted"; lrec pass "$sha" pass pass
+vd GH_RUN="$done_red" GH_SHA="$sha"; vd GH_RUN="$done_red" GH_SHA="$sha"
+[ "$(/usr/bin/grep -c "NIGHTLY GitHub half red at ${sha:0:7}" "$ST/alerts.log" 2>/dev/null)" = 1 ] && [ -s "$T/notify.log" ] \
+  && ok "a GitHub-half red alerts once, through the alerts file and the notifier" \
+  || ko "GitHub-half red alerts: '$(cat "$ST/alerts.log" 2>/dev/null)', notify '$(cat "$T/notify.log" 2>/dev/null)'"
+rm -f "$ST/nightly-result"   # the GitHub-half note alone, with no local record beside it
+out=$(hold); rc=$?; out2=$(hold)
+case "$out" in *"DISPATCH NOTE"*"GitHub half"*"red"*) [ $rc = 1 ] && [ -z "$out2" ] && ok "a GitHub-half red is one dispatch note, and the pass goes on" \
+  || ko "a GitHub-half red note: rc $rc, second '$out2'";; *) ko "a GitHub-half red said no note: rc $rc, '$out'";; esac
+rm -f "$ST/nightly-verdict" "$ST/nightly-result"
+
+# 37) (#1975) The local half never runs the full suite for a pytest obligation at the tip it measured: the GitHub half's result
+#     at that sha answers it, and with no such result the obligation stays in place for a later nightly.
+obclean; rm -f "$ST/nightly-github-seen"
+obwrite o/r "$newtip" "-" "pytest" delta "$(( $(date +%s) + 900 ))"
+ngh() { env "$@" SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" "SG_SETTLE_PYTEST=$T/settle.sh pytest" bash "$S/nightly.sh" 2>&1; end_check; }
+out=$(ngh SG_GHREAD=false); rc=$?
+! /usr/bin/grep -q '^pytest ' "$T/settle.log" 2>/dev/null && [ -n "$(/bin/ls -A "$OBL" 2>/dev/null)" ] \
+  && ok "with no GitHub result, the tip's pytest obligation stays in place and no full suite runs" \
+  || ko "a tip obligation with no GitHub result: rc $rc, settle '$(cat "$T/settle.log" 2>/dev/null)', left '$(/bin/ls "$OBL" 2>/dev/null)'"
+mark; rm -f "$T/settle.log"
+out=$(ngh SG_GHREAD="$T/ghread" GH_RUN="$done_ok" GH_SHA="$newtip"); rc=$?
+! /usr/bin/grep -q '^pytest ' "$T/settle.log" 2>/dev/null && [ -z "$(/bin/ls -A "$OBL" 2>/dev/null)" ] && /usr/bin/grep -q 'green' "$(sf)" 2>/dev/null \
+  && ok "the GitHub half's pass at the tip answers pytest green" \
+  || ko "GitHub pass at the tip: rc $rc, settle '$(cat "$T/settle.log" 2>/dev/null)', settled '$(cat "$(sf)" 2>/dev/null)'"
+obclean; rm -f "$ST/nightly-github-seen"
+obwrite o/r "$newtip" "-" "pytest" delta "$(( $(date +%s) + 900 ))"
+out=$(ngh SG_GHREAD="$T/ghread" GH_RUN="$done_red" GH_SHA="$newtip"); rc=$?
+! /usr/bin/grep -q '^pytest ' "$T/settle.log" 2>/dev/null && /usr/bin/grep -q 'red' "$(sf)" 2>/dev/null \
+  && ok "the GitHub half's red at the tip answers pytest red" \
+  || ko "GitHub red at the tip: rc $rc, settle '$(cat "$T/settle.log" 2>/dev/null)', settled '$(cat "$(sf)" 2>/dev/null)'"
+obclean; rm -f "$ST/nightly-github-seen" "$ST/nightly-verdict"
 
 rm -rf "$T"; exit $fail
