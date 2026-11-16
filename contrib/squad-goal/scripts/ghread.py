@@ -74,6 +74,7 @@ process); a library caller -- the throttle -- logs its own calls, because only i
 `graphql_read` logs its own read.
 
     python3 ghread.py --log <REST|GraphQL> <route> <hit|miss|write> <outcome>    # one line, for a shell door that has no Python of its own
+    python3 ghread.py --fast-tier <sha>    # `<pass|fail|unproven>` TAB `<run id|->`, the fast tier of one sha (#1926)
 
 Scope (ADR-0277): this is the outcome contract, the transports behind it and the call log. The token bucket, the shared
 `$SG_STATE` cooldown and the per-resource response cache are `ghthrottle.py`, and the health causes read from the log and the
@@ -900,6 +901,18 @@ def main(argv: list[str]) -> int:
     """The CLI: the exit code carries the outcome, stdout carries the answer or the one-line refusal."""
     name = argv[0] if argv else "ghread.py"
     args = argv[1:]
+    if args and args[0] == "--fast-tier":
+        # The fast-tier verdict of one sha, for a shell door (#1926, #1927): `pass|fail|unproven`, a TAB, then the Actions
+        # run id or `-`. An unanswered read is `unproven` with no run, so a caller that acts only on `pass` keeps its
+        # today's path on a refusal. The call is logged as the read it is.
+        if len(args) != 2:
+            sys.stderr.write(f"usage: {name} --fast-tier <sha>\n")
+            return _USAGE
+        route = f"repos/sbihaiko/agent-squad/commits/{args[1]}/check-runs?per_page=100"
+        out = fast_tier_verdict(args[1])
+        log_call(None, route, MISS, FAILED if out.run_id is None and out.verdict == "unproven" else ANSWER)
+        print(f"{out.verdict}\t{out.run_id if out.run_id is not None else '-'}")
+        return 0
     if args and args[0] == "--log":
         if len(args) != 5 or args[3] not in (HIT, MISS, WRITE):
             sys.stderr.write(f"usage: {name} --log <REST|GraphQL> <route> <hit|miss|write> <outcome>\n")

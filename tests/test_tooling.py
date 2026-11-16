@@ -702,3 +702,54 @@ def test_no_job_runs_for_a_pull_request_from_a_fork():
     jobs = _ci_workflow()["jobs"]
     missing = [name for name, job in jobs.items() if SAME_REPO not in str(job.get("if", ""))]
     assert missing == [], f"these jobs run for a fork's pull request: {missing}"
+
+
+# The local half of the promotion's tip gate (spec 1782, #1927): the shell suites of the changed scripts and each test a
+# Linux runner deselects. Two facts keep the two halves equivalent to today's gate, and each one is pinned here.
+CONFTEST = ROOT / "tests" / "conftest.py"
+BASE_BATTERY = ROOT / "contrib" / "squad-goal" / "scripts" / "base-battery.sh"
+TIP_GATE = ROOT / "contrib" / "squad-goal" / "scripts" / "tip-gate.sh"
+
+
+def _deselect_markers() -> set[str]:
+    """The markers `tests/conftest.py` registers for a fixture a runner may lack: each one is deselected, never skipped,
+    on a runner that does not hold it (ADR-0139). Read from the registration itself, so a new marker joins the set."""
+    return set(re.findall(r'^\s+"(\w+?)(?:\(reason\))?:', CONFTEST.read_text(), re.M))
+
+
+def test_the_local_half_runs_each_test_a_linux_runner_deselects():
+    """(e) Every marker a Linux runner deselects is selected by the local half, so a macOS-bound red still refuses. The
+    definition is one: `sg_linux_deselected_markers` in base-battery.sh, and the tip gate reads it."""
+    markers = _deselect_markers()
+    assert len(markers) == 8, f"the deselection markers of conftest.py changed: {sorted(markers)}"
+    r = subprocess.run(["bash", "-c", f'. "{BASE_BATTERY}"; sg_linux_deselected_markers'],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.strip(), "base-battery.sh names no deselected-test selection"
+    selected = set(re.findall(r"\b\w+_bound\b", r.stdout))
+    assert markers <= selected, f"the local half leaves these deselected tests to no runner: {sorted(markers - selected)}"
+    assert "sg_linux_deselected_markers" in TIP_GATE.read_text(), "the tip gate keeps its own copy of the marker selection"
+
+
+def _mypy_scope(text: str) -> set[str]:
+    """The paths one gate's mypy checks: the arguments of its `mypy` calls, comments left out."""
+    scope: set[str] = set()
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for call in re.findall(r"(?:^|\s)(?:-m )?mypy ([^|&;]+)", line):
+            scope.update(call.split())
+    return scope
+
+
+def test_the_local_half_keeps_mypy_only_for_a_wider_scope_than_ci():
+    """(f) The CI half's mypy scope and the local gate's are compared here. While they are the same, mypy stays in the CI
+    half and never runs twice; a wider local scope fails this test, so mypy enters the local half on purpose, not by drift."""
+    ci_scope = _mypy_scope("\n".join(_ci_run_lines()))
+    local_scope = _mypy_scope(BASE_BATTERY.read_text())
+    assert ci_scope == {"squad"}, f"the CI mypy scope moved: {sorted(ci_scope)}"
+    assert local_scope == ci_scope, (
+        f"the local mypy scope is {sorted(local_scope)}, not CI's {sorted(ci_scope)}: a wider local scope keeps mypy in "
+        "the local half of the tip gate")
+    local_half = "\n".join(ln for ln in TIP_GATE.read_text().splitlines() if not ln.lstrip().startswith("#"))
+    assert "-m mypy" not in local_half, \
+        "the local half runs mypy although the CI half already covers that scope"

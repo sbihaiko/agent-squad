@@ -286,6 +286,25 @@ shards "$tr" success success failure success; SG_GHREAD="$T/bin/ghread" pass; rc
 /usr/bin/grep "promote-pass: $tr" "$SG_STATE/promote.log" | /usr/bin/grep -q "full-proof shard 2" && ok "the refusal names the red shard" \
   || ko "red shard line: $(/usr/bin/grep "$tr" "$SG_STATE/promote.log")"
 
+# (#1927) The proof of the tip is hybrid: a pass from the reader for the dev tip runs only the tip gate's local half, and the
+# full suite runs none of it. The reader and the gate's interpreter are stubs, so the case is offline and the half's verdict
+# is the one it names.
+printf '#!/bin/bash\nprintf "pass\\t4242\\n"\n' > "$T/bin/fast-tier"; chmod +x "$T/bin/fast-tier"
+printf '#!/bin/bash\nexit 0\n' > "$T/bin/pyok"; chmod +x "$T/bin/pyok"
+printf '#!/bin/bash\nexit 7\n' > "$T/bin/pyred"; chmod +x "$T/bin/pyred"
+adv dev hybrid; th=$(tip dev); before=$(tip stg); n=$(runs); : > "$SG_STATE/gate-history"
+shards "$th" success success success success
+SG_CI_FAST_TIER_CMD="$T/bin/fast-tier" SG_GATE_PY="$T/bin/pyok" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$th" ] && ok "a green CI half with a green local half promotes the tip" || ko "hybrid: rc $rc, stg $(tip stg), dev $th, out '$(cat "$T/out")'"
+[ "$(runs)" = "$n" ] && ok "the hybrid proof runs no full suite" || ko "the hybrid proof ran the full suite: $(runs) runs, was $n"
+[ "$(tail -n 1 "$SG_STATE/gate-history" | cut -f2,3,23,24)" = "$(printf 'full\tpass\tci\t4242')" ] && ok "the local half's history line names the CI runner and its run id" || ko "hybrid history line: '$(tail -n 1 "$SG_STATE/gate-history")'"
+adv dev hybrid-red; tr=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tr" success success success success
+SG_CI_FAST_TIER_CMD="$T/bin/fast-tier" SG_GATE_PY="$T/bin/pyred" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && ok "a red local half holds the tip under a green CI half" || ko "hybrid red: rc $rc, stg $(tip stg), dev $tr, out '$(cat "$T/out")'"
+[ "$(runs)" = "$n" ] && ok "the red local half runs no full suite either" || ko "the red local half ran the full suite"
+/usr/bin/grep -q "not promoted: the local half of the tip gate failed" "$SG_STATE/promote.log" && ok "the red local half is one marker naming the half" || ko "red half marker: '$(tail -n 2 "$SG_STATE/promote.log")'"
+
 # (#1192) A tip whose CI has not answered yet is measured by waiting, never by a local suite: the suite saturates the machine
 # for eleven minutes, and the loop's own runs then die at the takeover bound. Past SG_PROMOTE_CI_WAIT the suite answers, so a CI
 # that never reports never holds delivery.
@@ -574,7 +593,8 @@ nl=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh"' "$d/prom
 nw=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=$proof_word bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 nf=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 na=$(/usr/bin/grep -c 'bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
-[ "$nl" = 3 ] && [ "$nw" = 1 ] && [ "$nf" = 1 ] && [ "$na" = 7 ] && ok "the local-suite and delta calls pass the local proof, the CI path the fast or ci word, the fallback the fast word (#1723)" \
+# The tip gate's green local half is a second call of the CI path's word (#1927), beside the CI checks' own call.
+[ "$nl" = 3 ] && [ "$nw" = 2 ] && [ "$nf" = 1 ] && [ "$na" = 8 ] && ok "the local-suite and delta calls pass the local proof, the CI path the fast or ci word, the fallback the fast word (#1723)" \
   || ko "promote-stg.sh calls: local $nl, word $nw, fast $nf, all $na"
 
 # #1086: an interpreter that lacks a tool the suite runs refuses the pass before any suite runs. The refusal names the tool,

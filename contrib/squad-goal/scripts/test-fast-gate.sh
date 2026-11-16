@@ -754,6 +754,18 @@ out=$(SG_CALL_DEADLINE_SECONDS=2 SG_GATE_BOUND_SECONDS=2 SG_FAST_CMD="bash $T/ha
 out=$(GATE_STUB_73=1 BASE_FAIL=1 sgfg); rc=$?
 [ $rc = 1 ] && case "$out" in *"test_a"*) ok "1760 a measured red after a slot wait still fails the run (exit 1)";; *) ko "1760 real red: '$out'";; esac || ko "1760 real red: rc $rc '$(last "$out")'"
 
+# (#1927) A suite the fast gate runs never inherits GATE_REUSE_FILE: gate.sh --inner exports that file for the gate's own
+# verdict, and a fixture gate inside a suite that kept it would write the outer gate's reuse from its own memo hit, and its
+# row would vanish. The fast gate found this on its own suite, whose memo row went missing under the gate.
+$G -C "$R" checkout -q -b gui/reuse dev
+printf '#!/bin/bash\necho "suite sees reuse=${GATE_REUSE_FILE:-none}" >> "%s/ran.log"\n' "$T" > "$S/test-reuse.sh"
+printf '#!/bin/bash\necho reuse\n' > "$S/reuse.sh"; $G -C "$R" add -A; $G -C "$R" commit -q -m reuse-work
+: > "$T/outer-reuse"
+out=$(GATE_REUSE_FILE=$T/outer-reuse fg); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx "suite sees reuse=none" "$T/ran.log" && [ ! -s "$T/outer-reuse" ] \
+  && ok "1927 a suite the fast gate runs inherits no GATE_REUSE_FILE" \
+  || ko "1927 reuse leak: rc $rc ran '$(cat "$T/ran.log" 2>&1)' outer '$(cat "$T/outer-reuse" 2>&1)'"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail

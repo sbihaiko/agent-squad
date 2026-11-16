@@ -29,6 +29,15 @@ check: a line that exits non-zero while the defect is present.
 4. **A markdown answer has no repro.** Its findings are read as before.
 5. **A plan review names no repro.** A plan reads no code, so its prompt asks for none, its answer is parsed with no
    demotion, and no repro runs (ADR-0171).
+6. **The loop's own rebase-round review has one writer and names its repro.** A kept rebase or landing branch gets one
+   CHANGES review that asks a rebase round. `revformat.py --round-review` writes it for `wave.sh` and `branchland.sh`, in
+   the shape the landing pass classifies as changes. Its repro is a trial merge of the head with the ref the round
+   rebases on, which exits non-zero while the two conflict.
+7. **A kept round is bounded whether it pushes or not.** The push back takes the last head of a kept round whose outcome
+   is not fail, so an unproven round (ADR-0164) still reaches its work branch, and only that branch; the landing gate and
+   the review still decide what reaches the base. A round whose fix run ended with the branch still at the head it started
+   from pushed nothing: the landing pass requeues its issues (Todo, rework), names the wave branch that keeps the work for
+   salvage, and removes the marker.
 
 ## Consequences
 
@@ -46,4 +55,7 @@ one to Debt with its head, and a repro cannot write outside its tree while it ca
 a review whose Blocking repro passes is saved with the finding in Debt, and a review whose every repro passes is an
 approval; the repro runs in the reviewed tree (a `--worktree` review), a throwaway worktree of the head, or not at all when
 no tree holds it, and never in the checkout of a `--branch` review. `test-loopbug-review.sh`:
-a plan review with a blank repro stays CHANGES, and its prompt asks for no repro.
+a plan review with a blank repro stays CHANGES, and its prompt asks for no repro. `test-revformat.sh` also proves the
+round review classifies as changes, its repro fails on a conflict and passes once rebased, and no other script writes it.
+`test-branchfix-pass.sh`: an unproven kept round's head is pushed, a fail head never is. `test-branchland.sh`: a kept round
+that pushed nothing is requeued with rework and its marker removed; a running or undispatched round is left alone.

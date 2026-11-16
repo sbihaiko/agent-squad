@@ -30,6 +30,9 @@ for m in "$A"/branchfix-push-*; do
   [ -f "$m" ] || continue
   run=${m##*/branchfix-push-}; read -r br dsha < "$m"   # dsha: the sha the round was dispatched for, the one its lease is on
   rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); rd=${rd:-$SG_CHECKOUT/runs/$run}
+  # (#1960) A kept round's heads are those of every outcome that is not fail: a round whose proof ended unproven (ADR-0164) still
+  # made its rebase, and only the work branch takes it; branchland's gate and review still decide. An ordinary round reads pass only.
+  kept="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; oc=pass; [ -s "$kept" ] && oc=nonfail
   t=$(python3 -c 'import json,sys
 s=v=None; h=[]
 for l in open(sys.argv[1]):
@@ -37,8 +40,8 @@ for l in open(sys.argv[1]):
     except Exception: continue
     if d.get("event") in ("run_start","resume"): v=None; s=d if d.get("event")=="run_start" else s
     elif d.get("event")=="verdict": v=d
-    elif d.get("event")=="outcome" and d.get("outcome")=="pass" and (d.get("workspace") or {}).get("head"): h.append(d["workspace"]["head"])
-if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s["target_branch"], *reversed(h))' "$rd/record.jsonl" 2>/dev/null)
+    elif d.get("event")=="outcome" and (d.get("outcome")=="pass" if sys.argv[2]=="pass" else d.get("outcome")!="fail") and (d.get("workspace") or {}).get("head"): h.append(d["workspace"]["head"])
+if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s["target_branch"], *reversed(h))' "$rd/record.jsonl" "$oc" 2>/dev/null)
   [ -n "$t" ] || continue
   read -r tg tb ch <<< "$t"
   # The head (#779): on a work branch the land into the target branch can be a no-op, so that branch stays at the base. The
@@ -47,7 +50,7 @@ if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s[
   head=$(/usr/bin/git -C "$tg" rev-parse -q --verify "refs/heads/$tb^{commit}" 2>/dev/null) \
     && /usr/bin/git -C "$tg" fetch -q "$remote" "refs/heads/$br" 2>/dev/null || { echo "BRANCHFIX PUSH $br: the head of run $run is not readable; the next pass retries"; continue; }
   old=$(/usr/bin/git -C "$tg" rev-parse FETCH_HEAD)
-  # ff reads a pass outcome's own head only: a run that left no commit names no head of its own, and the target branch it
+  # ff reads an outcome's own head only: a run that left no commit names no head of its own, and the target branch it
   # would otherwise name is the base, never a rebase round's work (#1344).
   ff=
   for c in $ch; do
@@ -63,7 +66,7 @@ if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s[
   # A kept rebase round (#1344) rewrites its own branch, so its head is never a fast-forward of the reviewed tip and the
   # ordinary rule would drop it. Its head is the branch's new first pass head, and only when it carries a commit past the ref
   # the round rebased on: a head that adds nothing is no round.
-  kept="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; kre=$(head -1 "$kept" 2>/dev/null)
+  kre=$(head -1 "$kept" 2>/dev/null)
   [ -s "$kept" ] && [ -n "$ff" ] && [ -n "$kre" ] && [ "$(/usr/bin/git -C "$tg" rev-list --count "$kre..$ff" 2>/dev/null)" != 0 ] && head=$ff
   if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit"
   elif [ -s "$kept" ] && [ -z "$ff" ]; then echo "BRANCHFIX PUSH $br: run $run added no head of its own, so no round is pushed"
@@ -135,7 +138,8 @@ while read -r sha br i; do
   run=$(/usr/bin/grep -E '^run-[A-Za-z0-9._-]+$' "$lf" | tail -1); rm -f "$lf"
   [ -n "$run" ] || { echo "BRANCHFIX $br @ $s9: launch.py printed no run id, so no fix run started; the next pass retries" >&2; continue; }
   /usr/bin/git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place
-  echo "$run" > "$A/branchfix-$key-$s9"; echo "$br $sha" > "$A/branchfix-push-$run";python3 "$here/revformat.py" --record-stall "$A" branchfix "$key" "$fp" "$same"; rm -f "$A/branchfix-stop-$key"
+  # The push marker goes first (#1960): branchland reads a dispatch marker with no push marker as a round that ended.
+  echo "$br $sha" > "$A/branchfix-push-$run"; echo "$run" > "$A/branchfix-$key-$s9";python3 "$here/revformat.py" --record-stall "$A" branchfix "$key" "$fp" "$same"; rm -f "$A/branchfix-stop-$key"
   find "$A" -maxdepth 1 -name "branchfix-$key-?????????" ! -name "*-$s9" -delete 2>/dev/null
   echo "BRANCHFIX $br @ $s9 (issue #$i): fix round dispatched ($same failed rounds with no change before it) -> $run"
 done <<EOT

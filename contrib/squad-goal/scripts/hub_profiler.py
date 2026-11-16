@@ -891,26 +891,33 @@ GATE_HISTORY_FIELDS = ("finish", "kind", "result", "sha", "start", "selection", 
                        # (#1856) What tells a gate stage's queue time from its work: the tree the gate read, the seconds
                        # it waited for the lock and its slots, its wall time, the CPU its command spent, and whether a
                        # green verdict answered instead of a battery (ADR-0168).
-                       "tree", "wait", "wall", "cpu", "reused")
+                       "tree", "wait", "wall", "cpu", "reused",
+                       # (#1927) Which proof produced the verdict (ci or local), and the CI run id a `ci` proof names.
+                       "runner", "run_id")
 # The entry mode (#1798): how the gate came to its verdict, the seventeenth field. A row from before the field ends with its
 # load reading, a number or a dash, never one of these words, so the tail is counted by the word and an older row reads its
-# own columns. A row that carries the queue fields (#1856) ends with its reuse word, five fields after its mode.
+# own columns. A row that carries the queue fields (#1856) ends with its reuse word, five fields after its mode; a row that
+# carries the runner fields (#1927) ends with its CI run id, two fields after its reuse word.
 ENTRY_MODES = ("gated", "reused", "skipped")
 NO_BATTERY_MODES = ("reused", "skipped")
 REUSE_WORDS = ("yes", "no")
+RUNNERS = ("ci", "local")
 
 
 def gate_row(line):
     """One gate-history line as named fields, or None when it is too short to hold a finish and a start. A reason that
     holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields. A row
     that ends with the queue fields keeps thirteen tail columns, a row whose last field is the entry mode keeps eight, and a
-    row from before the mode keeps seven."""
+    row from before the mode keeps seven, and a row that carries the runner fields keeps fifteen."""
     parts = line.split("\t")
     if len(parts) < 5:
         return None
-    # The reason is the ninth field and the only free text, so the words at the row's end say how many fields follow it.
-    if len(parts) >= len(GATE_HISTORY_FIELDS) and parts[-1] in REUSE_WORDS and parts[-6] in ENTRY_MODES:
+    # The reason is the ninth field and the only free text, so the words at the row's end say how many fields follow it:
+    # the runner words first, then the reuse word, then the entry mode.
+    if len(parts) >= len(GATE_HISTORY_FIELDS) and parts[-2] in RUNNERS and parts[-3] in REUSE_WORDS and parts[-8] in ENTRY_MODES:
         tail = len(GATE_HISTORY_FIELDS) - 9
+    elif len(parts) >= 22 and parts[-1] in REUSE_WORDS and parts[-6] in ENTRY_MODES:
+        tail = 13
     elif len(parts) >= 17 and parts[-1] in ENTRY_MODES:
         tail = 8
     else:

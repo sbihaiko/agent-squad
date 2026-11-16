@@ -62,8 +62,11 @@
 # verdict for the same tree and suite answered instead of a battery (ADR-0168), `no` otherwise. A gate cancelled that way is
 # still one row (gate_reuse below), mode `reused`, with wait, wall and cpu of 0 and its start at its finish, so a saved gate is
 # counted, a reader of gate time counts it in neither, and the share of a gate stage that is lock wait is read from the window
-# (hub_profiler.gate_queue), never inferred. A row from before these fields has 17 and reads as an unknown wait and no tree. A gate
-# that sets SG_GATE_STATUS=self writes no history line, as it writes no status line and no obligation. The file only grows: the throughput report
+# (hub_profiler.gate_queue), never inferred. A row from before these fields has 17 and reads as an unknown wait and no tree.
+# The runner field (#1927) is the proof that produced the verdict: `ci` when the gate's command names the CI half of a
+# hybrid proof (GATE_RUNNER), else `local`; the run id field names that CI run's id, `-` when none. A row from before these
+# two fields has 22 and reads as a local gate with no run. A gate that sets SG_GATE_STATUS=self writes no history line, as it
+# writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
 # A caller that names GATE_OUTCOME_READ_FILE gets the same outcome line copied there inside the lock, so it decides on the word
 # the gate wrote, never on the exit code alone (spec 1163, #1174). The variable goes before the command runs, so a gate inside a
@@ -257,14 +260,15 @@ gate_cpu_read() {  # sets gate_cpu_s: `-` when no reading is possible
   rm -f "$f"
   case "$c" in ''|*[!0-9]*) ;; *) gate_cpu_s=$c;; esac
 }
-gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red> [<reused>]
-  local tree wall
+gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red> [<reused>] [<runner>] [<run id>]
+  local tree wall runner=${14:-${GATE_RUNNER:-local}} runid=${15:-${GATE_RUNNER_ID:--}}
+  case "$runner" in ci|local) ;; *) runner=local;; esac   # the two words the proof has; anything else is a local gate
   fin=${gate_fin:-$(date +%s)}   # the finish epoch the line carries, and the epoch the obligation's deadline counts from (note)
   tree=$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null); [ -n "$tree" ] || tree=-
   wall=$(( fin - ${4:-$fin} )); [ "$wall" -ge 0 ] || wall=0
   [ -z "${gate_wall:-}" ] || wall=$gate_wall   # a cancelled gate spends no wall, whatever second its two clocks fell in
   mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)" "$(gate_mode "$5" "$6" "${13:-no}")" "${tree:--}" "${gate_wait:--}" "$wall" "${gate_cpu_s:--}" "${13:-no}"
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)" "$(gate_mode "$5" "$6" "${13:-no}")" "${tree:--}" "${gate_wait:--}" "$wall" "${gate_cpu_s:--}" "${13:-no}" "$runner" "${runid:--}"
   append_line "$st/gate-history" "$line"
 }
 # A gate a green verdict already answers writes one line and runs nothing (#1856, #1798, ADR-0168): the same shape as a
@@ -279,6 +283,10 @@ case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
   --reuse)  # a cancelled gate whose verdict a green memo answers: one history line, no lock, no slots, no battery (ADR-0168)
     [ $# = 3 ] || { echo "usage: gate.sh --reuse <kind> <sha>" >&2; exit 2; }; gate_reuse "$2" "$3"; exit 0;;
+  --history)  # <kind> <result> <sha> <start> <selection> <scope> <outcome> <runner> <run id>: one history line, with no lock and
+              # no slots. A proof that must never take the gate lock records its gate with it, through the one writer (#1927).
+    [ $# = 10 ] || { echo "usage: gate.sh --history <kind> <result> <sha> <start> <selection> <scope> <outcome> <runner> <run id>" >&2; exit 2; }
+    gate_history "$2" "$3" "$4" "$5" "$6" "$7" "$8" - - - - - no "$9" "${10}"; exit 0;;
   --inner)  # inside the lock: take the slots, then run the gate. The take is one try, never a wait: a gate that cannot take its
             # slots exits 73 at once with none, and serial.sh releases the lock on that exit, so it holds neither resource while
             # it waits for the other. Every later exit path runs the EXIT trap and gives the slots back.

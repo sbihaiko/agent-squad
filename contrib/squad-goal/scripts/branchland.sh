@@ -86,8 +86,7 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc red base gaid
       printf '%s\n' "$lcout" | head -5
       say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; fi
     if [ -s "$SG_STATE/auto/kept-$rbk" ]; then rbref=$(head -1 "$SG_STATE/auto/kept-$rbk")
-      printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on %s, resolve the conflict in each file, keep the work, and push.\n' \
-        "$land" "$files" "$rbref" > "$SG_STATE/review-$rbk.md"; printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"; rm -f "$SG_STATE/review-$rbk.base"; fi
+      python3 "$here/revformat.py" --round-review "$land" "$rbref" "$files" > "$SG_STATE/review-$rbk.md"; printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"; rm -f "$SG_STATE/review-$rbk.base"; fi
     say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; }
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.
@@ -219,6 +218,17 @@ kept_landed() { local br=$1 sha=$2 ref full
   full=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-kept/$land^{commit}") || return 1
   /usr/bin/git -C "$SG_CHECKOUT" merge-base --is-ancestor "$sha" "$full" 2>/dev/null; }
 
+# round_empty <branch> <tip> (#1960): 0 when a kept landing round ended with no pushed head. The tip is the head the round started
+# from, a fix run was dispatched for it (auto/branchfix-<key>-<sha9>), and its push marker is gone, so the push back is done. The
+# remote tip is read after the marker: a push that landed before the marker went is seen, and the round is not read as empty.
+round_empty() { local k run
+  case "$1" in fix/*-land-*) ;; *) return 1;; esac
+  k=$(printf '%s' "$1" | tr / _)
+  [ -s "$SG_STATE/auto/kept-$k" ] && /usr/bin/grep -q '^round ' "$SG_STATE/auto/kept-$k" || return 1
+  [ "$(cat "$SG_STATE/landround-$k.head" 2>/dev/null)" = "$2" ] || return 1
+  run=$(cat "$A/branchfix-$k-${2:0:9}" 2>/dev/null); [ -n "$run" ] && [ ! -e "$A/branchfix-push-$run" ] || return 1
+  [ "$(/usr/bin/git ls-remote "$remote" "refs/heads/$1" 2>/dev/null | awk '{print $1}')" = "$2" ] && printf '%s\n' "$run"; }
+
 while read -r sha br i; do
   [ -n "$br" ] || continue
   case "$br" in fix/*-land-*)
@@ -243,7 +253,11 @@ while read -r sha br i; do
   [ "$cls" = malformed ] && cls=$(python3 "$here/revformat.py" --classify "$rk.md" "$rk.sha" "$sha" --fix-round 2>/dev/null)
   case "$cls" in
     approves) ;;
-    changes) say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes: $(head -1 "$rk.md")"; continue;;
+    changes)
+      # (#1960) A kept round that pushed nothing has no other bound: wave.sh requeues its issues and removes the marker.
+      if [ -x "$here/wave.sh" ] && rrun=$(round_empty "$br" "$sha"); then
+        bash "$here/wave.sh" landempty "$br" "fix run $rrun ended and $br is still at ${sha:0:9}" 2>&1; continue; fi
+      say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes: $(head -1 "$rk.md")"; continue;;
     stale) say wait "$br" "$sha" noreview "no review of ${sha:0:9} yet"; continue;;
     *) # malformed holds its own branch and names the shape. The marker carries the file's content, and the pass classifies
        # afresh every time, so a corrected file at the same tip lands on the next pass -- the hold is never permanent.

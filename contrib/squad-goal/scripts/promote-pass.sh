@@ -245,6 +245,42 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     done
     echo "$v"
   }
+  # #1927 (spec 1782): the proof of the tip is hybrid. ghread.py's reader answers the CI half of the tip sha directly
+  # (#1926); on a pass the tip gate runs only its local half -- the shell suites of the scripts the tip changes, and every
+  # test a Linux runner deselects -- through tip-gate.sh, and the promotion carries on that green beside the reader's pass.
+  # Any other verdict runs today's path below whole, and SG_PROOF_RUNNER=local restores it without a read. Delivery
+  # outranks the proof (ADR-0164): a local half the bound ended is unproven and never holds the tip; only a measured red is
+  # a hold. The half's own history line names runner=ci and the CI run id (gate.sh), so the record says what proved the tip.
+  half=$(SG_STATE="$state" bash "$d/tip-gate.sh" --choose "$tip" 2>/dev/null)
+  case "$half" in
+    "ci "*)
+      rid=${half#ci }; rid=${rid:--}
+      stood_down "read before the local half"
+      hout=$state/tip-gate-half-$(printf '%s' "$tip" | cut -c1-12).log
+      (cd "$tree" && GATE_DEADLINE_EPOCH=$due SG_TIP_GATE_BASE="origin/$stg" bash "$d/tip-gate.sh" --local-half "$tip" "$rid") > "$hout" 2>&1; hrc=$?
+      [ "$hrc" = 1 ] && { kill "$mon" 2>/dev/null; mark "$tip" "not promoted: the local half of the tip gate failed ($hout)"; exit 1; }
+      if [ "$hrc" = 0 ]; then
+        kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+        if [ "$ci_tiered" = 1 ]; then
+          ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
+          fast_record "$tip"; proof_word=fast; carried="the CI fast tier and the tip gate's local half carried the pass"
+          echo "$(date -u +%FT%TZ) promote-pass: $tip CI fast tier green, local half green: $ci_jobs" >> "$log"
+        else
+          bash "$d/gate.sh" --status full pass "$tip"
+          ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
+          echo "$(date -u +%FT%TZ) promote-pass: $tip CI checks green, local half green: $ci_jobs" >> "$log"
+          why=$(full_status "$tip" "$(full_status_desc "$full_prefix" "${ci_names[@]}")") || { mark "$tip" "not promoted: $why"; exit 1; }
+          proof_word=ci; carried="the CI checks and the tip gate's local half carried the pass"
+        fi
+        o=$(SG_PROMOTE_PROOF=$proof_word bash "$d/promote-stg.sh" 2>&1); rc=$?
+        etip=$(printf '%s\n' "$o" | sed -n 's/^promote-stg: tip //p' | tail -n 1); etip=${etip:-$tip}
+        [ $rc = 75 ] && { echo "$(date -u +%FT%TZ) promote-pass: $etip waiting for CI: the check has not reported on it yet" >> "$log"; echo "promote-pass: $etip waiting for CI"; exit 0; }
+        [ $rc = 73 ] && { refused "$tip" "not proven: the gate cap is full, retried later"; exit 0; }
+        [ $rc = 0 ] || { mark "$etip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+        mark "$etip" "promoted: $carried"; exit 0
+      fi
+      refused "$tip" "not proven yet: the local half of the tip gate did not finish, so the CI checks answer as before";;
+  esac
   v=$(ci_verdict "$tip")
   case "$v" in
     pass)

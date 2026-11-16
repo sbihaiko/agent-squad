@@ -678,6 +678,22 @@ def render(answer):
     return "\n".join(lines) + "\n"
 
 
+def round_review(onto, ref, files):
+    """The loop's own CHANGES review that asks one rebase round (#1960): the one writer for wave.sh and branchland.sh.
+
+    `onto` is the branch the rebase conflicted with, `ref` the ref the round rebases on, `files` the conflicting paths
+    (blank or unreadable: none named). It is rendered as any answer is, so the landing pass classifies it as
+    changes. Its repro (ADR-0172) is a trial merge of the head with `ref`: it exits non-zero while they conflict.
+    """
+    paths = [p for p in files.split() if p != "(unreadable)"]
+    item = {"location": "whole branch",   # a bare file name (Makefile, g) is no location the shape reads, so the paths go in the defect
+            "defect": f"the rebase on {onto} conflicts in {', '.join(paths) if paths else 'no path named by git'}",
+            "failure": f"the branch cannot land on {onto} until each conflicting file is resolved",
+            "fix": f"Rebase this branch on {ref}, resolve the conflict in each file, keep the work, and push.",
+            REPRO: f"git merge-tree --write-tree HEAD {ref} >/dev/null"}
+    return render({"verdict": "CHANGES", "blocking": [item], "debt": [], "resolved": []})
+
+
 def answer_review(text, keep=None, plan=False):
     """The review of a model answer. A JSON answer is parsed and rendered, and its raw JSON is written to `keep`; a
     markdown answer is normalized as before. Raises ValueError for a JSON answer off the schema. `plan` is a plan
@@ -725,7 +741,13 @@ def main(argv=None):
                    help="print the failed rounds in a row for that marker set (0 when the findings changed)")
     p.add_argument("--record-stall", nargs=5, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT", "ROUNDS"),
                    help="keep this round's findings and count for the next pass")
+    p.add_argument("--round-review", nargs=3, metavar=("ONTO", "REF", "FILES"),
+                   help="print the loop's CHANGES review that asks one rebase round on REF after a conflict with ONTO in"
+                   " FILES (#1960): the one writer of that review")
     a = p.parse_args(argv)
+    if a.round_review:
+        print(round_review(*a.round_review), end="")
+        return 0
     if a.stall:
         print(stall_rounds(*a.stall))
         return 0

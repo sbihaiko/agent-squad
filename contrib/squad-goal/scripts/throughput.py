@@ -93,8 +93,10 @@ def child_reviews(state):
 
 def gate_mode(f):
     """The entry mode of one split gate-history row (#1798), '' for a row from before it. The mode ends a 17-field row; a row
-    that carries the queue fields (#1856) ends with its reuse word, five fields after the mode. A reason may hold a tab, so
-    the mode is found from the row's end."""
+    that carries the queue fields (#1856) ends with its reuse word, five fields after the mode, and a row that carries the
+    runner fields (#1927) ends with its CI run id, two fields after that. A reason may hold a tab, so the mode is found
+    from the row's end."""
+    if len(f) >= 24 and f[-2] in ("ci", "local") and f[-3] in ("yes", "no") and f[-8] in ("gated", "reused", "skipped"): return f[-8]
     if len(f) >= 22 and f[-1] in ("yes", "no") and f[-6] in ("gated", "reused", "skipped"): return f[-6]
     if len(f) >= 17 and f[-1] in ("gated", "reused", "skipped"): return f[-1]
     return ""
