@@ -43,6 +43,14 @@ def test_gating_sits_between_code_complete_and_closed_with_its_fact_and_actor(co
     assert by["Gating"]["actor"] == "The gate" and not by["Gating"]["terminal"]
 
 
+def test_the_definition_names_the_priority_field_with_four_coloured_options(columns):
+    definition = json.loads((SCRIPTS / "board-definition.json").read_text())
+
+    assert definition["priorityField"] == "Priority"
+    assert [(p["name"], p["color"]) for p in definition["priorities"]] == [
+        ("urgent", "RED"), ("high", "ORANGE"), ("normal", "YELLOW"), ("low", "BLUE")]
+
+
 def test_gating_takes_a_colour_no_other_status_uses(columns):
     statuses = json.loads((SCRIPTS / "board-definition.json").read_text())["statuses"]
     colours = [s["color"] for s in statuses]
