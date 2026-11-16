@@ -133,7 +133,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_quality_reading.py", "tests/test_quickstart_tailnet.py", "tests/test_record.py", "tests/test_retired_profile.py", "tests/test_review_parallel.py",
         "tests/test_run_monitor.py", "tests/test_salvage_note.py", "tests/test_sandbox.py", "tests/test_session_send.py", "tests/test_skillpath.py",
         "tests/test_suite_state_isolation.py", "tests/test_testselect.py", "tests/test_to_test_scenario_migrate.py", "tests/test_to_test_scenario_records_bugs.py", "tests/test_to_test_scenario_title_emoji.py",
-        "tests/test_wave_review.py", "tests/test_web_hue.py", "tests/test_gh_fast_tier.py",
+        "tests/test_wave_review.py", "tests/test_web_hue.py", "tests/test_gh_fast_tier.py", "tests/test_macos_probe_workflow.py",
     ),
 )
 
