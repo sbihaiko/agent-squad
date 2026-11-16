@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import anyio
 
 from squad import actions, gates, git, limits, node_commit, session
+from squad import verdict as V
 from squad.adapter import CallRequest, new_session_id
 from squad.caps import CeilingWaitExpired
 from squad.engine_errors import Frontier
@@ -175,7 +176,7 @@ class Children:
         e = self.e
         d = e.dispatch.children[name]["definition"]
         path = self.workspace(name, d)
-        if (ctx.reviews is None or e.dry or done["outcome"] != "pass" or not ctx.node.get("review")
+        if (ctx.reviews is None or e.dry or not V.delivers(done["outcome"]) or not ctx.node.get("review")
                 or not e.dispatch.landable(name) or not path.exists() or e.dispatch.last_round(name) >= 1):
             return
         e.dispatch.pending[name] = {"event": anyio.Event(), "got": None}
