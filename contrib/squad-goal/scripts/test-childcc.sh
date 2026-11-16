@@ -740,4 +740,25 @@ export GH_NUMS="5950:Doing"; run nch 5950 n; wtree nch; echo wave/nch > "$T/st/a
 [ "$(/usr/bin/grep -c '^requeue 5950 ' "$WAVE_CALLS")" = 1 ] && /usr/bin/grep -q '^requeue 5950 .*the child made no change.*the fix already exists' "$WAVE_CALLS" && ok "a no-change child is requeued once with the reason" || ko "no-change requeue: $(cat "$WAVE_CALLS")"
 ! /usr/bin/grep -q '^enter nch' "$WAVE_CALLS" && [ "$rc" != 3 ] && ok "a no-change child enters nothing and holds no wave" || ko "no-change: exit $rc, waves $(cat "$WAVE_CALLS")"
 
+# A child whose own gate ended unproven is a finished child all the same (ADR-0164): the work is done and the proof could not
+# finish, so its commits enter its wave, and the entry is the place that records the obligation the tree still owes. A child
+# whose gate ended `fail` measured a red, and a measured red never enters: it is no finished child here (#1997).
+unprun() { # name issue outcome: a finished run whose one child ended `outcome`, with its run's approval at the child's head
+  local n=$1 i=$2 o=$3 h k; wtree "$n"; h=$(/usr/bin/git -C "$T/co/runs/$n/ws/target-c" rev-parse HEAD)
+  { echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
+    echo '{"event": "outcome", "node": "c", "outcome": "'$o'", "reasons": ["unproven:c"]}'
+    echo '{"event": "review_round", "node": "c", "round": 1, "head": "'$h'", "verdict": "approve", "offered": false, "review": {"verdict": "approve", "findings": "x"}}'
+    echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "review", "review": {"verdict": "approve", "findings": "x"}}}'
+    echo '{"event": "verdict"}'; } > "$T/co/runs/$n/record.jsonl"
+  echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"
+  k=$(/usr/bin/git -C "$T/co/runs/$n/ws/target-c" symbolic-ref --quiet --short HEAD | tr / _)
+  printf '**VERDICT: APPROVE**\n' > "$T/st/review-$k.md"; echo "wave/$n" > "$T/st/review-$k.base"; echo "$h" > "$T/st/review-$k.sha"; }
+export GH_NUMS="5110:Doing 5111:Doing"
+unprun unp 5110 unproven; : > "$WAVE_CALLS"; rm -f "$T/moves"; out=$(lpass unp); rc=$?
+[ "$(ent unp 5110)" = 1 ] && [ -e "$T/st/auto/cc-unp-c" ] && ok "a child whose gate ended unproven enters its wave" || ko "unproven child not entered: exit $rc, waves '$(cat "$WAVE_CALLS")', out $out"
+/usr/bin/grep -q 'WAVE x entered (#5110)' <<<"$out" && ok "the wave admits the unproven child, so its entry stands" || ko "unproven child's entry did not stand: out $out"
+unprun flr 5111 fail; : > "$WAVE_CALLS"; rm -f "$T/moves"; out=$(lpass flr); rc=$?
+[ "$(ent flr 5111)" = 0 ] && [ ! -e "$T/st/auto/cc-flr-c" ] && ok "a child whose gate ended fail never enters its wave" || ko "failed child entered: waves '$(cat "$WAVE_CALLS")', out $out"
+/usr/bin/grep -q ' 5111$' "$T/moves" 2>/dev/null && ko "a failed child moved to Code Complete" || ok "a failed child moves no card"
+
 rm -rf "$T"; exit $fail
