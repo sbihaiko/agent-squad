@@ -133,12 +133,30 @@ def test_a_refused_read_is_unproven_and_names_no_run():
     assert (refused.verdict, refused.run_id) == ("unproven", None)
 
 
-def test_the_reader_asks_one_check_runs_route_for_the_sha():
-    seen: list[str] = []
+def test_a_failed_check_names_its_own_run_when_the_checks_span_runs():
+    out = fast_tier(
+        check_run("ruff", "success", check_id=1, run_id=100),
+        check_run("mypy", "success", check_id=2, run_id=100),
+        check_run("fast-battery", "failure", check_id=3, run_id=999),
+    )
+    assert (out.verdict, out.run_id) == ("fail", 999)
 
-    def transport(route: str) -> ghread.Transport:
-        seen.append(route)
+
+def test_a_pass_whose_checks_span_runs_names_no_run():
+    out = fast_tier(
+        check_run("ruff", "success", check_id=1, run_id=100),
+        check_run("mypy", "success", check_id=2, run_id=100),
+        check_run("fast-battery", "success", check_id=3, run_id=101),
+    )
+    assert (out.verdict, out.run_id) == ("pass", None)
+
+
+def test_the_reader_asks_one_check_runs_route_for_the_sha_with_a_get():
+    seen: list[list[str]] = []
+
+    def transport(argv: list[str]) -> ghread.Transport:
+        seen.append(argv)
         return answer()
 
     ghread.fast_tier_verdict(SHA, transport=transport)
-    assert seen == [ROUTE]
+    assert seen == [["--method", "GET", ROUTE]]

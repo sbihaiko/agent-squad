@@ -400,32 +400,48 @@ class FastTier:
     run_id: int | None
 
 
+RestFn = Callable[[list[str]], Transport]
+
+
 def _run_id(check: dict[str, Any]) -> int | None:
     match = _RUN_URL.search(str(check.get("details_url") or ""))
     return int(match[1]) if match else None
 
 
-def fast_tier_verdict(sha: str, transport: TransportFn | None = None) -> FastTier:
+def _shared_run_id(checks: list[dict[str, Any]]) -> int | None:
+    ids = {_run_id(check) for check in checks}
+    return ids.pop() if len(ids) == 1 else None
+
+
+def _gh_rest_get(argv: list[str]) -> Transport:
+    p = subprocess.run(["gh", "api", *argv], capture_output=True, text=True, check=False)
+    return Transport(rc=p.returncode, body=p.stdout, detail=(p.stderr or "").strip())
+
+
+def _rest_get(route: str, transport: RestFn | None) -> dict[str, Any] | None:
+    kind, value, *_ = _verdict((transport or _gh_rest_get)(["--method", "GET", route]), ANSWER)
+    return value if kind == ANSWER and isinstance(value, dict) else None
+
+
+def fast_tier_verdict(sha: str, transport: RestFn | None = None) -> FastTier:
     """The fast-tier verdict of one sha from its check runs, and the Actions run that carries them."""
-    out = read(f"repos/sbihaiko/agent-squad/commits/{sha}/check-runs?per_page=100", transport)
-    if not out.is_answer or not isinstance(out.answer, dict):
+    answer = _rest_get(f"repos/sbihaiko/agent-squad/commits/{sha}/check-runs?per_page=100", transport)
+    if answer is None:
         return FastTier("unproven", None)
     latest: dict[str, dict[str, Any]] = {}
-    for check in out.answer.get("check_runs") or []:
+    for check in answer.get("check_runs") or []:
         if not isinstance(check, dict) or check.get("name") not in FAST_TIER_CHECKS:
             continue
         # A re-run is a newer check run of the same name, and it replaces the failed one it re-ran.
         kept = latest.get(check["name"])
         if kept is None or check.get("id", 0) > kept.get("id", 0):
             latest[check["name"]] = check
-    concluded = [latest.get(name, {}).get("conclusion") for name in FAST_TIER_CHECKS]
-    run_ids = [i for i in map(_run_id, latest.values()) if i is not None]
-    run_id = run_ids[0] if run_ids else None
-    if "failure" in concluded:
-        return FastTier("fail", run_id)
-    if all(conclusion == "success" for conclusion in concluded):
-        return FastTier("pass", run_id)
-    return FastTier("unproven", run_id)
+    failed = [name for name in FAST_TIER_CHECKS if latest.get(name, {}).get("conclusion") == "failure"]
+    if failed:
+        return FastTier("fail", _run_id(latest[failed[0]]))
+    passed = all(latest.get(name, {}).get("conclusion") == "success" for name in FAST_TIER_CHECKS)
+    run_id = _shared_run_id([latest[name] for name in FAST_TIER_CHECKS if name in latest])
+    return FastTier("pass" if passed else "unproven", run_id)
 
 
 def _pull(node: Any) -> dict[str, Any]:
