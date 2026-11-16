@@ -844,6 +844,17 @@ r=$(CLOSED_CARDS=1299 run)
 [ "$(marked 351)" = 1 ] && [ "$(marked 1299)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 1 ] && ok "C: a free slot dispatches the open issue and never the closed one" || ko "C: marks 351=$(marked 351) 1299=$(marked 1299), launches $(lines "$LAUNCHLOG"): '$r'"
 case "$r" in *"#1299"*) ko "C: the pass names the closed #1299: '$r'";; *) ok "C: the dispatching pass never names the closed issue";; esac
 
+# B (#1995): the recorded write decides a Todo card. A board read can answer Todo for a card the owner moved away a moment
+#   ago, and the transitions record holds the write that came after the read. A card whose last recorded write is Backlog is
+#   no Todo signal and is never dispatched; one whose last recorded write is Todo is.
+scene backlogwritten
+issues '[{"number":1757,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":1758,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+printf '%s\n' '{"issue":1757,"item":305036002,"from":"Todo","to":"Doing","by":"loop","pass":"frontier","reason":null,"at":"2026-11-16T09:00:00Z","repo":"o/r"}' '{"issue":1757,"item":305036002,"from":"Doing","to":"Backlog","by":"owner","pass":null,"reason":null,"at":"2026-11-16T09:02:32Z","repo":"o/r"}' > "$SG_STATE/board-transitions.o_r.jsonl"
+printf '%s\n' '{"issue":1758,"item":305036003,"from":"Backlog","to":"Todo","by":"owner","pass":"hand","reason":null,"at":"2026-11-16T09:03:04Z","repo":"o/r"}' >> "$SG_STATE/board-transitions.o_r.jsonl"
+r=$(run)
+[ "$(marked 1757)" = 0 ] && ok "B: a card whose last recorded write is Backlog is never dispatched" || ko "B: #1757 dispatched on a stale Todo read: '$r'"
+[ "$(marked 1758)" = 1 ] && ok "B: a card whose last recorded write is Todo is dispatched" || ko "B: #1758 not dispatched after its recorded Todo write: '$r'"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
