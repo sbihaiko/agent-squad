@@ -1306,7 +1306,7 @@ def _queue_parts(q):
 
 NIGHTLY_MODES = ("pass", "fail")
 NIGHTLY_FAILED = re.compile(r"fail(?::signal-\d+)?")   # a red leg, naming the signal that also stopped it (#1183)
-NIGHTLY_BOUNDED = re.compile(r"bounded:(?:signal|exit)-\d+")   # a leg that ended without naming a failing test (#1183)
+NIGHTLY_BOUNDED = re.compile(r"bounded:(?:(?:signal|exit)-\d+|window)")   # window: an hour that closed with no run (#1975)   # a leg that ended without naming a failing test (#1183)
 
 def _nightly_mode(v):
     """A nightly record's mode field: `pass`, `fail`, `fail:signal-<n>` for a red leg a signal also stopped, or
@@ -1327,6 +1327,17 @@ def _nightly_fold(parallel, serial):
     if parallel == "pass" and serial == "pass": return "pass"
     return "bounded"
 
+def _nightly_shown(n):
+    """The result the line shows, and the GitHub half's tooltip phrase (#1975, ADR-0153 rule 1d). The line reads the one
+    verdict, never the local record alone, and the tooltip names a GitHub half that did not pass: a local red is fail; a GitHub red at the record's sha is fail; a local pass is
+    pass only when the verdict at the record's sha is pass, and unproven otherwise; a bounded local half stays bounded."""
+    v = n.get("verdict")
+    same = isinstance(v, dict) and v.get("sha") == n["sha"]
+    gh = f"github {v.get('github')}" if same and v.get("github") != "pass" else ""   # a green GitHub half adds no words
+    if n["result"] == "fail" or (same and v.get("result") == "fail"): return "fail", gh
+    if n["result"] == "pass": return ("pass" if same and v.get("result") == "pass" else "unproven"), gh
+    return n["result"], gh
+
 def _nightly_parts(n, now):
     """`nightly pass 6h ago`: the last full suite in both modes (nightly.sh, #704), its result and its age. A pass reads in
     the ok tone, a bounded attempt in the warn tone -- the suite never finished, so the tip is unproven, never red (#1183,
@@ -1344,10 +1355,12 @@ def _nightly_parts(n, now):
         and isinstance(n.get("ids"), list) and n["result"] == _nightly_fold(n["parallel"], n["serial"]) \
         and (n["result"] != "bounded" or not n["ids"])
     if not ok: return [{"text": "nightly ?", "tone": FOOT_NEUTRAL}]
-    text = f"nightly {n['result']} {_age(max(now - n['ts'], 0.0))} ago"
+    shown, gh = _nightly_shown(n)
+    text = f"nightly {shown} {_age(max(now - n['ts'], 0.0))} ago"
     tip = [f"parallel {n['parallel']} · serial {n['serial']} · ran at {str(n['sha'])[:7]}"]
+    if gh: tip.append(gh)
     ids = [str(x) for x in n["ids"] if x]
-    part = {"text": text, "tone": {"pass": "ok", "bounded": "warn"}.get(n["result"], "err")}
+    part = {"text": text, "tone": {"pass": "ok", "bounded": "warn", "unproven": "warn"}.get(shown, "err")}
     if ids:
         tip.append(f"{len(ids)} failed: " + ", ".join(ids))
         part["detail"] = ids
@@ -2045,7 +2058,18 @@ def _nightly_status():
     except (TypeError, ValueError): return None
     if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids): return None
     if f[1] == "bounded" and ids: return None
-    return {"result": f[1], "sha": f[2], "parallel": f[3], "serial": f[4], "ids": ids, "ts": float(f[0])}
+    out = {"result": f[1], "sha": f[2], "parallel": f[3], "serial": f[4], "ids": ids, "ts": float(f[0])}
+    if (STATE / "nightly-verdict").exists(): out["verdict"] = _nightly_verdict()
+    return out
+
+def _nightly_verdict():
+    """The one verdict nightly.sh writes in $SG_STATE/nightly-verdict (#1975, ADR-0153 rule 1d): `<epoch> TAB
+    <pass|fail|unproven> TAB <sha> TAB <local> TAB <github> TAB <github sha>`. None when it is not that one line."""
+    text = _read(STATE / "nightly-verdict")
+    if text.endswith("\n"): text = text[:-1]
+    f = text.split("\t")
+    if "\n" in text or len(f) != 6 or not f[0].isdigit() or f[1] not in ("pass", "fail", "unproven") or not f[2]: return None
+    return {"result": f[1], "sha": f[2], "local": f[3], "github": f[4], "github_sha": f[5]}
 
 def _newest_mtime(*paths):
     ts = []

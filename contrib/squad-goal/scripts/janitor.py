@@ -1838,11 +1838,13 @@ def spec_stall():   # #1962: a spec whose open tickets made no dev commit for a 
     items = [i for i in _items if isinstance(i.get("number"), int) and not i.get("pull_request")]
     commits = [(int(ts), subj) for ts, _, subj in (l.partition("\t") for l in out.splitlines()) if ts.isdigit()]
     created = {i["number"]: t for i in items if (t := stamp_epoch(i.get("created_at"))) is not None}
-    stuck = sp.stalled(sp.kids_of(items), {i["number"] for i in items}, sp.landed_of(commits), created, now, bound)
+    stuck = sp.stalled(sp.kids_of(items), {i["number"] for i in items}, sp.progress_of(commits), created, now, bound)
     if not stuck or dry: return
-    tickets = {t for ts in stuck.values() for t in ts}
     _, cols = cards(proj) if proj else (False, {})
     cols = {int(k): v for k, v in cols.items() if str(k).isdigit()}
+    stuck = sp.started_specs(stuck, cols)   # ADR-0142 clause 5: a spec the owner has not moved to Todo is no call for him (#2002)
+    if not stuck: return
+    tickets = {t for ts in stuck.values() for t in ts}
     holds = {t: holding(t) for t in tickets}
     standing = {int(k): "diverged" for k, bs in work_branches().items() if any(s == "diverged" for _, s in bs)}
     marker = {t for t in tickets if (st / "auto" / f"disp-{t}").exists()}

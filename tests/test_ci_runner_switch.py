@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -75,3 +76,32 @@ def test_the_ci_runner_switch_is_documented_beside_the_test_commands():
     text = INSTALL.read_text()
     assert "SQUAD_CI_RUNNER=1" in text
     assert text.index("SQUAD_CI_RUNNER=1") > text.index("pytest -n auto")
+
+
+
+def _ids(paths: tuple, extra: dict) -> tuple[set[str], str]:
+    """The node ids pytest collects from the files with the switches given and both nightly switches otherwise off."""
+    env = {k: v for k, v in os.environ.items() if k not in ("SQUAD_CI_RUNNER", "SQUAD_NIGHTLY_LOCAL_HALF")}
+    env.update(extra)
+    r = subprocess.run([sys.executable, "-m", "pytest", *map(str, paths), "--collect-only"],
+                       cwd=ROOT, env=env, capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    assert r.returncode in (0, 5), out
+    return {line.strip() for line in r.stdout.splitlines() if "::" in line and not line.startswith("deselected:")}, out
+
+
+@pytest.mark.heavy
+def test_the_local_half_switch_keeps_only_what_a_linux_runner_deselects():
+    """Guard for the nightly's local half (#1975, ADR-0153, ADR-0139): `SQUAD_NIGHTLY_LOCAL_HALF=1` keeps only the tests
+    that a Linux runner deselects by marker, read from the conftest's one deselection rule, never from a second list.
+
+    The node-bound overlay tests stay where node runs, and the unmarked tests of this file are left to the GitHub half.
+    """
+    paths = (OVERLAY, Path(__file__))
+    every, _ = _ids(paths, {})
+    linux_runs, _ = _ids(paths, {"SQUAD_CI_RUNNER": "1"})
+    local, out = _ids(paths, {"SQUAD_NIGHTLY_LOCAL_HALF": "1"})
+    assert linux_runs and linux_runs < every, "a Linux runner deselects none of these tests, so the case proves nothing"
+    assert not (local & linux_runs), f"the local half kept a test the Linux runner runs: {sorted(local & linux_runs)[:3]}"
+    if shutil.which("node"):
+        assert local == every - linux_runs, f"the local half is not what the Linux runner deselects: {out}"

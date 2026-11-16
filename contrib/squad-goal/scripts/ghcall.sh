@@ -164,7 +164,7 @@ gh_land_stop() {
 # or `bounded:<signal|exit>-<n>` for a leg that ended without naming a failing test (#1183). Anything else is a value the
 # loop cannot trust.
 sg_nightly_mode() {
-  case "$1" in pass|fail) return 0;; esac
+  case "$1" in pass|fail|bounded:window) return 0;; esac   # bounded:window: an hour that closed with no run (ADR-0153 rule 1b)
   case "$1" in fail:signal-[0-9]*|bounded:signal-[0-9]*|bounded:exit-[0-9]*) ;; *) return 1;; esac
   case "${1##*-}" in ''|*[!0-9]*) return 1;; esac   # the number after signal- or exit-, and nothing else
   return 0
@@ -249,6 +249,19 @@ gh_dispatch_hold() {
   # The promotion proof reserves the machine it measures (#739): promote-pass.sh writes $SG_STATE/promote-reserve while it
   # holds the gate lock, and it removes the file on exit, INT and TERM. A marker older than the lock's own bound is a proof
   # that died, and it never holds, by the same rule as the other guards here.
+  # (#1975, ADR-0153) The nightly owns the machine in its hour: no run starts from the hour's start until the nightly has run
+  # that day, and none starts while it runs. The hold ends with the hour, so a nightly that never finishes releases dispatch.
+  local nhour=${SG_NIGHTLY_HOUR:-04} np nwhy=
+  if [ -z "${SG_NIGHTLY_OFF:-}" ] && [ $((10#$(TZ=America/Sao_Paulo date +%H))) -eq $((10#$nhour)) ]; then
+    np=$(cat "$SG_STATE/locks/nightly/pid" 2>/dev/null)
+    if [ -n "$np" ] && kill -0 "$np" 2>/dev/null; then nwhy="the nightly runs (pid $np)"
+    elif [ ! -e "$SG_STATE/auto/nightly-$(date +%F)" ]; then nwhy="the nightly window is open"; fi
+  fi
+  if [ -n "$nwhy" ]; then
+    line="$(date -u '+%F %T') DISPATCH HOLD: $nwhy; no new run this pass"
+    printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+    return 0
+  fi
   if [ -r "$SG_STATE/promote-reserve" ]; then
     read -r ts _ < "$SG_STATE/promote-reserve" 2>/dev/null
     case "$ts" in
@@ -280,6 +293,21 @@ gh_dispatch_hold() {
       line="$(date -u '+%F %T') DISPATCH HOLD: a red proof obligation at ${osha:0:12} (${ochecks:-no check named}, run ${orun:--}) measured a defect; no new run at that tree"
       printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; return 0
     done <<< "$o"
+  fi
+  # (ADR-0153 rule 1d) A red of the nightly's GitHub half is a red like a local one: a report, never a hold. One note names
+  # the sha the GitHub half tested, once per verdict, and the pass goes on. A local red says its own note below.
+  if [ -r "$SG_STATE/nightly-verdict" ]; then
+    local vres vloc vgh vgsha
+    IFS=$'\t' read -r _ vres _ vloc vgh vgsha < "$SG_STATE/nightly-verdict" 2>/dev/null
+    if [ "$vres" = fail ] && [ "$vgh" = fail ] && [ "$vloc" != fail ]; then
+      seen="$SG_STATE/nightly-gh-red-noted"
+      if [ "$(cat -- "$seen" 2>/dev/null)" != "$vgsha" ]; then
+        if printf '%s\n' "$vgsha" > "$seen.$$" 2>/dev/null; then mv -f "$seen.$$" "$seen" 2>/dev/null || rm -f "$seen.$$"; fi
+        line="$(date -u '+%F %T') DISPATCH NOTE: the nightly GitHub half is red at ${vgsha:0:7}; the pass goes on, and the promotion still needs its proof"
+        printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+        return 1
+      fi
+    fi
   fi
   nids=$(sg_nightly_state "$SG_STATE/nightly-result"); nrc=$?
   if [ "$nrc" = 2 ]; then

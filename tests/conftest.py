@@ -348,30 +348,70 @@ def pytest_collection_modifyitems(config, items):
                 it.add_marker(skip)
     # A test whose fixture is a repository this runner does not own is deselected, never skipped: a skip would read green
     # while proving nothing (ADR-0018 item 6; ADR-0062 items 2 and 3 refuse a skip). The deselection is reported by name.
+    # The nightly's local half (ADR-0153) keeps only what a Linux runner deselects, read from the same rule.
+    if os.environ.get(LOCAL_HALF_SWITCH) == "1":
+        _keep_linux_deselected(config, items)
+    for marker_name, reason in absent_markers(items):
+        _deselect_absent(config, items, marker_name, reason)
+
+
+LOCAL_HALF_SWITCH = "SQUAD_NIGHTLY_LOCAL_HALF"
+
+
+def absent_markers(items):
+    """(marker, reason) for each fixture this runner lacks: the one rule of what a runner deselects (ADR-0139).
+
+    A MesenAI checkout, node, sandbox-exec (or a session outside the signal wall), the process table, a C compiler and macOS
+    each have a marker. A hosted session's SDK and the real claude CLI are read only when a collected test needs them, since
+    each read starts a process."""
+    rows = []
     if not host_present():
-        _deselect_absent(config, items, HOST_BOUND_MARKER, HOST_ABSENT_REASON)
-    # The same rule for node: a runner without the binary deselects the test that runs the page under it (ADR-0139).
+        rows.append((HOST_BOUND_MARKER, HOST_ABSENT_REASON))
     if not node_present():
-        _deselect_absent(config, items, NODE_BOUND_MARKER, NODE_ABSENT_REASON)
+        rows.append((NODE_BOUND_MARKER, NODE_ABSENT_REASON))
     if not sandbox_present():
-        _deselect_absent(config, items, SANDBOX_BOUND_MARKER, SANDBOX_ABSENT_REASON)
+        rows.append((SANDBOX_BOUND_MARKER, SANDBOX_ABSENT_REASON))
     elif inside_signal_wall():
-        _deselect_absent(config, items, SANDBOX_BOUND_MARKER, SANDBOX_WALL_REASON)
+        rows.append((SANDBOX_BOUND_MARKER, SANDBOX_WALL_REASON))
     # A nested sandbox may deny the setuid process table binary; a test that starts or observes a live process then fails by
     # construction, so it is deselected by name, never skipped (ADR-0139).
     if not process_table_present():
-        _deselect_absent(config, items, PROCESS_BOUND_MARKER, PROCESS_ABSENT_REASON)
+        rows.append((PROCESS_BOUND_MARKER, PROCESS_ABSENT_REASON))
     # The compiled process reader (#1511) is built on macOS only, and only with a C compiler.
     if not cc_present():
-        _deselect_absent(config, items, CC_BOUND_MARKER, CC_ABSENT_REASON)
+        rows.append((CC_BOUND_MARKER, CC_ABSENT_REASON))
     # A loop script suite assumes the macOS userland; a Linux runner deselects it by name.
     if not macos_present():
-        _deselect_absent(config, items, MACOS_BOUND_MARKER, MACOS_ABSENT_REASON)
+        rows.append((MACOS_BOUND_MARKER, MACOS_ABSENT_REASON))
     # A hosted session needs the SDK in its interpreter; a runner installed without the `sdk` extra refuses the start.
     if any(it.get_closest_marker(SDK_BOUND_MARKER) for it in items) and not sdk_present():
-        _deselect_absent(config, items, SDK_BOUND_MARKER, SDK_ABSENT_REASON)
+        rows.append((SDK_BOUND_MARKER, SDK_ABSENT_REASON))
     if any(it.get_closest_marker(CLAUDE_BOUND_MARKER) for it in items) and not claude_present():
-        _deselect_absent(config, items, CLAUDE_BOUND_MARKER, CLAUDE_ABSENT_REASON)
+        rows.append((CLAUDE_BOUND_MARKER, CLAUDE_ABSENT_REASON))
+    return rows
+
+
+def linux_runner_markers(items):
+    """The markers a Linux CI runner deselects: `absent_markers` read with the CI runner switch on, never a second list."""
+    saved = os.environ.get(CI_RUNNER_SWITCH)
+    os.environ[CI_RUNNER_SWITCH] = "1"
+    try:
+        return {name for name, _ in absent_markers(items)}
+    finally:
+        if saved is None:
+            os.environ.pop(CI_RUNNER_SWITCH, None)
+        else:
+            os.environ[CI_RUNNER_SWITCH] = saved
+
+
+def _keep_linux_deselected(config, items):
+    """The nightly's local half (ADR-0153): every test a Linux runner runs is the GitHub half's, so it is deselected here."""
+    linux = linux_runner_markers(items)
+    gone = [it for it in items if not any(it.get_closest_marker(m) for m in linux)]
+    if not gone:
+        return
+    config.hook.pytest_deselected(items=gone)
+    items[:] = [it for it in items if any(it.get_closest_marker(m) for m in linux)]
 
 
 def _deselect_absent(config, items, marker_name, absent_reason):

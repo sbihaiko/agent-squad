@@ -9,6 +9,12 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(dirname "$0"); src=${1:-$d/nightly.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; fail=0
 mkdir -p "$S" "$ST"; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The clock reports the window hour from FAKE_HOUR (04 by default) and the minute and second in it from FAKE_MS (00:00 by
+# default), so a case runs in or out of the nightly's window, and far from its end, whatever the real time is. Every other
+# date read passes through.
+mkdir -p "$T/fakebin"
+printf '#!/bin/bash\ncase "$*" in *+%%H*) echo "${FAKE_HOUR:-04}";; *+%%M:%%S*) echo "${FAKE_MS:-00:00}";; *) exec /bin/date "$@";; esac\n' > "$T/fakebin/date"; chmod +x "$T/fakebin/date"
+export PATH="$T/fakebin:$PATH"
 G="git -c user.email=a@b -c user.name=t"
 cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/live-check.sh" "$S/" 2>/dev/null
 sq=$(cd "$d/../../.." && pwd)   # the repository the live check reads its module from
@@ -27,6 +33,7 @@ for m in parallel serial; do
   cat > "$T/$m.sh" <<EOF
 #!/bin/bash
 echo "$m \$PWD" >> "$T/ran.log"
+[ -n "\${SLEEP_$m:-}" ] && sleep "\${SLEEP_$m}"
 [ "\${KILL_$m:-}" = 1 ] && exit 143
 [ "\${KILLFAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\n1 failed, 10 passed in 1.00s\n'; exit 143; }
 [ "\${FAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\nFAILED tests/test_x.py::test_x[case with space] - boom\nFAILED tests/test_y.py::test_b - boom\n3 failed, 10 passed in 1.00s\n'; exit 1; }
@@ -36,7 +43,7 @@ EOF
   chmod +x "$T/$m.sh"; done
 printf '#!/bin/bash\necho "$*" >> "%s/notify.log"\n' "$T" > "$T/notify.sh"; chmod +x "$T/notify.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
-export T
+export T SG_GHREAD=false   # no case reads GitHub: the verdict cases name their own reader (#1975)
 # ng [VAR=val...]: one nightly run against the fixture, its own state, tree and remote
 ng() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_OWNER=o SG_PROJECT=4 BOARD="$T/board.sh" SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
   SG_NIGHTLY_PARALLEL="$T/parallel.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1; }
@@ -592,5 +599,179 @@ alive_pid "$p" && ok "the check is still alive, so the suite must end it" || ko 
 end_check
 i=0; while [ -n "$(ckpid)" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done
 [ -z "$(ckpid)" ] && ok "the suite ends the check it started by pid" || ko "the check the suite started is still alive: $(ckpid)"
+
+# 31) (#1975) The nightly runs only in its window: the profile's hour (SG_NIGHTLY_HOUR, 04 by default, America/Sao_Paulo).
+mark; rm -f "$T/ran.log"; out=$(ng FAKE_HOUR=05); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && case "$out" in *window*) true;; *) false;; esac \
+  && ok "the nightly never starts outside its window, and writes no day marker" \
+  || ko "the nightly started outside its window: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+mark; rm -f "$T/ran.log"; out=$(ng FAKE_HOUR=03); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && ok "the nightly never starts before its window" \
+  || ko "the nightly started before its window: rc $rc, '$out'"
+mark; rm -f "$T/ran.log"; out=$(ng FAKE_HOUR=05 SG_NIGHTLY_HOUR=05); rc=$?
+[ $rc = 0 ] && [ -e "$T/ran.log" ] && ok "the profile's hour moves the window" \
+  || ko "the nightly did not run in the profile's hour: rc $rc, '$out'"
+
+# 32) (#1975) A window that closes with no run leaves one bounded record, and the alert names the window.
+mark; rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-missed-$(date +%F)"; out=$(ng FAKE_HOUR=05); rc=$?; rec
+[ "$r_res" = bounded ] && grep -q 'window' "$ST/alerts.log" 2>/dev/null \
+  && ok "a window that closed with no run records one bounded attempt" \
+  || ko "a closed window recorded '$r_res' with alerts '$(cat "$ST/alerts.log" 2>/dev/null)': '$out'"
+mark; rm -f "$ST/nightly-result" "$ST/alerts.log"; out=$(ng FAKE_HOUR=03); rec
+[ -z "$r_res" ] && ok "a window not yet open records nothing" || ko "a window not yet open recorded '$r_res'"
+yday=$(date -v-1d +%F 2>/dev/null || date -d yesterday +%F)
+rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-$yday" "$ST/auto/nightly-missed-$yday"; out=$(ng FAKE_HOUR=00 SG_NIGHTLY_HOUR=23); rec
+[ "$r_res" = bounded ] && [ -e "$ST/auto/nightly-missed-$yday" ] && ok "a 23:00 window that closed at midnight with no run records one bounded attempt" \
+  || ko "a 23:00 window closed with no run recorded '$r_res': '$out'"
+rm -f "$ST/nightly-result" "$ST/alerts.log"
+
+# 33) (#1975) The dispatch stops in the window until the nightly ran that day, and while the nightly runs in it.
+mark; out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ok "the dispatch holds in the open window before the nightly ran";;
+  *) ko "the dispatch did not hold in the window: '$out'";; esac
+touch "$ST/auto/nightly-$(date +%F)"
+out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ko "the dispatch holds in the window after the nightly ran today: '$out'";;
+  *) ok "the window hold ends once the nightly ran that day";; esac
+mark; out=$(export FAKE_HOUR=05; hold)
+case "$out" in *"nightly window"*) ko "the dispatch holds outside the window: '$out'";;
+  *) ok "the dispatch does not hold outside the window";; esac
+mkdir -p "$ST/locks/nightly"; sleep 60 & np=$!; echo "$np" > "$ST/locks/nightly/pid"
+out=$(export FAKE_HOUR=04; hold)
+kill "$np" 2>/dev/null; wait "$np" 2>/dev/null; rm -rf "$ST/locks/nightly"
+case "$out" in *"the nightly runs"*) ok "the dispatch holds while the nightly runs in its window";;
+  *) ko "the dispatch did not hold while the nightly runs: '$out'";; esac
+
+# 34) (#1975) The local half runs only what a Linux runner deselects: both default mode commands carry the conftest's own
+#     switch, SQUAD_NIGHTLY_LOCAL_HALF=1, so the one deselection rule (tests/conftest.py, ADR-0139) picks the tests, never a list here.
+cat > "$T/py" <<EOF
+#!/bin/bash
+[ "\$1" = -c ] && exec python3 "\$@"
+echo "half=\${SQUAD_NIGHTLY_LOCAL_HALF:-} \$*" >> "$T/py.log"; printf '12 passed in 0.10s\n'
+EOF
+chmod +x "$T/py"
+mark; rm -f "$T/py.log"
+out=$(env SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" SG_GHREAD=false bash "$S/nightly.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -c '^half=1 -m pytest' "$T/py.log" 2>/dev/null)" = 2 ] \
+  && /usr/bin/grep -q 'half=1 -m pytest -p no:deepeval -n auto' "$T/py.log" && /usr/bin/grep -q 'half=1 -m pytest -p no:deepeval -p no:xdist' "$T/py.log" \
+  && ok "both default modes run the local half only" || ko "the default modes do not run the local half: rc $rc, '$(cat "$T/py.log" 2>/dev/null)', '$out'"
+end_check
+
+# 35) (#1975) One verdict: the nightly verdict combines the local record and the GitHub half, read through ghcall.sh. Fail in
+#     either half is fail, pass in both on the same dev sha is pass, and any other pair is unproven.
+cat > "$T/ghread" <<EOF
+#!/bin/bash
+echo "\$1" >> "$T/gh.log"
+[ "\${GH_RC:-0}" = 0 ] || { echo 'refused: HTTP 403'; exit "\$GH_RC"; }
+case "\$1" in
+  *actions/workflows/nightly.yml/runs*) printf '{"workflow_runs":[%s]}' "\${GH_RUN:-}";;
+  *actions/artifacts\?name=nightly-dev-sha-*) w=\${1#*name=nightly-dev-sha-}; w=\${w%%&*}
+    if [ -n "\${GH_RUN:-}" ] && [ "\$w" = "\${GH_SHA:-}" ]; then printf '{"artifacts":[{"name":"nightly-dev-sha-%s","workflow_run":{"id":77}}]}' "\$w"
+    else printf '{"artifacts":[]}'; fi;;
+  *actions/runs/77/artifacts*) printf '{"artifacts":[{"name":"nightly-dev-sha-%s"}]}' "\${GH_SHA:-}";;
+  *actions/runs/77) [ -n "\${GH_RUN:-}" ] && printf '%s' "\$GH_RUN" || exit 1;;
+  *) exit 1;;
+esac
+EOF
+chmod +x "$T/ghread"
+vd() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" --verdict >/dev/null 2>&1
+  v_ts= v_res= v_sha= v_loc= v_gh= v_ghsha=
+  [ -f "$ST/nightly-verdict" ] && IFS=$'\t' read -r v_ts v_res v_sha v_loc v_gh v_ghsha < "$ST/nightly-verdict"; }
+lrec() { printf '%s\t%s\t%s\t%s\t%s\t[]\n' "$(date +%s)" "$1" "$2" "$3" "$4" > "$ST/nightly-result"; }
+today=$(date -u +%F)
+done_ok='{"id":77,"status":"completed","conclusion":"success","event":"schedule","created_at":"'$today'T07:00:00Z"}'
+done_red='{"id":77,"status":"completed","conclusion":"failure","event":"schedule","created_at":"'$today'T07:00:00Z"}'
+running='{"id":77,"status":"in_progress","conclusion":null,"event":"schedule","created_at":"'$today'T07:00:00Z"}'
+done_old='{"id":77,"status":"completed","conclusion":"success","event":"schedule","created_at":"2020-01-01T07:00:00Z"}'
+vcase() {  # <want> <label> [VAR=val...]
+  local want=$1 label=$2; shift 2; rm -f "$ST/nightly-verdict" "$T/gh.log"; vd "$@"
+  [ "$v_res" = "$want" ] && ok "verdict $want: $label" || ko "verdict '$v_res' (local '$v_loc', github '$v_gh' at '$v_ghsha'), want $want: $label"
+}
+lrec pass "$sha" pass pass
+vcase pass "both halves pass on the same dev sha" GH_RUN="$done_ok" GH_SHA="$sha"
+[ "$v_sha" = "$sha" ] && [ "$v_ghsha" = "$sha" ] && /usr/bin/grep -q "repos/o/r/actions/artifacts?name=nightly-dev-sha-$sha" "$T/gh.log" \
+  && ok "the verdict names the dev sha both halves tested, read through the gh door" || ko "verdict sha '$v_sha', github sha '$v_ghsha', reads '$(cat "$T/gh.log" 2>/dev/null)'"
+vcase fail "the GitHub half fails" GH_RUN="$done_red" GH_SHA="$sha"
+vcase unproven "the GitHub half tested another sha" GH_RUN="$done_ok" GH_SHA=0000000000000000000000000000000000000000
+vcase unproven "the GitHub half is unfinished" GH_RUN="$running" GH_SHA="$sha"
+vcase unproven "a GitHub run of an earlier day never answers today's verdict" GH_RUN="$done_old" GH_SHA="$sha"
+/usr/bin/grep -q 'per_page=1$' "$T/gh.log" 2>/dev/null && /usr/bin/grep -q 'nightly.yml/runs' "$T/gh.log" \
+  && ko "the verdict read the latest run, not the run that tested the local sha" || ok "the verdict reads the run that tested the local sha"
+vcase unproven "the GitHub half has no run" GH_RUN=
+vcase unproven "the GitHub read is refused" GH_RC=2
+lrec fail "$sha" fail pass
+vcase fail "the local half fails, whatever GitHub says" GH_RUN="$done_ok" GH_SHA="$sha"
+lrec bounded "$sha" bounded:signal-15 pass
+vcase fail "a bounded local half and a red GitHub half" GH_RUN="$done_red" GH_SHA="$sha"
+vcase unproven "a bounded local half and a green GitHub half" GH_RUN="$done_ok" GH_SHA="$sha"
+rm -f "$ST/nightly-result"
+vcase unproven "no local record" GH_RUN="$done_ok" GH_SHA="$sha"
+# An unproven verdict is read again by a later cycle, also outside the window, until a pass or a fail settles it.
+lrec pass "$sha" pass pass; rm -f "$ST/nightly-verdict"; touch "$ST/auto/nightly-$(date +%F)"
+vd GH_RUN="$running" GH_SHA="$sha"
+env FAKE_HOUR=05 SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" GH_RUN="$done_ok" GH_SHA="$sha" SG_NIGHTLY_VERDICT_EVERY=0 bash "$S/nightly.sh" >/dev/null 2>&1
+IFS=$'\t' read -r _ v_res _ < "$ST/nightly-verdict" 2>/dev/null
+[ "$v_res" = pass ] && ok "a later cycle settles an unproven verdict" || ko "a later cycle left the verdict '$v_res'"
+
+# 36) (#1975) A GitHub-half red is a red like a local one: one alert through the same path, said once per verdict, and one
+#     dispatch note, said once; the pass goes on, as it does for a local red (ADR-0153 rule 6).
+rm -f "$ST/alerts.log" "$T/notify.log" "$ST/nightly-gh-red-alerted" "$ST/nightly-gh-red-noted"; lrec pass "$sha" pass pass
+vd GH_RUN="$done_red" GH_SHA="$sha"; vd GH_RUN="$done_red" GH_SHA="$sha"
+[ "$(/usr/bin/grep -c "NIGHTLY GitHub half red at ${sha:0:7}" "$ST/alerts.log" 2>/dev/null)" = 1 ] && [ -s "$T/notify.log" ] \
+  && ok "a GitHub-half red alerts once, through the alerts file and the notifier" \
+  || ko "GitHub-half red alerts: '$(cat "$ST/alerts.log" 2>/dev/null)', notify '$(cat "$T/notify.log" 2>/dev/null)'"
+rm -f "$ST/nightly-result"   # the GitHub-half note alone, with no local record beside it
+out=$(hold); rc=$?; out2=$(hold)
+case "$out" in *"DISPATCH NOTE"*"GitHub half"*"red"*) [ $rc = 1 ] && [ -z "$out2" ] && ok "a GitHub-half red is one dispatch note, and the pass goes on" \
+  || ko "a GitHub-half red note: rc $rc, second '$out2'";; *) ko "a GitHub-half red said no note: rc $rc, '$out'";; esac
+rm -f "$ST/nightly-verdict" "$ST/nightly-result"
+
+# 37) (#1975) The local half never runs the full suite for a pytest obligation at the tip it measured: the GitHub half's result
+#     at that sha answers it, and with no such result the obligation stays in place for a later nightly.
+obclean; rm -f "$ST/nightly-github-seen"
+obwrite o/r "$newtip" "-" "pytest" delta "$(( $(date +%s) + 900 ))"
+ngh() { env "$@" SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" "SG_SETTLE_PYTEST=$T/settle.sh pytest" bash "$S/nightly.sh" 2>&1; end_check; }
+out=$(ngh SG_GHREAD=false); rc=$?
+! /usr/bin/grep -q '^pytest ' "$T/settle.log" 2>/dev/null && [ -n "$(/bin/ls -A "$OBL" 2>/dev/null)" ] \
+  && ok "with no GitHub result, the tip's pytest obligation stays in place and no full suite runs" \
+  || ko "a tip obligation with no GitHub result: rc $rc, settle '$(cat "$T/settle.log" 2>/dev/null)', left '$(/bin/ls "$OBL" 2>/dev/null)'"
+mark; rm -f "$T/settle.log"
+out=$(ngh SG_GHREAD="$T/ghread" GH_RUN="$done_ok" GH_SHA="$newtip"); rc=$?
+! /usr/bin/grep -q '^pytest ' "$T/settle.log" 2>/dev/null && [ -z "$(/bin/ls -A "$OBL" 2>/dev/null)" ] && /usr/bin/grep -q 'green' "$(sf)" 2>/dev/null \
+  && ok "the GitHub half's pass at the tip answers pytest green" \
+  || ko "GitHub pass at the tip: rc $rc, settle '$(cat "$T/settle.log" 2>/dev/null)', settled '$(cat "$(sf)" 2>/dev/null)'"
+obclean; rm -f "$ST/nightly-github-seen"
+obwrite o/r "$newtip" "-" "pytest" delta "$(( $(date +%s) + 900 ))"
+out=$(ngh SG_GHREAD="$T/ghread" GH_RUN="$done_red" GH_SHA="$newtip"); rc=$?
+! /usr/bin/grep -q '^pytest ' "$T/settle.log" 2>/dev/null && /usr/bin/grep -q 'red' "$(sf)" 2>/dev/null \
+  && ok "the GitHub half's red at the tip answers pytest red" \
+  || ko "GitHub red at the tip: rc $rc, settle '$(cat "$T/settle.log" 2>/dev/null)', settled '$(cat "$(sf)" 2>/dev/null)'"
+obclean; rm -f "$ST/nightly-github-seen" "$ST/nightly-verdict"
+
+# 38) (#1975) The local half runs on the sha today's GitHub run tested, so both halves name one sha; with no such run it runs
+#     on the dev tip.
+mark; rm -f "$ST/nightly-result"
+out=$(env SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" SG_GHREAD="$T/ghread" GH_RUN="$running" GH_SHA="$sha" bash "$S/nightly.sh" 2>&1); rc=$?; rec; end_check
+[ "$r_sha" = "$sha" ] && ok "the local half runs on the sha today's GitHub run tested" \
+  || ko "the local half ran at '$r_sha', not the GitHub half's $sha: rc $rc, '$out'"
+mark; rm -f "$ST/nightly-result"
+out=$(env SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" SG_GHREAD="$T/ghread" GH_RUN= bash "$S/nightly.sh" 2>&1); rc=$?; rec; end_check
+[ "$r_sha" = "$newtip" ] && ok "with no GitHub run today, the local half runs on the dev tip" \
+  || ko "with no GitHub run the local half ran at '$r_sha', not the tip $newtip: rc $rc"
+
+# 39) (#1975) A nightly still running at its hour's end is stopped there: it records one bounded attempt, the alert names the
+#     bound, and the hour's close writes no second record. The dispatch hold ends with the hour.
+mark; rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-missed-$(date +%F)"
+out=$(ng FAKE_MS=59:58 SLEEP_parallel=6); rc=$?; rec
+[ "$r_res" = bounded ] && /usr/bin/grep -q 'bound' "$ST/alerts.log" 2>/dev/null && [ -e "$ST/auto/nightly-missed-$(date +%F)" ] \
+  && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
+  && ok "a nightly past its hour's end is stopped and records one bounded attempt" \
+  || ko "a nightly past its bound: rc $rc, record '$r_res', alerts '$(cat "$ST/alerts.log" 2>/dev/null)', '$out'"
+r0=$(cat "$ST/nightly-result" 2>/dev/null); out=$(ng FAKE_HOUR=05)
+[ "$(cat "$ST/nightly-result" 2>/dev/null)" = "$r0" ] && ok "the hour's close writes no second record" || ko "the hour's close rewrote the record"
 
 rm -rf "$T"; exit $fail
