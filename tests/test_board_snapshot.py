@@ -147,3 +147,27 @@ def test_a_live_state_read_asks_the_carrier(tmp_path):
     state.read_all(fresh=True)
 
     assert board.reads == 2
+
+
+def _node(number, status, repo="x/y", archived=False):
+    return {"isArchived": archived, "fieldValueByName": {"name": status} if status is not None else None,
+            "content": {"number": number, "repository": {"nameWithOwner": repo}}}
+
+
+def test_the_fast_read_names_each_card_by_its_issue_number():
+    """The GraphQL snapshot carries the issue number, the status and the repository: one page, not twelve (#1796)."""
+    nodes = [_node(241, "Todo"), _node(242, "Doing")]
+
+    assert issue_state._states_of(nodes, "x/y") == {"241": "Todo", "242": "Doing"}
+
+
+def test_the_fast_read_leaves_out_a_card_that_is_archived_or_another_repository():
+    nodes = [_node(241, "Todo"), _node(242, "Doing", archived=True), _node(243, "Todo", repo="other/repo")]
+
+    assert issue_state._states_of(nodes, "x/y") == {"241": "Todo"}
+
+
+def test_the_fast_read_keeps_a_card_with_no_status_as_an_empty_state():
+    nodes = [_node(241, None)]
+
+    assert issue_state._states_of(nodes, "x/y") == {"241": ""}
