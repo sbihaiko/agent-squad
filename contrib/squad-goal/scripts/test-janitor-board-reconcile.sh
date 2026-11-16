@@ -51,7 +51,7 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)   # one read answers every card: number, Status, repository
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
-    for n in 2002 2003 2005 2006 2009 2022 2023 2098 2099; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2098 and #2099: the children of run-land-fail (#2015)
+    for n in 2002 2003 2005 2006 2009 2022 2023 2055 2083 2084 2085 2086 2087 2088 2089 2098 2099; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2098 and #2099: the children of run-land-fail (#2015); #2055 and #2083 to #2089: the children of the retried, aborted and human runs (#2015)
     for n in 2001 2007 2008 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2004 2010 2011 2032 2050; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2050: a spec card a work rule wrongly moved forward (#665)
     printf '2051\tIn Progress\thttps://api.github.com/repos/x/y\n2052\tClosed\thttps://api.github.com/repos/x/y\n2053\tBacklog\thttps://api.github.com/repos/x/y\n2054\tBacklog\thttps://api.github.com/repos/x/y\n'   # #2050's children, and spec #2053 with its queued child
@@ -70,7 +70,7 @@ case "$a" in
     esac;;
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2090 2091 2092 2093 2094 2095 2096 2097 2098 2099; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2055 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2083 2084 2085 2086 2087 2088 2089 2090 2091 2092 2093 2094 2095 2096 2097 2098 2099; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -219,6 +219,60 @@ git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A qu
 git -C "$T/co" update-ref refs/remotes/origin/dev HEAD
 # #2022's child landing reached the landing branch: its head is in origin/dev, so the run's failure does not unland it (#691)
 sed -i '' "s/a7df8f1ecff77bdb5833721121a7a50be4066053/$(git -C "$T/co" rev-parse HEAD)/" "$T/co/runs/run-mixed/record.jsonl"
+# #2015: the LAST landing a node made is its final state. A landing that failed and was retried until it stood is no
+# failure (#2084), an aborted landing is no failure (#2086), and a retried landing that moved nothing is no failure
+# (#2088). A landing of the run's own stage is no child's failure either.
+git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A retried child's work reaches dev (#2084)"
+retry2=$(git -C "$T/co" rev-parse HEAD)
+git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A child's work reaches dev (#2083)"
+retry1=$(git -C "$T/co" rev-parse HEAD)
+git -C "$T/co" update-ref refs/remotes/origin/dev HEAD
+mk run-retry 2083,2084
+rec run-retry '{"event":"run_start","run_id":"run-retry","ts":"2026-10-13T08:14:00Z"}
+{"event":"spawn_accepted","child":"route.router.1","definition":"GitHub issue #2083 on fix/2083-x"}
+{"event":"spawn_accepted","child":"route.router.2","definition":"GitHub issue #2084 on fix/2084-x"}
+{"event":"outcome","node":"route.router.1","entry":1,"outcome":"pass","reasons":[]}
+{"event":"outcome","node":"route.router.2","entry":1,"outcome":"pass","reasons":["tests green"]}
+{"event":"land","node":"route","outcome":"fail","reasons":["merge_land unavailable"],"effect":{"name":"merge_land"}}
+{"event":"land","node":"route.router.1","entry":1,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"REPL1","held_out":"pass"}}
+{"event":"land","node":"route.router.2","entry":1,"outcome":"fail","reasons":["merge_conflict"],"effect":{"name":"merge_land","head":"REPL2"}}
+{"event":"land","node":"route.router.2","entry":2,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"REPL2","held_out":"pass"}}
+{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+sed -i '' "s/REPL1/$retry1/g; s/REPL2/$retry2/g" "$T/co/runs/run-retry/record.jsonl"
+# #2086's child passed its own entries and its landing was aborted: the note never calls an aborted landing a failure.
+mk run-abort 2085,2086
+rec run-abort '{"event":"run_start","run_id":"run-abort","ts":"2026-10-13T08:15:00Z"}
+{"event":"spawn_accepted","child":"route.router.1","definition":"GitHub issue #2085 on fix/2085-x"}
+{"event":"spawn_accepted","child":"route.router.2","definition":"GitHub issue #2086 on fix/2086-x"}
+{"event":"outcome","node":"route.router.1","entry":1,"outcome":"pass","reasons":[]}
+{"event":"outcome","node":"route.router.2","entry":1,"outcome":"pass","reasons":["tests green"]}
+{"event":"land","node":"route.router.1","entry":1,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"REPL1","held_out":"pass"}}
+{"event":"land","node":"route.router.2","entry":1,"outcome":"abort","reasons":["the owner stopped the landing"],"effect":{"name":"merge_land","head":"REPL2"}}
+{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+sed -i '' "s/REPL1/$retry1/g; s/REPL2/$retry2/g" "$T/co/runs/run-abort/record.jsonl"
+# #2088's child failed to land and its retry moved nothing: the final landing is a pass, so the note names that pass.
+mk run-nomove 2087,2088
+rec run-nomove '{"event":"run_start","run_id":"run-nomove","ts":"2026-10-13T08:16:00Z"}
+{"event":"spawn_accepted","child":"route.router.1","definition":"GitHub issue #2087 on fix/2087-x"}
+{"event":"spawn_accepted","child":"route.router.2","definition":"GitHub issue #2088 on fix/2088-x"}
+{"event":"outcome","node":"route.router.1","entry":1,"outcome":"pass","reasons":[]}
+{"event":"outcome","node":"route.router.2","entry":1,"outcome":"pass","reasons":["tests green"]}
+{"event":"land","node":"route.router.1","entry":1,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"REPL1","held_out":"pass"}}
+{"event":"land","node":"route.router.2","entry":1,"outcome":"fail","reasons":["merge_conflict"],"effect":{"name":"merge_land","head":"REPL2"}}
+{"event":"land","node":"route.router.2","entry":2,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","before":"REPL2","head":"REPL2"}}
+{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+sed -i '' "s/REPL1/$retry1/g; s/REPL2/$retry2/g" "$T/co/runs/run-nomove/record.jsonl"
+# #2089's child needs a human and its landing failed: the note names the landing failure and the human need apart.
+mk run-human 2055,2089
+rec run-human '{"event":"run_start","run_id":"run-human","ts":"2026-10-13T08:17:00Z"}
+{"event":"spawn_accepted","child":"route.router.1","definition":"GitHub issue #2055 on fix/2055-x"}
+{"event":"spawn_accepted","child":"route.router.2","definition":"GitHub issue #2089 on fix/2089-x"}
+{"event":"outcome","node":"route.router.1","entry":1,"outcome":"pass","reasons":[]}
+{"event":"outcome","node":"route.router.2","entry":1,"outcome":"needs-human","reasons":["the acceptance needs an owner key"]}
+{"event":"land","node":"route.router.1","entry":1,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"REPL1","held_out":"pass"}}
+{"event":"land","node":"route.router.2","entry":1,"outcome":"fail","reasons":["merge_conflict"],"effect":{"name":"merge_land","head":"REPL2"}}
+{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+sed -i '' "s/REPL1/$retry1/g; s/REPL2/$retry2/g" "$T/co/runs/run-human/record.jsonl"
 printf '1\trun-x\t2062\twave/run-x\n' > "$T/st/wave-outside.tsv"   # a landing named #2062 outside its run's dispatch set (#775)
 printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
@@ -268,7 +322,18 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q 'BOARD-RECONCILE #2023: card -> Todo (run run-mixed child route.router.2 fail with nothing landed (red gate))' "$T/st/cycle.log" 2>/dev/null && ok "the reason names the child and its own outcome" || ko "child reason not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 # #2015: a child whose own landing failed names that failure, never its `pass` outcome word.
 /usr/bin/grep -q 'BOARD-RECONCILE #2098: card -> Todo (run run-land-fail child route.router.2 with nothing landed (its landing failed: merge_conflict))' "$T/st/cycle.log" 2>/dev/null && ok "a child whose landing failed names the landing failure" || ko "landing failure not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
-! /usr/bin/grep -q 'child route.router.2 pass with nothing landed' "$T/st/cycle.log" 2>/dev/null && ok "the note never calls a child whose work did not land a pass" || ko "the note says pass for a child that landed nothing: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q 'run run-land-fail child route.router.2 pass with nothing landed' "$T/st/cycle.log" 2>/dev/null && ok "the note never calls a child whose work did not land a pass" || ko "the note says pass for a child that landed nothing: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# #2015: the last landing a node made decides. A failure its retry stood is no failure, so the card leaves the loop.
+/usr/bin/grep -q '^STATUS o 4 Code Complete 2084$' "$T/board.calls" 2>/dev/null && ok "a child whose land failure was retried and stood still stays out of the loop" || ko "#2084 did not leave the loop: $(bc) $o"
+! /usr/bin/grep -qE 'run run-retry .*its landing failed' "$T/st/cycle.log" 2>/dev/null && ok "a retried landing that stood names no landing failure" || ko "retried landing named a failure: $(/usr/bin/grep 'run-retry' "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q 'merge_land unavailable' "$T/st/cycle.log" 2>/dev/null && ok "a failed landing of the run's own stage is no child's failure" || ko "the run's own landing failure reached a child's note: $(/usr/bin/grep 'merge_land unavailable' "$T/st/cycle.log")"
+# #2015: an aborted landing is not a failed one, and the note keeps the child's own outcome word.
+! /usr/bin/grep -qE 'run run-abort .*its landing failed' "$T/st/cycle.log" 2>/dev/null && ok "an aborted landing is never named a landing failure" || ko "aborted landing named a failure: $(/usr/bin/grep 'run-abort' "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2086: card -> Todo (run run-abort child route.router.2 pass with nothing landed (tests green))' "$T/st/cycle.log" 2>/dev/null && ok "an aborted landing keeps the child's own outcome in the note" || ko "#2086 note: $(/usr/bin/grep '2086' "$T/st/cycle.log" 2>/dev/null)"
+# #2015: a retried landing that moved nothing is the child's final landing, never the failure before it.
+/usr/bin/grep -q 'BOARD-RECONCILE #2088: card -> Todo (run run-nomove child route.router.2 pass with nothing landed (tests green))' "$T/st/cycle.log" 2>/dev/null && ok "a retried landing names its final state, never the earlier failure" || ko "#2088 note: $(/usr/bin/grep '2088' "$T/st/cycle.log" 2>/dev/null)"
+# #2015: a child that needs a human and whose landing failed names the landing failure and the human need apart.
+/usr/bin/grep -q 'BOARD-RECONCILE #2089: card -> Blocked (run run-human child route.router.2 its landing failed: merge_conflict and needs a human)' "$T/st/cycle.log" 2>/dev/null && ok "a needs-human child names its landing failure and the human need" || ko "#2089 note: $(/usr/bin/grep '2089' "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2032$' "$T/board.calls" 2>/dev/null && ok "a card whose fix is a commit in dev keeps Code Complete" || ko "#2032 moved: $(/usr/bin/grep ' 2032$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone leaves the card in Code Complete" || ko "#2011 moved: $(bc)"
 ! /usr/bin/grep -q 'Done 2011' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone is not Done" || ko "#2011 read Done from a landed branch marker: $(bc)"

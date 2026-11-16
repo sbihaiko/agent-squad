@@ -296,7 +296,7 @@ def read(f):
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
     # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
     kids = set(); kid_issue = {}; land_nodes = set(); outs = {}; kid_review = {}; heads = []
-    land_fail = {}   # the child whose own engine landing failed, and the failure's reason (#2015)
+    last_land = {}   # node -> the outcome and reasons of the LAST landing it made: its final landing state (#2015)
     # The spawn batch (#480): the engine answers a dispatch's requests in one batch, then starts the children. Any event after
     # the last spawn event is past that batch, so the run's choice of children is decided; spawn_ts is when it was made.
     spawned = decided = False; spawn_ts = 0.0
@@ -335,8 +335,10 @@ def read(f):
             if d.get("outcome") == "pass" and moved: heads.append((d.get("node"), eff.get("head"), eff.get("held_out") != "fail"))
             # A landing that failed is the reason its child's work never reached the run's target (#2015). The child's own
             # `outcome` may read pass: rule R names this failure, never that outcome word, for an issue that did not land.
-            elif d.get("outcome") is not None and d.get("node") is not None:
-                land_fail[str(d["node"])] = (d.get("reasons") or ["the landing failed"])[0]
+            # Only the node's LAST landing counts: a failure a retry stood is no failure, and an aborted landing is no
+            # failure either, so only `fail` is kept and any later landing replaces it.
+            if d.get("node") is not None:
+                last_land[str(d["node"])] = (d.get("outcome"), (d.get("reasons") or ["the landing failed"])[0])
         if ev == "outcome":   # the outcome the node itself recorded, child or run stage: the fact rule R reads per child (#271)
             open_calls.pop((d.get("node"), d.get("entry"), d.get("item")), None)   # the call closed (#1842)
             if d.get("node") is not None:
@@ -372,9 +374,12 @@ def read(f):
         # A landing a child's own held-out command turned red was undone, so it is not a landing (subject.py).
         if stands and node is not None: land_nodes.add(str(node))
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
+    # node -> the reason of the child's final landing, only when that landing failed and the node is a child (#2015): the
+    # run's own landing stage is no child's failure, and a failure a retry stood is no failure.
+    kid_land_fail_reason = {n: r for n, (o, r) in last_land.items() if o == "fail" and n in kids}
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
             "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts, "last_ts": lts, "vts": vts, "vkey": vkey,
-            "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "kid_land_fail": land_fail, "decided": decided, "spawn_ts": spawn_ts,
+            "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "kid_land_fail_reason": kid_land_fail_reason, "decided": decided, "spawn_ts": spawn_ts,
             "open_calls": list(open_calls.values())}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
@@ -1224,12 +1229,13 @@ def reconcile_board():
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
                 # The child's own landing failure names the note, and its `pass` outcome word never does (#2015): a child
                 # whose work did not reach the target is no pass, whatever its entries answered.
-                lf = i["kid_land_fail"].get(c)
+                lf = i["kid_land_fail_reason"].get(c)
                 why = f"its landing failed: {lf}" if lf else ("; ".join(ors) or "no reason recorded")
                 if oc == "needs-human" or i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor
                     stopped.add(n)
                     if rearmed_after(n, i): unfrozen(n, f, i)
-                    else: set_expected(n, "Blocked", f"run {i['run_id']} child {c} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
+                    # The landing failure and the human need are two facts: the note names the failure first when it holds (#2015).
+                    else: set_expected(n, "Blocked", f"run {i['run_id']} child {c} " + (f"its landing failed: {lf} and needs a human" if lf else f"needs a human with nothing landed ({why})"), i["run_id"], i["run_ts"], 40)
                 else:
                     if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} " + ("" if lf else f"{oc or 'stopped'} ") + f"with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
