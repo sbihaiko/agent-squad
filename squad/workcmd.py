@@ -165,10 +165,10 @@ def bounded_env(n):
 
 @contextlib.contextmanager
 def gate_slots(cwd):
-    """Hold `gates` slots of the machine-wide budget while a command runs; yield the worker count it may use."""
+    """Hold `gates` slots of the machine-wide budget while a command runs; yield (worker count, slots it holds)."""
     env = os.environ
     if "gate" in env.get("SG_SERIAL_HELD", "").split(":"):      # a gate holder took the slots already (gate.sh)
-        yield int(_num(env, "SQUAD_GATE_WORKERS", child_workers(env)))
+        yield int(_num(env, "SQUAD_GATE_WORKERS", child_workers(env))), 0
         return
     from squad import caps
     from squad.options import OptionError
@@ -176,7 +176,7 @@ def gate_slots(cwd):
         c = caps.ceiling(cwd)
     except OptionError as e:
         print(f"workcmd: no machine-wide budget ({e}); the command runs with {child_workers(env)} worker(s) and no slot", file=sys.stderr)
-        yield child_workers(env)
+        yield child_workers(env), 0
         return
     n, holder = min(child_workers(env), c.caps["gates"]), f"child-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     bound, poll, t0, said = _num(env, "SG_CHILD_SLOT_WAIT", 1800.0), _num(env, "SQUAD_CAPS_POLL", 1.0), time.monotonic(), False
@@ -187,13 +187,17 @@ def gate_slots(cwd):
             said = True
         if time.monotonic() - t0 >= bound:
             print(f"workcmd: {holder} waited {bound:g}s for caps.gates, held by {held}; the command runs with 1 worker and no slot", file=sys.stderr)
-            yield 1
+            yield 1, 0
             return
         time.sleep(poll)
     try:
-        yield min(n, len(leases))       # the count it took: a short take runs with the slots it holds (#734)
+        yield min(n, len(leases)), len(leases)       # the count it took: a short take runs with the slots it holds (#734)
     finally:
         c.release_many(leases)
+
+
+SLOTS_HELD = "SG_GATE_SLOTS_HELD"      # the count of gates slots the run holds for the command; child-gate.sh takes none under it (ADR-0175)
+CHILD_SUITE = re.compile(r"child-gate\.sh\s+['\"]?([^\s'\";&|()<>]+)")      # the suite a command starts through child-gate.sh
 
 
 @dataclass
@@ -296,20 +300,51 @@ def _cannot_start(cmd, cwd, env, stderr):
     return _refused_shebang(path) or any(phrase in stderr for phrase in EXEC_REFUSAL)
 
 
+def _tree_sha(cwd):
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _timeout_memo(cwd, cmd):
     """The marker of one (tree, command) timeout under `$SG_STATE`, or None when the tree has no sha to name it.
 
     The same tree and the same command timing out twice is not the machine: it is a hang the change brought, so the
     second timeout is a measured red (#1874, ADR-0164).
     """
-    try:
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
+    sha = _tree_sha(cwd)
     if not sha:
         return None
     key = hashlib.sha1(f"{sha}\0{cmd}".encode()).hexdigest()
     return pathlib.Path(os.environ.get("SG_STATE") or "/tmp") / "ac-timeouts" / key
+
+
+def _suite_ran_past_cap(cwd, cmd, cap):
+    """True when a suite the command names ran on this tree for at least `cap` seconds (ADR-0175).
+
+    `child-gate.sh` writes one row per finished suite: finish, start, wait, load, load, exit, suite, tree sha. A suite of
+    this tree that needed the whole cap shows the cap is too short, so a timeout of the command says nothing of the change.
+    """
+    named = {os.path.realpath(os.path.join(cwd, s)) for s in CHILD_SUITE.findall(cmd)}
+    sha = _tree_sha(cwd)
+    if not named or not sha:
+        return False
+    history = pathlib.Path(os.environ.get("SG_STATE") or "/tmp/sg-state") / "child-suite-history"
+    try:
+        rows = history.read_text().splitlines()
+    except OSError:
+        return False
+    for row in rows:
+        f = row.split("\t")
+        if len(f) != 8 or f[7] != sha or os.path.realpath(f[6]) not in named:
+            continue
+        try:
+            if int(f[0]) - int(f[1]) >= cap:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def run(cmd, cwd, timeout=None):
@@ -331,14 +366,20 @@ def run(cmd, cwd, timeout=None):
     syntax = subprocess.run(["/bin/sh", "-n", "-c", cmd], capture_output=True, cwd=cwd)
     if syntax.returncode != 0:
         return CmdResult(False, evidence_of(syntax.stderr), malformed=True)
-    with gate_slots(cwd) as n:
+    with gate_slots(cwd) as (n, slots):
         env = {**clean_env(os.environ), **bounded_env(n)}
+        if slots:
+            env[SLOTS_HELD] = str(slots)
+        else:
+            env.pop(SLOTS_HELD, None)
         try:
             r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             evidence = f"timeout after {timeout:g} s"
             memo = _timeout_memo(cwd, cmd)
             if memo is not None and memo.exists():
+                if _suite_ran_past_cap(cwd, cmd, timeout):
+                    return CmdResult(False, f"{evidence}: a suite it names ran for the whole cap on this tree, so the cap is too short and the timeout is unproven", unproven=True)
                 return CmdResult(False, f"{evidence}: the same tree and command timed out before, so this is a measured red")
             if memo is not None:
                 try:
