@@ -39,12 +39,11 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
    and it never follows a ticket into Doing: the spec is a document, and its lane reports how many tickets sit in each
    column. The spec closes when all its tickets close. The column carries no blocking edge — a ticket whose blocker is
    still open waits on the dispatch's reading of that edge, not on a column of its own.
-6. **The owner starts a spec by moving its card to Todo, and its tickets follow.** When a spec's card
-   sits in Todo, each open ticket of it whose card is in Backlog, or has no column, moves to Todo.
-   The move is forward only (ADR-0143): a ticket past Backlog keeps its column. The spec's column is
-   still a fold over its tickets: it reads Todo while any ticket is in flight, and the fold writes no
-   other column below Doing, so the two never fight. A run, an owner label or a closure outranks the
-   follow.
+6. **The owner starts a spec by moving its card to Todo, and that move carries its tickets.** The
+   owner's door moves a spec and its Backlog tickets in one owner write. No pass lifts a ticket: a
+   spec that reached Todo by another path lifts none, and the janitor names the hold once. No
+   automated writer moves a card from Backlog to Todo, for any reason. A spec in Backlog, or with no
+   column, is never set to Todo by the fold; the janitor names that hold once.
 7. **A spec whose tickets are all closed is done, and the loop closes it.** The proof is the
    tracker's count: at least one sub-issue, and every one closed. A spec with no sub-issue proves
    nothing and stays open. The close carries a comment that names the count, and the card follows
@@ -74,7 +73,8 @@ becomes the child of the run. `tests/test_vendor_skills.py` guards the title pre
 child in the skill that cuts the tickets. `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`
 proves the column: a spec with no card is added in Backlog, and a child of it with an open
 blocker is added in Backlog, each in one write; a spec whose every sub-issue is closed is closed,
-and one with an open sub-issue or none stays open; a spec in Todo moves its Backlog tickets to Todo,
-and a spec in Backlog moves none. The autofrontier and autobug suites prove the
+and one with an open sub-issue or none stays open; a spec in Todo lifts no Backlog ticket and names
+the hold once, and a spec in Backlog with a ticket in flight is never lifted and names the hold once.
+`contrib/squad-goal/scripts/test-hub-promote.sh` proves the owner's one write. The autofrontier and autobug suites prove the
 signal: a card in Todo whose issue carries no holder is dispatched, and an issue that carries a holder, or whose card
 is not in Todo, is not.

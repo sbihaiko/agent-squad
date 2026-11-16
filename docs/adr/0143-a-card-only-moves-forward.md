@@ -17,9 +17,11 @@ column its work never reached.
    column, and a freeze never moves it. A card whose landing fails keeps
    its column and carries a badge; it never moves back. A card is Done when its branch is in `dev`
    ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)).
-   The loop never moves a card into Backlog or Todo on its own; only the owner does. When the owner
-   moves a spec's card to Todo, its tickets in Backlog follow it there: the owner's move, not the
-   loop's ([ADR-0142](0142-a-spec-is-never-work.md)). An open issue with no card
+   The loop never moves a card into Backlog or Todo on its own; only the owner does. The owner's move
+   of a spec's card to Todo carries its Backlog tickets in the same owner write; no pass follows it
+   ([ADR-0142](0142-a-spec-is-never-work.md)). An automated Backlog-to-Todo move is held: non-zero
+   exit, a recorded refusal, no rework label. An automated writer whose compare read fails writes no
+   Todo. An open issue with no card
    gets a column once, when the loop first sees it: Todo for a bug, Backlog for anything else. A card
    that has a column keeps it until work moves it forward.
    **The one backward move:** a run that ends with nothing delivered returns its card to Todo,
