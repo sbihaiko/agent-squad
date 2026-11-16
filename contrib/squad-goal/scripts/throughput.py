@@ -91,11 +91,20 @@ def child_reviews(state):
     return counts
 
 
+def gate_mode(f):
+    """The entry mode of one split gate-history row (#1798), '' for a row from before it. The mode ends a 17-field row; a row
+    that carries the queue fields (#1856) ends with its reuse word, five fields after the mode. A reason may hold a tab, so
+    the mode is found from the row's end."""
+    if len(f) >= 22 and f[-1] in ("yes", "no") and f[-6] in ("gated", "reused", "skipped"): return f[-6]
+    if len(f) >= 17 and f[-1] in ("gated", "reused", "skipped"): return f[-1]
+    return ""
+
+
 def gate_time(state):
     """The run time of each gate of gate-history, split by selection: a selected gate's selection field starts with
     `selected`; any other gate (an `all: <reason>` field, an empty field, or no field, as an older record has) ran the whole
-    battery. A gate that ran no battery (#1798, entry mode `reused` or `skipped`, the seventeenth field) is no gate run and
-    counts in neither. A missing or empty file counts nothing. All lines: the history stamps dates, but the report reads every
+    battery. A gate that ran no battery (#1798, entry mode `reused` or `skipped`, the seventeenth field: the last field of a
+    17-field row, the sixth from the end of a row that carries the queue fields, #1856) is no gate run and counts in neither. A missing or empty file counts nothing. All lines: the history stamps dates, but the report reads every
     line as child_reviews does."""
     if state is None: return None
     groups = {"selected": [], "whole": []}
@@ -104,7 +113,7 @@ def gate_time(state):
     for line in lines:
         f = line.split("\t")
         if len(f) < 5: continue
-        if len(f) > 16 and f[-1] in ("reused", "skipped"): continue
+        if gate_mode(f) in ("reused", "skipped"): continue
         try: finish, start = int(f[0]), int(f[4])
         except ValueError: continue
         groups["selected" if len(f) > 5 and f[5].startswith("selected") else "whole"].append(finish - start)

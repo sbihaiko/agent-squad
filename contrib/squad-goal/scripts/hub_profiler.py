@@ -831,24 +831,37 @@ def strip_marks(audit, landings, promotions, start, end):
 # reads the lines a caller folded from the file, never a file, a clock or GitHub.
 GATE_OUTCOMES = ("pass", "fail", "unproven")
 GATE_HISTORY_FIELDS = ("finish", "kind", "result", "sha", "start", "selection", "scope", "outcome", "reason", "ran",
-                       "not_run", "slots", "red", "caller", "load_start", "load_finish", "mode")
-# The entry mode (#1798): how the gate came to its verdict, the row's last field. A row from before the field ends with its
+                       "not_run", "slots", "red", "caller", "load_start", "load_finish", "mode",
+                       # (#1856) What tells a gate stage's queue time from its work: the tree the gate read, the seconds
+                       # it waited for the lock and its slots, its wall time, the CPU its command spent, and whether a
+                       # green verdict answered instead of a battery (ADR-0168).
+                       "tree", "wait", "wall", "cpu", "reused")
+# The entry mode (#1798): how the gate came to its verdict, the seventeenth field. A row from before the field ends with its
 # load reading, a number or a dash, never one of these words, so the tail is counted by the word and an older row reads its
-# own columns.
+# own columns. A row that carries the queue fields (#1856) ends with its reuse word, five fields after its mode.
 ENTRY_MODES = ("gated", "reused", "skipped")
 NO_BATTERY_MODES = ("reused", "skipped")
+REUSE_WORDS = ("yes", "no")
 
 
 def gate_row(line):
     """One gate-history line as named fields, or None when it is too short to hold a finish and a start. A reason that
     holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields. A row
-    whose last field is the entry mode keeps eight tail columns; a row from before the field keeps seven."""
+    that ends with the queue fields keeps thirteen tail columns, a row whose last field is the entry mode keeps eight, and a
+    row from before the mode keeps seven."""
     parts = line.split("\t")
     if len(parts) < 5:
         return None
-    tail = 8 if len(parts) >= 17 and parts[-1] in ENTRY_MODES else 7
-    if len(parts) >= 8 + tail:
+    # The reason is the ninth field and the only free text, so the words at the row's end say how many fields follow it.
+    if len(parts) >= len(GATE_HISTORY_FIELDS) and parts[-1] in REUSE_WORDS and parts[-6] in ENTRY_MODES:
+        tail = len(GATE_HISTORY_FIELDS) - 9
+    elif len(parts) >= 17 and parts[-1] in ENTRY_MODES:
+        tail = 8
+    else:
+        tail = 7
+    if len(parts) >= 9 + tail:
         parts = parts[:8] + ["\t".join(parts[8:-tail])] + parts[-tail:]
+    parts = parts + [""] * (len(GATE_HISTORY_FIELDS) - len(parts))
     return dict(zip(GATE_HISTORY_FIELDS, parts))
 
 
@@ -1009,12 +1022,65 @@ def gate_wall(gates, since):
     return rows
 
 
+def _seconds(v):
+    """A whole-second field as a number, None for `-`, '' and for anything the record cannot hold as a run."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def gate_queue(lines, start, end):
+    """The gate queue of the window `[start, end)`, by finish (#1856): the share of the gate stage that is lock wait and
+    the number of distinct trees that paid a gate.
+
+    A row answers from its own fields: `wait` is the seconds before the gate held the lock and its slots, `wall` its run
+    time, `tree` the tree it read and `reused` whether a green verdict answered instead of a battery (ADR-0168). A row
+    from before those fields names no wait and no tree; it is counted in `rows`, `wait_unknown` and `trees_unnamed`, and
+    its wall is its finish minus its start, which is what the field holds. A window no gate finished in answers no share,
+    never a zero: a saved gate is one more row, so it is counted too.
+    """
+    rows = wait_unknown = trees_unnamed = reused = 0
+    wait_s = wall_s = 0.0
+    trees = set()
+    for line in lines:
+        row = gate_row(line)
+        if row is None:
+            continue
+        try:
+            finish, began = float(row["finish"]), float(row["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if finish < began or not start <= finish < end:
+            continue
+        rows += 1
+        wait = _seconds(row.get("wait"))
+        if wait is None:
+            wait_unknown += 1
+        else:
+            wait_s += wait
+        wall = _seconds(row.get("wall"))
+        wall_s += (finish - began) if wall is None else wall
+        tree = (row.get("tree") or "").strip()
+        if tree and tree != "-":
+            trees.add(tree)
+        else:
+            trees_unnamed += 1
+        if (row.get("reused") or "").strip() == "yes":
+            reused += 1
+    stage = wait_s + wall_s
+    return {"rows": rows, "trees": len(trees), "trees_unnamed": trees_unnamed, "wait_unknown": wait_unknown,
+            "wait_s": round(wait_s, 3), "wall_s": round(wall_s, 3), "stage_s": round(stage, 3),
+            "wait_share": round(wait_s / stage, 4) if stage > 0 else None, "reused": reused}
+
+
 def wall(steps, gate_lines, window_s, now):
     """The Loop tab's wall-time view of the window `window_s` that ends at `now`: the step rows of each lane, the running steps,
-    the slow cycle's time and the gate rows, all from one `since`."""
+    the slow cycle's time, the gate rows and the gate queue, all from one `since`."""
     since = now - window_s
     return {"window_s": window_s, "since": since, "cycle": cycle_time(steps, since), **step_wall(steps, since, now),
-            "gates": gate_wall(gate_rows(gate_lines), since)}
+            "gates": gate_wall(gate_rows(gate_lines), since), "queue": gate_queue(gate_lines, since, now)}
 
 
 # ---------------------------------------------------------------- the machine load (#1768)

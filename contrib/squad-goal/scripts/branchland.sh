@@ -91,14 +91,14 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc red base gaid
     say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; }
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.
-  out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_CALLER=entry SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
+  out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_CALLER=landing SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
   # Exit 4 is an inconclusive gate (#699): fast-gate ran its one retry and that failed too. Exit 73 is the machine's budget
   # (#1684): gate.sh took no slot, so no battery ran. Neither gets a rerun and neither gets a ruff fix, so nothing grants the
   # landing it held and no fix round is paid for a tree the gate never read.
   red=$rc   # the first gate's answer: a retry that never ran never clears it (#1684)
   [ "$rc" = 0 ] || [ "$rc" = 4 ] || [ "$rc" = 73 ] || { out="$out
 --- the rerun of what failed ---
-$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. SG_GATE_CALLER=entry SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); [ "$rc" = 73 ] && [ "$red" = 1 ] && rc=1; }
+$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. SG_GATE_CALLER=landing SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); [ "$rc" = 73 ] && [ "$red" = 1 ] && rc=1; }
   # Only ruff red, and ruff says it can fix it: `ruff check --fix` (safe fixes only) in the trial, one commit, the gate again.
   # The fixed trial is pushed to the branch (it is rebased on $land), so the fix lands with the branch.
   if [ "$rc" != 0 ] && [ "$rc" != 4 ] && [ "$rc" != 73 ] && printf '%s' "$out" | /usr/bin/grep -q 'fixable with the'; then
@@ -112,7 +112,7 @@ $(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([
       /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate commit -q -m "Apply ruff --fix at the landing
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
-      local rr=$rc; out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_CALLER=entry SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out"); [ "$rc" = 73 ] && rc=$rr   # a re-gate that never ran clears nothing (#1684)
+      local rr=$rc; out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_CALLER=landing SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out"); [ "$rc" = 73 ] && rc=$rr   # a re-gate that never ran clears nothing (#1684)
       if [ "$rc" = 0 ] && ! /usr/bin/git -C "$wt/tip" push -q --force-with-lease="refs/heads/$br:$sha" "$remote" "HEAD:refs/heads/$br" >/dev/null 2>&1; then rc=1; out="the ruff fix passed the gate but its push to $br was refused"; fi
     fi
   fi

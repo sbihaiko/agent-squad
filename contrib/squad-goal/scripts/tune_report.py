@@ -21,8 +21,18 @@ TRIAGE_FAILED = re.compile(r"(\d+) triage failed")
 HOLD = re.compile(rf"^{STAMP} DISPATCH HOLD: ")
 GATE_HOLD = re.compile(r"promotion proof|nightly")
 # The gate-history caller field (14th): who asked for the gate. A row without it, or with another word, is unknown.
-CALLERS = ("child", "entry", "tip", "other", "unknown")
+CALLERS = ("child", "entry", "landing", "tip", "other", "unknown")
 LOAD = re.compile(rf"^{STAMP} LOAD (\d+(?:\.\d+)?) (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)$")
+
+
+def gate_mode(parts):
+    """The entry mode of one split gate-history row (#1798), '' for a row from before it. The mode ends a 17-field row; a row
+    that carries the queue fields (#1856) ends with its reuse word, five fields after the mode."""
+    if len(parts) >= 22 and parts[-1] in ("yes", "no") and parts[-6] in ("gated", "reused", "skipped"):
+        return parts[-6]
+    if len(parts) >= 17 and parts[-1] in ("gated", "reused", "skipped"):
+        return parts[-1]
+    return ""
 
 
 def stamp(text):
@@ -135,7 +145,7 @@ def main():
         parts = line.split("\t")
         if len(parts) < 5:
             continue
-        if len(parts) > 16 and parts[-1] in ("reused", "skipped"):
+        if gate_mode(parts) in ("reused", "skipped"):
             continue   # a gate that ran no battery (#1798) is no gate time and no entry attempt
         finish, start = _float(parts[0]), _float(parts[4])
         if start is not None and inside(finish):

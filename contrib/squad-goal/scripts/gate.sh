@@ -38,20 +38,31 @@
 # that calls it sets SG_GATE_STATUS=self, so the gate does not overwrite it with the HEAD it was started in. Each line is written
 # by a temp file and a mv, so no reader sees half of it. SG_STATE unset: /tmp/sg-state, never TMPDIR.
 # Each finished gate also appends one line to $SG_STATE/gate-history: `<finish epoch> TAB <kind> TAB <result> TAB <sha> TAB <start epoch>
-# TAB <selection> TAB <scope> TAB <outcome> TAB <reason> TAB <ran> TAB <not run> TAB <slots> TAB <red>`. The selection and the scope are empty
+# TAB <selection> TAB <scope> TAB <outcome> TAB <reason> TAB <ran> TAB <not run> TAB <slots> TAB <red> TAB <stage> TAB <load start>
+# TAB <load finish> TAB <tree> TAB <wait> TAB <wall> TAB <cpu> TAB <reused>`. The selection and the scope are empty
 # when the gate ran no battery or names none. The outcome is pass, fail or unproven (spec 1163): the gate's own verdict, written by
 # the command to GATE_OUTCOME_FILE as `<outcome> TAB <reason> TAB <ran> TAB <not run>`; with none, pass or fail by the exit code,
 # and a gate stopped before any check answered is unproven. The result stays pass or fail, as the hub reads it. The reason is one
 # line, `-` when none; ran and not run list the checks, `-` when none; slots is the count of gate slots the gate took. The red field
 # is `-`, `red` for a measured red this gate recorded, `red-stands <sha>` for a red of the same tree that this attempt did not
-# clear, `cleared-green <sha>` or `cleared-fix <red sha>..<sha>` for the two ways a red is cleared (#1170). The caller field (#1410)
-# is SG_GATE_CALLER: child (the child's own last check), entry (the wave entry or a fix branch landing), tip (the wave-tip gate)
-# or other; a row from before the field has 13 fields, and the loop report reads it as an unknown caller. Two load fields follow it (#1691, gate_load below); a row from before them has 14. The entry mode is the seventeenth field (#1798): `gated` when the
-# gate ran the battery, `reused` when a kept green pass answered for the tree (ADR-0168), `skipped` when it ran no battery; a row
-# from before the field has 16, and every reader answers it as a gate with no mode. SG_GATE_ENTRY_MODE names the word a caller
-# knows: the wave entry sets `gated` for its gate and `reused` for its reuse, and a gate that names no word takes `gated` when it
-# wrote a selection or a scope and `skipped` when it wrote neither. The duration
-# is finish minus start, and start is read inside the lock, after the wait: it is the gate's run time, never its queue time. A gate
+# clear, `cleared-green <sha>` or `cleared-fix <red sha>..<sha>` for the two ways a red is cleared (#1170). The stage field (#1410)
+# is SG_GATE_CALLER: entry (the wave entry), child (the child's own last check), landing (branchland's gate on a work branch),
+# tip (the wave-tip gate) or other; a row from before the field has 13 fields, and the loop report reads it as an unknown stage.
+# Two load fields follow it (#1691, gate_load below); a row from before them has 14. The entry mode is the seventeenth field
+# (#1798): `gated` when the gate ran the battery, `reused` when a kept green pass answered for the tree (ADR-0168), `skipped`
+# when it ran no battery; a row from before the field has 16, and every reader answers it as a gate with no mode.
+# SG_GATE_ENTRY_MODE names the word a caller knows: the wave entry sets `gated` for its gate, and a gate that names no word takes
+# `gated` when it wrote a selection or a scope and `skipped` when it wrote neither. A gate whose verdict was reused is `reused`,
+# whatever word its caller named.
+# The stage's time is told from the work: `start` is read inside the lock, after the wait, so the duration (finish minus start)
+# is the gate's run time; `<tree>`, `<wait>`, `<wall>`, `<cpu>` and `<reused>` follow the mode and say the rest (#1856). `wait`
+# is the whole seconds from the gate's own start to that clock, the lock wait and the slot wait together, and it is gate wait,
+# never run time (ADR-0166); `wall` is finish minus start; `cpu` is the user and sys time the gate's children spent; `tree` is
+# the tree sha the gate read (HEAD^{tree}, so a rebase that keeps every file is one tree); and `reused` is `yes` when a green
+# verdict for the same tree and suite answered instead of a battery (ADR-0168), `no` otherwise. A gate cancelled that way is
+# still one row (gate_reuse below), mode `reused`, with wait, wall and cpu of 0 and its start at its finish, so a saved gate is
+# counted, a reader of gate time counts it in neither, and the share of a gate stage that is lock wait is read from the window
+# (hub_profiler.gate_queue), never inferred. A row from before these fields has 17 and reads as an unknown wait and no tree. A gate
 # that sets SG_GATE_STATUS=self writes no history line, as it writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
 # A caller that names GATE_OUTCOME_READ_FILE gets the same outcome line copied there inside the lock, so it decides on the word
@@ -227,32 +238,47 @@ gate_load() {
   case "$l" in ''|*[!0-9.]*) l=-;; esac
   printf '%s' "$l"
 }
-gate_mode() {  # <selection> <scope>: the entry mode this row carries (#1798). A caller that knows the word names it; a gate
-  # that names none ran the battery when it wrote a selection or a scope, and ran none when it wrote neither.
+gate_mode() {  # <selection> <scope> <reused>: the entry mode this row carries (#1798). A reused verdict is `reused` (#1856);
+  # else a caller that knows the word names it, and a gate that names none ran the battery when it wrote a selection or a
+  # scope, and ran none when it wrote neither.
+  [ "${3:-}" = yes ] && { printf reused; return; }
   case "${SG_GATE_ENTRY_MODE:-}" in gated|reused|skipped) printf '%s' "$SG_GATE_ENTRY_MODE"; return;; esac
   if [ -n "$1" ] || [ -n "$2" ]; then printf gated; else printf skipped; fi
 }
-gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red>
-  fin=$(date +%s)   # the finish epoch the line carries, and the epoch the obligation's deadline counts from (note)
+# The CPU the gate's command spent (#1856): the user and sys time of this shell's children, in whole seconds. `times` is a
+# builtin, so it reads this shell's own children; it is written through a file because a command substitution would fork
+# and the forked shell would report no children of its own.
+gate_cpu_read() {  # sets gate_cpu_s: `-` when no reading is possible
+  local f c
+  gate_cpu_s=-
+  f=$(mktemp "${TMPDIR:-/tmp}/gate-cpu.XXXXXX" 2>/dev/null) || return 0
+  times > "$f" 2>/dev/null
+  c=$(awk 'NR == 2 { for (i = 1; i <= 2; i++) { t = $i; sub(/s$/, "", t); split(t, a, "m"); c += a[1] * 60 + a[2] } } END { printf "%d\n", int(c + 0.5) }' "$f" 2>/dev/null)
+  rm -f "$f"
+  case "$c" in ''|*[!0-9]*) ;; *) gate_cpu_s=$c;; esac
+}
+gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red> [<reused>]
+  local tree wall
+  fin=${gate_fin:-$(date +%s)}   # the finish epoch the line carries, and the epoch the obligation's deadline counts from (note)
+  tree=$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null); [ -n "$tree" ] || tree=-
+  wall=$(( fin - ${4:-$fin} )); [ "$wall" -ge 0 ] || wall=0
+  [ -z "${gate_wall:-}" ] || wall=$gate_wall   # a cancelled gate spends no wall, whatever second its two clocks fell in
   mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)" "$(gate_mode "$5" "$6")"
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)" "$(gate_mode "$5" "$6" "${13:-no}")" "${tree:--}" "${gate_wait:--}" "$wall" "${gate_cpu_s:--}" "${13:-no}"
   append_line "$st/gate-history" "$line"
 }
-# The wave entry's reuse (#1798): one history row for an entry a kept green pass answered, so the entry's mode is on the record
-# and the reuse is no silent skip (ADR-0168 rule 5). The row ran nothing: its start is its finish, and a reader that folds gate
-# time counts it in neither (hub.py, throughput.py, tune_report.py). gate.sh stays the history file's one writer.
-entry_reuse() {  # <sha>
-  local t
-  t=$(date +%s); mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t\t\tpass\t-\t-\t-\t0\t-\t%s\t%s\t%s\treused' "$t" "${SG_GATE_KIND:-fast}" pass "$1" "$t" \
-    "${SG_GATE_CALLER:-entry}" "${gate_load0:--}" "$(gate_load)"
-  append_line "$st/gate-history" "$line"
+# A gate a green verdict already answers writes one line and runs nothing (#1856, #1798, ADR-0168): the same shape as a
+# measured gate, with no selection and no scope (it ran no battery), the pass the memo gave, mode `reused`, reused `yes`, and
+# wait, wall and cpu of 0. Its start is its finish, so a reader that folds gate time counts it in neither (hub.py,
+# throughput.py, tune_report.py), and the reuse is never a silent skip (ADR-0168 rule 5). gate.sh stays the file's one writer.
+gate_reuse() {  # <kind> <sha>
+  gate_fin=$(date +%s) gate_wait=0 gate_wall=0 gate_cpu_s=0 gate_load0=$(gate_load)
+  gate_history "$1" pass "$2" "$gate_fin" "" "" pass - - - 0 - yes
 }
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
-  --entry-reuse)  # a wave entry a kept green pass answered: one history row, mode reused, and no battery and no status line,
-                  # because the reuse path writes the pass line itself (fast-gate.sh, memo_reuse).
-    [ $# = 2 ] || { echo "usage: gate.sh --entry-reuse <sha>" >&2; exit 2; }; entry_reuse "$2"; exit 0;;
+  --reuse)  # a cancelled gate whose verdict a green memo answers: one history line, no lock, no slots, no battery (ADR-0168)
+    [ $# = 3 ] || { echo "usage: gate.sh --reuse <kind> <sha>" >&2; exit 2; }; gate_reuse "$2" "$3"; exit 0;;
   --inner)  # inside the lock: take the slots, then run the gate. The take is one try, never a wait: a gate that cannot take its
             # slots exits 73 at once with none, and serial.sh releases the lock on that exit, so it holds neither resource while
             # it waits for the other. Every later exit path runs the EXIT trap and gives the slots back.
@@ -279,12 +305,16 @@ case "${1:-}" in
   --run)    # inside the lock: run the command, then write the line. One clock starts when the lock is taken (ADR-0163, #1171).
     shift
     outread=${GATE_OUTCOME_READ_FILE:-}; unset GATE_OUTCOME_READ_FILE   # the caller's copy: the command never sees it
-    export GATE_SELECT_FILE GATE_SCOPE_FILE GATE_OUTCOME_FILE GATE_BASE_FILE
+    export GATE_SELECT_FILE GATE_SCOPE_FILE GATE_OUTCOME_FILE GATE_BASE_FILE GATE_REUSE_FILE
     GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
     GATE_SCOPE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-scope.XXXXXX" 2>/dev/null) || GATE_SCOPE_FILE=
     GATE_OUTCOME_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-outcome.XXXXXX" 2>/dev/null) || GATE_OUTCOME_FILE=
     GATE_BASE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-base.XXXXXX" 2>/dev/null) || GATE_BASE_FILE=
+    GATE_REUSE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-reuse.XXXXXX" 2>/dev/null) || GATE_REUSE_FILE=
     start=$(date +%s); gate_load0=$(gate_load)
+    # (#1856) The wait is everything before this clock: the lock wait and the slot wait, measured from the gate's own start
+    # (SG_GATE_T0, set by this invocation before it queued), never a constant and never folded into the run time (ADR-0166).
+    gate_wait=$(( start - ${SG_GATE_T0:-$start} )); [ "$gate_wait" -ge 0 ] || gate_wait=0
     # One attempt identity per logical gate invocation (#1255): the aid is a token written to a marker before the
     # gate runs, and a replay for the same card and tip reads that marker instead of drawing a new token. Two runs
     # in one second still differ, because each draws its own token; and a crash-restart answers as the same attempt
@@ -313,7 +343,11 @@ case "${1:-}" in
         [ -z "$outread" ] || { printf '%s\t%s\t%s\t%s\n' "$FOC" "$FRS" "$FRAN" "$FNOT" > "$outread.$$" 2>/dev/null \
           && mv -f "$outread.$$" "$outread" 2>/dev/null; }
         status "${SG_GATE_KIND:-gate}" "$FRES" "$sha" "$sel" "$scope"
-        gate_history "${SG_GATE_KIND:-gate}" "$FRES" "$sha" "$start" "$sel" "$scope" "$FOC" "$FRS" "${FRAN:--}" "${FNOT:--}" "${SQUAD_GATE_WORKERS:-0}" "$FRED"
+        # (#1856, ADR-0168) A command that answers from a stored green verdict marks the line: the gate ran no battery,
+        # so its row says the verdict was reused and the reader counts the saved gate. The marker is its content, never its
+        # existence: the temp file exists from the moment it is made.
+        gate_reused=no; [ "$(cat "${GATE_REUSE_FILE:-/nonexistent}" 2>/dev/null)" = yes ] && gate_reused=yes
+        gate_history "${SG_GATE_KIND:-gate}" "$FRES" "$sha" "$start" "$sel" "$scope" "$FOC" "$FRS" "${FRAN:--}" "${FNOT:--}" "${SQUAD_GATE_WORKERS:-0}" "$FRED" "$gate_reused"
         # The gate-attempt journal (#1255): one attempt record per verdict this invocation drew, for the card
         # the gate names (SG_GATE_CARD) and the tip it ran at. A deadline stop reaches here too: its verdict is
         # unproven, and an unproven attempt counts like any other. The record's identity is (card, tip, aid), and
@@ -361,6 +395,7 @@ case "${1:-}" in
       [ -z "$GATE_SCOPE_FILE" ] || rm -f "$GATE_SCOPE_FILE"
       [ -z "$GATE_OUTCOME_FILE" ] || rm -f "$GATE_OUTCOME_FILE"
       [ -z "$GATE_BASE_FILE" ] || rm -f "$GATE_BASE_FILE"
+      [ -z "$GATE_REUSE_FILE" ] || rm -f "$GATE_REUSE_FILE"
     }
     # stop_tree <pid>: every descendant as it stands now, TERM then KILL, so a child that ignores TERM still goes and a child
     # its parent leaves behind is in the list taken before the first signal.
@@ -400,6 +435,7 @@ case "${1:-}" in
     set +m
     wait "$cpid" 2>/dev/null; rc=$?
     reap_wd "$wd"
+    gate_cpu_read   # (#1856) read before any other child runs, so the line names this command's own CPU
     # An orphan answers for no caller: it writes no status, no history line and no obligation, because nobody asked this tree
     # for a word, and a stale status would read as this gate's. It gives back what it holds -- the slots here, the lock when
     # serial.sh's holder exits -- and names the orphan on one line of its log.
@@ -409,6 +445,7 @@ case "${1:-}" in
       [ -z "$GATE_SCOPE_FILE" ] || rm -f "$GATE_SCOPE_FILE"
       [ -z "$GATE_OUTCOME_FILE" ] || rm -f "$GATE_OUTCOME_FILE"
       [ -z "$GATE_BASE_FILE" ] || rm -f "$GATE_BASE_FILE"
+      [ -z "$GATE_REUSE_FILE" ] || rm -f "$GATE_REUSE_FILE"
       echo "gate: orphan: the process that asked for this gate (pid ${SG_GATE_PARENT:-?}) is gone: the gate stops and releases its slots" >&2
       exit 143
     fi
@@ -431,6 +468,10 @@ esac
 # and their own parent is the lock holder, which lives as long as the gate does. An outermost gate sets it; a gate inside a gate
 # inherits the one caller of the chain.
 [ -n "${SG_GATE_PARENT:-}" ] || export SG_GATE_PARENT=$PPID
+# (#1856) The instant this gate began, before it queues for the lock: the wait of its history line is measured from here, so a
+# gate set afresh never inherits the clock of a gate that called it. --inner and --run sit below the lock, so the value they
+# read is this one.
+SG_GATE_T0=$(date +%s); export SG_GATE_T0
 wave_wait=${SERIAL_WAIT_SECONDS:-1800}
 export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-$(( $(gate_bound) + 300 ))}
 case ":${SG_SERIAL_HELD:-}:" in
