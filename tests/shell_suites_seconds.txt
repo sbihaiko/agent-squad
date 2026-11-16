@@ -159,9 +159,9 @@ test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
 test-promote-branch.sh 1.94
 test-promote-delta.sh 19.00
-test-promote-main-pass.sh 42.40
+test-promote-main-pass.sh 23.53
 test-promote-pass.sh 120.00
-test-promote.sh 16.53
+test-promote.sh 69.85
 test-publish-live.sh 2.50
 test-quality-reading.sh 2.06
 test-quota-floor.sh 0.62

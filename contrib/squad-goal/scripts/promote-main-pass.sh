@@ -14,7 +14,9 @@
 #        in flight   a name has a run that has not completed, or no run yet inside the grace (300 s): nothing, up to
 #                    SG_PROMOTE_MAIN_FLIGHT_S (3600) from the request; past it R is unproven.
 #        green       every name's newest run ended success: promote-main.sh R. The request is cleared whatever it answers;
-#                    a refusal is one alert, and a move clears the bug record and the hold.
+#                    a refusal is one alert, and a move clears the bug record and the hold. A push this process cannot
+#                    authenticate (#1896) is no refusal: one alert names the credential it could not reach, no hold is
+#                    written, and the request stays, so the next pass that reaches the credential moves main by it.
 #        red         a job ran a step and failed (the base check's refinement): main stays. One bug is open at a time,
 #                    `bug` and `ready-for-agent`, never `loop-bug`: the record holds its number, a later red comments on
 #                    it, and a recorded bug that is closed gives a new one. The hold time and the red sha are recorded.
@@ -140,6 +142,14 @@ if [ -n "${R:-}" ]; then
   case "$v" in
     green)
       o=$(SG_MAIN_BRANCH=$main SG_STG_BRANCH=$stg bash "$d/promote-main.sh" "$R" 2>&1); rc=$?
+      if [ $rc = 3 ]; then
+        # This process cannot reach the credential the push needs, and promote-main.sh named it (#1896): the request
+        # stays, and no hold is written, so the next pass that can reach the credential moves main to R by this same
+        # request. The hook the CI event fires runs in a launchd service session, which carries no login keychain; the
+        # watch cycle runs in the owner's session and reaches it. One alert names what could not be reached.
+        alert_once credential "$R: the complete tier is green and $main did not move: $(printf '%s' "$o" | tail -1)"
+        say "$R not promoted: $(printf '%s' "$o" | tail -1)"; exit 1
+      fi
       rm -f "$rec"   # cleared whatever the move answered: a later pass asks again by the rule
       if [ $rc = 0 ]; then
         rm -f "$bugrec" "$hold" "$redrec"

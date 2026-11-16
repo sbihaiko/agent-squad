@@ -69,6 +69,7 @@ EOF
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board"; chmod +x "$T/board"; export SG_BOARD_CMD=$T/board
 pass() { bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }
+passenv() { env "$@" bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }   # <VAR=value>...: a pass with its own environment
 ghn() { local c; c=$(/usr/bin/grep -c -- "$1" "$T/gh.log" 2>/dev/null); echo "${c:-0}"; }   # <pattern>: the gh calls that match
 alerts() { local c; c=$(/usr/bin/grep -c "PROMOTE MAIN" "$ST/alerts.log" 2>/dev/null); echo "${c:-0}"; }
 req() { cut -f1 "$ST/promote-main-requested" 2>/dev/null; }
@@ -259,6 +260,34 @@ realign; adv stg red-hold-a 7200; a26=$(tip stg); request "$a26" 600; checks "$a
 # (a) stg moves to a new sha inside the re-arm: the complete tier is requested on it, the quiet window alone gating it.
 adv stg red-hold-b 700; b26=$(tip stg); : > "$T/gh.log"; passq; rc=$?
 [ $rc = 0 ] && [ "$(req)" = "$b26" ] && ok "26 a new tip after a red is requested without a re-arm about the red sha" || ko "26 new tip: record '$(req)', red '$a26', stg '$b26', out '$(cat "$T/out")'"
+
+# 27) The push cannot authenticate (#1896). A push to an https remote needs the credential git's helper serves, and the
+# process that runs the pass may be one that cannot reach it: gh keeps its token in the login keychain, and the self-hosted
+# runner that fires the hook is a launchd service job, whose security session does not carry the login keychain. git then
+# gets no credential, GIT_TERMINAL_PROMPT=0 forbids the prompt, and the push dies with a bare `could not read Username`.
+# The pass names the credential it could not reach, and keeps the request, so the next pass that can reach it moves main.
+# A fake remote serves both halves: its URL is https, and its content is the local bare remote, so the fetch and the push
+# land at home while the credential is the one git itself resolves.
+fake=https://example.invalid/x/emu.git
+printf '[url "file://%s"]\n\tinsteadOf = %s\n' "$R" "$fake" > "$T/fake-url.gitconfig"
+{ cat "$T/fake-url.gitconfig"; printf '[credential]\n\thelper =\n'; } > "$T/cred-deny.gitconfig"           # a helper that answers nothing
+{ cat "$T/fake-url.gitconfig"; printf '[credential]\n\thelper = "!f() { echo username=x; echo password=y; }; f"\n'; } > "$T/cred-ok.gitconfig"
+realign; adv stg no-cred 7200; n27=$(tip stg); m27=$(tip main); request "$n27" 600; checks "$n27" success success
+passenv SG_PROMOTE_REMOTE=$fake GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$T/cred-deny.gitconfig; rc=$?
+[ $rc != 0 ] && [ "$(tip main)" = "$m27" ] && ok "27 a push that cannot authenticate moves nothing" \
+  || ko "27 deny: rc $rc, main $(tip main), out '$(cat "$T/out")'"
+/usr/bin/grep -q "cannot reach" "$T/out" && /usr/bin/grep -q "example.invalid" "$T/out" \
+  && ok "27 the pass names the credential it could not reach" || ko "27 no reason: '$(cat "$T/out")'"
+/usr/bin/grep -q "was refused" "$T/out" && ko "27 the pass prints a bare refusal: '$(cat "$T/out")'" || ok "27 the pass prints no bare refusal"
+[ "$(req)" = "$n27" ] && ok "27 the request stays, so the pass that can reach the credential moves main" || ko "27 request '$(req)'"
+[ ! -e "$ST/promote-main-hold" ] && ok "27 a credential the pass cannot reach writes no hold" || ko "27 hold '$(cat "$ST/promote-main-hold" 2>/dev/null)'"
+[ "$(alerts)" = 1 ] && /usr/bin/grep -q "cannot reach" "$ST/alerts.log" && ok "27 one alert names the credential that was not reachable" || ko "27 alerts: '$(cat "$ST/alerts.log" 2>/dev/null)'"
+# The request the denied pass kept is answered by a pass that reaches the credential: a fake remote that accepts it moves
+# main to the requested sha, and clears the request.
+rm -f "$ST/alerts.log" "$ST"/auto/promote-main-*
+passenv SG_PROMOTE_REMOTE=$fake GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$T/cred-ok.gitconfig; rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$n27" ] && [ -z "$(req)" ] && ok "27 a fake remote that accepts the credential moves main" \
+  || ko "27 accept: rc $rc, main $(tip main), want $n27, out '$(cat "$T/out")'"
 
 # No loop script but the two promotion scripts names the main push, and the pass itself pushes nothing.
 /usr/bin/grep -nE '^[^#]*\bpush\b' "$d/promote-main-pass.sh" >/dev/null && ko "the pass pushes by itself" || ok "the pass pushes nothing: promote-main.sh moves main"

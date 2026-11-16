@@ -235,6 +235,42 @@ out=$(bash "$d/promote-main.sh" "$base" 2>&1); rc=$?
   && ok "promote-stg.sh refuses any merge when the base is main" || ko "merge into main: rc $rc, out '$out', gh '$(cat "$T/gh.log")'"
 git -C "$R" update-ref refs/heads/stg "$keep"   # fixture: stg is where the cases below expect it
 
+# (#1896) A promotion whose push cannot authenticate names the credential it could not reach, in one line, and never a bare
+# refusal. gh keeps its token in the login keychain, and the self-hosted runner that fires the CI hook is a launchd service
+# job whose security session carries no login keychain: git's helper answers nothing, GIT_TERMINAL_PROMPT=0 forbids the
+# prompt, and the push dies with `could not read Username`. The fake remote below answers 401 to every request, so git's
+# demand for a credential is real and no byte reaches github.com; a helper that answers stands for a session that holds it.
+fake=https://example.invalid/x/emu.git
+printf '[url "file://%s"]\n\tinsteadOf = %s\n' "$R" "$fake" > "$T/fake-url.gitconfig"
+{ cat "$T/fake-url.gitconfig"; printf '[credential]\n\thelper = "!f() { echo username=x; echo password=y; }; f"\n'; } > "$T/cred-ok.gitconfig"
+printf '[credential]\n\thelper =\n' > "$T/cred-deny.gitconfig"   # the helper answers nothing: the credential is unreachable
+cat > "$T/deny-server.py" <<'PY'
+import http.server, socketserver, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def answer(self):
+        self.send_response(401); self.send_header("WWW-Authenticate", 'Basic realm="x"')
+        self.send_header("Content-Length", "0"); self.end_headers()
+    do_GET = do_POST = answer
+    def log_message(self, *a): pass
+s = socketserver.TCPServer(("127.0.0.1", 0), H)
+with open(sys.argv[1], "w") as f: f.write(str(s.server_address[1]))
+s.serve_forever()
+PY
+python3 "$T/deny-server.py" "$T/port" & srv=$!
+for _ in $(seq 1 100); do [ -s "$T/port" ] && break; sleep 0.05; done
+mkeep=$(tip main)
+git -C "$R" update-ref refs/heads/stg "$(tip main)"; adv stg cred-ahead; before=$(tip main)
+out=$(SG_PROMOTE_REMOTE=http://127.0.0.1:$(cat "$T/port")/x.git GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$T/cred-deny.gitconfig \
+  bash "$d/promote-main.sh" 2>&1); rc=$?
+kill "$srv" 2>/dev/null; wait "$srv" 2>/dev/null
+[ $rc -ne 0 ] && [ "$(tip main)" = "$before" ] && ok "a promotion whose push cannot authenticate moves nothing" || ko "no credential: rc $rc, main $(tip main), out '$out'"
+case "$out" in *"cannot reach"*credential*) ok "the refusal names the credential it could not reach";; *) ko "no credential named: '$out'";; esac
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c .)" = 1 ] && ok "the refusal is one line" || ko "the refusal is $(printf '%s\n' "$out" | /usr/bin/grep -c .) lines: '$out'"
+printf '%s' "$out" | /usr/bin/grep -q "was refused" && ko "the refusal is a bare 'refused': '$out'" || ok "the refusal is never a bare 'refused'"
+out=$(SG_PROMOTE_REMOTE=$fake GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$T/cred-ok.gitconfig bash "$d/promote-main.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$(tip stg)" ] && ok "a fake remote that accepts the credential moves main" || ko "credential accepted: rc $rc, main $(tip main), stg $(tip stg), out '$out'"
+git -C "$R" update-ref refs/heads/main "$mkeep"; git -C "$R" update-ref refs/heads/stg "$keep"   # fixture: both branches back
+
 # No loop script pushes to main but the stg-to-main pass, through promote-main.sh: only promote-main.sh names the push, and a
 # test fixture is no loop script.
 bad=$(cd "$d" && grep -lE 'push[^#]*(refs/heads/(main|\$main)|origin main|HEAD:main)' *.sh *.py 2>/dev/null | grep -v -e '^test-' -e '^promote-main.sh$')
