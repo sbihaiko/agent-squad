@@ -88,5 +88,16 @@ echo 94 >> "$T/st/auto/retire-run-d.done"; echo 0 > "$T/retire.rc"; r=$(retry ru
 mkrun run-e 96; : > "$T/retire.log"; land run-e >/dev/null
 [ ! -s "$T/retire.log" ] && [ ! -e "$T/st/auto/retire-run-e" ] && ok "E: no age cap, no retirement" || ko "E: '$(cat "$T/retire.log")'"
 
+# F: the real retirement (squad/retire.py) on a run that already has its verdict: it touches nothing, and the requeue goes on.
+mkrun run-f 97; cap run-f
+PYTHONPATH="$SG_SQUAD" python3 -c 'import sys; from squad import record
+r = record.Record(sys.argv[1])
+r.append("run_start", run_id="run-f", graph_name="g", graph_hash="h", engine_options={}, root="root", plan=[])
+r.append("verdict", verdict="completed", exit_code=0, reasons=[], remains=[], folded=[])' "$T/co/runs/run-f/record.jsonl"
+before=$(cat "$T/co/runs/run-f/record.jsonl")
+r=$(SG_RETIRE_CMD= land run-f)
+[ "$(queued 97 "$r")" = 1 ] && [ "$(cat "$T/co/runs/run-f/record.jsonl")" = "$before" ] && case "$r" in *"RETIRE OVER run-f"*) true;; *) false;; esac \
+  && ok "F: a run with its verdict is untouched and its issue is requeued" || ko "F: '$r'"
+
 [ $fail = 0 ] && echo "PASS test-wave-retire" || echo "FAIL test-wave-retire"
 exit $fail

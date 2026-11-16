@@ -9,6 +9,7 @@ import signal
 import time
 
 from squad import procs as P
+from squad import record
 from squad import retire as R
 
 NOW = 1_800_000_000.0
@@ -47,13 +48,19 @@ class World:
 def run_folder(tmp_path, events):
     f = tmp_path / "runs" / "run-x"
     f.mkdir(parents=True)
-    (f / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    rec = record.Record(f / "record.jsonl")
+    for e in events:
+        rec.append(e["event"], **{k: v for k, v in e.items() if k not in ("event", "ts")})
     return f
 
 
+START = {"event": "run_start", "run_id": "run-x", "graph_name": "g", "graph_hash": "h", "engine_options": {}, "root": "root",
+         "plan": [], "ts": ENGINE_START}
+
+
 def engine_events(pid=4242, since=ENGINE_START + 10):
-    return [{"event": "run_start", "run_id": "run-x", "ts": ENGINE_START},
-            {"event": "call_start", "node": "code", "pid": pid, "started_at": since, "ts": since}]
+    return [START,
+            {"event": "call_start", "node": "root", "entry": 1, "session": "s", "pid": pid, "limit": 600, "started_at": since, "ts": since}]
 
 
 def go(folder, world, saved=None, wip_ok=True):
@@ -140,7 +147,8 @@ def test_a_helper_in_the_folder_that_is_no_run_process_does_not_hold(tmp_path):
 
 
 def test_a_run_with_a_verdict_is_untouched(tmp_path):
-    f = run_folder(tmp_path, engine_events() + [{"event": "verdict", "verdict": "pass", "exit_code": 0, "reasons": []}])
+    f = run_folder(tmp_path, engine_events() + [{"event": "verdict", "verdict": "completed", "exit_code": 0, "reasons": [],
+                                                    "remains": [], "folded": [], "ts": NOW - 100}])
     w = World()
     w.add(4242, 900, "squad start --run x")
     before = (f / "record.jsonl").read_text()
@@ -181,7 +189,7 @@ def test_an_unreadable_process_table_keeps_the_claim(tmp_path):
 
 
 def test_a_run_that_named_no_process_and_moved_recently_keeps_the_claim(tmp_path):
-    f = run_folder(tmp_path, [{"event": "run_start", "run_id": "run-x", "ts": NOW - 10}])
+    f = run_folder(tmp_path, [{**START, "ts": NOW - 10}])
     w = World()
     out = R.retire(f, "killed/age-cap-requeue", snapshot=w.snapshot, cwds=w.cwds, kill=w.kill, sleep=lambda s: None,
                    now=time.time(), keep_work=lambda f, r: ([], True))

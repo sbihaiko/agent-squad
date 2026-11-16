@@ -278,3 +278,5 @@ contrib/squad-goal/scripts/test-dispatch-hold-wave.sh	contrib/squad-goal/scripts
 contrib/squad-goal/scripts/test-dispatch-mutex.sh	contrib/squad-goal/scripts/test-dispatch-mutex.sh
 contrib/squad-goal/scripts/test-dispatch-worktree-reuse.sh	contrib/squad-goal/scripts/test-dispatch-worktree-reuse.sh
 contrib/squad-goal/scripts/test-token-ledger.sh	contrib/squad-goal/scripts/test-token-ledger.sh
+squad/retire.py	tests/test_retire.py
+squad/retire.py	contrib/squad-goal/scripts/test-wave-retire.sh

@@ -25,6 +25,9 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$d/fast-gate.sh" "$d/quality-reading.py" "$d/siblings.py" "$d/cluster.py" "$d/autohunt.sh" "$d/revformat.py" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
+# A capped run here is an ended run: the retirement an age-cap requeue waits for (#1970) is test-wave-retire.sh's, and here
+# a stub proves the end at once, so no process table is read and no process is signalled.
+export SG_RETIRE_CMD=/usr/bin/true
 {
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
   printf ': "${SG_LAND_REMOTE:=%s/origin.git}"; export SG_LAND_REMOTE\n' "$T"   # a case may set its own remote (K3: one that fails on the network)
