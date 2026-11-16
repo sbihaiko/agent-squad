@@ -911,9 +911,11 @@ def rec(start=1000.0, child="code.1", land_outcome="pass", verdict="completed", 
     return out
 
 
-def test_the_trip_spans_of_a_fixture_record_are_its_five_stages(prof):
+def test_the_trip_spans_of_a_fixture_record_are_its_stages(prof):
     spans = prof.trip_spans(rec())
-    assert spans == {"wait": 30.0, "coding": 200.0, "review": 56.0, "gates": 90.0, "landing": 150.0, "end": 1500.0}
+    assert spans == {"queue": None, "wait": 30.0, "coding": 200.0, "between": 0.0, "review": 56.0, "gates": 90.0,
+                     "landing": 150.0, "after": None, "end": 1500.0}, \
+        "with no card read, queue and after are None; the one child holds no gap, so between is a measured zero"
 
 
 def test_a_run_that_landed_nothing_is_no_delivery(prof):
@@ -931,6 +933,31 @@ def test_a_child_that_failed_and_retried_counts_its_whole_span_as_coding(prof):
            ev("call_start", 2200.0, node="code.1", entry=2), ev("outcome", 2500.0, node="code.1", entry=2, outcome="pass"),
            ev("land", 2600.0, node="code.1", outcome="pass"), ev("verdict", 2610.0, verdict="completed", exit_code=0, reasons=[])]
     assert prof.trip_spans(evs)["coding"] == 490.0     # 2500 - 2010: the retry's wait and both entries
+
+
+def test_the_fold_names_the_wait_before_the_run_and_between_two_children(prof):
+    """#1894: a card's trip is longer than its run's span. The wait before the run and the gap between two children are
+    stages of their own, never folded away: a 40 min queue and a 20 min gap come out as 40 and 20 minutes."""
+    todo = 10_000.0
+    evs = [ev("run_start", todo + 2400.0),                                      # queue: the 40 min before the run
+           ev("spawn_accepted", todo + 2405.0, child="code.1"),
+           ev("call_start", todo + 2410.0, node="code.1", entry=1),
+           ev("outcome", todo + 3010.0, node="code.1", entry=1, outcome="pass"),  # code.1's span: 600 s
+           ev("spawn_accepted", todo + 4000.0, child="code.2"),
+           ev("call_start", todo + 4210.0, node="code.2", entry=1),              # between: 4210 - 3010 = 1200 s
+           ev("outcome", todo + 4810.0, node="code.2", entry=1, outcome="pass"),
+           ev("land", todo + 4900.0, node="code.2", outcome="pass"),
+           ev("verdict", todo + 5000.0, verdict="completed", exit_code=0, reasons=[])]
+    spans = prof.trip_spans(evs, {"todo": todo, "closed": todo + 5000.0})
+    assert spans["queue"] == 2400.0, "the 40 minutes the card waited before its run started"
+    assert spans["between"] == 1200.0, "the 20 minutes between code.1's last answer and code.2's first call"
+    assert spans["after"] == 0.0
+
+
+def test_a_card_that_waits_for_nothing_answers_zeros_never_a_missing_stage(prof):
+    """The waiting stages are named on every delivery: a card that never waited answers 0, never a missing stage."""
+    spans = prof.trip_spans(rec(), {"todo": 1000.0, "closed": 1500.0})
+    assert (spans["queue"], spans["between"], spans["after"]) == (0.0, 0.0, 0.0)
 
 
 def test_the_percentile_is_the_linear_rule_the_doc_names(prof):
@@ -952,14 +979,15 @@ def test_each_stage_answers_its_median_and_p90_over_the_deliveries(prof):
     t = prof.trip(TRIP_SPANS, gates, since=NOW - 3600)
     assert t["deliveries"] == 3 and t["bar"] is True
     rows = {r["stage"]: r for r in t["stages"]}
-    assert list(rows) == ["wait", "coding", "review", "gates", "landing"]
+    assert list(rows) == ["queue", "wait", "coding", "between", "review", "gates", "landing", "after"]
     assert rows["wait"]["median_s"] == 20.0 and rows["wait"]["p90_s"] == pytest.approx(28.0)
     assert rows["coding"]["median_s"] == 200.0 and rows["coding"]["p90_s"] == pytest.approx(280.0)
     assert rows["review"]["median_s"] == 40.0 and rows["review"]["observations"] == 3
     assert rows["gates"]["median_s"] == 60.0 and rows["gates"]["observations"] == 3, \
         "the two deliveries that hold a gate and the one gate-history row of the window"
     assert rows["landing"]["p90_s"] == pytest.approx(84.0)
-    assert [r["label"] for r in t["stages"]] == ["Wait for a dispatch", "Coding", "Review", "Gates", "Landing"]
+    assert [r["label"] for r in t["stages"]] == ["Queued before the run", "Wait for a dispatch", "Coding",
+                                                 "Between two children", "Review", "Gates", "Landing", "After the verdict"]
     assert rows["coding"]["share"] == pytest.approx(0.526, abs=1e-3), "the share is the median over the sum of medians"
 
 
@@ -1025,6 +1053,21 @@ def test_the_swatch_rules_are_shipped_with_the_widget():
         assert rule in src, f"the trip's swatch rules are what makes a colour readable: {rule} is missing"
 
 
+def test_the_panel_names_the_waiting_stages_beside_the_five():
+    """#1894: the bar's total is the card's own trip, so the waiting stages are rows and segments beside the five."""
+    waiting = [{"stage": "queue", "label": "Waiting before the run", "observations": 4, "median_s": 2400.0, "p90_s": 2400.0, "share": 0.24},
+               {"stage": "between", "label": "Waiting between children", "observations": 4, "median_s": 1200.0, "p90_s": 1200.0, "share": 0.12},
+               {"stage": "after", "label": "Waiting after the verdict", "observations": 4, "median_s": 600.0, "p90_s": 600.0, "share": 0.06}]
+    trip = {**TRIP, "stages": [*TRIP["stages"], *waiting]}
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': trip})},new Set())"))
+    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?"', out)
+    assert [r[0] for r in rows] == ["wait", "coding", "review", "gates", "landing", "queue", "between", "after"]
+    src = HUB_PY.read_text()
+    for stage in ("queue", "between", "after"):
+        assert f"#proftrip .pts-{stage}{{" in src and f"#proftrip .ptk-{stage}{{" in src, \
+            f"the waiting stage {stage} draws its own colour, so its row and its segment read as one"
+
+
 def test_a_window_with_fewer_than_three_deliveries_says_so_and_draws_no_bar():
     thin = {**TRIP, "deliveries": 2, "bar": False}
     out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': thin})},new Set())"))
@@ -1060,11 +1103,36 @@ def test_the_route_answers_the_trip_of_the_window_the_page_asked_for(hub):
     code, v = ask(port, "GET")
     assert code == 200 and v["trip"]["window_s"] == 86400 and v["trip"]["bar"] is True
     assert v["trip"]["deliveries"] == 3, "the delivery two days back is outside the day the page asked for"
-    assert [s["stage"] for s in v["trip"]["stages"]] == ["wait", "coding", "review", "gates", "landing"]
+    assert [s["stage"] for s in v["trip"]["stages"]] == ["queue", "wait", "coding", "between", "review", "gates",
+                                                          "landing", "after"]
     assert {r["stage"]: r["observations"] for r in v["trip"]["stages"]}["gates"] == 5, \
         "three deliveries hold a gate each, and the gate history adds its two rows of the window"
     assert table.reads == 0, "the trip reads files only, so it shows with the switch off"
     assert ask(port, "GET", path="/api/profiler?w=3600")[1]["trip"]["window_s"] == 3600
+
+
+def test_the_trip_folds_the_wait_of_the_card_the_run_works(hub):
+    """#1894: the card's own transitions give the wait outside the run: 40 min in the queue before it started, and the
+    verdict's wait for the Closed move after it. The run names its issue in request.txt."""
+    mod, port, _, state, _ = hub
+    now = float(int(time.time()))   # whole seconds: the card's transitions are ISO stamps, never a fraction
+    run = state.parent / "runs" / "run-20261115-060606-aaaaaa"
+    start = now - 3600
+    record(run, *[dict(e, ts=e["ts"] - 1000 + start) for e in rec()])
+    (run / "request.txt").write_text("issue #7\n")
+    def iso(t):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+    path = mod._hist.history_path(mod.BOARD, mod.REPO)
+    mod._hist.record_issue(path, 7, iso(now), iso(now), [
+        {"t": iso(start - 2400), "type": "added"}, {"t": iso(start - 2400), "type": "status", "status": "Todo"},
+        {"t": iso(start), "type": "status", "status": "Doing"}, {"t": iso(start + 800), "type": "closed"}],
+        True, now)
+    code, v = ask(port, "GET")
+    rows = {r["stage"]: r for r in v["trip"]["stages"]}
+    assert code == 200 and rows["queue"]["median_s"] == 2400.0, "the 40 min the card waited in the queue"
+    assert rows["after"]["median_s"] == 300.0, "the 300 s between the verdict and the Closed move"
+    assert rows["between"]["median_s"] == 0.0, "the run's one child holds no gap"
 
 
 def test_the_trip_reads_the_gate_history_by_column_name(hub):
