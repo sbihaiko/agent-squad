@@ -669,15 +669,18 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     # proved this tree. Only the shipped fast gate answers the probe, and it answers only a green pass, so a red, a different
     # tree or suite, a tree the key cannot read, or a memo turned off answers no hit and the gate runs below as before.
     case "$SG_WAVE_GATES" in *"$here/fast-gate.sh"*) fgm=$here/fast-gate.sh;; *) fgm=;; esac
+    # The entry's mode is on its gate-history line (#1798): `reused` when this probe answers, `gated` when the entry runs the
+    # gate below, and `skipped` is the word of an entry that runs no battery at all. SG_GATE_ENTRY_MODE carries it into
+    # gate.sh, the history file's one writer.
     if [ -n "$fgm" ]; then
-      ph=$(SG_GATE_CALLER=entry SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$fgm" --memo-hit 2>&1); prc=$?
+      ph=$(SG_GATE_CALLER=entry SG_GATE_ENTRY_MODE=reused SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$fgm" --memo-hit 2>&1); prc=$?
       [ $prc = 0 ] && { reuse=$(printf '%s\n' "$ph" | tail -1); return 0; }
     fi
     of=$(mktemp "${TMPDIR:-/tmp}/wave-outcome.XXXXXX" 2>/dev/null) || of=
     [ -z "$of" ] || : > "$of"
     # SG_GATE_CARD names the card this gate answers for: its attempt is journaled and projected to Gate Tries (#1255).
     # SG_GATE_WAVE names the wave the gate is for, so the wave's Gating fact reads it (#1257).
-    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_CALLER=entry SG_GATE_KIND=fast SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
+    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_CALLER=entry SG_GATE_ENTRY_MODE=gated SG_GATE_KIND=fast SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
     oc= rs= ran= notran=
     [ -z "$of" ] || IFS=$'\t' read -r oc rs ran notran < "$of" 2>/dev/null
     [ -z "$of" ] || rm -f "$of"

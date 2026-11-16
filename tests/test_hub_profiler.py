@@ -1103,14 +1103,16 @@ def test_the_route_answers_the_trip_of_the_window_the_page_asked_for(hub):
         record(runs / f"run-20261115-03030{i}-aaaaa{i}", *[dict(e, ts=e["ts"] - 1000 + start) for e in rec()])
     (state / "gate-history").write_text(
         "".join(f"{now - 200}\tfast\tpass\tabc\t{now - 260}\tall\troot\tpass\t-\t1\t0\t0\t0\tchild\t0.1\t0.2\n"
-                for _ in range(2)))
+                for _ in range(2))
+        # #1798: a reused entry ran no battery, so its row is no gate observation of the window.
+        + f"{now - 100}\tfast\tpass\tabc\t{now - 100}\t\t\tpass\t-\t-\t-\t0\t-\tentry\t0.1\t0.2\treused\n")
     code, v = ask(port, "GET")
     assert code == 200 and v["trip"]["window_s"] == 86400 and v["trip"]["bar"] is True
     assert v["trip"]["deliveries"] == 3, "the delivery two days back is outside the day the page asked for"
     assert [s["stage"] for s in v["trip"]["stages"]] == ["queue", "wait", "coding", "between", "review", "gates",
                                                           "landing", "after"]
     assert {r["stage"]: r["observations"] for r in v["trip"]["stages"]}["gates"] == 5, \
-        "three deliveries hold a gate each, and the gate history adds its two rows of the window"
+        "three deliveries hold a gate each, and the gate history adds its two rows that ran a battery"
     assert table.reads == 0, "the trip reads files only, so it shows with the switch off"
     assert ask(port, "GET", path="/api/profiler?w=3600")[1]["trip"]["window_s"] == 3600
 
@@ -1146,7 +1148,23 @@ def test_the_trip_reads_the_gate_history_by_column_name(hub):
     row = mod.gate_row(line)
     assert (row["start"], row["finish"], row["outcome"], row["caller"]) == ("90", "100", "pass", "child")
     assert row["reason"] == "why\twith\ttabs", "the free-text reason is rejoined, so later columns keep their place"
+    assert row.get("mode", "") == "", "a row from before the entry mode answers none (#1798)"
     assert mod.gate_row("100\tfast\tpass") is None, "a row too short to hold a start and a finish is no row"
+
+
+def test_a_gate_history_row_names_its_entry_mode_and_an_older_row_still_parses(hub):
+    """#1798: the wave entry's mode is the row's seventeenth field; a row from before it parses as it always did."""
+    mod = hub[0]
+    for mode, caller in (("gated", "entry"), ("reused", "entry"), ("skipped", "entry")):
+        row = mod.gate_row(f"100\tfast\tpass\tabc\t90\t\t\tpass\t-\t-\t-\t0\t-\t{caller}\t0.1\t0.2\t{mode}")
+        assert (row["mode"], row["caller"], row["outcome"]) == (mode, caller, "pass"), \
+            f"a {mode} row keeps its columns after the reason-free field"
+    # An older row's last field is a load reading, never a mode, so its seven tail columns keep their place.
+    old = mod.gate_row("100\tfast\tpass\tabc\t90\tall\troot\tpass\twhy\twith\ttabs\t1\t0\t0\t0\tchild\t0.1\t0.2")
+    assert old["caller"] == "child" and old.get("mode", "") == "", "an older row still answers its own columns"
+    # A reason that holds a tab in a new row keeps the mode at the end, so the tail still names itself.
+    new = mod.gate_row("100\tfast\tpass\tabc\t90\tall\troot\tpass\twhy\twith\ttabs\t1\t0\t0\t0\tentry\t0.1\t0.2\tgated")
+    assert (new["reason"], new["caller"], new["mode"]) == ("why\twith\ttabs", "entry", "gated")
 
 
 def test_the_profile_doc_names_the_bar_as_the_live_form_of_its_trip_table():

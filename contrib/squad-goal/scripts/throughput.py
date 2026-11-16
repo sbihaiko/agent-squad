@@ -94,8 +94,9 @@ def child_reviews(state):
 def gate_time(state):
     """The run time of each gate of gate-history, split by selection: a selected gate's selection field starts with
     `selected`; any other gate (an `all: <reason>` field, an empty field, or no field, as an older record has) ran the whole
-    battery. A missing or empty file counts nothing. All lines: the history stamps dates, but the report reads every line as
-    child_reviews does."""
+    battery. A gate that ran no battery (#1798, entry mode `reused` or `skipped`, the seventeenth field) is no gate run and
+    counts in neither. A missing or empty file counts nothing. All lines: the history stamps dates, but the report reads every
+    line as child_reviews does."""
     if state is None: return None
     groups = {"selected": [], "whole": []}
     try: lines = (state / "gate-history").read_text(errors="replace").splitlines()
@@ -103,6 +104,7 @@ def gate_time(state):
     for line in lines:
         f = line.split("\t")
         if len(f) < 5: continue
+        if len(f) > 16 and f[-1] in ("reused", "skipped"): continue
         try: finish, start = int(f[0]), int(f[4])
         except ValueError: continue
         groups["selected" if len(f) > 5 and f[5].startswith("selected") else "whole"].append(finish - start)

@@ -831,17 +831,24 @@ def strip_marks(audit, landings, promotions, start, end):
 # reads the lines a caller folded from the file, never a file, a clock or GitHub.
 GATE_OUTCOMES = ("pass", "fail", "unproven")
 GATE_HISTORY_FIELDS = ("finish", "kind", "result", "sha", "start", "selection", "scope", "outcome", "reason", "ran",
-                       "not_run", "slots", "red", "caller", "load_start", "load_finish")
+                       "not_run", "slots", "red", "caller", "load_start", "load_finish", "mode")
+# The entry mode (#1798): how the gate came to its verdict, the row's last field. A row from before the field ends with its
+# load reading, a number or a dash, never one of these words, so the tail is counted by the word and an older row reads its
+# own columns.
+ENTRY_MODES = ("gated", "reused", "skipped")
+NO_BATTERY_MODES = ("reused", "skipped")
 
 
 def gate_row(line):
     """One gate-history line as named fields, or None when it is too short to hold a finish and a start. A reason that
-    holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields."""
+    holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields. A row
+    whose last field is the entry mode keeps eight tail columns; a row from before the field keeps seven."""
     parts = line.split("\t")
     if len(parts) < 5:
         return None
-    if len(parts) >= 16:
-        parts = parts[:8] + ["\t".join(parts[8:-7])] + parts[-7:]
+    tail = 8 if len(parts) >= 17 and parts[-1] in ENTRY_MODES else 7
+    if len(parts) >= 8 + tail:
+        parts = parts[:8] + ["\t".join(parts[8:-tail])] + parts[-tail:]
     return dict(zip(GATE_HISTORY_FIELDS, parts))
 
 
