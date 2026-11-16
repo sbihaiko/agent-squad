@@ -756,25 +756,39 @@ def test_the_local_half_keeps_mypy_only_for_a_wider_scope_than_ci():
 
 
 def test_nightly_workflow_pins_its_schedule_dev_ref_and_read_only_token():
-    """Guard for the nightly's GitHub half (#1975): a schedule at 04:00 America/Sao_Paulo runs the complete Linux suite on dev.
+    """Guard for the nightly's GitHub half (#1975, ADR-0153): a schedule at 04:00 America/Sao_Paulo runs the complete Linux suite on dev.
 
-    The trigger is a schedule only, so no branch push starts it. Each job checks out dev and runs one shard of the full suite
-    in one mode, heavy included, and the token is read-only.
+    The trigger is a schedule only, so no branch push starts it. One job reads the dev tip once, and every shard checks out
+    that one sha: dev moves between two checkouts, and twelve shards of twelve tips prove no tip. The sha job uploads an
+    artifact whose name carries the sha, so the local half reads the tested sha with no download. Each shard runs the very
+    command of its complete-tier sibling in ci.yml, heavy included, with SQUAD_CI_RUNNER=1, and the token is read-only.
     """
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "nightly.yml").read_text())
     on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
-    assert set(on) == {"schedule"}, f"only the schedule starts the nightly; found {sorted(on)}"
+    assert set(on) == {"schedule"}, f"only the schedule starts the nightly, never a push; found {sorted(on)}"
+    assert "push" not in on and "pull_request" not in on
     assert on["schedule"] == [{"cron": "0 7 * * *"}], "04:00 America/Sao_Paulo is 07:00 UTC"
     assert wf["permissions"] == {"contents": "read"}
-    assert set(wf["jobs"]) == {f"full-xdist-{n}" for n in range(1, 7)} | {f"full-serial-{n}" for n in range(1, 7)}
-    for name, job in wf["jobs"].items():
+    shards = {f"full-xdist-{n}" for n in range(1, FULL_SHARDS + 1)} | {f"full-serial-{n}" for n in range(1, FULL_SHARDS + 1)}
+    assert set(wf["jobs"]) == shards | {"dev-sha"}
+    sha_job = wf["jobs"]["dev-sha"]
+    checkout = [s for s in sha_job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert checkout and checkout[0].get("with", {}).get("ref") == "dev", "the sha job checks out dev"
+    assert "steps.tip.outputs.sha" in str(sha_job.get("outputs", {}).get("sha")), "the sha job exports the dev sha it read"
+    upload = [s for s in sha_job["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert upload and upload[0]["with"]["name"] == "nightly-dev-sha-${{ steps.tip.outputs.sha }}", \
+        "the tested dev sha is in the artifact name, so a reader needs no download"
+    ci = _ci_workflow()["jobs"]
+    for name in shards:
+        job = wf["jobs"][name]
+        assert job.get("needs") == ["dev-sha"], f"{name} waits for the one dev sha"
         checkout = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
-        assert checkout and checkout[0].get("with", {}).get("ref") == "dev", f"{name} checks out dev"
-        runs = [s.get("run", "") for s in job["steps"]]
-        mode = "-n auto" if "xdist" in name else "-p no:xdist"
-        shard = name.rsplit("-", 1)[1]
-        assert any(mode in r and f"ci_shards.py {shard}" in r for r in runs), \
-            f"{name} runs shard {shard} in the mode {mode!r}"
+        assert checkout and checkout[0].get("with", {}).get("ref") == "${{ needs.dev-sha.outputs.sha }}", \
+            f"{name} checks out the dev sha the sha job read"
+        assert (job.get("env") or {}).get("SQUAD_CI_RUNNER") == "1", f"{name} deselects what a Linux runner lacks (ADR-0139)"
+        runs = [s["run"] for s in job["steps"] if "pytest" in s.get("run", "")]
+        assert runs == [s["run"] for s in ci[name]["steps"] if "pytest" in s.get("run", "")], \
+            f"{name} runs the command of its complete-tier sibling in ci.yml"
         assert "not heavy" not in " ".join(runs), f"{name} deselects the heavy tests"

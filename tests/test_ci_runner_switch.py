@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -75,3 +76,31 @@ def test_the_ci_runner_switch_is_documented_beside_the_test_commands():
     text = INSTALL.read_text()
     assert "SQUAD_CI_RUNNER=1" in text
     assert text.index("SQUAD_CI_RUNNER=1") > text.index("pytest -n auto")
+
+
+
+def _ids(path: Path, extra: dict) -> tuple[set[str], str]:
+    """The node ids pytest collects from one file with the switches given and both nightly switches otherwise off."""
+    env = {k: v for k, v in os.environ.items() if k not in ("SQUAD_CI_RUNNER", "SQUAD_NIGHTLY_LOCAL_HALF")}
+    env.update(extra)
+    r = subprocess.run([sys.executable, "-m", "pytest", str(path), "--collect-only", "-q", "-p", "no:cacheprovider"],
+                       cwd=ROOT, env=env, capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    assert r.returncode in (0, 5), out
+    return {line.strip() for line in r.stdout.splitlines() if "::" in line and not line.startswith("deselected:")}, out
+
+
+@pytest.mark.heavy
+def test_the_local_half_switch_keeps_only_what_a_linux_runner_deselects():
+    """Guard for the nightly's local half (#1975, ADR-0153, ADR-0139): `SQUAD_NIGHTLY_LOCAL_HALF=1` keeps only the tests
+    that a Linux runner deselects by marker, read from the conftest's one deselection rule, never from a second list.
+
+    The node-bound overlay tests stay where node runs, and an unmarked test is left to the GitHub half.
+    """
+    every, _ = _ids(OVERLAY, {})
+    linux, _ = _ids(OVERLAY, {"SQUAD_CI_RUNNER": "1"})
+    local, out = _ids(OVERLAY, {"SQUAD_NIGHTLY_LOCAL_HALF": "1"})
+    assert linux and linux < every, "a Linux runner deselects no overlay test, so the case proves nothing"
+    assert not (local & linux), f"the local half kept a test the Linux runner runs: {sorted(local & linux)[:3]}"
+    if shutil.which("node"):
+        assert local == every - linux, f"the local half is not what the Linux runner deselects: {out}"

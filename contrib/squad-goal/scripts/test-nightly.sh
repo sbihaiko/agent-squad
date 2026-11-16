@@ -635,4 +635,67 @@ kill "$np" 2>/dev/null; wait "$np" 2>/dev/null; rm -rf "$ST/locks/nightly"
 case "$out" in *"the nightly runs"*) ok "the dispatch holds while the nightly runs in its window";;
   *) ko "the dispatch did not hold while the nightly runs: '$out'";; esac
 
+# 34) (#1975) The local half runs only what a Linux runner deselects: both default mode commands carry the conftest's own
+#     switch, SQUAD_NIGHTLY_LOCAL_HALF=1, so the one deselection rule (tests/conftest.py, ADR-0139) picks the tests, never a list here.
+cat > "$T/py" <<EOF
+#!/bin/bash
+[ "\$1" = -c ] && exec python3 "\$@"
+echo "half=\${SQUAD_NIGHTLY_LOCAL_HALF:-} \$*" >> "$T/py.log"; printf '12 passed in 0.10s\n'
+EOF
+chmod +x "$T/py"
+mark; rm -f "$T/py.log"
+out=$(env SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" SG_GHREAD=false bash "$S/nightly.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -c '^half=1 -m pytest' "$T/py.log" 2>/dev/null)" = 2 ] \
+  && /usr/bin/grep -q 'half=1 -m pytest -p no:deepeval -n auto' "$T/py.log" && /usr/bin/grep -q 'half=1 -m pytest -p no:deepeval -p no:xdist' "$T/py.log" \
+  && ok "both default modes run the local half only" || ko "the default modes do not run the local half: rc $rc, '$(cat "$T/py.log" 2>/dev/null)', '$out'"
+end_check
+
+# 35) (#1975) One verdict: the nightly verdict combines the local record and the GitHub half, read through ghcall.sh. Fail in
+#     either half is fail, pass in both on the same dev sha is pass, and any other pair is unproven.
+cat > "$T/ghread" <<EOF
+#!/bin/bash
+echo "\$1" >> "$T/gh.log"
+case "\$1" in
+  *actions/workflows/nightly.yml/runs*) [ "\${GH_RC:-0}" = 0 ] || { echo 'refused: HTTP 403'; exit "\$GH_RC"; }
+    printf '{"workflow_runs":[%s]}' "\${GH_RUN:-}";;
+  *actions/runs/77/artifacts*) printf '{"artifacts":[{"name":"nightly-dev-sha-%s"}]}' "\${GH_SHA:-}";;
+  *) exit 1;;
+esac
+EOF
+chmod +x "$T/ghread"
+vd() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" bash "$S/nightly.sh" --verdict >/dev/null 2>&1
+  v_ts= v_res= v_sha= v_loc= v_gh= v_ghsha=
+  [ -f "$ST/nightly-verdict" ] && IFS=$'\t' read -r v_ts v_res v_sha v_loc v_gh v_ghsha < "$ST/nightly-verdict"; }
+lrec() { printf '%s\t%s\t%s\t%s\t%s\t[]\n' "$(date +%s)" "$1" "$2" "$3" "$4" > "$ST/nightly-result"; }
+done_ok='{"id":77,"status":"completed","conclusion":"success"}'
+done_red='{"id":77,"status":"completed","conclusion":"failure"}'
+running='{"id":77,"status":"in_progress","conclusion":null}'
+vcase() {  # <want> <label> [VAR=val...]
+  local want=$1 label=$2; shift 2; rm -f "$ST/nightly-verdict" "$T/gh.log"; vd "$@"
+  [ "$v_res" = "$want" ] && ok "verdict $want: $label" || ko "verdict '$v_res' (local '$v_loc', github '$v_gh' at '$v_ghsha'), want $want: $label"
+}
+lrec pass "$sha" pass pass
+vcase pass "both halves pass on the same dev sha" GH_RUN="$done_ok" GH_SHA="$sha"
+[ "$v_sha" = "$sha" ] && [ "$v_ghsha" = "$sha" ] && /usr/bin/grep -q 'repos/o/r/actions/workflows/nightly.yml/runs' "$T/gh.log" \
+  && ok "the verdict names the dev sha both halves tested, read through the gh door" || ko "verdict sha '$v_sha', github sha '$v_ghsha', reads '$(cat "$T/gh.log" 2>/dev/null)'"
+vcase fail "the GitHub half fails" GH_RUN="$done_red" GH_SHA="$sha"
+vcase unproven "the GitHub half tested another sha" GH_RUN="$done_ok" GH_SHA=0000000000000000000000000000000000000000
+vcase unproven "the GitHub half is unfinished" GH_RUN="$running" GH_SHA="$sha"
+vcase unproven "the GitHub half has no run" GH_RUN=
+vcase unproven "the GitHub read is refused" GH_RC=2
+lrec fail "$sha" fail pass
+vcase fail "the local half fails, whatever GitHub says" GH_RUN="$done_ok" GH_SHA="$sha"
+lrec bounded "$sha" bounded:signal-15 pass
+vcase fail "a bounded local half and a red GitHub half" GH_RUN="$done_red" GH_SHA="$sha"
+vcase unproven "a bounded local half and a green GitHub half" GH_RUN="$done_ok" GH_SHA="$sha"
+rm -f "$ST/nightly-result"
+vcase unproven "no local record" GH_RUN="$done_ok" GH_SHA="$sha"
+# An unproven verdict is read again by a later cycle, also outside the window, until a pass or a fail settles it.
+lrec pass "$sha" pass pass; rm -f "$ST/nightly-verdict"; touch "$ST/auto/nightly-$(date +%F)"
+vd GH_RUN="$running" GH_SHA="$sha"
+env FAKE_HOUR=05 SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" GH_RUN="$done_ok" GH_SHA="$sha" SG_NIGHTLY_VERDICT_EVERY=0 bash "$S/nightly.sh" >/dev/null 2>&1
+IFS=$'\t' read -r _ v_res _ < "$ST/nightly-verdict" 2>/dev/null
+[ "$v_res" = pass ] && ok "a later cycle settles an unproven verdict" || ko "a later cycle left the verdict '$v_res'"
+
 rm -rf "$T"; exit $fail
