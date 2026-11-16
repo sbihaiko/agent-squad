@@ -31,10 +31,10 @@ _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 # battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
 # enters a wave ungated (ADR-0145 rule 9).
 : "${SG_WAVE_GATES:=bash '$here/fast-gate.sh'}"
-# The wave entry's own battery (wave.sh, #1800): `on` runs it when the entry finds no reusable green verdict; `off` admits the
-# child after its clean rebase with no battery, and the entry records `skipped`. A reuse hit enters as before, and the wave's
-# landing gate proves every child either way.
-: "${SG_WAVE_ENTRY_GATE:=on}"
+# The wave entry's own battery (wave.sh, #1800): `off`, the default (#1802), admits the child after its clean rebase with no
+# battery, and the entry records `skipped`; the wave's landing gate is the one batch gate that proves every child (#1797).
+# `on` runs the battery when the entry finds no reusable green verdict. A reuse hit enters as before.
+: "${SG_WAVE_ENTRY_GATE:=off}"
 # The review a loop run gives each passed child before it merges it (#601, ADR-0145 rule 9): the loop workflow's review gate
 # runs the script this names, and with none set (a run outside the loop) the gate answers "no review here".
 : "${SG_RUN_REVIEW:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runreview.sh}"

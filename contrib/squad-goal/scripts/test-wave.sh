@@ -32,6 +32,7 @@ export SG_RETIRE_CMD=/usr/bin/true
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
   printf ': "${SG_LAND_REMOTE:=%s/origin.git}"; export SG_LAND_REMOTE\n' "$T"   # a case may set its own remote (K3: one that fails on the network)
   printf ': "${SG_WAVE_TIP_GATES:=true}"; export SG_WAVE_TIP_GATES\n'   # the tip's check (#377): `true` unless a case replaces it
+  printf ': "${SG_WAVE_ENTRY_GATE:=on}"; export SG_WAVE_ENTRY_GATE\n'   # the entry cases prove the entry gate, so it is on here (#1802); Z10 names its own
   printf 'export SG_BOARD_VOCAB=shipped\n'   # the vocabulary every wave profile runs on (#468): its columns are the ones the landing writes
   printf '. %s/address.sh\n' "$T/s"
 } > "$T/s/env.sh"
@@ -1771,15 +1772,17 @@ o=$(z10_entry "$T/c970" off 970); rc=$?
 case "$o" in *"entered $W24"*) [ $rc = 0 ] && ok "Z10: the gate off enters a child with no reusable verdict";; *) ko "Z10: the off entry refused the child: rc $rc '$o'";; esac
 [ -s "$BL10" ] && ko "Z10: the off entry ran a battery on a miss: $(cat "$BL10")" || ok "Z10: the off entry runs no battery on a miss"
 case "$(wfact 970 run-24)" in "entered "*skipped*) ok "Z10: the off entry records skipped";; *) ko "Z10: the entry record is '$(wfact 970 run-24)'";; esac
-[ "$(lmode)" = "entry skipped" ] && ok "Z10: the skipped entry is a history row whose mode is skipped" \
-  || ko "Z10: the skipped row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+s970=$($G -C "$T/c970" rev-parse HEAD)
+[ "$(lmode "$s970")" = "entry skipped" ] && ok "Z10: the skipped entry is a history row whose mode is skipped" \
+  || ko "Z10: the skipped row is '$(lmode "$s970")': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
 # (2) The gate off, and a reusable green verdict: the child enters as today, and the entry records reused.
 child 971 g971 "origin/$W24"; rm -f "$BL10"; z10_childgate "$T/c971" >/dev/null; rm -f "$BL10"; REV_BASE=$W24 rev 971
 o=$(z10_entry "$T/c971" off 971); rc=$?
 case "$o" in *"entered $W24"*) ok "Z10: the gate off enters a child whose final gate is a reuse hit";; *) ko "Z10: the reuse hit did not enter: rc $rc '$o'";; esac
 [ -s "$BL10" ] && ko "Z10: the reuse hit ran a second battery: $(cat "$BL10")" || ok "Z10: the reuse hit runs no battery"
-[ "$(lmode)" = "entry reused" ] && ok "Z10: the reuse hit is a history row whose mode is reused" \
-  || ko "Z10: the reuse row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+s971=$($G -C "$T/c971" rev-parse HEAD)
+[ "$(lmode "$s971")" = "entry reused" ] && ok "Z10: the reuse hit is a history row whose mode is reused" \
+  || ko "Z10: the reuse row is '$(lmode "$s971")': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
 # (3) The gate on (the default): a miss runs the battery as before, and the entry records no skip.
 child 972 g972 "origin/$W24"; REV_BASE=$W24 rev 972; rm -f "$BL10"
 o=$(z10_entry "$T/c972" on 972); rc=$?

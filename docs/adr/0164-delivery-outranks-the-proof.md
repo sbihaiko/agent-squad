@@ -37,8 +37,12 @@ A gate attempt ends in one of three outcomes, and the evidence is what tells the
 - **One deadline covers the whole attempt.** The gate, its retry and the delta answer inside one bound, and the delta
   gets a reserved slice of it, so a suite that overruns cannot leave the delta with nothing to prove.
 
-The same reading applies to a landing gate: a gate that cannot finish holds nothing that a bounded proof could answer,
-and a gate that measured a red holds everything until the red is fixed.
+The same reading applies to a landing gate: a gate that measured a red holds everything until the red is fixed.
+
+- **The wave tip's check is the one exception.** A child enters its wave with no battery by default (spec 1797), so the
+  check at the wave tip is the only proof its children get before they reach the base. An unproven tip check never
+  lands the wave: the wave waits, no child is blamed, no try is counted, and the check runs again on a later pass. The
+  wave's age cap bounds the wait.
 
 The ground truth stays off the delivery path. The nightly keeps the full suite in both modes, heavy included
 (ADR-0153); it is what turns a marker or an obligation into a fact, and it never gates a landing.
