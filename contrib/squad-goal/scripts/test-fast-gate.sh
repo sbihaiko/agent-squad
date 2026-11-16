@@ -296,6 +296,17 @@ out2=$(mg "$ms" dev); rc2=$?
 [ "$(lgof "$out2")" = "$(lgof "$out1")" ] && ok "the memo names the log of the pass it reuses" || ko "memo log: '$(lgof "$out2")' vs '$(lgof "$out1")'"
 IFS=$'\t' read -r _ kind res at < "$ms/gate-status" 2>/dev/null
 [ "$kind $res $at" = "fast pass $(git -C "$R" rev-parse HEAD)" ] && ok "a memo hit leaves the hub's pass line for the same sha" || ko "memo status: '$(cat "$ms/gate-status" 2>&1)'"
+# (ADR-0168, #1856) A gate a green verdict already answers is cancelled, and it is still one row: the reader counts the saved
+# gate and reads its wall time as none, so the share of a gate stage that is lock wait is computed, never guessed.
+h0=$(wc -l < "$ms/gate-history" 2>/dev/null | tr -d ' '); h0=${h0:-0}
+out=$(mg "$ms" dev); rc=$?
+h1=$(wc -l < "$ms/gate-history" 2>/dev/null | tr -d ' '); h1=${h1:-0}
+lr=$(tail -n 1 "$ms/gate-history" 2>/dev/null)
+[ $rc = 0 ] && [ "$(( h1 - h0 ))" = 1 ] && [ "$(printf '%s' "$lr" | cut -f8)" = pass ] \
+  && [ "$(printf '%s' "$lr" | cut -f22)" = yes ] && [ "$(printf '%s' "$lr" | cut -f20)" = 0 ] \
+  && [ "$(printf '%s' "$lr" | cut -f17)" = reused ] && [ "$(printf '%s' "$lr" | cut -f1)" = "$(printf '%s' "$lr" | cut -f5)" ] \
+  && ok "a cancelled gate whose verdict is reused writes one row, mode reused, its start at its finish, no wall time and the reuse named" \
+  || ko "reuse row: rc $rc, rows $h0 -> $h1, '$(printf '%s' "$lr")'"
 out=$(memo=0 mg "$ms" dev); rc=$?
 [ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "SG_FAST_MEMO=0 forces a fresh battery" || ko "memo off: rc $rc runs $(battery_runs): $out"
 

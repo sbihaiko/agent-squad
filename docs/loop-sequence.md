@@ -72,7 +72,7 @@ Three rules follow from the list:
 
 - **Live, by CPU:** the hub's `Loop` tab. Its `CPU sampling` switch is off by default; on, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree, with every process outside the loop in one context row.
 - **Slow lane, by wall time:** `$SG_STATE/cycle.log`. A line `HH:MM:SS <step> <secs>s` is a step of 5 s or more; `CYCLE <secs>s` ends each cycle.
-- **Gates:** `$SG_STATE/gate-history`, one line a gate run: kind, scope, outcome, seconds, the machine load at its start and finish, and the entry mode (`gated`, `reused` or `skipped`). `gate_load_set.py` prints the labeled rows.
+- **Gates:** `$SG_STATE/gate-history`, one line a gate run: kind, scope, stage, outcome, the machine load at its start and finish, the entry mode (`gated`, `reused` or `skipped`), the tree it read, the seconds it waited for the lock and its slots, its wall time, the CPU its command spent, and whether its verdict was reused. A gate a green verdict answers is one line too, mode `reused`. `gate_load_set.py` prints the labeled rows; `hub_profiler.gate_queue` answers over one window what share of the gate stage is lock wait and how many distinct trees paid a gate.
 - **Runs:** each `record.jsonl` under `worktrees/*/*/runs/run-*/`: the time between `run_start`, `spawn_accepted`, the child's outcome, each `review_round`, each `gate_start` and `gate_result`, and the verdict.
 - **One pass of one script:** `JANITOR_DRY=1 python3 -m cProfile -s cumtime janitor.py`. A dry pass writes nothing.
 - **Process churn:** count new pids a second by parent tree. A process table read every second misses a process that lives for less, and such processes were the cause of hot spot 3.

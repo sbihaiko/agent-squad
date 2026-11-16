@@ -47,8 +47,8 @@ hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/d
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
 IFS=$'\t' read -r fin kind res at start _ < <(tail -n 1 "$H"); sel=$(tail -n 1 "$H" | cut -f6); scope=$(tail -n 1 "$H" | cut -f7)
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 16 ] && ok "the history line has seventeen fields: the selection and scope, the verdict, the slots, how a red cleared, the caller, the load at the start and at the finish, then the entry mode" || ko "history fields: '$(tail -n 1 "$H")'"
-# (#1798) The entry mode is the last field: a gate that ran its battery is `gated`, and one that ran none is `skipped`.
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 21 ] && ok "the history line has twenty-two fields: the selection and scope, the verdict, the slots, how a red cleared, the stage, the load at the start and at the finish, the entry mode, then the tree, the wait, the wall time, the cpu and the reuse" || ko "history fields: '$(tail -n 1 "$H")'"
+# (#1798) The entry mode is the seventeenth field: a gate that ran its battery is `gated`, and one that ran none is `skipped`.
 [ "$(tail -n 1 "$H" | cut -f17)" = gated ] && ok "a gate that ran a battery names its entry mode gated" || ko "entry mode of a battery gate: '$(tail -n 1 "$H")'"
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$S" 2>/dev/null
@@ -57,7 +57,7 @@ case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$sta
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 
 (cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" sh -c 'exit 7'); rc=$?
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 16 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 21 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
 [ "$(tail -n 1 "$H" | cut -f17)" = skipped ] && ok "a gate that ran no battery names its entry mode skipped" || ko "entry mode of a gate with no battery: '$(tail -n 1 "$H")'"
 
 # --- the load (#1691): a gate line carries the one-minute load at its start and at its finish, so a set of gate runs can be
@@ -192,6 +192,29 @@ rsha=$(git -C "$T/w" rev-parse HEAD)
 [ "$(rh | cut -f14)" = entry ] && ok "a gate row names the caller the environment gave" || ko "caller field: '$(rh)'"
 (cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
 [ "$(rh | cut -f14)" = other ] && ok "a gate row with no caller named reads other" || ko "default caller: '$(rh)'"
+# (#1856) The row tells queue time from work: the tree it read, the seconds it waited for the lock and its slots, its wall
+# time, its CPU and whether the verdict was reused. Without them a window of rows cannot say how much of a gate stage was
+# waiting (ADR-0166: gate wait is no run time).
+(cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_CALLER=landing bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
+row=$(rh); rtree=$(git -C "$T/w" rev-parse 'HEAD^{tree}')
+[ "$(printf '%s' "$row" | awk -F'\t' '{print NF}')" = 22 ] \
+  && ok "a gate row carries twenty-two fields: the entry mode, the tree, the wait, the wall time, the CPU and the reuse" || ko "row width: '$(printf '%s' "$row" | awk -F'\t' '{print NF}')' fields: '$row'"
+[ "$(printf '%s' "$row" | cut -f14)" = landing ] && ok "the landing's gate names its stage landing" || ko "landing stage: '$(printf '%s' "$row" | cut -f14)'"
+[ "$(printf '%s' "$row" | cut -f17)" = gated ] && ok "a landing gate that ran its battery names its mode gated" || ko "mode field: '$(printf '%s' "$row" | cut -f17)'"
+[ "$(printf '%s' "$row" | cut -f18)" = "$rtree" ] && ok "the row names the tree sha the gate read, never only its commit" || ko "tree field: '$(printf '%s' "$row" | cut -f18)', want $rtree"
+[ "$(printf '%s' "$row" | cut -f20)" = "$(( $(printf '%s' "$row" | cut -f1) - $(printf '%s' "$row" | cut -f5) ))" ] \
+  && ok "the row carries its wall time, finish minus start" || ko "wall field: '$(printf '%s' "$row" | cut -f20)' on '$(printf '%s' "$row" | cut -f1)-$(printf '%s' "$row" | cut -f5)'"
+case "$(printf '%s' "$row" | cut -f19)" in ''|*[!0-9]*) ko "wait field is no whole second: '$(printf '%s' "$row" | cut -f19)'";; *) ok "the row carries the lock wait in whole seconds";; esac
+case "$(printf '%s' "$row" | cut -f21)" in ''|*[!0-9]*) ko "cpu field is no whole second: '$(printf '%s' "$row" | cut -f21)'";; *) ok "the row carries the CPU the gate's command spent";; esac
+[ "$(printf '%s' "$row" | cut -f22)" = no ] && ok "a gate that measured the tree itself is not a reuse" || ko "reused field: '$(printf '%s' "$row" | cut -f22)'"
+# The wait is measured from the gate's own start, so a gate queued behind a holder records the seconds it stood in the queue.
+QS=$T/queue; mkdir -p "$QS"
+( SG_STATE="$QS" bash "$d/serial.sh" gate sleep 3 ) 2>/dev/null & qhold=$!
+sleep 1
+(cd "$T/w" && SG_STATE="$QS" SERIAL_POLL_SECONDS=0.2 bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
+qw=$(tail -n 1 "$QS/gate-history" | cut -f19)
+case "$qw" in ''|*[!0-9]*) ko "a queued gate wrote no wait: '$qw'";; *) [ "$qw" -ge 1 ] && ok "a gate queued behind a holder records the seconds it waited" || ko "queued wait: '${qw}s', want 1 or more";; esac
+wait "$qhold" 2>/dev/null
 out=$(rrun red-delta); rc=$?
 [ $rc = 1 ] && [ "$(rh | cut -f8)" = fail ] && [ -n "$(rfile "$rsha")" ] && [ "$(rh | cut -f13)" = red ] \
   && ok "a measured red is recorded, and the history names it red" || ko "red record: rc $rc, '$(rh)'"

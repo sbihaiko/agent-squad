@@ -61,7 +61,7 @@ test-ffland.sh 0.35
 test-gate-attempts.sh 9.36
 test-gate-lock.sh 14.58
 test-gate-watchdog.sh 19.44
-test-gate.sh 64.00
+test-gate.sh 56.27
 test-gh-pass-bounded.sh 3.40
 test-ghcache.sh 2.83
 test-ghcall-refusal.sh 0.41
