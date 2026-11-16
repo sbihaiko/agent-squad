@@ -2882,6 +2882,30 @@ def test_the_gate_rows_read_a_history_line_and_skip_a_line_that_is_no_whole_row(
                      "load_start": 1.5, "load_finish": 2.25}], "a short line, a finish that is no number and an unknown outcome are no row"
 
 
+def test_the_wall_view_reads_the_state_folder_files_into_the_one_fold(served):
+    mod, _, _, state = served
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "steps.tsv").write_text("\n".join(step_lines(
+        ("c", "janitor", NOW - 100, NOW - 70, "done", "0"), ("r", "promote", NOW - 42, None, "", ""))) + "\n")
+    (state / "gate-history").write_text(gate_line(NOW - 20, NOW - 30, outcome="pass") + "\n")
+    out = mod.wall_view(600, NOW)
+    assert [r["name"] for r in out["slow"]] == ["janitor"] and out["slow"][0]["total_s"] == 30.0
+    assert out["running"] == [{"lane": "slow", "name": "promote", "age_s": 42.0}]
+    assert out["gates"] == [{"kind": "gate", "outcome": "pass", "count": 1, "total_s": 10.0, "median_s": 10.0, "p90_s": 10.0,
+                             "load_start": 1.5, "load_finish": 2.25}]
+
+
+def test_the_wall_view_reads_only_the_tail_of_a_file_and_drops_the_cut_line(served, monkeypatch):
+    mod, _, _, state = served
+    state.mkdir(parents=True, exist_ok=True)
+    lines = [gate_line(NOW - 100 * k, NOW - 100 * k - 10) for k in range(5, 0, -1)]   # oldest first
+    (state / "gate-history").write_text("\n".join(lines) + "\n")
+    width = len(lines[0]) + 1
+    monkeypatch.setattr(mod, "WALL_TAIL_BYTES", 2 * width + 10)
+    out = mod.wall_view(86400, NOW)
+    assert sum(r["count"] for r in out["gates"]) == 2, "the two whole lines at the end are read, the cut line before them is dropped"
+
+
 def test_the_wall_view_folds_the_step_records_and_the_gate_history_into_one_answer(prof, steprec):
     steps = steprec.fold(step_lines(("c", "janitor", WALL_NOW - 100, WALL_NOW - 70, "done", "0"),
                                     ("h1", "heartbeat.sh", WALL_NOW - 300, WALL_NOW - 299, "done", "0"),
