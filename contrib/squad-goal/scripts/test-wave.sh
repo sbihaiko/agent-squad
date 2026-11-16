@@ -392,7 +392,7 @@ case "$r" in *"#40"*"did not close"*) ok "E3: the close that failed is named";; 
 [ "$rc" != 0 ] && ok "E3b: a landing that could not close an issue exits non-zero" || ko "E3b: the landing exited 0 with #40 still open"
 [ -e "$T/st/auto/wave-run-3" ] && ok "E3b: the run keeps its wave marker, so a later pass lands it again" || ko "E3b: the wave marker is gone: nothing tries the close again"
 case "$(wfact 40 run-3)" in "owed "*) [ ! -e "$T/st/auto/wowed-run-3" ] && ok "E3b: the owed close is a fact in the issue's ledger, with no wowed- marker" || ko "E3b: a wowed- marker is written";; *) ko "E3b: ledger fact of #40: '$(wfact 40 run-3)'";; esac
-printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\nfor a in "$@"; do case "$a" in body=@*) cat "${a#body=@}" >> "%s/gh-bodies.log";; esac; done\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 : > "$T/gh.log"; : > "$T/board.log"; : > "$T/pushes.log"; dev0=$($O rev-parse dev)
 r=$(land2 run-3); rc=$?
 [ $rc = 0 ] && ok "E3b: the later pass delivers the owed issue (exit 0)" || ko "E3b: the later pass exited $rc: '$r'"

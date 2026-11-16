@@ -361,7 +361,7 @@ stop() {
 # loop_caused <why> [own|loop]: the loop caused this requeue, not the issue's work (#621): a child a held gate lock or the
 # wave's age cap kept out of the wave (#682; a wave that landed without a child for a cause wave.sh did not record is no loop
 # cause, so the janitor's "unknown" counts as the issue's own), an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
-# wrote no ruling (every model failed, or a hold with no verdict), a red base battery no child's own suite names (#663), a
+# wrote no ruling (every model failed, or a hold with no verdict), a red tip a child that broke it cannot leave (#663), a
 # run that completed with nothing landed, a prerequisite the loop could not resolve (no profile, a sandbox denial), and a
 # network failure, and a finished run that cut no wave (#1349). A full gate budget is one of them wherever it is named: the
 # take prints "caps.gates is full", a wait past its bound "runs with 1 worker and no slot", and a gate that gave the lock back
@@ -825,7 +825,9 @@ child_gate() {
 # check is unproven (spec 1163, #1174), so the wave lands with its obligation and no child is blamed. The gate's word
 # decides: pass and unproven admit, fail is the red path. 6 (#1687): the tip is red on a tree a gate passed before with the
 # same suite, so the red may be the machine's and no child is blamed on it: the check runs again on a later pass, once per
-# (wave, tip). A second red on that same tip takes the red path.
+# (wave, tip). A second red on that same tip takes the red path. 7 (#1961): the tip is red, no child names the cause, and the
+# red is held: it was red twice on the same tree with the same failing tests, or the rerun named another set; a first red
+# runs once more on the same tree in the same pass, and a green rerun of the same suite releases it (flake_release).
 # passed_before <sha> <kind> <selection> <scope>: the gate history holds a pass for this tree and this suite (#1687, #1700):
 # a full battery (scope full, an `all: <reason>` selection) whatever its kind, or a delta of the tip check's own kind over
 # the tip check's own selection. A row that named no selection ran no battery, so it covers nothing.
@@ -844,14 +846,65 @@ tip_suite() {
 # tipred_file <wave>: the second-look marker (#1687, #1700). It names the one tip that spent the wave's second look, and it
 # goes when the check settles and the wave lands or stops, so no marker outlives its tip or its wave.
 tipred_file() { printf '%s/auto/tipred-%s\n' "$SG_STATE" "$(printf '%s' "$1" | tr / _)"; }
+# The measured-red marker (#1961) sits beside the second-look marker: <marker>.red holds, one a line, the tip sha, the key of
+# its failing-test set ("-" when the log names no test), the reds measured on that sha and set, and the kind, selection and
+# scope of the check that measured them. <marker>.red.tests is the set and <marker>.red.lines the first red's failure lines,
+# for the bug a green rerun files. A red that names no child runs once more on the same tree; a second red on the same tree
+# and set runs no third check until the tip moves, and the landing counts it as a try (stuck), so the cap and the owner's
+# alert apply. A green rerun of the same suite releases the red; a narrower or unproven rerun never does (ADR-0164).
+tipred_clear() { local m; m=$(tipred_file "$1"); rm -f "$m" "$m.red" "$m.red.tests" "$m.red.lines"; }
+# red_read <wave>: the measured-red marker into r_sha r_key r_n r_k r_sel r_sc; exit 1 when there is none.
+red_read() {
+  r_sha=; r_key=; r_n=0; r_k=; r_sel=; r_sc=
+  local f; f="$(tipred_file "$1").red"; [ -f "$f" ] || return 1
+  { IFS= read -r r_sha; IFS= read -r r_key; IFS= read -r r_n; IFS= read -r r_k; IFS= read -r r_sel; IFS= read -r r_sc; } 2>/dev/null < "$f"
+  case $r_n in ''|*[!0-9]*) r_n=0;; esac
+  [ -n "$r_sha" ]
+}
+# red_write <wave> <sha> <key> <reds> <kind> <selection> <scope>: the marker's one write; exit 1 when it did not land.
+red_write() { local f; f="$(tipred_file "$1").red"; mkdir -p "$SG_STATE/auto" 2>/dev/null && printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$2" "$3" "$4" "$5" "$6" "$7" > "$f" 2>/dev/null; }
+# red_set <log>: the failing tests a check log names, sorted, one a line: pytest's FAILED and ERROR node ids, a shell suite's FAIL lines.
+red_set() { awk '/^(FAILED|ERROR) /{ print $2; next } /^FAIL /{ sub(/^FAIL /, ""); print }' "$1" 2>/dev/null | sort -u; }
+# set_key <set>: the key of a failing-test set; "-" for an empty set, which counts as the same set as any other.
+set_key() { [ -n "$1" ] || { echo -; return 0; }; printf '%s\n' "$1" | cksum | awk '{ print $1 }'; }
+# flake_release <wave> <sha>: a green rerun of the same suite released the red on this tree. The release is named and kept
+# in wave-flake.tsv, and the flaky check is filed as one bug through the loop's one filing door (autohunt.sh --file), once
+# per failing-test set: a set already filed is named, never filed again.
+flake_release() {
+  local w=$1 sha=$2 m fp tests lines body out first more
+  m=$(tipred_file "$w")
+  tests=$(cat "$m.red.tests" 2>/dev/null); fp=$r_key; [ "$fp" != - ] || fp="tree-$sha"
+  echo "WAVE $w: the tip's check was red on $sha and green on its rerun: released by the green run on the same tree"
+  printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$w" "$sha" "$fp" >> "$SG_STATE/wave-flake.tsv" 2>/dev/null
+  if [ -e "$SG_STATE/auto/flake-filed-$fp" ]; then echo "WAVE-FLAKE $w: the flaky check (${tests:-no test named}) is already filed as a bug"; return 0; fi
+  first=$(printf '%s\n' "$tests" | head -1); more=$(printf '%s\n' "$tests" | /usr/bin/grep -c .)
+  [ "$more" -gt 1 ] 2>/dev/null && first="$first and $((more - 1)) more"
+  body=$(mktemp) || return 0
+  lines=$(cat "$m.red.lines" 2>/dev/null)
+  printf 'The check at the tip of %s was red on tree %s and green when it ran again on the same tree with the same suite, so the landing released the red and the wave landed. The failing tests are flaky.\n\nFailing tests:\n```\n%s\n```\n\nFailure lines of the red run:\n```\n%s\n```\n' \
+    "$w" "$sha" "${tests:-none named by the check log}" "${lines:-none kept}" > "$body"
+  out=$(SG_FILED_BY=wave SG_FILED_LABELS="${SG_FRONTIER_LABEL:-ready-for-agent}" bash "$here/autohunt.sh" --file "flaky test: ${first:-the tip check of a wave} is red, then green on the same tree" "$body" --fingerprint "$fp" 2>&1)
+  rm -f "$body"
+  case "$out" in *"HUNT filed"*|*"HUNT dup"*) : > "$SG_STATE/auto/flake-filed-$fp" 2>/dev/null; echo "WAVE-FLAKE $w: the flaky check is filed as a bug: $out";;
+    *) echo "WAVE-FLAKE $w: the bug for the flaky check was not filed: $out";; esac
+  return 0
+}
 wave_check() {
-  local S=$1 w=$2 rc crc found cx clog oc of hsha mk look=1 tk tsel tsc hb hid
+  local S=$1 w=$2 rc crc found cx clog oc of hsha mk look=1 tk tsel tsc hb hid known rset rkey
   waitwhy=   # the one cause of exit 3, read by the landing (#1700)
   [ -n "$tipgate" ] || return 0
   mk=$(tipred_file "$w")
+  # Two reds on this tree and set (#1961): no third check until the tip moves, and the landing counts the hold.
+  hsha=$($G -C "$S" rev-parse HEAD 2>/dev/null)
+  if [ -n "$hsha" ] && red_read "$w" && [ "$r_sha" = "$hsha" ] && [ "$r_n" -ge 2 ]; then
+    echo "WAVE CHECK RED $w: the tip's check was red twice on the same tree with the same failing tests ($(tr '\n' ' ' < "$mk.red.tests" 2>/dev/null)); held until the tip moves: no third check runs on this tree"
+    return 7
+  fi
   of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
     clog="$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log"   # the check's own output, kept: a red that names no cause has to name its log (#447)
+    hsha=$($G -C "$S" rev-parse HEAD 2>/dev/null)
+    known=; red_read "$w" && [ -n "$hsha" ] && [ "$r_sha" = "$hsha" ] && [ "$r_n" -ge 1 ] && known=1   # a red already measured on this tree
     [ -z "$of" ] || : > "$of"
     # The check waits for the gate lock a bounded time (SERIAL_WAIT_SECONDS, 900 s): a try that gave up on its first look lost the
     # cycle, and the wave waited a whole cycle for each retry (#946 lost three cycles). The landing runs in its own detached pass
@@ -877,26 +930,35 @@ wave_check() {
       rm -f "$of"; return 3
     fi
     [ $rc = 75 ] && waited_out "$(cat "$clog")" && { waitwhy="the tip's check did not run: the bounded wait for the gate lock ran out"; rm -f "$of"; return 3; }
+    case "$oc" in pass|unproven|fail) ;; *) oc=; [ $rc = 0 ] && oc=pass; [ $rc = 4 ] && oc=unproven;; esac   # a raw check that names no word: exit 0 passes, 4 keeps the old inconclusive code (#699)
+    # A red already measured on this tree (#1961) is released only by a green run of the same suite: an unproven run never
+    # releases it, and neither does a narrower one (another selection or scope that is not a full battery). Either waits.
+    if [ -n "$known" ]; then
+      case "$oc" in
+        unproven) waitwhy="the rerun of the tip's check on the tree that was red is unproven, and an unproven run never releases a red"; rm -f "$of"; return 3;;
+        pass) IFS=$'\t' read -r tk tsel tsc < <(tip_suite "$hsha" "$hb")
+          if [ -n "$r_k$r_sel$r_sc" ] && [ -n "$tk$tsel$tsc" ] && [ "$tk|$tsel|$tsc" != "$r_k|$r_sel|$r_sc" ] && { [ "$tsc" != full ] || [ "${tsel#all: }" = "$tsel" ]; }; then
+            waitwhy="the rerun of the tip's check ran another suite ($tk, ${tsel:-no selection}, ${tsc:-no scope}) than the red ($r_k, ${r_sel:-no selection}, ${r_sc:-no scope}), and a narrower run never releases a red"; rm -f "$of"; return 3
+          fi
+          flake_release "$w" "$hsha"; rm -f "$clog" "$of" "$mk"; tipred_clear "$w"; return 0;;
+      esac
+    fi
     case "$oc" in
       pass) rm -f "$clog" "$of" "$mk"; return 0;;
       unproven) rm -f "$of" "$mk"; return 5;;   # the wave lands with its obligation, so no tip waits for a second look; the log stays, as it does for a red
-      fail) : ;;                          # the red path below
-      *) [ $rc = 0 ] && { rm -f "$clog" "$of" "$mk"; return 0; }
-         [ $rc = 4 ] && { rm -f "$of" "$mk"; return 5; }   # a raw check that names no word keeps the old inconclusive code (#699)
-         : ;;                                          # any other exit is the red path below
+      *) : ;;                             # fail, and any other exit: the red path below
     esac
-    hsha=$($G -C "$S" rev-parse HEAD 2>/dev/null)
     # Only before a child left in this pass: one marker cannot follow two tips (#1699). The pass row must name the tip check's
     # own kind, selection and scope, and the marker's write must land, or the next pass answers the same second look again and
     # the wave never lands (#1700).
-    if [ $look = 1 ] && [ -n "$hsha" ] && [ "$(cat "$mk" 2>/dev/null)" != "$hsha" ]; then
+    if [ -z "$known" ] && [ $look = 1 ] && [ -n "$hsha" ] && [ "$(cat "$mk" 2>/dev/null)" != "$hsha" ]; then
       IFS=$'\t' read -r tk tsel tsc < <(tip_suite "$hsha" "$hb")
       if passed_before "$hsha" "$tk" "$tsel" "$tsc"; then
         if mkdir -p "$SG_STATE/auto" 2>/dev/null && printf '%s\n' "$hsha" > "$mk" 2>/dev/null; then rm -f "$of"; return 6; fi
         echo "WAVE-NOTE $w: the second-look marker $mk cannot be written, so the red takes the usual path"
       fi
     fi
-    found=""; while read -r sha; do
+    found=""; [ -n "$known" ] || while read -r sha; do
       [ -n "$sha" ] || continue
       touch "$SG_STATE/locks/single-wland/round" 2>/dev/null   # each child's own suite is a gate round too (#1290)
       child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")" "$clog"; crc=$?
@@ -905,7 +967,33 @@ wave_check() {
       [ $crc = 9 ] && { waitwhy="the tip's check has no verdict: the own check of #$(child_of "$S" "$sha") measured nothing (${cpwhy:-no verdict})"; rm -f "$of"; return 3; }
       [ $crc = 0 ] || { found=$sha; break; }
     done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)   # newest first: the last entrant is tried first
-    [ -n "$found" ] || { rm -f "$of"; echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause (the check's own output is $clog)"; return 1; }
+    # No child names the cause: the red is the tree's, measured, and never the loop's (#1961). A second look the tip already
+    # spent (#1687) is a red on this tree that named no test, which counts as the same set.
+    if [ -z "$found" ]; then
+      rm -f "$of"
+      [ -n "$known" ] || { [ -n "$hsha" ] && [ "$(cat "$mk" 2>/dev/null)" = "$hsha" ] && { known=1; r_key=-; r_n=1; r_k=; r_sel=; r_sc=; }; }
+      rset=$(red_set "$clog"); rkey=$(set_key "$rset")
+      IFS=$'\t' read -r tk tsel tsc < <(tip_suite "$hsha" "$hb")
+      if [ -n "$known" ] && { [ "$rkey" = "$r_key" ] || [ "$rkey" = - ] || [ "$r_key" = - ]; }; then
+        [ "$rkey" != - ] || rkey=$r_key
+        red_write "$w" "$hsha" "$rkey" 2 "${r_k:-$tk}" "${r_sel:-$tsel}" "${r_sc:-$tsc}" || echo "WAVE-NOTE $w: the measured-red marker cannot be written, so the next pass runs the check again"
+        [ -z "$rset" ] || printf '%s\n' "$rset" > "$mk.red.tests" 2>/dev/null
+        echo "WAVE CHECK RED $w: the tip's check was red twice on the same tree with the same failing tests ($(printf '%s' "${rset:-$(cat "$mk.red.tests" 2>/dev/null)}" | tr '\n' ' ')); held until the tip moves: no third check runs on this tree (the check's own output is $clog)"
+        return 7
+      fi
+      printf '%s\n' "$rset" > "$mk.red.tests" 2>/dev/null
+      { /usr/bin/grep -E '^(FAILED|ERROR|FAIL) |^E   ' "$clog" | head -60 | /usr/bin/grep . || tail -40 "$clog"; } > "$mk.red.lines" 2>/dev/null
+      if ! red_write "$w" "$hsha" "$rkey" 1 "$tk" "$tsel" "$tsc"; then
+        echo "WAVE CHECK RED $w: the tip's check is red, no child names the cause, and the measured-red marker cannot be written, so the red is held (the check's own output is $clog)"
+        return 7
+      fi
+      if [ -n "$known" ]; then   # the same tree, another failing set: one more run, on a later pass
+        echo "WAVE CHECK RED $w: the tip's check is red again on the same tree with other failing tests ($(printf '%s' "$rset" | tr '\n' ' ')); held, and the next pass runs it once more (the check's own output is $clog)"
+        return 7
+      fi
+      echo "WAVE CHECK RED $w: the tip's check is red ($(printf '%s' "${rset:-no test named}" | tr '\n' ' ')) and no child's own check names the cause: it runs once more on the same tree"
+      continue
+    fi
     cx=$(child_of "$S" "$found")
     $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1; rm -f "$of"
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
@@ -1053,7 +1141,7 @@ stuck() {
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$(tipred_file "$w")"   # a wave that stopped for good leaves no tip to check again (#1700)
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; tipred_clear "$w"   # a wave that stopped for good leaves no tip to check again (#1700)
   if [ -n "${all// /}" ]; then echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $held"
   else echo "WAVE NEEDS-HUMAN $w: the landing failed and the wave names no issue; the run's wave marker is cleared and $held"; fi
   return 1
@@ -1376,7 +1464,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
         rm -rf "$S"; return 1
       fi
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$refused" "$(tipred_file "$w")"
+      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$refused"; tipred_clear "$w"
       if [ -n "$landed" ]; then
         echo "WAVE $w already landed in $base (its tip is in the base; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
       else
@@ -1409,6 +1497,9 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # The check ran no verdict: the one cause it met is named, with the check's own log, so the next pass reads the trace (#1700).
     [ $rc = 3 ] && { wwhy=${waitwhy:-the tip check ran no verdict}; echo "WAVE WAIT $w: $wwhy; the wave lands on a later pass (the check's own output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
     [ $rc = 6 ] && { echo "WAVE WAIT $w: the tip's check is red on a tree a gate passed before, so no child is blamed on this red; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
+    # 7 (#1961): the tip is red on this tree and no child names the cause, measured twice, or held for its next run. It is a
+    # landing that failed on the tree's own red, never the loop's cause, so each pass counts a try and the cap reaches the owner.
+    [ $rc = 7 ] && { stuck "$run" "$w" "$S" "the check at the tip of $w is red on the same tree after its rerun and names no child: it is held until the tip moves (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
     tipobl=
     [ $rc = 5 ] && { ob=$(obligation_of "$(sc rev-parse HEAD)"); tipobl=$ob; echo "WAVE $w: the tip's check is unproven: the wave lands with its obligation${ob:+ $(basename "$ob")}${ob:- (none: the tip check wrote no obligation record)}"; }
     { [ $rc = 0 ] || [ $rc = 5 ]; } || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
@@ -1441,7 +1532,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"
-  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$(tipred_file "$w")"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
+  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; tipred_clear "$w"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
   sg_base_red "$base" >/dev/null   # the base right after the push (#786): a red head the wave lands on is reported now
   printf '%s\n' "$rows" | while read -r k sha ns; do
     [ "$k" = A ] && echo "WAVE-NOTE $w: commit ${sha:0:9} names several issues ($ns) and closes none of them"; done

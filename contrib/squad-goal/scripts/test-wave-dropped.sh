@@ -66,7 +66,7 @@ case "$r" in *"landed in dev (#93)"*) ok "b: the landing names #93 only";; *) ko
 # c: an interrupted bisection (the child leaves, then the tip's check holds), then a retry that lands the original wave:
 # the issues whose work landed close.
 mkrun run-c 94 "bad work 94 (Refs #94)"; entered run-c 94; : > "$T/gh.log"; rm -f "$T/n-c"
-TIPC='n=$(cat "$SG_STATE/n-c" 2>/dev/null || echo 0); echo $((n + 1)) > "$SG_STATE/n-c"; if [ $n = 0 ]; then ! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q bad; elif [ $n = 1 ]; then echo "serial: waited 1s for lock gate"; exit 75; else true; fi'
+TIPC='n=$(cat "$SG_STATE/n-c" 2>/dev/null || echo 0); echo $((n + 1)) > "$SG_STATE/n-c"; if [ $n = 0 ]; then ! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q bad; elif [ $n = 1 ]; then echo "serial: waited 1s for lock gate (bounded)"; exit 75; else true; fi'
 r=$(DROP=94 SG_WAVE_TIP_GATES=$TIPC SG_WAVE_CHILD_GATES=$CHILDRED land run-c); rc=$?
 [ $rc != 0 ] && [ -z "$(closes)" ] && ok "c: the interrupted landing closes nothing" || ko "c: exit $rc, closes '$(closes)': '$r'"
 r=$(SG_WAVE_TIP_GATES=true land run-c); rc=$?
