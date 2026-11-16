@@ -1,9 +1,13 @@
 #!/bin/bash
 # usage: wtclean.sh   (from watch.sh) Removes squad child worktrees under $SG_CHECKOUT/runs/*/ws once their run has a
 # verdict (or the run is a zombie: no verdict, idle 20 min, no process inside), the tree is clean and HEAD is on a remote branch. The run folder and its dashboard server are left alone (the hub lists runs from live servers). A finished worktree
-# whose HEAD is on no remote branch (a run that landed commits without pushing) is kept and reported once as WT UNPUSHED: the
-# work is preserved and a person, or the next run, decides what to do with it. A run whose wave has not landed is held
-# whatever the tree holds (WT HELD wave): the wave entry reads the child's worktree after the verdict (ADR-0145 rule 9).
+# whose HEAD is on no remote branch is SALVAGED, never kept for good (#2020): the pass writes the local ref
+# refs/salvage/wt/<tree path> at its HEAD, then removes the tree, and logs the ref and the sha. The ref is the preservation and
+# it pushes nothing; a person, or the next run, lands the work from it. The ref name is the tree's path under the checkout,
+# because a tree's own name repeats (`w`, the router's child name) and two runs' trees must never share one ref. A tree a live
+# process works in, a tree with uncommitted work and a tree that holds another registered worktree stay. A run whose wave has
+# not landed is held whatever the tree holds (WT HELD wave): the wave entry reads the child's worktree after the verdict
+# (ADR-0145 rule 9).
 # A tree that holds a checked out submodule is its own class: git refuses to remove such a tree whole (`fatal: working trees
 # containing submodules cannot be moved or removed`, a line with no run id in it), so every removal here carries the flag that
 # case needs, and the line names the run or the tree. One the flag still cannot free is reported once as WT KEPT submodule.
@@ -140,24 +144,29 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
     grep -qx "wave $w" "$seen" || { echo "WT HELD wave ${run##*/} ${w##*/}: the run's wave has not landed; kept"; echo "wave $w" >> "$seen"; }
     continue; fi
   inner "$w" && { kept "${run##*/}" "$w" inner "another worktree lies inside it"; continue; }
+  in_use "$w" && { kept "${run##*/}" "$w" use "a live process works in it"; continue; }
   [ -z "$(dirt "$w")" ] || { kept "${run##*/}" "$w" dirt "uncommitted work in it"; continue; }
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
-  local_only=$($G branch --format='%(refname:short)' --contains "$sha" 2>/dev/null | grep '^squad/run/' | head -1)
-  local_refs=
+  # #2020: a clean tree of an ended run whose commits are on no remote branch is salvaged, never kept for good. The ref holds the
+  # work once the tree and its branch are gone, so nothing is lost and nothing is pushed.
   if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
-    local_refs=$($G -C "$w" log --format=%B%x1e "origin/$SG_BASE..$sha" 2>/dev/null | awk -v RS='\036' '/Refs #[0-9]+/ && $0 !~ /TDD RED/ {f=1} END {print f}')
-    empty_wave=; [ -e "$SG_STATE/auto/waved-${run##*/}" ] && empty_wave=1
-    # A local branch is not a salvage destination. Keep it only for undelivered issue work or an empty landed wave.
-  fi
-  if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && { [ -z "$local_only" ] || [ "$local_refs" = 1 ] || [ -n "$empty_wave" ]; }; then
-    grep -qx "$w" "$seen" && continue
     # #767: the branch passes and the frontier see only `fix/<n>-…` or `gui/<n>-…` (workbranches.sh), so the line names the
     # push under such a name: the tree's own name when it is one and the push is a fast-forward, else a fresh one to fill in
     to='fix/<n>-<slug>'
     if printf '%s' "$own" | grep -qE '^(fix|gui)/[0-9]+([^0-9]|$)'; then
       { ! $G rev-parse -q --verify "refs/remotes/origin/$own" >/dev/null || $G merge-base --is-ancestor "origin/$own" "$sha"; } && to=$own; fi
-    echo "WT UNPUSHED ${run##*/} ${sha:0:9}: finished run with commits on no remote branch; kept; salvage: git push origin ${sha:0:9}:refs/heads/$to"; echo "$w" >> "$seen"; continue; fi
+    rel=${w#"$SG_CHECKOUT"/}; [ "$rel" = "$w" ] && rel=${w#/}   # a registered path the resolved checkout does not prefix
+    ref="refs/salvage/wt/$(printf '%s' "$rel" | tr '/' '_')"
+    if $G -C "$w" update-ref "$ref" "$sha" 2>/dev/null; then
+      wt_remove "$SG_CHECKOUT" "$w"; rc=$?
+      if [ $rc = 0 ]; then echo "WT SALVAGED ${run##*/} ${w##*/} ${sha:0:9} $ref; a person lands it: git push origin ${sha:0:9}:refs/heads/$to"
+        case $own in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$own" >/dev/null 2>&1;; esac   # its work is in the ref: the branch goes with the tree
+      elif [ $rc = 2 ]; then grep -qx "sub $w" "$seen" || { echo "WT KEPT submodule ${run##*/} ${sha:0:9} ${w}: a checked out submodule git refuses to remove, even with --force; its work is at $ref; kept"; echo "sub $w" >> "$seen"; }
+      else grep -qx "unpushed $w" "$seen" || { echo "WT KEPT unpushed ${run##*/} ${w##*/}: git refused to remove the tree; its work is at $ref; kept"; echo "unpushed $w" >> "$seen"; }; fi
+    else grep -qx "unpushed $w" "$seen" || { echo "WT KEPT unpushed ${run##*/} ${w##*/}: the pass could not write $ref; the tree stays; kept"; echo "unpushed $w" >> "$seen"; }; fi
+    continue
+  fi
   b=$($G -C "$w" branch --show-current)
   wt_remove "$SG_CHECKOUT" "$w"; rc=$?
   if [ $rc = 0 ]; then echo "WT CLEAN ${run##*/} ${b:-detached} ${sha:0:9}${wt_forced:+ (submodule tree: removed with --force)}"

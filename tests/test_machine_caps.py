@@ -628,6 +628,18 @@ def test_the_cli_takes_and_releases_a_count_of_slots(tmp_path):
     assert json.loads(cli(tmp_path).stdout)["occupancy"]["gates"] == 0
 
 
+def test_the_command_with_no_target_reads_the_project_file_of_the_working_directory(tmp_path):
+    proj = project(tmp_path, runs=4, gates=3)
+    out = json.loads(cli(proj).stdout)
+    assert (out["runs"], out["gates"]) == (4, 3)
+    assert out["project"]["path"] == str((proj / "docs" / "squad" / "defaults.yaml").resolve())
+
+
+def test_the_command_with_no_target_and_no_project_file_reads_the_plugin_values(tmp_path):
+    out = json.loads(cli(tmp_path).stdout)
+    assert (out["runs"], out["gates"]) == (10, 12) and out["project"] is None
+
+
 def test_a_gate_asking_for_more_than_the_project_ceiling_takes_the_ceiling_and_never_waits(tmp_path):
     proj = project(tmp_path, gates=2)
     t0 = time.monotonic()

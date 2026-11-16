@@ -44,10 +44,12 @@ hour2() { python3 -c 'import os, sys, time; t = time.time() - 7200; os.utime(sys
 line lover '{"event": "run_start", "pos": 1}' "$(v failed '["x"]' '["n1"]')"; hour2 lover; : > "$T/st/auto/waved-run-lover"
 line lrem '{"event": "run_start", "pos": 1}' "$(v failed '["x"]' '["n1"]')"; hour2 lrem
 # #708: an ended run (a verdict after its last start or resume) whose wave is not open (no wave-<run>) and whose record is an
-# hour idle leaves active-runs.txt, whatever keeps its tree: a child tree with commits on no remote (WT UNPUSHED), a needs-human
-# or paused verdict. The tree stays. A run resumed after its verdict, or one whose record moved this hour, keeps its line.
+# hour idle leaves active-runs.txt, whatever keeps its tree: a dirty child tree, a child tree with commits on no remote (that one
+# is salvaged into refs/salvage/wt/<tree path> and removed, #2020), a needs-human or paused verdict. A run resumed after its
+# verdict, or one whose record moved this hour, keeps its line.
 line lunp '{"event": "run_start", "pos": 1}' "$(v completed)"; $G worktree add -q -b squad/run-lunp/c runs/run-lunp/ws/c origin/main
 $G -C runs/run-lunp/ws/c -c user.email=a@b -c user.name=t commit -q --allow-empty -m unpushed
+lunpsha=$($G -C runs/run-lunp/ws/c rev-parse HEAD)   # read before the pass: the salvaged tree is gone after it
 line lhuman '{"event": "run_start", "pos": 1}' "$(v needs-human)"
 line lpaused '{"event": "run_start", "pos": 1}' "$(v stopped '["paused:owner"]')"
 line lresumed '{"event": "run_start", "pos": 1}' "$(v stopped)" '{"event": "resume", "pos": 3}'
@@ -92,6 +94,7 @@ case "$lines" in *run-lgone*) ko "#1433: a line whose run folder is gone kept it
 case "$out" in *"RUN GONE run-lgone"*) ok "#1433: the pass names the run whose folder is gone";; *) ko "#1433: the dropped line is silent: $out";; esac
 case "$lines" in *run-lnever*) ok "#1433: a launch whose folder stands and has no record yet keeps its line";; *) ko "#1433: a launch with no record lost its line: $lines";; esac
 case "$lines" in *run-lnew*) ok "#1433: a run that finished inside the lease window keeps its line";; *) ko "#1433: a fresh finished run lost its line: $lines";; esac
-[ -f runs/run-lws/ws/c/f ] && [ -d runs/run-lunp/ws/c ] && ok "the dropped runs keep their trees" || ko "a dropped run lost its tree: $out"
+[ -f runs/run-lws/ws/c/f ] && ok "the dropped run with uncommitted work keeps its tree" || ko "a dropped run lost its dirty tree: $out"
+[ ! -d runs/run-lunp/ws/c ] && [ "$($G rev-parse -q --verify refs/salvage/wt/runs_run-lunp_ws_c 2>/dev/null)" = "$lunpsha" ] && ok "an unpushed child tree of an ended run is salvaged into a ref and removed" || ko "run-lunp's tree was kept or lost: $out"
 [ -d "$T/hm/wt-fresh" ] && ok "a fresh ~/wt-* tree at the base tip: kept" || ko "wt-fresh removed: $out"
 rm -rf "$T"; exit $fail

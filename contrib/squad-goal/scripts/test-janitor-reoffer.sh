@@ -11,8 +11,9 @@
 #  (G) a spec #922 that sits in Doing with no live child goes back to Todo, the column its lift started from (ADR-0143 correction);
 #  (H) a spec #923 in Doing whose child #924 waits in Todo goes back to Todo, the owner's column, not Backlog;
 #  (I) a spec #925 in Code Complete whose child #926 is in Doing under a live run leaves Code Complete for Todo;
-#  (J) a card #927 in Doing with a wave label, no run, no marker and nothing landed goes back to Todo (the one-time recovery);
-#  (K) a card #928 in Doing with no wave label is a hand placement and stays in Doing.
+#  (J) a card #927 in Doing with a recorded dispatch, no run, no marker and nothing landed goes back to Todo (the one-time
+#      recovery); it carries no wave label, so the label is no proof of the loop's ownership;
+#  (K) a card #928 in Doing with no recorded dispatch is a hand placement and stays in Doing.
 # Stubbed gh and board; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-reoffer.sh [janitor.py]
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
@@ -54,7 +55,6 @@ case "$a" in
       [ "$n" = 914 ] && labs='{"nodes":[{"name":"frozen:owner"}]}'
       [ "$n" = 920 ] || [ "$n" = 922 ] && labs='{"nodes":[{"name":"spec"}]}'
       [ "$n" = 923 ] || [ "$n" = 925 ] && labs='{"nodes":[{"name":"spec"}]}'
-      [ "$n" = 927 ] && labs='{"nodes":[{"name":"wave:3"}]}'
       subs='{"nodes":[]}'
       [ "$n" = 920 ] && subs='{"nodes":[{"number":921}]}'
       [ "$n" = 923 ] && subs='{"nodes":[{"number":924}]}'
@@ -80,6 +80,8 @@ echo run-missing >> "$T/st/active-runs.txt"; echo run-missing > "$T/st/auto/disp
 mk run-child 921; echo run-child > "$T/st/auto/disp-921"
 # I: the child #926 of spec #925 (in Code Complete) is in Doing under a live run
 mk run-child2 926; echo run-child2 > "$T/st/auto/disp-926"
+# J: a run recorded that it dispatched #927 (its entered fact in the issue's ledger), and it is gone; the card carries no wave label
+SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" wave 'x/y#927' run-old entered 'the child entered the wave' >/dev/null
 run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_BOARD_VOCAB=shipped JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 bc() { cat "$T/board.calls" 2>/dev/null; }
 o=$(run)
@@ -101,7 +103,7 @@ after=$(/usr/bin/grep -c '^o 4 ' "$T/board.calls" 2>/dev/null)
 /usr/bin/grep -q '^o 4 Todo 923$' "$T/board.calls" 2>/dev/null && ok "H: a spec in Doing whose child waits in Todo returns to Todo" || ko "H spec #923 not in Todo: $(bc) $o"
 /usr/bin/grep -q '^o 4 Backlog 923$' "$T/board.calls" 2>/dev/null && ko "H spec #923 returned to Backlog, not the owner's column: $(bc)" || ok "H: the owner's column is not Backlog for it"
 /usr/bin/grep -q '^o 4 Todo 925$' "$T/board.calls" 2>/dev/null && ok "I: a spec in Code Complete with a child in Doing returns to Todo" || ko "I spec #925 not in Todo: $(bc) $o"
-/usr/bin/grep -q '^o 4 Todo 927$' "$T/board.calls" 2>/dev/null && ok "J: a wave card in Doing with no run, no marker and nothing landed returns to Todo" || ko "J #927 not in Todo: $(bc) $o"
-/usr/bin/grep -q '^o 4 [A-Za-z ]* 928$' "$T/board.calls" 2>/dev/null && ko "K hand-placed #928 written: $(bc)" || ok "K: a card in Doing with no wave label is left alone"
+/usr/bin/grep -q '^o 4 Todo 927$' "$T/board.calls" 2>/dev/null && ok "J: a card in Doing with a recorded dispatch, no wave label, no run, no marker and nothing landed returns to Todo" || ko "J #927 not in Todo: $(bc) $o"
+/usr/bin/grep -q '^o 4 [A-Za-z ]* 928$' "$T/board.calls" 2>/dev/null && ko "K hand-placed #928 written: $(bc)" || ok "K: a card in Doing with no recorded dispatch is left alone"
 /usr/bin/grep -q 'STALE-CARD #911: card Doing behind run run-zombie' "$T/st/cycle.log" 2>/dev/null && ok "A: the reoffer names the card's column as the shipped one" || ko "A message names the wrong column: $(cat "$T/st/cycle.log" 2>/dev/null)"
 rm -rf "$T"; exit $fail

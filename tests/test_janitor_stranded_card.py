@@ -233,6 +233,37 @@ def test_an_open_wave_over_a_live_issue_still_reads_held_by_wave(tmp_path):
     assert f"HELD-BY-WAVE #{N}" in decided(tmp_path), decided(tmp_path)
 
 
+# --- #1987: the stale-Doing recovery reads recorded dispatch evidence, never a wave label ---------------------------
+
+
+@pytest.mark.heavy
+def test_a_doing_card_with_recorded_dispatch_returns_to_todo(tmp_path):
+    """The issue's ledger records that a run dispatched it: the card goes back to Todo with the STALE-CARD line."""
+    sandbox(tmp_path, card="Doing")
+    ledger(tmp_path, "wave", f"x/y#{N}", "run-old", "entered", "the child entered the wave")
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+    assert f"STATUS o 4 Todo {N}" in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"STALE-CARD #{N}" in decided(tmp_path), decided(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_doing_card_with_a_wave_label_and_no_recorded_dispatch_is_left_alone(tmp_path):
+    """The label is no longer proof that the loop owns the card: with no recorded dispatch the card stays."""
+    sandbox(tmp_path, card="Doing", labels="wave:3")
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+    assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"DOING-NO-RUN #{N}" in decided(tmp_path), decided(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_doing_card_with_no_dispatch_evidence_is_left_alone(tmp_path):
+    """A hand placement looks the same: no label and no recorded dispatch keeps the card where the owner put it."""
+    sandbox(tmp_path, card="Doing")
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+    assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"DOING-NO-RUN #{N}" in decided(tmp_path), decided(tmp_path)
+
+
 # --- the class remover: a stranded Code Review or Code Complete card ------------------------------------------------
 
 

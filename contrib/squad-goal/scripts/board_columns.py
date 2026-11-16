@@ -3,8 +3,10 @@
 One entry per column: the fact that sets it, the actor it waits on, whether it is terminal, and the board's own
 order, flow position and colour. The tuple's own order is the colour map's order.
 """
+import functools
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 COLUMNS = (
@@ -22,7 +24,7 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "bd9743eb561aaffd4327db9e7417b165bc6608a65934bf343a53103687a5ebd5"
+PIN_SHA256 = "86ce0d2f5e9fd4518e8839a68123d31cd6ab869aff94ba168260b52d68ddb7bc"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
 # the work reached, so it maps to None and the reconciler writes the marker instead.
@@ -38,10 +40,115 @@ def _pinned_text():
     return text
 
 
-def shipped_columns():
-    """The columns of the shipped definition, in its order: name, fact, actor, terminal."""
-    return [{"name": s["name"], "fact": s["fact"], "actor": s["actor"], "terminal": s["terminal"]}
-            for s in json.loads(_pinned_text())["statuses"]]
+CURRENT_DEFINITION_VERSION = 1   # the version this reader knows; a version it does not know is unknown, never guessed
+
+
+class UnknownDefinition(Exception):
+    """The definition states a version or a fact expression this reader does not know (#1901)."""
+
+
+# The closed grammar (#1901): an expression is a fact name, `all`, `any` or `not`, and nothing else. A fact name must
+# name one of the board's facts, so an expression the loop cannot evaluate is unknown, never read as false.
+KNOWN_FACTS = frozenset({"abandoned", "closed", "in_dev", "gating", "wave_branch", "review_wait", "run_live",
+                         "child_live", "spec", "owner", "gated"})
+
+
+def parse_expression(value, column=None):
+    """One expression of the grammar, parsed: a fact name, `("not", x)`, `("all", (x, ...))` or `("any", (x, ...))`.
+
+    A value outside the grammar raises UnknownDefinition, named with the column it sits in. Nothing else is accepted: an
+    `all` or `any` takes a non-empty list, `not` takes one expression, and a dict holds exactly one operator."""
+    if isinstance(value, str):
+        if value not in KNOWN_FACTS:
+            raise UnknownDefinition(f"column {column!r}: the fact {value!r} is not one of the board's facts")
+        return value
+    if isinstance(value, dict) and len(value) == 1:
+        op, arg = next(iter(value.items()))
+        if op == "not":
+            return ("not", parse_expression(arg, column))
+        if op in ("all", "any") and isinstance(arg, list) and arg:
+            return (op, tuple(parse_expression(x, column) for x in arg))
+    raise UnknownDefinition(f"column {column!r}: {value!r} is outside the grammar (a fact name, all, any, not)")
+
+
+def _evaluate(expression, facts):
+    """True when one parsed expression holds for the facts; a fact the dict lacks is false."""
+    if isinstance(expression, str):
+        return bool(facts.get(expression))
+    op, arg = expression
+    if op == "not":
+        return not _evaluate(arg, facts)
+    if op == "all":
+        return all(_evaluate(x, facts) for x in arg)
+    return any(_evaluate(x, facts) for x in arg)
+
+
+@functools.lru_cache(maxsize=8)
+def _definition_from(text):
+    """The columns one definition text names, each with its parsed `when`; UnknownDefinition when it is unknown.
+
+    A file with no `definition_version` reads as the current version, with today's behaviour: only a version this reader
+    does not know is unknown. An expression outside the grammar is unknown too, named with its column."""
+    data = json.loads(text)
+    version = data.get("definition_version", CURRENT_DEFINITION_VERSION)
+    if version != CURRENT_DEFINITION_VERSION:
+        raise UnknownDefinition(f"the definition version {version!r} is not version {CURRENT_DEFINITION_VERSION}, the one this reader knows")
+    statuses = data.get("statuses") if isinstance(data, dict) else None
+    if not isinstance(statuses, list) or not statuses:
+        raise UnknownDefinition("the definition names no statuses")
+    return tuple({"name": s.get("name"), "fact": s.get("fact"), "description": s.get("description", ""),
+                  "actor": s.get("actor"), "terminal": bool(s.get("terminal")),
+                  "when": parse_expression(s.get("fact"), s.get("name"))}
+                 for s in statuses)
+
+
+@functools.lru_cache(maxsize=1)
+def _shipped_text():
+    """The pinned copy, read and hashed once: a served board asks this rule for every card, and the copy never changes while
+    a process runs. A hand edit is still refused, because the hash is checked before the read is cached."""
+    return _pinned_text()
+
+
+def shipped_definition(text=None):
+    """The columns of the definition, each with its parsed `when` expression; the pinned copy when no text is given."""
+    return _definition_from(text if text is not None else _shipped_text())
+
+
+def shipped_columns(text=None):
+    """The columns of the shipped definition, in its order: name, fact expression, description, actor, terminal."""
+    return [{"name": s["name"], "fact": s["fact"], "description": s["description"], "actor": s["actor"], "terminal": s["terminal"]}
+            for s in shipped_definition(text)]
+
+
+_NOTED = set()   # the unknowns already named on stderr: a reader that meets the same one every card says it once
+
+
+def _note_unknown(unknown):
+    """One stderr line names an unknown definition: a reader never fails silently (#1901)."""
+    if unknown in _NOTED: return
+    _NOTED.add(unknown)
+    print(f"board: {unknown}; the card keeps its last written column", file=sys.stderr)
+
+
+def resolve_column(facts, written=None, text=None):
+    """(column, freeze label or None, unknown name or None) for one card's facts: the one rule both carriers read (#1901).
+
+    The column whose expression is true, and the freeze the facts name. Exactly one column answers; when none or more than
+    one does, the reader guesses nothing. A definition version or an expression this reader does not know returns `written`,
+    the card's last written column, and names the unknown. Facts are booleans, each missing one false."""
+    facts = facts or {}
+    freeze = FREEZE_LABEL["owner"] if facts.get("owner") else FREEZE_LABEL["gated"] if facts.get("gated") else None
+    try:
+        columns = shipped_definition(text)
+    except UnknownDefinition as e:
+        _note_unknown(str(e))
+        return written, freeze, str(e)
+    matched = [c["name"] for c in columns if _evaluate(c["when"], facts)]
+    if len(matched) != 1:
+        unknown = f"the definition names {len(matched)} columns ({', '.join(matched) or 'none'}) for one card; one column answers"
+        _note_unknown(unknown)
+        return written, freeze, unknown
+    return matched[0], freeze, None
 
 
 def pin_drift(published_text):
@@ -50,26 +157,17 @@ def pin_drift(published_text):
     return [f"drift: the published definition differs from the pinned copy {PINNED_COPY.name}; review it, then replace the copy and its hash"]
 
 
-def column_for(facts):
+def column_for(facts, written=None, text=None):
     """(column, freeze label or None) the shipped table names for one open or closed issue's facts.
 
-    The furthest the work reached sets the column; a freeze never moves it (the definition's own rule). Facts are booleans,
-    each missing one false: abandoned, closed, in_dev (the wave is in dev), gating (a gate is live for the wave, or its last
-    attempt ended without a pass and none was made since: #1257), wave_branch, run_live, spec, child_live (a spec
-    whose sub-issue is in flight), owner (an owner label), gated (another item gates it), and review_wait (the child's code
-    is done and its review or a fix round holds it: Code Review, #603). The push, the approval and the dev CI are reported
-    facts, never a column: a card in the wave holds Code Complete until its wave is in dev, and then it is Closed."""
-    freeze = FREEZE_LABEL["owner"] if facts.get("owner") else FREEZE_LABEL["gated"] if facts.get("gated") else None
-    if facts.get("abandoned"): return "Abandoned", freeze
-    if facts.get("closed") or facts.get("in_dev"): return "Closed", freeze
-    if facts.get("gating"): return ROLE["gating"], freeze
-    if facts.get("wave_branch"): return "Code Complete", freeze
-    if facts.get("review_wait"): return CODE_REVIEW, freeze
-    if facts.get("run_live"): return DOING, freeze
-    # A spec is a document, never work (ADR-0142): a ticket in flight lifts its card to Todo, never to a work column (#1131).
-    if facts.get("child_live"): return "Todo", freeze
-    if facts.get("spec") or freeze: return "Backlog", freeze
-    return "Todo", None
+    The column whose expression in the definition holds; a freeze never moves it (the definition's own rule). Facts are
+    booleans, each missing one false: abandoned, closed, in_dev (the wave is in dev), gating (a gate is live for the wave,
+    or its last attempt ended without a pass and none was made since: #1257), wave_branch, run_live, spec, child_live
+    (a spec whose sub-issue is in flight), owner (an owner label), gated (another item gates it), and review_wait (the
+    child's code is done and its review or a fix round holds it: Code Review, #603). The push, the approval and the dev CI
+    are reported facts, never a column: a card in the wave holds Code Complete until its wave is in dev, and then it is
+    Closed. `written` is the card's last written column, kept when the definition is unknown (#1901)."""
+    return resolve_column(facts, written, text)[:2]
 
 
 # The hub's view of the shipped definition (#247). The definition names a GitHub colour; the page needs a hex that reads
@@ -150,18 +248,33 @@ def terminal_column(state, reason=None):
     return ROLE["abandoned"] if not_planned(reason) else ROLE["issue_closed"]
 
 
-def view_column(status, closed, labels=(), reason=None):
+STATUS_FACT = {"Backlog": "spec", "Todo": "child_live", "Doing": "run_live", "Code Review": "review_wait",
+               "Code Complete": "wave_branch", "Gating": "gating", "Closed": "closed", "Abandoned": "abandoned"}
+
+
+def view_column(status, closed, labels=(), reason=None, text=None):
     """(column, freeze label or None) the hub draws one card in, from its Status (old or shipped name), state and labels.
 
-    Blocked is no column: it is the owner freeze over the column the work reached, Backlog when the Status names none.
-    A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned
-    or its close reason is not planned, or duplicate: that card was not delivered, so it is Abandoned too (#921)."""
+    The written Status names the facts, and the column is the one the definition's expression answers (#1901): the hub read
+    and the GitHub writer reach a column by the same rule, so no reader invents one. Blocked is no column: it is the owner
+    freeze over the column the work reached, Backlog when the Status names none. A card with no Status is not scheduled, so
+    it is Backlog. A closed card is Closed, unless its Status says Abandoned or its close reason is not planned, or
+    duplicate: that card was not delivered, so it is Abandoned too (#921). A Status the definition does not ship, and an
+    unknown definition, keep the written column, named: the reader never guesses one."""
     labels = set(labels or ())
     owner = status == "Blocked" or FREEZE_LABEL["owner"] in labels
     freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None
     name = SHIPPED_NAME.get(status, status) if status else None
     if closed:
-        return (ROLE["abandoned"] if name == ROLE["abandoned"] or not_planned(reason) else ROLE["issue_closed"]), None
+        facts = {"abandoned": True} if (name == ROLE["abandoned"] or not_planned(reason)) else {"closed": True}
+        column, _, _ = resolve_column(facts, written=name or ROLE["issue_closed"], text=text)
+        return (column or ROLE["issue_closed"]), None
+    if name in STATUS_FACT:
+        facts = {STATUS_FACT[name]: True}
+        if owner: facts["owner"] = True
+        if FREEZE_LABEL["gated"] in labels: facts["gated"] = True
+        column, _, _ = resolve_column(facts, written=name, text=text)
+        return (column or name), freeze
     return (name or ROLE["unscheduled"]), freeze
 
 

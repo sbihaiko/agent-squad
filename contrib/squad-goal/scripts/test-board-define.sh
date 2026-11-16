@@ -134,7 +134,8 @@ assert len(names) == 8, names
 assert names.index("Code Complete") + 1 == names.index("Gating") == names.index("Closed") - 1, names
 g = d["statuses"][names.index("Gating")]
 assert g["color"] == "PINK" and [s["color"] for s in d["statuses"]].count("PINK") == 1, g
-assert g["fact"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move", g
+assert g["description"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move", g   # the wording; `fact` holds the expression (#1901)
+assert isinstance(d.get("definition_version"), int), d.get("definition_version")
 assert g["actor"] == "The gate" and g["terminal"] is False, g
 assert "An attempt is a marker, not a move: the card leaves Gating only forward." in d["rules"], d["rules"]
 assert d["fieldNames"]["gateTries"] == "Gate Tries" and d["gateTries"] == {"type": "number"}, d["fieldNames"]

@@ -741,6 +741,9 @@ def entered():   # {(run, issue)} of each child of repo0 that entered a wave, re
         try: _entered = set(ledger().entered(repo0))
         except (OSError, ImportError, ValueError) as e: say(f"LEDGER-UNREAD: the entered facts could not be read ({e})"); _entered = set()
     return _entered
+def dispatched(n):   # the issue's ledger records a run that dispatched it (the entered fact, ADR-0149): the proof the
+    # loop owns the card, never a wave label (#1987). A ledger that cannot be read records nothing, so the card stays.
+    return any(x == str(n) for _, x in entered())
 _landed = None
 def landings():   # {issue: {(ref, kind)}} of the landing passes' facts (ADR-0149), read from the ledgers once a pass. A
     # landing is delivered work only when a landing pass wrote it (#691, #695): rule R reads this, never a run's land heads.
@@ -1365,12 +1368,12 @@ def reconcile_board():
                     say(f"SPEC-REVERTED #{n}: a child reopened, the card keeps {col} and carries the tag {spec_fold.TAG}")
                     if not dry and spec_fold.TAG not in olabels[n]: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "-X", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={spec_fold.TAG}"])
             # A Doing card that no run holds and no marker claims is left alone (#1034): a card a person placed and a stuck one
-            # look the same, so only the owner moves it (ADR-0143 rule 1). The pass names it once and writes nothing.
+            # look the same, so only the owner moves it (ADR-0143 rule 1). The recorded dispatch of the issue's ledger tells
+            # the two apart: a card the loop dispatched goes back to Todo, and the pass names it once before any other case.
             if not is_spec and have_cards.get(n, "") == doing and not holding(n) and not (st / "auto" / f"disp-{n}").exists() and not (st / "auto" / f"bug-{n}").exists():
-                wave = next((l for l in olabels[n] if l.startswith("wave:")), None)
-                if wave and not base_landed(n, set()) and branch_ahead_count(n) == "0" and not owner_frozen(n):   # the one-time recovery (#1034): a wave card a run left in Doing has no other way back
-                    say(f"STALE-CARD #{n}: card {doing} with {wave}, no live run, no marker and nothing landed; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
-                    set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {doing} with {wave}, no live run, no marker and nothing landed", rank=20)
+                if dispatched(n) and not base_landed(n, set()) and branch_ahead_count(n) == "0" and not owner_frozen(n):   # the one-time recovery (#1034): a card a run left in Doing has no other way back, and the recorded dispatch proves the loop owns it (#1987)
+                    say(f"STALE-CARD #{n}: card {doing} with a recorded dispatch, no live run, no marker and nothing landed; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
+                    set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {doing} with a recorded dispatch, no live run, no marker and nothing landed", rank=20)
                 else:
                     mk = st / "auto" / f"janitor-doing-norun-{n}"
                     if not mk.exists():

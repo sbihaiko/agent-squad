@@ -23,24 +23,27 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d "$T/hm/wt-pushed" ] && ok "L: loose clean pushed tree removed" || ko "L: wt-pushed kept"
 [ -d "$T/hm/wt-dirty" ] && ok "L: loose dirty tree kept" || ko "L: wt-dirty removed"
 [ -d "$T/hm/wt-unpushed" ] && ok "L: loose unpushed tree kept" || ko "L: wt-unpushed removed"
-# P (#361): a finished run whose commits are on no remote branch is KEPT and reported WT UNPUSHED. The loop pushes no work of its
+# P (#2020): a finished run whose commits are on no remote branch is SALVAGED, never kept for good. The pass writes a local ref
+# refs/salvage/wt/<tree path> at the tree's HEAD, removes the tree, and names the ref and the sha. The loop pushes no work of its
 # own: a run pushes its own branch, and the auto-push that used to run here read the branch's pull request, which the loop no
-# longer does.
+# longer does. The ref keeps the work; the line names the push a person may make.
 mkdir -p "$T/bin" "$T/st/cq" "$T/st/auto"; printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/ghlog"\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"; : > "$T/ghlog"
 cd "$T/co"; $G push -q origin HEAD:refs/heads/fix/9-x 2>/dev/null; mkdir -p runs/run-landed/ws; $G worktree add -q -b fix/9-x runs/run-landed/ws/w origin/main 2>/dev/null || $G worktree add -q -B fix/9-x runs/run-landed/ws/w HEAD
 $G -C runs/run-landed/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m fix; echo '{"event": "verdict"}' > runs/run-landed/record.jsonl
 mkdir -p runs/run-moved/ws; $G worktree add -q -b fix/8-y runs/run-moved/ws/w HEAD; $G -C runs/run-moved/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m mine
 $G -c user.email=a@b -c user.name=t commit -q --allow-empty -m other; $G push -q origin HEAD:refs/heads/fix/8-y 2>/dev/null; $G reset -q --hard HEAD~1; echo '{"event": "verdict"}' > runs/run-moved/record.jsonl
+lr=$($G -C runs/run-landed/ws/w rev-parse HEAD); sl=${lr:0:9}   # read before the pass: a salvaged tree is gone after it
 out=$(bash "$T/s/wtclean.sh" 2>&1)
-case "$out" in *"WT UNPUSHED run-landed"*) ok "P: a finished run with commits on no remote branch is kept and reported";; *) ko "P: run-landed not reported: $out";; esac
-remote=$($G ls-remote origin refs/heads/fix/9-x | cut -c1-9); [ "$remote" != "$($G -C runs/run-landed/ws/w rev-parse HEAD | cut -c1-9)" ] && ok "P: the loop pushed nothing" || ko "P: the loop pushed the run's branch"
-[ -d runs/run-landed/ws/w ] && ok "P: the tree with the unpushed work is kept" || ko "P: the tree with the unpushed work was removed"
+case "$out" in *"WT SALVAGED run-landed w $sl"*) ok "P: a finished run with commits on no remote branch is salvaged";; *) ko "P: run-landed not salvaged: $out";; esac
+[ ! -d runs/run-landed/ws/w ] && ok "P: the salvaged tree is removed" || ko "P: the tree with the unpushed work was kept"
+[ "$($G rev-parse -q --verify refs/salvage/wt/runs_run-landed_ws_w 2>/dev/null)" = "$lr" ] && ok "P: the ref holds the tree's HEAD" || ko "P: no salvage ref at the tree's HEAD"
+case "$out" in *"refs/salvage/wt/runs_run-landed_ws_w"*) ok "P: the line names the ref";; *) ko "P: the line names no ref: $out";; esac
+remote=$($G ls-remote origin refs/heads/fix/9-x | cut -c1-9); [ "$remote" != "$sl" ] && ok "P: the loop pushed nothing" || ko "P: the loop pushed the run's branch"
 [ ! -s "$T/ghlog" ] && ok "P: the pass reads nothing of GitHub" || ko "P: a gh call was made: $(cat "$T/ghlog")"
-case "$out" in *"WT UNPUSHED run-moved"*) ok "P: a branch that moved on the remote is reported the same way, never force-pushed";; *) ko "P: run-moved not reported: $out";; esac
+case "$out" in *"WT SALVAGED run-moved w "*) ok "P: a branch that moved on the remote is salvaged the same way, never force-pushed";; *) ko "P: run-moved not salvaged: $out";; esac
 # #767: only a `fix/<n>-…` or `gui/<n>-…` branch is a work branch, so the line names the exact salvage push under that name.
-sl=$($G -C runs/run-landed/ws/w rev-parse HEAD | cut -c1-9)
 case "$out" in *"git push origin $sl:refs/heads/fix/9-x"*) ok "#767: the line names the salvage push under the work-branch name";; *) ko "#767: no salvage command: $out";; esac
-mv_line=$(printf '%s\n' "$out" | grep "WT UNPUSHED run-moved")
+mv_line=$(printf '%s\n' "$out" | grep "WT SALVAGED run-moved")
 case "$mv_line" in *"refs/heads/fix/8-y"*) ko "#767: a moved branch is named for a push the remote refuses: $mv_line";; *"refs/heads/fix/<n>-<slug>"*) ok "#767: a moved branch gets a fresh fix/<n>-<slug> name";; *) ko "#767: run-moved has no salvage command: $mv_line";; esac
 # V (#464): the loop's wave entry reads the child's worktree after the run's VERDICT (ADR-0145 rule 9), so a run whose wave
 # has not landed keeps its child trees: a tree removed here left the entry with nothing to read ("WAVE no entry for #N: the
@@ -191,10 +194,29 @@ mkdir -p runs/run-842-empty/ws; $G worktree add -q -b squad/run-842-empty/child 
 $G -C runs/run-842-empty/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "child work"
 $G branch -q squad/run/842-empty "$($G -C runs/run-842-empty/ws/w rev-parse HEAD)"; echo '{"event": "verdict"}' > runs/run-842-empty/record.jsonl
 printf 'issue 842\n' > "$T/st/auto/waved-run-842-empty"
+rsha=$($G -C runs/run-842-refs/ws/w rev-parse HEAD); esha=$($G -C runs/run-842-empty/ws/w rev-parse HEAD)   # read before the pass
 out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d runs/run-842-clean/ws/w ] && ok "U: local-only branch without undelivered Refs is cleanable" || ko "U: ordinary local-only work was kept: $out"
-if [ -d runs/run-842-refs/ws/w ]; then case "$out" in *"WT UNPUSHED run-842-refs"*) ok "U: undelivered non-RED Refs work is kept and reported";; *) ko "U: undelivered Refs work lacks WT UNPUSHED: $out";; esac; else ko "U: undelivered Refs work was removed: $out"; fi
-[ -d runs/run-842-empty/ws/w ] && ok "U: a run whose landed wave was empty is kept" || ko "U: empty-wave work was removed: $out"
+[ ! -d runs/run-842-refs/ws/w ] && [ "$($G rev-parse -q --verify refs/salvage/wt/runs_run-842-refs_ws_w 2>/dev/null)" = "$rsha" ] && ok "U: undelivered Refs work goes with the tree and the ref keeps it" || ko "U: undelivered Refs work was kept or lost: $out"
+[ ! -d runs/run-842-empty/ws/w ] && [ "$($G rev-parse -q --verify refs/salvage/wt/runs_run-842-empty_ws_w 2>/dev/null)" = "$esha" ] && ok "U: a run whose landed wave was empty is salvaged, not kept" || ko "U: empty-wave work was kept or lost: $out"
+# SALVAGE (#2020): the ref is the preservation, so only a tree with nothing to lose and nothing using it goes. A dirty tree, a live
+# process inside it, or another registered worktree inside it keeps it, and the pass writes no ref for it. The ref is named for the
+# tree's path under the checkout: a tree's own name repeats (`w` here, the router's child name in the loop), and two runs' trees
+# must never share one ref.
+salv() { mkdir -p "runs/run-$1/ws"; $G worktree add -q --detach "runs/run-$1/ws/w" HEAD; }
+salv salv; $G -C runs/run-salv/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "salv work"; echo '{"event": "verdict"}' > runs/run-salv/record.jsonl
+salv salv2; $G -C runs/run-salv2/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "salv work too"; echo '{"event": "verdict"}' > runs/run-salv2/record.jsonl
+salv salvd; $G -C runs/run-salvd/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "dirty salv"; echo x > runs/run-salvd/ws/w/f; echo '{"event": "verdict"}' > runs/run-salvd/record.jsonl
+salv salvb; $G -C runs/run-salvb/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "busy salv"; echo '{"event": "verdict"}' > runs/run-salvb/record.jsonl
+( cd runs/run-salvb/ws/w && exec sleep 90 ) & bpid=$!; sleep 1
+b1=$($G -C runs/run-salv/ws/w rev-parse HEAD); b2=$($G -C runs/run-salv2/ws/w rev-parse HEAD)
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d runs/run-salv/ws/w ] && [ "$($G rev-parse -q --verify refs/salvage/wt/runs_run-salv_ws_w 2>/dev/null)" = "$b1" ] && ok "SALVAGE: the tree goes and its work is in its ref" || ko "SALVAGE: the first tree was kept or lost: $out"
+[ ! -d runs/run-salv2/ws/w ] && [ "$($G rev-parse -q --verify refs/salvage/wt/runs_run-salv2_ws_w 2>/dev/null)" = "$b2" ] && ok "SALVAGE: two same-named trees get one ref each" || ko "SALVAGE: two trees shared one ref or one stayed: $out"
+[ ! -d runs/run-salvd/ws/w ] && ko "SALVAGE: a dirty unpushed tree was removed: $out" || { $G rev-parse -q --verify refs/salvage/wt/runs_run-salvd_ws_w >/dev/null 2>&1 && ko "SALVAGE: a dirty tree got a ref" || ok "SALVAGE: a dirty unpushed tree is kept and gets no ref"; }
+[ ! -d runs/run-salvb/ws/w ] && ko "SALVAGE: a tree a live process works in was removed: $out" || { $G rev-parse -q --verify refs/salvage/wt/runs_run-salvb_ws_w >/dev/null 2>&1 && ko "SALVAGE: a busy tree got a ref" || ok "SALVAGE: a live process keeps the tree and no ref is written"; }
+kill $bpid 2>/dev/null
+for d in salv salv2 salvd salvb; do $G worktree remove --force "runs/run-$d/ws/w" >/dev/null 2>&1 || rm -rf "runs/run-$d"; done
 # Q: a finished tree under .claude/worktrees (one per workflow run, made by the agent tools) is culled once it is clean, unlocked,
 # not in use and its HEAD is in the base. A locked tree is a live agent's, and a dirty one holds work, so both stay.
 cd "$T/co"; mkdir -p .claude/worktrees

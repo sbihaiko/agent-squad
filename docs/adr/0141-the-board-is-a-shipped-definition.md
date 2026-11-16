@@ -46,6 +46,11 @@ repository the loop ships from, and it should not have to rebuild the vocabulary
 7. **No repository-specific value ships in the definition.** No secret, no credential, no machine
    configuration, no name of a repository or a person. The definition is data a stranger can apply
    unchanged.
+8. **The definition declares its version, and each column states its fact in one closed grammar: a
+   fact name, `all`, `any` and `not`.** One rule evaluates the expression, so the hub read and the
+   GitHub Project writer reach a column the same way. A reader that meets a version or an expression
+   it does not know keeps the card's last written column and names the unknown; it never guesses a
+   column and never fails silently. A file with no version reads as the current version.
 
 ## Consequences
 
@@ -62,4 +67,6 @@ repository the loop ships from, and it should not have to rebuild the vocabulary
 
 ## Guard
 
-None yet; a draft.
+`tests/test_board_definition_grammar.py` proves the grammar, the version and the unknown cases;
+`tests/test_board_pin.py` proves the pinned copy. The applier runs outside this repository, so the
+apply side stays a draft until the published repository guards it.
