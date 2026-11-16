@@ -214,9 +214,11 @@ def _reach(start, start_rel, importers, dynamic, resolved=()):
         seen.add(name)
         for rel in importers.get(name, ()):
             # A test reached by this edge is selected, and nothing else rests on it: no importer's selection can be hidden
-            # behind its own dynamic load, so it never answers `all` (ADR-0169).
+            # behind its own dynamic load, so it never answers `all` (ADR-0169). Its module is walked on, so a test that
+            # imports from it (a fixture module) is reached too (#2035).
             if _is_test(rel):
                 reached.add(rel)
+                queue.append(_module(rel))
                 continue
             # A module that declared the changed path is answered by that declaration; one that declared another path only
             # proves nothing about this edge, so the edge still answers `all` rather than drop the importers it hides.
@@ -339,6 +341,9 @@ def _answer(root, base):
         _all(f"the diff against {base} failed")
     if any(_is_test(rel) and Path(rel).parent.as_posix() == "tests" for rel in added_or_deleted.stdout.split("\0")):
         selected.add(SHARD_GUARD)
+    for rel in list(selected):
+        if _is_test(rel):
+            selected |= _reach(_module(rel), rel, importers, dynamic, resolved)
     present = sorted(rel for rel in selected if (root / rel).exists())   # pytest cannot run a path the tip deleted
     if not present:
         _all(f"every test the change reaches is deleted at the tip: {' '.join(sorted(selected))}")

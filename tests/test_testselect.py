@@ -66,6 +66,16 @@ def test_a_changed_squad_module_selects_its_importers_directly_and_through_squad
     assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py"]
 
 
+def test_a_test_that_imports_from_a_selected_test_selects_that_test_too(tmp_path):
+    """#2035: a fixture module (test A) loads `squad.gamma`, and a test (test B) imports its fixtures from A. A change to
+    `squad.gamma` selects A, so B runs with it: the selection follows the imports of every selected test, transitively."""
+    repo = tip(tmp_path, {"squad/gamma.py": "VALUE = 4\n"}, extra={
+        "tests/test_flow.py": "from squad import gamma\nFIXTURE = gamma.VALUE\n",
+        "tests/test_survival.py": "from tests.test_flow import FIXTURE\n",
+    })
+    assert select(repo) == ["tests/test_flow.py", "tests/test_gamma.py", "tests/test_survival.py"]
+
+
 def test_a_changed_test_file_selects_itself(tmp_path):
     repo = tip(tmp_path, {"tests/test_gamma.py": "from squad.gamma import VALUE\nX = 1\n"})
     assert select(repo) == ["tests/test_gamma.py"]
