@@ -7,7 +7,7 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lcolh{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:8px 12px 10px;min-height:40px;background:var(--bg);border-bottom:2px solid var(--sep);font-size:var(--fs-body);font-weight:600;color:var(--fg)}
 #bbody .lcolh b{background:var(--panel);color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-lg);padding:0 8px;line-height:var(--chip-h);font-size:var(--fs-caption);font-weight:600}
 #bbody .lane{display:contents}
-#bbody .lh{grid-column:1/-1;display:grid;grid-template-columns:var(--lh-cols);align-items:center;column-gap:12px;row-gap:6px;padding:10px 14px;min-height:48px;margin-top:16px;border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg) var(--radius-lg) 0 0;background:color-mix(in srgb,var(--lc,var(--mute)) 9%,var(--panel));cursor:pointer;user-select:none;color:var(--fg)}
+#bbody .lh{grid-column:1/-1;display:flex;flex-direction:column;row-gap:6px;padding:10px 14px;min-height:48px;margin-top:16px;border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg) var(--radius-lg) 0 0;background:color-mix(in srgb,var(--lc,var(--mute)) 9%,var(--panel));cursor:pointer;user-select:none;color:var(--fg)}
 #bbody .lcolh+.lane .lh,#bbody .lcolh+.lh{margin-top:10px}
 #bbody .lane.coll .lh{margin-top:10px;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--panel);padding:8px 14px;min-height:44px}
 #bbody .lane.coll+.lane.coll .lh{margin-top:6px}
@@ -19,7 +19,7 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .lid.sw{color:var(--fg)}
 #bbody .lh .sid{color:var(--lc,var(--fg))}
 #bbody .lh .lf{display:flex;align-items:center;min-width:0;overflow:hidden}
-#bbody .lh .ltt{font-size:var(--fs-body);font-weight:400;min-width:0;line-height:1.3;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}   /* a title clamps to two lines; its whole text is in the tooltip */
+#bbody .lh .ltt{font-size:var(--fs-body);font-weight:400;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}   /* a long title ends in an ellipsis; its whole text is in the tooltip */
 #bbody .lh .ltt.subt{color:var(--mute)}
 #bbody .lh .bar{position:relative;display:block;width:100%;height:8px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}
 #bbody .lh .bar i{position:absolute;left:0;top:0;display:block;height:100%;background:var(--ok)}
@@ -27,12 +27,16 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .bar i.rv{background:var(--ok);opacity:.25}   /* the share in review: the same green, fainter than the held share (owner, 2026-11-02) */
 #bbody .lh .pc{font-size:var(--fs-caption);font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
 #bbody .lh .lst{font-size:var(--fs-caption);font-weight:600;color:var(--mute);border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;line-height:var(--chip-h);white-space:nowrap}
-#bbody .lh .lf-id.full{grid-column:1/-1;justify-content:flex-start}
-#bbody .lh .lh-facts{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;column-gap:12px;row-gap:6px;min-width:0}
-#bbody .lh .lh-facts .lf{flex:none}
-#bbody .lh .lh-counts{grid-column:2;display:flex;justify-content:flex-end;min-width:0;font-size:var(--fs-caption);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
-#bbody .lh .lh-counts .lf{flex:none}
-#bbody .lh .lh-counts b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+#bbody .lh .lh-r1,#bbody .lh .lh-r2{display:flex;align-items:center;min-width:0}
+#bbody .lh .lf-id{flex:none}
+#bbody .lh .lf-id.full{flex:1 1 auto;justify-content:flex-start}
+#bbody .lh .lf-title{flex:1 1 0;padding-left:.6em}
+#bbody .lh .lf-chip,#bbody .lh .lf-sync{flex:none}
+#bbody .lh .lf-gh{flex:none;padding:0 .4em}
+#bbody .lh .lf-bar{flex:0 1 8em;min-width:4em}
+#bbody .lh .lf-frac{flex:none;padding-left:.6em}
+#bbody .lh .lf-counts{flex:none;margin-left:auto;padding-left:.6em;font-size:var(--fs-caption);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+#bbody .lh .lf-counts b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
 #bbody .lane.alarm .lh .lid{color:var(--err)}
 /* A column is a lane of a card grid (#1994): the cards fill the lane's width on several per line, the lane wears a
    light tint of its column colour, and its label names the column and the group's count of that column. A card's
