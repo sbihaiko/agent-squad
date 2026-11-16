@@ -135,7 +135,7 @@ refused() {  # <tip> <reason>: logged and answered, never a marker: a transient 
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
 if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
-  # The proof holds nothing by default (#739 with ADR-0157 rule 1 rewritten, owner decision 2026-10-31): the dispatchers read
+  # The proof holds nothing by default (#739 with ADR-0163, owner decision 2026-10-31): the dispatchers read
   # the marker (gh_dispatch_hold) and start no run while it stands, so a standing marker costs run slots. The owner named
   # parallelism as the priority, so the default bound is zero and no marker is written; an owner who wants the measurement
   # shielded names a bound in SG_PROMOTE_RESERVE_SECONDS. The trap removes a named marker on exit, INT and TERM.

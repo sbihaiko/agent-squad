@@ -382,7 +382,7 @@ def mark_killed(f, reason=None):
     _run(["python3", "-m", "squad.killed", str(f)] + ([str(reason)] if reason else []), env=env)
 TAKEOVER_SECONDS = float(os.environ.get("SG_TAKEOVER_SECONDS", "1800") or 1800)
 GATE = re.compile(r"gate\.sh\b")   # a gate process (`gate.sh`, `fast-gate.sh`): a run inside one is doing work or waiting its turn, never stuck (#1191)
-# A gate process older than this is itself overdue: every bound the loop gives a gate is shorter (ADR-0163, ADR-0157), so
+# A gate process older than this is itself overdue: every bound the loop gives a gate is shorter (ADR-0163), so
 # it is no evidence that the run is working, and the takeover bound applies again (#1390).
 GATE_STUCK_SECONDS = float(os.environ.get("SG_GATE_STUCK_SECONDS", "") or TAKEOVER_SECONDS)
 def age_of(t):   # T: seconds since a record stamp, or None when the pass cannot read it (an epoch, or an ISO UTC stamp)

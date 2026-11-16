@@ -24,7 +24,7 @@ The landing gate, the promotion proof and the nightly are the gates a delivery s
 
 ## Consequences
 
-A work-branch tip, a wave entry and a wave tip run only the tests their diff reaches, and the machine saves the time the other tests would take. A branch that lands in `dev` by the local gate runs the full non-heavy battery. The promotion proof and the nightly keep the full suite, so the heavy, serial and two-mode coverage stays where [ADR-0153](0153-the-full-suite-runs-nightly-in-both-modes.md) and [ADR-0156](0156-a-full-proof-carries-across-a-covered-delta.md) place it.
+A work-branch tip, a wave entry and a wave tip run only the tests their diff reaches, and the machine saves the time the other tests would take. A branch that lands in `dev` by the local gate runs the full non-heavy battery. The promotion proof and the nightly keep the full suite, so the heavy, serial and two-mode coverage stays where [ADR-0153](0153-the-full-suite-runs-nightly-in-both-modes.md) and [ADR-0173](0173-the-complete-tier-runs-on-the-promotion-request.md) place it.
 
 A delta rests on the imports and path literals the selector reads. A test that reaches a changed module by a path the selector cannot see is not selected; the full battery at the landing gate, the CI suite and the nightly find it.
 

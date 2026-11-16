@@ -63,7 +63,7 @@ read -r where at lock dirty < "$T/suite.log"
 [ "$dirty" = 0 ] && ok "the suite ran in a clean tree" || ko "the suite's tree was dirty ($dirty)"
 case "$where" in "$HOME"/wt-*|*/wt-*) ko "the suite tree is a wt-* tree, which wtclean removes: $where";; *) ok "the suite tree is not a wt-* tree";; esac
 
-# #739 with ADR-0157 rule 1 rewritten: a reserve stands only when the owner names a bound. The default holds nothing, so a
+# #739 with ADR-0163: a reserve stands only when the owner names a bound. The default holds nothing, so a
 # proof never takes a run slot from the loop.
 [ "$(tail -n 1 "$T/reserve.log" 2>/dev/null)" = unreserved ] && ok "with the default bound a proof holds no dispatch" || ko "the default held the machine: '$(cat "$T/reserve.log" 2>/dev/null)'"
 [ ! -e "$SG_STATE/promote-reserve" ] && ok "no reserve stands after the proof" || ko "a reserve outlived the proof"
