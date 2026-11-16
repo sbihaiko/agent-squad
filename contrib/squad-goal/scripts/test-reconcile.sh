@@ -4,7 +4,7 @@
 # by name, never written; a card behind the recomputed column moves forward as it always did; a revert keeps the column and adds the tag.
 # usage: bash test-reconcile.sh [path/to/reconcile.py]
 src=${1:-$(dirname "$0")/reconcile.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/bin" "$T/st"; test -f "$(dirname "$src")/board_columns.py" || exit 1; cp "$src" "$T/s/reconcile.py"; cp "$(dirname "$src")/board_columns.py" "$T/s/board_columns.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
+mkdir -p "$T/s" "$T/bin" "$T/st"; test -f "$(dirname "$src")/board_columns.py" || exit 1; cp "$src" "$T/s/reconcile.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/issue_state.py" "$T/s/"; cp "$(dirname "$src")/board-definition.json" "$T/s/"   # the shipped axis the flow order reads lives in the pinned definition beside the module
 cp "$(dirname "$src")/ghread.py" "$(dirname "$src")/ghthrottle.py" "$T/s/"   # the door reader and the quota floor reader reconcile imports (#847)
 printf '#!/bin/bash\necho "$*" >> "%s/moves"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
@@ -13,13 +13,13 @@ echo "$*" >> "TMPDIR/ghcalls"   # every gh call of a pass, for the call count (#
 case "$*" in
   "api users/x") echo '{"type":"User"}';;
   *"/fields"*) echo '[{"id":7,"name":"Status"}]';;
-  *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n1170\tClosed\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
+  *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n1170\tClosed\thttps://api.github.com/repos/x/y\n1180\tTodo\thttps://api.github.com/repos/x/y\n1185\tTodo\thttps://api.github.com/repos/x/y\n1190\tAbandoned\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url (#1932: the three close-reason cases)
   *"--method POST"*"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
   *"--method DELETE"*"/labels"*) echo "$*" >> "TMPDIR/deletes"; echo '{}';;   # a holder-label clear: the reconciler sends none (#1678)
   *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
   *"issue(number:"*) b=''; sep=''
     for n in $(echo "$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+'); do r=$("$0" api "repos/x/y/issues/$n" 2>/dev/null)
-      b="$b$sep\"i$n\":$(jq -c --argjson n "$n" --argjson r "$r" '{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),createdAt:null,labels:{nodes:($r.labels//[])},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}' <<<"{}")"; sep=','; done
+      b="$b$sep\"i$n\":$(jq -c --argjson n "$n" --argjson r "$r" '{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),stateReason:(if $r.state_reason then ($r.state_reason|ascii_upcase) else null end),createdAt:null,labels:{nodes:($r.labels//[])},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}' <<<"{}")"; sep=','; done
     echo "{\"data\":{\"repository\":{$b}}}" ;;   # the GraphQL fact: one alias per issue asked, whether the route named one issue or a numbers= list (#1648)   # the single-issue read is the GraphQL fact: its state, body and labels are the REST answer below
   *"issues(states: OPEN"*) if [ -n "$OPEN_GRAPHQL" ]; then cat "$OPEN_GRAPHQL"; else echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1093,"title":"t","body":"","state":"OPEN"},{"number":1095,"title":"t","body":"","state":"OPEN"},{"number":1120,"title":"t","body":"## Blocked by\n\n- #1093\n","state":"OPEN"},{"number":1140,"title":"t","body":"","state":"OPEN"},{"number":1150,"title":"t","body":"","state":"OPEN"},{"number":1160,"title":"t","body":"","state":"OPEN"}]}}}}'; fi;;   # the open-issue aggregate, one GraphQL request (#853); a case overrides it to carry labels (#1678)
   *"issues/1090") if [ -n "$ISSUE_1090" ]; then cat "$ISSUE_1090"; else echo '{"state":"closed","body":""}'; fi;;
@@ -36,6 +36,11 @@ case "$*" in
   *"issues/1150") echo '{"state":"open","body":""}';;
   *"issues/1160") echo '{"state":"open","body":""}';;
   *"issues/1170") echo '{"state":"closed","body":""}';;
+  # The close reason a terminal card follows (#1932): #1180 was closed as not planned, so it was never delivered and its
+  # card reads Abandoned; #1185 was closed as completed, so its card reads Closed; #1190 is the abandoned card already.
+  *"issues/1180") echo '{"state":"closed","state_reason":"not_planned","body":""}';;
+  *"issues/1185") echo '{"state":"closed","state_reason":"completed","body":""}';;
+  *"issues/1190") echo '{"state":"closed","state_reason":"not_planned","body":""}';;
   *"issues?state=open&labels=bug"*) echo '[]';;
   *"issues?state=open"*) echo "${OPEN_ISSUES:-[]}";;
 esac
@@ -93,7 +98,20 @@ case "$ap" in *"#1170"*) ko "an apply pass filed a line for #1170, already in Cl
 case "$m" in *1170*) ko "the no-op card #1170 reached the writer: '$m'";; *) ok "a card in its earned column sends no writer call";; esac
 case "$ap" in *"MOVE #1090 Todo -> Closed (issue closed)"*) ok "a card in another column draws its line under apply";; *) ko "no MOVE line for #1090: '$ap'";; esac
 [ "$(printf '%s\n' "$m" | /usr/bin/grep -cx 'x 4 Closed 1090')" = 1 ] && ok "the writer's recorded argv for #1090 is the whole contract line" || ko "the writer argv for #1090 differs: '$m'"
-case "$ap" in *"moves: 5"*) ok "the final count is the moves made";; *) ko "the final count is not the five moves made: '$ap'";; esac
+# A terminal column follows the close reason (#1932, spec #132): an issue closed as not planned was never delivered, so its
+# card reads Abandoned and never Closed; a completed close reads Closed; and a card already in Abandoned for such an issue
+# draws no line and no write, so a later pass can never walk it to Closed.
+case "$m" in *"x 4 Abandoned 1180"*) ok "an issue closed as not planned moves its card to Abandoned";;
+  *) ko "the not-planned close of #1180 did not move to Abandoned: '$m'";; esac
+case "$ap" in *"MOVE #1180 Todo -> Abandoned (issue closed as not_planned)"*) ok "the move names the not-planned close";;
+  *) ko "the move of #1180 does not name its close reason: '$ap'";; esac
+case "$m" in *"x 4 Closed 1185"*) ok "an issue closed as completed moves its card to Closed";;
+  *) ko "the completed close of #1185 did not move to Closed: '$m'";; esac
+case "$ap" in *"MOVE #1185 Todo -> Closed (issue closed)"*) ok "the completed move reads as a plain closed issue";;
+  *) ko "the move of #1185 does not read as a completed close: '$ap'";; esac
+case "$ap" in *"#1190"*) ko "a card already in Abandoned drew a line: '$ap'";; *) ok "a card already in Abandoned draws no line";; esac
+case "$m" in *1190*) ko "the Abandoned card #1190 reached the writer: '$m'";; *) ok "a card already in Abandoned sends no writer call";; esac
+case "$ap" in *"moves: 7"*) ok "the final count is the moves made";; *) ko "the final count is not the seven moves made: '$ap'";; esac
 # A write the carrier refused is named on the pass's stream and ends the pass non-zero, never swallowed.
 printf '#!/bin/bash\necho "no Status option $3" >&2; exit 1\n' > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); rc=$?

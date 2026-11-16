@@ -320,7 +320,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
 # What one issue of a fact carries. `comments(last: ...)` is how the TDD RED comment of a fork-only fix is found without a
 # read of the issue's comments, which was one request per candidate (#45).
 _COMMENTS = 50
-_ISSUE_FIELDS = f"number title body state createdAt labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} parent {{ number }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
+_ISSUE_FIELDS = f"number title body state stateReason createdAt labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} parent {{ number }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
@@ -472,6 +472,8 @@ def _issue(node: Any) -> dict[str, Any]:
         "body": node.get("body"),
         "created_at": node.get("createdAt"),
         "state": state.lower() if isinstance(state, str) else None,
+        # The close reason, on REST's name and spelling: a card's terminal column follows it (board_columns.terminal_column, #1932)
+        "state_reason": node.get("stateReason").lower() if isinstance(node.get("stateReason"), str) else None,
         "labels": _labels(node.get("labels")),
         "blocked_by": [
             n.get("number")

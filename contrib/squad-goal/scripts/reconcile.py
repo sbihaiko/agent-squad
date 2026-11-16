@@ -11,7 +11,7 @@ issue, never a move back, so a card the facts pull back out of a terminal column
 import json, os, pathlib, re, subprocess, sys
 os.environ.setdefault("SG_GH_PASS", "reconcile")   # the call log names this pass (ADR-0277): unattributed spend cannot be pinned on its spender (#1648)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-from board_columns import BY_FACT, COLUMNS, SHIPPED_NAME
+from board_columns import BY_FACT, COLUMNS, ROLE, SHIPPED_NAME, past, terminal_column
 from issue_state import board_state
 import ghread, ghthrottle   # the door's reader and log, the shared throttle, and the quota floors (#847, #1648)
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
@@ -121,7 +121,10 @@ def shipped_name(to):
     return SHIPPED_NAME.get(to, to) if VOCAB == "shipped" else to
 def move(n, to, why):
     cur = items.get(str(n)) or None
-    if cur in FLOW and FLOW[to] < FLOW[cur]:   # the card itself is the watermark: its column is the furthest the work reached, and the shipped flow order fixes which way is back
+    # The card itself is the watermark: its column is the furthest the work reached, and the flow order fixes which way is back.
+    # A shipped name is not in the legacy flow, so its direction is read on the shipped axis the definition holds (#1932).
+    back = FLOW[to] < FLOW[cur] if cur in FLOW and to in FLOW else past(cur, shipped_name(to) or to)
+    if back:
         tag = cur in TERMINAL   # the work was delivered and the facts now pull the card back: the merge was taken back, so the card keeps its column and carries the tag
         print(f"BACKWARD #{n}: {cur} -> {to} refused, the card keeps {cur}" + (f" and carries the tag {TAG}" if tag else "") + f" ({why})")
         if tag:
@@ -174,7 +177,10 @@ for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[
     if not st: continue
     if st["state"] != "closed" and i < MIN: continue
     deps = blockers(st.get("body"))
-    if st["state"] == "closed" and cur != BY_FACT["issue_closed"]: move(n, BY_FACT["issue_closed"], "issue closed")
+    term = terminal_column(st.get("state"), st.get("state_reason"))   # the same function the janitor reads: Abandoned when the close was not a delivery, Closed when it was (spec #132)
+    if term:
+        # A card that already sits in its earned terminal column draws no line and no write, so an abandoned card is never walked to Closed (#1932).
+        if cur != term: move(n, term if VOCAB == "shipped" else BY_FACT["issue_closed"], f"issue closed as {st.get('state_reason')}" if term == ROLE["abandoned"] else "issue closed")
     elif st["state"] == "open" and cur == BY_FACT["issue_closed"]: move(n, BY_FACT["unclaimed"], "the issue is open again, so the work was taken back")   # the facts earn the floor; `move` refuses to walk the card back and tags it instead
     elif st["state"] == "open" and i in refs and cur in (BY_FACT["unclaimed"], BY_FACT["claimed"], BY_FACT["blocked"], None): move(n, BY_FACT["wave_branch"], f"work branch {refs[i]} is ahead of {LAND}")
     elif st["state"] == "open" and deps:

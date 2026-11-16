@@ -140,6 +140,14 @@ def not_planned(reason):
     return str(reason or "").strip().lower() in NOT_PLANNED
 
 
+def terminal_column(state, reason=None):
+    """The terminal column one issue's carrier facts earn, or None while it is open: Abandoned when the close reason says
+    the issue was not delivered (spec #132), Closed for a completed close. The janitor's terminal rule and the reconciler
+    both read this one function, so the two passes never disagree about where a closed issue's card belongs (#1932)."""
+    if str(state or "").strip().lower() != "closed": return None
+    return ROLE["abandoned"] if not_planned(reason) else ROLE["issue_closed"]
+
+
 def view_column(status, closed, labels=(), reason=None):
     """(column, freeze label or None) the hub draws one card in, from its Status (old or shipped name), state and labels.
 
