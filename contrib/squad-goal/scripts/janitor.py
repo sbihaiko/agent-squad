@@ -964,15 +964,38 @@ def branch_ahead_count(n):   # how many of its work branches hold commits the la
 def branch_in_dev_count(n):   # how many of its work branches are in the landing branch: the tip is an ancestor of dev
     return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("behind", "identical")))
 _named_in_land = None
-def named_in_land():   # {issue} whose fix is a commit in origin/<land>: its subject ends `(#N)` and is no `TDD RED` (a red test alone fixes nothing). A fix pushed straight to dev reached it (#519). The subject only: a body names issues in passing. One local log a pass, no API call; a checkout with no such ref names none
+def named_in_land():   # {issue: commit time of its newest naming commit} whose fix is a commit in origin/<land>: its subject ends `(#N)` and is no `TDD RED` (a red test alone fixes nothing). A fix pushed straight to dev reached it (#519). The subject only: a body names issues in passing. One local log a pass, no API call; a checkout with no such ref names none
     global _named_in_land
     if _named_in_land is None:
         land = f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"
         base = os.environ.get("SG_LAND_SCAN_FROM", "").strip()   # a fork's last upstream commit: the upstream's `(#N)` subjects name its PRs, never this repository's issues (#759)
-        r = _run(["git", "-C", str(co), "log", "-n", "2000", "--format=%s", f"{base}..{land}" if base else land])
-        _named_in_land = {m.group(1) for line in (r[1].splitlines() if r[0] == 0 else []) if not line.startswith("TDD RED")
-                          for m in [re.search(r"\(#(\d+)\)\s*$", line)] if m}
+        r = _run(["git", "-C", str(co), "log", "-n", "2000", "--format=%ct %s", f"{base}..{land}" if base else land])
+        _named_in_land = {}
+        for line in r[1].splitlines() if r[0] == 0 else []:
+            ct, _, subj = line.partition(" ")
+            m = re.search(r"\(#(\d+)\)\s*$", subj)
+            if not m or subj.startswith("TDD RED"): continue
+            t = float(ct) if ct.isdigit() else 0.0
+            _named_in_land[m.group(1)] = max(_named_in_land.get(m.group(1), 0.0), t)
     return _named_in_land
+def kept_marker(n):   # a kept branch holds the issue's commits for a round (wave.sh keep_conflict, branchland.sh): auto/kept-fix_<n>-..., or a marker whose `issue <n>` line names it (#1958)
+    for m in (st / "auto").glob("kept-*"):
+        if m.name.startswith(f"kept-fix_{n}-"): return True
+        t = marker_text(m) or ""
+        if any(l.strip() == f"issue {n}" for l in t.splitlines()): return True
+    return False
+ended_empty = {}   # issue -> verdict time of the newest run that ended with nothing landed for it (rule R fills it, #1958)
+def requeued_at(n):   # the newest no-landing requeue of the issue: a requeue fact or a refused wave entry of its ledger, or a run end rule R read (#1958). 0 when none; a ledger that cannot be read is none, so the old reading stands
+    t = ended_empty.get(str(n), 0.0)
+    try:
+        rec = ledger().read(f"{repo0}#{n}")
+        t = max([t] + [float(x.get("ts") or 0) for x in (rec.get("requeued") or {}).values() if isinstance(x, dict)]
+                + [float(x.get("ts") or 0) for x in (rec.get("wave") or {}).values() if isinstance(x, dict) and x.get("state") == "refused"])
+    except (OSError, ImportError, ValueError, KeyError, TypeError): pass
+    return t
+def named_landing(n):   # a `(#N)` commit in the landing branch is the issue's landing unless a no-landing requeue or a run end is newer than it (#1958): the requeue's Todo is the later fact, so an older partial landing never writes Code Complete over it
+    ct = named_in_land().get(str(n))
+    return ct is not None and requeued_at(n) <= ct
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` marker, the close pass's claim that it merged that commit: "landed", "ahead" (a fix commit is still to come), "unwound" (the base no longer holds it and nothing is left to merge), or "unknown" when the fork cannot answer at all -- the marker then stands as the evidence it is
     if not (fd and fb): return "unknown"
@@ -1205,6 +1228,8 @@ def reconcile_board():
                 else: set_expected(n, "Blocked", f"run {i['run_id']} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
             else:   # a run that ended with nothing delivered delivered nothing: the card goes back to the queue, never to Code Complete (ADR-0145 rule 12, #464)
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} completed with nothing landed", i["run_id"], i["run_ts"], 20)
+            if i and i["verdict"] and not own_landed and isinstance(i["vts"], (int, float)):   # a run end with nothing landed: an older `(#N)` commit yields to it (#1958)
+                ended_empty[str(n)] = max(ended_empty.get(str(n), 0.0), float(i["vts"]))
     # A run that ended without a verdict has no card to rank: the reoffer marker a run-end path wrote names it, and the card
     # goes back to the queue unless a live run holds the issue, the owner froze it, or its work landed. The marker goes once
     # the card has left Doing; an unreadable card keeps it for the next pass (ADR-0143, #1034).
@@ -1232,6 +1257,12 @@ def reconcile_board():
     # (#550). A card that has a column keeps it: the floor never moves a card, so it never sends one back to Backlog or Todo
     # (ADR-0143). Only the owner moves a card there. This rank is below every rule above, so current run, marker, branch,
     # landing, closure, or owner-label evidence wins.
+    # A label that holds the issue out of every dispatch lane is the owner's hold: such a card is placed, never stranded (#1958).
+    # The lanes' skip lists (skiplabels.sh) and the owner labels; Todo would dispatch none of them.
+    STRAND_HOLDS = {x for v in (os.environ.get("SG_BUG_SKIP_LABELS") or "needs-owner,no-auto,wontfix,question",
+                                os.environ.get("SG_FRONTIER_SKIP_LABELS") or "") for x in v.split(",") if x} | {
+        "frozen:owner", "frozen:dependency", "ready-for-human", "ready-for-HAL9K", "needs-triage", "needs-info",
+        "needs-ratification", "debt", RUN_PARENT}
     oans, olabels = open_issues()
     if oans: fill_missing(proj, set(olabels) | set(expected))   # a card the REST read omitted is asked once of the GraphQL read and rides the pass's map (#1463)
     specs = {k for k, ls in olabels.items() if "spec" in ls} if oans else set()
@@ -1308,6 +1339,19 @@ def reconcile_board():
                     if not mk.exists():
                         say(f"DOING-NO-RUN #{n}: a card sits in Doing with no live run and no marker; the janitor leaves it and the owner moves it")
                         if not dry: mk.touch()
+            # The #1034 recovery, widened (#1958): a card in Code Review or Code Complete that nothing holds and nothing delivered
+            # is stranded, since the frontier reads Todo only. No live run or open wave, no dispatch or kept marker, no remote
+            # branch ahead of the landing branch or in it, no freeze, no landing fact and no `(#N)` landing: the card goes back
+            # to Todo by the one backward move (ADR-0143), named no-landing, with one STRANDED line. A rule that ranked the card
+            # this pass decides it instead.
+            have_n = have_cards.get(n, "")
+            if (not is_spec and have_n in ({"Code Complete"} | ({CODE_REVIEW} if shipped else set())) and n not in expected
+                    and not holding(n) and not any((st / "auto" / f"{k}-{n}").exists() for k in ("disp", "bug"))
+                    and not kept_marker(n) and branch_ahead_count(n) == "0" and branch_in_dev_count(n) == "0"
+                    and not owner_frozen(n) and n not in held_owner and not (olabels[n] & STRAND_HOLDS)
+                    and not list((st / "auto").glob(f"fork-{n}-*")) and not landings().get(str(n)) and not named_landing(n)):
+                say(f"STRANDED #{n}: card {have_n} with no live run, no marker, no branch, no freeze and no landing; card -> {os.environ.get('SG_TODO', 'Todo')} (no-landing), so the next cycle dispatches the issue again")
+                set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {have_n} with no live run, no marker, no branch and nothing landed", rank=20)
             if olabels[n] & {"needs-owner", "needs-ratification"}:
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(set(expected) | (set(olabels) if oans else set()), key=int):   # every open issue, as when the floor named each one: a rule below can still move a card forward
@@ -1316,7 +1360,7 @@ def reconcile_board():
         if term: set_expected(n, term if shipped else "Done", "issue is closed" if term == ROLE["abandoned"] else f"issue is closed as {reason}", "", "", 95 if term == ROLE["abandoned"] else 90)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
-        if n not in specs and str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665)
+        if n not in specs and named_landing(n): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665). A newer no-landing requeue or run end wins over it (#1958)
         if n not in specs and n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set, and a branch that names a spec is its children's (#665)
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
@@ -1522,6 +1566,14 @@ if repo0:
         if (rec.get("board") or {}).get("state") == "pending": continue
         say(f"DISP MARKER DROPPED #{n}: the owner's rearm is newer than run {held_by}")
         if not dry: m.unlink(missing_ok=True)
+def stop_of(n):   # why the issue is stopped, or "": its ledger stopped it (WAVE STOP, needs-human, a held file) or the owner froze it (#1958). wave.sh held_out reads the same facts
+    try:
+        rec = ledger().read(f"{repo0}#{n}")
+        if rec.get("state") in ("frozen", "needs-human"): return f"its ledger is stopped: {rec['state']}"
+        if rec.get("state") == "held": return f"its ledger is held: {rec.get('held') or 'unreadable'}"
+    except (OSError, ImportError, ValueError, KeyError): pass
+    labs = issue_labels(n) & {"frozen:owner", "needs-owner"}
+    return f"it carries {' '.join(sorted(labs))}" if labs else ""
 if owner and proj and repo0:
     for r in names:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
@@ -1551,7 +1603,10 @@ if owner and proj and repo0:
         why = "; ".join(i["reasons"]) or "no reason recorded"
         for n in sorted(marks, key=int):
             if holding(n):   # a live run works it, or a wave still carries it: not ours to release, not yet
-                if n in delivering and n not in byissue and not issue_closed(n): say(f"HELD-BY-WAVE #{n}: run {f.name} ended {i['name']}, its wave is open; the landing pass owns the issue")   # observability only (#1423, ADR-0166); a closed issue is named never (#1566)
+                if n in delivering and n not in byissue and not issue_closed(n):   # observability only (#1423, ADR-0166); a closed issue is named never (#1566)
+                    stop = stop_of(n)   # a stopped issue is the owner's, whatever its wave does: the line names the stop, never a hold the landing pass owns (#1958)
+                    if stop: say(f"HELD-STOPPED #{n}: run {f.name} ended {i['name']}, its wave is open, and the issue is stopped ({stop}); no pass dispatches it until the owner rearms it")
+                    else: say(f"HELD-BY-WAVE #{n}: run {f.name} ended {i['name']}, its wave is open; the landing pass owns the issue")
                 again = True; continue
             ist = sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip()
             if ist != "open": again = again or ist != "closed"; continue
@@ -1564,14 +1619,16 @@ if owner and proj and repo0:
             where = (f"its card is {col[1]}" if col else "its card keeps its column") + (f" (bug card back in {moves[-1][1]})" if moves else "") + " and"
             kept = unpushed(f)   # #771: the loop pushes no work (#361), so the release names a child's unpushed commits for salvage
             salv = f"; its child left commits on no remote branch, kept for salvage: {', '.join(kept)}" if kept else ""
-            say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped so it dispatches again{salv}")
+            stop = stop_of(n)   # the count above may have just stopped the issue (WAVE STOP): the line names the stop, never a dispatch that will not come (#1958)
+            nxt = f"; the issue is stopped ({stop}), so no pass dispatches it until the owner rearms it" if stop else " so it dispatches again"
+            say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped{nxt}{salv}")
             if not dry:
                 for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"bug card back in {s} after run {f.name} ended {i['name']}")
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink(missing_ok=True)
                 if kept: (st / "auto" / f"salvage-{n}").write_text("".join(k + "\n" for k in kept))   # the next dispatch names it (startability.sh)
                 (st / "cq").mkdir(exist_ok=True)
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
-                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again." + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
+                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped" + (f". The issue is stopped ({stop}), so no pass dispatches it until the owner rearms it." if stop else ", so the next cycle dispatches the issue again.") + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
         if not again and not dry: mk.touch()
     # O (#888): a probe's refutation that failed for a transient cause leaves auto/probe-retry-<n>. Rule O above never reads a
     # child that entered its wave, so this sweep sends it again: once a pass, for an open probe frozen for the owner, read from

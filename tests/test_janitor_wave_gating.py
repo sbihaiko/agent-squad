@@ -163,7 +163,7 @@ def _reconcile(tmp_path: Path, monkeypatch, card: str, standing: str, live_gate:
     mod.open_issues = lambda: (False, {})
     mod.issue_info = lambda n: ("open", "", "Issue")
     mod.issue_labels = lambda n: set()
-    mod.named_in_land = lambda: set()
+    mod.named_in_land = lambda: {}
     have = {str(CHILD): card}
     mod.cards = lambda p: (True, have)
     writes = []
