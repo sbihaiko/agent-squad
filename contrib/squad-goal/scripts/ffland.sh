@@ -23,7 +23,8 @@ g() { /usr/bin/git -C "$W" "$@"; }
 # checks it waited for, and a status left pending is a landing that died. A report, never a gate: landstatus.sh exits 0 on
 # every refusal, and SG_LAND_STATUS=off silences it.
 pendsha=
-status() { [ -n "$1" ] && bash "$d/landstatus.sh" "$@"; return 0; }
+status() { [ -n "$1" ] && bash "$d/landstatus.sh" "$@" >&2; return 0; }   # its report is stderr: stdout carries the one contract line
+
 fb() { echo "FFLAND-FALLBACK $*"; status "$pendsha" failure "landing #$iss refused"; exit 1; }
 
 g init -q . 2>/dev/null; g remote add origin "$remote"
