@@ -10,7 +10,9 @@ import os
 import signal
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -24,6 +26,7 @@ pytestmark = pytest.mark.heavy   # a nightly run in a fixture tree is over 1 s
 
 def _run(cmd, env=None, **kw):
     clean = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
+    clean["SG_NIGHTLY_HOUR"] = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H")   # the suite runs in its window whatever the hour
     clean.update(env or {})
     return subprocess.run(cmd, capture_output=True, text=True, env=clean, timeout=120, **kw)
 

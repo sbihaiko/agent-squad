@@ -753,3 +753,28 @@ def test_the_local_half_keeps_mypy_only_for_a_wider_scope_than_ci():
     local_half = "\n".join(ln for ln in TIP_GATE.read_text().splitlines() if not ln.lstrip().startswith("#"))
     assert "-m mypy" not in local_half, \
         "the local half runs mypy although the CI half already covers that scope"
+
+
+def test_nightly_workflow_pins_its_schedule_dev_ref_and_read_only_token():
+    """Guard for the nightly's GitHub half (#1975): a schedule at 04:00 America/Sao_Paulo runs the complete Linux suite on dev.
+
+    The trigger is a schedule only, so no branch push starts it. Each job checks out dev and runs one shard of the full suite
+    in one mode, heavy included, and the token is read-only.
+    """
+    import yaml
+
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "nightly.yml").read_text())
+    on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
+    assert set(on) == {"schedule"}, f"only the schedule starts the nightly; found {sorted(on)}"
+    assert on["schedule"] == [{"cron": "0 7 * * *"}], "04:00 America/Sao_Paulo is 07:00 UTC"
+    assert wf["permissions"] == {"contents": "read"}
+    assert set(wf["jobs"]) == {f"full-xdist-{n}" for n in range(1, 7)} | {f"full-serial-{n}" for n in range(1, 7)}
+    for name, job in wf["jobs"].items():
+        checkout = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+        assert checkout and checkout[0].get("with", {}).get("ref") == "dev", f"{name} checks out dev"
+        runs = [s.get("run", "") for s in job["steps"]]
+        mode = "-n auto" if "xdist" in name else "-p no:xdist"
+        shard = name.rsplit("-", 1)[1]
+        assert any(mode in r and f"ci_shards.py {shard}" in r for r in runs), \
+            f"{name} runs shard {shard} in the mode {mode!r}"
+        assert "not heavy" not in " ".join(runs), f"{name} deselects the heavy tests"

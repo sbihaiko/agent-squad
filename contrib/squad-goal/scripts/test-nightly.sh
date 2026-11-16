@@ -9,6 +9,11 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(dirname "$0"); src=${1:-$d/nightly.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; fail=0
 mkdir -p "$S" "$ST"; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The clock reports the window hour from FAKE_HOUR (04 by default), so a case runs in or out of the nightly's window whatever
+# the real time is. Every other date read passes through.
+mkdir -p "$T/fakebin"
+printf '#!/bin/bash\ncase "$*" in *+%%H*) echo "${FAKE_HOUR:-04}";; *) exec /bin/date "$@";; esac\n' > "$T/fakebin/date"; chmod +x "$T/fakebin/date"
+export PATH="$T/fakebin:$PATH"
 G="git -c user.email=a@b -c user.name=t"
 cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/live-check.sh" "$S/" 2>/dev/null
 sq=$(cd "$d/../../.." && pwd)   # the repository the live check reads its module from
@@ -592,5 +597,42 @@ alive_pid "$p" && ok "the check is still alive, so the suite must end it" || ko 
 end_check
 i=0; while [ -n "$(ckpid)" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done
 [ -z "$(ckpid)" ] && ok "the suite ends the check it started by pid" || ko "the check the suite started is still alive: $(ckpid)"
+
+# 31) (#1975) The nightly runs only in its window: the profile's hour (SG_NIGHTLY_HOUR, 04 by default, America/Sao_Paulo).
+mark; rm -f "$T/ran.log"; out=$(ng FAKE_HOUR=05); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && case "$out" in *window*) true;; *) false;; esac \
+  && ok "the nightly never starts outside its window, and writes no day marker" \
+  || ko "the nightly started outside its window: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+mark; rm -f "$T/ran.log"; out=$(ng FAKE_HOUR=03); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && ok "the nightly never starts before its window" \
+  || ko "the nightly started before its window: rc $rc, '$out'"
+mark; rm -f "$T/ran.log"; out=$(ng FAKE_HOUR=05 SG_NIGHTLY_HOUR=05); rc=$?
+[ $rc = 0 ] && [ -e "$T/ran.log" ] && ok "the profile's hour moves the window" \
+  || ko "the nightly did not run in the profile's hour: rc $rc, '$out'"
+
+# 32) (#1975) A window that closes with no run leaves one bounded record, and the alert names the window.
+mark; rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-missed-$(date +%F)"; out=$(ng FAKE_HOUR=05); rc=$?; rec
+[ "$r_res" = bounded ] && grep -q 'window' "$ST/alerts.log" 2>/dev/null \
+  && ok "a window that closed with no run records one bounded attempt" \
+  || ko "a closed window recorded '$r_res' with alerts '$(cat "$ST/alerts.log" 2>/dev/null)': '$out'"
+mark; rm -f "$ST/nightly-result" "$ST/alerts.log"; out=$(ng FAKE_HOUR=03); rec
+[ -z "$r_res" ] && ok "a window not yet open records nothing" || ko "a window not yet open recorded '$r_res'"
+
+# 33) (#1975) The dispatch stops in the window until the nightly ran that day, and while the nightly runs in it.
+mark; out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ok "the dispatch holds in the open window before the nightly ran";;
+  *) ko "the dispatch did not hold in the window: '$out'";; esac
+touch "$ST/auto/nightly-$(date +%F)"
+out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ko "the dispatch holds in the window after the nightly ran today: '$out'";;
+  *) ok "the window hold ends once the nightly ran that day";; esac
+mark; out=$(export FAKE_HOUR=05; hold)
+case "$out" in *"nightly window"*) ko "the dispatch holds outside the window: '$out'";;
+  *) ok "the dispatch does not hold outside the window";; esac
+mkdir -p "$ST/locks/nightly"; sleep 60 & np=$!; echo "$np" > "$ST/locks/nightly/pid"
+out=$(export FAKE_HOUR=04; hold)
+kill "$np" 2>/dev/null; wait "$np" 2>/dev/null; rm -rf "$ST/locks/nightly"
+case "$out" in *"the nightly runs"*) ok "the dispatch holds while the nightly runs in its window";;
+  *) ko "the dispatch did not hold while the nightly runs: '$out'";; esac
 
 rm -rf "$T"; exit $fail
