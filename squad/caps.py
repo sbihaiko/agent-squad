@@ -429,6 +429,7 @@ def _take(args):
 
 def main(argv=None):
     """`python3 -m squad.caps [--target DIR]`: print the resolution with the live occupancy as JSON. A missing block exits 2 with its name.
+    No `--target` reads the project file of the working directory, the resolution the loop reaches with `caps.ceiling(".")`.
     `take <kind> <holder> [--count N] [--try] [--wait S] [--pid P]` takes slots; `release <kind> <holder>` gives them back."""
     import argparse
     import sys
@@ -447,6 +448,7 @@ def main(argv=None):
             s.add_argument("--wait", type=float, default=0.0)
             s.add_argument("--try", dest="try_mode", action="store_true")
     args = a.parse_args(argv)
+    args.target = args.target if args.target is not None else "."   # the CLI resolves the working directory, as the loop does
     try:
         c = ceiling(args.target)
         if args.cmd == "take":
