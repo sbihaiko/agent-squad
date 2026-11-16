@@ -55,7 +55,7 @@ class Board:
         if "/fields?" in s:
             out = json.dumps(FIELDS)
         elif "/issues?" in s:
-            rows = [{"number": n, "state": st, "labels": [{"name": l} for l in labels]}
+            rows = [{"number": n, "state": st, "labels": [{"name": label} for label in labels]}
                     for n, (st, labels) in self.issues.items()]
             if "state=open" in s:
                 rows = [r for r in rows if r["state"] == "open"]
