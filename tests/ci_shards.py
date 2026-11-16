@@ -51,7 +51,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_no_alert_strip.py", "tests/test_hub_overlay_stream.py", "tests/test_hub_pr_review_chip.py", "tests/test_hub_process_lock.py", "tests/test_hub_procscan_cache.py", "tests/test_hub_quota_probe.py",
         "tests/test_hub_run_groups.py", "tests/test_hub_run_liveness.py", "tests/test_hub_runs_active.py", "tests/test_hub_runs_scope.py", "tests/test_hub_settings_view.py", "tests/test_hub_slack_settings.py",
         "tests/test_hub_state_default.py", "tests/test_hub_switcher.py", "tests/test_hub_tailnet.py", "tests/test_hub_token_burn.py", "tests/test_hubmux_profiles.py",
-        "tests/test_issue_ledger.py", "tests/test_issue_state_gate_tries.py", "tests/test_issue_state_priority.py","tests/test_issue_state_repo_cache.py", "tests/test_issue_state_test_case.py", "tests/test_janitor_dashboard_ceiling.py", "tests/test_janitor_stranded_card.py",
+        "tests/test_issue_ledger.py", "tests/test_issue_state_gate_tries.py", "tests/test_issue_state_priority.py", "tests/test_issue_state_repo_cache.py", "tests/test_issue_state_test_case.py", "tests/test_janitor_dashboard_ceiling.py", "tests/test_janitor_stranded_card.py",
         "tests/test_handhold.py", "tests/test_hub_live_cache.py", "tests/test_hub_live_work.py",
         "tests/test_janitor_hand_hold.py", "tests/test_janitor_takeover.py", "tests/test_retire.py", "tests/test_jev_screen_set.py", "tests/test_launch.py", "tests/test_launch_modules.py", "tests/test_launch_off_models.py", "tests/test_limits.py",
         "tests/test_livecheck.py", "tests/test_model_fallthrough.py", "tests/test_plugin.py", "tests/test_release_changelog.py", "tests/test_review_calibration.py",
@@ -117,7 +117,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
     ),
     (
         "tests/test_adapter_error_classes.py", "tests/test_adapter_refusals.py", "tests/test_adr_0145_waves.py", "tests/test_adr_index.py", "tests/test_board_fast_read.py",
-        "tests/test_board_gate_record.py", "tests/test_board_pin.py", "tests/test_priority_rank.py","tests/test_board_transitions.py", "tests/test_caps_partial.py", "tests/test_contract_probe.py",
+        "tests/test_board_gate_record.py", "tests/test_board_pin.py", "tests/test_priority_rank.py", "tests/test_board_transitions.py", "tests/test_caps_partial.py", "tests/test_contract_probe.py",
         "tests/test_dashboard_child_review.py", "tests/test_dashboard_failures.py", "tests/test_dashboard_layout.py", "tests/test_dashboard_live_call.py", "tests/test_dashboard_pause.py",
         "tests/test_dashboard_record.py", "tests/test_gate_counts.py", "tests/test_gh_callers.py", "tests/test_gh_door_child_merge.py", "tests/test_hub_board_cases.py",
         "tests/test_hub_board_filter_bar.py", "tests/test_hub_board_observation.py", "tests/test_hub_board_outcomes.py", "tests/test_hub_cache_split.py", "tests/test_hub_childcc_row.py",

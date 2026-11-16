@@ -491,12 +491,22 @@ class BoardBinding:
         return 0
 
     def priority_field(self):
-        """The Priority single-select field: `{"id"}`, the field's id, empty when the board carries none (#1977). Cached a day."""
+        """The Priority single-select field: `{"id"}`, the field's id, empty when the board carries none (#1977).
+        Only a found id is cached a day, so a field added to the board is read at the next call."""
         def read_field():
             fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
             f = next((x for x in fs if isinstance(x, dict) and x.get("name") == PRIORITY), None) if isinstance(fs, list) else None
+            if f and f.get("dataType") != "SINGLE_SELECT": raise RuntimeError(f"{PRIORITY!r} field is not a single select")
             return {"id": f["id"] if f else ""}
-        return self._cached(f"rest-priority-field-{self.owner}-{self.project}.json", 86400, read_field)
+        cache = self.st / f"rest-priority-field-{self.owner}-{self.project}.json"
+        try:
+            if time.time() - cache.stat().st_mtime < 86400:
+                d = json.loads(cache.read_text())
+                if d.get("id"): return d
+        except (OSError, ValueError): pass
+        d = read_field()
+        if d["id"]: cache.write_text(json.dumps(d))
+        return d
 
     def read_priorities(self):
         """{issue: Priority name} for each card that carries one, in ONE items read (#1977). A card with no value is absent.

@@ -5,10 +5,13 @@ A card with no value is absent from the answer, and a Priority the board does no
 """
 import importlib.util
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="the stub board filters its items with jq")
 
 SCRIPT = Path(__file__).parents[1] / "contrib" / "squad-goal" / "scripts" / "issue_state.py"
 SPEC = importlib.util.spec_from_file_location("issue_state_priority", SCRIPT)
@@ -72,3 +75,37 @@ def test_a_board_without_a_priority_field_raises(tmp_path):
 
     with pytest.raises(RuntimeError, match="Priority"):
         binding(tmp_path, board).read_priorities()
+
+
+def test_a_priority_field_that_is_not_a_single_select_raises(tmp_path):
+    text = dict(FIELDS[1], dataType="TEXT")
+    board = Board({1: "urgent"}, fields=[FIELDS[0], text])
+
+    with pytest.raises(RuntimeError, match="single select"):
+        binding(tmp_path, board).read_priorities()
+
+
+def test_a_priority_field_added_after_a_miss_is_read_at_once(tmp_path):
+    board = Board({1: "urgent"}, fields=[FIELDS[0]])
+    with pytest.raises(RuntimeError):
+        binding(tmp_path, board).read_priorities()
+
+    board.fields = FIELDS
+
+    assert binding(tmp_path, board).read_priorities() == {"1": "urgent"}
+
+
+def test_the_read_feeds_the_ranking_and_an_unreadable_field_holds_the_lane(tmp_path):
+    rank_script = Path(__file__).parents[1] / "contrib" / "squad-goal" / "scripts" / "priority_rank.py"
+    rank_spec = importlib.util.spec_from_file_location("priority_rank_chain", rank_script)
+    priority_rank = importlib.util.module_from_spec(rank_spec)
+    rank_spec.loader.exec_module(priority_rank)
+    cards = [{"number": n, "repo": "x/y", "created": "2026-11-01T00:00:00Z"} for n in (1, 2)]
+    board = Board({1: "low", 2: "urgent"})
+
+    ranked, held = priority_rank.queue(cards, binding(tmp_path, board).read_priorities)
+    assert [c["number"] for c in ranked] == [2, 1] and held == []
+
+    board.fields = [FIELDS[0]]
+    ranked, held = priority_rank.queue(cards, binding(tmp_path / "again", board).read_priorities)
+    assert ranked == [] and [c["number"] for c in held] == [1, 2]

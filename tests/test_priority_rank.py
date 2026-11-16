@@ -77,3 +77,31 @@ def test_the_input_list_is_not_reordered():
     priority_rank.order(cards)
 
     assert cards == before
+
+
+def test_the_board_priority_is_attached_to_each_card_before_the_order():
+    ranked, held = priority_rank.queue([card(1), card(2), card(3)], lambda: {"2": "urgent", "3": "critical"})
+
+    assert [c["number"] for c in ranked] == [2, 1]
+    assert [c["number"] for c in held] == [3]
+
+
+def test_an_unreadable_priority_field_holds_every_card_it_touches():
+    def unreadable():
+        raise RuntimeError("no 'Priority' field on the board")
+
+    ranked, held = priority_rank.queue([card(1, "urgent"), card(2)], unreadable)
+
+    assert ranked == []
+    assert [c["number"] for c in held] == [1, 2]
+
+
+def test_creation_time_is_compared_as_an_instant_not_as_text():
+    earlier = card(5, "high", created="2026-11-01T09:00:00+10:00")
+    later = card(6, "high", created="2026-11-01T00:00:00Z")
+
+    assert numbers([later, earlier]) == [5, 6]
+
+
+def test_a_number_given_as_text_sorts_as_its_integer():
+    assert numbers([card("10", "high"), card(9, "high")]) == [9, "10"]
