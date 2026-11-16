@@ -7,6 +7,7 @@ and the lane names its column and count. The rule lives in the page's rule layer
 `board-lanes.css`; ADR-0137 keeps the domain rules out of the view, and no browser runs here: the rule text runs
 under node, and the stylesheet is read as text.
 """
+import copy
 import json
 import re
 import shutil
@@ -68,18 +69,32 @@ def _drawn(model=None):
     return html
 
 
+def _board(groups):
+    """The board model `buildBoard` builds for these groups, with the page's options at their defaults."""
+    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "hidden": []}
+    return _lanes_rule(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));")
+
+
 def test_a_lane_fills_a_grid_of_cards():
     """The cards of one column are a grid, so a wide lane shows several cards on one line."""
     assert "grid-template-columns:repeat(auto-fill,minmax(340px,1fr))" in _rule("#bbody .cell")
 
 
 def _cards_per_line(lane_px):
-    """How many cards of the lane grid fit on one line at this lane width, read from the drawn rule."""
+    """How many cards of the lane grid fit on one line at this lane width, read from the drawn rule.
+
+    No browser runs in this suite (ADR-0137: the rule layer is read as text here), so this derives the count from
+    every declaration that takes room from the lane: the page's border-box rule, the lane's padding on both sides,
+    its right border, the card's minimum and the gap. A change to any of them moves the count and fails the test.
+    """
+    page = HUB_PY.read_text()
+    assert "*{box-sizing:border-box}" in page, "the page does not size its boxes by the border"
     rule = _rule("#bbody .cell")
     card = int(re.search(r"minmax\((\d+)px,", rule).group(1))
     gap = int(re.search(r"gap:(\d+)px", rule).group(1))
     pad = int(re.search(r"padding:(\d+)px", rule).group(1))
-    inner = lane_px - 2 * pad
+    border = int(re.search(r"border-right:(\d+)px", rule).group(1))
+    inner = lane_px - 2 * pad - border
     return max(1, (inner + gap) // (card + gap))
 
 
@@ -100,10 +115,41 @@ def test_a_column_track_never_goes_below_320_px():
     assert "grid-template-columns:var(--tracks" in _rule("#bbody .lgrid")
 
 
+def _grid(model=None):
+    return re.search(r'<div class=lgrid style="([^"]*)">', _drawn(model)).group(1)
+
+
 def test_the_board_hands_one_track_list_to_the_grid():
-    """The counts are the board's own, summed over the drawn lanes, so every lane keeps the same column edges."""
-    grid = re.search(r'<div class=lgrid style="([^"]*)">', _drawn()).group(1)
+    """The lanes share one grid, so every lane keeps the same column edges."""
+    grid = _grid()
     assert "--tracks:minmax(320px,4fr) minmax(320px,4fr) minmax(320px,1fr)" in grid, grid
+
+
+def test_a_collapsed_lanes_cards_never_widen_a_column():
+    """The tracks count the drawn lanes only: a collapsed lane draws no cell, so its cards give no column any width."""
+    collapsed = copy.deepcopy(MODEL)
+    collapsed["lanes"][0]["collapsed"] = True   # s12 holds Todo 3 and Doing 2, and draws none of them
+    grid = _grid(collapsed)
+    assert "--tracks:minmax(320px,1fr) minmax(320px,4fr) minmax(320px,1fr)" in grid, grid
+    assert "<span>Todo</span><b>4</b>" in _drawn(collapsed), "the header does not count the whole board"
+
+
+def test_an_empty_visible_column_is_drawn():
+    """A column the board holds no card in is still a lane, so a reader sees it and reads it as empty (#1994)."""
+    model = _board([
+        {"name": "Todo", "end": False, "items": []},
+        {"name": "Doing", "end": False, "items": [{"n": 5, "t": "e", "l": []}]},
+        {"name": "Closed", "end": True, "items": []},
+    ])
+    assert model["vc"] == ["Todo", "Doing"], model["vc"]
+    assert model["hc"] == [], model["hc"]
+    html = _drawn({"vc": ["Todo", "Doing"], "cols": ["Todo", "Doing"],
+                   "lanes": [{"id": "none", "kind": "none", "title": "No spec", "closed": 0, "total": 0, "doing": 1,
+                              "review": 0, "st": "", "collapsed": False,
+                              "counts": {"Todo": 0, "Doing": 1},
+                              "cells": {"Todo": [], "Doing": [{"n": 5, "t": "e"}]}}]})
+    assert '<div class=cell data-lane="none" data-col="Todo"' in html, "the empty column draws no lane"
+    assert re.search(r'data-col="Todo"[^>]*><div class=clh><span>Todo</span><b>0</b>', html), html
 
 
 def test_each_lane_names_its_column_and_its_count():
@@ -127,9 +173,26 @@ def test_two_lanes_are_separated_by_a_divider():
 def test_a_card_title_clamps_to_two_lines_with_the_whole_title_in_its_tooltip():
     clamp = _rule("#bbody .cell .it .tt")
     assert "-webkit-line-clamp:2" in clamp and "-webkit-box-orient:vertical" in clamp and "overflow:hidden" in clamp
+    assert "line-clamp:2" in clamp and "max-height:3.1em" in clamp, "the clamp has no fallback where -webkit-line-clamp is unknown"
     page = HUB_PY.read_text()
     line = next(x for x in page.splitlines() if "<span class=tt" in x)
-    assert re.search(r'<span class=tt title="\$\{esc\(tt\)\}">\$\{esc\(tt\)\}</span>', line), line[-400:]
+    assert r"""<span class=tt title="${esc(tt).replace(/"/g,"&quot;")}">${esc(tt)}</span>""" in line, line[-400:]
+
+
+def test_a_title_with_a_quote_cannot_break_its_tooltip():
+    """The tooltip is a quoted attribute: `esc` leaves a quote alone, so the title passes through the quote escape."""
+    page = HUB_PY.read_text()
+    esc = next(x for x in page.splitlines() if x.startswith("const esc="))
+    out = _lanes_rule(esc + "\nconsole.log(JSON.stringify(esc('a \"quoted\" <b> & title')));")
+    assert out == 'a "quoted" &lt;b&gt; &amp; title', out
+    line = next(x for x in page.splitlines() if "<span class=tt" in x)
+    assert '.replace(/"/g,"&quot;")' in line, line[-400:]
+
+
+def test_a_narrow_board_wraps_its_lanes_instead_of_scrolling_sideways():
+    """The weighted tracks never go below 320 px, so a board of many columns wraps its lanes on a narrow screen."""
+    assert re.search(r"@media \(max-width:1100px\)\{#bbody \.lgrid\{grid-template-columns:repeat\(auto-fit,minmax\(360px,1fr\)\)\}\}",
+                     _css()), "a narrow board overflows the page sideways"
 
 
 def test_a_card_top_border_keeps_the_issue_colour():

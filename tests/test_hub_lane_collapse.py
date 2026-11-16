@@ -106,11 +106,11 @@ def test_a_collapsed_lane_keeps_its_count_per_column():
     assert lane["counts"] == {"Todo": 2, "Doing": 1}, "the collapsed line does not count each column"
 
 
-def test_a_column_is_drawn_only_while_an_expanded_lane_holds_a_card_in_it():
+def test_a_visible_column_is_drawn_even_when_only_a_collapsed_lane_holds_a_card_in_it():
+    """#1994: a column the user left visible is always a lane, even at zero cards, so the board never drops one."""
     model = _lanes({"lc": {"s20": True}})
-    assert model["vc"] == [], "a column held only by a collapsed lane is still drawn"
-    hidden = {c["name"]: c["count"] for c in model["hc"]}
-    assert hidden == {"Todo": 2, "Doing": 1}, "the hidden columns are not named with their counts, or a closed status is named"
+    assert model["vc"] == ["Todo", "Doing"], "a column the user left visible is not drawn"
+    assert model["hc"] == [], "a column the user left visible is named as hidden"
     assert len(_lanes({"lc": {"s20": False}})["vc"]) >= 2, "an expanded lane does not draw its columns"
 
 
