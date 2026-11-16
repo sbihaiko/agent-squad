@@ -629,6 +629,18 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     [ -n "$shared" ] || return 1
     printf '%s\n' "$shared"
   }
+  # record_shared_pairs (stdin: the shared paths, #1941): each child of the run that entered the wave is recorded with $iss, so the
+  # frontier never pairs the two again in one run (siblings.py record). The entered children are the wave's siblings; a pair
+  # is recorded with each, since the wave does not tell which sibling holds the path.
+  record_shared_pairs() {
+    local p s paths=()
+    while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done
+    [ ${#paths[@]} -gt 0 ] || return 0
+    for s in $(python3 "$here/issue_ledger.py" entered "$SG_REPO" 2>/dev/null | awk -F '\t' -v r="$run" '$1 == r { print $2 }'); do
+      [ "$s" = "$iss" ] && continue
+      python3 "$here/siblings.py" record "$iss" "$s" "${paths[@]}" >/dev/null 2>&1 || echo "WAVE-NOTE the shared-path pair of #$iss and #$s is not recorded (#1941)"
+    done
+  }
   rebase_on_tip() {
     $G fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>/dev/null || {
       echo "WAVE-ERROR $w is not on $remote (the run cuts it from $base at its start): #$iss enters no wave"; return 2; }
@@ -648,6 +660,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     case "$src" in
       2) echo "WAVE-ERROR the sibling diff of $w over $base cannot be read: #$iss enters no wave"; return 2;;
       0) while IFS= read -r p; do [ -n "$p" ] && list="${list:+$list, }\"$p\""; done <<< "$shared"
+         record_shared_pairs <<< "$shared"
          refuse "the diff of a sibling in $w changes the same file ($list): a merge_conflict of one wave, so the child waits for a run that builds it alone"; return 1;;
     esac
   }
