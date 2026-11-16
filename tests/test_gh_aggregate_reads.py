@@ -355,3 +355,38 @@ def test_the_cli_names_a_refused_query(tmp_path):
     r = _cli(tmp_path, RATE_LIMITED, 1)
     assert r.returncode == 2, "the refusal keeps its own exit code"
     assert "rate limit exceeded" in r.stdout
+
+
+# --- the blocking edges name their repository, and a missing page is recorded (#1983) ----------------------------------
+
+
+def _edge_envelope(has_more: bool, blocker_repo: str = "sbihaiko/other") -> str:
+    node = {
+        "number": 5,
+        "title": "Edges name their repository",
+        "state": "OPEN",
+        "body": "",
+        "labels": {"nodes": []},
+        "repository": {"nameWithOwner": "sbihaiko/agent-squad"},
+        "blockedBy": {
+            "pageInfo": {"hasNextPage": has_more},
+            "nodes": [{"number": 12, "state": "OPEN", "repository": {"nameWithOwner": blocker_repo}}],
+        },
+    }
+    return json.dumps({"data": {"repository": {"issues": {"pageInfo": {"hasNextPage": False}, "nodes": [node]}}}})
+
+
+def test_each_blocking_edge_names_the_repository_of_its_blocker():
+    issue = ghread.read(ISSUES_ROUTE, transport=stub(0, _edge_envelope(False))).answer[0]
+    assert issue["repo"] == "sbihaiko/agent-squad"
+    assert issue["blocked_by_edges"] == [{"repo": "sbihaiko/other", "number": 12, "state": "open"}]
+
+
+def test_a_blocker_page_with_more_pages_is_recorded_as_missing():
+    issue = ghread.read(ISSUES_ROUTE, transport=stub(0, _edge_envelope(True))).answer[0]
+    assert issue["blocked_by_complete"] is False
+
+
+def test_a_blocker_page_with_no_more_pages_is_recorded_complete():
+    issue = ghread.read(ISSUES_ROUTE, transport=stub(0, _edge_envelope(False))).answer[0]
+    assert issue["blocked_by_complete"] is True

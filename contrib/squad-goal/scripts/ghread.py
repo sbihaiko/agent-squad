@@ -321,7 +321,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
 # What one issue of a fact carries. `comments(last: ...)` is how the TDD RED comment of a fork-only fix is found without a
 # read of the issue's comments, which was one request per candidate (#45).
 _COMMENTS = 50
-_ISSUE_FIELDS = f"number title body state stateReason createdAt labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} parent {{ number }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
+_ISSUE_FIELDS = f"number title body state stateReason createdAt repository {{ nameWithOwner }} labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ pageInfo {{ hasNextPage }} nodes {{ number state repository {{ nameWithOwner }} }} }} parent {{ number }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
@@ -475,7 +475,14 @@ def _issue(node: Any) -> dict[str, Any]:
         "state": state.lower() if isinstance(state, str) else None,
         # The close reason, on REST's name and spelling: a card's terminal column follows it (board_columns.terminal_column, #1932)
         "state_reason": node.get("stateReason").lower() if isinstance(node.get("stateReason"), str) else None,
+        "repo": _name_with_owner(node.get("repository")),
         "labels": _labels(node.get("labels")),
+        "blocked_by_edges": [   # each blocker names its own repository, so issue #12 of one repo is never #12 of another (#1983)
+            {"repo": _name_with_owner(n.get("repository")), "number": n.get("number"), "state": n.get("state").lower() if isinstance(n.get("state"), str) else None}
+            for n in _connection(node.get("blockedBy")).get("nodes") or []
+            if isinstance(n, dict) and isinstance(n.get("number"), int)
+        ],
+        "blocked_by_complete": _connection(_connection(node.get("blockedBy")).get("pageInfo")).get("hasNextPage") is False,   # False: a page of blockers is missing or unread, so the edges are partial (#1983)
         "blocked_by": [
             n.get("number")
             for n in _connection(node.get("blockedBy")).get("nodes") or []
@@ -499,6 +506,11 @@ def _issue(node: Any) -> dict[str, Any]:
             if isinstance(n, dict) and isinstance(n.get("number"), int)
         ],
     }
+
+
+def _name_with_owner(repository: Any) -> str | None:
+    name = _connection(repository).get("nameWithOwner")
+    return name if isinstance(name, str) else None
 
 
 def _sub_issues(summary: Any) -> dict[str, int] | None:
