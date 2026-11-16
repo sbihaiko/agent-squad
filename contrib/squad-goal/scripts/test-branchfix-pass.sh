@@ -216,6 +216,21 @@ printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\
 r=$(OPEN="33" fp)
 [ "$($O rev-parse "refs/heads/$rb")" = "$K" ] && ok "a run that added no head leaves the kept branch as it is" || ko "the kept branch moved to $($O rev-parse "refs/heads/$rb"), want $K"
 case "$r" in *"(rebase round"*) ko "a run with no head was pushed as a round: '$r'";; *) ok "a run with no head pushes no round";; esac
+# 23) (#1960) a kept round whose run ended unproven still made its head: the last head whose outcome is not fail is pushed to the
+#     work branch (lease on the reviewed sha), and branchland's gate and review still decide. A fail head is never pushed.
+kround() {   # kround <issue> <outcome>: a kept round dispatched and ended with one head under that outcome; prints the head
+  local rb=fix/$1-rebase-r1 rid tg; : > "$T/launch.log"
+  push "$rb"; rev "$rb" CHANGES "u.sh:1 the rebase conflicts"; echo origin/dev > "$T/st/auto/kept-fix_$1-rebase-r1"
+  OPEN="$1" fp >/dev/null; rid=$(cat "$T/st/auto/branchfix-fix_$1-rebase-r1-"* 2>/dev/null)
+  tg=$T/tgk$1; rm -rf "$tg"; $G clone -q "$T/origin.git" "$tg" 2>/dev/null
+  (cd "$tg" && $G checkout -q -b "squad/run/$rid" origin/dev && echo k > "k$1" && $G add "k$1" && $G -c user.email=a@b -c user.name=t commit -q -m "the round (Refs #$1)")
+  mkdir -p "$T/co/runs/$rid"
+  printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "%s", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg" "$rid" "$2" "$($G -C "$tg" rev-parse HEAD)" > "$T/co/runs/$rid/record.jsonl"
+  $G -C "$tg" rev-parse HEAD; }
+UH=$(kround 34 unproven); r=$(OPEN="34" fp)
+[ "$($O rev-parse refs/heads/fix/34-rebase-r1)" = "$UH" ] && ok "23 an unproven kept round's head is pushed to the work branch" || ko "23 the unproven round was not pushed: remote $($O rev-parse refs/heads/fix/34-rebase-r1) want $UH: '$r'"
+K35=; FH=$(kround 35 fail); K35=$($O rev-parse refs/heads/fix/35-rebase-r1); r=$(OPEN="35" fp)
+[ "$($O rev-parse refs/heads/fix/35-rebase-r1)" = "$K35" ] && [ "$K35" != "$FH" ] && ok "23 a fail head is never pushed" || ko "23 a fail head was pushed: '$r'"
 # 22) (#1425) two fix rounds with the same blocking finding are the most the pass dispatches under the default cap: the third
 #     pass stops the branch as stalled and dispatches no third run.
 : > "$T/launch.log"

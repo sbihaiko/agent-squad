@@ -470,4 +470,21 @@ python3 "$src" --answer "$T/adr3.json" > "$T/adr3.md" 2>/dev/null
   && ! /usr/bin/grep -q 'not a repro of a defect' "$T/adr3.md" \
   && ok "40 a Blocking finding citing an ADR rule the change violates stays Blocking, even with a grep repro (#1548)" \
   || ko "40 ADR violation: summary='$(python3 "$src" --summary "$T/adr3.md" 2>&1)' $(cat "$T/adr3.md" 2>/dev/null)"
+# 41) #1960: the loop's own rebase-round review has one writer, and the landing pass reads it as changes, never malformed. Its
+# Blocking finding names a repro (ADR-0172) that exits non-zero while the branch conflicts with the ref and 0 once it is rebased.
+sd=$(cd "$(dirname "$src")" && pwd)
+for files in "g a.py" ""; do
+  python3 "$src" --round-review dev origin/dev "$files" > "$T/rr.md" 2>"$T/rr.err"; echo tip41 > "$T/rr.sha"
+  [ "$(python3 "$src" --classify "$T/rr.md" "$T/rr.sha" tip41 2>&1)" = changes ] && /usr/bin/grep -q 'Rebase this branch on origin/dev,' "$T/rr.md" \
+    && ok "41 the round review ('${files:-no path}') classifies as changes" || ko "41 round review ('$files'): '$(python3 "$src" --classify "$T/rr.md" "$T/rr.sha" tip41 2>&1)' $(cat "$T/rr.md" "$T/rr.err" 2>/dev/null)"
+done
+rp=$(sed -n 's/.* — repro: //p' "$T/rr.md" | head -1)
+G=/usr/bin/git; R=$T/rp; $G init -q -b dev "$R" && (cd "$R" && echo base > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m b \
+  && $G checkout -q -b w && echo mine > g && $G -c user.email=a@b -c user.name=t commit -q -am w && $G checkout -q dev && echo other > g \
+  && $G -c user.email=a@b -c user.name=t commit -q -am d && $G update-ref refs/remotes/origin/dev dev && $G checkout -q w)
+(cd "$R" && sh -c "$rp") >/dev/null 2>&1; c1=$?
+(cd "$R" && $G checkout -q -b clean origin/dev && sh -c "$rp") >/dev/null 2>&1; c2=$?
+[ -n "$rp" ] && [ "$c1" != 0 ] && [ "$c2" = 0 ] && ok "41 the repro fails while the branch conflicts and passes once rebased" || ko "41 repro '$rp': conflict rc=$c1, clean rc=$c2"
+n=$(/usr/bin/grep -l "Rebase this branch on" "$sd/wave.sh" "$sd/branchland.sh" 2>/dev/null | wc -l | tr -d ' ')
+[ "$n" = 0 ] && ok "41 wave.sh and branchland.sh write no round review of their own" || ko "41 $n script(s) still write the round review text"
 rm -rf "$T"; exit $fail

@@ -541,4 +541,26 @@ mv "$T/s/wave.sh" "$T/s/wave.real"; printf '#!/bin/bash\necho "$*" >> "%s/lc.cal
 r=$(OPEN=7 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl); mv "$T/s/wave.real" "$T/s/wave.sh"
 case "$r" in *"BRANCHLAND LANDED fix/7-land-run-z"*) [ ! -e "$T/lc.called" ] && ok "a clean pushed round lands and landconflict is not called" || ko "landconflict ran: $(cat "$T/lc.called")";; *) ko "the clean round did not land: '$r'";; esac
 
+# (#1960) The no-push bound. A kept landing round whose fix run ended (its push marker is gone) with the branch still at the head
+# the round started from pushed nothing: no conflict will ever come back to land_round, so the lander requeues its issues (Todo,
+# rework, the salvage ref named) and removes the marker. A round still running, or one never dispatched, is left alone.
+nopush() { landc; tip=$($O rev-parse fix/7-land-run-z); printf 'origin/dev\nissue 7\nissue 9\nround 1 aaaaaaaa\n' > "$LKM"
+  python3 "$T/s/revformat.py" --round-review dev origin/dev g > "$T/st/review-fix_7-land-run-z.md"; printf '%s\n' "$tip" > "$T/st/review-fix_7-land-run-z.sha"
+  printf '%s\n' "$tip" > "$T/st/landround-fix_7-land-run-z.head"; rm -f "$T/st/auto/branchfix-"*
+  [ "${1:-}" = undispatched ] || printf 'run-q\n' > "$T/st/auto/branchfix-fix_7-land-run-z-${tip:0:9}"
+  [ "${1:-}" = running ] && printf 'fix/7-land-run-z %s\n' "$tip" > "$T/st/auto/branchfix-push-run-q"; : ; }
+nopush; r=$(OPEN="7 9" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$(/usr/bin/grep -c 'labels\[\]=rework' "$T/gh.log")" = 2 ] && [ "$(/usr/bin/grep -c ' Todo ' "$T/board.log")" = 2 ] && ok "1960 a kept round that pushed nothing requeues its issues with rework" || ko "1960 no-push: rework $(/usr/bin/grep -c 'labels\[\]=rework' "$T/gh.log"), todo $(/usr/bin/grep -c ' Todo ' "$T/board.log"): '$r'"
+[ ! -e "$LKM" ] && ok "1960 the kept marker is removed" || ko "1960 the marker remains: '$(cat "$LKM" 2>&1 | tr '\n' '|')'"
+case "$r" in *"wave/run-z"*) [ -n "$($O rev-parse -q --verify refs/heads/wave/run-z)" ] && ok "1960 the salvage ref is named and stays on the remote" || ko "1960 wave/run-z is gone";; *) ko "1960 no salvage ref named: '$r'";; esac
+for k in running undispatched; do
+  nopush "$k"; r=$(OPEN="7 9" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+  ! /usr/bin/grep -q 'labels\[\]=rework' "$T/gh.log" && [ -s "$LKM" ] && ok "1960 a $k round is not requeued" || ko "1960 a $k round was requeued: '$r'"
+done
+# The round review the lander writes for a kept #1344 branch is the one writer's shape: it reads as changes, never malformed.
+reset; hand8; hs=$($O rev-parse fix/8-rebase-hand); printf 'origin/dev\n' > "$T/st/auto/kept-fix_8-rebase-hand"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_8-rebase-hand.md"; printf '%s\n' "$hs" > "$T/st/review-fix_8-rebase-hand.sha"
+r=$(OPEN=8 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$(python3 "$T/s/revformat.py" --classify "$T/st/review-fix_8-rebase-hand.md" "$T/st/review-fix_8-rebase-hand.sha" "$hs")" = changes ] && ok "1960 the lander's round review classifies as changes" || ko "1960 the lander's round review: $(cat "$T/st/review-fix_8-rebase-hand.md")"
+
 rm -rf "$T"; exit $fail
