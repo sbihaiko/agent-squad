@@ -7,6 +7,11 @@ const hasLabel=(x,l)=>(x.l||[]).includes(l);
 const plain=t=>String(t==null?"":t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");
 // A cell shows every card it holds: the owner reads the whole lane at once, so no cap and no "+N more" (#891).
 const cellView=rows=>({shown:rows,more:0});
+// A visible column's width (#1994): the weight of its card count, clamped to 1..4, on a track that never goes below
+// 320 px. An empty column keeps one share, so it stays visible at the minimum width and never takes room from a lane.
+const COL_MIN="320px", COL_WEIGHT_MAX=4;
+const colWeight=n=>Math.max(1,Math.min(COL_WEIGHT_MAX,n||0));
+const colTracks=counts=>counts.map(n=>`minmax(${COL_MIN},${colWeight(n)}fr)`).join(" ");
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
 const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
