@@ -1866,6 +1866,21 @@ def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts n
             else "the frontier holds this work and starts none; NEEDS OWNER")
     alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} ({tail})")
     mk.write_text(f"{now}\n")
+def _deadlock():   # the deadlock rules beside this script (#1983); -I keeps the script's directory off sys.path, so the import names it itself
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import deadlock
+    return deadlock
+def deadlock_audit():   # #1983: the open issues' dependency graph, checked on the reads this pass already holds (no call); one alert per cause, and no dispatch is held
+    answered, _ = open_issues()
+    if not answered or dry: return
+    dl = _deadlock()
+    path = st / "deadlock-causes.json"
+    try: seen = set(json.loads(path.read_text()))
+    except Exception: seen = set()
+    items = [dict(i, repo=i.get("repo") or repo0) for i in _items if isinstance(i, dict) and isinstance(i.get("number"), int) and not i.get("pull_request")]
+    causes = dl.audit(items)
+    for c in dl.new_causes(causes, seen): alert(f"DEADLOCK {c['status']}: {c['reason']}")
+    path.write_text(json.dumps(sorted(c["cause"] for c in causes)))
 def _specstall():   # the spec rules beside this script (#1962); -I keeps the script's directory off sys.path, so the import names it itself
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     import specstall
@@ -1939,6 +1954,7 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
         alert(f"LIVE-MTIME {live}: {len(changed)} file(s) changed with no publish: {', '.join(changed[:5])}")
 frontier_idle()
 spec_stall()
+deadlock_audit()
 watchd_orphan()
 live_mtime()
 if acts and not dry:

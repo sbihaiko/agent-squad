@@ -24,7 +24,7 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "86ce0d2f5e9fd4518e8839a68123d31cd6ab869aff94ba168260b52d68ddb7bc"
+PIN_SHA256 = "d4a5577dcf5f6e0d47011c395d6e5557aa2fd3c30eb57e50558fc7c7d0eb68f0"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
 # the work reached, so it maps to None and the reconciler writes the marker instead.

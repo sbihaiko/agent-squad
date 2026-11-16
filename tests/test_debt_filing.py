@@ -80,6 +80,12 @@ class StubGh:
             return json.dumps({"number": body["number"], "html_url": f"https://x/{body['number']}"})
         if method == "GET" and "/issues" in path:
             return json.dumps([{"number": b.get("number", i + 1), "body": b["body"]} for i, b in enumerate(self.issues)])
+        if "graphql" in args:   # the card of an issue the items route omitted (#1463), read from the same board state
+            n = int(next(a for a in args if a.startswith("number=")).partition("=")[2])
+            status = dict((int(i.removeprefix("PVTI_")) - 9000, v) for i, v in self.moved)
+            nodes = [{"databaseId": 9000 + n, "isArchived": False, "project": {"number": 4},
+                      "fieldValueByName": {"optionId": status[n]} if n in status else None}] if n in self.on_board else []
+            return json.dumps({"data": {"repository": {"issue": {"projectItems": {"nodes": nodes}}}}})
         raise AssertionError(args)
 
 

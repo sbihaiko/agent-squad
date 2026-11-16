@@ -87,6 +87,13 @@ def _dedupe(xs):
 
 
 UNFINISHED = ("deadline", "unproven")   # the outcomes whose proof did not finish, so the work they hold is kept (ADR-0164)
+DELIVERS = ("pass", "unproven")   # a child outcome whose work goes to review and to the run's wave branch: unproven holds no red (#2037)
+
+
+def delivers(outcome):
+    """True for a child outcome whose work is reviewed and landed in the run's own target. The wave tip check still measures
+    it before `dev`, and an unproven tip never lands there (ADR-0164)."""
+    return outcome in DELIVERS
 
 
 def _kept_after_deadline(events, failing):

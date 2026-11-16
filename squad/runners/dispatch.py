@@ -177,7 +177,8 @@ class Dispatch:
 
     def landable(self, name):
         d = self.children[name]["definition"]
-        return self.e.has_git and self.e.runs.isolated(d) and (name, 1, None) in self.e.done and self.e.done[(name, 1, None)]["outcome"] == "pass"
+        return (self.e.has_git and self.e.runs.isolated(d) and (name, 1, None) in self.e.done
+                and V.delivers(self.e.done[(name, 1, None)]["outcome"]))
 
     def landed_outcome(self, name, outcome):
         if name in self.landed and self.landed[name]["outcome"] != "pass":
@@ -230,7 +231,7 @@ class Dispatch:
         Code merges: no diff, conflict text or test output reaches a model. Return True in a dry walk when a landing is still owed."""
         for name, outcome, _ in seen:
             self.raise_streamed()
-            if outcome != "pass" or name in self.landed or not self.landable(name):
+            if not V.delivers(outcome) or name in self.landed or not self.landable(name):
                 continue
             if self.e.dry:
                 return True

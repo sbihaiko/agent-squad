@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "86ce0d2f5e9fd4518e8839a68123d31cd6ab869aff94ba168260b52d68ddb7bc"
+PINNED = "d4a5577dcf5f6e0d47011c395d6e5557aa2fd3c30eb57e50558fc7c7d0eb68f0"
 SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Gating", "Closed", "Abandoned"]
 
 
@@ -41,6 +41,14 @@ def test_gating_sits_between_code_complete_and_closed_with_its_fact_and_actor(co
     assert by["Gating"]["description"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move"
     assert by["Gating"]["fact"] == {"all": ["gating", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}]}}]}   # the fact is an expression (#1901)
     assert by["Gating"]["actor"] == "The gate" and not by["Gating"]["terminal"]
+
+
+def test_the_definition_names_the_priority_field_with_four_coloured_options(columns):
+    definition = json.loads((SCRIPTS / "board-definition.json").read_text())
+
+    assert definition["priorityField"] == "Priority"
+    assert [(p["name"], p["color"]) for p in definition["priorities"]] == [
+        ("urgent", "RED"), ("high", "ORANGE"), ("normal", "YELLOW"), ("low", "BLUE")]
 
 
 def test_gating_takes_a_colour_no_other_status_uses(columns):

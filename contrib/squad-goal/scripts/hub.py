@@ -7636,7 +7636,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pending_new||0;readStale=!!b.err||lastBoardOver;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
+lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pending_new||0;readStale=!!b.err||lastBoardOver;lastBoardErr=b.err||"";$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -7737,7 +7737,7 @@ function paintHL(){
 // highlight:end
 
 // A tab only shows one pane; every pane keeps its own poll (#889).
-let TAB="board",lastRead=0,readStale=false,lastBoardT=0,lastBoardOver=false,lastPending=0;
+let TAB="board",lastRead=0,readStale=false,lastBoardErr="",lastBoardT=0,lastBoardOver=false,lastPending=0;
 const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",prof:"#tab-prof",set:"#tab-set"};
 const HASH={board:"#kanban",runs:"#runs",flow:"#flow",prof:"#loop",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#loop":"prof","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
 function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||(/^#set-[a-z]+$/.test(location.hash)?"set":null)}   // a card link opens Kanban, where the card is (#1274); a themed Settings link opens Settings (#1286)
@@ -7765,7 +7765,7 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  const pj=$("#pj"),psw=$("#psw");pj.onclick=e=>{e.stopPropagation();const on=!psw.classList.contains("on");psw.classList.toggle("on",on);pj.setAttribute("aria-expanded",on)};
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board items read N s ago": the item read's own stamp (#1661), never the browser's fetch time
-setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale||!!lastPending);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale)":""}${lastPending?` · ${lastPending} card(s) seen, not read yet`:""}`:"board items not read yet"):""},1000);   // the stale class names a card the fast read has seen and the full read has not written (#985)
+setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale||!!lastPending);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale: "+lastBoardErr+")":""}${lastPending?` · ${lastPending} card(s) seen, not read yet`:""}`:"board items not read yet"):""},1000);   // the stale class names a card the fast read has seen and the full read has not written (#985)
 // loop-switch:start
 // The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
 // a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.

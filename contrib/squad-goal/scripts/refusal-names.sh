@@ -11,7 +11,7 @@
 # a pass (autobug.sh) -- each name their refusal through this file, and each refuses a name this set does not hold rather
 # than filing, queueing or logging it under a guessed name. This file is one definition and one predicate: it sources
 # nothing, reads nothing and writes nothing.
-SG_REFUSAL_NAMES="BOARD-WRITE-FAILED DISPATCH-FAILED REFUSAL-COMMENT-FAILED RETARGET-FAILED BOARD-READ-FAILED"
+SG_REFUSAL_NAMES="BOARD-WRITE-FAILED BOARD-PREDICT-FAILED DISPATCH-FAILED REFUSAL-COMMENT-FAILED RETARGET-FAILED BOARD-READ-FAILED"
 # sg_refusal_names: the whole set, one name per line.
 sg_refusal_names() { printf '%s\n' $SG_REFUSAL_NAMES; }
 # sg_refusal_named <name>: 0 when <name> is a member of the set, 1 when it is not. The one predicate of the closed set.
