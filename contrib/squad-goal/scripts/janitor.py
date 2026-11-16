@@ -1427,12 +1427,18 @@ for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
         continue
     say(f"stale {d.name} (request {req} ended failed, issue open, no work branch) removed")
     if not dry: d.unlink(missing_ok=True)
+def proof_unfinished(rs):   # #1892: a run whose only reasons are unfinished proofs, and no measured red (ADR-0164)
+    return bool(rs) and all(r.startswith(("unproven:", "kept:")) or r == "deadline" for r in rs) and any(r == "deadline" or r.startswith("unproven:") for r in rs)
+
 def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered for issue n is one failed dispatch, counted
     # by wave.sh fail (one count per issue, keyed by the run, frozen at SG_REQUEUE_CAP), whether or not it still holds a marker.
     # A run the issue's ledger file lists (#673, read through issue_ledger.py, its one module) is not sent again, so a pass
     # costs no call for a run already counted. A corrupt ledger holds the issue (ADR-0149 rule 4): nothing is counted and the
     # hold is named; the pass decides it again once the owner's rearm wrote a fresh file. A ledger module that cannot be
     # loaded sends the call: wave.sh counts a run once anyway.
+    if proof_unfinished(i["reasons"]):
+        say(f"UNPROVEN #{n}: run {f.name} ended with its proof unfinished, so it is no failed dispatch ({'; '.join(i['reasons'])})")
+        return True
     rec = {}
     try:
         issue_ledger = ledger()
