@@ -52,5 +52,24 @@ ca=$(/usr/bin/grep -n '^test-c start' "$T/log" | tail -1 | cut -d: -f1); ae=$(/u
 hrow=$(/usr/bin/grep -F "$T/proj/test-c.sh" "$hist" 2>/dev/null | tail -1)
 [ "$(printf '%s' "$hrow" | cut -f3)" = 0 ] && [ "$(printf '%s' "$hrow" | cut -f8)" = "$(git -C "$T/proj" rev-parse HEAD)" ] && ok "its history row has wait 0 and the tree sha" || ko "row: ${hrow:-none}"
 
+# one suite per call (#2025): a glob of suites gave the first suite the others as its arguments, and a watch suite copied a
+# suite as its watch.sh, which then ran itself at every level until the user's process slots ran out
+n0=$(/usr/bin/grep -c '^test-a start' "$T/log")
+bash "$d/child-gate.sh" ./test-a.sh ./test-b.sh > "$T/g.out" 2>&1; rcg=$?
+[ "$rcg" = 2 ] && /usr/bin/grep -q 'one suite per call' "$T/g.out" && [ "$(/usr/bin/grep -c '^test-a start' "$T/log")" = "$n0" ] && ok "a second suite as an argument is refused and nothing runs" || ko "two suites rc=$rcg: $(cat "$T/g.out")"
+# the suite runs under a process bound below the user's own, so a runaway suite meets a fork error before the loop does
+printf '#!/bin/bash\nulimit -u > "%s/ulimit"\n' "$T" > "$T/proj/test-u.sh"
+bash "$d/child-gate.sh" ./test-u.sh > /dev/null 2>&1
+uu=$(cat "$T/ulimit" 2>/dev/null); per=$(sysctl -n kern.maxprocperuid 2>/dev/null || ulimit -u)
+[ -n "$uu" ] && [ "$uu" != unlimited ] && [ "$uu" -lt "$per" ] && ok "the suite runs under a process bound ($uu) below the user's ($per)" || ko "suite ulimit -u ${uu:-none}, user ${per:-?}"
+# a watch suite refuses a source that is not a watch.sh, before it builds a fixture
+printf '#!/bin/bash\nexit 0\n' > "$T/other.sh"
+for w in test-watch-cycle.sh test-watch-land.sh test-watch-orphan.sh; do
+  bash "$d/$w" "$T/other.sh" > "$T/w-$w.out" 2>&1 & pw=$!
+  for i in $(seq 1 50); do kill -0 "$pw" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$pw" 2>/dev/null; then pkill -P "$pw" 2>/dev/null; kill "$pw" 2>/dev/null; wait "$pw" 2>/dev/null; ko "$w ran its cases on a source not named watch.sh"
+  else wait "$pw"; rw=$?; [ "$rw" = 2 ] && /usr/bin/grep -q 'not a watch.sh' "$T/w-$w.out" && ok "$w refuses a source not named watch.sh" || ko "$w rc=$rw: $(head -3 "$T/w-$w.out")"; fi
+done
+
 [ "$fail" = 0 ] && echo "child-suite: all green" || echo "child-suite: FAILED"
 exit "$fail"
