@@ -304,16 +304,8 @@ done
 # (#885) The pytest tally and the code-quality reading print together; the pipe's status is tee's, so the reading never changes the exit.
 tally=$(/usr/bin/grep -E '[0-9]+ (passed|failed|errors?)' "$lg" | tail -n 1)
 { echo "fast-gate: pytest tally: ${tally:-none: no pytest count in the battery log}"; "$py" "$here/quality-reading.py" "$base"; } 2>&1 | tee -a "$lg"
-changed=$(git diff --name-only --diff-filter=d "$mb" HEAD)
-suites=$(printf '%s\n' "$changed" | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
-  | sed 's|^test-||')
 # A fixture suite that copies a module list names it in its `# mirrors:` line; a change to any listed file runs that suite.
-for t in "$top"/contrib/squad-goal/scripts/test-*.sh; do [ -f "$t" ] || continue
-  for f in $(sed -n 's/^# mirrors: //p' "$t" | head -n 1); do
-    printf '%s\n' "$changed" | /usr/bin/grep -qxF "contrib/squad-goal/scripts/$f" && { suites="$suites"$'\n'"$(basename "$t" .sh | sed 's/^test-//')"; break; }
-  done
-done
-suites=$(printf '%s\n' $suites | sort -u)
+suites=$(sg_shell_suites "$top" "$mb")
 bran="ruff mypy pytest"; bnot=-
 # (#1249) A battery whose selection was empty ran no pytest, so it proves nothing: the line it logged names why.
 empty=$(/usr/bin/grep -m 1 '^no pytest ran' "$lg")

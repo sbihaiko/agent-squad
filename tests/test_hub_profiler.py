@@ -3161,7 +3161,8 @@ def test_the_gate_row_names_the_tree_the_wait_the_wall_the_cpu_and_the_reuse(pro
     row = prof.gate_row(gate_queue_line(1000, 900))
     assert (row["tree"], row["wait"], row["wall"], row["cpu"], row["reused"]) == ("t-a", "30", "60", "12", "no")
     assert row["mode"] == "gated" and row["caller"] == "child", "the entry mode keeps its place before the queue fields"
-    assert prof.GATE_HISTORY_FIELDS[-5:] == ("tree", "wait", "wall", "cpu", "reused")
+    assert prof.GATE_HISTORY_FIELDS[-7:-2] == ("tree", "wait", "wall", "cpu", "reused"), \
+        "the queue fields still end five before the row's last field, the CI run id (#1927)"
     old = prof.gate_row(gate_line(1000, 900))
     assert (old["tree"], old["wait"], old["wall"], old["cpu"], old["reused"]) == ("", "", "", "", ""), \
         "a row from before the fields answers '' for each, never a reading it does not hold"
@@ -3275,3 +3276,29 @@ def test_the_wall_view_offers_its_three_windows_and_marks_the_chosen_one():
 
 def test_the_loop_tab_polls_with_the_wall_window_it_chose():
     assert "ww=" in page() and "wallWin" in page(), "the poll names the wall window, so the page's choice reaches the hub"
+
+
+def test_the_gate_row_names_the_runner_and_the_ci_run_id(prof):
+    """(#1927) A gate row carries the proof that produced it and the CI run a `ci` proof names. A row from before the two
+    fields answers '' for each, never a runner it does not hold."""
+    row = prof.gate_row(gate_queue_line(1000, 900) + "\tci\t4242")
+    assert (row["runner"], row["run_id"]) == ("ci", "4242")
+    assert row["tree"] == "t-a" and row["reused"] == "no", "the fields before the runner keep their place"
+    assert prof.GATE_HISTORY_FIELDS[-2:] == ("runner", "run_id")
+    old = prof.gate_row(gate_queue_line(1000, 900))
+    assert (old["runner"], old["run_id"]) == ("", ""), "a row from before the fields answers '' for each"
+    split = prof.gate_row(gate_queue_line(1000, 900, reason="red\tstands") + "\tlocal\t-")
+    assert (split["reason"], split["runner"], split["run_id"]) == ("red\tstands", "local", "-"), \
+        "a reason that holds a tab is rejoined, so the runner fields keep their place"
+
+
+def test_each_gate_history_reader_takes_the_runner_fields_from_the_same_end(prof):
+    """(#1927) One grammar, three readers: the hub's rule layer, throughput.py and tune_report.py read a row's entry mode
+    from its end. A row that carries the runner fields must keep its mode in all three, or a `skipped` gate would count as
+    a gate run in the throughput report."""
+    row = gate_queue_line(1000, 900) + "\tci\t4242"
+    assert prof.gate_row(row)["mode"] == "gated"
+    for name in ("throughput.py", "tune_report.py"):
+        mod = load(f"{name[:-3]}_under_test", SCRIPTS / name)
+        assert mod.gate_mode(row.split("\t")) == "gated", f"{name} loses the entry mode after the runner fields"
+        assert mod.gate_mode(gate_queue_line(1000, 900).split("\t")) == "gated", f"{name} loses it on a row with no runner"

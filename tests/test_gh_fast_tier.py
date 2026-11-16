@@ -160,3 +160,21 @@ def test_the_reader_asks_one_check_runs_route_for_the_sha_with_a_get():
 
     ghread.fast_tier_verdict(SHA, transport=transport)
     assert seen == [["--method", "GET", ROUTE]]
+
+
+def test_the_cli_prints_the_verdict_and_the_run_id_the_tip_gate_reads(monkeypatch, capsys):
+    """(#1927) The shell door: the tip gate reads one line, `<verdict>` TAB `<run id or ->`, and never parses the JSON."""
+    monkeypatch.setattr(ghread, "_gh_rest_get", lambda argv: answer(
+        check_run("ruff", "success", check_id=1, run_id=4242),
+        check_run("mypy", "success", check_id=2, run_id=4242),
+        check_run("fast-battery", "success", check_id=3, run_id=4242),
+    ))
+    assert ghread.main(["ghread.py", "--fast-tier", SHA]) == 0
+    assert capsys.readouterr().out == "pass\t4242\n"
+
+
+def test_the_cli_answers_unproven_with_no_run_when_the_read_is_refused(monkeypatch, capsys):
+    """(#1927) A refused read is `unproven` with `-`, so a caller that acts only on `pass` keeps today's gate."""
+    monkeypatch.setattr(ghread, "_gh_rest_get", lambda argv: ghread.Transport(rc=1, body=REFUSAL_BODY))
+    assert ghread.main(["ghread.py", "--fast-tier", SHA]) == 0
+    assert capsys.readouterr().out == "unproven\t-\n"

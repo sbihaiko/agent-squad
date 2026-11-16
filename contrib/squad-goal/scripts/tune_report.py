@@ -27,7 +27,10 @@ LOAD = re.compile(rf"^{STAMP} LOAD (\d+(?:\.\d+)?) (\d+(?:\.\d+)?) (\d+(?:\.\d+)
 
 def gate_mode(parts):
     """The entry mode of one split gate-history row (#1798), '' for a row from before it. The mode ends a 17-field row; a row
-    that carries the queue fields (#1856) ends with its reuse word, five fields after the mode."""
+    that carries the queue fields (#1856) ends with its reuse word, five fields after the mode, and a row that carries the
+    runner fields (#1927) ends with its CI run id, two fields after that."""
+    if len(parts) >= 24 and parts[-2] in ("ci", "local") and parts[-3] in ("yes", "no") and parts[-8] in ("gated", "reused", "skipped"):
+        return parts[-8]
     if len(parts) >= 22 and parts[-1] in ("yes", "no") and parts[-6] in ("gated", "reused", "skipped"):
         return parts[-6]
     if len(parts) >= 17 and parts[-1] in ("gated", "reused", "skipped"):

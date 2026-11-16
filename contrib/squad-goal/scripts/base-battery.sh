@@ -74,6 +74,30 @@ sg_base_battery() {
   printf '%s\nsg_battery_run %q %q %q %s %q\n' "$(declare -f sg_battery_run)" "$1" "$2" "${SG_GATE_WORKERS:-6}" "$select" "$stage"
 }
 
+# sg_shell_suites <top> <merge-base>: the shell suite names (`test-<n>.sh`, without prefix or suffix) a tree changes against
+# <merge-base>: every .sh or .py script under contrib/squad-goal/scripts the tree changes, and every fixture suite whose
+# `# mirrors:` line names a changed file. One definition, so the fast gate and the promotion's tip gate read one selection.
+sg_shell_suites() {
+  local top=$1 mb=$2 changed suites t f
+  changed=$(/usr/bin/git -C "$top" diff --name-only --diff-filter=d "$mb" HEAD 2>/dev/null) || { printf '\n'; return 0; }
+  suites=$(printf '%s\n' "$changed" | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' \
+    | /usr/bin/grep -v / | sed 's|^test-||')
+  for t in "$top"/contrib/squad-goal/scripts/test-*.sh; do [ -f "$t" ] || continue
+    for f in $(sed -n 's/^# mirrors: //p' "$t" | head -n 1); do
+      printf '%s\n' "$changed" | /usr/bin/grep -qxF "contrib/squad-goal/scripts/$f" \
+        && { suites="$suites"$'\n'"$(basename "$t" .sh | sed 's/^test-//')"; break; }
+    done
+  done
+  printf '%s\n' $suites | sort -u
+}
+
+# sg_linux_deselected_markers: the pytest markers a Linux runner deselects (tests/conftest.py, ADR-0139), as one `-m`
+# expression. Every test that carries one runs on the machine, never on the runner: it is the local half of a hybrid proof
+# (spec 1782, #1927). A marker added to the runner's deselection belongs here, and tests/test_tooling.py guards the set.
+sg_linux_deselected_markers() {
+  printf '%s\n' "macos_bound or sandbox_bound or claude_bound or cc_bound or process_bound or sdk_bound or host_bound or node_bound"
+}
+
 # sg_base_gate <base> <python> [<stage>]: the fast gate over that battery, the changed scripts of the tip read against <base>.
 sg_base_gate() {
   local dir; dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

@@ -75,9 +75,18 @@ def _holder(d, cwd, log, seconds):
 
 def test_only_the_gate_runners_take_the_machine_wide_gate_lock():
     """#81 and #392: the gate of a landing runs in CI, and the gates that still run here -- the branchland local gate, the wave
-    entry gate, the promotion pass and its gate (#459), the fast gate and a hand gate -- queue behind one lock. No other script takes it. A comment never counts."""
-    takers = sorted(p.name for p in _scripts()
-                    if GATE_LOCK.search("\n".join(line.split("#", 1)[0] for line in p.read_text().splitlines())))
+    entry gate, the promotion pass and its gate (#459), the fast gate and a hand gate -- queue behind one lock. No other script takes it. A comment never counts.
+    The one call that names gate.sh and takes nothing is its `--history` door (#1927): it appends a history line with no lock
+    and no slots, so a proof that must never hold a landing records its gate with it. It is read as no take, and the suite
+    proves such a call exists, so the exemption never hides a real one."""
+    TIP_GATE = SCRIPTS / "tip-gate.sh"
+    assert 'gate.sh" --history' in TIP_GATE.read_text(), "the tip gate records through the lock-free history door"
+
+    def takes(path):
+        body = "\n".join(line.split("#", 1)[0] for line in path.read_text().splitlines())
+        return GATE_LOCK.search(body.replace('gate.sh" --history', ""))
+
+    takers = sorted(p.name for p in _scripts() if takes(p))
     assert takers == ["branchland.sh", "fast-gate.sh", "gate.sh", "promote-pass.sh", "promote-stg.sh", "wave.sh"], takers
 
 
