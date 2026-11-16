@@ -241,6 +241,8 @@ rec
 # --- proof obligations (spec 1163, ADR-0153): the nightly settles what a gate could not prove. It reads each record in
 #     $SG_STATE/obligations, runs the named checks over the named tree, and writes one settlement line in
 #     $SG_STATE/obligation-settled. The stub checks log the tree and its HEAD, so credit and tree are read from the run.
+# Dev moves to a new tip, and the obligation cases below run the nightly there.
+$G -C "$T/src" commit -q --allow-empty -m two; $G -C "$T/src" push -q "$T/origin.git" dev; newtip=$($G -C "$T/src" rev-parse dev)
 OBL=$ST/obligations; SET=$ST/obligation-settled
 obkey() { printf '%s\t%s\t%s' "$1" "$2" "$3" | cksum | cut -d' ' -f1; }   # the gate's own key for one obligation entry
 obwrite() {  # <repository> <sha> <base> <checks> <scope> <deadline>: the gate's own key for one obligation entry
