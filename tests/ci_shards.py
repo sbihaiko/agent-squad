@@ -52,7 +52,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_run_groups.py", "tests/test_hub_run_liveness.py", "tests/test_hub_runs_active.py", "tests/test_hub_runs_scope.py", "tests/test_hub_settings_view.py", "tests/test_hub_slack_settings.py",
         "tests/test_hub_state_default.py", "tests/test_hub_switcher.py", "tests/test_hub_tailnet.py", "tests/test_hub_token_burn.py", "tests/test_hubmux_profiles.py",
         "tests/test_issue_ledger.py", "tests/test_issue_state_gate_tries.py", "tests/test_issue_state_repo_cache.py", "tests/test_issue_state_test_case.py", "tests/test_janitor_dashboard_ceiling.py",
-        "tests/test_handhold.py", "tests/test_hub_live_work.py", "tests/test_janitor_hand_hold.py", "tests/test_janitor_takeover.py", "tests/test_jev_screen_set.py", "tests/test_launch.py", "tests/test_launch_modules.py", "tests/test_launch_off_models.py", "tests/test_limits.py",
+        "tests/test_handhold.py", "tests/test_hub_live_cache.py", "tests/test_hub_live_work.py", "tests/test_janitor_hand_hold.py", "tests/test_janitor_takeover.py", "tests/test_jev_screen_set.py", "tests/test_launch.py", "tests/test_launch_modules.py", "tests/test_launch_off_models.py", "tests/test_limits.py",
         "tests/test_livecheck.py", "tests/test_model_fallthrough.py", "tests/test_plugin.py", "tests/test_release_changelog.py", "tests/test_review_calibration.py",
         "tests/test_review_fix.py", "tests/test_review_grok_measure.py", "tests/test_run_liveness.py", "tests/test_scripts_manifest.py", "tests/test_shell_suites.py",
         "tests/test_slow_cap.py", "tests/test_stall.py", "tests/test_steprec.py", "tests/test_subject_config.py", "tests/test_tailnet_access.py", "tests/test_tailnet_check.py",

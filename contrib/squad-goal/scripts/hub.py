@@ -4138,6 +4138,36 @@ def gate_lock_line(pid, line, issues_of):
     scripts = [x for x in re.findall(r"([\w-]+\.(?:sh|py))\b", line) if x not in ("serial.sh", "gate.sh")]
     return f"gate: pid {pid} runs {scripts[0]}" if scripts else f"gate: pid {pid}"
 
+LIVE_POLL_SECS = 3.0   # seconds: the page's own live poll (`poll()` reads /api/live every 3 s), never a guess (#1933)
+LIVE_CLOCK = time.monotonic   # the age reader; a test injects its own, so freshness is proved by a clock and never by a sleep
+_LIVE_KEPT = {"at": None, "answer": None}   # the kept Live work answer: one entry per loaded module, so one per profile
+_LIVE_LOCK = threading.Lock()
+
+
+def live_served(now=None):
+    """The Live work answer, computed at most once per the page's own poll window (#1933).
+
+    Every open page and every client asks this profile the same question, and one answer reads the process table, each
+    live run's record and the board read, so a per-request answer took most of a core on the live hub. The window is the
+    poll's own interval, so the answer a page sees is never older than the poll that would have refreshed it anyway, and
+    any number of pages and clients inside one window share one compute. The lock is held across the compute, so
+    concurrent readers wait for one answer instead of each paying for one. A request at or past the window computes
+    again, never served as fresh. The cache is the loaded module's own, so one profile's answer is never another's."""
+    now = LIVE_CLOCK() if now is None else now
+    with _LIVE_LOCK:
+        at = _LIVE_KEPT["at"]
+        if at is not None and now - at < LIVE_POLL_SECS: return _LIVE_KEPT["answer"]
+        answer = live_work_lines(board_cache.get("items", []))
+        _LIVE_KEPT.update(at=now, answer=answer)
+        return answer
+
+
+def live_recompute():
+    """Clear the kept Live work answer: a loop write changes what the panel draws, so the page that acted reads its own
+    change at once instead of waiting out the window."""
+    with _LIVE_LOCK: _LIVE_KEPT.update(at=None, answer=None)
+
+
 def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
     """The Live work panel's answer, all from local state and the board read the hub already holds:
     `{"loop": <on|off|draining|starting>, "lines": [<row>], "boardAge": <seconds or None>}`. A row is
@@ -9510,7 +9540,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
-        elif self.path.startswith("/api/live"): body, ct = json.dumps(live_work_lines(board_cache.get("items", []))).encode(), "application/json"
+        elif self.path.startswith("/api/live"): body, ct = json.dumps(live_served()).encode(), "application/json"   # one compute per poll window, whatever asks (#1933)
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
@@ -9580,6 +9610,7 @@ class H(BaseHTTPRequestHandler):
         try: body = json.loads(raw or b"{}")
         except ValueError: body = None
         code, out = (loop_switch_project(a, slug, body, origin_ok) if slug else loop_switch(a, body, origin_ok))
+        if code == 200: live_recompute()   # the page reads its own change at once, never a window-old answer (#1933)
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def profiler_post(self, a):
