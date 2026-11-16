@@ -14,6 +14,7 @@ No case touches the network, the live loop state or the live board.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -57,10 +58,11 @@ def _write(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def sandbox(tmp_path: Path, *, pushed: bool) -> Path:
+def sandbox(tmp_path: Path, *, pushed: bool, known: bool = True) -> Path:
     """The janitor beside its modules, a stub `gh` and board, a checkout with a bare origin that holds `main`, and one
     finished run for issue #2101 whose child made one commit. `pushed` sends that commit to a remote branch; without it
-    the commit stands on a local branch only."""
+    the commit stands on a local branch only. `known=False` makes the record name a head the checkout cannot read at
+    all, the case where no reach can be proved."""
     for name in ("janitor.py", "ghcall.sh", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py",
                  "board-definition.json", "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
@@ -82,6 +84,8 @@ def sandbox(tmp_path: Path, *, pushed: bool) -> Path:
     sh(child, "git", "add", "work.txt")
     sh(child, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", f"the run's change (#{N})")
     head = sh(child, "git", "rev-parse", "HEAD")
+    if not known:
+        head = "0" * 40   # a commit the checkout does not hold: its reach cannot be read at all
     if pushed:
         sh(child, "git", "push", "-q", "origin", f"HEAD:refs/heads/gui/{N}")
     before = sh(co, "git", "rev-parse", "HEAD")
@@ -91,6 +95,10 @@ def sandbox(tmp_path: Path, *, pushed: bool) -> Path:
         f'"effect":{{"name":"merge_land","before":"{before}","head":"{head}","held_out":"pass"}}}}\n'
         '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}\n'
     )
+    # The fixture must drive the janitor's land-event path, never a default: a malformed line would be skipped and every
+    # assertion would pass for the wrong reason. Each line has to parse.
+    for line in (run / "record.jsonl").read_text().splitlines():
+        assert json.loads(line)["event"] in ("run_start", "land", "verdict"), f"a record line drifted: {line}"
     auto = tmp_path / "st/auto"
     auto.mkdir(parents=True)
     (tmp_path / "st/active-runs.txt").write_text("run-local\n")
@@ -126,6 +134,12 @@ def writes(tmp_path: Path) -> str:
     return f.read_text() if f.exists() else ""
 
 
+def decided(tmp_path: Path) -> str:
+    """The janitor's own decision log: the rule names the path it took, so a case never passes on another path's write."""
+    f = tmp_path / "st/cycle.log"
+    return f.read_text() if f.exists() else ""
+
+
 @pytest.mark.heavy
 def test_a_landing_on_no_remote_branch_returns_the_card_to_todo(tmp_path):
     """The stranded card (#1958): the run's head stands on a local branch only, so nothing is delivered and the card
@@ -133,6 +147,7 @@ def test_a_landing_on_no_remote_branch_returns_the_card_to_todo(tmp_path):
     sandbox(tmp_path, pushed=False)
     janitor(tmp_path)
     log = writes(tmp_path)
+    assert f"DISPATCH-FAILED #{N}" in decided(tmp_path), "the no-delivery rule did not decide this run"
     assert f"STATUS o 4 Todo {N}" in log, f"the card did not return to Todo: {log}"
 
 
@@ -142,8 +157,20 @@ def test_a_landing_on_no_remote_branch_releases_the_dispatch_and_names_the_salva
     no remote branch is named for salvage."""
     sandbox(tmp_path, pushed=False)
     janitor(tmp_path)
+    assert f"DISPATCH-FAILED #{N}" in decided(tmp_path), "the no-delivery rule did not decide this run"
     assert not (tmp_path / f"st/auto/disp-{N}").exists(), "the dispatch marker held an issue nothing can land"
     assert (tmp_path / f"st/auto/salvage-{N}").exists(), "the local-only commit was not named for salvage"
+
+
+@pytest.mark.heavy
+def test_a_head_the_checkout_cannot_read_keeps_the_old_reading(tmp_path):
+    """A record naming a head this checkout does not hold proves no reach, so the run is not read as no delivery: the
+    old reading stands and the card keeps its column. Only a head the checkout can see and that no remote holds is the
+    stranded case."""
+    sandbox(tmp_path, pushed=False, known=False)
+    janitor(tmp_path)
+    assert f"DISPATCH-FAILED #{N}" not in decided(tmp_path), "a head the checkout cannot see was read as no delivery"
+    assert (tmp_path / f"st/auto/disp-{N}").exists(), "the marker went on a head the checkout cannot read"
 
 
 @pytest.mark.heavy
@@ -153,5 +180,6 @@ def test_a_landing_that_stands_on_a_remote_branch_keeps_the_card_and_the_marker(
     sandbox(tmp_path, pushed=True)
     janitor(tmp_path)
     log = writes(tmp_path)
+    assert f"DISPATCH-FAILED #{N}" not in decided(tmp_path), "a reachable landing was read as no delivery"
     assert f"Todo {N}" not in log, f"a reachable landing was read as no delivery: {log}"
     assert (tmp_path / f"st/auto/disp-{N}").exists(), "the marker went while a remote branch could still land"
