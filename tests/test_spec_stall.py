@@ -61,6 +61,35 @@ def test_a_dev_commit_names_a_ticket_by_number_in_its_subject():
     assert sp.landed_of([(500, "Fix the janitor (#11, #12)"), (700, "Refs #11")]) == {11: (500, 700), 12: (500, 500)}
 
 
+def test_a_spec_whose_card_sits_in_backlog_is_never_named_as_stalled():
+    # ADR-0142 clause 5: the owner starts a spec by moving its card to Todo, so a Backlog spec is no call for him (#2002).
+    assert sp.started_specs({10: [11, 12]}, {10: "Backlog"}) == {}
+
+
+def test_a_spec_whose_card_sits_in_no_column_is_never_named_as_stalled():
+    assert sp.started_specs({10: [11]}, {}) == {}
+
+
+def test_a_spec_the_owner_moved_to_todo_is_named_as_stalled():
+    assert sp.started_specs({10: [11]}, {10: "Todo"}) == {10: [11]}
+
+
+def test_a_legacy_in_progress_card_names_its_spec_too():
+    assert sp.started_specs({10: [11]}, {10: "In Progress"}) == {10: [11]}
+
+
+def test_only_a_commit_that_closes_or_fixes_a_ticket_is_progress():
+    commits = [(500, "Closes #11"), (600, "Fixes #12"), (700, "Refs #11, #12"), (800, "TDD RED: Fixes #12")]
+    assert sp.progress_of(commits) == {11: (500, 500), 12: (600, 600)}
+
+
+def test_the_spec_axis_names_the_shipped_board_columns():
+    import sys
+    sys.path.insert(0, str(ROOT / "contrib/squad-goal/scripts"))
+    from board_columns import shipped_columns
+    assert sp.COLUMNS == tuple(c["name"] for c in shipped_columns())
+
+
 def test_a_state_names_the_stuck_ticket_as_stranded_conflict_failed_run_or_blocked():
     cols = {1: "Doing", 2: "Doing", 3: "Doing", 4: "Blocked"}
     assert sp.state(1, cols, {1: False}, {}, set()) == "stranded"
