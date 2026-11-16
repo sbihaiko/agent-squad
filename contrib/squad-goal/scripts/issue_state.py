@@ -89,8 +89,6 @@ HOLDER_FIELDS = ("Run", "Run started")
 # The number field the gate-attempt journal projects to (#1255, ADR-0170): one count per card.
 GATE_TRIES = "Gate Tries"
 
-WAVE = re.compile(r"^wave:\d+$")   # the ordering label, and the title of the milestone that carries a delivery
-
 
 class NotCarried(RuntimeError):
     """The write is not carried by the read that follows it: the named failure, never a written card.
@@ -110,15 +108,6 @@ class KindGap(RuntimeError):
     def __init__(self, issue, wanted, carried):
         self.issue, self.wanted, self.carried = issue, wanted, carried
         super().__init__(f"the binding cannot carry kind {wanted!r} for issue {issue}; it carries {', '.join(carried) or 'no kind'}")
-
-
-class WaveSpansRepositories(RuntimeError):
-    """A wave whose issues sit in more than one repository: refused before any write, because a milestone belongs to one
-    repository. The wave stays an ordering label."""
-
-    def __init__(self, wave, repos):
-        self.wave, self.repos = wave, sorted(repos)
-        super().__init__(f"{wave} spans {', '.join(self.repos)}; a milestone belongs to one repository, so the wave stays a label")
 
 
 class ReadFailure(RuntimeError):
@@ -332,44 +321,6 @@ class State:
         if carried != wanted:
             raise NotCarried(issue, wanted, carried, refused)
         return carried
-
-    def wave(self, issue):
-        """The wave one issue carries, "" when it carries none. A milestone that carries a wave answers it, and the label
-        is read only where no milestone does: the label is derived from the milestone, never a second source."""
-        milestone, labels = self.binding.issue_wave(self._ref(issue)[1])
-        if WAVE.match(milestone): return milestone
-        return next((l for l in labels if WAVE.match(l)), "")
-
-    def deliver_wave(self, wave, issues, due=None):
-        """The owner marks `wave` as a delivery: one milestone carries it, each issue is set on it, and the stored wave label
-        is removed so the label is only what the milestone derives. `issues` are numbers in this binding's repository or
-        `owner/repo#N`; a set that spans repositories is `WaveSpansRepositories`, raised before any write. A milestone the
-        owner did not date gets no due date: `due` is an ISO stamp the owner gave, and is the only way one is set.
-        Every write is proven by the read that follows it: a milestone or a label removal that read does not carry is
-        `NotCarried`, and the label is removed only after the read carried the milestone. Returns {"milestone", "number", "issues"}."""
-        if not WAVE.match(wave): raise ValueError(f"a wave is named wave:NN, not {wave!r}")
-        refs = [self._ref(i) for i in issues]
-        repos = {r for r, _ in refs}
-        if len(repos) > 1: raise WaveSpansRepositories(wave, repos)
-        number = self.binding.milestone(wave, due)
-        for _, n in refs:
-            refused = ""
-            try: self.binding.write_milestone(n, number)
-            except RuntimeError as e: refused = str(e)
-            carried = self.binding.issue_wave(n)[0]
-            if carried != wave: raise NotCarried(n, wave, carried, refused)
-            if wave in self.binding.issue_wave(n)[1]:
-                refused = ""
-                try: self.binding.drop_label(n, wave)
-                except RuntimeError as e: refused = str(e)
-                if wave in self.binding.issue_wave(n)[1]: raise NotCarried(n, f"no {wave} label beside the milestone", wave, refused)
-        return {"milestone": wave, "number": number, "issues": [n for _, n in refs]}
-
-    def _ref(self, issue):
-        """(repository, number) of an issue named as a number or `owner/repo#N`."""
-        m = re.match(r"^(?:(.+)#)?(\d+)$", str(issue))
-        if not m: raise ValueError(f"an issue is a number or owner/repo#N, not {issue!r}")
-        return (m[1] or self.binding.repo), int(m[2])
 
     def test_cases(self, now=None):
         """Every test case item, in one read: [{"issue", "result", "commit", "ended", "age"}], the age in seconds
@@ -904,11 +855,6 @@ class BoardBinding:
         self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][kind]}]}))
 
-    def issue_wave(self, issue):
-        """(milestone title, label names) one issue carries, in one read. Never cached: it is the read that proves a write."""
-        d = json.loads(self.api(f"repos/{self.repo}/issues/{issue}"))
-        return ((d.get("milestone") or {}).get("title") or ""), [l["name"] for l in d.get("labels", []) if isinstance(l, dict)]
-
     def issue_facts(self, issue):
         """(state, label names) of one issue, read from the issue itself, or None when the read did not answer. Never
         cached: this is the read a naming decision keeps its premise on, so a list read at another time, or another
@@ -923,18 +869,6 @@ class BoardBinding:
         labels = d.get("labels")
         if not isinstance(labels, list) or not all(isinstance(l, dict) and isinstance(l.get("name"), str) for l in labels): return None
         return str(d.get("state") or "").lower(), [l["name"] for l in labels]
-
-    def milestone(self, title, due=None):
-        """The number of the one milestone titled `title`: found when it exists (open or closed), created when it does not.
-        A create sends no due date unless the owner gave one."""
-        found = next((m for m in json.loads(self.api("--paginate", f"repos/{self.repo}/milestones?state=all&per_page=100")) if m.get("title") == title), None)
-        if found: return found["number"]
-        body = {"title": title, **({"due_on": due} if due else {})}
-        return json.loads(self.api("-X", "POST", f"repos/{self.repo}/milestones", "--input", "-", inp=json.dumps(body)))["number"]
-
-    def write_milestone(self, issue, number):
-        """One PATCH of the issue's milestone. The read that proves it is the seam's."""
-        self.api("-X", "PATCH", f"repos/{self.repo}/issues/{issue}", "--input", "-", inp=json.dumps({"milestone": number}))
 
     def drop_label(self, issue, label):
         """One DELETE of a label from an issue. The read that proves it is the seam's."""
