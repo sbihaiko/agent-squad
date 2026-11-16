@@ -5885,8 +5885,9 @@ def label_wave(labels):   # the `wave:NN` label's number, or None
     return min(w) if w else None
 
 def board_summary(drawn):   # drawn: (number, column, parent spec, wave, is a spec) for every item the list read holds
-    kids, waves = {}, {}
+    kids, waves, far = {}, {}, {}   # far: spec -> (rank, column, count) of the furthest column its tickets reached
     ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}
+    ranks = {name: i for i, name in enumerate(ORDER)}   # the axis the lanes draw, so "furthest" reads the same as a column
     gone = {n for n, st, _, _, sp in drawn if sp and st in ends}   # a ticket of a closed spec reads as No spec in the lanes (#972)
     for _, st, pa, wv, sp in drawn:
         if sp: continue
@@ -5894,7 +5895,14 @@ def board_summary(drawn):   # drawn: (number, column, parent spec, wave, is a sp
             c = store.setdefault(key, [0, 0])
             c[1] += 1
             if st == COLUMN["issue_closed"]: c[0] += 1
-    specs = [{"n": n, "st": st, "closed": kids.get(n, [0, 0])[0], "total": kids.get(n, [0, 0])[1]} for n, st, _, _, sp in drawn if sp]
+        # A spec's card keeps its own column, so how far its tickets got is a count beside it, never its own column (#1906).
+        # A given-up ticket did not reach past the work it left, so an Abandoned ticket names no furthest column.
+        if pa is not None and pa not in gone and st in ranks and st != COLUMN["abandoned"]:
+            have = far.get(pa)
+            if have is None or ranks[st] > have[0]: far[pa] = (ranks[st], st, 1)
+            elif ranks[st] == have[0]: far[pa] = (have[0], st, have[2] + 1)
+    specs = [{"n": n, "st": st, "closed": kids.get(n, [0, 0])[0], "total": kids.get(n, [0, 0])[1],
+              "far": (far.get(n) or (0, None, 0))[1], "far_n": (far.get(n) or (0, None, 0))[2]} for n, st, _, _, sp in drawn if sp]
     return {"specs": specs, "waves": [{"spec": pa, "wave": wv, "closed": c, "total": t} for (pa, wv), (c, t) in waves.items()]}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)

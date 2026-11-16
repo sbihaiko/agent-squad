@@ -89,7 +89,7 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
     l.doing=o.doing?l.all.filter(x=>x.col===o.doing).length:0;
     l.review=o.review?l.all.filter(x=>x.col===o.review).length:0;   // the review share of the bar, in its own colour after the held share (owner, 2026-11-02)   // the bar's held share: the cards a run claims, drawn in the closed green read through (owner, 2026-11-02)
     const s=l.kind==="s"?sumSpec.get(l.num):l.kind==="sw"?sumWave.get(sumKey(l.num,l.wave)):l.kind==="none"?o.sum?.none:null;   // No spec: open cards plus the last seven days closed, counted by the hub (owner)   // a closed row is never served: the summary counts it (#972)
-    if(s){l.closed=s.closed;l.total=s.total}
+    if(s){l.closed=s.closed;l.total=s.total;if(l.kind==="s"){l.far=s.far;l.farN=s.far_n}}   // the tickets' furthest column, a count beside the spec, never its own column (#1906)
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
     if(l.kind==="s"&&m){l.closed=+m[1];l.total=+m[2]}
     l.done=l.total>0&&l.closed===l.total&&!l.all.some(x=>!ends.has(x.col));l.inFlight=l.all.filter(x=>SPEC_IN_FLIGHT.includes(x.col)).length;l.started=l.kind==="s"&&(l.st==="Todo"||l.inFlight>0);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
@@ -127,6 +127,10 @@ function laneHead(l,v){
   const idText=l.kind==="s"?"SPEC "+l.num:l.kind==="bugs"?"Loop bugs":l.kind==="sw"?l.sid+" · "+l.wl:l.title;
   const titleText=l.kind==="s"?l.title:l.kind==="bugs"?"defects of the loop itself: a prefixed label halts dispatch, and loop-bug:landing halts the landing too (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";
   const count=n=>l.counts[n]?String(l.counts[n]):"–";
+  // A spec keeps its own column (the chip), and the furthest column its tickets reached stands beside it as one more count
+  // of the counts row: the fold of the children never draws as the spec's column (#1906).
+  const counts=[v.todo,v.doing,v.review].map(n=>[n,count(n)]);
+  if(l.kind==="s"&&l.far)counts.push(["furthest",l.far+(l.farN?` ${l.farN}`:"")]);
   const cell={
     id:{...fact("id"),text:idText,full:l.kind==="sw"},
     title:{...fact("title"),text:l.kind==="sw"?"":titleText},
@@ -135,7 +139,7 @@ function laneHead(l,v){
     chip:{...fact("chip"),text:l.st||""},
     gh:{...fact("gh"),on:l.kind==="s"},
     sync:{...fact("sync"),on:l.kind==="s",n:l.num},
-    counts:{...fact("counts"),items:[v.todo,v.doing,v.review].map(n=>[n,count(n)])}};
+    counts:{...fact("counts"),items:counts}};
   return{rows:laneHeadRows.map(r=>r.map(k=>cell[k]))};
 }
 

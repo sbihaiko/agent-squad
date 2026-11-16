@@ -165,6 +165,34 @@ def test_no_separate_specs_card_is_drawn(hub):
     assert "function specBar(" not in hub.PAGE
 
 
+def test_the_summary_serves_the_furthest_column_the_tickets_reached(hub):
+    """A spec's card keeps its own column; how far its tickets got is a count the summary serves beside it (#1906)."""
+    drawn = [(1, "Todo", None, None, True),          # the spec's own card
+             (2, "Doing", 1, None, False),
+             (3, "Code Complete", 1, None, False),
+             (4, "Code Complete", 1, None, False),
+             (5, "Backlog", 1, None, False),
+             (6, "Closed", 1, None, False)]
+    spec = hub.board_summary(drawn)["specs"][0]
+    assert (spec["st"], spec["far"], spec["far_n"]) == ("Todo", "Closed", 1), spec
+    assert (spec["closed"], spec["total"]) == (1, 5), spec
+
+
+def test_the_furthest_column_counts_the_tickets_that_reached_it(hub):
+    drawn = [(1, "Todo", None, None, True),
+             (2, "Gating", 1, None, False),
+             (3, "Gating", 1, None, False),
+             (4, "Code Review", 1, None, False),
+             (5, "Abandoned", 1, None, False)]   # a given-up ticket did not reach past the work it left
+    spec = hub.board_summary(drawn)["specs"][0]
+    assert (spec["far"], spec["far_n"]) == ("Gating", 2), spec
+
+
+def test_a_spec_with_no_ticket_serves_no_furthest_column(hub):
+    spec = hub.board_summary([(1, "Backlog", None, None, True)])["specs"][0]
+    assert spec["far"] is None and spec["far_n"] == 0, spec
+
+
 def test_the_cache_row_column_is_the_kanban_column(hub):
     """The Specs row counts the column the kanban draws, so the cache wrapper never reshapes a row's facts."""
     for i in BOARD:

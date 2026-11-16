@@ -365,8 +365,10 @@ def test_the_board_answer_holds_no_closed_or_abandoned_row(hub, tmp_path, monkey
 def test_the_board_answer_carries_one_summary_per_spec_and_per_wave(hub, tmp_path, monkeypatch):
     _serve(hub, tmp_path, monkeypatch, _ends_fixture())
     sums = hub.board()["sum"]
-    assert _entry(sums["specs"], n=889) == {"n": 889, "st": "Doing", "closed": 1, "total": 3}
-    assert _entry(sums["specs"], n=41) == {"n": 41, "st": "Closed", "closed": 1, "total": 2}
+    # `far` is the furthest column the spec's tickets reached, a count beside the spec and never its own column (#1906);
+    # an Abandoned ticket names no furthest column, and a closed spec's tickets count by its own summary alone.
+    assert _entry(sums["specs"], n=889) == {"n": 889, "st": "Doing", "closed": 1, "total": 3, "far": "Closed", "far_n": 1}
+    assert _entry(sums["specs"], n=41) == {"n": 41, "st": "Closed", "closed": 1, "total": 2, "far": None, "far_n": 0}
     assert _entry(sums["waves"], spec=889, wave=1) == {"spec": 889, "wave": 1, "closed": 1, "total": 2}
     assert _entry(sums["waves"], spec=889, wave=None) == {"spec": 889, "wave": None, "closed": 0, "total": 1}
 
