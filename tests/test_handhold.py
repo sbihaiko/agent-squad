@@ -79,7 +79,7 @@ def read(state: Path, n: int) -> str:
 
 
 def test_hold_writes_the_file_and_its_three_fields(env):
-    rc = H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={})
     assert rc == 0
     fields = dict(line.split(" ", 1) for line in read(env, 1664).splitlines())
     assert fields["by"] == "manual"
@@ -90,7 +90,7 @@ def test_hold_writes_the_file_and_its_three_fields(env):
 def test_a_manual_hold_writes_the_file_and_the_holder_label_and_both_faces_read_back(env, labels):
     """One act, two faces (#1678): the file the janitor reads and the label a dispatch pass reads are written together."""
     assert H.LABELS == {"manual": "ready-for-human", "hal9k": "ready-for-HAL9K"}
-    rc = H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={})
     assert rc == 0
     assert labels == [("owner/name", 1664, "ready-for-human", True)]
     row = H.holds(state=env, now=NOW)[0]
@@ -98,7 +98,7 @@ def test_a_manual_hold_writes_the_file_and_the_holder_label_and_both_faces_read_
 
 
 def test_a_hal9k_hold_writes_the_hal9k_label_on_the_issue(env, labels):
-    rc = H.hold([1664], by="hal9k", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="hal9k", minutes=60, state=env, now=NOW, procs={})
     assert rc == 0
     assert labels == [("owner/name", 1664, "ready-for-HAL9K", True)]
     assert H.holds(state=env, now=NOW)[0]["carrier"] == "hal9k"
@@ -106,7 +106,7 @@ def test_a_hal9k_hold_writes_the_hal9k_label_on_the_issue(env, labels):
 
 def test_a_refused_hold_writes_no_holder_label(env, labels):
     (env / "auto" / "taken-run-x").write_text("run run-x\nissues 1664\n")
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={})
     assert rc == 1
     assert labels == [], "a refused hold names no holder, so it writes no label"
 
@@ -116,7 +116,7 @@ def test_a_failed_label_write_leaves_no_file_that_says_held_and_names_the_failur
         raise H.HandError(f"the write of {label} on #{n} was refused")
 
     monkeypatch.setattr(H, "_gh_label", refused)
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={})
     assert rc == 1
     assert not (env / "auto" / "hold-1664").exists(), "the label never landed, so no file may say the issue is held"
     err = capsys.readouterr().err
@@ -132,7 +132,7 @@ def test_a_batch_whose_later_label_write_fails_writes_no_file_and_undoes_the_lab
             raise H.HandError("the second write was refused")
 
     monkeypatch.setattr(H, "_gh_label", refused_on_two)
-    rc = H.hold([1, 2], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1, 2], by="manual", state=env, now=NOW, procs={})
     assert rc == 1
     assert calls == [(1, True), (2, True), (1, False)], "the label the first write added is cleared again"
     for n in (1, 2):
@@ -141,7 +141,7 @@ def test_a_batch_whose_later_label_write_fails_writes_no_file_and_undoes_the_lab
 
 def test_a_hold_with_no_repository_is_refused_and_writes_neither_face(env, monkeypatch, capsys):
     monkeypatch.delenv("SG_REPO")
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={})
     assert rc == 1
     assert not (env / "auto" / "hold-1664").exists()
     assert "SG_REPO" in capsys.readouterr().err
@@ -150,48 +150,48 @@ def test_a_hold_with_no_repository_is_refused_and_writes_neither_face(env, monke
 def test_hold_refused_when_a_live_run_holds_the_issue_and_writes_nothing(env, tmp_path, capsys):
     folder = run_folder(tmp_path, RUN, 1664, live=True)
     listed(env, folder)
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(True), cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(True))
     assert rc == 1
     assert not (env / "auto" / "hold-1664").exists()
     assert RUN in capsys.readouterr().err
 
 
 def test_a_zsh_wrapper_whose_body_names_a_live_command_is_no_live_engine(env, tmp_path):
-    """#1993: a tool shell's `zsh -c` body names `squad start`, but the shell is no engine or session, so the run is not live."""
+    """#1993: the record's engine pid is a `zsh -c` wrapper whose body names `squad start`: the wrapper is no engine, so the run is not live."""
     folder = run_folder(tmp_path, RUN, 1664, live=False)
     listed(env, folder)
-    shell = [(9001, str(folder), "zsh -c sleep 540; python3 -m squad start x")]
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(False), cwd_procs=lambda: shell)
+    wrapper = {PID: RL.Proc(NOW - 200, "zsh -c sleep 540; python3 -m squad start x")}
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=wrapper)
     assert rc == 0
 
 
-def test_a_process_that_only_shares_the_run_folder_cwd_does_not_make_the_run_live(env, tmp_path):
-    """#1993: a process whose cwd is the run folder is discovery evidence only, never the run's ownership."""
+def test_a_squad_process_the_record_does_not_name_does_not_make_the_run_live(env, tmp_path):
+    """#1993: a process that shares the run folder but is not the engine the record names is no evidence of ownership."""
     folder = run_folder(tmp_path, RUN, 1664, live=False)
     listed(env, folder)
-    other = [(9002, str(folder), "python3 -m squad start other-run")]
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(False), cwd_procs=lambda: other)
+    other = {9002: RL.Proc(NOW - 200, "python3 -m squad start other-run")}
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=other)
     assert rc == 0
 
 
 def test_hold_of_an_issue_a_dead_run_held_is_not_refused(env, tmp_path):
     folder = run_folder(tmp_path, RUN, 1664, live=False, verdict=True)
     listed(env, folder)
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(False), cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(False))
     assert rc == 0
 
 
 def test_hold_refused_for_another_carrier_hold(env):
-    H.hold([1664], by="hal9k", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="hal9k", state=env, now=NOW, procs={})
     before = read(env, 1664)
-    rc = H.hold([1664], by="manual", state=env, now=NOW + 5, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW + 5, procs={})
     assert rc == 1
     assert read(env, 1664) == before   # never overwritten
 
 
 def test_hold_refused_when_a_taken_marker_names_the_issue(env, capsys):
     (env / "auto" / "taken-run-x").write_text("run run-x\nissues 1664 1663\n")
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs={})
     assert rc == 1
     assert not (env / "auto" / "hold-1664").exists()
     assert "taken" in capsys.readouterr().err
@@ -199,7 +199,7 @@ def test_hold_refused_when_a_taken_marker_names_the_issue(env, capsys):
 
 def test_a_batch_with_one_refusal_writes_no_file_for_any_issue(env, capsys):
     (env / "auto" / "taken-run-x").write_text("run run-x\nissues 2\n")
-    rc = H.main(["hold", "1", "2", "3", "--by", "manual"], state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.main(["hold", "1", "2", "3", "--by", "manual"], state=env, now=NOW, procs={})
     assert rc == 1
     for n in (1, 2, 3):
         assert not (env / "auto" / f"hold-{n}").exists()
@@ -208,17 +208,17 @@ def test_a_batch_with_one_refusal_writes_no_file_for_any_issue(env, capsys):
 
 
 def test_renew_refuses_another_carrier(env, capsys):
-    H.hold([1664], by="hal9k", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="hal9k", state=env, now=NOW, procs={})
     before = read(env, 1664)
-    rc = H.renew([1664], by="manual", state=env, now=NOW + 60, procs={}, cwd_procs=lambda: [])
+    rc = H.renew([1664], by="manual", state=env, now=NOW + 60, procs={})
     assert rc == 1
     assert read(env, 1664) == before
     assert "hal9k" in capsys.readouterr().err
 
 
 def test_renew_moves_until_forward_and_keeps_since(env):
-    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
-    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={})
+    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={})
     assert rc == 0
     fields = dict(line.split(" ", 1) for line in read(env, 1664).splitlines())
     assert fields["since"] == H.iso(NOW)
@@ -226,9 +226,9 @@ def test_renew_moves_until_forward_and_keeps_since(env):
 
 
 def test_a_renew_keeps_the_label_and_the_file_consistent(env, labels):
-    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={})
     labels.clear()
-    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={}, cwd_procs=lambda: [])
+    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={})
     assert rc == 0
     assert labels == [("owner/name", 1664, "ready-for-human", True)]
     fields = dict(line.split(" ", 1) for line in read(env, 1664).splitlines())
@@ -238,23 +238,23 @@ def test_a_renew_keeps_the_label_and_the_file_consistent(env, labels):
 
 
 def test_a_failed_label_write_on_a_renew_leaves_the_hold_file_as_it_was(env, monkeypatch, capsys):
-    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={})
     before = read(env, 1664)
 
     def refused(repo, n, label, add):
         raise H.HandError("the write was refused")
 
     monkeypatch.setattr(H, "_gh_label", refused)
-    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={}, cwd_procs=lambda: [])
+    rc = H.renew([1664], by="manual", minutes=120, state=env, now=NOW + 600, procs={})
     assert rc == 1
     assert read(env, 1664) == before
     assert "refused" in capsys.readouterr().err
 
 
 def test_release_removes_the_hold_and_records_the_column_it_names(env, capsys):
-    H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", state=env, now=NOW, procs={})
     assert (env / "auto" / "hold-1664").exists()
-    rc = H.release([1664], by="manual", to="Closed", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.release([1664], by="manual", to="Closed", state=env, now=NOW, procs={})
     assert rc == 0
     assert not (env / "auto" / "hold-1664").exists()
     decision = dict(line.split(" ", 1) for line in (env / "auto" / "release-1664").read_text().splitlines())
@@ -263,9 +263,9 @@ def test_release_removes_the_hold_and_records_the_column_it_names(env, capsys):
 
 
 def test_a_release_clears_the_file_and_the_holder_label_in_one_act(env, labels):
-    H.hold([1664], by="hal9k", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="hal9k", state=env, now=NOW, procs={})
     labels.clear()
-    rc = H.release([1664], by="hal9k", to="Closed", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.release([1664], by="hal9k", to="Closed", state=env, now=NOW, procs={})
     assert rc == 0
     assert labels == [("owner/name", 1664, "ready-for-HAL9K", False)]
     assert not (env / "auto" / "hold-1664").exists()
@@ -273,13 +273,13 @@ def test_a_release_clears_the_file_and_the_holder_label_in_one_act(env, labels):
 
 
 def test_a_failed_label_clear_keeps_the_hold_file_and_names_the_failure(env, monkeypatch, capsys):
-    H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", state=env, now=NOW, procs={})
 
     def refused(repo, n, label, add):
         raise H.HandError(f"the clear of {label} on #{n} was refused")
 
     monkeypatch.setattr(H, "_gh_label", refused)
-    rc = H.release([1664], by="manual", to="Closed", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.release([1664], by="manual", to="Closed", state=env, now=NOW, procs={})
     assert rc == 1
     assert (env / "auto" / "hold-1664").exists(), "the label still names a holder, so the file keeps the hold"
     assert not (env / "auto" / "release-1664").exists(), "a release that did not clear both faces records no move"
@@ -288,24 +288,24 @@ def test_a_failed_label_clear_keeps_the_hold_file_and_names_the_failure(env, mon
 
 
 def test_release_without_a_column_is_refused_and_keeps_the_hold(env):
-    H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", state=env, now=NOW, procs={})
     with pytest.raises(ValueError, match="--to"):
-        H.release([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+        H.release([1664], by="manual", state=env, now=NOW, procs={})
     assert (env / "auto" / "hold-1664").exists(), "a release with no decision is refused, never a ghost card"
-    rc = H.main(["release", "1664", "--by", "manual"], state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    rc = H.main(["release", "1664", "--by", "manual"], state=env, now=NOW, procs={})
     assert rc == 2
     assert (env / "auto" / "hold-1664").exists()
 
 
 def test_release_of_a_stale_hold_still_works(env):
-    H.hold([1664], by="manual", minutes=1, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
-    rc = H.release([1664], by="manual", to="Todo", state=env, now=NOW + 86400, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", minutes=1, state=env, now=NOW, procs={})
+    rc = H.release([1664], by="manual", to="Todo", state=env, now=NOW + 86400, procs={})
     assert rc == 0
     assert not (env / "auto" / "hold-1664").exists()
 
 
 def test_holds_reports_stale_past_until(env):
-    H.hold([1664], by="hal9k", minutes=30, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="hal9k", minutes=30, state=env, now=NOW, procs={})
     fresh = H.holds(state=env, now=NOW + 60)
     late = H.holds(state=env, now=NOW + 3600)
     assert fresh[0]["issue"] == 1664 and fresh[0]["carrier"] == "hal9k" and fresh[0]["stale"] is False
@@ -314,7 +314,7 @@ def test_holds_reports_stale_past_until(env):
 
 
 def test_holds_names_the_folder_activity_of_each_marker(env):
-    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", minutes=60, state=env, now=NOW, procs={})
     row = H.holds(state=env, now=NOW + 120)[0]
     assert row["activity"] >= 0 and row["live"] is True
     stale = H.holds(state=env, now=NOW + 7200)[0]
@@ -322,7 +322,7 @@ def test_holds_names_the_folder_activity_of_each_marker(env):
 
 
 def test_alerts_names_a_stale_hold_once(env):
-    H.hold([1664], by="manual", minutes=1, state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", minutes=1, state=env, now=NOW, procs={})
     lines = H.alerts(state=env, now=NOW + 86400)
     assert len(lines) == 1 and "#1664" in lines[0] and "STALE" in lines[0]
     assert "HOLD STALE #1664" in (env / "alerts.log").read_text()
@@ -330,14 +330,14 @@ def test_alerts_names_a_stale_hold_once(env):
 
 
 def test_alerts_names_an_orphan_hold_on_a_closed_issue(env):
-    H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", state=env, now=NOW, procs={})
     lines = H.alerts(state=env, closed={1664}, now=NOW)
     assert len(lines) == 1 and "ORPHAN" in lines[0] and "#1664" in lines[0]
     assert "HOLD ORPHAN #1664" in (env / "alerts.log").read_text()
 
 
 def test_an_orphan_hold_is_never_live_work(env):
-    H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", state=env, now=NOW, procs={})
     row = H.holds(state=env, closed={1664}, now=NOW)[0]
     assert row["orphan"] is True and row["live"] is False
 
@@ -345,21 +345,21 @@ def test_an_orphan_hold_is_never_live_work(env):
 def test_a_finished_run_holds_no_issue(env, tmp_path):
     folder = run_folder(tmp_path, RUN, 1664, live=True, verdict=True)
     listed(env, folder)
-    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(True), cwd_procs=lambda: [])
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(True))
     assert rc == 0
 
 
 @pytest.mark.parametrize("verb", ["hold", "renew", "release"])
 def test_every_write_verb_creates_board_dirty(env, verb):
-    H.hold([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+    H.hold([1664], by="manual", state=env, now=NOW, procs={})
     dirty = env / "board-dirty"
     dirty.unlink(missing_ok=True)   # the setup hold touched it; the verb under test must touch it again
     if verb == "hold":
-        H.hold([1700], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+        H.hold([1700], by="manual", state=env, now=NOW, procs={})
     elif verb == "renew":
-        H.renew([1664], by="manual", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+        H.renew([1664], by="manual", state=env, now=NOW, procs={})
     else:
-        H.release([1664], by="manual", to="Closed", state=env, now=NOW, procs={}, cwd_procs=lambda: [])
+        H.release([1664], by="manual", to="Closed", state=env, now=NOW, procs={})
     assert dirty.exists()
 
 

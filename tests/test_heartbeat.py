@@ -48,12 +48,18 @@ def one_row(pid=None, cpu=10.0, ppid=1):
     return [(pid or PID, ppid, cpu)]
 
 
+def table_for(rows):
+    """The process table the rows describe: each process keeps one start time, so the owned check holds on every read."""
+    from squad.procs import Proc
+    return {pid: Proc(pid=pid, ppid=ppid, pgid=0, start=0.0, command="", cpu=cpu) for pid, ppid, cpu in rows}
+
+
 def pass_once(tmp_path, events, rows, now, mtime, stamps=None, kills=None, **kw):
     folder = tmp_path / "run-x"
     folder.mkdir(exist_ok=True)
     rec(folder, *events, mtime=mtime)
     return heartbeat.scan(runlist(tmp_path, folder), tmp_path, stamps or tmp_path / "hb", now=now,
-                          rows=rows, kill=(lambda pid, sig: (kills or []).append((pid, sig))),
+                          rows=rows, read=lambda: table_for(rows), kill=(lambda pid, sig: (kills or []).append((pid, sig))),
                           mark=lambda folder, reason: (kills or []).append(("mark", str(folder), reason)) or True, **kw)
 
 
@@ -69,7 +75,7 @@ def test_a_flat_tree_and_a_frozen_record_kill_the_run_and_name_the_reason(tmp_pa
     marks, kills = [], []
     out = io.StringIO()
     got = heartbeat.scan(runlist(tmp_path, folder), tmp_path, stamps, now=T0 + 6 * MIN, rows=one_row(),
-                         kill=lambda pid, sig: kills.append((pid, sig)),
+                         read=lambda: table_for(one_row()), kill=lambda pid, sig: kills.append((pid, sig)),
                          mark=lambda f, r: marks.append((str(f), r)), out=out)
     assert [(m[1]) for m in marks] == ["killed: heartbeat_stale"]
     assert got and got[0]["node"] == "router" and got[0]["cpu_s"] == 10.0

@@ -45,7 +45,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from squad import caps as C
-from squad import reap, record
+from squad import record
 from squad import run_liveness as RL
 
 CARRIERS = ("manual", "hal9k")
@@ -229,9 +229,9 @@ def _request_issues(folder):
     return found
 
 
-def _live(run, folder, checkout, now, procs, cwd_procs):
+def _live(run, folder, checkout, now, procs):
     """True while a listed run lives: its record names no verdict and its engine runs (`run_liveness`), or it is still in
-    its launch window, or a gate or session process works inside its folder (the rule `reap.LIVE_PROC` names)."""
+    its launch window. A process that only shares the folder's cwd is no evidence of ownership (#1993)."""
     try:
         text = RL.read_text(RL.record_path(run, checkout))
     except RL.ReadError as e:
@@ -243,32 +243,26 @@ def _live(run, folder, checkout, now, procs, cwd_procs):
             return True
     except RL.ReadError as e:
         raise HandError(f"cannot read the processes for run {folder.name}: {e}") from e
-    if C._in_launch_window(folder, now):
-        return True
-    rows = cwd_procs()
-    if rows is None:
-        raise HandError(f"cannot read the processes for run {folder.name}")
-    here = str(folder)
-    return any((cwd == here or cwd.startswith(here + "/")) and reap.LIVE_PROC.search(cmd) for _, cwd, cmd in rows)
+    return C._in_launch_window(folder, now)
 
 
-def _held(issues, state, checkout, now, procs, cwd_procs):
+def _held(issues, state, checkout, now, procs):
     """{issue: run} for every issue a live listed run's request names."""
     wanted = {str(n) for n in issues}
     out = {}
     for run in _listed(state):
         folder = Path(run) if run.startswith("/") else checkout / "runs" / run
         named = _request_issues(folder) & wanted
-        if named and _live(run, folder, checkout, now, procs, cwd_procs):
+        if named and _live(run, folder, checkout, now, procs):
             for n in named:
                 out.setdefault(n, folder.name)
     return out
 
 
-def _refusals(verb, issues, by, state, checkout, now, procs, cwd_procs):
+def _refusals(verb, issues, by, state, checkout, now, procs):
     """One line per refused issue; an empty list when the whole batch may take the verb. Everything is read before a write."""
     try:
-        held = _held(issues, state, checkout, now, procs, cwd_procs) if verb == "hold" else {}
+        held = _held(issues, state, checkout, now, procs) if verb == "hold" else {}
         taken = _taken(state) if verb == "hold" else {}
     except HandError as e:
         return [f"refused #{n}: {e}" for n in issues]
@@ -294,7 +288,7 @@ def _refusals(verb, issues, by, state, checkout, now, procs, cwd_procs):
     return lines
 
 
-def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=None, label_write=None, repo=None):
+def _verb(verb, issues, by, minutes, state, checkout, now, procs, to=None, label_write=None, repo=None):
     st = _state(state)
     ck = _checkout(checkout)
     now = time.time() if now is None else now
@@ -308,8 +302,7 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=
     nums = _numbers(issues)
     m = _minutes(minutes) if verb != "release" else None   # the one bound is validated before any face is written
     snap = RL.read_processes if procs is None else procs
-    cwd = reap._procs if cwd_procs is None else cwd_procs
-    refusals = _refusals(verb, nums, by, st, ck, now, snap, cwd)
+    refusals = _refusals(verb, nums, by, st, ck, now, snap)
     if refusals:
         for line in refusals:
             print(line, file=sys.stderr)
@@ -341,26 +334,22 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, cwd_procs, to=
     return 0
 
 
-def hold(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None,
-         label_write=None, repo=None):
+def hold(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, label_write=None, repo=None):
     """Write the hold file and the holder label on every issue, or neither on any. Return 0 when all are written, 1 on a
     refusal."""
-    return _verb("hold", issues, by, minutes, state, checkout, now, procs, cwd_procs, label_write=label_write, repo=repo)
+    return _verb("hold", issues, by, minutes, state, checkout, now, procs, label_write=label_write, repo=repo)
 
 
-def renew(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None,
-          label_write=None, repo=None):
+def renew(issues, by="manual", minutes=None, state=None, checkout=None, now=None, procs=None, label_write=None, repo=None):
     """Push `until` forward on holds the same carrier wrote, keeping the file and the label consistent. Return 0 when all
     renew, 1 on a refusal."""
-    return _verb("renew", issues, by, minutes, state, checkout, now, procs, cwd_procs, label_write=label_write, repo=repo)
+    return _verb("renew", issues, by, minutes, state, checkout, now, procs, label_write=label_write, repo=repo)
 
 
-def release(issues, by="manual", to=None, state=None, checkout=None, now=None, procs=None, cwd_procs=None,
-            label_write=None, repo=None):
+def release(issues, by="manual", to=None, state=None, checkout=None, now=None, procs=None, label_write=None, repo=None):
     """Clear the hold file and the holder label the same carrier wrote, and record the column the card moves to. Return 0
     or 1: a label the clear does not reach keeps the hold."""
-    return _verb("release", issues, by, None, state, checkout, now, procs, cwd_procs, to=to, label_write=label_write,
-                 repo=repo)
+    return _verb("release", issues, by, None, state, checkout, now, procs, to=to, label_write=label_write, repo=repo)
 
 
 def holds(state=None, closed=None, now=None):
@@ -473,7 +462,7 @@ def alerts(state=None, closed=None, now=None, path=None):
 
 
 def main(argv=None, **kw):
-    """The CLI. `kw` carries `state`, `checkout`, `now`, `procs` and `cwd_procs` for a caller that injects them."""
+    """The CLI. `kw` carries `state`, `checkout`, `now` and `procs` for a caller that injects them."""
     ap = argparse.ArgumentParser(prog="python3 -m squad.handhold")
     sub = ap.add_subparsers(dest="verb", required=True)
     for verb in ("hold", "renew", "release"):

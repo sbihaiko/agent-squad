@@ -60,6 +60,11 @@ STALE_SLOT_S = 300    # a holder with no live lease and no live process this lon
 # A run's process: its engine (`squad start` or `squad resume`), a gate or a session. A dashboard server is none of them (#1270).
 # janitor.py carries a copy of this pattern (`LIVE`); test_machine_caps.py holds the two equal.
 LIVE_PROC = re.compile(r"gate\.sh\b|_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad(?!\.dashboard_server)\b|[s]quad (start|resume)( |$)")
+def _session_process(cmd):
+    """True for a run's own process: a session, a gate or an engine. A shell that wraps one by `-c` is not that process (#1993)."""
+    return bool(LIVE_PROC.search(cmd)) and not RL.is_shell_wrapper(cmd)
+
+
 KILL_CMD = re.compile(r"\b(kill|pkill|killall)\b")
 SCRIPT_CMD = re.compile(r"\.(sh|bash|zsh|py)\b")
 TEMP_ROOTS = ("/tmp/", "/private/tmp/", tempfile.gettempdir() + "/")
@@ -189,7 +194,7 @@ def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, s
             if procs is None:
                 return done   # the process table is unreadable: no proof that no gate waits, so nothing is marked
         here = str(folder)
-        if any((cwd == here or cwd.startswith(here + "/")) and LIVE_PROC.search(c) for _, cwd, c in procs):
+        if any((cwd == here or cwd.startswith(here + "/")) and _session_process(c) for _, cwd, c in procs):
             continue
         if not dry:
             tail, tail_moved = _tail(folder)   # read before the verdict is written: that write moves the record's own clock
@@ -269,7 +274,7 @@ def stale_slot_holders(active_runs, checkout, ceiling=None, procs=None, now=None
     out = []
     for folder, age in waiting:
         here = str(folder)
-        if any((cwd == here or cwd.startswith(here + "/")) and LIVE_PROC.search(c) for _, cwd, c in procs):
+        if any((cwd == here or cwd.startswith(here + "/")) and _session_process(c) for _, cwd, c in procs):
             continue
         if _held(ceiling, folder.name, names):
             continue
