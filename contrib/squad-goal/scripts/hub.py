@@ -22,6 +22,8 @@ _leadtime_spec = importlib.util.spec_from_file_location("board_leadtime", pathli
 _leadtime = importlib.util.module_from_spec(_leadtime_spec); _leadtime_spec.loader.exec_module(_leadtime)
 _fast_spec = importlib.util.spec_from_file_location("board_fast", pathlib.Path(__file__).resolve().parent / "board_fast.py")
 board_fast = importlib.util.module_from_spec(_fast_spec); _fast_spec.loader.exec_module(board_fast)
+_specstall_spec = importlib.util.spec_from_file_location("specstall", pathlib.Path(__file__).resolve().parent / "specstall.py")
+specstall = importlib.util.module_from_spec(_specstall_spec); _specstall_spec.loader.exec_module(specstall)
 # The board draws the shipped definition (#247): its statuses, in its order, with their colours. Open PRs are a lane beside
 # the axis, never a column, and it is for tracking only (#384); a work branch has no lane of its own -- its kind reaches the
 # kinds view -- and a landed branch is read from its issue card. Every name comes from the table; COLUMN reads a column or a
@@ -3077,16 +3079,23 @@ def spec_progress(items, moves=None, window=None, now=None):
     gone = (COLUMN["issue_closed"], COLUMN["abandoned"])
     done = total = 0
     rows = []   # (fraction, number, tip line) per open spec
+    # A ticket's close instant stands for its landing: the board cache keeps no dev commit time.
+    landed = {i["n"]: (t, t) for i in items or [] if isinstance(i.get("n"), int) and (t := _close_instant(i.get("c"))) is not None}
+    kids = {}
+    for i in items or []:
+        if isinstance(i.get("pa"), int) and isinstance(i.get("n"), int): kids.setdefault(i["pa"], []).append(i["n"])
+    ages = specstall.ages(kids, landed, time.time() if now is None else now)
     for i in items or []:
         if _columns_module.SPEC_LABEL not in (i.get("l") or []): continue
         if cache_row_column(i, moves, window) in gone: continue
         sc = task_count(i)
+        age = f" · open {int(ages[i['n']] // 86400)} d" if i.get("n") in ages else ""
         if sc:
             c, t = (int(x) for x in sc.split("/"))
             done, total = done + c, total + t
-            rows.append((c / t, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — {sc}"))
+            rows.append((c / t, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — {sc}{age}"))
         else:
-            rows.append((0.0, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — no sub-issue"))
+            rows.append((0.0, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — no sub-issue{age}"))
     rows.sort(key=lambda r: (r[0], r[1]))
     tips = [r[2] for r in rows[:SPEC_TIP_LINES]] + ([f"+{len(rows) - SPEC_TIP_LINES} more"] if len(rows) > SPEC_TIP_LINES else [])
     none = nospec_count(items, moves, window, now)   # the No spec lane's own count: one more group in the total (owner)

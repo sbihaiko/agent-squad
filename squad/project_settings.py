@@ -12,6 +12,7 @@ import copy
 import hashlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -50,6 +51,7 @@ CATALOG = {
     "caps.children": ("int", 1, 1000, "children", "live dispatch children on this machine; a project may only lower the plugin value"),
     "caps.gates": ("int", 1, 1000, "slots", "gate worker slots on this machine; a project may only lower the plugin value"),
     "caps.reviews": ("int", 1, 1000, "reviews", "live reviews on this machine; a project may only lower the plugin value"),
+    "janitor.spec_stall_seconds": ("int", 3600, 31536000, "seconds", "a spec with no dev commit on its open tickets for this long raises one SPEC-STALL alert per bound"),
     "claude_md.max_line_width": ("int", 40, 10000, "characters", "width of one CLAUDE.md line before `squad setup --check` flags it"),
     "claude_md.max_section_lines": ("int", 5, 10000, "lines", "length of one CLAUDE.md section before `squad setup --check` flags it"),
     "tailnet.host": ("str", None, None, "MagicDNS name", "name of this machine on the tailnet"),
@@ -360,3 +362,13 @@ def init(target):
         return False
     _write(path, {})
     return True
+
+
+def spec_stall_seconds(target):
+    """The janitor's spec-stall bound: the project file's value when it sets one, else the plugin default."""
+    data, _ = load(target)
+    return overlay(D.load(), data)[0]["janitor"]["spec_stall_seconds"]
+
+
+if __name__ == "__main__":
+    print(spec_stall_seconds(sys.argv[2]))

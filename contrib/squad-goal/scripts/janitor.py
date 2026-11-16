@@ -772,8 +772,9 @@ def wave_outside():   # issue -> run: each `Refs #N` a landing named outside its
     return _outside
 _subs = {}   # issue -> REST's sub_issues_summary, from the same one read as the labels
 _kids = {}   # spec -> its sub-issues' numbers (the native relation), from the same one read as the labels
+_items = []  # the open issues' list entries, from the same one read (the spec rule reads their parent and creation)
 def open_issues():   # every open issue of the repository, ONE read per pass through the door's aggregate route (#92): (answered, {number: labels}). answered is False when the list did not answer (a refusal, a deadline miss, no door beside this module), and then no card is added on a guess. No call per issue: the one list carries every issue's number and labels.
-    global _open
+    global _open, _items
     if _open is None:
         r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_aggregate", f"repos/{repo0}/issues?state=open"])   # the read goes through ghcall.sh (gh_aggregate, the throttle), never a call site of this module's (ADR-0277)
         try: items = json.loads(out) if r == 0 else None
@@ -784,6 +785,7 @@ def open_issues():   # every open issue of the repository, ONE read per pass thr
                 m[str(i["number"])] = set(l.get("name") for l in i.get("labels") or [] if isinstance(l, dict))
                 if isinstance(i.get("sub_issues_summary"), dict): _subs[str(i["number"])] = i["sub_issues_summary"]
                 if isinstance(i.get("sub_issues"), list): _kids[str(i["number"])] = [str(k) for k in i["sub_issues"] if isinstance(k, int)]
+        _items = items if isinstance(items, list) else []
         _open = (isinstance(items, list), m)
     return _open
 def issue_closed(n):   # the pass's one open-issue list answers for the whole repository (#92, #1566): an issue absent from
@@ -1819,6 +1821,39 @@ def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts n
             else "the frontier holds this work and starts none; NEEDS OWNER")
     alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} ({tail})")
     mk.write_text(f"{now}\n")
+def _specstall():   # the spec rules beside this script (#1962); -I keeps the script's directory off sys.path, so the import names it itself
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import specstall
+    return specstall
+def spec_bound():   # janitor.spec_stall_seconds of the profile (#1962); the plugin default when the project file cannot be read
+    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
+    r, out = _run(["python3", "-m", "squad.project_settings", "spec-stall", str(co)], env={**os.environ, "PYTHONPATH": root})
+    return int(out) if r == 0 and out.strip().isdigit() else 86400
+def spec_stall():   # #1962: a spec whose open tickets made no dev commit for a bound names them, one alert per bound
+    bound = spec_bound()
+    answered, _ = open_issues()
+    r, out = _run(["git", "-C", str(co), "log", "--format=%ct\t%s", f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"])
+    if not answered or r != 0: return
+    sp = _specstall()
+    items = [i for i in _items if isinstance(i.get("number"), int) and not i.get("pull_request")]
+    commits = [(int(ts), subj) for ts, _, subj in (l.partition("\t") for l in out.splitlines()) if ts.isdigit()]
+    created = {i["number"]: t for i in items if (t := stamp_epoch(i.get("created_at"))) is not None}
+    stuck = sp.stalled(sp.kids_of(items), {i["number"] for i in items}, sp.landed_of(commits), created, now, bound)
+    if not stuck or dry: return
+    tickets = {t for ts in stuck.values() for t in ts}
+    _, cols = cards(proj) if proj else (False, {})
+    cols = {int(k): v for k, v in cols.items() if str(k).isdigit()}
+    holds = {t: holding(t) for t in tickets}
+    standing = {int(k): "diverged" for k, bs in work_branches().items() if any(s == "diverged" for _, s in bs)}
+    marker = {t for t in tickets if (st / "auto" / f"disp-{t}").exists()}
+    for spec_n, ts in sorted(stuck.items()):
+        mk = st / f"spec-stall-{spec_n}"
+        try: last = float(mk.read_text())
+        except (OSError, ValueError): last = 0.0
+        if now - last < bound: continue
+        parts = [f"#{t} {sp.state(t, cols, holds, standing, marker)}" for t in sorted(ts)]
+        alert(f"SPEC-STALL #{spec_n}: no dev progress for {bound // 3600} h; stuck tickets: {'; '.join(parts)} (NEEDS OWNER)")
+        mk.write_text(f"{now}\n")
 def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lane of this scripts dir still runs; one alert per episode
     here = os.path.dirname(os.path.abspath(__file__)); mk = st / "watchd-orphan-alert"
     try: sup = int((st / "watchd.pid").read_text().strip())
@@ -1856,6 +1891,7 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
     if changed:
         alert(f"LIVE-MTIME {live}: {len(changed)} file(s) changed with no publish: {', '.join(changed[:5])}")
 frontier_idle()
+spec_stall()
 watchd_orphan()
 live_mtime()
 if acts and not dry:

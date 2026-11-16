@@ -236,7 +236,9 @@ board=$(sg_board_rows "$(sg_go_csv "$F/issues.json" "$SG_FRONTIER_LABEL")") || {
 printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
 export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from this pass's one board read (#1620)
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "   # the issues whose card sits in Todo: the owner's go signal (#550)
-while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r '.[]|select(.pull_request|not)|select((.title // "")|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)
+git -C "${SG_CHECKOUT:-.}" log --format='%ct%x09%s' "origin/${SG_LAND_BRANCH:-dev}" > "$F/dev-subjects" 2>/dev/null || : > "$F/dev-subjects"
+closers=" $(python3 "$here/specstall.py" closers "$F/issues.json" "$F/dev-subjects" 2>/dev/null | tr '\n' ' ')"   # a ticket that closes its spec ranks before ordinary work (#1962)
+while IFS=$'\x1f' read -r _rank w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r --arg cl "$closers " '.[]|select(.pull_request|not)|select((.title // "")|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[(.number as $m | if ($cl | contains(" \($m) ")) then 0 else 1 end),([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)
 i=0
 while [ $i -lt ${#cands[@]} ]; do
   IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))

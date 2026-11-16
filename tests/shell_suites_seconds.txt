@@ -6,6 +6,7 @@ test-address.sh 3.28
 test-autobug.sh 20.37
 test-autofrontier-envelope.sh 2.95
 test-autofrontier-one-run.sh 27.39
+test-autofrontier-spec-first.sh 7.18
 test-autohunt.sh 9.69
 test-autorefuse.sh 1.79
 test-basecheck.sh 3.73
@@ -135,6 +136,7 @@ test-janitor-reopen-fresh.sh 2.48
 test-janitor-rule-o.sh 1.24
 test-janitor-rule-p.sh 1.48
 test-janitor-run-fields-unchanged.sh 1.75
+test-janitor-spec-stall.sh 4.19
 test-janitor-stale-card.sh 1.32
 test-janitor-terminal-comment.sh 2.71
 test-janitor-unlanded-branch.sh 0.97
