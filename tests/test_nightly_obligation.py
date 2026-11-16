@@ -27,6 +27,7 @@ pytestmark = pytest.mark.heavy   # a nightly run in a fixture tree is over 1 s
 def _run(cmd, env=None, **kw):
     clean = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
     clean["SG_NIGHTLY_HOUR"] = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H")   # the suite runs in its window whatever the hour
+    clean["SG_GHREAD"] = "false"   # no case reads GitHub: the nightly verdict reads the GitHub half through this door (#1975)
     clean.update(env or {})
     return subprocess.run(cmd, capture_output=True, text=True, env=clean, timeout=120, **kw)
 

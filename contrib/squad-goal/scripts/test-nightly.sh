@@ -41,7 +41,7 @@ EOF
   chmod +x "$T/$m.sh"; done
 printf '#!/bin/bash\necho "$*" >> "%s/notify.log"\n' "$T" > "$T/notify.sh"; chmod +x "$T/notify.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
-export T
+export T SG_GHREAD=false   # no case reads GitHub: the verdict cases name their own reader (#1975)
 # ng [VAR=val...]: one nightly run against the fixture, its own state, tree and remote
 ng() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_OWNER=o SG_PROJECT=4 BOARD="$T/board.sh" SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
   SG_NIGHTLY_PARALLEL="$T/parallel.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1; }

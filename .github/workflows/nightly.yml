@@ -5,22 +5,47 @@ on:
   schedule:
     - cron: "0 7 * * *"
 
-# The nightly runs the complete Linux suite on the dev tip, heavy tests included, in both modes: the xdist shards and the serial
-# shards of tests/ci_shards.py. The token is read-only, and the jobs check out dev, never the default branch.
+# The GitHub half of the nightly (ADR-0153): the complete Linux suite on the dev tip, heavy tests included, in both modes,
+# by the shard commands of the complete tier in ci.yml. The token is read-only. One job reads the dev tip once, and every
+# shard checks out that one sha, because dev moves between two checkouts. The sha is the name of an artifact, so the local
+# half reads the tested sha through the gh door with no download, and it combines the two halves into one verdict.
 permissions:
   contents: read
 
 jobs:
-  full-xdist-1:
-    name: full-xdist-1
+  dev-sha:
+    name: dev-sha
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      SQUAD_CI_RUNNER: "1"
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.tip.outputs.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: dev
+      - id: tip
+        run: |
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "$sha" > dev-sha.txt
+          echo "nightly dev sha: $sha" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-dev-sha-${{ steps.tip.outputs.sha }}
+          path: dev-sha.txt
+          retention-days: 7
+
+  full-xdist-1:
+    name: full-xdist-1
+    needs: [dev-sha]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -31,14 +56,15 @@ jobs:
 
   full-xdist-2:
     name: full-xdist-2
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -49,14 +75,15 @@ jobs:
 
   full-xdist-3:
     name: full-xdist-3
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -67,14 +94,15 @@ jobs:
 
   full-xdist-4:
     name: full-xdist-4
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -85,14 +113,15 @@ jobs:
 
   full-xdist-5:
     name: full-xdist-5
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -103,14 +132,15 @@ jobs:
 
   full-xdist-6:
     name: full-xdist-6
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -121,14 +151,15 @@ jobs:
 
   full-serial-1:
     name: full-serial-1
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -139,14 +170,15 @@ jobs:
 
   full-serial-2:
     name: full-serial-2
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -157,14 +189,15 @@ jobs:
 
   full-serial-3:
     name: full-serial-3
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -175,14 +208,15 @@ jobs:
 
   full-serial-4:
     name: full-serial-4
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -193,14 +227,15 @@ jobs:
 
   full-serial-5:
     name: full-serial-5
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:
@@ -211,14 +246,15 @@ jobs:
 
   full-serial-6:
     name: full-serial-6
+    needs: [dev-sha]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      SQUAD_CI_RUNNER: "1"
+      SQUAD_CI_RUNNER: "1"   # a runner without the host repo or node: each deselected test prints its id and reason
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: dev
+          ref: ${{ needs.dev-sha.outputs.sha }}
       - name: Python 3.13
         uses: actions/setup-python@v6
         with:

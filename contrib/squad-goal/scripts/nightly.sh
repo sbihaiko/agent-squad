@@ -46,6 +46,49 @@ here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
 [ -n "${SG_NIGHTLY_OFF:-}" ] && exit 0   # a profile that sets it keeps no nightly: a project may carry its own suite instead (ADR-0153)
+# (#1975, ADR-0153) One verdict. The nightly has two halves: the GitHub half (.github/workflows/nightly.yml) runs every test a
+# Linux runner runs, and this script runs the rest, the local half. The verdict combines the local record with the latest
+# scheduled run of the GitHub half, read through the gh door (ghcall.sh) and never by a bare gh call. The GitHub half names
+# the dev sha it tested in the name of one artifact, `nightly-dev-sha-<sha>`. Fail in either half is fail. Pass in both halves
+# on the same sha is pass. Any other pair is unproven: a half that is missing, unfinished, bounded, or at another sha.
+#   $SG_STATE/nightly-verdict: `<epoch> TAB <pass|fail|unproven> TAB <sha> TAB <local> TAB <github> TAB <github sha>`
+# The verdict is written after each local run, and a later call reads it again while it is unproven, at most once per
+# SG_NIGHTLY_VERDICT_EVERY seconds (600 by default) and for one day after the local record, so a GitHub half that ends after
+# the local half still settles it. `--verdict` writes it once and exits.
+verdict_write() {
+  local lres=missing lsha= gres=missing gsha=- row id gst gco res sha
+  if [ -r "$st/nightly-result" ]; then IFS=$'\t' read -r _ lres lsha _ < "$st/nightly-result"; fi
+  case "$lres" in pass|fail|bounded) ;; *) lres=missing; lsha=;; esac
+  if [ "$lres" != fail ] && [ -n "${SG_REPO:-}" ]; then   # a local red is the verdict whatever GitHub says, so no read is spent
+    row=$(. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/workflows/nightly.yml/runs?event=schedule&per_page=1" \
+      -q '.workflow_runs[0] // empty | "\(.id)\t\(.status)\t\(.conclusion)"' 2>/dev/null) || row=
+    if [ -n "$row" ]; then
+      IFS=$'\t' read -r id gst gco <<<"$row"
+      case "$gst/$gco" in completed/success) gres=pass;; completed/failure) gres=fail;; completed/*) gres=${gco:-unknown};; *) gres=unfinished;; esac
+      case "$id" in ''|*[!0-9]*) ;; *)
+        gsha=$(. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/runs/$id/artifacts" \
+          -q '.artifacts[].name | select(startswith("nightly-dev-sha-")) | ltrimstr("nightly-dev-sha-")' 2>/dev/null | head -n 1) || gsha=
+        [ -n "$gsha" ] || gsha=-;; esac
+    fi
+  fi
+  if [ "$lres" = fail ] || [ "$gres" = fail ]; then res=fail
+  elif [ "$lres" = pass ] && [ "$gres" = pass ] && [ -n "$lsha" ] && [ "$lsha" = "$gsha" ]; then res=pass
+  else res=unproven; fi
+  sha=${lsha:-$gsha}
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$res" "${sha:--}" "$lres" "$gres" "$gsha" > "$st/nightly-verdict.$$" \
+    && mv -f "$st/nightly-verdict.$$" "$st/nightly-verdict"
+}
+[ "${1:-}" = --verdict ] && { verdict_write; exit $?; }
+if [ "${1:-}" != --run ] && [ -r "$st/nightly-result" ]; then
+  IFS=$'\t' read -r lts _ < "$st/nightly-result"; vts=0; vres=
+  [ -r "$st/nightly-verdict" ] && IFS=$'\t' read -r vts vres _ < "$st/nightly-verdict"
+  case "$lts" in ''|*[!0-9]*) lts=0;; esac; case "$vts" in ''|*[!0-9]*) vts=0;; esac
+  vnow=$(date +%s)
+  if [ $((vnow - lts)) -lt 86400 ] && { [ "$vts" -lt "$lts" ] \
+       || { [ "$vres" != pass ] && [ "$vres" != fail ] && [ $((vnow - vts)) -ge "${SG_NIGHTLY_VERDICT_EVERY:-600}" ]; }; }; then
+    verdict_write
+  fi
+fi
 # (#1975, ADR-0153) The suite starts only in the profile's hour, America/Sao_Paulo (SG_NIGHTLY_HOUR, 04 by default). The dispatch
 # stops in that hour (ghcall.sh), so the live runs end and the suite gets the machine. When the hour has closed with no run that
 # day, the first cycle after it records one bounded attempt; no later cycle repeats it.
@@ -91,8 +134,12 @@ tip=$(g rev-parse "origin/$base") || exit 1; dtip=$tip   # the dev tip the settl
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { echo "nightly: the tree could not check out $tip" >&2; exit 1; }
 py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
 # The two modes are one command each, so a caller may point them elsewhere: the whole suite, heavy included, in both.
-par=${SG_NIGHTLY_PARALLEL:-"$py -m pytest -p no:deepeval -n auto"}
-ser=${SG_NIGHTLY_SERIAL:-"$py -m pytest -p no:deepeval -p no:xdist"}
+# The default commands run the local half only (#1975, ADR-0153): SQUAD_NIGHTLY_LOCAL_HALF=1 makes the conftest keep the tests a
+# Linux runner deselects by marker (the macOS-bound shell suites among them), by the one deselection rule (ADR-0139). The GitHub
+# half runs the rest. A configured command is the caller's whole suite.
+half=; [ -z "${SG_NIGHTLY_PARALLEL:-}${SG_NIGHTLY_SERIAL:-}" ] && half=1
+par=${SG_NIGHTLY_PARALLEL:-"SQUAD_NIGHTLY_LOCAL_HALF=1 $py -m pytest -p no:deepeval -n auto"}
+ser=${SG_NIGHTLY_SERIAL:-"SQUAD_NIGHTLY_LOCAL_HALF=1 $py -m pytest -p no:deepeval -p no:xdist"}
 # A failing id is whatever pytest's short summary names after `FAILED ` or `ERROR `: a node id, or the file a
 # collection error names (`ERROR tests/test_module.py`, no `::`). Both are what the hub shows, so neither is dropped.
 # pytest writes ` - ` and the failure's message after the id, so the id is the line up to the FIRST ` - `; the rest is
@@ -234,6 +281,7 @@ now=$(date +%s); run="$now@$tip"
 # The suite's own record goes first, exactly as it did before the obligations existed: the hub and the dispatch hold read
 # it, and a settlement that hangs or is stopped never holds it back (ADR-0153).
 write_record "$res" "$pm" "$sm" "$ids" || { echo "nightly: the result record could not be written" >&2; exit 1; }
+verdict_write   # the local half joins the GitHub half in one verdict (#1975); an unproven one is read again by a later call
 # Only a red the suite measured alerts as red: a red mode always names at least one failing test, so the alert names them.
 # A bounded leg is unproven, not red; its own alert names the mode, the stop reason and the log line that caused it, so the
 # cause is never "no failing test named" (#1201).
@@ -343,7 +391,8 @@ for f in "$odir"/*; do
       fi
       cur=$tip
     fi
-    t=$tree; case $res in pass) tgreen=1;; fail) tgreen=0;; *) tgreen=;; esac
+    # A local half that passed ran only part of the suite, so it never answers pytest green; a red still answers it red.
+    t=$tree; case $res in pass) [ -n "$half" ] || tgreen=1;; fail) tgreen=0;; *) tgreen=;; esac
   elif [ "$osh" = "$cur" ]; then
     t=$tree
   else
