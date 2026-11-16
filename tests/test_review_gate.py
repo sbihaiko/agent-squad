@@ -243,3 +243,30 @@ def test_the_graph_validates_a_review_gate_and_refuses_a_misplaced_one(tmp_path)
     del node(bad, "route")["review"]
     node(bad, "route")["checks"].append("child_review")
     assert any("review-command" in e.message for e in validate(bad))
+
+
+UNPROVEN = ("fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; "
+            "unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)")
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+@pytest.mark.parametrize("status,delivers", [("unproven", True), ("fail", False)])
+async def test_an_unproven_child_is_reviewed_and_lands_and_a_failed_one_is_not(tmp_path, status, delivers):
+    """#2037: a child whose gate measured nothing (`unproven`, exit 4) holds no red, so its work is delivered: the review
+    reads it and an approved head lands, and the landing gate measures it (ADR-0164). Before, only `pass` reached the
+    review, so the review gate said `no_child_reviewed` and the loop requeued the child with its commits on no remote."""
+    repo = sibling_repo(tmp_path / "t")
+    child = writer("a.txt", status=status, reasons=[UNPROVEN if status == "unproven" else "ac_failed"])
+    eng = make(tmp_path, {"router": routed(req(task="issue #2037")), "route.router.1": child},
+               tweak=gated(stub(tmp_path, 0)), target=repo)
+    await eng.run()
+    gate = [e for e in ev(tmp_path, "outcome") if e["node"] == "review_gate" or e["node"] == "child_review"]
+    if delivers:
+        assert len(logged(tmp_path)) == 1, gate
+        assert (repo / "a.txt").read_text() == "x\n"
+        [land] = ev(tmp_path, "land")
+        assert land["outcome"] == "pass" and land["effect"]["review"]["verdict"] == "approve"
+    else:
+        assert not (tmp_path / "review.log").exists()
+        assert not (repo / "a.txt").exists() and not ev(tmp_path, "land")
