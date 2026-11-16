@@ -21,7 +21,7 @@ import uuid
 
 import anyio
 
-from squad import modelreg, prices, sandbox, workcmd
+from squad import bash_time, modelreg, prices, sandbox, workcmd
 from squad.adapter import AdapterError, CallRequest, CallResult, MessageOverCeiling
 from squad.stall import StallWatch
 
@@ -200,6 +200,8 @@ class _Progress:
     def __init__(self, req, sink, seconds):
         self.req, self.sink, self.seconds = req, sink, seconds
         self.messages, self.context_tokens, self.tool = 0, None, None
+        self.command_class = None      # the class of the last Bash call; None for any other tool
+        self.pending = {}              # Bash calls in flight: tool_use_id -> (class, monotonic start)
         self.last = time.monotonic()
 
     def take(self, message):
@@ -208,20 +210,40 @@ class _Progress:
         counts = [v for k in INPUT_KEYS if isinstance(v := (u.get(k) if isinstance(u, dict) else None), int)]
         if counts:      # a message that reports no whole number leaves the last reading alone: an unreported figure is unknown, never zero
             self.context_tokens = sum(counts)
+        started = False
         for block in getattr(message, "content", None) or []:
             if type(block).__name__ == "ToolUseBlock":
-                self.tool = getattr(block, "name", None)
-        self.write()
+                self.tool, self.command_class = getattr(block, "name", None), None
+                if self.tool == "Bash":
+                    command = (getattr(block, "input", None) or {}).get("command")
+                    self.command_class = bash_time.classify(command)
+                    self.pending[getattr(block, "id", None)] = (self.command_class, time.monotonic())
+                    self._emit("start")
+                    started = True
+        if not started:
+            self.write()
+
+    def tool_done(self, tool_use_id):
+        """The end of a Bash call: its class and elapsed seconds. A call the adapter did not start is ignored."""
+        if (begun := self.pending.pop(tool_use_id, None)) is None:
+            return
+        self.tool, self.command_class = "Bash", begun[0]
+        self._emit("end", round(time.monotonic() - begun[1], 3))
 
     def write(self):
         if not self.sink or self.seconds is None:
             return
-        now = time.monotonic()
-        if now - self.last < self.seconds:
+        if time.monotonic() - self.last < self.seconds:
             return
-        self.last = now
+        self._emit(None)
+
+    def _emit(self, phase, elapsed=None):
+        if not self.sink or self.seconds is None:
+            return
+        self.last = time.monotonic()
         self.sink("progress", node=self.req.node, entry=self.req.entry, item=self.req.item, session=self.req.session_id,
-                  messages=self.messages, context_tokens=self.context_tokens, tool=self.tool)
+                  messages=self.messages, context_tokens=self.context_tokens, tool=self.tool,
+                  command_class=self.command_class, phase=phase, elapsed=elapsed)
 
 
 class SdkAdapter:
@@ -350,9 +372,10 @@ class SdkAdapter:
                                 req.pulse.tool_started(getattr(b, "id", None))
                     continue
                 if kind == "UserMessage":
-                    if req.pulse is not None:
-                        for b in m.content if isinstance(getattr(m, "content", None), list) else []:
-                            if type(b).__name__ == "ToolResultBlock":
+                    for b in m.content if isinstance(getattr(m, "content", None), list) else []:
+                        if type(b).__name__ == "ToolResultBlock":
+                            prog.tool_done(getattr(b, "tool_use_id", None))
+                            if req.pulse is not None:
                                 req.pulse.tool_done(getattr(b, "tool_use_id", None))
                     if _stalled(watch, m):
                         break
