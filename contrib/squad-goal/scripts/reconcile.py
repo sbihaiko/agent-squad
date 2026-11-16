@@ -208,7 +208,7 @@ def archive_pass():
     for c in chosen: c["item"] = nodes.get((REPO, c["issue"]))
     for c in chosen:
         if not c["item"]: print(f"ARCHIVE SKIPPED #{c['issue']}: the item read did not carry its card")
-    board_archive.archive([c for c in chosen if c["item"]], write=board_archive.archive_item, pace=board_archive.pace_seconds(), say=print)
+    board_archive.archive([c for c in chosen if c["item"]], write=lambda node: board_archive.archive_item(node, STATE.binding.api), pace=board_archive.pace_seconds(), say=print)
 if APPLY and VOCAB == "shipped" and ARCHIVE: archive_pass()
 print(f"moves: {len(MOVES)}")   # the count of cards whose column changes
 sys.exit(1 if REFUSED else 0)   # a pass that could not write what it reported is a failed pass, never a quiet one

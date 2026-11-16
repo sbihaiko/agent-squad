@@ -92,8 +92,15 @@ def test_an_archived_card_is_no_card_to_the_readers(tmp_path):
     assert binding._read_all_live() == {"1": "Todo"}
 
 
-def test_archive_write_reads_a_rate_limit_answer_as_a_stop(monkeypatch):
-    answer = subprocess.CompletedProcess([], 1, stdout="", stderr="was submitted too quickly: secondary rate limit")
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: answer)
+def test_archive_write_reads_a_rate_limit_answer_as_a_stop():
+    def api(*args, **kwargs):
+        raise RuntimeError("was submitted too quickly: secondary rate limit")
     with pytest.raises(ba.RateLimited):
-        ba.archive_item("PVTI_1")
+        ba.archive_item("PVTI_1", api)
+
+
+def test_archive_write_goes_through_the_binding_call_site():
+    """The write is the binding's call, never a `gh` of the archive pass's own (ADR-0277)."""
+    calls = []
+    ba.archive_item("PVTI_1", lambda *args, **kwargs: calls.append(args) or "")
+    assert calls and calls[0][0] == "graphql" and "item=PVTI_1" in calls[0]

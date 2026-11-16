@@ -2,7 +2,6 @@
 """Archive the terminal cards of closed issues once they are old enough, one paced write at a time (#1931)."""
 import datetime as dt
 import os
-import subprocess
 import time
 
 TERMINAL_COLUMNS = ("Closed", "Abandoned")
@@ -42,12 +41,14 @@ def item_nodes(binding):
     return nodes
 
 
-def archive_item(node_id):
-    r = subprocess.run(["gh", "api", "graphql", "-f", f"query={ARCHIVE_QUERY}", "-f", f"item={node_id}"],
-                       capture_output=True, text=True)
-    if r.returncode:
-        text = (r.stderr or r.stdout).strip()
-        if "rate limit" in text.lower() or "RATE_LIMITED" in text: raise RateLimited(text[:200])
+def archive_item(node_id, api):
+    """Archive one card through the board binding's call site (`api`, issue_state.BoardBinding.api), never a `gh` of
+    its own (ADR-0277): the binding logs each call and retries a server error."""
+    try:
+        api("graphql", "-f", f"query={ARCHIVE_QUERY}", "-f", f"item={node_id}")
+    except RuntimeError as e:
+        text = str(e).strip()
+        if "rate limit" in text.lower() or "RATE_LIMITED" in text or "submitted too quickly" in text: raise RateLimited(text[:200])
         raise RuntimeError(text[:200])
 
 
