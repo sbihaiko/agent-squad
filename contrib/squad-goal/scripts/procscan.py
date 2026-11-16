@@ -21,7 +21,7 @@ _VIEWS = {}                            # reader format -> (the raw snapshot it w
 
 
 class _Cell(dict):
-    """The unnamed reader's cell, and the reset handle. A caller that clears the cache by the old single-cell shape
+    """The reset handle. A caller that clears the cache by the old single-cell shape
     (sets `snap` or `at` to None) clears every reader's cell and every view, so a reset still means a reset."""
 
     def __setitem__(self, key, value):
@@ -36,9 +36,9 @@ _STATE = _Cell(at=None, snap=None)
 def _cell(read):
     """The raw cell of one reader. A reader is named by its function, so a reader another caller injected (a test's fake)
     keeps its own cell and can never answer for the machine's real read. A function carries one name in every profile's
-    module, so those profiles still share one cell and one read a tick."""
-    name = getattr(read, "__qualname__", None)
-    if not name: return _STATE
+    module, so those profiles still share one cell and one read a tick. A reader with no name (an object with `__call__`)
+    is keyed by itself: one shared cell for every such reader answered a new fake with the scan an old one left (#1957)."""
+    name = getattr(read, "__qualname__", None) or read
     cell = _CELLS.get(name)
     if cell is None: cell = _CELLS[name] = {"at": None, "snap": None}
     return cell
