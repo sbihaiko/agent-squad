@@ -14,26 +14,38 @@ export GIT_TERMINAL_PROMPT=0
 W=$(mktemp -d) || exit 1; trap 'rm -rf "$W"' EXIT
 g() { /usr/bin/git -C "$W" "$@"; }
 no() { echo "promote-main: $*" >&2; exit 1; }
-# The credential (#1896). git reads it from the credential helper of the profile, and a helper whose store this process
-# cannot reach answers nothing: gh keeps its token in the login keychain, and the self-hosted runner that fires the CI hook
-# is a launchd service job, whose security session carries no login keychain. GIT_TERMINAL_PROMPT=0 then forbids the
-# prompt, and the push dies with a bare `could not read Username`. So the credential is asked for before the fetch, and a
-# process that cannot reach it names it, in one line, on a code of its own: the caller knows the credential and the push
-# are the whole of it, and leaves its work for a process that can reach it.
-host=; case "$remote" in http://*|https://*) h=${remote#*://}; host=${h%%/*};; esac
-helper=; [ -n "$host" ] && helper=$(/usr/bin/git config --get-urlmatch credential.helper "$remote" 2>/dev/null | tail -1)
-[ -n "$helper" ] || helper=$(/usr/bin/git config --get-all credential.helper 2>/dev/null | tail -1)
-no_credential() {
-  echo "promote-main: nothing was pushed: this process cannot reach the $host credential the push to $main needs, and git's credential helper (${helper:-none configured}) answered none; $main is where it was" >&2
+# The credential (#1896). git resolves its own credential helper, and a helper whose store this process cannot reach
+# answers nothing: gh keeps its token in the login keychain, and the CI hook runs in a launchd session that carries no login
+# keychain. GIT_TERMINAL_PROMPT=0 then forbids the prompt, and the push dies with `could not read Username`. This script
+# proves nothing about a credential before it uses one: a probe resolves the helper a second time, under its own rules, and
+# a probe that fails where the push would succeed invents an environment defect. The only proof is the push or fetch git
+# itself reports as an authentication failure; then the helper git resolves in this same environment is read, and one line
+# names what could not be reached, on a code of its own. The caller knows the credential is the whole of it and leaves its
+# work for a process that can reach it.
+auth_failure() {  # <git's output>: git failed at the credential, never at the repository
+  case "$1" in
+    *"could not read Username"*|*"could not read Password"*|*"Authentication failed"*|*"terminal prompts disabled"*) return 0;;
+  esac
+  return 1
+}
+redacted() {  # <url>: scheme://host, with no userinfo, so a credential written into the URL never reaches the line
+  case "$1" in
+    *://*) local s=${1%%://*} r=${1#*://} hp
+      hp=${r%%/*}; case "$hp" in *@*) hp=${hp#*@};; esac
+      printf '%s://%s' "$s" "$hp";;
+    *) printf '%s' "$1";;
+  esac
+}
+no_credential() {  # <git's output>: one line that names the credential this process could not reach
+  local helper
+  helper=$(/usr/bin/git config --get-urlmatch credential.helper "$remote" 2>/dev/null | tail -1)
+  [ -n "$helper" ] || helper=$(/usr/bin/git config --get-all credential.helper 2>/dev/null | tail -1)
+  echo "promote-main: nothing was pushed: this process cannot reach the credential for $(redacted "$remote") (git's credential helper: ${helper:-none configured}), and git said: $(printf '%s' "$1" | tail -1); $main is where it was" >&2
   exit 3
 }
-if [ -n "$host" ]; then
-  c=$(printf 'url=%s\n\n' "$remote" | GIT_ASKPASS=/bin/false /usr/bin/git credential fill 2>/dev/null) || c=
-  case "$c" in *password=*) ;; *) no_credential;; esac
-fi
 g init -q . 2>/dev/null; g remote add origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$main:refs/remotes/origin/$main" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) \
-  || case "$o" in *"could not read Username"*|*"terminal prompts disabled"*) no_credential;; *) no "fetch failed: $(printf '%s' "$o" | tail -1)";; esac
+  || { auth_failure "$o" && no_credential "$o"; no "fetch failed: $(printf '%s' "$o" | tail -1)"; }
 tip=$(g rev-parse "origin/$stg") || no "no $stg branch"
 what=$stg
 if [ -n "${1:-}" ]; then
@@ -44,6 +56,5 @@ fi
 [ "$(g rev-parse "origin/$main")" = "$tip" ] && { echo "$main is already at $what $tip"; exit 0; }
 g merge-base --is-ancestor "origin/$main" "$tip" || no "refused: $main is not an ancestor of $what, so $main holds work $what lacks"
 o=$(g push -q origin "$tip:refs/heads/$main" 2>&1) \
-  || case "$o" in *"could not read Username"*|*"could not read Password"*|*"Authentication failed"*|*"terminal prompts disabled"*) no_credential;; \
-       *) no "the push to $main was rejected: $(printf '%s' "$o" | tail -1)";; esac
+  || { auth_failure "$o" && no_credential "$o"; no "the push to $main was rejected: $(printf '%s' "$o" | tail -1)"; }
 echo "PROMOTED $main $tip"

@@ -42,9 +42,7 @@ window of the dev-to-stg step. A profile that promotes nothing makes it exit at 
   pass changes nothing. A request with no run yet is in flight for a short grace. Past the bound the tip is unproven.
 - **Green.** Every complete-tier job of the recorded sha is green: `promote-main.sh <sha>` moves `main` to that sha by a
   fast-forward. `stg` may already be ahead; `main` takes the proven sha and never the tip. The pull request is never
-  merged, so `main` takes no merge commit, and `promote-stg.sh` refuses its merge route when the base is the main branch. A
-  push its own process cannot authenticate is no verdict on the tier: the push names the one credential the process could
-  not reach, the request stays, and the next pass that reaches the credential moves `main` by that same request.
+  merged, so `main` takes no merge commit, and `promote-stg.sh` refuses its merge route when the base is the main branch.
 - **Red.** A job ran a step and failed. `main` stays. The pass keeps one open bug: it files it with `bug` and
   `ready-for-agent`, never as a loop defect, or comments on the open one. It records the hold time and the red sha. A red
   sha is never asked again; a new `stg` tip is needed.

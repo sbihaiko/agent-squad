@@ -15,8 +15,10 @@
 #                    SG_PROMOTE_MAIN_FLIGHT_S (3600) from the request; past it R is unproven.
 #        green       every name's newest run ended success: promote-main.sh R. The request is cleared whatever it answers;
 #                    a refusal is one alert, and a move clears the bug record and the hold. A push this process cannot
-#                    authenticate (#1896) is no refusal: one alert names the credential it could not reach, no hold is
-#                    written, and the request stays, so the next pass that reaches the credential moves main by it.
+#                    authenticate (#1896) is no verdict on the tier and no refusal: one alert names the credential it could
+#                    not reach, no hold is written, and the request stays, so the next pass that reaches the credential
+#                    moves main by it. The pass exits 3 for it, on a code of its own, so a caller never reads it as the
+#                    refusal above.
 #        red         a job ran a step and failed (the base check's refinement): main stays. One bug is open at a time,
 #                    `bug` and `ready-for-agent`, never `loop-bug`: the record holds its number, a later red comments on
 #                    it, and a recorded bug that is closed gives a new one. The hold time and the red sha are recorded.
@@ -34,7 +36,8 @@
 # that content alone. An unproven or refused-move hold names no sha and keeps its own wait.
 # A workflow that names no complete tier job proves nothing: one alert, no request, never green.
 # The live copy is published from stg and never waits for this pass. SG_PROMOTE=off does nothing. Exit 0: nothing to do, a
-# wait, a request or a move. Exit 1: main was held or a write failed; the reason is in promote.log or alerts.log.
+# wait, a request or a move. Exit 1: main was held or a write failed; the reason is in promote.log or alerts.log. Exit 3:
+# this process cannot reach the credential the main push needs; the request stays and the one line in promote.log names it.
 d=$(cd "$(dirname "$0")" && pwd)
 [ "${SG_PROMOTE:-on}" = off ] && exit 0           # a profile that delivers by another path promotes nothing: no fetch, no line
 [ -n "${SG_STATE:-}" ] || { echo "promote-main-pass: SG_STATE is not set; the pass never reads the machine-wide default" >&2; exit 2; }
@@ -146,9 +149,10 @@ if [ -n "${R:-}" ]; then
         # This process cannot reach the credential the push needs, and promote-main.sh named it (#1896): the request
         # stays, and no hold is written, so the next pass that can reach the credential moves main to R by this same
         # request. The hook the CI event fires runs in a launchd service session, which carries no login keychain; the
-        # watch cycle runs in the owner's session and reaches it. One alert names what could not be reached.
+        # watch cycle runs in the owner's session and reaches it. One alert names what could not be reached, and the
+        # pass exits 3, so a caller that reads only the status never takes this for the refusal below.
         alert_once credential "$R: the complete tier is green and $main did not move: $(printf '%s' "$o" | tail -1)"
-        say "$R not promoted: $(printf '%s' "$o" | tail -1)"; exit 1
+        say "$R not promoted: $(printf '%s' "$o" | tail -1)"; exit 3
       fi
       rm -f "$rec"   # cleared whatever the move answered: a later pass asks again by the rule
       if [ $rc = 0 ]; then
