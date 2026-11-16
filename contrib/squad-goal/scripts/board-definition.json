@@ -1,4 +1,5 @@
 {
+  "definition_version": 1,
   "board": {
     "title": "Squad Board",
     "description": "The monotone board: eight columns for the issue, two terminals, the other entities beside the axis."
@@ -15,62 +16,71 @@
     "An attempt is a marker, not a move: the card leaves Gating only forward.",
     "Closed means the wave is in dev.",
     "A freeze is not a state. A frozen card keeps its column.",
-    "The columns are a view over kind and status, not a second axis."
+    "The columns are a view over kind and status, not a second axis.",
+    "A column's fact is an expression in one closed grammar: a fact name, all, any, not, and nothing else. Exactly one column answers the facts."
   ],
   "statuses": [
     {
       "name": "Backlog",
       "color": "GRAY",
-      "fact": "Open, not in the schedule: no startable label, no live run, no freeze",
+      "fact": {"all": [{"any": ["spec", "owner", "gated"]}, {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch", "review_wait", "run_live", "child_live"]}}]},
+      "description": "Open, not in the schedule: no startable label, no live run, no freeze",
       "actor": "Nobody",
       "terminal": false
     },
     {
       "name": "Todo",
       "color": "BLUE",
-      "fact": "Startable: no blocker, no live run",
+      "fact": {"all": [{"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch", "review_wait", "run_live"]}}, {"any": ["child_live", {"not": {"any": ["spec", "owner", "gated"]}}]}]},
+      "description": "Startable: no blocker, no live run",
       "actor": "An agent",
       "terminal": false
     },
     {
       "name": "Doing",
       "color": "YELLOW",
-      "fact": "A live run holds it; a spec whose child is live work is marked here",
+      "fact": {"all": ["run_live", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch", "review_wait"]}}]},
+      "description": "A live run holds it; a spec whose child is live work is marked here",
       "actor": "The run",
       "terminal": false
     },
     {
       "name": "Code Review",
       "color": "ORANGE",
-      "fact": "The child's code is done; its review or a fix round holds it",
+      "fact": {"all": ["review_wait", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch"]}}]},
+      "description": "The child's code is done; its review or a fix round holds it",
       "actor": "The review",
       "terminal": false
     },
     {
       "name": "Code Complete",
       "color": "ORANGE",
-      "fact": "A child is in the wave branch",
+      "fact": {"all": ["wave_branch", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating"]}}]},
+      "description": "A child is in the wave branch",
       "actor": "An agent",
       "terminal": false
     },
     {
       "name": "Gating",
       "color": "PINK",
-      "fact": "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move",
+      "fact": {"all": ["gating", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}]}}]},
+      "description": "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move",
       "actor": "The gate",
       "terminal": false
     },
     {
       "name": "Closed",
       "color": "GREEN",
-      "fact": "In dev",
+      "fact": {"all": [{"any": ["closed", "in_dev"]}, {"not": "abandoned"}]},
+      "description": "In dev",
       "actor": "Nobody",
       "terminal": true
     },
     {
       "name": "Abandoned",
       "color": "RED",
-      "fact": "Not delivered, by decision: wontfix, superseded, or needs-info expired",
+      "fact": "abandoned",
+      "description": "Not delivered, by decision: wontfix, superseded, or needs-info expired",
       "actor": "Nobody",
       "terminal": true
     }

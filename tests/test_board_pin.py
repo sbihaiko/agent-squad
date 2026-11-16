@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "bd9743eb561aaffd4327db9e7417b165bc6608a65934bf343a53103687a5ebd5"
+PINNED = "86ce0d2f5e9fd4518e8839a68123d31cd6ab869aff94ba168260b52d68ddb7bc"
 SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Gating", "Closed", "Abandoned"]
 
 
@@ -38,7 +38,8 @@ def test_gating_sits_between_code_complete_and_closed_with_its_fact_and_actor(co
     by = {c["name"]: c for c in columns.shipped_columns()}
     names = list(by)
     assert names.index("Code Complete") + 1 == names.index("Gating") == names.index("Closed") - 1
-    assert by["Gating"]["fact"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move"
+    assert by["Gating"]["description"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move"
+    assert by["Gating"]["fact"] == {"all": ["gating", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}]}}]}   # the fact is an expression (#1901)
     assert by["Gating"]["actor"] == "The gate" and not by["Gating"]["terminal"]
 
 
@@ -68,9 +69,10 @@ def test_code_review_sits_between_doing_and_code_complete_with_its_fact_and_acto
     by = {c["name"]: c for c in columns.shipped_columns()}
     names = list(by)
     assert names.index("Doing") + 1 == names.index("Code Review") == names.index("Code Complete") - 1
-    assert by["Code Review"]["fact"] == "The child's code is done; its review or a fix round holds it"
+    assert by["Code Review"]["description"] == "The child's code is done; its review or a fix round holds it"
+    assert by["Code Review"]["fact"] == {"all": ["review_wait", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch"]}}]}
     assert by["Code Review"]["actor"] == "The review" and not by["Code Review"]["terminal"]
-    assert "review" not in by["Doing"]["fact"].lower()
+    assert "review" not in by["Doing"]["description"].lower()
 
 
 def test_the_hash_the_pinned_copy_and_the_published_copy_are_one_step_apart(columns):

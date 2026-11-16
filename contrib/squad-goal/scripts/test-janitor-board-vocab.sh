@@ -13,7 +13,7 @@ python3 - "$T/s/board-definition.json" <<'PY'
 import json
 import sys
 
-statuses = {status["name"]: status["fact"] for status in json.load(open(sys.argv[1]))["statuses"]}
+statuses = {status["name"]: status["description"] for status in json.load(open(sys.argv[1]))["statuses"]}   # the wording; `fact` holds the expression (#1901)
 expected = {
     "Doing": "A live run holds it; a spec whose child is live work is marked here",
     "Code Review": "The child's code is done; its review or a fix round holds it",
