@@ -16,7 +16,7 @@
   },
   "ego-browser": {
     "files": 8,
-    "sha256": "0077ac321ff96e4b883d5cfc995a9746edab5590d76b084cae87998f91285758",
+    "sha256": "9f22e9154f8e695d5198d959abf115379c1d81d210ae6a25807b85b60d79f01c",
     "source": "skill:ego-browser"
   },
   "tdd": {
@@ -26,7 +26,7 @@
   },
   "to-spec": {
     "files": 2,
-    "sha256": "6a2d1d62d909ffd6c1cf9c7570ca64f8e3b2407706b4e53e9d297655fc60877d",
+    "sha256": "506bc90cbe515e76d6a4f66f00e813ade62a48ec79e596e1dfccb0096476e77c",
     "source": "skill:to-spec"
   },
   "to-test-scenario": {
@@ -36,7 +36,7 @@
   },
   "to-tickets": {
     "files": 2,
-    "sha256": "1eaa445a2f4adbf0face4e4e6bb2337a8127fdfa040db921443cd74067624a65",
+    "sha256": "55122bdea3ceb324be115aaf159496a3598966161b70c6d76db4eee5c43e590b",
     "source": "skill:to-tickets"
   }
 }
