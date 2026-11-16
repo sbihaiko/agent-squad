@@ -2508,12 +2508,14 @@ def test_the_slots_fold_draws_a_step_line_from_zero_to_the_cap(prof):
     assert [c["cap"] for c in out["ceilings"]] == [3] and out["label"] == "Run slots in use"
 
 
-def test_two_runs_at_once_count_two_slots_and_a_count_above_the_cap_is_lowered_to_it(prof):
+def test_two_runs_at_once_count_two_slots_and_a_count_above_the_cap_stays_raw(prof):
+    """The line shows the raw slots in use, so a run queued at the cap stays visible; the cap is its own step line."""
     invs = [inv(W0 - 3 * H, W0 - H) for _ in range(4)]
     assert [r["slots"] for r in prof.run_slots(invs, [capmark(W0 - 4 * H, 4)], 4 * H, W0)["rows"]] == [0, 4, 0]
     out = prof.run_slots(invs, [capmark(W0 - 4 * H, 2)], 4 * H, W0)
-    assert [r["slots"] for r in out["rows"]] == [0, 2, 0], "a count above the ceiling is lowered to it, as squad/caps counts"
-    assert out["peak"] == 2 and out["top"] == 2
+    assert [r["slots"] for r in out["rows"]] == [0, 4, 0], "a count above the cap is never lowered: the queued run shows"
+    assert out["peak"] == 4 and out["top"] == 4, "the peak and the scale hold the raw count, never the lowered one"
+    assert [c["cap"] for c in out["ceilings"]] == [2], "the cap is drawn apart, as the ceiling it is"
 
 
 def test_a_cap_change_in_the_window_is_a_step_at_its_own_time(prof):
@@ -2536,13 +2538,29 @@ def test_a_window_with_no_run_record_is_a_gap_with_its_reason(prof):
 
 
 def test_a_record_that_cannot_be_read_gaps_only_its_own_stretch(prof):
-    """A part of the window with no readable record is a gap: the stretch the unreadable run covers, never the whole
-    window where another run's readable record draws its slots."""
+    """A part of the window with no readable record is a gap: the stretch the unreadable run covers up to the next
+    readable evidence, never the whole tail, so the readable run after it still draws its slots."""
     out = prof.run_slots([inv(W0 - H, W0)], [capmark(W0 - 4 * H, 3)], 4 * H, W0,
                          unreadable=[{"start": W0 - 3 * H, "reason": "run-1: record unreadable"}])
     assert [(g["start"], g["end"], g["reason"]) for g in out["gaps"]] == [
-        (W0 - 3 * H, W0, "run-1: record unreadable")]
+        (W0 - 3 * H, W0 - H, "run-1: record unreadable")]
     assert steps_of(out) == [(0, W0 - 4 * H, W0 - H), (1, W0 - H, W0)], "the records that did read still draw their slots"
+
+
+def test_a_gap_runs_to_the_window_end_where_no_readable_record_covers_the_tail(prof):
+    """A gap with no readable record after it runs to the window's end: nothing caps it short of the tail it hides."""
+    out = prof.run_slots([inv(W0 - 4 * H, W0 - 3 * H)], [capmark(W0 - 4 * H, 3)], 4 * H, W0,
+                         unreadable=[{"start": W0 - 2 * H, "reason": "run-2: record unreadable"}])
+    assert [(g["start"], g["end"]) for g in out["gaps"]] == [(W0 - 2 * H, W0)]
+
+
+def test_a_readable_run_across_a_gap_keeps_its_own_stretch_out_of_it(prof):
+    """A readable run that covers the gap's start speaks for its own stretch: the gap is only where no readable record
+    is, so the readable slots are never hidden under it."""
+    out = prof.run_slots([inv(W0 - 4 * H, W0 - 2 * H), inv(W0 - H, W0)], [capmark(W0 - 4 * H, 3)], 4 * H, W0,
+                         unreadable=[{"start": W0 - 3 * H, "reason": "run-1: record unreadable"}])
+    assert [(g["start"], g["end"]) for g in out["gaps"]] == [(W0 - 2 * H, W0 - H)]
+    assert steps_of(out) == [(1, W0 - 4 * H, W0 - 2 * H), (0, W0 - 2 * H, W0 - H), (1, W0 - H, W0)]
 
 
 def test_an_unreadable_record_with_no_known_start_gaps_the_whole_window(prof):
@@ -2559,8 +2577,8 @@ def test_cap_marks_and_slots_share_one_half_open_window(prof):
 
 
 def test_the_current_cap_anchors_the_ceiling_only_where_no_mark_speaks(prof):
-    """The cap in force now is no evidence of the cap before the first recorded mark: a head row of it would draw a
-    step at that mark that never happened."""
+    """With no mark at all, the current cap anchors the whole window; a mark at or after the start overrides it. A head
+    row of the current cap before a recorded mark would draw a step that never happened."""
     out = prof.run_slots([], [capmark(W0 - 2 * H, 2)], 4 * H, W0, cap=6)
     assert [(c["cap"], c["start"], c["end"]) for c in out["ceilings"]] == [(2, W0 - 4 * H, W0)]
     only = prof.run_slots([], [], 4 * H, W0, cap=6)
@@ -2654,6 +2672,54 @@ def test_the_route_answers_the_slots_on_the_strip_s_own_axis(hub):
         assert table.reads == 0, "the slots read run records only"
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_the_route_answers_the_rule_layers_own_slots_object(hub):
+    """AC4: the fold is pure in the rule layer and the route carries its rows. The slots object in the /api/profiler
+    answer is `run_slots` over the same fixture, with its rows, ceilings, gaps, peak, top and cap."""
+    mod, port, _, _, table = hub
+    now = time.time()
+    d = pathlib.Path(mod.CHECKOUT) / "runs" / "run-20261115-030505-dddddd"
+    try:
+        record(d, ev("run_start", now - 1800, caps={"runs": 3}), ev("verdict", now - 900, verdict="completed", exit_code=0))
+        code, v = ask(port, "GET", path="/api/profiler?sw=14400")
+        assert code == 200
+        slots = v["slots"]
+        assert {"rows", "ceilings", "gaps", "peak", "top", "cap"} <= set(slots), "the fold's own keys reach the page"
+        invs, caps = [], []
+        for run in sorted((pathlib.Path(mod.CHECKOUT) / "runs").glob("run-*")):
+            got = mod.run_invocations(run / "record.jsonl")
+            if got is not None:
+                invs.extend(got[0]); caps.extend(got[1])
+        expected = mod.hub_profiler.run_slots(invs, caps, 14400, slots["end"], cap=(mod.loop_caps() or {}).get("runs"))
+        assert slots == expected, "the route answers the rule layer's fold, key for key"
+        assert table.reads == 0, "the slots read run records only"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_a_window_with_no_readable_record_gaps_the_whole_window(records):
+    """No readable record at all: the gaps still cover the window, even beside a lost folder that names its own stretch,
+    so the chart never draws a stretch of zeros it cannot see."""
+    mod, runs = records
+    lost = runs / "run-20261115-020810-iiiiii"
+    lost.mkdir(parents=True)
+    os.utime(lost, (NOW - 1200, NOW - 1200))
+    out = mod.slot_view(14400, NOW)
+    assert out["rows"] == [], "no readable record draws no line of zeros"
+    assert out["gaps"][0]["start"] == NOW - 14400 and out["gaps"][-1]["end"] == NOW
+    at = NOW - 14400
+    for g in out["gaps"]:
+        assert g["start"] <= at, "the gaps leave no stretch of the window uncovered"
+        at = max(at, g["end"])
+    assert at == NOW
+
+
+def test_the_launch_bound_is_the_janitors_own(served):
+    """`NEVER_STARTED_S` is the janitor's rule-J bound: a run folder the chart calls lost is the one the janitor drops,
+    so the two never drift apart."""
+    from squad import caps
+    assert served[0].NEVER_STARTED_S == caps.LAUNCH_GRACE
 
 
 SLOTS = {"window_s": 14400, "start": W0 - 14400, "end": W0, "label": "Run slots in use", "cap": 3, "peak": 2, "top": 3,

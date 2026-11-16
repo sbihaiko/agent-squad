@@ -2857,7 +2857,7 @@ def load_view(st):
 # is read tolerantly: an event that is not JSON is skipped, and a record that is there and cannot be opened is a gap with
 # its reason, never a run of zero slots. The cap's marks are the caps each `run_start` recorded, so a change shows at the
 # time a record names it; the cap in force now anchors a window no record speaks for, and no file's mtime is a cap change.
-NEVER_STARTED_S = 300   # the janitor's bound: past it a run folder with no record is a lost record, not a launch
+NEVER_STARTED_S = 300   # squad/caps.py LAUNCH_GRACE, the janitor's rule-J bound: past it a folder with no record is lost, not a launch
 def run_invocations(path):
     """One run's invocations and the caps its starts recorded: each invocation is `{"start", "end"}` from a `run_start` or
     `resume` to the verdict after it (`end` None while it has none), and each mark `{"at", "runs"}` the cap that start
@@ -2893,7 +2893,9 @@ def slot_view(window_s, now=None, cap=None):
     """The run slots in use of the window `window_s` and the instant `now`: the records of every run under this profile's
     run roots, folded by the rule layer. `cap` is the run cap in force now, read once by the caller. A folder past its
     launch window with no record, and a record that exists but cannot be read, are gaps with their reason: the chart says
-    what it cannot see, never a silent zero. No GitHub read, and no process table, so it shows with the CPU switch off."""
+    what it cannot see, never a silent zero. With no readable record at all, one gap covers the whole window, so the
+    stretch a lost folder names never stands in for the rest. No GitHub read, and no process table, so it shows with the
+    CPU switch off."""
     now = time.time() if now is None else now
     invs, caps, bad, readable = [], [], [], 0
     for root in run_roots(CHECKOUT):
@@ -2912,7 +2914,7 @@ def slot_view(window_s, now=None, cap=None):
             readable += 1
             inv, marks = got
             invs.extend(inv); caps.extend(marks)
-    return hub_profiler.run_slots(None if readable == 0 and not bad else invs, caps, window_s, now, cap=cap, unreadable=bad)
+    return hub_profiler.run_slots(None if readable == 0 else invs, caps, window_s, now, cap=cap, unreadable=bad)
 
 def profiler_view(a, w=None, sw=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
