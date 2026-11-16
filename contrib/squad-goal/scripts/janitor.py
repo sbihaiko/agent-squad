@@ -262,6 +262,21 @@ def in_land(sha):   # the commit is an ancestor of origin/<land>, read in the ch
     if sha not in _in_land:
         _in_land[sha] = _run(["git", "-C", str(co), "merge-base", "--is-ancestor", sha, f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"])[0] == 0
     return _in_land[sha]
+_on_remote = {}; _remote_held = None
+def known(sha):   # the checkout can read this commit at all: a head it cannot see names no reach, so the old reading stands (#1958)
+    return _run(["git", "-C", str(co), "cat-file", "-e", str(sha) + "^{commit}"])[0] == 0
+def remote():   # the tracking remote a salvage or landing pass pushes to: the landing branch's own, or origin
+    return os.environ.get("SG_REMOTE") or _run(["git", "-C", str(co), "config", "--get", f"branch.{os.environ.get('SG_LAND_BRANCH') or 'dev'}.remote"])[1].strip() or "origin"
+def on_remote(sha):   # the commit stands on a branch of the tracking remote: a landing pass or a salvage can still reach it. One bounded probe over the remote's own namespace, never every remote-tracking ref (#1958)
+    if sha not in _on_remote:
+        _on_remote[sha] = bool(_run(["git", "-C", str(co), "for-each-ref", "--contains", str(sha), "--count=1", "--format=%(refname)", f"refs/remotes/{remote()}"])[1].strip())
+    return _on_remote[sha]
+def remote_held():   # the checkout knows the tracking remote's branches at all: without one the pass cannot say a head reached no remote, so it keeps the old reading
+    global _remote_held
+    if _remote_held is None:
+        _remote_held = bool(_run(["git", "-C", str(co), "for-each-ref", "--count=1", "--format=%(refname)", f"refs/remotes/{remote()}"])[1].strip())
+        if not _remote_held: say(f"REMOTE-UNSEEN: the checkout holds no refs/remotes/{remote()}; the local-only rule is inert this pass")
+    return _remote_held
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def unpushed(f):   # #771: "<branch> <sha9> in <tree>" for each child tree of the run whose HEAD is in no origin/<land> and on no remote branch
     out = []
@@ -342,8 +357,11 @@ def read(f):
     # A failed run's landing is delivered work only once it reached the landing branch (#691, ADR-0143): its own land commit on
     # its work branch, a head origin/<land> does not hold, delivered nothing, so the run reads as one that landed nothing. A
     # landing that records no head keeps the old reading. Any other verdict keeps its landing: a pass goes on through its wave.
+    # A head on no remote branch delivers nothing whatever the verdict (#1958): no pass can land work only a local branch holds,
+    # so the card returns to Todo and the dispatch marker goes, where before the card sat past Todo and the marker held it for good.
     for node, head, stands in heads:
         if ver == "failed" and head and not in_land(str(head)): continue
+        if head and remote_held() and known(head) and not in_land(str(head)) and not on_remote(str(head)): continue
         landed = True
         # The node that landed: a dispatch child's own name (`dispatch.py` writes node=child), or the run's own stage.
         # A landing a child's own held-out command turned red was undone, so it is not a landing (subject.py).
