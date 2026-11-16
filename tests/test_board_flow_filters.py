@@ -621,7 +621,7 @@ def test_a_stored_chart_range_waits_for_the_lead_chart_and_the_type_is_never_sto
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    fresh = {"ty": "bug", "tf": "7", "a": "Todo", "b": "", "own": False}   # a fresh page opens on the past week
+    fresh = {"ty": "bug", "tf": "12h", "a": "Todo", "b": "", "own": False}   # a fresh page opens on the past 12 hours (#2029)
     for stored in ({"tf": "30", "a": "Doing", "b": "Closed"}, {"ty": "task", "tf": "3", "a": "Doing"}, {}):
         assert loaded(stored) == fresh, "a stored chart range never reaches the Board tab's shared state"
 
@@ -663,7 +663,7 @@ const pre=snap();"""
     assert json.loads(second["store"]["squad-chart"]) == {"a": "Doing", "b": ""}, \
         "the chart key carries the range only; the timeframe stays the visit's choice (#1247)"
 
-    span = f"/api/leadtime?tf=7&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
+    span = f"/api/leadtime?tf=12h&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
     answers = {f"/api/chart/lead?{_bar(fk='bug', ty='bug')}": {"lead": {}, "t": 1}, span: {"dots": []}}
     third = _page_harness(hub, answers, observe + 'await flowOpen("lead");await settle();' + report,
                           onchange=onchange, store=second["store"])
@@ -673,7 +673,7 @@ const pre=snap();"""
     assert "a=Doing" not in third["pre"]["route"] and "b=" not in third["pre"]["route"], \
         "the board's own route carries neither the stored Start nor a stored End"
     assert third["pre"]["cards"] == first["pre"]["cards"] == [2], "the chart range never narrows the board's cards"
-    assert third["tf"] == "7" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
+    assert third["tf"] == "12h" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
     assert span in third["fetched"], "the restored range is what the opened chart reads"
     assert third["post"]["route"] == third["pre"]["route"] and third["post"]["cards"] == first["pre"]["cards"], \
         "opening the chart reads the board's route and cards unchanged"
@@ -908,3 +908,12 @@ console.log(JSON.stringify({fetched:FETCHED,before,draws:DRAWN.length,last:DRAWN
     dead = _page_harness(hub, answers, drive, onchange=_onchange(hub), render=True, real_draw=False)
     assert dead["draws"] == 0 and dead["afterHtml"] == dead["beforeHtml"] == "", \
         "a drawFlow that writes nothing leaves the element alone: the proof reads the page's own draw"
+
+
+def test_the_lead_chart_offers_twelve_hours_first_and_serves_it():
+    """#2029: the Timeframe list starts with Past 12 hours, and the route serves that preset as half a day."""
+    text = (Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub.py").read_text()
+    line = next(row for row in text.splitlines() if row.startswith("const LT_TF="))
+    assert line.startswith('const LT_TF=[["12h","Past 12 hours"],'), line
+    tf = next(row for row in text.splitlines() if row.startswith("LEAD_TIMEFRAMES = "))
+    assert '("12h", 0.5)' in tf, tf

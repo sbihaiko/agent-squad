@@ -382,7 +382,7 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
     if zoom:
         scope = f"{start:%b} {start.day} to {end:%b} {end.day}"
     else:
-        scope = f"last {timeframe * 24} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
+        scope = f"last {timeframe * 24:g} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
     # #1354: a dot measured from its board entry rather than the chosen start column says so, so the chart never
     # claims a measure it did not use.
     fallback_cards = sorted(row["n"] for row in plotted if row.get("fallback"))

@@ -77,6 +77,28 @@ def test_a_spec_lane_counts_its_closed_tickets_from_the_summary():
     assert (lane["closed"], lane["total"]) == (1, 3), "the closed ticket is not counted: it is served by no row"
 
 
+FAR_SUM = {"specs": [{"n": 889, "st": "Doing", "closed": 1, "total": 3, "far": "Code Complete", "far_n": 2}], "waves": []}
+
+
+def test_a_spec_lane_draws_the_furthest_column_its_tickets_reached_as_a_count():
+    """#1906: the tickets' furthest column stands beside the spec as a count, and the spec's own column stays its own."""
+    lane = next(ln for ln in _build(summary=FAR_SUM)["lanes"] if ln["id"] == "s889")
+    head = _run(f"console.log(JSON.stringify(laneHead({json.dumps(lane)},"
+                "{todo:\"Todo\",doing:\"Doing\",review:\"Code Review\"})));")
+    cells = {c["k"]: c for row in head["rows"] for c in row}
+    assert ["furthest", "Code Complete 2"] in cells["counts"]["items"], cells["counts"]
+    assert cells["chip"]["text"] == "Doing", "the spec's own column is drawn as its column, never the tickets'"
+
+
+def test_a_spec_lane_with_no_ticket_in_flight_draws_no_furthest_count():
+    summary = {"specs": [{"n": 889, "st": "Backlog", "closed": 0, "total": 0}], "waves": []}
+    lane = next(ln for ln in _build(summary=summary)["lanes"] if ln["id"] == "s889")
+    head = _run(f"console.log(JSON.stringify(laneHead({json.dumps(lane)},"
+                "{todo:\"Todo\",doing:\"Doing\",review:\"Code Review\"})));")
+    cells = {c["k"]: c for row in head["rows"] for c in row}
+    assert [n for n, _ in cells["counts"]["items"]] == ["Todo", "Doing", "Code Review"], cells["counts"]
+
+
 def test_progress_reads_the_spec_sub_issue_count_not_the_served_rows():
     """A closed ticket carries no parent on the board, so counting rows would answer 0 of 2: the spec card's own
     sub-issue count is the completeness (#890)."""

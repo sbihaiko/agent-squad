@@ -5268,7 +5268,7 @@ def _x_ticks(days):
 BUG_ROW_SECONDS = 7 * 86400   # the Bugs and Loop-bugs rows count the cards opened in the past week (owner, 2026-11-13)
 FLOW_MOVED = "moved"   # the label a card carries once it left for another board: no band of this board counts it (#1663)
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
-LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)
+LEAD_TIMEFRAMES = [("12h", 0.5), ("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the four short ones count hours on the page (owner, 2026-11-01); 12h is the default (#2029)
 LEAD_START = COLUMN["issue_todo"]   # the Lead Time view opens measured from Todo (#1247): the payload the page reads carries it
 
 
@@ -5885,8 +5885,9 @@ def label_wave(labels):   # the `wave:NN` label's number, or None
     return min(w) if w else None
 
 def board_summary(drawn):   # drawn: (number, column, parent spec, wave, is a spec) for every item the list read holds
-    kids, waves = {}, {}
+    kids, waves, far = {}, {}, {}   # far: spec -> (rank, column, count) of the furthest column its tickets reached
     ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}
+    ranks = {name: i for i, name in enumerate(ORDER)}   # the axis the lanes draw, so "furthest" reads the same as a column
     gone = {n for n, st, _, _, sp in drawn if sp and st in ends}   # a ticket of a closed spec reads as No spec in the lanes (#972)
     for _, st, pa, wv, sp in drawn:
         if sp: continue
@@ -5894,7 +5895,14 @@ def board_summary(drawn):   # drawn: (number, column, parent spec, wave, is a sp
             c = store.setdefault(key, [0, 0])
             c[1] += 1
             if st == COLUMN["issue_closed"]: c[0] += 1
-    specs = [{"n": n, "st": st, "closed": kids.get(n, [0, 0])[0], "total": kids.get(n, [0, 0])[1]} for n, st, _, _, sp in drawn if sp]
+        # A spec's card keeps its own column, so how far its tickets got is a count beside it, never its own column (#1906).
+        # A given-up ticket did not reach past the work it left, so an Abandoned ticket names no furthest column.
+        if pa is not None and pa not in gone and st in ranks and st != COLUMN["abandoned"]:
+            have = far.get(pa)
+            if have is None or ranks[st] > have[0]: far[pa] = (ranks[st], st, 1)
+            elif ranks[st] == have[0]: far[pa] = (have[0], st, have[2] + 1)
+    specs = [{"n": n, "st": st, "closed": kids.get(n, [0, 0])[0], "total": kids.get(n, [0, 0])[1],
+              "far": (far.get(n) or (0, None, 0))[1], "far_n": (far.get(n) or (0, None, 0))[2]} for n, st, _, _, sp in drawn if sp]
     return {"specs": specs, "waves": [{"spec": pa, "wave": wv, "closed": c, "total": t} for (pa, wv), (c, t) in waves.items()]}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
@@ -7509,13 +7517,13 @@ const ltEx=(exc,cards,total,words,reasons)=>{const R=reasons||{},named=exc.map(e
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total,c.excluded_text,c.excluded_reasons);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
-let LT={tf:"7",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:true,p85:true,win:"full"};   // a fresh page opens on the past week, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); the average, the median and p85 all show at first, and each is a toggle (#1332)
+let LT={tf:"12h",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:true,p85:true,win:"full"};   // a fresh page opens on the past 12 hours (#2029), Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); the average, the median and p85 all show at first, and each is a toggle (#1332)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
 const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
-const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Last week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
+const LT_TF=[["12h","Past 12 hours"],["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Last week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe and the Type stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltGap=16;   // the least vertical space between two gutter tag baselines, one body line (#1332)
