@@ -572,7 +572,8 @@ def test_two_readings_of_one_window_are_never_closer_than_one_period(hub, monkey
 
     def read():
         calls.append(1)
-        if len(calls) == 1: time.sleep(0.05)   # the first read overruns the period; the next answers at once
+        if len(calls) == 1:   # the first read overruns the period; the next answers at once
+            time.sleep(0.05)
         return table()
 
     monkeypatch.setattr(window, "add", spy)
