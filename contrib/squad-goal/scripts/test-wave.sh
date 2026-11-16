@@ -32,6 +32,7 @@ export SG_RETIRE_CMD=/usr/bin/true
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
   printf ': "${SG_LAND_REMOTE:=%s/origin.git}"; export SG_LAND_REMOTE\n' "$T"   # a case may set its own remote (K3: one that fails on the network)
   printf ': "${SG_WAVE_TIP_GATES:=true}"; export SG_WAVE_TIP_GATES\n'   # the tip's check (#377): `true` unless a case replaces it
+  printf ': "${SG_WAVE_ENTRY_GATE:=on}"; export SG_WAVE_ENTRY_GATE\n'   # the entry cases prove the entry gate, so it is on here (#1802); Z10 names its own
   printf 'export SG_BOARD_VOCAB=shipped\n'   # the vocabulary every wave profile runs on (#468): its columns are the ones the landing writes
   printf '. %s/address.sh\n' "$T/s"
 } > "$T/s/env.sh"
@@ -1067,18 +1068,18 @@ r=$(cd "$T/c520" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-52 520 2>&1
 case "$(wfact 520 run-52)" in *obligation*) ko "AC: a pass entry's fact carries an obligation: '$(wfact 520 run-52)'";; *) ok "AC: a pass entry's fact carries no obligation";; esac
 [ $rc = 0 ] && [ -z "$(obl_for "$($G -C "$T/c520" rev-parse HEAD)")" ] && ok "AC: a pass entry writes no obligation record" || ko "AC: pass obligation '$(cat "$T/st/obligations"/* 2>/dev/null)'"
 [ -z "$(/usr/bin/grep -- '--proof' "$T/board.log" 2>/dev/null)" ] && [ ! -e "$T/st/proof-card/520" ] && ok "AC: a proven entry never carries the fact" || ko "AC: a proven entry carried the fact: $(cat "$T/board.log" 2>/dev/null)"
-# AE (#1176): a wave whose tip check is unproven lands, and every issue it delivers carries the fact of the tip's
-# obligation. The tip gate goes through gate.sh, so the obligation record exists for the settlement to answer.
+# AE (#1802, spec 1797): a wave whose tip check is unproven never lands. The entry runs no battery by default, so the tip
+# check is the one proof of the wave's children, and an unproven one holds the wave until a pass or a fail. No child is
+# blamed, no try is counted, and no card is delivered.
 printf '#!/bin/bash\nprintf "unproven\\tsaturation: the battery crashed twice\\tunknown\\truff\\n" > "$GATE_OUTCOME_FILE"\nexit 4\n' > "$T/unproven-tip.sh"
 start2 run-51 >/dev/null; child 510 g510 "origin/wave/run-51"; en2 run-51 510 >/dev/null; : > "$T/board.log"; : > "$T/st/gate-history"; rm -rf "$T/st/obligations" "$T/st/proof-card"
 r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' bash '$T/unproven-tip.sh'" SG_WAVE_CHILD_GATES='exit 1' land2 run-51 2>&1); rc=$?
-[ $rc = 0 ] && $O cat-file -e dev:g510 2>/dev/null && case "$r" in *unproven*) true;; *) false;; esac && ok "AA: an unproven tip check lands the wave and says so" || ko "AA: tip exit $rc: '$r'"
-case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an unproven tip check blamed a child: '$r'";; *) ok "AA: an unproven tip check blames no child";; esac
-[ -z "$(tries 510 run-51)" ] && ok "AA: an unproven tip check counts no landing try" || ko "AA: tries $(tries 510 run-51)"
-/usr/bin/grep -qx -- '--proof o 3 510 unproven' "$T/board.log" && ok "AE: an unproven tip landing puts the fact on the delivered card" || ko "AE: no proof fact on the tip landing: $(cat "$T/board.log" 2>/dev/null)"
-[ -n "$(/bin/ls -A "$T/st/proof-card/510" 2>/dev/null)" ] && ok "AE: the delivered issue maps to the tip's obligation" || ko "AE: no proof-card mapping: $(/bin/ls -A "$T/st/proof-card" 2>&1)"
-[ "$(awk -F'\t' -v s="$($O rev-parse dev)" '$4 == s && $8 == "unproven"' "$T/st/gate-history" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
-  && ok "AE: the gate record names the tip's unproven outcome at the landed sha" || ko "AE: gate history: '$(cat "$T/st/gate-history" 2>&1)'"
+[ $rc != 0 ] && ! $O cat-file -e dev:g510 2>/dev/null && case "$r" in *"WAVE WAIT"*unproven*) true;; *) false;; esac && ok "AE: an unproven tip check holds the wave and says so" || ko "AE: tip exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AE: an unproven tip check blamed a child: '$r'";; *) ok "AE: an unproven tip check blames no child";; esac
+[ -z "$(tries 510 run-51)" ] && ok "AE: an unproven tip check counts no landing try" || ko "AE: tries $(tries 510 run-51)"
+[ -z "$(/usr/bin/grep -- '--proof\|Closed' "$T/board.log" 2>/dev/null)" ] && ok "AE: a held wave delivers no card" || ko "AE: a held wave wrote a card: $(cat "$T/board.log" 2>/dev/null)"
+[ "$(awk -F'\t' '$8 == "unproven"' "$T/st/gate-history" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
+  && ok "AE: the gate record names the tip's unproven outcome" || ko "AE: gate history: '$(cat "$T/st/gate-history" 2>&1)'"
 
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"
@@ -1494,11 +1495,11 @@ W70=wave/run-70; start2 run-70 >/dev/null; child 1701 g1701 "origin/$W70"; en2 r
 M70="$T/st/auto/tipred-wave_run-70"; printf '%s\n' "$($G -C "$T/origin.git" rev-parse "$W70")" > "$M70"
 r=$(SG_WAVE_TIP_GATES=true land2 run-70 2>&1); rc=$?
 [ $rc = 0 ] && [ ! -e "$M70" ] && ok "W1700: a check that passes with no word clears the second-look marker" || ko "W1700: no-word pass: exit $rc, marker '$(cat "$M70" 2>/dev/null)': '$r'"
-# 1: an unproven check lands the wave with its obligation, so no tip waits for a second look.
+# 1: an unproven check holds the wave (#1802) and clears the second-look marker: the next pass runs the check again.
 W71=wave/run-71; start2 run-71 >/dev/null; child 1702 g1702 "origin/$W71"; en2 run-71 1702 >/dev/null
 M71="$T/st/auto/tipred-wave_run-71"; printf '%s\n' "$($G -C "$T/origin.git" rev-parse "$W71")" > "$M71"
 r=$(SG_WAVE_TIP_GATES='printf "unproven\tinconclusive\t\tpytest\n" > "$GATE_OUTCOME_FILE"; exit 4' land2 run-71 2>&1); rc=$?
-[ $rc = 0 ] && [ ! -e "$M71" ] && ok "W1700: an unproven check that lands clears the marker" || ko "W1700: unproven: exit $rc, marker '$(cat "$M71" 2>/dev/null)': '$r'"
+[ $rc != 0 ] && [ ! -e "$M71" ] && ! $O cat-file -e dev:g1702 2>/dev/null && ok "W1700: an unproven check holds the wave and clears the marker" || ko "W1700: unproven: exit $rc, marker '$(cat "$M71" 2>/dev/null)': '$r'"
 # 1: an empty wave ends here: the branch goes, and so does its marker.
 W72=wave/run-72; start2 run-72 >/dev/null
 M72="$T/st/auto/tipred-wave_run-72"; printf 'deadbeef\n' > "$M72"
@@ -1771,15 +1772,17 @@ o=$(z10_entry "$T/c970" off 970); rc=$?
 case "$o" in *"entered $W24"*) [ $rc = 0 ] && ok "Z10: the gate off enters a child with no reusable verdict";; *) ko "Z10: the off entry refused the child: rc $rc '$o'";; esac
 [ -s "$BL10" ] && ko "Z10: the off entry ran a battery on a miss: $(cat "$BL10")" || ok "Z10: the off entry runs no battery on a miss"
 case "$(wfact 970 run-24)" in "entered "*skipped*) ok "Z10: the off entry records skipped";; *) ko "Z10: the entry record is '$(wfact 970 run-24)'";; esac
-[ "$(lmode)" = "entry skipped" ] && ok "Z10: the skipped entry is a history row whose mode is skipped" \
-  || ko "Z10: the skipped row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+s970=$($G -C "$T/c970" rev-parse HEAD)
+[ "$(lmode "$s970")" = "entry skipped" ] && ok "Z10: the skipped entry is a history row whose mode is skipped" \
+  || ko "Z10: the skipped row is '$(lmode "$s970")': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
 # (2) The gate off, and a reusable green verdict: the child enters as today, and the entry records reused.
 child 971 g971 "origin/$W24"; rm -f "$BL10"; z10_childgate "$T/c971" >/dev/null; rm -f "$BL10"; REV_BASE=$W24 rev 971
 o=$(z10_entry "$T/c971" off 971); rc=$?
 case "$o" in *"entered $W24"*) ok "Z10: the gate off enters a child whose final gate is a reuse hit";; *) ko "Z10: the reuse hit did not enter: rc $rc '$o'";; esac
 [ -s "$BL10" ] && ko "Z10: the reuse hit ran a second battery: $(cat "$BL10")" || ok "Z10: the reuse hit runs no battery"
-[ "$(lmode)" = "entry reused" ] && ok "Z10: the reuse hit is a history row whose mode is reused" \
-  || ko "Z10: the reuse row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+s971=$($G -C "$T/c971" rev-parse HEAD)
+[ "$(lmode "$s971")" = "entry reused" ] && ok "Z10: the reuse hit is a history row whose mode is reused" \
+  || ko "Z10: the reuse row is '$(lmode "$s971")': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
 # (3) The gate on (the default): a miss runs the battery as before, and the entry records no skip.
 child 972 g972 "origin/$W24"; REV_BASE=$W24 rev 972; rm -f "$BL10"
 o=$(z10_entry "$T/c972" on 972); rc=$?

@@ -731,8 +731,8 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     fi
     # (#1800, ADR-0166) With the entry gate off, a miss enters after the clean rebase with no battery, and the entry is recorded
     # as skipped: gate.sh writes the one history line, mode `skipped`, and the wave's landing gate proves every child as before.
-    # Only the value `off` skips, and the reuse probe above already answered a hit.
-    if [ "${SG_WAVE_ENTRY_GATE:-on}" = off ]; then
+    # `off` is the default (#1802); only the value `on` runs the battery, and the reuse probe above already answered a hit.
+    if [ "${SG_WAVE_ENTRY_GATE:-off}" = off ]; then
       SG_GATE_CALLER=entry bash "$here/gate.sh" --skip fast "$($G rev-parse HEAD)" >/dev/null 2>&1
       skipped=1; return 0
     fi
@@ -995,7 +995,7 @@ wave_check() {
     fi
     case "$oc" in
       pass) rm -f "$clog" "$of" "$mk"; return 0;;
-      unproven) rm -f "$of" "$mk"; return 5;;   # the wave lands with its obligation, so no tip waits for a second look; the log stays, as it does for a red
+      unproven) rm -f "$of" "$mk"; return 5;;   # the wave waits and the check runs again (#1802); the log stays, as it does for a red
       *) : ;;                             # fail, and any other exit: the red path below
     esac
     # Only before a child left in this pass: one marker cannot follow two tips (#1699). The pass row must name the tip check's
@@ -1557,7 +1557,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       return 0; }
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
     # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is. An unproven tip
-    # holds nothing delivery needs (spec 1163, #1174, ADR-0164): the wave lands with its obligation, and the nightly settles it.
+    # holds the wave (#1802): with no entry battery, the tip check is the only proof the children get before the base.
     # The base's own check (#786): a red completed check on $base holds the landing until its head is green.
     red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     wave_check "$S" "$w"; rc=$?
@@ -1567,9 +1567,12 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # 7 (#1961): the tip is red on this tree and no child names the cause, measured twice, or held for its next run. It is a
     # landing that failed on the tree's own red, never the loop's cause, so each pass counts a try and the cap reaches the owner.
     [ $rc = 7 ] && { stuck "$run" "$w" "$S" "the check at the tip of $w is red on the same tree after its rerun and names no child: it is held until the tip moves (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
+    # 5 (#1802, spec 1797): the tip's check is unproven. The entry runs no battery by default, so this check is the one proof
+    # of the wave's children: an unproven one never moves the base. The wave waits, blames no child and counts no try; the
+    # check runs again on a later pass, and the age cap bounds the wait (ADR-0164).
+    [ $rc = 5 ] && { echo "WAVE WAIT $w: the tip's check is unproven, and an unproven tip never lands; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
     tipobl=
-    [ $rc = 5 ] && { ob=$(obligation_of "$(sc rev-parse HEAD)"); tipobl=$ob; echo "WAVE $w: the tip's check is unproven: the wave lands with its obligation${ob:+ $(basename "$ob")}${ob:- (none: the tip check wrote no obligation record)}"; }
-    { [ $rc = 0 ] || [ $rc = 5 ]; } || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
+    [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
     # The issues the wave delivers, read here, after the rebase, from what is ahead of the base: a commit the base already holds
     # is dropped by the rebase, and its issue was not delivered by this landing. A repeat from a refused push reads them again.

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """A child that finished with outcome pass moves its issue to Code Complete (called by watch.sh every loop).
+A child that finished with outcome unproven is a finished child too (ADR-0164): its work is done and the proof could not
+finish, so it enters its wave, and the entry records the obligation the tree still owes. A child with outcome fail, or a
+child whose own landing failed, never enters: a measured red holds delivery.
 A child of a run that cut a wave enters it first (#375, ADR-0145 rules 9 and 12): `wave.sh enter <run> <issue>` runs in the
 child's own worktree, is the only route into the wave branch, and its entry is what moves the card; a child that did not
 enter has no card to move, its issue went back to the queue. A run that cut no wave keeps the direct move, unless it was dispatched
@@ -366,7 +369,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
     finished = record_finished(rec)
-    issue, seen, done, unmapped, defn, failed, verdict = {}, set(), {}, [], {}, {}, {}   # done: one item per child, its last passing entry (#611)
+    issue, seen, done, unmapped, defn, failed, verdict, word = {}, set(), {}, [], {}, {}, {}, {}   # done: one item per child, its last finished entry (#611); word: the outcome that entry ended on
     owned, landed, rounds = set(), set(), {}   # the children the run reviews itself (#696), the children with a `land` event, and each child's last review round
     try: gated = {g.get("name") for g in json.loads((rec.parent / "graph.json").read_text()).get("nodes", []) if isinstance(g, dict) and g.get("review")}   # the dispatch nodes with a review gate
     except (OSError, ValueError, AttributeError): gated = set()
@@ -378,9 +381,9 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             seen.add(d["child"]); defn[d["child"]] = d.get("definition"); n = cluster_from(json.dumps(d.get("definition"))) or issue_from(json.dumps(d.get("definition")))
             if d.get("envelope") in gated: owned.add(d["child"])
             if n is not None: issue[d["child"]] = n
-        elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in issue:
-            done.pop(d["node"], None); done[d["node"]] = (d.get("reasons") or [""])[0]   # a fix entry (#570) is entry 2, 3, ... of the same child: the last one stands, and its worktree holds its head
-        elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
+        elif d.get("event") == "outcome" and d.get("outcome") in ("pass", "unproven") and d.get("node") in issue:   # unproven: the work is done and the proof could not finish, so the child is finished and its entry carries the obligation (ADR-0164)
+            done.pop(d["node"], None); done[d["node"]] = (d.get("reasons") or [""])[0]; word[d["node"]] = d.get("outcome")   # a fix entry (#570) is entry 2, 3, ... of the same child: the last one stands, and its worktree holds its head
+        elif d.get("event") == "outcome" and d.get("outcome") in ("pass", "unproven") and d.get("node") in seen:
             if d["node"] not in unmapped: unmapped.append(d["node"])
         elif d.get("event") == "review_round" and d.get("node") in seen:
             if d.get("verdict") == "no_review": owned.discard(d["node"])   # "no review here" is no review: the pass reads that child as before (ADR-0145 rule 9)
@@ -494,7 +497,10 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
         for sib in every_issue(d, n):
             subprocess.run([board, owner, proj, "Code Complete", str(sib)], capture_output=True)
             print(f"CODE COMPLETE #{sib} ({name} {child})", flush=True)
-    (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: pass. Cards -> Code Complete: {', '.join('#' + str(x) for x in every_issue(d, n))} (Closed follows when the wave lands in dev). {why[:600]}\n")
+    ow = word.get(child, "pass")   # the outcome the child ended on: `unproven` is no pass, so the record never claims one
+    (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: {ow}. "
+        + (f"Its entry carries the proof obligation the tree still owes (ADR-0164). " if ow == "unproven" else "")
+        + f"Cards -> Code Complete: {', '.join('#' + str(x) for x in every_issue(d, n))} (Closed follows when the wave lands in dev). {why[:600]}\n")
 # The round holds the children worked since the last complete pass. A pass is complete when every child it left had its turn
 # in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did. A held
 # child is never in `visited` (#620): it holds the landing until its hold is requeued or its wave reaches its age cap.
