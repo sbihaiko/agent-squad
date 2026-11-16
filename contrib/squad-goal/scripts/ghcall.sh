@@ -294,6 +294,21 @@ gh_dispatch_hold() {
       printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; return 0
     done <<< "$o"
   fi
+  # (ADR-0153 rule 1d) A red of the nightly's GitHub half is a red like a local one: a report, never a hold. One note names
+  # the sha the GitHub half tested, once per verdict, and the pass goes on. A local red says its own note below.
+  if [ -r "$SG_STATE/nightly-verdict" ]; then
+    local vres vloc vgh vgsha
+    IFS=$'\t' read -r _ vres _ vloc vgh vgsha < "$SG_STATE/nightly-verdict" 2>/dev/null
+    if [ "$vres" = fail ] && [ "$vgh" = fail ] && [ "$vloc" != fail ]; then
+      seen="$SG_STATE/nightly-gh-red-noted"
+      if [ "$(cat -- "$seen" 2>/dev/null)" != "$vgsha" ]; then
+        if printf '%s\n' "$vgsha" > "$seen.$$" 2>/dev/null; then mv -f "$seen.$$" "$seen" 2>/dev/null || rm -f "$seen.$$"; fi
+        line="$(date -u '+%F %T') DISPATCH NOTE: the nightly GitHub half is red at ${vgsha:0:7}; the pass goes on, and the promotion still needs its proof"
+        printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+        return 1
+      fi
+    fi
+  fi
   nids=$(sg_nightly_state "$SG_STATE/nightly-result"); nrc=$?
   if [ "$nrc" = 2 ]; then
     # (#1183, ADR-0164) The suite never finished: it names no failing test, so the tip is unproven and never red. One line

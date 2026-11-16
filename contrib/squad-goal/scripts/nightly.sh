@@ -55,6 +55,15 @@ day=$st/auto/nightly-$(date +%F)
 # The verdict is written after each local run, and a later call reads it again while it is unproven, at most once per
 # SG_NIGHTLY_VERDICT_EVERY seconds (600 by default) and for one day after the local record, so a GitHub half that ends after
 # the local half still settles it. `--verdict` writes it once and exits.
+alert() {  # <message>
+  local msg=$1 net
+  printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$st/alerts.log"
+  net=${HEALTH_NOTIFY:-/usr/bin/osascript}
+  "$net" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1
+}
+# The GitHub half's results the nightly has read, one `<sha> TAB <pass|fail>` line each: a pytest obligation at that sha is
+# answered by it, so the local half never runs the full suite for it (ADR-0153 rule 1d).
+gh_seen() { awk -F'\t' -v s="$1" '$1 == s { r = $2 } END { if (r != "") print r }' "$st/nightly-github-seen" 2>/dev/null; }
 verdict_write() {
   local lres=missing lsha= gres=missing gsha=- row id gst gco res sha
   if [ -r "$st/nightly-result" ]; then IFS=$'\t' read -r _ lres lsha _ < "$st/nightly-result"; fi
@@ -75,6 +84,15 @@ verdict_write() {
   elif [ "$lres" = pass ] && [ "$gres" = pass ] && [ -n "$lsha" ] && [ "$lsha" = "$gsha" ]; then res=pass
   else res=unproven; fi
   sha=${lsha:-$gsha}
+  if { [ "$gres" = pass ] || [ "$gres" = fail ]; } && [ "$gsha" != - ] && [ "$(gh_seen "$gsha")" != "$gres" ]; then
+    { tail -n 59 "$st/nightly-github-seen" 2>/dev/null; printf '%s\t%s\n' "$gsha" "$gres"; } > "$st/nightly-github-seen.$$" \
+      && mv -f "$st/nightly-github-seen.$$" "$st/nightly-github-seen"
+  fi
+  # A GitHub-half red alerts once per sha, through the path a local red takes (rule 6). A local red has its own alert.
+  if [ "$gres" = fail ] && [ "$lres" != fail ] && [ "$(cat "$st/nightly-gh-red-alerted" 2>/dev/null)" != "$gsha" ]; then
+    alert "NIGHTLY GitHub half red at ${gsha:0:7}: the scheduled Linux suite failed"
+    printf '%s\n' "$gsha" > "$st/nightly-gh-red-alerted"
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$res" "${sha:--}" "$lres" "$gres" "$gsha" > "$st/nightly-verdict.$$" \
     && mv -f "$st/nightly-verdict.$$" "$st/nightly-verdict"
 }
@@ -204,12 +222,6 @@ run_mode() {  # <command> <log> <configured command>; sets ms and mr
 write_record() {  # <result> <parallel> <serial> <ids>
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${now:-$(date +%s)}" "$1" "$tip" "$2" "$3" "$4" > "$st/nightly-result.$$" \
     && mv -f "$st/nightly-result.$$" "$st/nightly-result"
-}
-alert() {  # <message>
-  local msg=$1 net
-  printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$st/alerts.log"
-  net=${HEALTH_NOTIFY:-/usr/bin/osascript}
-  "$net" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1
 }
 # mode_why <mode field> <log>: one phrase naming the stop and the line that names its cause, for the alert. A bounded leg
 # names no failing test, so the alert never says "no failing test named".
@@ -391,8 +403,15 @@ for f in "$odir"/*; do
       fi
       cur=$tip
     fi
-    # A local half that passed ran only part of the suite, so it never answers pytest green; a red still answers it red.
+    # A local half that passed ran only part of the suite: the GitHub half's result at this sha answers pytest, and with
+    # none yet the obligation stays in place, so no full suite runs here for it (ADR-0153 rule 1d). A red answers it red.
     t=$tree; case $res in pass) [ -n "$half" ] || tgreen=1;; fail) tgreen=0;; *) tgreen=;; esac
+    if [ -n "$half" ] && [ "$res" = pass ]; then
+      case $(gh_seen "$tip") in pass) tgreen=1;; fail) tgreen=0;; *)
+        case " $want " in *" pytest "*)
+          ob_report "OBLIGATION unmeasured: $name: pytest waits for the nightly GitHub half at ${tip:0:7}; left in place"; continue;; esac;;
+      esac
+    fi
   elif [ "$osh" = "$cur" ]; then
     t=$tree
   else
@@ -404,6 +423,10 @@ for f in "$odir"/*; do
       ob_report "OBLIGATION unmeasured: $name could not be checked out in the nightly tree; left in place"; continue
     fi
     cur=$osh; t=$tree
+  fi
+  # An older tree the GitHub half measured is answered by that result too, with no local suite (ADR-0153 rule 1d).
+  if [ -n "$half" ] && [ -z "$tgreen" ] && [ "$osh" != "$tip" ]; then
+    case $(gh_seen "$osh") in pass) tgreen=1;; fail) tgreen=0;; esac
   fi
   # A bounded suite at the tip measured no red: an obligation that needs pytest cannot be answered by it, so the record
   # stays open, never settled red (ADR-0164). A red still answers it as red.
