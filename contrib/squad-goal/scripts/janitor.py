@@ -839,7 +839,7 @@ def board_seam(p):   # the one seam instance a pass asks for project p, so its r
 def board_read(p):   # one items read per pass for every card's Status and holder (#236, #327): (answered, {issue: Status}, {issue: holder} or None); answered is False when GitHub did not answer, and nothing is moved then
     if p not in _boards:
         seam = board_seam(p)
-        try: _boards[p] = (bool(seam.binding.status_field()["id"]), *seam.board())
+        try: _boards[p] = (bool(seam.binding.status_field()["id"]), *seam.board(fresh=True))   # a card this pass may move is never answered from the window's snapshot (#1796)
         except Exception as e:   # any failure of the read is an unanswered board, never a dead pass: nothing is moved on it
             _boards[p] = (False, {}, None)
             say(f"BOARD-READ-FAILED project {p}: {type(e).__name__}: {str(e)[:160]}")

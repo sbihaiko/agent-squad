@@ -264,9 +264,10 @@ class State:
         """Every issue a run holds, in one read: {issue: {"run": id, "started": time}}. An issue no run holds is absent."""
         return self.binding.holders()
 
-    def board(self):
-        """Every state and every holder the carrier answers, in one read: ({issue: state}, {issue: {"run", "started"}})."""
-        return self.binding.board()
+    def board(self, fresh=False):
+        """Every state and every holder the carrier answers, in one read: ({issue: state}, {issue: {"run", "started"}}).
+        `fresh` asks for a live read, for a caller that gates a write (#1796)."""
+        return self.binding.board(fresh=fresh)
 
     def holder(self, issue):
         """The run that holds `issue`, {"run": id, "started": time}; None when no run holds it."""
@@ -773,9 +774,43 @@ class BoardBinding:
             if n.isdigit() and run and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = {"run": run, "started": started}
         return m
 
-    def board(self):
+    @property
+    def _snapshot_file(self):
+        """The board snapshot's file. The snapshot is filtered to the binding's repository, so the file is named by it too:
+        two repositories on one board never read each other's snapshot (#770)."""
+        tag = "-" + self.repo.replace("/", "_") if self.repo else ""
+        return f"board-snapshot-{self.owner}-{self.project}{tag}.json"
+
+    def _snapshot_ttl(self):   # the window one snapshot answers a reader that does not gate a write (#1796)
+        return max(0.0, self._num("SG_BOARD_SNAPSHOT_S", "120"))
+
+    def board(self, fresh=False):
         """Every card's state and holder, in ONE read: ({issue: state}, {issue: {"run", "started"}}). The Status and the Run
-        fields ride the same items read, so a caller that needs both asks once. The repository url filters as in `read_all`."""
+        fields ride the same items read, so a caller that needs both asks once. The repository url filters as in `read_all`.
+
+        The answer is the window's snapshot (#1796): a second reader inside `SG_BOARD_SNAPSHOT_S` sends no request, and a
+        reader that gates a write passes `fresh` so the card it is about to move is never answered from an old answer. A
+        window of zero keeps every read live."""
+        ttl = 0.0 if fresh else self._snapshot_ttl()
+        f = self.st / self._snapshot_file
+        if ttl > 0:
+            try:
+                if time.time() - f.stat().st_mtime < ttl:
+                    states, held = json.loads(f.read_text())
+                    if held is not None: return states, held   # a snapshot with no holder map is a failed read, never an answer
+            except (OSError, ValueError): pass
+        states, held = self._read_board()
+        if held is not None:   # a field list the carrier could not answer is a miss, and a miss is never cached (#1747)
+            tmp = f.with_suffix(f".{os.getpid()}.tmp")
+            try:
+                tmp.write_text(json.dumps([states, held]))
+                os.replace(tmp, f)
+            except OSError:
+                pass
+        return states, held
+
+    def _read_board(self):
+        """The live read behind `board`, never cached here: its one items read, folded into the state and holder maps."""
         try: tf = self.text_fields()
         except (RuntimeError, ValueError, TypeError, AttributeError): tf = None   # a carrier that answers no field list (a bare id,
         # a refusal) names no text field: the Status column still answers, the holder map is unknown, and the miss is never cached
