@@ -14,7 +14,7 @@ Pointers: `docs/adr/README.md` (ADR index), `docs/agents/` (tracker, labels, dom
 
 This file and the ADRs are never ledgers: no dates, counts, statuses, issue numbers, run ids or amendment logs. Rewrite a changed decision in place. A one-off fact goes to memory; a status goes to the tracker.
 
-- **Everything written is US English, Concise STE100.** Rafael may talk in Portuguese; the record is English. Guard: none yet; a draft.
+- **Everything written is US English, Concise STE100: strict in acceptance criteria, steps and a bug's Observed and Expected; light (one idea per sentence, no word limit) in a spec's reasoning.** Rafael may talk in Portuguese; the record is English. Guard: none yet; a draft.
 - **The full suite is `python3 -m pytest -n auto`; serial is `-p no:xdist`. Both must pass before a merge, and a test never relies on the worker count.** CI runs the fast battery, `-m "not heavy"`. A test call over 1 s carries `heavy`. Guard: `tests/test_slow_cap.py`, `tests/test_tooling.py`.
 - **One test call over 20 seconds fails the suite, unless it carries a reason.** Guard: `tests/test_slow_cap.py`.
 - **A timing claim is measured from the work it observes, never a bare constant: a retry wait runs one pause from the engine's first try, and a call the runner's load can push over the heavy line carries `heavy`.** Guard: `tests/test_review_parallel.py`, `tests/test_slow_cap.py`.

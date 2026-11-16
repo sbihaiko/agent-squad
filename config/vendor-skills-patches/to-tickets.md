@@ -19,3 +19,10 @@ when the card stands on the Squad Board. After the last ticket, read every new c
 (`gh issue view <n> --json labels,projectItems` for each) and report the tickets by number and column. A card a read
 does not carry is read again before you call it missing. The spec's own card follows its children as a fold over them,
 so a publish that leaves the spec in Backlog with its children in Backlog is correct, never a spec left behind.
+
+**Write it in ASD-STE100, at two levels.** Strict STE100 in acceptance criteria, numbered steps, and a bug's Observed
+and Expected sections: one fact or one instruction per sentence, at most 20 words in an instruction and 25 in a
+description, active voice, and an uncertainty in its own sentence. Light STE100 in the reasoning (Problem Statement,
+Solution, Further Notes, context): one idea per sentence with no word limit, so that a cause and its effect stay
+together. At both levels: one term for one concept, no noun stack of more than three words, a title of at most 12
+words. Domain terms are technical names, which STE100 allows; the vocabulary is not limited to the STE100 dictionary.
