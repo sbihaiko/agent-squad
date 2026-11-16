@@ -219,6 +219,26 @@ def test_a_window_that_read_every_process_answers_the_full_coverage(prof, scope)
     assert s["processes_read"] == s["processes_seen"] == len(FIRST) + len(SECOND) and s["coverage"] == 1.0
 
 
+def test_the_coverage_reads_one_snapshot_of_the_window_while_the_sampler_prunes_it(prof, scope):
+    """The sampler thread drops readings past the span while a GET reads the stats: read and seen come from one copy
+    of the window, so the pair never mixes two window sizes (CI: 14 seen against 9 read)."""
+    import collections
+
+    class Pruning(collections.deque):
+        def __iter__(self):   # the sampler prunes the oldest reading between two walks of the window
+            items = list(super().__iter__())
+            if len(self) > 1: self.popleft()
+            return iter(items)
+
+    w = prof.Window()
+    w.add(1.0, FIRST, scope)
+    w.add(2.0, SECOND, scope)
+    w.add(3.0, FIRST, scope)
+    w.cov = Pruning(w.cov)
+    s = w.stats()
+    assert s["coverage"] == 1.0 and s["processes_read"] == s["processes_seen"], s
+
+
 def test_a_pid_file_that_names_another_program_roots_nothing(prof):
     """A stale pid file can name a pid the system gave to another program."""
     a = rd({10: (1, 0.0, "/usr/bin/vim notes.txt"), 11: (10, 0.0, "sleep 5")})
