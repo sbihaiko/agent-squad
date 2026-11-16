@@ -931,7 +931,8 @@ def test_a_loop_audit_line_is_written_atomically(hub, monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- the pages
 def page():
-    return HUB_PY.read_text() + (SCRIPTS / "hub-profiler.js").read_text()
+    """The desktop page's source with the shared Loop view it inlines (#1754)."""
+    return HUB_PY.read_text() + (SCRIPTS / "hub-profiler.js").read_text() + (SCRIPTS / "hub-profiler.css").read_text()
 
 
 def test_the_tab_is_named_loop_and_stands_between_flow_and_settings_on_the_desktop_page(served):
@@ -1261,7 +1262,7 @@ def test_a_zero_median_draws_no_ghost_segment_either():
 
 
 def test_the_swatch_rules_are_shipped_with_the_widget():
-    src = (ROOT / "contrib/squad-goal/scripts/hub.py").read_text()
+    src = page()
     for rule in ("#proftrip .ptk{", "background:currentColor", "min-width:4px", "gap:1px",
                  "#proftrip .ptk.ptk-none{background:none", "box-shadow:inset 0 0 0 1px currentColor"):
         assert rule in src, f"the trip's swatch rules are what makes a colour readable: {rule} is missing"
@@ -1276,7 +1277,7 @@ def test_the_panel_names_the_waiting_stages_beside_the_five():
     out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': trip})},new Set())"))
     rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?"', out)
     assert [r[0] for r in rows] == ["wait", "coding", "review", "gates", "landing", "queue", "between", "after"]
-    src = HUB_PY.read_text()
+    src = page()
     for stage in ("queue", "between", "after"):
         assert f"#proftrip .pts-{stage}{{" in src and f"#proftrip .ptk-{stage}{{" in src, \
             f"the waiting stage {stage} draws its own colour, so its row and its segment read as one"
@@ -2089,9 +2090,10 @@ def test_the_page_names_no_gap_sentence_and_draws_no_failed_runs_table():
 
 
 def test_the_phone_reaches_the_loop_tab():
-    """The phone's More menu opens the Loop tab of this page."""
+    """The phone's More menu opens the Loop view on the phone itself (#1754), drawn by the desktop's render function."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
-    assert re.search(r'id="more-loop" href="\./#loop"', html), "the phone opens the Loop tab of the same page"
+    assert re.search(r'id="more-loop" data-more="profiler"', html), "the phone opens its own Loop layer"
+    assert "/*PROFILER_JS*/" in html, "the layer inlines the shared render function"
 
 
 # The gates of the strip were folded for the same window (#1767): the fold stays in the route, and the page draws it no more.

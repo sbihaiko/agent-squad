@@ -84,7 +84,7 @@ def test_the_phone_and_the_desktop_inline_the_same_render_function(hub):
     src = PROFILER_JS.read_text()
     assert src in hub.MOBILE_PAGE, "the phone draws the desktop's render function, not a copy"
     assert src in hub.PAGE, "the desktop keeps the one render function"
-    assert "function profHtml(" in src and 'fetch("/api/profiler")' in src
+    assert "function profHtml(" in src and 'fetch("/api/profiler' in src
 
 
 def test_a_node_opens_and_closes_by_touch():
