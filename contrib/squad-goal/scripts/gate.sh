@@ -279,6 +279,14 @@ gate_reuse() {  # <kind> <sha>
   gate_fin=$(date +%s) gate_wait=0 gate_wall=0 gate_cpu_s=0 gate_load0=$(gate_load)
   gate_history "$1" pass "$2" "$gate_fin" "" "" pass - - - 0 - yes
 }
+# An entry that ran no battery at all, because the wave entry gate is off (#1800), writes one line too, mode `skipped`: no
+# lock, no slots, no battery. Its result is a pass because nothing measured a red; the wave's landing gate is what proves the
+# child. gate.sh stays the file's one writer.
+gate_skip() {  # <kind> <sha>
+  SG_GATE_ENTRY_MODE=skipped
+  gate_fin=$(date +%s) gate_wait=0 gate_wall=0 gate_cpu_s=0 gate_load0=$(gate_load)
+  gate_history "$1" pass "$2" "$gate_fin" "" "" pass - - - 0 - no
+}
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
   --reuse)  # a cancelled gate whose verdict a green memo answers: one history line, no lock, no slots, no battery (ADR-0168)
@@ -287,6 +295,8 @@ case "${1:-}" in
               # no slots. A proof that must never take the gate lock records its gate with it, through the one writer (#1927).
     [ $# = 10 ] || { echo "usage: gate.sh --history <kind> <result> <sha> <start> <selection> <scope> <outcome> <runner> <run id>" >&2; exit 2; }
     gate_history "$2" "$3" "$4" "$5" "$6" "$7" "$8" - - - - - no "$9" "${10}"; exit 0;;
+  --skip)   # an entry that ran no battery at all (#1800): one history line, mode skipped, no lock, no slots, no battery
+    [ $# = 3 ] || { echo "usage: gate.sh --skip <kind> <sha>" >&2; exit 2; }; gate_skip "$2" "$3"; exit 0;;
   --inner)  # inside the lock: take the slots, then run the gate. The take is one try, never a wait: a gate that cannot take its
             # slots exits 73 at once with none, and serial.sh releases the lock on that exit, so it holds neither resource while
             # it waits for the other. Every later exit path runs the EXIT trap and gives the slots back.
