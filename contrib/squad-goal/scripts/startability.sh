@@ -31,7 +31,33 @@ sg_board_rows() {   # [go-csv]: the one board read of a pass, every card the car
   else python3 "$here/issue_state.py" 2>/dev/null || return 1; fi
 }
 sg_todo_of() {   # the Todo issues of the rows on stdin; the go list's UNREAD and NOTE rows are said on stderr
-  awk -F '\t' -v t="${SG_TODO:-Todo}" '$1 == "UNREAD" { print "FRONTIER: go-labelled #" $2 " has no readable card on the board (named in alerts.log)" > "/dev/stderr"; next } $1 == "NOTE" { print "FRONTIER: #" $2 " is " $3 "; it is not go-labelled, and nothing alerts" > "/dev/stderr"; next } $2 == t { print $1 }'
+  awk -F '\t' -v t="${SG_TODO:-Todo}" '$1 == "UNREAD" { print "FRONTIER: go-labelled #" $2 " has no readable card on the board (named in alerts.log)" > "/dev/stderr"; next } $1 == "NOTE" { print "FRONTIER: #" $2 " is " $3 "; it is not go-labelled, and nothing alerts" > "/dev/stderr"; next } $2 == t { print $1 }' | sg_recorded_todo
+}
+# A recorded write outranks a board read (#1995, ADR-0144): the Project Status field is eventually consistent, so a read
+# can answer Todo for a card a writer has already moved. board.py proves every move it writes and records each proof, in
+# write order, in board-transitions.<repo>.jsonl, so the last recorded write of a card is the latest column a writer
+# proved. A card whose last recorded write sets another column is no Todo signal until a later write sets Todo, whatever
+# the read answers. A record that cannot be read filters nothing, as for any filter that cannot run.
+sg_recorded_todo() {   # <issue> a line on stdin: print the ones the transition record does not contradict
+  local f
+  if [ -z "${SG_STATE:-}" ] || [ -z "${SG_REPO:-}" ]; then cat; return 0; fi
+  f="$SG_STATE/board-transitions.${SG_REPO//\//_}.jsonl"
+  python3 -c '
+import json, sys
+path, todo = sys.argv[1], sys.argv[2]
+last = {}
+try:
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try: r = json.loads(line)
+            except ValueError: continue
+            n, to = r.get("issue"), r.get("to")
+            if n is not None and to is not None: last[str(n)] = to
+except OSError:
+    last = {}
+for n in sys.stdin.read().split():
+    if last.get(n, todo) == todo: print(n)
+' "$f" "${SG_TODO:-Todo}"
 }
 sg_todo_cards() {
   local out; out=$(sg_board_rows "$@") || return 1
