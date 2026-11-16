@@ -2916,3 +2916,43 @@ def test_the_wall_view_folds_the_step_records_and_the_gate_history_into_one_answ
     assert [r["name"] for r in out["slow"]] == ["janitor", "heartbeat.sh"], "the slow lane sorts by total, the janitor first"
     assert out["gates"][0]["outcome"] == "pass" and out["gates"][0]["count"] == 1
     assert out["running"] == [], "no step is in flight"
+
+
+WALL = {"window_s": 3600, "since": W0 - 3600, "label": "1 hour", "cycle": {"n": 4, "median_s": 90.0, "p90_s": 120.0},
+        "slow": [{"lane": "slow", "name": "janitor", "count": 3, "total_s": 90.0, "median_s": 30.0, "p90_s": 40.0}],
+        "fast": [{"lane": "fast", "name": "childcc", "count": 2, "total_s": 40.0, "median_s": 20.0, "p90_s": 28.0}],
+        "running": [{"lane": "slow", "name": "promote", "age_s": 42.0}],
+        "gates": [{"kind": "gate", "outcome": "pass", "count": 2, "total_s": 30.0, "median_s": 15.0, "p90_s": 19.0,
+                   "load_start": 2.0, "load_finish": 2.5}]}
+WALL_WINDOWS = [{"s": 600, "label": "10 minutes"}, {"s": 3600, "label": "1 hour"}, {"s": 86400, "label": "24 hours"}]
+
+
+def test_the_wall_view_puts_the_slow_cycle_time_at_its_top_with_its_median_and_p90():
+    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
+    assert "id=profwall" in part, "the wall-time view is drawn"
+    assert part.index("id=profwall") < part.index("id=proftrip"), "the wall-time view stands above the trip bar"
+    head = part[part.index("id=profwall"):part.index("janitor")]
+    assert "1.5 min" in head and "2.0 min" in head, "the slow cycle's median and p90 stand before the rows"
+
+
+def test_the_wall_view_draws_each_lane_step_and_a_running_step_with_its_age():
+    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
+    assert part.index("janitor") < part.index("childcc"), "the slow lane's rows stand before the fast lane's"
+    assert "promote" in part and "42.00 s" in part, "a step still running shows its age"
+    assert "running" in part, "a running step is named as running"
+
+
+def test_the_wall_view_draws_each_gate_row_with_its_mean_load_at_start_and_finish():
+    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
+    assert "2.00" in part and "2.50" in part, "the gate row carries its mean load at the start and at the finish"
+
+
+def test_the_wall_view_offers_its_three_windows_and_marks_the_chosen_one():
+    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
+    for s in (600, 3600, 86400):
+        assert f'data-wall="{s}"' in part, "each window the page offers is a control"
+    assert 'data-wall="3600" aria-pressed=true' in part, "the window the view folded is the one pressed"
+
+
+def test_the_loop_tab_polls_with_the_wall_window_it_chose():
+    assert "ww=" in page() and "wallWin" in page(), "the poll names the wall window, so the page's choice reaches the hub"
