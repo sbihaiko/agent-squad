@@ -209,3 +209,12 @@ def test_a_reopened_issue_returns_its_card_from_closed_to_todo_only(table):
     assert table.refused_for_automated("Closed", "Doing", "reopened")
     assert table.refused_for_automated("Code Complete", "Todo", "reopened")
     assert table.refused_for_automated("Closed", "Todo")
+
+
+def test_only_the_owner_moves_a_backlog_card_to_todo(table):
+    """#1909 (ADR-0142, ADR-0143 rule 1): an automated writer never moves a Backlog card to Todo, whatever the reason; the
+    other moves out of Backlog keep their answer."""
+    for reason in (None, "no-landing", "reopened"):
+        assert table.refused_for_automated("Backlog", "Todo", reason), reason
+    assert not table.refused_for_automated("Backlog", "Closed")
+    assert not table.refused_for_automated("Backlog", "Abandoned")

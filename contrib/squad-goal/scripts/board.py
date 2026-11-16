@@ -39,7 +39,9 @@ A writer that is not the owner's door (`SG_MOVE_BY` is not `owner`) never moves 
 Doing-to-Todo unclaim, and the same return to Todo when the move names `SG_MOVE_REASON=no-landing`: a run that landed nothing
 undoes the column the loop itself set, and that unclaim reaches no other column (#1059). Every other backward move is refused:
 the card keeps its column and its issue gets the `rework` label, the refusal is logged to $SG_STATE/board-rejections.jsonl, and
-the exit is 3 (ADR-0143).
+the exit is 3 (ADR-0143). A move from Backlog to Todo is held the same way for every reason, with no rework label (#1909): only the
+owner's door starts a card. A compare read that fails leaves an automated writer no Todo write, and the read failure is named (#1909).
+Each transition and each refusal records `by`, `pass` (the caller's pass, `hand` when none) and `reason`.
 The proof fact (#1176) is two labels on the issue: `unproven` while the proof obligation the gate wrote is open, and
 `proof:red` when the settlement measured a defect. A green settlement and a proven landing carry neither. The write is
 proven by the issue read that follows it, and a fact the read does not carry is a READ FAILURE, named and exiting
@@ -51,7 +53,7 @@ or the new one, never a part-written one (ADR-0030). Each proved move also appen
 to `$SG_STATE/board-transitions.<owner>_<name>.jsonl`, the record of its repository (#897). A skipped or unproven move records nothing, and a holder or
 test-case write records nothing."""
 import json, os, pathlib, sys, time
-from board_columns import refused_for_automated
+from board_columns import HOLD, refused_for_automated
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
 args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]; proof = args[:1] == ["--proof"]; gate_tries = args[:1] == ["--gate-tries"]
 args = args[1:] if add or run_fields or clear_run or test_case or remove or proof or gate_tries else args
@@ -110,12 +112,20 @@ if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
 tries = max(1, state.binding.attempts - 1)   # a write has one attempt fewer than the bound: the compare is one of the reads SG_BOARD_READ_ATTEMPTS bounds (#327)
 rc = 0; proved = []; transitions = []; refusals = []   # one card, one node read: no whole-board read answers the compare or the proof (#1300)
 automated = os.environ.get("SG_MOVE_BY") != "owner"   # any writer that is not the owner's door is automated (ADR-0143)
+by = os.environ.get("SG_MOVE_BY") or None   # the dispatch context the caller names; a move with none records none (#861)
+pss = os.environ.get("SG_MOVE_PASS") or None   # the caller's pass, kept by board.sh (#1909)
+reason = os.environ.get("SG_MOVE_REASON") or None
 for n in nums:
+    read_failed = None
     try: have = state.read_one(n) or None   # the compare: the card's own read, and no PATCH when it already carries the Status (#327)
-    except (RuntimeError, ValueError): have = None   # a board that does not answer the read is written on, never blocked by it
+    except (RuntimeError, ValueError) as e: have = None; read_failed = str(e)[:200] or "the read did not answer"   # an automated writer that cannot read the card never moves it to Todo (#1909)
     if have == status: print(f"#{n} -> {status} (already carried, not written)"); continue
-    if automated and refused_for_automated(have, status, os.environ.get("SG_MOVE_REASON")):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
-        refusals.append({"issue": n, "from": have, "to": status, "by": os.environ.get("SG_MOVE_BY") or None, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    if automated and read_failed and status == "Todo":
+        print(f"#{n}: the compare read failed ({read_failed}); an automated writer does not move the card to 'Todo' unread", file=sys.stderr); rc = 1; continue
+    if automated and refused_for_automated(have, status, reason):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
+        refusals.append({"issue": n, "from": have, "to": status, "by": by, "pass": pss, "reason": reason, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        if (have, status) == HOLD:   # the owner starts a card from Backlog: a hold is named, never a rework (#1909)
+            print(f"#{n}: held, an automated writer does not move {have!r} to {status!r}; only the owner starts a card (ADR-0142)", file=sys.stderr); continue
         print(f"#{n}: refused, an automated writer moves {have!r} back to {status!r}; the card keeps {have!r} and carries rework", file=sys.stderr)
         if state.binding.repo:
             try: state.binding.api("-X", "POST", f"repos/{state.binding.repo}/issues/{n}/labels", "-f", "labels[]=rework")
@@ -149,7 +159,7 @@ for n in nums:
         written = bool(state.binding.settle(probe, tries, cap))
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
-        print(f"#{n} -> {status}"); proved.append((iid, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": status})
+        print(f"#{n} -> {status}"); proved.append((iid, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": status, "by": by, "pass": pss, "reason": reason})
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
         print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
@@ -159,7 +169,6 @@ if proved:   # the record and the refresh flag are one step: one move, one write
     except (OSError, ValueError): moves = {}
     if not isinstance(moves, dict): moves = {}
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    by = os.environ.get("SG_MOVE_BY") or None   # the dispatch context the caller names; a move with none records none (#861)
     for iid, col in proved: moves[str(iid)] = {"column": col, "at": at, **({"by": by} if by else {})}   # a later move of the same item replaces its entry; the key is text, as the record reads back (#652)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # formed whole beside the record, then one atomic rename (ADR-0030)
     tmp.write_text(json.dumps(moves, sort_keys=True) + "\n"); os.replace(tmp, p)

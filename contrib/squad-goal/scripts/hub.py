@@ -5749,7 +5749,7 @@ def _settle_seconds():
     except ValueError: return 60.0
 SUB_ISSUES_PAGE = 100          # the page size the sub-issue read asks for
 SUB_ISSUES_MAX_PAGES = 20      # a spec with more sub-issues than this is refused, never half-moved (#838)
-# The labels the janitor's rule holds a child out of the column flow for (janitor.py, #589): an owner decision, or a closure.
+# The labels that hold a child out of the column flow (janitor.py): an owner decision, or a closure.
 # A spec's move never puts such a ticket in Todo, where a dispatcher would take it as work (ADR-0142 sections 2 and 6).
 TICKET_HOLD_LABELS = ("needs-owner", "needs-ratification", "wontfix")
 def _repo_of(url, fallback):
