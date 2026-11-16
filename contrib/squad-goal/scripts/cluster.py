@@ -12,19 +12,44 @@ A path is compared in its normal form (paths below): "./squad/a.py" and "squad/x
 A cluster is capped at CL_MAX tickets (default 2): one child over many tickets of one large file is one run that dies
 out_of_budget, so the cluster is split in ascending number order and no ticket is dropped (ADR-0158).
 Prints one cluster per line, issue numbers ascending (the first is the primary), input order of clusters by primary."""
-import json, os, posixpath, re, sys, time
+import json, os, posixpath, re, subprocess, sys, time
 
 PATH = re.compile(r"(?<![A-Za-z0-9_.~/-])(?:\.{1,2}/)*(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:cs|cpp|h|hpp|py|sh|axaml|json|jsonl|md|yml|yaml|toml|xml|js|ts|html|css)\b")
 
 
+BARE = re.compile(r"(?<![A-Za-z0-9_.~/-])[A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:cs|cpp|h|hpp|py|sh|axaml|json|jsonl|md|yml|yaml|toml|xml|js|ts|html|css)\b(?![A-Za-z0-9_/-])")
+_BY_NAME = None
+
+
+def by_name():
+    """The checkout's tracked files by base name, read once from `git ls-files` in SG_CHECKOUT (else the working
+    directory); an unreadable checkout gives none."""
+    global _BY_NAME
+    if _BY_NAME is None:
+        _BY_NAME = {}
+        try:
+            out = subprocess.run(["git", "-C", os.environ.get("SG_CHECKOUT") or ".", "ls-files"], capture_output=True,
+                                 text=True, timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for f in out.splitlines():
+            _BY_NAME.setdefault(posixpath.basename(f), []).append(f)
+    return _BY_NAME
+
+
 def paths(body):
     """The repository-relative files a body names, in normal form: "./" and "x/.." fold away; a path that leaves the
-    repository ("../x") is no repository file and is dropped."""
+    repository ("../x") is no repository file and is dropped. A bare file name is the path of the one checkout file of
+    that name, and a name of no file or of several adds none (#2014)."""
     out = set()
     for p in PATH.findall(body or ""):
         n = posixpath.normpath(p)
         if n != ".." and not n.startswith("../"):
             out.add(n)
+    for b in set(BARE.findall(body or "")):
+        hits = by_name().get(b, [])
+        if len(hits) == 1:
+            out.add(hits[0])
     return out
 
 

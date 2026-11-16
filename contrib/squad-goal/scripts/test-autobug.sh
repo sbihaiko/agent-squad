@@ -625,7 +625,7 @@ unset SG_BOARD_READ_BACKOFF
 # the whole settle bound: board.py says "a read failure, not a written card", and that is the board failing to answer, not
 # GitHub refusing the write -- the same as the HTTP 500 above. The door logged it by name and filed no bug; the next pass
 # writes the card again. The stub accepts the PATCH and never shows the Status.
-rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"; rm -f "$T"/st/rest-* "$T/bseen" "$T/bstatus" "$T/launched"; touch "$T/b500" "$T/bnowrite"
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"; rm -f "$T"/st/rest-* "$T/bseen" "$T/bstatus" "$T/launched" "$T/st/board-transitions.x_y.jsonl"; touch "$T/b500" "$T/bnowrite"   # no proved write of case 12 stands: this card's write is the one that never catches up (#1995)
 : > "$T/filed"; : > "$T/st/cycle.log"
 export SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?

@@ -152,6 +152,20 @@ o=$(hold); rc=$?
 case "$o" in *bounded*) ok "the dispatch note names the stopped leg, so the reader tells it from a red";; *) ko "the dispatch note does not name the stopped leg: '$o'";; esac
 o2=$(hold); [ -z "$o2" ] && ok "the bounded note is said once for the record, not on every pass" || ko "the bounded note repeated: '$o2'"
 
+# 4c2) (#2005) A pass record writes no stopped note: only a record whose suite was stopped before it measured anything says
+#      the suite was stopped. The reader answers a pass like no reading -- nothing to say -- so the pass goes on in silence,
+#      and the bounded record above still names its stopped leg.
+rm -f "$ST/nightly-result" "$ST/nightly-bounded-noted" "$ST/nightly-red-noted"
+printf '%s\tpass\t%s\tpass\tpass\t[]\n' "$(date +%s)" "$sha" > "$ST/nightly-result"
+o=$(hold); rc=$?
+[ $rc = 1 ] && ok "a pass record holds no dispatch" || ko "a pass record held dispatch: rc $rc, '$o'"
+case "$o" in *"stopped before it measured"*) ko "a pass record wrote the stopped note: '$o'";; *) ok "a pass record in both modes writes no stopped note";; esac
+printf '%s\tbounded\t%s\tbounded:signal-15\tpass\t[]\n' "$(date +%s)" "$sha" > "$ST/nightly-result"
+o=$(hold); rc=$?
+[ $rc = 1 ] && case "$o" in *"stopped before it measured"*) ok "a stopped record still writes the stopped note";; *) ko "a stopped record wrote no stopped note: '$o'";; esac \
+  || ko "a stopped record held dispatch: rc $rc, '$o'"
+rm -f "$ST/nightly-result"
+
 # 4d) (#1183) A leg that named a failing test and was then killed is still red, unchanged: its ids are carried, the alert
 #     fires and delivery holds. Its mode also names the signal that stopped it, so the record keeps the stop reason.
 rm -f "$ST/alerts.log" "$ST/nightly-result"; mark
@@ -168,6 +182,24 @@ o=$(hold); rc=$?
   && ok "a red leg is a report, even when a signal also stopped it" \
   || ko "a red killed leg held dispatch or said nothing: rc $rc, '$o'"
 rm -f "$T/ran.log"
+
+# 4e) (#2004) The note is said once per record, never once per second. Two red records that share a sha and land in the
+#     same second of the same day are still two records, and the second one names the tip that moved. A note keyed on the
+#     sha and the record's mtime in whole seconds reads the second as already said and prints nothing, so the pass that
+#     should name both shas goes silent about one run in four.
+rm -f "$ST/nightly-result" "$ST/nightly-red-noted" "$ST/nightly-bounded-noted"
+$G -C "$T/src" reset -q --hard "$sha"
+printf '%s\tfail\t%s\tfail\tpass\t["tests/test_x.py::test_a"]\n' "$(date +%s)" "$sha" > "$ST/nightly-result"
+same_mt=$(date -r "$ST/nightly-result" +%Y%m%d%H%M.%S)   # the whole second both records carry
+o=$(hold)
+case "$o" in *nightly*) ok "the first of two same-second records says its note";; *) ko "the first same-second record said no note: '$o'";; esac
+$G -C "$T/src" commit -q --allow-empty -m moved; new2=$($G -C "$T/src" rev-parse dev)
+printf '%s\tfail\t%s\tfail\tpass\t["tests/test_x.py::test_b"]\n' "$(date +%s)" "$sha" > "$ST/nightly-result"
+touch -t "$same_mt" "$ST/nightly-result"              # the second record lands in the first one's second
+o=$(hold); rc=$?
+[ $rc = 1 ] && ok "a second same-second record holds no dispatch" || ko "the second same-second record held dispatch: rc $rc, '$o'"
+case "$o" in *"$sha"*"$new2"*) ok "a second same-second record still names its sha and the moved tip (#2004)";; *) ko "the second same-second note names not both: '$o'";; esac
+$G -C "$T/src" reset -q --hard "$sha"; rm -f "$ST/nightly-result"
 
 # 5) (#1527, ADR-0153) a held gate lock holds the nightly, which never takes the landing lock: it runs no mode and writes no day
 #    marker, and it is left as it was. Once the gate is free the nightly runs both modes, as before.

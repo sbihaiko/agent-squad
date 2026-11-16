@@ -127,6 +127,7 @@ test-janitor-killed.sh 0.85
 test-janitor-live-mtime.sh 2.68
 test-janitor-neverstarted.sh 1.51
 test-janitor-own-pass.sh 3.46
+test-janitor-parked-card.sh 1.59
 test-janitor-pid-reuse.sh 0.35
 test-janitor-probe-retry.sh 4.19
 test-janitor-rearm-floor.sh 1.08

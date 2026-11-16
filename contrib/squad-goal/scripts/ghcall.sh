@@ -183,7 +183,7 @@ sg_nightly_red() { case "$1" in fail|fail:signal-[0-9]*) return 0;; esac; return
 # failing test, because the leg that was stopped measured none: a bounded record that carries an id is no reading. The hub
 # drops the same lines, so the two readers never disagree about which record they are looking at. Answers 0 and prints the
 # failing ids when the record is RED; 2 and prints the two legs when it is BOUNDED, an attempt the suite never finished, so
-# it holds nothing (ADR-0164); 1 when there is no reading.
+# it holds nothing (ADR-0164); 3 when it is PASS, a reading with no delivery fact to say (#2005); 1 when there is no reading.
 sg_nightly_state() {
   local rec nf ts res sha par ser ids ids_read
   [ -r "$1" ] || return 1
@@ -214,6 +214,9 @@ except Exception: sys.exit(1)
 if type(v) is not list or not all(type(x) is str for x in v): sys.exit(1)
 print(", ".join(v) if v else "")' 2>/dev/null) || return 1
   if [ "$res" = fail ]; then printf '%s\n' "${ids_read:-no test named}"; return 0; fi
+  # (#2005) A pass measured both modes green: there is nothing to say, and it is never a stopped note. It answers 3, a
+  # reading that carries no delivery fact, so the caller says nothing and the pass goes on.
+  [ "$res" = pass ] && return 3
   # A bounded leg measured nothing, so it names no failing test. An id here contradicts the mode, and it is no reading.
   [ -z "$ids_read" ] || return 1
   printf 'parallel %s, serial %s\n' "$par" "$ser"
@@ -245,7 +248,7 @@ sg_obligation_red() {
 
 gh_dispatch_hold() {
   local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nids nrc r ts o osha ochecks orun
-  local rsha rmt key seen
+  local rsha rhash key seen
   # The promotion proof reserves the machine it measures (#739): promote-pass.sh writes $SG_STATE/promote-reserve while it
   # holds the gate lock, and it removes the file on exit, INT and TERM. A marker older than the lock's own bound is a proof
   # that died, and it never holds, by the same rule as the other guards here.
@@ -312,12 +315,13 @@ gh_dispatch_hold() {
   nids=$(sg_nightly_state "$SG_STATE/nightly-result"); nrc=$?
   if [ "$nrc" = 2 ]; then
     # (#1183, ADR-0164) The suite never finished: it names no failing test, so the tip is unproven and never red. One line
-    # says which leg was stopped and how, and the pass goes on. The line is said once per record -- keyed by the sha and the
-    # record's own time -- because a bounded record stands until the next nightly, and one line per poll would bury
-    # cycle.log with the same sentence all day.
+    # says which leg was stopped and how, and the pass goes on. The line is said once per record -- keyed by the whole
+    # record the line is made of -- because a bounded record stands until the next nightly, and one line per poll would bury
+    # cycle.log with the same sentence all day. A sha and the record's mtime in whole seconds are no identity: two records
+    # that land in the same second read as one record, and the second note went silent (#2004).
     rsha=$(cut -f3 "$SG_STATE/nightly-result" 2>/dev/null)
-    rmt=$(date -r "$SG_STATE/nightly-result" +%s 2>/dev/null) || rmt=
-    key="$rsha ${rmt:-no-time}"; seen="$SG_STATE/nightly-bounded-noted"
+    rhash=$(cksum < "$SG_STATE/nightly-result" 2>/dev/null) || rhash=
+    key="$rsha ${rhash:-no-content}"; seen="$SG_STATE/nightly-bounded-noted"
     [ "$(cat -- "$seen" 2>/dev/null)" = "$key" ] && return 1
     if printf '%s\n' "$key" > "$seen.$$" 2>/dev/null; then mv -f "$seen.$$" "$seen" 2>/dev/null || rm -f "$seen.$$"; fi
     line="$(date -u '+%F %T') DISPATCH NOTE: the nightly full suite at ${rsha:0:7} was stopped before it measured anything (${nids}); the tip is unproven, not red, so the pass goes on"
@@ -328,15 +332,17 @@ gh_dispatch_hold() {
     # (#747, ADR-0153) The record is red for the sha it ran at, not for whatever the tip became, and it is a report either
     # way: the pass goes on. A tip the nightly has not seen is unproven, one line names both shas, and the next nightly
     # proves the new tip. A red at the tip itself names the test it measured; each landing still carries its own local
-    # gate, and the promotion still needs its full proof. The line is said once per record, keyed by the sha and the
-    # record's own time, so a red that stands until the next nightly does not bury cycle.log.
+    # gate, and the promotion still needs its full proof. The line is said once for the record and the tip it is read
+    # against -- the two facts the sentence is made of -- so a red that stands until the next nightly does not bury
+    # cycle.log. A sha and the record's mtime in whole seconds are no identity: a record that lands in the same second as
+    # an earlier one read as the same record, and the note of the second one went silent (#2004).
     rsha=$(cut -f3 "$SG_STATE/nightly-result" 2>/dev/null); tip=
     if [ -n "${SG_CHECKOUT:-}" ]; then
       tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q origin/dev 2>/dev/null) \
         || tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q HEAD 2>/dev/null) || tip=
     fi
-    rmt=$(date -r "$SG_STATE/nightly-result" +%s 2>/dev/null) || rmt=
-    key="$rsha ${rmt:-no-time}"; seen="$SG_STATE/nightly-red-noted"
+    rhash=$(cksum < "$SG_STATE/nightly-result" 2>/dev/null) || rhash=
+    key="$rsha ${rhash:-no-content} $tip"; seen="$SG_STATE/nightly-red-noted"
     [ "$(cat -- "$seen" 2>/dev/null)" = "$key" ] && return 1
     if [ -n "$tip" ] && [ "${rsha:0:12}" != "${tip:0:12}" ]; then
       line="$(date -u '+%F %T') DISPATCH NOTE: the nightly red names $rsha, not the dev tip $tip; the tip is unproven, the pass goes on, and the next nightly proves it"

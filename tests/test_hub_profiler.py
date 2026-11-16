@@ -1599,11 +1599,11 @@ def test_the_process_table_read_stops_once_no_page_reads_the_profile(hub, monkey
     mod, port, _, _, table = hub
     gate = gated(mod, 0.2)
     monkeypatch.setattr(mod, "READ_GATE", gate)
+    table.before = lambda: time.sleep(0.25) if table.reads == 0 else None   # a loaded machine: the first read outlasts the idle bound (#2013)
     gate.touch()
     assert ask(port, "POST", {"on": True})[0] == 200
-    wait(lambda: table.reads >= 2)
-    time.sleep(0.45)                                         # no page reads the profile
-    assert not mod.profiler_running(), "the process table read went on with no page reading the profile"
+    wait(lambda: gate.touch() or table.reads >= 2)           # a page keeps reading until two reads are seen, however slow
+    wait(lambda: not mod.profiler_running())                 # no page reads the profile: the sampler ends by itself
     seen = table.reads
     time.sleep(0.1)
     assert table.reads == seen
