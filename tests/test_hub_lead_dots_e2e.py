@@ -75,14 +75,14 @@ def _card(n, opened, closed):
 
 def _seed(base):
     """A throwaway board cache and history store: one lone card and two whose closes merge into one cluster (#1331), all
-    closed inside the default two-day view, placed from the clock the hub reads."""
+    closed inside the default 12-hour view (#2029), placed from the clock the hub reads."""
     hub_dir = base / "hub"
     hub_dir.mkdir()
     now = time.time()
     clock = datetime.now(UTC)
-    lone_close = clock - timedelta(hours=40)
+    lone_close = clock - timedelta(hours=10)   # inside the 12-hour default (#2029)
     lone_open = lone_close - timedelta(hours=8)
-    pair_closes = (clock - timedelta(hours=2), clock - timedelta(hours=1, minutes=50))
+    pair_closes = (clock - timedelta(hours=2), clock - timedelta(hours=1, minutes=58))   # two minutes apart: one cluster on the 12-hour axis
     cards = [(1, lone_open, lone_close)] + [(n, c - timedelta(hours=5), c) for n, c in ((2, pair_closes[0]), (3, pair_closes[1]))]
     items = [_card(n, _iso(o), _iso(c)) for n, o, c in cards]
     board = hub_dir / "hub-board.json"

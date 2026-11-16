@@ -570,7 +570,7 @@ def test_a_hidden_state_the_board_definition_does_not_name_never_shows(hub, boar
 
 
 # SPEC 889 #900: the lead-time diagram is the Jira-style control chart, computed by the hub (board_leadtime).
-TIMEFRAME_KEYS = ["1", "2", "3", "7", "14", "30", "all"]   # the owner replaced the 3- and 6-month presets with 24, 48 and 72 hours (2026-11-01)
+TIMEFRAME_KEYS = ["12h", "1", "2", "3", "7", "14", "30", "all"]   # 24, 48 and 72 hours replaced the 3- and 6-month presets (2026-11-01); 12 hours leads (#2029)
 
 
 def test_the_lead_chart_shares_its_plot_frame_with_hub_clustering_and_page(hub, board):

@@ -663,7 +663,7 @@ const pre=snap();"""
     assert json.loads(second["store"]["squad-chart"]) == {"a": "Doing", "b": ""}, \
         "the chart key carries the range only; the timeframe stays the visit's choice (#1247)"
 
-    span = f"/api/leadtime?tf=7&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
+    span = f"/api/leadtime?tf=12h&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
     answers = {f"/api/chart/lead?{_bar(fk='bug', ty='bug')}": {"lead": {}, "t": 1}, span: {"dots": []}}
     third = _page_harness(hub, answers, observe + 'await flowOpen("lead");await settle();' + report,
                           onchange=onchange, store=second["store"])
@@ -673,7 +673,7 @@ const pre=snap();"""
     assert "a=Doing" not in third["pre"]["route"] and "b=" not in third["pre"]["route"], \
         "the board's own route carries neither the stored Start nor a stored End"
     assert third["pre"]["cards"] == first["pre"]["cards"] == [2], "the chart range never narrows the board's cards"
-    assert third["tf"] == "7" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
+    assert third["tf"] == "12h" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
     assert span in third["fetched"], "the restored range is what the opened chart reads"
     assert third["post"]["route"] == third["pre"]["route"] and third["post"]["cards"] == first["pre"]["cards"], \
         "opening the chart reads the board's route and cards unchanged"
@@ -912,10 +912,8 @@ console.log(JSON.stringify({fetched:FETCHED,before,draws:DRAWN.length,last:DRAWN
 
 def test_the_lead_chart_offers_twelve_hours_first_and_serves_it():
     """#2029: the Timeframe list starts with Past 12 hours, and the route serves that preset as half a day."""
-    import importlib.util, pathlib
-    src = pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub.py"
-    text = src.read_text()
-    line = next(l for l in text.splitlines() if l.startswith("const LT_TF="))
+    text = (Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub.py").read_text()
+    line = next(row for row in text.splitlines() if row.startswith("const LT_TF="))
     assert line.startswith('const LT_TF=[["12h","Past 12 hours"],'), line
-    tf = next(l for l in text.splitlines() if l.startswith("LEAD_TIMEFRAMES = "))
+    tf = next(row for row in text.splitlines() if row.startswith("LEAD_TIMEFRAMES = "))
     assert '("12h", 0.5)' in tf, tf
