@@ -8,12 +8,12 @@ Scope: issues already on board 4 (open ones only from number >= RECONCILE_MIN, d
 A card never moves backwards: the column it carries is the furthest the work reached and is its own watermark, so a recomputed
 column lower in the shipped flow is refused, reported by name, and no new ledger is kept. A merge taken back is a tag plus a new
 issue, never a move back, so a card the facts pull back out of a terminal column keeps its column and carries the tag."""
-import json, os, pathlib, re, subprocess, sys
+import datetime as dt, json, os, pathlib, re, subprocess, sys
 os.environ.setdefault("SG_GH_PASS", "reconcile")   # the call log names this pass (ADR-0277): unattributed spend cannot be pinned on its spender (#1648)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 from board_columns import BY_FACT, COLUMNS, ROLE, SHIPPED_NAME, past, terminal_column
 from issue_state import board_state
-import ghread, ghthrottle   # the door's reader and log, the shared throttle, and the quota floors (#847, #1648)
+import board_archive, ghread, ghthrottle   # the archive pass (#1931), the door's reader and log, the shared throttle, and the quota floors (#847, #1648)
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
 if not (REPO and OWNER and BOARD): sys.exit("reconcile: set SG_REPO, SG_OWNER and SG_PROJECT (env.sh exports them)")
 FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many requests left in a pool, the pass skips its read for the cycle (#847)
@@ -34,6 +34,7 @@ REFUSED = []   # the cards whose write the carrier refused this pass (#454)
 FLOW = {column["name"]: column["flow"] for column in COLUMNS}   # the shipped column order (the flow the page draws left to right): a card moves forward along it and never back
 TERMINAL = {column["name"] for column in COLUMNS if column["terminal"]}   # the columns the work is delivered at, each entered once
 TAG = "reverted"   # what a card carries when its merge was taken back (#246): the tag and the new issue decide what happens next, never a silent move back
+ARCHIVE = []   # the closed cards in a terminal column: the archive pass's candidates (#1931)
 def gh(*a):
     if a[:1] == ("api",) and not set(a) & {"--method", "-X", "-f", "-F", "--input"}:   # a read: through the throttle, which holds the pass back under a cooldown and logs the line (#847, #1648)
         out = THROTTLE.read(a[1])
@@ -47,7 +48,7 @@ def gh(*a):
 def js(*a):
     o = gh(*a); return json.loads(o) if o else None
 _here = os.path.dirname(os.path.abspath(__file__)); MOVE = os.path.join(_here, "board.sh")
-try: items = board_state(owner=OWNER, project=BOARD, repo=REPO, kind=None).read_all()   # the state each card carries, asked of the seam (a user or an org owner, cached a month); the carrier is the binding's business (#236)
+try: STATE = board_state(owner=OWNER, project=BOARD, repo=REPO, kind=None); items = STATE.read_all()   # the state each card carries, asked of the seam (a user or an org owner, cached a month); the carrier is the binding's business (#236)
 except RuntimeError: sys.exit("board unreadable")
 LAND = os.environ.get("SG_LAND_BRANCH") or "dev"   # the branch a work branch lands in: a card is Done when its branch is in it
 OPEN = {int(i["number"]): i for i in js("api", f"repos/{REPO}/issues?state=open") or []}   # the open issues, one read: a card it covers is open and needs no read of its own (#853)
@@ -176,6 +177,8 @@ for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[
     st = OPEN.get(i) or EXTRA.get(i) or js("api", f"repos/{REPO}/issues/{n}")   # the batch answers first; a card the batch missed costs one read (#1648)
     if not st: continue
     if st["state"] != "closed" and i < MIN: continue
+    if VOCAB == "shipped" and st["state"] == "closed" and cur in board_archive.TERMINAL_COLUMNS and st.get("closed_at"):
+        ARCHIVE.append({"issue": i, "repo": REPO, "column": cur, "state": "closed", "closed_at": st["closed_at"], "item": None})
     deps = blockers(st.get("body"))
     term = terminal_column(st.get("state"), st.get("state_reason"))   # the same function the janitor reads: Abandoned when the close was not a delivery, Closed when it was (spec #132)
     if term:
@@ -194,5 +197,18 @@ for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or
     name = shipped_name(to) or to   # a new card is addable at any column the carrier holds; the shipped name is what it holds
     print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {name} (new bug)")
     if APPLY: write(i["number"], name, add=True)
+def archive_pass():
+    """Archive the terminal cards whose issue closed past the age bound; children of an open spec stay on the board (#1931)."""
+    protected = set()
+    for n, row in OPEN.items():
+        if "spec" in label_names(row): protected |= {int(c["number"]) for c in js("api", f"repos/{REPO}/issues/{n}/sub_issues") or []}
+    chosen = board_archive.select(ARCHIVE, repo=REPO, now=dt.datetime.now(dt.UTC), after_days=board_archive.after_days(), protected=protected)
+    if not chosen: return
+    nodes = board_archive.item_nodes(STATE.binding)
+    for c in chosen: c["item"] = nodes.get((REPO, c["issue"]))
+    for c in chosen:
+        if not c["item"]: print(f"ARCHIVE SKIPPED #{c['issue']}: the item read did not carry its card")
+    board_archive.archive([c for c in chosen if c["item"]], write=board_archive.archive_item, pace=board_archive.pace_seconds(), say=print)
+if APPLY and VOCAB == "shipped" and ARCHIVE: archive_pass()
 print(f"moves: {len(MOVES)}")   # the count of cards whose column changes
 sys.exit(1 if REFUSED else 0)   # a pass that could not write what it reported is a failed pass, never a quiet one

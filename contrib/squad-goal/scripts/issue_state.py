@@ -754,11 +754,12 @@ class BoardBinding:
         """The live Status-only read behind `read_all`."""
         out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={self.status_field()['id']}", "--jq",
                        '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name=="Status")|.value.name|if type=="object" then .raw else . end))//""),'
-                       ' (.content.repository_url//"")]|@tsv')
+                       ' (.content.repository_url//""),(.archived_at//"")]|@tsv')
         m = {}
         for l in out.splitlines():
-            f = (l.split("\t") + ["", "", ""])[:3]
-            n, s, u = f[0].strip(), f[1], f[2]
+            f = (l.split("\t") + ["", "", "", ""])[:4]
+            n, s, u, archived = f[0].strip(), f[1], f[2], f[3]
+            if archived: continue   # an archived card is no card to the readers, so none re-adds it (#1931)
             if n.isdigit() and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = self.state_name(s)
         return m
 
