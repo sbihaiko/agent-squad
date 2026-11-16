@@ -155,7 +155,7 @@ def janitor(tmp_path: Path, **extra: str) -> subprocess.CompletedProcess[str]:
 
 def writes(tmp_path: Path) -> str:
     f = tmp_path / "calls"
-    return "".join(l + "\n" for l in (f.read_text().splitlines() if f.exists() else []) if l.startswith(("STATUS", "ADD")))
+    return "".join(x + "\n" for x in (f.read_text().splitlines() if f.exists() else []) if x.startswith(("STATUS", "ADD")))
 
 
 def decided(tmp_path: Path) -> str:
@@ -204,7 +204,7 @@ def test_a_stopped_issue_is_not_said_to_dispatch_again(tmp_path):
     finished_run(tmp_path)
     ledger(tmp_path, "stop", f"x/y#{N}", "three failed dispatches with no change", "own")
     janitor(tmp_path)
-    line = next((l for l in decided(tmp_path).splitlines() if f"DISPATCH-FAILED #{N}" in l), "")
+    line = next((x for x in decided(tmp_path).splitlines() if f"DISPATCH-FAILED #{N}" in x), "")
     assert line, f"rule O did not decide the run: {decided(tmp_path)}"
     assert "dispatches again" not in line, f"a stopped issue was said to dispatch again: {line}"
     assert "stopped" in line, f"the line does not name the stop: {line}"

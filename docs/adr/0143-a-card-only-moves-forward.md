@@ -29,6 +29,11 @@ column its work never reached.
    the loop undoes its own work; the move names that reason, `SG_MOVE_REASON=no-landing`, and the
    exception reaches Todo and no other column. A card the loop set itself is a correction of its own
    write, which is why it never weakens the rule for any other writer.
+   The move covers a partial landing: a `(#N)` commit in `dev` is Code Complete only while no
+   no-landing requeue or run end is newer than it, so an older part of the fix never writes over the
+   requeue's Todo. It also covers a stranded card: a card in Code Review or Code Complete with no live
+   run, no wave or kept marker, no remote branch ahead of `dev`, no freeze and no landing goes back to
+   Todo with the same reason, because the frontier reads Todo only.
    A spec card is derived, not delivered: the fold over its sub-issues is its only writer, and no
    work rule names it. The fold lifts the card to Todo while any ticket is in flight and keeps it in
    the column the owner gave it otherwise; it never follows a ticket into Doing, Code Review or Code
@@ -67,4 +72,5 @@ column its work never reached.
 floor and the fold. `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh` guards a spec's
 tickets that follow the owner's move of its card to Todo. `contrib/squad-goal/scripts/test-janitor-terminal-comment.sh`
 guards the reopen of a spec's card beside an issue whose work is in dev keeping its card, and `tests/test_hub_swimlanes.py`
-guards the lane a spec's ticket draws once the spec's card reads Todo.
+guards the lane a spec's ticket draws once the spec's card reads Todo. `tests/test_janitor_stranded_card.py`
+guards the partial landing and the stranded card.
