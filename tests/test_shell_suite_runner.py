@@ -147,12 +147,34 @@ def test_the_slow_line_is_the_cap_divided_by_the_slowdown_the_cap_excuses():
 def test_a_suites_bound_is_its_measured_time_times_the_slowdown_the_cap_excuses(monkeypatch):
     """A bound tighter than the load this machine may meet fails a suite for the machine's work, not for its own (#736)."""
     monkeypatch.setattr(shell_suites, "measured", lambda: {"test-long.sh": 250.0})
+    monkeypatch.setattr(slowcap, "pressure_factor", lambda: 1.0)   # an idle machine, so the bound is the spin factor alone
     assert shell_suites.timeout_for("/nowhere/test-long.sh") == 250.0 * slowcap.MAX_CONTENTION_FACTOR
 
 
 def test_a_quick_suites_bound_is_the_floor(monkeypatch):
     monkeypatch.setattr(shell_suites, "measured", lambda: {"test-quick.sh": 1.0})
+    monkeypatch.setattr(slowcap, "pressure_factor", lambda: 4.0)
     assert shell_suites.timeout_for("/nowhere/test-quick.sh") == shell_suites.MIN_TIMEOUT_SECONDS
+
+
+def test_a_busy_machines_load_widens_a_suites_bound(monkeypatch):
+    """#1885: a suite that clones and pushes trees waits on the disk, a wait the CPU-spin factor never sees. At load 24.6
+    on 8 CPUs the machine carries about three waiters per CPU, so the 106.19 s line is not held to the 424.76 s bound the
+    spin factor alone allows; test-wave.sh took 485.2 s there and was stopped while green."""
+    monkeypatch.setattr(shell_suites, "measured", lambda: {"test-wave.sh": 106.19})
+    monkeypatch.setattr(slowcap, "load_average", lambda: 24.6)
+    monkeypatch.setattr(slowcap, "cpu_count", lambda: 8)
+    assert shell_suites.timeout_for("/nowhere/test-wave.sh") > 485.2
+
+
+def test_a_suite_that_costs_more_than_the_widened_bound_is_still_stopped(monkeypatch):
+    """The pressure widens the bound by a measured and bounded factor, never removes it: a suite whose own cost is past what
+    the busiest machine can excuse keeps a finite bound."""
+    monkeypatch.setattr(shell_suites, "measured", lambda: {"test-costly.sh": 250.0})
+    monkeypatch.setattr(slowcap, "load_average", lambda: 1000.0)
+    monkeypatch.setattr(slowcap, "cpu_count", lambda: 8)
+    assert shell_suites.timeout_for("/nowhere/test-costly.sh") == (
+        250.0 * shell_suites.LOAD_FACTOR * slowcap.MAX_CONTENTION_FACTOR)
 
 
 def test_every_real_suite_s_bound_covers_the_load_the_cap_excuses():

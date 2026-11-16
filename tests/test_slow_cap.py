@@ -150,6 +150,17 @@ def test_the_contention_factor_is_measured_and_bounded():
     assert 1.0 <= slowcap.contention_factor() <= slowcap.MAX_CONTENTION_FACTOR
 
 
+def test_the_pressure_factor_is_the_load_per_cpu_and_is_bounded():
+    """#1885: the load average counts a process blocked on a disk, which a CPU spin cannot see. The factor is one waiter per
+    CPU at the idle line, that ratio above it, and never past the bound the cap excuses."""
+    import tests.slowcap as slowcap
+
+    assert slowcap.pressure_factor(4.0, 8) == 1.0
+    assert slowcap.pressure_factor(24.6, 8) == 24.6 / 8
+    assert slowcap.pressure_factor(1000.0, 8) == slowcap.MAX_CONTENTION_FACTOR
+    assert 1.0 <= slowcap.pressure_factor() <= slowcap.MAX_CONTENTION_FACTOR
+
+
 def test_the_repo_default_cap_is_20_seconds_and_durations_print():
     text = (ROOT / "pyproject.toml").read_text()
     assert "--durations=15" in text and 'slow_cap_seconds = "20"' in text and 'test_deadline_seconds = "60"' in text
