@@ -8,6 +8,9 @@ export HANG_NAP=$(( 271800000 + $$ ))
 # status line for the hub. A throwaway repository, a stub base command, stub suites: nothing here runs a real battery.
 # usage: bash test-fast-gate.sh [scripts dir]
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the hold is proved
+# gate.sh exports GATE_REUSE_FILE to the command it runs, so a suite under a gate inherits it: a memo hit of this suite then marks
+# the outer gate's row instead of writing its own, and the reuse row it reads is missing. The suite's gates read no outer marker.
+unset GATE_REUSE_FILE
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"   # (#801) the gate takes slots: its own budget, never the machine's
 export SG_FAST_LOG_DIR=$T/logs; mkdir -p "$SG_FAST_LOG_DIR"   # (#945) the gate's log sits outside SG_STATE, where the child that ran it may read it

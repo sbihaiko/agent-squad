@@ -15,6 +15,9 @@ unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from
 # SERIAL_HOLD_SECONDS; serial.sh exports SG_SERIAL_HELD and reads SERIAL_POLL_SECONDS; a gate caller sets SG_GATE_KIND and
 # SG_GATE_STATUS. All of them go, beside REV.
 unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
+# gate.sh exports GATE_REUSE_FILE to the command it runs (its --run), so this suite run under a gate inherits it: a memo hit of
+# an entry then marks the outer gate's row instead of writing its own reuse row, and the row this suite reads is missing (#1798).
+unset GATE_REUSE_FILE
 # The clones and the wave's rebase replay commits, and a rebase needs a committer. A runner has none set and cannot
 # auto-detect one, so the suite names its own identity and never reads the machine's (#1062).
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b
