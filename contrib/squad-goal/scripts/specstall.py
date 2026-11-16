@@ -1,10 +1,24 @@
-"""Spec rules (#1962): a spec's tickets are its open sub-issues; a dev commit names a ticket by `#N` in its subject.
+"""Spec rules (#1962, #2002): a spec's tickets are its open sub-issues; a dev commit names a ticket by `#N` in its subject.
+
+A stalled spec is a call for the owner only when the owner started it: its card sits in Todo or a later column, never in
+Backlog and never with no card (docs/adr/0142-a-spec-is-never-work.md, clause 5). Only a commit that closes or fixes a
+ticket is progress; a commit that only mentions `#N`, and a TDD RED commit, are not.
 
 usage: python3 specstall.py closers <issues.json> <dev-subjects>
 """
 import json
 import re
 import sys
+
+# The shipped board's own axis, in the definition's order (#2002). The order is the fact this rule reads, so the whole
+# axis sits here and no reader carries half of it: `tests/test_spec_stall.py` proves it names the shipped columns.
+COLUMNS = ("Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Gating", "Closed", "Abandoned")
+# A card that wears a name the old vocabulary gave its column reads as the shipped column. Blocked is no column: it is
+# the owner's freeze over the column the work reached, so a card wears it on no axis of its own.
+SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Merging": "Code Complete",
+                "Landing": "Code Complete", "Blocked": None}
+START = COLUMNS.index("Todo")   # the owner's go signal: a card that reached this column or any later one is started
+_CLOSING = re.compile(r"(?i)\b(?:close[sd]?|fix(?:es|ed)?)\s+#(\d+)\b")   # the keywords that close an issue when a commit lands
 
 
 def parent_of(entry):
@@ -30,6 +44,30 @@ def landed_of(commits):
             first, last = out.get(n, (ts, ts))
             out[n] = (min(first, ts), max(last, ts))
     return out
+
+
+def progress_of(commits):
+    """The tickets a dev commit closes or fixes, each as (first, last) in time, as `landed_of` reads (#2002).
+    A commit that only mentions `#N` moves no ticket, and a TDD RED commit is a test that must fail: neither is progress."""
+    out = {}
+    for ts, subject in commits:
+        if subject.lstrip().startswith("TDD RED"):
+            continue
+        for n in map(int, _CLOSING.findall(subject)):
+            first, last = out.get(n, (ts, ts))
+            out[n] = (min(first, ts), max(last, ts))
+    return out
+
+
+def started(col):
+    """True when the spec's card sits in Todo or a later column: the owner's move that starts a spec (ADR-0142 clause 5)."""
+    col = SHIPPED_NAME.get(col, col)
+    return col in COLUMNS and COLUMNS.index(col) >= START
+
+
+def started_specs(stuck, cols):
+    """The stalled specs whose card is started: a spec in Backlog, or with no card, waits for the owner and is no stall."""
+    return {spec: ts for spec, ts in stuck.items() if started(cols.get(spec))}
 
 
 def closers(kids, open_set, landed):
