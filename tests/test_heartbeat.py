@@ -153,3 +153,48 @@ def test_a_verdict_written_by_the_kill_is_what_the_record_carries(tmp_path):
 
 def test_the_usage_line_is_the_last_line_of_the_docstring():
     assert heartbeat.main([]) == 2
+
+
+def _proc(pid, ppid, pgid, start, command):
+    from squad.procs import Proc
+    return Proc(pid=pid, ppid=ppid, pgid=pgid, start=start, command=command)
+
+
+def test_a_run_kill_signals_the_owned_groups_of_its_tool_shells_and_reports_survivors():
+    """#1993: the owned set is the engine's descendants with their start times and groups. A shell's group is signalled, a
+    sibling is never touched, and the process that survives KILL is named."""
+    table = {
+        10: _proc(10, 1, 10, 100.0, "python3 -m squad start x"),
+        20: _proc(20, 10, 20, 200.0, "zsh -c sleep 540"),
+        21: _proc(21, 20, 20, 201.0, "sleep 540"),
+        30: _proc(30, 1, 30, 300.0, "zsh -c sleep 9"),
+    }
+    owned = heartbeat.owned_procs(10, table)
+    assert owned == {10: (100.0, 10), 20: (200.0, 20), 21: (201.0, 20)}
+    live = dict(table)
+    sent, groups = [], []
+
+    def kill(pid, sig):
+        sent.append((pid, sig))
+        if pid != 21:
+            live.pop(pid, None)
+
+    def killpg(pg, sig):
+        groups.append((pg, sig))
+        for pid in [p for p, q in live.items() if q.pgid == pg and p != 21]:
+            live.pop(pid)
+
+    survivors = heartbeat.kill_owned(owned, read=lambda: live, kill=kill, killpg=killpg, sleep=lambda s: None)
+    assert (20, signal.SIGTERM) in groups and (20, signal.SIGKILL) in groups
+    assert all(pid != 30 for pid, _ in sent) and all(pg != 30 for pg, _ in groups)
+    assert survivors == [21]
+
+
+def test_a_run_kill_never_signals_a_pid_whose_start_time_changed():
+    """#1993: a pid that now names a different process (a reused pid) is not the owned process and gets no signal."""
+    owned = {20: (200.0, 20)}
+    reused = {20: _proc(20, 1, 20, 999.0, "vim notes.txt")}
+    sent, groups = [], []
+    heartbeat.kill_owned(owned, read=lambda: reused, kill=lambda pid, sig: sent.append((pid, sig)),
+                         killpg=lambda pg, sig: groups.append((pg, sig)), sleep=lambda s: None)
+    assert sent == [] and groups == []

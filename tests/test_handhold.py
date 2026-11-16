@@ -156,6 +156,24 @@ def test_hold_refused_when_a_live_run_holds_the_issue_and_writes_nothing(env, tm
     assert RUN in capsys.readouterr().err
 
 
+def test_a_zsh_wrapper_whose_body_names_a_live_command_is_no_live_engine(env, tmp_path):
+    """#1993: a tool shell's `zsh -c` body names `squad start`, but the shell is no engine or session, so the run is not live."""
+    folder = run_folder(tmp_path, RUN, 1664, live=False)
+    listed(env, folder)
+    shell = [(9001, str(folder), "zsh -c sleep 540; python3 -m squad start x")]
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(False), cwd_procs=lambda: shell)
+    assert rc == 0
+
+
+def test_a_process_that_only_shares_the_run_folder_cwd_does_not_make_the_run_live(env, tmp_path):
+    """#1993: a process whose cwd is the run folder is discovery evidence only, never the run's ownership."""
+    folder = run_folder(tmp_path, RUN, 1664, live=False)
+    listed(env, folder)
+    other = [(9002, str(folder), "python3 -m squad start other-run")]
+    rc = H.hold([1664], by="manual", state=env, now=NOW, procs=live_procs(False), cwd_procs=lambda: other)
+    assert rc == 0
+
+
 def test_hold_of_an_issue_a_dead_run_held_is_not_refused(env, tmp_path):
     folder = run_folder(tmp_path, RUN, 1664, live=False, verdict=True)
     listed(env, folder)

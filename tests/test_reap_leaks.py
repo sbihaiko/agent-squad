@@ -104,3 +104,35 @@ def test_a_table_no_reader_can_read_is_no_rows(monkeypatch):
 
     monkeypatch.setattr(reap_leaks.subprocess, "run", denied)
     assert reap_leaks._table() == []
+
+
+def test_a_zsh_wrapper_in_a_dead_run_folder_does_not_keep_the_run_from_the_reap(tmp_path):
+    """#1993: a `zsh -c` tool shell whose body names a session command is no session, so a dead run is still reaped."""
+    import json
+    import os
+    import time
+
+    from squad import reap
+
+    folder = tmp_path / "runs" / "run-dead"
+    folder.mkdir(parents=True)
+    rec = folder / "record.jsonl"
+    rec.write_text("".join(json.dumps(e) + "\n" for e in [
+        {"event": "run_start", "run_id": "run-dead", "pos": 1},
+        {"event": "call_start", "pid": 999999, "started_at": 1.0, "pos": 2},
+    ]))
+    now = time.time()
+    os.utime(rec, (now - 3600, now - 3600))
+    active = tmp_path / "active-runs.txt"
+    active.write_text(f"{folder}\n")
+
+    class NoLeases:
+        def occupancy(self):
+            return {"waiting": []}
+
+        def holders(self, kind):
+            return []
+
+    shell = [(9001, str(folder), "zsh -c sleep 540; python3 -m squad start x")]
+    done = reap.reap(str(active), str(tmp_path), ceiling=NoLeases(), procs=shell, dry=True, now=now, say=lambda s: None)
+    assert done == ["run-dead"]
