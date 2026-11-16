@@ -21,7 +21,7 @@ class FakeBinding:
         self.reads = 0
         self.source = []   # the cards one card's own read asked the source for (#1758)
 
-    def read_all(self):
+    def read_all(self, fresh=False):
         self.reads += 1
         return dict(self.carried)
 

@@ -122,3 +122,25 @@ def test_the_snapshot_is_per_repository(tmp_path):
     assert one.reads == 1 and two.reads == 1
     files = sorted(p.name for p in tmp_path.glob("board-snapshot-*"))
     assert len(files) == 2, f"one snapshot per repository, got {files}"
+
+
+def test_the_state_read_rides_the_same_snapshot(tmp_path):
+    """The reporting pass asks for the states seconds after another reader; the window answers both (#1796)."""
+    board = Board()
+    state = seam(tmp_path, board)
+
+    state.board()
+    states = state.read_all()
+
+    assert states == {"241": "Todo"}
+    assert board.reads == 1, "the state read is served from the window's snapshot"
+
+
+def test_a_live_state_read_asks_the_carrier(tmp_path):
+    board = Board()
+    state = seam(tmp_path, board)
+
+    state.read_all(fresh=True)
+    state.read_all(fresh=True)
+
+    assert board.reads == 2
