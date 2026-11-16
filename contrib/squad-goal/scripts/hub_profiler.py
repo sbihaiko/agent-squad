@@ -522,12 +522,15 @@ def failed_run_table(rows, window_s, now):
 
 
 # ---------------------------------------------------------------- the trip of one issue (#1769)
-# One stacked bar of the trip of an issue: the wait for a dispatch, coding, review, gates and landing. Each stage answers
-# its median and its p90 over the deliveries of a window. A delivery is a run whose record holds both a passed land and a
-# verdict; a run that landed nothing is no delivery and is not folded. The bars and tables read the percentiles on the
-# `(n - 1)` weight, the rule `docs/loop-sequence.md` names, so a number taken here and the trip table agree.
-TRIP_STAGES = (("wait", "Wait for a dispatch"), ("coding", "Coding"), ("review", "Review"), ("gates", "Gates"),
-               ("landing", "Landing"))
+# One stacked bar of the trip of an issue: the wait for a dispatch, coding, review, gates and landing, and the waits the
+# card around the run spent outside all five (#1894): the queue before the run, the gaps between two children and the wait
+# past the verdict. Each stage answers its median and its p90 over the deliveries of a window. A delivery is a run whose
+# record holds both a passed land and a verdict; a run that landed nothing is no delivery and is not folded. The bars and
+# tables read the percentiles on the `(n - 1)` weight, the rule `docs/loop-sequence.md` names, so a number taken here and
+# the trip table agree.
+TRIP_STAGES = (("queue", "Queued before the run"), ("wait", "Wait for a dispatch"), ("coding", "Coding"),
+               ("between", "Between two children"), ("review", "Review"), ("gates", "Gates"), ("landing", "Landing"),
+               ("after", "After the verdict"))
 TRIP_MIN_DELIVERIES = 3   # fewer than three deliveries say so and draw no bar: a median of two is no profile
 TRIP_LABEL = "The trip of an issue"
 _START = frozenset(("run_start", "resume"))   # an event that opens an invocation: the fold reads the last one only
@@ -558,8 +561,8 @@ def _invocation(events):
     return events[idx:] if idx >= 0 else []
 
 
-def trip_spans(events):
-    """The five stages of one run record in seconds, or None when the record is no delivery.
+def trip_spans(events, card=None):
+    """The stages of one run record in seconds, or None when the record is no delivery.
 
     - `wait`: the run's start to its first call, the wait for a slot the record holds (`ceiling_wait` moves the start of
       that call, so no frontier beat before the run exists is read here).
@@ -568,6 +571,11 @@ def trip_spans(events):
     - `review`: each review round's wait, from the last child answer to the round.
     - `gates`: each gate's start to its result, as the record holds both.
     - `landing`: the last child answer or review to the merge.
+    - `between`: the uncovered time between two child spans, the wait a wave entry or a gate slot takes inside the run.
+    - `queue`: the card's Todo move to the run's start, when `card` names that move.
+    - `after`: the verdict to the card's Closed move, when `card` names that move.
+    `card` is `{"todo": epoch, "closed": epoch}`, read from the board's transitions by the caller. A wait the caller
+    measures is 0 when it did not happen, never a missing stage; `queue` and `after` are None when no card is read.
     A stage the record does not hold is None, never a zero. `end` is the verdict time; a run with no passed land or no
     verdict is no delivery.
     """
@@ -600,14 +608,27 @@ def trip_spans(events):
             s = gstart.get((e.get("node"), e.get("entry"), e.get("item")))
             if s is not None and t >= s:
                 gates = (gates or 0.0) + (t - s)
+    spans = []
     for node, first in first_call.items():
         last = last_answer.get(node)
         if last is not None and last >= first:
             coding = (coding or 0.0) + (last - first)
+            spans.append((first, last))
+    between, covered = 0.0, None
+    for first, last in sorted(spans):
+        if covered is not None and first > covered:
+            between += first - covered
+        covered = last if covered is None else max(covered, last)
+    card = card or {}
+    todo, closed = card.get("todo"), card.get("closed")
+    end = _ts(verdict)
     before = [t for t in answers if t <= _ts(land)]
-    return {"wait": calls[0] - start if start is not None and calls and calls[0] >= start else None,
-            "coding": coding, "review": review, "gates": gates,
-            "landing": _ts(land) - max(before) if before else None, "end": _ts(verdict)}
+    return {"queue": start - todo if todo is not None and start is not None and start >= todo else None,
+            "wait": calls[0] - start if start is not None and calls and calls[0] >= start else None,
+            "coding": coding, "between": between, "review": review, "gates": gates,
+            "landing": _ts(land) - max(before) if before else None,
+            "after": closed - end if closed is not None and end is not None and closed >= end else None,
+            "end": end}
 
 
 def gate_span(gate, since):

@@ -32,17 +32,20 @@ Read this section as a profiler's hot-spot list. The step numbers are those of t
 
 | stage | steps | median | p90 | what the time is |
 |---|---|---|---|---|
+| Queued before the run | 1, 2 | - | - | the card's Todo move to the run's start, from the board's transitions |
 | Wait for a dispatch | 2, 3 | one fast-lane beat (120 s) | a run slot (`no slot`) | the run cap is the owner's lever; a full machine is healthy backpressure |
 | Router | 6 | 31 s | - | one model call |
 | Child coding | 7 | 2140 s | 7200 s | model turns, and the child's own test runs. The largest stage of a trip |
+| Between two children | 7, 8 | - | - | the uncovered time between two child spans: a wave entry or a slot wait inside the run |
 | Review round | 7b, 11 | 42 s | - | one model call per round; a fix round adds one child entry |
 | Engine gates | 9 | 78 s | 756 s | the run's final gate; the p90 is a wait for a gate slot or a loaded machine |
 | Wave entry gate | 12 | 469 s (pass) | 924 s | `fast-gate.sh` on the rebased tree, a delta selection |
 | Wait for the slow lane | 13 | 271 s | 489 s | the verdict is read once a `watch.sh` cycle |
 | Wave landing | 14 | one tip gate | - | the same gate again on the wave tip |
 | Promotion to `stg` | 15, 18, 19 | CI fast tier | - | starts past the quiet window since the last landing |
+| After the verdict | 15 to 19 | - | - | the run's verdict to the card's Closed move, from the board's transitions |
 
-The live form of this table is the **trip bar** of the hub's `Loop` tab: one stacked bar over the window the tab's picker names (1 hour, 24 hours or 48 hours), a stage a segment, with each stage's median as the segment's width, its median and its p90 in the segment's hover and in the table under the bar, and the count of deliveries the bar folds. The hub's `GET /api/profiler` answers it as `trip` (`hub_profiler.trip`), folded from the run records and `gate-history`; a window with fewer than three deliveries draws no bar and says so. The bar reads the stages the records hold: the wait for a slot before a run's first call, the child's coding, each review round, each gate, and the merge to the verdict. A percentile is read on the `(n - 1)` weight (`hub_profiler.percentile`), so the bar and this table agree on one definition.
+The live form of this table is the **trip bar** of the hub's `Loop` tab: one stacked bar over the window the tab's picker names (1 hour, 24 hours or 48 hours), a stage a segment, with each stage's median as the segment's width, its median and its p90 in the segment's hover and in the table under the bar, and the count of deliveries the bar folds. The hub's `GET /api/profiler` answers it as `trip` (`hub_profiler.trip`), folded from the run records, `gate-history` and the board's transitions of the card each run works; a window with fewer than three deliveries draws no bar and says so. The bar reads the stages the records hold: the wait for a slot before a run's first call, the child's coding, each review round, each gate, and the merge to the verdict; the card's transitions add the waiting outside the run, the queue before it, the gaps between two children and the wait past the verdict (`trip_spans`). A percentile is read on the `(n - 1)` weight (`hub_profiler.percentile`), so the bar and this table agree on one definition.
 
 ### Hot spots
 

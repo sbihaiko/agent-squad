@@ -2570,16 +2570,39 @@ def trip_events(path):
         if isinstance(e, dict) and e.get("event") == m.group(1): out.append(e)
     return out
 
-def trip_stages(path):
-    """The rule layer's stages of one record, or None when it is no delivery, cached by the file's own signature."""
+def card_waits(store, numbers):
+    """issue number -> `{"todo", "closed"}`, the epoch of the card's first entry into Todo and into Closed, as the board's
+    transitions record them (#1894). Only the issues a run of the window names are folded: the store holds every card of
+    the board. A card the record never saw in a column answers None for it."""
+    out = {}
+    for n in numbers:
+        rec = store.get(n)
+        if rec is None: continue
+        runs = _hist.intervals(rec.get("events") or [])
+        todo = next((_epoch(r["from"]) for r in runs if r["column"] == LEAD_START), None)
+        closed = next((_epoch(r["from"]) for r in runs if r["column"] == COLUMN["issue_closed"]), None)
+        if todo is not None or closed is not None: out[n] = {"todo": todo, "closed": closed}
+    return out
+
+def trip_issues(path):
+    """The issues one run names, from the request beside its record: the run's own request, never a second reader."""
+    try: text = (pathlib.Path(path).parent / "request.txt").read_text(errors="replace")
+    except OSError: return []
+    return sorted((int(n) for n in request_issues(text)))
+
+def trip_stages(path, card=None):
+    """The rule layer's stages of one record, or None when it is no delivery, cached by the file's own signature and the
+    card's two moves: a transition alone changes the answer, so it is part of the key."""
     try: st = path.stat()
     except OSError: return None
     key = str(path)
+    card = card or {}
+    sig = (st.st_mtime, st.st_size, card.get("todo"), card.get("closed"))
     hit = TRIP_SPANS.get(key)
-    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size: return hit[2]
-    spans = hub_profiler.trip_spans(trip_events(path))
+    if hit and hit[:4] == sig: return hit[4]
+    spans = hub_profiler.trip_spans(trip_events(path), card)
     if len(TRIP_SPANS) >= TRIP_SPANS_MAX: TRIP_SPANS.clear()
-    TRIP_SPANS[key] = (st.st_mtime, st.st_size, spans)
+    TRIP_SPANS[key] = (*sig, spans)
     return spans
 
 # A gate-history row's fields, in the order `gate.sh` writes them; the one grammar lives in the rule layer (ADR-0137).
@@ -2606,17 +2629,20 @@ def trip_gates(since):
     return out
 
 def trip_view(window_s, now=None):
-    """The Loop tab's trip bar (#1769): the five stages of a delivery over the chosen window, folded by the rule layer
-    from the run records under this profile's run roots and the gate history. It reads files only, so it shows with the
-    CPU sampling switch off."""
+    """The Loop tab's trip bar (#1769): the stages of a delivery over the chosen window, folded by the rule layer from the
+    run records under this profile's run roots, the gate history, and the board transitions of the card each run works
+    (#1894). It reads files only, so it shows with the CPU sampling switch off."""
     now = time.time() if now is None else now
     since = now - window_s
     files = []
     for root in run_roots(CHECKOUT):
         try: files.extend(sorted(root.glob("run-*/record.jsonl")))
         except OSError: continue
+    issues = {p: trip_issues(p) for p in files}
+    waits = card_waits(_hist.load_store(_hist.history_path(BOARD, REPO)), {n for ns in issues.values() for n in ns})
     return {"window_s": window_s, "since": since,
-            **hub_profiler.trip([trip_stages(p) for p in files], trip_gates(since), since)}
+            **hub_profiler.trip([trip_stages(p, next((waits[n] for n in issues[p] if n in waits), None))
+                                 for p in files], trip_gates(since), since)}
 
 
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
@@ -6006,6 +6032,8 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #proftrip .ptk{display:inline-block;width:10px;height:10px;margin-right:8px;border-radius:var(--radius-sm);vertical-align:-1px;background:currentColor}
 #proftrip .pts-wait{background:var(--mute)}#proftrip .pts-coding{background:var(--run)}#proftrip .pts-review{background:var(--acc)}#proftrip .pts-gates{background:var(--warn)}#proftrip .pts-landing{background:var(--ok)}
 #proftrip .ptk-wait{color:var(--mute)}#proftrip .ptk-coding{color:var(--run)}#proftrip .ptk-review{color:var(--acc)}#proftrip .ptk-gates{color:var(--warn)}#proftrip .ptk-landing{color:var(--ok)}
+#proftrip .pts-queue{background:var(--s5)}#proftrip .pts-between{background:var(--s3)}#proftrip .pts-after{background:var(--drop)}
+#proftrip .ptk-queue{color:var(--s5)}#proftrip .ptk-between{color:var(--s3)}#proftrip .ptk-after{color:var(--drop)}
 #proftrip .ptk.ptk-none{background:none;box-shadow:inset 0 0 0 1px currentColor}
 #proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#proftt th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#proftt th:first-child{text-align:left}#proftt td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#proftt td:first-child{text-align:left}
 #profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}
