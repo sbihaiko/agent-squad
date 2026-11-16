@@ -7669,7 +7669,7 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
   share=x=>l=>l.total?Math.round((x||0)/l.total*100):0;   // a share of the lane bar, drawn after the closed share: the held green of a claimed card, then the review's own colour (owner, 2026-11-02)
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  const headCell=(l,c,cl)=>{const k=c.k,pc=c.text?`<span class=pc>${c.text}</span>`:"",
-   inner=k==="id"?`<span class=tw>${cl?"&#9656;":"&#9662;"}</span><span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(c.text)}</span>`
+   inner=k==="id"?`<span class=tw>${cl?"&#9656;":"&#9662;"}</span><span class="lid${l.kind==="sw"?" sw":""}"${l.kind==="sw"?` title="${esc(c.text)}"`:""}>${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(c.text)}</span>`
    :k==="title"?(c.text?`<span class="ltt${l.kind==="s"?"":" subt"}" title="${esc(c.text)}">${esc(c.text)}</span>`:"")
    :k==="bar"?(c.on?`<span class=bar title="${l.closed} of ${l.total} closed${l.doing?`, ${l.doing} doing`:""}${l.review?`, ${l.review} in review`:""}"><i style="width:${pct(l)}%"></i>${l.doing?`<i class=dn style="left:${pct(l)}%;width:${share(l.doing)(l)}%"></i>`:""}${l.review?`<i class=rv style="left:${pct(l)+(l.doing?share(l.doing)(l):0)}%;width:${share(l.review)(l)}%"></i>`:""}</span>`:"")
    :k==="frac"?pc

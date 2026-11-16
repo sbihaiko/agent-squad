@@ -111,7 +111,7 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
 
 // The lane header takes two rows of flex items (#2026). Row 1 holds the spec number, the title, the column chip, the GitHub
 // mark and the Sync press, the title taking the free space. Row 2 holds the progress bar, the fraction and the counts, the
-// counts at the right edge. A wave lane's name spans row 1, so it is never clipped.
+// counts at the right edge. A wave lane's name takes the free space of row 1 and ends in an ellipsis.
 const laneHeadCols=[{k:"id",al:"flex-end"},{k:"title",al:"flex-start"},{k:"bar",al:"flex-start"},
   {k:"frac",al:"flex-end"},{k:"chip",al:"center"},{k:"gh",al:"flex-end"},{k:"sync",al:"flex-end"},
   {k:"counts",al:"flex-end"}];

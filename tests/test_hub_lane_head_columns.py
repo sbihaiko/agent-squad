@@ -147,11 +147,43 @@ def test_the_title_css_ends_a_long_title_in_an_ellipsis_on_one_line():
     assert "text-overflow:ellipsis" in rule and "white-space:nowrap" in rule, rule
 
 
-def test_the_header_rows_set_no_fixed_gap_between_their_items():
+def _lane_head_rules():
+    css = re.sub(r"/\*.*?\*/", "", LANES_CSS.read_text(), flags=re.S)
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    return [(sel.strip(), body) for sel, body in rules if re.search(r"\.lh\b|\.lf\b", sel)]
+
+
+def test_the_lane_head_sets_no_fixed_gap_between_its_items():
+    rules = _lane_head_rules()
+    assert rules, "the lane head has no rules to check"
+    for sel, body in rules:
+        assert not re.search(r"(?<![\w-])gap\s*:|column-gap\s*:", body), (sel, body)
+    for sel, body in rules:
+        if re.search(r"(?<![\w-])row-gap\s*:", body):
+            assert sel == "#bbody .lh", (sel, body)
+
+
+def test_the_lane_head_rows_span_the_header_and_stay_on_one_line_each():
     css = LANES_CSS.read_text()
-    for selector in (r"#bbody \.lh\{[^}]*\}", r"#bbody \.lh \.lh-r1,#bbody \.lh \.lh-r2\{[^}]*\}"):
-        rule = re.search(selector, css).group(0)
-        assert "column-gap" not in rule and "gap:" not in rule.replace("row-gap:", ""), rule
+    rows = re.search(r"#bbody \.lh \.lh-r1,#bbody \.lh \.lh-r2\{[^}]*\}", css).group(0)
+    assert "width:100%" in rows and "flex-wrap:nowrap" in rows, rows
+    title = re.search(r"#bbody \.lh \.lf-title\{[^}]*\}", css).group(0)
+    assert "flex:1 1 0" in title, title
+    counts = re.search(r"#bbody \.lh \.lf-counts\{[^}]*\}", css).group(0)
+    assert "margin-left:auto" in counts, counts
+
+
+def test_a_wave_lane_name_ends_in_an_ellipsis_and_keeps_its_full_text_in_a_tooltip(page):
+    css = LANES_CSS.read_text()
+    label = re.search(r"#bbody \.lh \.lf-id\.full \.lid\{[^}]*\}", css).group(0)
+    assert "text-overflow:ellipsis" in label and "overflow:hidden" in label and "min-width:0" in label, label
+    _, headers = _drawn_headers(page, [LANE_WAVE])
+    assert 'title="SPEC 1158 · Wave 2"' in headers[0], headers[0]
+
+
+def test_the_bar_cell_sizes_from_its_rule_not_from_an_inline_width():
+    rule = re.search(r"#bbody \.lh \.lf-bar\{[^}]*\}", LANES_CSS.read_text()).group(0)
+    assert "flex:0 1 8em" in rule and "min-width:4em" in rule, rule
 
 
 def test_the_page_draws_every_header_from_the_rule_layer_on_one_grid(page):

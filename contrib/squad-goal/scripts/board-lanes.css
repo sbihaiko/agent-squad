@@ -27,9 +27,10 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .bar i.rv{background:var(--ok);opacity:.25}   /* the share in review: the same green, fainter than the held share (owner, 2026-11-02) */
 #bbody .lh .pc{font-size:var(--fs-caption);font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
 #bbody .lh .lst{font-size:var(--fs-caption);font-weight:600;color:var(--mute);border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;line-height:var(--chip-h);white-space:nowrap}
-#bbody .lh .lh-r1,#bbody .lh .lh-r2{display:flex;align-items:center;min-width:0}
+#bbody .lh .lh-r1,#bbody .lh .lh-r2{display:flex;flex-wrap:nowrap;align-items:center;width:100%;min-width:0}
 #bbody .lh .lf-id{flex:none}
-#bbody .lh .lf-id.full{flex:1 1 auto;justify-content:flex-start}
+#bbody .lh .lf-id.full{flex:1 1 0;min-width:0;justify-content:flex-start}
+#bbody .lh .lf-id.full .lid{min-width:0;overflow:hidden;text-overflow:ellipsis}
 #bbody .lh .lf-title{flex:1 1 0;padding-left:.6em}
 #bbody .lh .lf-chip,#bbody .lh .lf-sync{flex:none}
 #bbody .lh .lf-gh{flex:none;padding:0 .4em}
