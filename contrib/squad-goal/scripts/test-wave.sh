@@ -1798,4 +1798,23 @@ $O cat-file -e dev:g981 2>/dev/null && ko "Z11: the child that broke the wave la
 /usr/bin/grep -q 'issues/981 -f state=closed' "$T/gh.log" && ko "Z11: the culprit's issue was closed" || ok "Z11: the culprit's issue is not closed"
 [ ! -e "$T/st/auto/disp-981" ] && /usr/bin/grep -qx 'o 3 Todo 981' "$T/board.log" && ok "Z11: the culprit is back in the queue" || ko "Z11: the culprit was not requeued"
 
+# Z12 (#1800, criterion 4): a wave of two children, both entered with the entry gate off. The bad child's tree carries the file
+# z12bad, and the landing battery fails on any tree that holds it: the tip check reads the tip's tree, and each child's own
+# check reads the files its commits change. The landing gate takes the bad child out and lands the good one.
+W26=wave/run-26; start2 run-26 >/dev/null
+child 990 g990 "origin/$W26"; en2off run-26 990 >/dev/null
+child 991 z12bad "origin/$W26"; en2off run-26 991 >/dev/null
+case "$(wfact 990 run-26)" in "entered "*skipped*) ok "Z12: the good child entered with no entry battery";; *) ko "Z12: #990 entry is '$(wfact 990 run-26)'";; esac
+case "$(wfact 991 run-26)" in "entered "*skipped*) ok "Z12: the bad child entered with no entry battery";; *) ko "Z12: #991 entry is '$(wfact 991 run-26)'";; esac
+printf 'run-26\n' > "$T/st/auto/disp-991"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES='[ ! -e z12bad ]' SG_WAVE_CHILD_GATES='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx z12bad && exit 1; exit 0' land2 run-26); rc=$?
+[ $rc = 0 ] && ok "Z12: with the entry gate off, the wave without the bad child lands (exit 0)" || ko "Z12: exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*"#991"*) ok "Z12: the landing gate names the bad child";; *) ko "Z12: no child named: '$r'";; esac
+$O cat-file -e dev:g990 2>/dev/null && ok "Z12: the good child lands" || ko "Z12: the good child is not in dev"
+$O cat-file -e dev:z12bad 2>/dev/null && ko "Z12: the bad child landed" || ok "Z12: the bad child is not in dev"
+/usr/bin/grep -q 'issues/990 -f state=closed' "$T/gh.log" && ok "Z12: the good child's issue closes" || ko "Z12: #990 was not closed"
+/usr/bin/grep -q 'issues/991 -f state=closed' "$T/gh.log" && ko "Z12: the bad child's issue was closed" || ok "Z12: the bad child's issue is not closed"
+[ ! -e "$T/st/auto/disp-991" ] && /usr/bin/grep -qx 'o 3 Todo 991' "$T/board.log" && ok "Z12: the bad child is back in the queue" || ko "Z12: the bad child was not requeued"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
