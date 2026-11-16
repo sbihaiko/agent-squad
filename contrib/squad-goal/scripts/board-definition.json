@@ -103,6 +103,13 @@
     { "name": "Reverted", "color": "ORANGE", "fact": "Delivered, then taken back" }
   ],
   "gateTries": { "type": "number" },
+  "priorityField": "Priority",
+  "priorities": [
+    { "name": "urgent", "color": "RED" },
+    { "name": "high", "color": "ORANGE" },
+    { "name": "normal", "color": "YELLOW" },
+    { "name": "low", "color": "BLUE" }
+  ],
   "views": [
     { "name": "All items", "layout": "TABLE_LAYOUT" },
     { "name": "Board", "layout": "BOARD_LAYOUT", "groupBy": "Status" }

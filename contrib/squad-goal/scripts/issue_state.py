@@ -88,6 +88,7 @@ HOLDER_FIELDS = ("Run", "Run started")
 
 # The number field the gate-attempt journal projects to (#1255, ADR-0170): one count per card.
 GATE_TRIES = "Gate Tries"
+PRIORITY = "Priority"
 
 
 class NotCarried(RuntimeError):
@@ -488,6 +489,29 @@ class BoardBinding:
             try: return max(0, int(float(line.strip())))
             except ValueError: continue
         return 0
+
+    def priority_field(self):
+        """The Priority single-select field: `{"id"}`, the field's id, empty when the board carries none (#1977). Cached a day."""
+        def read_field():
+            fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
+            f = next((x for x in fs if isinstance(x, dict) and x.get("name") == PRIORITY), None) if isinstance(fs, list) else None
+            return {"id": f["id"] if f else ""}
+        return self._cached(f"rest-priority-field-{self.owner}-{self.project}.json", 86400, read_field)
+
+    def read_priorities(self):
+        """{issue: Priority name} for each card that carries one, in ONE items read (#1977). A card with no value is absent.
+        A board with no Priority field raises, so the caller holds the cards it would have ranked."""
+        fid = self.priority_field()["id"]
+        if not fid: raise RuntimeError(f"no {PRIORITY!r} field on the board")
+        out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={fid}", "--jq",
+                       '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name==%s)|.value.name|if type=="object" then .raw else . end))//""),'
+                       '(.content.repository_url//"")]|@tsv' % json.dumps(PRIORITY))
+        m = {}
+        for l in out.splitlines():
+            n, p, u = (l.split("\t") + ["", "", ""])[:3]
+            n = n.strip()
+            if n.isdigit() and p and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = p
+        return m
 
     def write_gate_tries(self, issue, count):
         """One PATCH of the Gate Tries number. The read that proves it is the seam's (ADR-0144, ADR-0170)."""
