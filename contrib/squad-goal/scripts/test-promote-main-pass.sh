@@ -69,6 +69,7 @@ EOF
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board"; chmod +x "$T/board"; export SG_BOARD_CMD=$T/board
 pass() { bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }
+passenv() { env "$@" bash "$d/promote-main-pass.sh" > "$T/out" 2>&1; }   # <VAR=value>...: a pass with its own environment
 ghn() { local c; c=$(/usr/bin/grep -c -- "$1" "$T/gh.log" 2>/dev/null); echo "${c:-0}"; }   # <pattern>: the gh calls that match
 alerts() { local c; c=$(/usr/bin/grep -c "PROMOTE MAIN" "$ST/alerts.log" 2>/dev/null); echo "${c:-0}"; }
 req() { cut -f1 "$ST/promote-main-requested" 2>/dev/null; }
@@ -259,6 +260,62 @@ realign; adv stg red-hold-a 7200; a26=$(tip stg); request "$a26" 600; checks "$a
 # (a) stg moves to a new sha inside the re-arm: the complete tier is requested on it, the quiet window alone gating it.
 adv stg red-hold-b 700; b26=$(tip stg); : > "$T/gh.log"; passq; rc=$?
 [ $rc = 0 ] && [ "$(req)" = "$b26" ] && ok "26 a new tip after a red is requested without a re-arm about the red sha" || ko "26 new tip: record '$(req)', red '$a26', stg '$b26', out '$(cat "$T/out")'"
+
+# 27) The push cannot authenticate (#1896). A push to an https remote needs the credential git's helper serves, and the
+# process that runs the pass may be one that cannot reach it: gh keeps its token in the login keychain, and the self-hosted
+# runner that fires the hook is a launchd service job, whose security session does not carry the login keychain. git then
+# gets no credential, GIT_TERMINAL_PROMPT=0 forbids the prompt, and the push dies with `could not read Username`. The pass
+# names the credential it could not reach, exits 3, and keeps the request, so the next pass that can reach it moves main.
+# A fake remote serves both halves: the denying one is a loopback HTTP server over the local bare remote (its GETs serve the
+# dumb protocol, so the fetch succeeds; its receive-pack answers 401, so the push demands a credential), and the accepting
+# one rewrites the same URL to the local bare remote, so the fetch and the push both land at home.
+fake=https://example.invalid/x/emu.git
+printf '[url "file://%s"]\n\tinsteadOf = %s\n' "$R" "$fake" > "$T/fake-url.gitconfig"
+printf '[credential]\n\thelper =\n' > "$T/cred-deny.gitconfig"   # the helper answers nothing: the credential is unreachable
+# The denying remote: a loopback HTTP server over the local bare remote. Its GETs serve the dumb protocol, so the pass's
+# fetch succeeds as the real one does, and the receive-pack advertisement and every POST answer 401, so the push demands a
+# credential. Loopback only, so no byte reaches github.com.
+cat > "$T/deny-push-server.py" <<'PY'
+# (#1896) GETs serve the bare repository over the dumb protocol; the receive-pack advertisement and every POST answer 401.
+import http.server, socketserver, sys
+class H(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k): super().__init__(*a, directory=sys.argv[1], **k)
+    def deny(self):
+        self.send_response(401); self.send_header("WWW-Authenticate", 'Basic realm="x"')
+        self.send_header("Content-Length", "0"); self.end_headers()
+    def do_GET(self):
+        if "git-receive-pack" in self.path: return self.deny()
+        return super().do_GET()
+    def do_POST(self): return self.deny()
+    def log_message(self, *a): pass
+with socketserver.TCPServer(("127.0.0.1", 0), H) as s:
+    print(s.server_address[1], flush=True); s.serve_forever()
+PY
+servers=; stop_servers() { local p; for p in $servers; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; }
+trap stop_servers EXIT   # a killed suite never leaves a loopback server behind
+# serve <document root>: a fake remote on a free loopback port; sets $port. The port arrives through a FIFO, so no poll.
+serve() { local pf=$T/port.$$; rm -f "$pf"; mkfifo "$pf"
+  python3 "$T/deny-push-server.py" "$1" > "$pf" & srv=$!; servers="$servers $srv"
+  port=; read -r -t 20 port < "$pf"; rm -f "$pf"; }
+realign; adv stg no-cred 7200; n27=$(tip stg); m27=$(tip main); request "$n27" 600; checks "$n27" success success
+git -C "$R" update-server-info   # the dumb protocol serves the refs of the tip the stg branch now holds
+serve "$T"; deny=http://127.0.0.1:$port/remote.git
+passenv SG_PROMOTE_REMOTE=$deny GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$T/cred-deny.gitconfig; rc=$?
+stop_servers; servers=
+[ $rc = 3 ] && [ "$(tip main)" = "$m27" ] && ok "27 a push that cannot authenticate exits 3 and moves nothing" \
+  || ko "27 deny: rc $rc, main $(tip main), out '$(cat "$T/out")'"
+/usr/bin/grep -q "cannot reach" "$T/out" && /usr/bin/grep -q "127.0.0.1:$port" "$T/out" \
+  && ok "27 the pass names the credential it could not reach" || ko "27 no reason: '$(cat "$T/out")'"
+/usr/bin/grep -q "refused" "$T/out" && ko "27 the pass prints a bare refusal: '$(cat "$T/out")'" || ok "27 the pass prints no bare refusal"
+[ "$(req)" = "$n27" ] && ok "27 the request stays, so the pass that can reach the credential moves main" || ko "27 request '$(req)'"
+[ ! -e "$ST/promote-main-hold" ] && ok "27 a credential the pass cannot reach writes no hold" || ko "27 hold '$(cat "$ST/promote-main-hold" 2>/dev/null)'"
+[ "$(alerts)" = 1 ] && /usr/bin/grep -q "cannot reach" "$ST/alerts.log" && ok "27 one alert names the credential that was not reachable" || ko "27 alerts: '$(cat "$ST/alerts.log" 2>/dev/null)'"
+# The request the denied pass kept is answered by a pass whose remote takes the push: main moves to the requested sha, and
+# the request is cleared.
+rm -f "$ST/alerts.log" "$ST"/auto/promote-main-*
+passenv SG_PROMOTE_REMOTE=$fake GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$T/fake-url.gitconfig; rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$n27" ] && [ -z "$(req)" ] && ok "27 a fake remote that takes the push moves main" \
+  || ko "27 accept: rc $rc, main $(tip main), want $n27, out '$(cat "$T/out")'"
 
 # No loop script but the two promotion scripts names the main push, and the pass itself pushes nothing.
 /usr/bin/grep -nE '^[^#]*\bpush\b' "$d/promote-main-pass.sh" >/dev/null && ko "the pass pushes by itself" || ok "the pass pushes nothing: promote-main.sh moves main"
