@@ -8,6 +8,9 @@ export HANG_NAP=$(( 271800000 + $$ ))
 # status line for the hub. A throwaway repository, a stub base command, stub suites: nothing here runs a real battery.
 # usage: bash test-fast-gate.sh [scripts dir]
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the hold is proved
+# gate.sh exports GATE_REUSE_FILE to the command it runs, so a suite under a gate inherits it: a memo hit of this suite then marks
+# the outer gate's row instead of writing its own, and the reuse row it reads is missing. The suite's gates read no outer marker.
+unset GATE_REUSE_FILE
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"   # (#801) the gate takes slots: its own budget, never the machine's
 export SG_FAST_LOG_DIR=$T/logs; mkdir -p "$SG_FAST_LOG_DIR"   # (#945) the gate's log sits outside SG_STATE, where the child that ran it may read it
@@ -137,6 +140,8 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="bash $T/base.sh" bash "$d
 [ $rc -ne 0 ] && ok "a base that does not resolve fails the gate: it is never skipped" || ko "unresolved base: rc $rc: $out"
 # The wave entry gate defaults to the fast gate, so a child's own changed scripts are proven before it enters.
 /usr/bin/grep -q 'SG_WAVE_GATES:=.*fast-gate\.sh' "$d/env.sh" && ok "the default wave entry gate is the fast gate" || ko "env.sh: the default SG_WAVE_GATES does not run fast-gate.sh"
+# The wave entry's own battery is on by default (#1800): a profile turns it off, and the entry then skips it.
+/usr/bin/grep -q 'SG_WAVE_ENTRY_GATE:=on' "$d/env.sh" && ok "the wave entry battery is on by default" || ko "env.sh: SG_WAVE_ENTRY_GATE does not default to on"
 
 # (#566) The default battery is the loop's one definition (base-battery.sh), and its pytest runs with a bounded worker count,
 # SG_GATE_WORKERS_CHILD, instead of `auto`. A stub python logs the argv of each leg: the count is set here, so this suite

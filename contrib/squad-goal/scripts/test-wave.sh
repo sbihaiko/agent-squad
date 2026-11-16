@@ -15,6 +15,9 @@ unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from
 # SERIAL_HOLD_SECONDS; serial.sh exports SG_SERIAL_HELD and reads SERIAL_POLL_SECONDS; a gate caller sets SG_GATE_KIND and
 # SG_GATE_STATUS. All of them go, beside REV.
 unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
+# gate.sh exports GATE_REUSE_FILE to the command it runs (its --run), so this suite run under a gate inherits it: a memo hit of
+# an entry then marks the outer gate's row instead of writing its own reuse row, and the row this suite reads is missing (#1798).
+unset GATE_REUSE_FILE
 # The clones and the wave's rebase replay commits, and a rebase needs a committer. A runner has none set and cannot
 # auto-detect one, so the suite names its own identity and never reads the machine's (#1062).
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b
@@ -1709,7 +1712,7 @@ z9_entry() { (cd "$1" && SG_STATE=$T/st SG_WAVE_GATES="bash $T/s/fast-gate.sh" S
 # Z9b (#1798): the entry's mode is on its gate-history line, in the seventeenth field: `reused` when a kept green pass
 # answered the entry and `gated` when the entry ran the gate itself. It is read with the caller, so a row of the child's own
 # gate never stands in for the entry's.
-lmode() { awk -F'\t' 'END { print $14 " " $17 }' "$T/st/gate-history" 2>/dev/null; }
+lmode() { awk -F'\t' -v s="$1" '$14 == "entry" && $4 == s { m = $14 " " $17 } END { print m }' "$T/st/gate-history" 2>/dev/null; }
 child 960 g960 "origin/$W23"; rm -f "$BL"; o=$(z9_childgate "$T/c960")
 [ -s "$BL" ] && ok "Z9: the child's final gate runs the battery and keeps its pass" || ko "Z9: the child's gate ran no battery: '$o'"
 # A child that commits after its gate holds a tree the pass never read. Its setup runs before any hold, so the hold covers only
@@ -1722,8 +1725,12 @@ if hold; then
   case "$o" in *"entered $W23"*) ok "Z9: a green final gate frees the child of the held gate lock: it enters";; *) ko "Z9: the entry did not enter under the held lock: rc $rc '$o'";; esac
   [ -s "$BL" ] && ko "Z9: the entry ran a second battery: $(cat "$BL")" || ok "Z9: the entry runs no second battery for the tree the child proved"
   case "$(wfact 960 run-23)" in *reuse*) ok "Z9: the entry record names the reuse";; *) ko "Z9: the record does not name the reuse: '$(wfact 960 run-23)'";; esac
-  [ "$(lmode)" = "entry reused" ] && ok "Z9: the entry's reuse is a history row whose mode is reused" \
-    || ko "Z9: the reuse row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+  s960=$($G -C "$T/c960" rev-parse HEAD)
+  [ "$(lmode "$s960")" = "entry reused" ] && ok "Z9: the entry's reuse is a history row whose mode is reused" \
+    || ko "Z9: the reuse row is '$(lmode "$s960")': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+  printf '1\tgate\tpass\t%s\t1\t\t\tpass\t\t0\t0\t0\tno\tchild\t0\t0\tskipped\t-\t-\t0\t-\tno\tlocal\t-\n' "$s960" >> "$T/st/gate-history"
+  [ "$(lmode "$s960")" = "entry reused" ] && ok "Z9: a child row after the entry row leaves the entry's reuse row" \
+    || ko "Z9: a child row after the entry row shadows the reuse row: '$(lmode "$s960")'"
   wait
   if hold; then
     rm -f "$BL"; REV_BASE=$W23 rev 961
@@ -1735,8 +1742,9 @@ if hold; then
     rm -f "$BL"; r=$(z9_entry "$T/c961" 961); rc=$?
     [ $rc = 0 ] && [ -s "$BL" ] && ok "Z9: with the lock free, the changed tree runs its own battery and enters" || ko "Z9: the changed tree did not run its battery: rc $rc '$(cat "$BL" 2>/dev/null)' '$r'"
     case "$(wfact 961 run-23)" in *reuse*) ko "Z9: a fresh battery recorded a reuse it never made: '$(wfact 961 run-23)'";; *) ok "Z9: a fresh battery records no reuse";; esac
-    [ "$(lmode)" = "entry gated" ] && ok "Z9: the entry that ran its own gate is a history row whose mode is gated" \
-      || ko "Z9: the gated row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+    s961=$($G -C "$T/c961" rev-parse HEAD)
+    [ "$(lmode "$s961")" = "entry gated" ] && ok "Z9: the entry that ran its own gate is a history row whose mode is gated" \
+      || ko "Z9: the gated row is '$(lmode "$s961")': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
   else
     wait 2>/dev/null
     ko "Z9: the second holder never held the gate lock, so the changed tree's hold could not be proved"
@@ -1745,5 +1753,73 @@ else
   wait 2>/dev/null
   ko "Z9: the holder never came to hold the gate lock, so the entry without a lock could not be proved"
 fi
+
+# Z10 (#1800, ADR-0166): SG_WAVE_ENTRY_GATE names whether the wave entry runs its own battery. With `off`, a child whose entry
+# finds no reusable green verdict enters after the clean rebase with no battery, and the entry is recorded as skipped. A reuse
+# hit enters as today and is recorded as reused, and with `on` the entry is unchanged: a miss runs the battery.
+W24=wave/run-24; start2 run-24 >/dev/null
+printf '#!/bin/bash\necho battery >> "%s/z10-battery.log"\n' "$T" > "$T/z10-batt.sh"
+BL10=$T/z10-battery.log
+z10_childgate() { (cd "$1" && SG_STATE=$T/st SG_FAST_CMD="bash $T/z10-batt.sh" SG_FAST_RETRY_CMD=false bash "$T/s/fast-gate.sh" 2>&1); }
+z10_entry() { (cd "$1" && SG_STATE=$T/st SG_WAVE_ENTRY_GATE=$2 SG_WAVE_GATES="bash $T/s/fast-gate.sh" SG_FAST_CMD="bash $T/z10-batt.sh" SG_FAST_RETRY_CMD=false bash "../s/wave.sh" enter run-24 "$3" 2>&1); }
+# (1) The gate off, and no reusable verdict: the child enters with no battery, and the entry records skipped.
+child 970 g970 "origin/$W24"; REV_BASE=$W24 rev 970; rm -f "$BL10"
+o=$(z10_entry "$T/c970" off 970); rc=$?
+case "$o" in *"entered $W24"*) [ $rc = 0 ] && ok "Z10: the gate off enters a child with no reusable verdict";; *) ko "Z10: the off entry refused the child: rc $rc '$o'";; esac
+[ -s "$BL10" ] && ko "Z10: the off entry ran a battery on a miss: $(cat "$BL10")" || ok "Z10: the off entry runs no battery on a miss"
+case "$(wfact 970 run-24)" in "entered "*skipped*) ok "Z10: the off entry records skipped";; *) ko "Z10: the entry record is '$(wfact 970 run-24)'";; esac
+[ "$(lmode)" = "entry skipped" ] && ok "Z10: the skipped entry is a history row whose mode is skipped" \
+  || ko "Z10: the skipped row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+# (2) The gate off, and a reusable green verdict: the child enters as today, and the entry records reused.
+child 971 g971 "origin/$W24"; rm -f "$BL10"; z10_childgate "$T/c971" >/dev/null; rm -f "$BL10"; REV_BASE=$W24 rev 971
+o=$(z10_entry "$T/c971" off 971); rc=$?
+case "$o" in *"entered $W24"*) ok "Z10: the gate off enters a child whose final gate is a reuse hit";; *) ko "Z10: the reuse hit did not enter: rc $rc '$o'";; esac
+[ -s "$BL10" ] && ko "Z10: the reuse hit ran a second battery: $(cat "$BL10")" || ok "Z10: the reuse hit runs no battery"
+[ "$(lmode)" = "entry reused" ] && ok "Z10: the reuse hit is a history row whose mode is reused" \
+  || ko "Z10: the reuse row is '$(lmode)': '$(tail -n 1 "$T/st/gate-history" 2>/dev/null)'"
+# (3) The gate on (the default): a miss runs the battery as before, and the entry records no skip.
+child 972 g972 "origin/$W24"; REV_BASE=$W24 rev 972; rm -f "$BL10"
+o=$(z10_entry "$T/c972" on 972); rc=$?
+case "$o" in *"entered $W24"*) ok "Z10: the gate on enters a child whose verdict is a miss";; *) ko "Z10: the on entry did not enter: rc $rc '$o'";; esac
+[ -s "$BL10" ] && ok "Z10: the gate on runs the battery on a miss" || ko "Z10: the gate on ran no battery on a miss: '$o'"
+case "$(wfact 972 run-24)" in *skipped*) ko "Z10: the gate on recorded a skip it never made: '$(wfact 972 run-24)'";; *) ok "Z10: the gate on records no skip";; esac
+
+# Z11 (#1800, ADR-0166): the wave's landing gate is unchanged when the entry gate is off. It still proves every child, and a
+# red tip still takes out the child that broke it and lands the rest.
+W25=wave/run-25; start2 run-25 >/dev/null
+en2off() { local r=$1 n=$2 o; REV_BASE=wave/$r rev "$n"; o=$((cd "$T/c$n" && SG_WAVE_ENTRY_GATE=off SG_WAVE_GATES=true bash "$T/s/wave.sh" enter "$r" "$n") 2>&1) \
+  || { ko "en2off $r #$n: the child did not enter its wave: $o"; return 1; }; printf '%s\n' "$o"; }
+child 980 g980 "origin/$W25"; en2off run-25 980 >/dev/null
+child 981 g981 "origin/$W25"; en2off run-25 981 >/dev/null
+child 982 g982 "origin/$W25"; en2off run-25 982 >/dev/null
+printf 'run-25\n' > "$T/st/auto/disp-981"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES='! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q "work 981"' SG_WAVE_CHILD_GATES='[ "$SG_WAVE_CHILD" = 981 ] && exit 1; exit 0' land2 run-25); rc=$?
+[ $rc = 0 ] && ok "Z11: with the entry gate off, the wave without the child that broke it lands (exit 0)" || ko "Z11: exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*"#981"*) ok "Z11: the landing gate names the child that broke the wave";; *) ko "Z11: no child named: '$r'";; esac
+$O cat-file -e dev:g980 2>/dev/null && $O cat-file -e dev:g982 2>/dev/null && ok "Z11: the other children land" || ko "Z11: the other children are not in dev"
+$O cat-file -e dev:g981 2>/dev/null && ko "Z11: the child that broke the wave landed" || ok "Z11: the culprit is not in dev"
+/usr/bin/grep -q 'issues/980 -f state=closed' "$T/gh.log" && /usr/bin/grep -q 'issues/982 -f state=closed' "$T/gh.log" && ok "Z11: the issues of the other children close" || ko "Z11: the other children's issues were not closed"
+/usr/bin/grep -q 'issues/981 -f state=closed' "$T/gh.log" && ko "Z11: the culprit's issue was closed" || ok "Z11: the culprit's issue is not closed"
+[ ! -e "$T/st/auto/disp-981" ] && /usr/bin/grep -qx 'o 3 Todo 981' "$T/board.log" && ok "Z11: the culprit is back in the queue" || ko "Z11: the culprit was not requeued"
+
+# Z12 (#1800, criterion 4): a wave of two children, both entered with the entry gate off. The bad child's tree carries the file
+# z12bad, and the landing battery fails on any tree that holds it: the tip check reads the tip's tree, and each child's own
+# check reads the files its commits change. The landing gate takes the bad child out and lands the good one.
+W26=wave/run-26; start2 run-26 >/dev/null
+child 990 g990 "origin/$W26"; en2off run-26 990 >/dev/null
+child 991 z12bad "origin/$W26"; en2off run-26 991 >/dev/null
+case "$(wfact 990 run-26)" in "entered "*skipped*) ok "Z12: the good child entered with no entry battery";; *) ko "Z12: #990 entry is '$(wfact 990 run-26)'";; esac
+case "$(wfact 991 run-26)" in "entered "*skipped*) ok "Z12: the bad child entered with no entry battery";; *) ko "Z12: #991 entry is '$(wfact 991 run-26)'";; esac
+printf 'run-26\n' > "$T/st/auto/disp-991"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES='[ ! -e z12bad ]' SG_WAVE_CHILD_GATES='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx z12bad && exit 1; exit 0' land2 run-26); rc=$?
+[ $rc = 0 ] && ok "Z12: with the entry gate off, the wave without the bad child lands (exit 0)" || ko "Z12: exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*"#991"*) ok "Z12: the landing gate names the bad child";; *) ko "Z12: no child named: '$r'";; esac
+$O cat-file -e dev:g990 2>/dev/null && ok "Z12: the good child lands" || ko "Z12: the good child is not in dev"
+$O cat-file -e dev:z12bad 2>/dev/null && ko "Z12: the bad child landed" || ok "Z12: the bad child is not in dev"
+/usr/bin/grep -q 'issues/990 -f state=closed' "$T/gh.log" && ok "Z12: the good child's issue closes" || ko "Z12: #990 was not closed"
+/usr/bin/grep -q 'issues/991 -f state=closed' "$T/gh.log" && ko "Z12: the bad child's issue was closed" || ok "Z12: the bad child's issue is not closed"
+[ ! -e "$T/st/auto/disp-991" ] && /usr/bin/grep -qx 'o 3 Todo 991' "$T/board.log" && ok "Z12: the bad child is back in the queue" || ko "Z12: the bad child was not requeued"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

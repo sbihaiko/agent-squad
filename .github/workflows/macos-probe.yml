@@ -1,0 +1,101 @@
+# A manual probe (#1976): can a GitHub-hosted macOS runner run the loop's macOS-bound tests?
+# It reports facts to the job summary and holds no secret. The read-only token is the only credential it has.
+name: macos-probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: check out the repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: sandbox-exec denies one write
+        id: sandbox
+        continue-on-error: true
+        run: |
+          d=$(mktemp -d); d=$(cd "$d" && pwd -P)
+          target="$d/denied.txt"
+          prof="(version 1)(allow default)(deny file-write* (subpath \"$d\"))"
+          if sandbox-exec -p "$prof" /usr/bin/true; then started=yes; else started=no; fi
+          if sandbox-exec -p "$prof" /bin/sh -c "echo x > '$target'" 2>/dev/null; then wrote=yes; else wrote=no; fi
+          if [ -e "$target" ]; then on_disk=yes; else on_disk=no; fi
+          {
+            echo "### 1. sandbox-exec"
+            echo "- starts a process under a profile: $started"
+            echo "- a write under the denied subpath succeeds: $wrote"
+            echo "- the denied file exists on disk: $on_disk"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: launchctl loads and unloads a user agent
+        id: launchctl
+        continue-on-error: true
+        run: |
+          d=$(mktemp -d)
+          label="com.agentsquad.probe.$$"
+          plist="$d/$label.plist"
+          cat > "$plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <plist version="1.0"><dict>
+          <key>Label</key><string>$label</string>
+          <key>ProgramArguments</key><array><string>/usr/bin/true</string></array>
+          <key>RunAtLoad</key><false/>
+          </dict></plist>
+          EOF
+          domain="gui/$(id -u)"
+          load_rc=0; launchctl bootstrap "$domain" "$plist" || load_rc=$?
+          unload_rc=0; launchctl bootout "$domain/$label" || unload_rc=$?
+          {
+            echo "### 2. launchctl"
+            echo "- bootstrap of a temporary user agent, exit code: $load_rc"
+            echo "- bootout of the same agent, exit code: $unload_rc"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$load_rc" -eq 0 ] && [ "$unload_rc" -eq 0 ] || { echo "::error::launchctl did not load and unload the user agent"; exit 1; }
+
+      - name: cc builds the compiled process reader
+        id: cc
+        continue-on-error: true
+        run: |
+          d=$(mktemp -d)
+          build_rc=0; cc -O2 -o "$d/psfast" contrib/squad-goal/scripts/psfast.c || build_rc=$?
+          run_rc=0; "$d/psfast" -p $$ >/dev/null 2>&1 || run_rc=$?
+          {
+            echo "### 3. cc"
+            echo "- cc builds contrib/squad-goal/scripts/psfast.c, exit code: $build_rc"
+            echo "- the built reader runs against this shell, exit code: $run_rc"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$build_rc" -eq 0 ] || { echo "::error::cc failed to build psfast.c"; exit 1; }
+          [ "$run_rc" -eq 0 ] || { echo "::error::the built psfast reader failed"; exit 1; }
+
+      - name: macos_bound shell suites
+        id: suites
+        continue-on-error: true
+        run: |
+          xml="$RUNNER_TEMP/suites.xml"; log="$RUNNER_TEMP/suites.log"; py="$RUNNER_TEMP/venv/bin/python"
+          rc=0; start=$(date +%s)
+          if python3 -m venv "$RUNNER_TEMP/venv" && "$py" -m pip install --quiet pytest; then
+            "$py" -m pytest tests/test_shell_suites.py -m macos_bound -p no:deepeval -p no:cacheprovider \
+              --junitxml="$xml" >"$log" 2>&1 || rc=$?
+          else
+            rc=1
+          fi
+          secs=$(( $(date +%s) - start ))
+          pass=0; fail=0; skip=0
+          if [ -f "$xml" ]; then
+            read -r pass fail skip < <(python3 -c 'import sys, xml.etree.ElementTree as E; r = E.parse(sys.argv[1]).getroot(); s = r if r.tag == "testsuite" else r[0]; bad = int(s.get("failures")) + int(s.get("errors")); print(int(s.get("tests")) - bad - int(s.get("skipped")), bad, s.get("skipped"))' "$xml")
+          fi
+          {
+            echo "### 4. macos_bound shell suites (tests/test_shell_suites.py, -m macos_bound)"
+            echo "- pass: $pass"
+            echo "- fail: $fail"
+            echo "- skipped: $skip"
+            echo "- time: ${secs} s"
+            echo "- pytest exit code: $rc"
+            grep '^FAILED' "$log" | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$rc" -eq 0 ] || { echo "::error::macos_bound shell suites did not all pass"; exit 1; }
