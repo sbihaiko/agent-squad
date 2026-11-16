@@ -1120,6 +1120,7 @@ def reconcile_board():
         if not dry: mk.touch()
     specs = set()   # a spec is never work, and its card is a fold over its sub-issues (ADR-0142): a commit subject, a branch or a landing that names it is its children's, so no work rule writes its card and the fold alone sets it (#665)
     held_owner = {}   # issue -> (rank, status, why): the write frozen:owner held back this pass, named in cycle.log when it differs
+    parked = {}   # issue -> (status, why): the Todo back to which R would have moved a card the owner parked in Backlog, named in cycle.log
     _owner_frozen = {}
     def owner_frozen(n):   # the issue carries frozen:owner: the owner holds its card, so R never moves it (the open-issue read answers for the whole pass)
         n = str(n)
@@ -1138,6 +1139,11 @@ def reconcile_board():
             return
         old = expected.get(n)
         if old and old[0] >= rank: return
+        if status == os.environ.get("SG_TODO", "Todo") and card_status(proj, n) == "Backlog":
+            # The loop's one backward move undoes the dispatch that took the card out of Todo (ADR-0143). A dispatch reads
+            # Todo only, so a card in Backlog was never claimed by the loop: the owner parked it, and only the owner starts it
+            # (ADR-0142). A run that ends without landing derives Todo here, and that Todo must never reach the parked card (#2007).
+            parked.setdefault(n, (status, why)); return
         expected[n] = (rank, status, why, run_id, run_ts)
         if status == "Todo" and "nothing landed" in why: no_landing.add(n)
     def wave_column(n, f, i):   # a card whose wave is in dev is Closed; a gate that holds the wave is Gating; the push, the approval and the dev CI are reported facts, never a column (ADR-0145, ADR-0170)
@@ -1396,6 +1402,8 @@ def reconcile_board():
         have = have_all.get(str(n))
         if have is not None and have != want:
             say(f"BOARD-FROZEN #{n}: frozen:owner holds the card in {have}; R left it alone (would have written {want}: {why})")
+    for n, (want, why) in sorted(parked.items(), key=lambda kv: int(kv[0])):   # the owner parked the card in Backlog: R names the move it held back and writes nothing (#2007)
+        say(f"PARKED #{n}: the card sits in Backlog, which only the owner leaves; R left it alone (would have written {want}: {why})")
     for n in sorted((k for k in set(expected) | set(olabels) if RUN_PARENT in (olabels.get(k) or issue_labels(k))), key=int):   # a run parent is a roll-up in GitHub, never work: it gets no card, and a card it has is removed, only when the board carries one (#500)
         expected.pop(n, None)
         if str(n) in have_all and board_write(["--remove", owner, str(proj), str(n)], n, "the issue is a run parent"):
@@ -1618,11 +1626,13 @@ if owner and proj and repo0:
             if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])   # only the column the dispatch set: never downgrade a card another step moved past it
             mks = " and ".join("auto/" + k + "-" + n for k in marks[n])
             col = expected.get(n)
+            park = card_status(proj, n) == "Backlog"   # the owner parked the card: R derived no Todo for it (#2007), and no pass dispatches a Backlog card (ADR-0142)
             where = (f"its card is {col[1]}" if col else "its card keeps its column") + (f" (bug card back in {moves[-1][1]})" if moves else "") + " and"
             kept = unpushed(f)   # #771: the loop pushes no work (#361), so the release names a child's unpushed commits for salvage
             salv = f"; its child left commits on no remote branch, kept for salvage: {', '.join(kept)}" if kept else ""
             stop = stop_of(n)   # the count above may have just stopped the issue (WAVE STOP): the line names the stop, never a dispatch that will not come (#1958)
-            nxt = f"; the issue is stopped ({stop}), so no pass dispatches it until the owner rearms it" if stop else " so it dispatches again"
+            nxt = (f"; its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo" if park
+                   else f"; the issue is stopped ({stop}), so no pass dispatches it until the owner rearms it" if stop else " so it dispatches again")
             say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped{nxt}{salv}")
             if not dry:
                 for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"bug card back in {s} after run {f.name} ended {i['name']}")
@@ -1630,7 +1640,7 @@ if owner and proj and repo0:
                 if kept: (st / "auto" / f"salvage-{n}").write_text("".join(k + "\n" for k in kept))   # the next dispatch names it (startability.sh)
                 (st / "cq").mkdir(exist_ok=True)
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
-                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped" + (f". The issue is stopped ({stop}), so no pass dispatches it until the owner rearms it." if stop else ", so the next cycle dispatches the issue again.") + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
+                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped" + (". Its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo." if park else f". The issue is stopped ({stop}), so no pass dispatches it until the owner rearms it." if stop else ", so the next cycle dispatches the issue again.") +(f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
         if not again and not dry: mk.touch()
     # O (#888): a probe's refutation that failed for a transient cause leaves auto/probe-retry-<n>. Rule O above never reads a
     # child that entered its wave, so this sweep sends it again: once a pass, for an open probe frozen for the owner, read from
