@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: autobug.sh   (called by watch.sh every ~6 min; AB_DRY=1 prints what it would dispatch)
 # Automatic bug/debt fixing: every open issue labeled $SG_BUG_LABEL (then, only when none of those is startable, `debt`) that no open work branch names, no dispatch
-# marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict), none of $SG_BUG_SKIP_LABELS
+# marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict), no file a live run holds
+# (slicecut.py holds, the frontier's own issue-to-file map, ADR-0150), none of $SG_BUG_SKIP_LABELS
 # (the holder and hold floor) and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
 # per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
 # runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
@@ -298,6 +299,11 @@ board=$(sg_board_rows) || { AB_REASON="the board did not answer"; echo "AUTOBUG:
 printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
 export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from this pass's one board read (#1620)
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "
+# (ADR-0150 across runs, #2016) The frontier's issue-to-file map, read here across the live runs too: a bug whose body names a
+# file a live run holds waits for a later pass, and the line names the holding run. The map is slicecut.py's (cluster.paths),
+# never a second copy, so both dispatchers answer the same file set. A check that cannot run filters nothing, as in the
+# frontier: a failed read names no hold and holds no startable bug.
+python3 "$here/slicecut.py" holds "$F/issues.json" > "$F/held" 2>/dev/null || rm -f "$F/held"
 ready_now() {   # <issue>: 0 when stack.sh answers READY
   local n=$1 out w
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
@@ -348,6 +354,10 @@ for sel in "$lab" debt; do
     flab=; case ",$labels," in *",frozen:not-startable,"*) flab=1;; esac
     sg_not_startable "$n" "$flab" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE (its marker, or its frozen:not-startable label with no marker to re-arm it)"; continue; }
     h=$(sg_ledger_held "$n") && { echo "AUTOBUG skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
+    # ADR-0150 across runs: a live run that edits a file of this bug's body holds the bug, and the line names that run. The
+    # two dispatchers read one map, so a bug never enters a run beside a child that edits the same file.
+    hf=$(awk -F'\t' -v n="$n" '$1 == n { print $2 " is held by run " $3; exit }' "$F/held" 2>/dev/null)
+    [ -n "$hf" ] && { echo "AUTOBUG skip #$n: $hf (ADR-0150); it waits for a later pass"; continue; }
     ready_now "$n" || continue
     sg_ac_refused "$n" "$F/issue-$n.json" AUTOBUG && continue   # an acceptance command on a missing script (#729)
     cand+=("$n"); [ -n "${tri:-}" ] && triaged+=("$n")

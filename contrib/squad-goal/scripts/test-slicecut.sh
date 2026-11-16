@@ -137,6 +137,19 @@ out=$(python3 "$src" release "$T/issues.json" 2>&1)
 case "$out" in *"RELEASE gui/10 "*) ok "D2: once the landing ends, the release moves the branch onto the base";; *) ko "D2: no release after the landing: '$out'";; esac
 [ "$(tip gui/10)" = "$(base_tip)" ] && ok "D2: the released branch starts at the base" || ko "D2: gui/10 at $(tip gui/10), base $(base_tip)"
 
+# H1: the same map, read across the live runs alone: `holds` names each issue the map puts on a file a live run holds, with
+#     that run, and it names nothing for an issue whose body shares no file with a live run (#2016, the bug lane's hold).
+issues '[{"number":21,"title":"a","body":"edit scripts/held.py","labels":[]},{"number":22,"title":"b","body":"fix scripts/held.py too","labels":[]},{"number":23,"title":"c","body":"edit scripts/loose.py","labels":[]}]'
+: > "$SG_STATE/active-runs.txt"; rm -f "$SG_STATE"/auto/disp-* "$SG_STATE"/auto/bug-*
+live_run run-h 21
+out=$(python3 "$src" holds "$T/issues.json" 2>&1)
+case "$out" in *"22"$'\t'"scripts/held.py"$'\t'"run-h"*) ok "H1: a live run's file is named with its issue and its run";; *) ko "H1: no hold line: '$out'";; esac
+case "$out" in *"23"$'\t'*) ko "H1: an issue that shares no file with a live run is held: '$out'";; *) ok "H1: an issue that shares no file with a live run is held by nothing";; esac
+[ -z "$(tip gui/22)" ] && ok "H1: holds cuts no branch" || ko "H1: holds cut gui/22"
+done_run run-h
+out=$(python3 "$src" holds "$T/issues.json" 2>&1)
+[ -z "$out" ] && ok "H1: a run whose last verdict is in holds no file" || ko "H1: a finished run still holds: '$out'"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "slicecut: all checks green"; exit 0; }
 echo "slicecut: FAILED"; exit 1
