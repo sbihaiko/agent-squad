@@ -128,7 +128,8 @@ def test_the_watchdog_stands_down_at_the_half_minute_it_is_told_to(tmp_path):
         folder = tmp_path / "run-x"
         (tmp_path / "hb" / "run-x").write_text(f"10.0 {T0}\n")
         assert heartbeat.scan(runlist(tmp_path, folder), tmp_path, tmp_path / "hb", now=T0 + 2 * MIN, rows=one_row(),
-                              kill=lambda *a: None, mark=lambda f, r: True)
+                              read=lambda: table_for(one_row()), kill=lambda *a: None, killpg=lambda *a: None,
+                              mark=lambda f, r: True)
     finally:
         del os.environ["HB_FLAT_MIN"], os.environ["HB_RECORD_MIN"]
 
@@ -204,3 +205,19 @@ def test_a_run_kill_never_signals_a_pid_whose_start_time_changed():
     heartbeat.kill_owned(owned, read=lambda: reused, kill=lambda pid, sig: sent.append((pid, sig)),
                          killpg=lambda pg, sig: groups.append((pg, sig)), sleep=lambda s: None)
     assert sent == [] and groups == []
+
+
+def test_a_run_kill_never_signals_the_group_of_the_process_that_started_the_engine():
+    """#1993: an engine that is no group leader shares its parent's group. That group is the driver's, never the run's, so it
+    gets no signal; the engine itself still gets its TERM and KILL."""
+    table = {
+        5: _proc(5, 1, 5, 50.0, "bash watch.sh"),
+        10: _proc(10, 5, 5, 100.0, "python3 -m squad start x"),
+        20: _proc(20, 10, 20, 200.0, "zsh -c sleep 540"),
+    }
+    owned = heartbeat.owned_procs(10, table)
+    sent, groups = [], []
+    heartbeat.kill_owned(owned, read=lambda: table, kill=lambda pid, sig: sent.append((pid, sig)),
+                         killpg=lambda pg, sig: groups.append((pg, sig)), sleep=lambda s: None)
+    assert all(pg != 5 for pg, _ in groups) and (20, signal.SIGTERM) in groups
+    assert (10, signal.SIGTERM) in sent and all(pid != 5 for pid, _ in sent)

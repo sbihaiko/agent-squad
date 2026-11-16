@@ -122,7 +122,8 @@ def stamp(stamp_dir, run, cpu, now):
     return None, None
 
 
-def scan(run_file, checkout, stamp_dir, now=None, rows=None, kill=os.kill, mark=K.mark_killed, out=None, read=procs.snapshot):
+def scan(run_file, checkout, stamp_dir, now=None, rows=None, kill=os.kill, mark=K.mark_killed, out=None, read=procs.snapshot,
+         killpg=os.killpg):
     """One heartbeat pass over the runs an active list names. Return one record per kill.
 
     `rows`, `kill` and `mark` are injectable so a test runs the pass with a stub run and no real process.
@@ -163,7 +164,7 @@ def scan(run_file, checkout, stamp_dir, now=None, rows=None, kill=os.kill, mark=
             continue
         node = last_node(events)
         try:
-            survivors = stop_run(pid, read, kill)
+            survivors = stop_run(pid, read, kill, killpg)
         except procs.ReadError:
             continue   # no owned set from an unreadable table, so nothing is signalled
         mark(folder, "killed: heartbeat_stale")
@@ -200,16 +201,27 @@ def _holds(table, pid, start):
     return p is not None and p.start == start and p.stat != "Z"
 
 
+def _signal(send, target, sig):
+    """One signal; a process that ended between the read and the signal is no error, so the pass goes on to the next run."""
+    try:
+        send(target, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def kill_owned(owned, read, kill=os.kill, killpg=os.killpg, sleep=time.sleep):
-    """TERM, then KILL, to each owned process group that still holds a member and to each owned process that still holds its
-    start time. Every signal follows a fresh read, so a reused pid is never signalled. Return the owned pids that survive KILL."""
+    """TERM, then KILL, to each process group an owned process led at the owned read while an owned member still holds its
+    start time, and to each owned process that still holds its start time. Every signal follows a fresh read, so a reused pid is never signalled. A group
+    whose leader is not owned is never signalled: an engine that shares its parent's group would otherwise signal the parent,
+    the driver that started it. Return the owned pids that survive KILL."""
+    led = {g for _, (_, g) in owned.items() if g > 1 and g in owned and owned[g][1] == g}   # groups an owned process leads
     for sig in (signal.SIGTERM, signal.SIGKILL):
         now = read()
-        for pgid in sorted({g for pid, (start, g) in owned.items() if g > 1 and _holds(now, pid, start)}):
-            killpg(pgid, sig)
+        for pgid in sorted({g for pid, (start, g) in owned.items() if g in led and _holds(now, pid, start)}):
+            _signal(killpg, pgid, sig)
         for pid, (start, _) in owned.items():
             if _holds(read(), pid, start):
-                kill(pid, sig)
+                _signal(kill, pid, sig)
         if sig is signal.SIGTERM:
             sleep(TERM_GRACE_S)
     final = read()
