@@ -3,9 +3,10 @@
 # And for its watermark (#246): a recomputed column lower in the shipped flow than the one the card carries is refused and reported
 # by name, never written; a card behind the recomputed column moves forward as it always did; a revert keeps the column and adds the tag.
 # usage: bash test-reconcile.sh [path/to/reconcile.py]
+unset SG_GH_PASS   # the reconciler names its own reads; a pass name the enclosing loop exported is not this suite's
 src=${1:-$(dirname "$0")/reconcile.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/bin" "$T/st"; test -f "$(dirname "$src")/board_columns.py" || exit 1; cp "$src" "$T/s/reconcile.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/issue_state.py" "$T/s/"; cp "$(dirname "$src")/board-definition.json" "$T/s/"   # the shipped axis the flow order reads lives in the pinned definition beside the module
-cp "$(dirname "$src")/ghread.py" "$(dirname "$src")/ghthrottle.py" "$T/s/"   # the door reader and the quota floor reader reconcile imports (#847)
+cp "$(dirname "$src")/ghread.py" "$(dirname "$src")/ghthrottle.py" "$(dirname "$src")/board_archive.py" "$T/s/"   # the door reader, the quota floor reader and the archive pass reconcile imports (#847, #1931)
 printf '#!/bin/bash\necho "$*" >> "%s/moves"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash

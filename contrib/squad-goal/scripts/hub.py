@@ -2555,7 +2555,7 @@ def read_pause(secs):
 # switch shows.
 PROFILER_SWITCH = STATE / "profiler.json"
 PROFILER_AUDIT = STATE / "profiler-audit.jsonl"
-PROFILER_SECS = 1.0   # the cadence of the process-table read, start to start: a second resolves a fork storm, and the read runs only while the switch is on
+PROFILER_SECS = 1.0   # the wait after each read of the process table, so two readings are never closer than this: a second resolves a fork storm, and the read runs only while the switch is on
 PROFILER_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pass
 PROFILER_STILL_RUNNING = "still running: the sampler ends after its current read of the process table"
@@ -2581,11 +2581,10 @@ def profiler_scope():
     return hub_profiler.Scope(pid, tuple(marks))
 
 def profiler_sampler(stop):
-    """Read the process table every PROFILER_SECS, start to start, until `stop` is set, while a page reads this profile
-    (#1790). A failed or empty read is counted and not folded: folded, it would count every process of the next reading as
-    new."""
+    """Read the process table, then wait PROFILER_SECS after the read ends, until `stop` is set, while a page reads this
+    profile (#1790). A failed or empty read is counted and not folded: folded, it would count every process of the next
+    reading as new."""
     while not stop.is_set():
-        began = time.monotonic()
         try: reading = {(pid, p.start): (p.ppid, p.cpu, p.command) for pid, p in profiling_table().items()}
         except Exception: reading = None
         try: scope = profiler_scope() if reading else None
@@ -2594,7 +2593,7 @@ def profiler_sampler(stop):
             if stop.is_set() or not profiler_on() or not read_wanted(): break   # the switch file is the truth, whoever wrote it
             if reading: PROFILER["window"].add(time.time(), reading, scope)
             else: PROFILER["window"].fail()
-        stop.wait(max(0.0, PROFILER_SECS - (time.monotonic() - began)))
+        stop.wait(PROFILER_SECS)
 
 def profiler_ensure():
     """Start the sampler when the switch is on and none runs. The hub calls this as it starts, and on each read, so a
