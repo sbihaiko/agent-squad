@@ -48,48 +48,54 @@ jobs:
           </dict></plist>
           EOF
           domain="gui/$(id -u)"
-          launchctl bootstrap "$domain" "$plist"; load_rc=$?
-          launchctl bootout "$domain/$label"; unload_rc=$?
+          load_rc=0; launchctl bootstrap "$domain" "$plist" || load_rc=$?
+          unload_rc=0; launchctl bootout "$domain/$label" || unload_rc=$?
           {
             echo "### 2. launchctl"
             echo "- bootstrap of a temporary user agent, exit code: $load_rc"
             echo "- bootout of the same agent, exit code: $unload_rc"
           } >> "$GITHUB_STEP_SUMMARY"
+          [ "$load_rc" -eq 0 ] && [ "$unload_rc" -eq 0 ] || { echo "::error::launchctl did not load and unload the user agent"; exit 1; }
 
       - name: cc builds the compiled process reader
         id: cc
         continue-on-error: true
         run: |
           d=$(mktemp -d)
-          cc -O2 -o "$d/psfast" contrib/squad-goal/scripts/psfast.c; build_rc=$?
-          "$d/psfast" -p $$ >/dev/null 2>&1; run_rc=$?
+          build_rc=0; cc -O2 -o "$d/psfast" contrib/squad-goal/scripts/psfast.c || build_rc=$?
+          run_rc=0; "$d/psfast" -p $$ >/dev/null 2>&1 || run_rc=$?
           {
             echo "### 3. cc"
             echo "- cc builds contrib/squad-goal/scripts/psfast.c, exit code: $build_rc"
             echo "- the built reader runs against this shell, exit code: $run_rc"
           } >> "$GITHUB_STEP_SUMMARY"
+          [ "$build_rc" -eq 0 ] || { echo "::error::cc failed to build psfast.c"; exit 1; }
+          [ "$run_rc" -eq 0 ] || { echo "::error::the built psfast reader failed"; exit 1; }
 
       - name: macos_bound shell suites
         id: suites
         continue-on-error: true
         run: |
-          here=contrib/squad-goal/scripts
-          pass=0; fail=0; failed=""
-          start=$(date +%s)
-          for s in "$here"/test-*.sh; do [ -f "$s" ] || continue
-            hm=$(mktemp -d)
-            if env $(compgen -e | grep -E "^(SG_|SERIAL_)" | sed "s/^/-u /") HOME="$hm" bash "$s" >/dev/null 2>&1; then
-              pass=$((pass + 1))
-            else
-              fail=$((fail + 1)); failed="$failed $(basename "$s")"
-            fi
-            rm -rf "$hm"
-          done
+          xml="$RUNNER_TEMP/suites.xml"; log="$RUNNER_TEMP/suites.log"; py="$RUNNER_TEMP/venv/bin/python"
+          rc=0; start=$(date +%s)
+          if python3 -m venv "$RUNNER_TEMP/venv" && "$py" -m pip install --quiet pytest; then
+            "$py" -m pytest tests/test_shell_suites.py -m macos_bound -p no:deepeval -p no:cacheprovider \
+              --junitxml="$xml" >"$log" 2>&1 || rc=$?
+          else
+            rc=1
+          fi
           secs=$(( $(date +%s) - start ))
+          pass=0; fail=0; skip=0
+          if [ -f "$xml" ]; then
+            read -r pass fail skip < <(python3 -c 'import sys, xml.etree.ElementTree as E; r = E.parse(sys.argv[1]).getroot(); s = r if r.tag == "testsuite" else r[0]; bad = int(s.get("failures")) + int(s.get("errors")); print(int(s.get("tests")) - bad - int(s.get("skipped")), bad, s.get("skipped"))' "$xml")
+          fi
           {
-            echo "### 4. macos_bound shell suites"
+            echo "### 4. macos_bound shell suites (tests/test_shell_suites.py, -m macos_bound)"
             echo "- pass: $pass"
             echo "- fail: $fail"
+            echo "- skipped: $skip"
             echo "- time: ${secs} s"
-            [ -n "$failed" ] && echo "- failed suites:$failed"
+            echo "- pytest exit code: $rc"
+            grep '^FAILED' "$log" | sed 's/^/- /' || true
           } >> "$GITHUB_STEP_SUMMARY"
+          [ "$rc" -eq 0 ] || { echo "::error::macos_bound shell suites did not all pass"; exit 1; }
