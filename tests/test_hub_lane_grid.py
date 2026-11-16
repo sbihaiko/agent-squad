@@ -76,8 +76,11 @@ def _board(groups):
 
 
 def test_a_lane_fills_a_grid_of_cards():
-    """The cards of one column are a grid, so a wide lane shows several cards on one line."""
-    assert "grid-template-columns:repeat(auto-fill,minmax(340px,1fr))" in _rule("#bbody .cell")
+    """The cards of one column are a grid, so a wide lane shows several cards on one line.
+
+    The card's floor yields to the lane (`minmax(min(340px,100%),1fr)`), so a lane narrower than one card still
+    holds its card inside its own border (#2018)."""
+    assert "grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr))" in _rule("#bbody .cell")
 
 
 def _cards_per_line(lane_px):
@@ -90,7 +93,7 @@ def _cards_per_line(lane_px):
     page = HUB_PY.read_text()
     assert "*{box-sizing:border-box}" in page, "the page does not size its boxes by the border"
     rule = _rule("#bbody .cell")
-    card = int(re.search(r"minmax\((\d+)px,", rule).group(1))
+    card = int(re.search(r"minmax\((?:min\()?(\d+)px,", rule).group(1))   # the floor, inside `min(...)` when it yields to the lane
     gap = int(re.search(r"gap:(\d+)px", rule).group(1))
     pad = int(re.search(r"padding:(\d+)px", rule).group(1))
     border = int(re.search(r"border-right:(\d+)px", rule).group(1))
@@ -213,3 +216,44 @@ def test_the_mobile_page_keeps_one_card_per_line():
     assert "auto-fill" not in mobile, "the phone page takes no grid of cards"
     card = re.search(r"\.card\{([^}]*)\}", mobile).group(1)
     assert "display:block" in card and "width:100%" in card, card
+
+
+def _track_widths(tracks, board_px):
+    """The width each column track takes on a board of this width, from the track list the page draws.
+
+    A track's floor is its `minmax` minimum; the room left over is shared by the tracks' weights, as the grid does.
+    """
+    parts = [(int(a), int(b)) for a, b in re.findall(r"minmax\((\d+)px,(\d+)fr\)", tracks)]
+    assert parts, tracks
+    mins = [a for a, _ in parts]
+    if sum(mins) >= board_px:
+        return mins
+    unit = (board_px - sum(mins)) / sum(b for _, b in parts)
+    return [a + b * unit for a, b in parts]
+
+
+def _lane_card_need():
+    """The width a lane needs for one card: the card's floor, both paddings and the divider, or 0 when the card
+    yields to the lane's own width."""
+    page = HUB_PY.read_text()
+    assert "*{box-sizing:border-box}" in page, "the page does not size its boxes by the border"
+    rule = _rule("#bbody .cell")
+    if "minmax(min(" in rule:   # the card's floor yields to the lane, so the lane's width fits its card
+        return 0
+    card = int(re.search(r"minmax\((?:min\()?(\d+)px,", rule).group(1))   # the floor, inside `min(...)` when it yields to the lane
+    pad = int(re.search(r"padding:(\d+)px", rule).group(1))
+    border = int(re.search(r"border-right:(\d+)px", rule).group(1))
+    return card + 2 * pad + border
+
+
+def test_the_last_lane_of_a_group_stays_inside_the_groups_right_edge():
+    """#2018: at about 2000 px the No spec group drew five lanes, and the card of its last lane (Code Complete)
+    ran past the group's right border while Backlog and Doing stayed inside. The card's 340 px floor plus the
+    lane's padding and divider is 357 px, wider than the 320 px floor a lane's track can take, and the last lane
+    is the one whose weight leaves it under 357 px. A card yields to the lane's own width instead."""
+    counts = [3, 6, 9, 2, 1]   # Backlog, Todo, Doing, Code Review, Code Complete: the No spec group's drawn cards
+    tracks = _lanes_rule(f"console.log(JSON.stringify(colTracks({json.dumps(counts)})));")
+    widths = _track_widths(tracks, 2000)
+    need = _lane_card_need()
+    assert need <= widths[-1], (f"the last lane's card is {need - widths[-1]:.0f} px past the group's right edge "
+                                f"({need:.0f} px of card for a lane of {widths[-1]:.0f} px)")
