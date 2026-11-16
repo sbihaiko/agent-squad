@@ -13,6 +13,7 @@ SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 COLUMNS_PY = SCRIPTS / "board_columns.py"
 HUB_PY = SCRIPTS / "hub.py"
 RECONCILE_PY = SCRIPTS / "reconcile.py"
+JANITOR_PY = SCRIPTS / "janitor.py"
 NAMES = ("No status", "Todo", "Open Specs", "In Progress", "Code Complete", "Blocked", "Done",
          "Open PRs")
 
@@ -112,6 +113,19 @@ def test_a_card_closed_as_not_planned_draws_abandoned_whatever_its_status(table)
     assert table.view_column("Closed", True, reason="completed") == ("Closed", None)
     assert table.view_column("Closed", True, reason="reopened") == ("Closed", None)
     assert table.view_column("Closed", True) == ("Closed", None), "a read that carries no reason keeps the Status's word"
+
+
+def test_the_terminal_column_follows_the_close_reason_and_both_passes_read_it(table):
+    """#1932 (spec #132): a closed issue's card goes to Abandoned when the close reason says the issue was not delivered,
+    and to Closed only for a completed close. The janitor's terminal rule and the reconciler both derive it from this one
+    function, so the two passes can never disagree about where a closed issue's card belongs."""
+    assert table.terminal_column("closed", "not_planned") == "Abandoned"
+    assert table.terminal_column("closed", "duplicate") == "Abandoned"
+    assert table.terminal_column("closed", "completed") == "Closed"
+    assert table.terminal_column("closed", None) == "Closed"
+    assert table.terminal_column("open", None) is None
+    for path in (RECONCILE_PY, JANITOR_PY):
+        assert "terminal_column" in path.read_text(), f"{path.name} derives the terminal column on its own"
 
 
 def test_the_hub_names_no_column_literal_of_its_own(columns):
