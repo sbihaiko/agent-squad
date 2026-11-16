@@ -27,6 +27,8 @@ pre = ["caffeinate", "-dimsu"] if shutil.which("caffeinate") else []
 subprocess.Popen(pre + ["python3", sys.argv[1], sys.argv[2]], stdout=open("/tmp/squad-hub.log", "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
 P
   for _ in 1 2 3 4 5 6 7 8 9 10; do sleep 1; a=$(ask) && break; done
+  hs=$(cut -d' ' -f1 "$here/../PUBLISHED" 2>/dev/null); [ -n "$hs" ] || hs=$(git -C "$here/.." rev-parse HEAD 2>/dev/null)
+  [ -n "$hs" ] && [ -n "${SG_STATE:-}" ] && mkdir -p "$SG_STATE" && printf '%s\n' "$hs" > "$SG_STATE/hub.sha.$$" && mv "$SG_STATE/hub.sha.$$" "$SG_STATE/hub.sha"   # the build this hub loaded: live-guard.sh names a later publish of its files
 fi
 case "$a" in *'"hub": "squad-hub"'*) ;; *) echo "hubctl: port $port is held by something that is not the squad hub; pick another port or stop it" >&2; exit 1;; esac
 if [ -n "$slug" ]; then

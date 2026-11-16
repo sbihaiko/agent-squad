@@ -61,6 +61,12 @@ driver_changed() { # driver_changed FROM TO: the in-memory files that differ bet
   git -C "${SG_CHECKOUT:-}" cat-file -e "$1^{commit}" 2>/dev/null && git -C "${SG_CHECKOUT:-}" cat-file -e "$2^{commit}" 2>/dev/null || return 3
   for p in "${driver_paths[@]}"; do git -C "$SG_CHECKOUT" diff --quiet "$1" "$2" -- "contrib/squad-goal/$p" 2>/dev/null || printf '%s\n' "$p"; done
   return 0; }
+hub_paths=(scripts/hub.py scripts/hubmux.py scripts/board_columns.py scripts/board-definition.json scripts/board_history.py scripts/board_cfd.py scripts/board_flow_history.py)
+hub_changed() { # hub_changed FROM TO: the files the hub imports or pins that differ between two builds, one a line; rc 3 = cannot tell
+  local p
+  git -C "${SG_CHECKOUT:-}" cat-file -e "$1^{commit}" 2>/dev/null && git -C "$SG_CHECKOUT" cat-file -e "$2^{commit}" 2>/dev/null || return 3
+  for p in "${hub_paths[@]}"; do git -C "$SG_CHECKOUT" diff --quiet "$1" "$2" -- "contrib/squad-goal/$p" 2>/dev/null || printf '%s\n' "$p"; done
+  return 0; }
 once() { # once NAME VALUE LINE: print LINE when VALUE differs from the value kept under NAME; keep VALUE
   local f=$SG_STATE/live-guard.$1; [ "$(cat "$f" 2>/dev/null)" = "$2" ] && return 0
   mkdir -p "$SG_STATE" && printf '%s\n' "$2" > "$f.$$" && mv "$f.$$" "$f"; [ -n "$3" ] && echo "$3"; return 0; }
@@ -80,6 +86,13 @@ notes() {
     if [ "$cr" = 3 ]; then once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner)"
     elif [ -n "$ch" ]; then once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner): $(printf '%s' "$ch" | tr '\n' ' ' | sed 's/ $//')"
     else printf '%s\n' "$ps" > "$SG_STATE/live-guard.driver.$$" && mv "$SG_STATE/live-guard.driver.$$" "$SG_STATE/live-guard.driver"; fi
+  fi
+  hs=$(cat "$SG_STATE/hub.sha" 2>/dev/null)
+  if [ -n "$hs" ] && [ -n "$ps" ] && [ "$hs" != "$ps" ]; then
+    hch=$(hub_changed "$hs" "$ps"); hcr=$?
+    if [ "$hcr" = 3 ]; then once hub "$ps" "LIVE-GUARD hub runs ${hs:0:8}, published ${ps:0:8}: restart pending (owner): hubctl.sh --restart"
+    elif [ -n "$hch" ]; then once hub "$ps" "LIVE-GUARD hub runs ${hs:0:8}, published ${ps:0:8}: restart pending (owner): hubctl.sh --restart for $(printf '%s' "$hch" | tr '\n' ' ' | sed 's/ $//')"
+    fi
   fi
   return 0; }
 key_now() { { git -C "$tree" rev-parse HEAD; git -C "$tree" status --porcelain --untracked-files=no
