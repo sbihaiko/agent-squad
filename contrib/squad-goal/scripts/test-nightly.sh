@@ -9,10 +9,11 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(dirname "$0"); src=${1:-$d/nightly.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; fail=0
 mkdir -p "$S" "$ST"; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-# The clock reports the window hour from FAKE_HOUR (04 by default), so a case runs in or out of the nightly's window whatever
-# the real time is. Every other date read passes through.
+# The clock reports the window hour from FAKE_HOUR (04 by default) and the minute and second in it from FAKE_MS (00:00 by
+# default), so a case runs in or out of the nightly's window, and far from its end, whatever the real time is. Every other
+# date read passes through.
 mkdir -p "$T/fakebin"
-printf '#!/bin/bash\ncase "$*" in *+%%H*) echo "${FAKE_HOUR:-04}";; *) exec /bin/date "$@";; esac\n' > "$T/fakebin/date"; chmod +x "$T/fakebin/date"
+printf '#!/bin/bash\ncase "$*" in *+%%H*) echo "${FAKE_HOUR:-04}";; *+%%M:%%S*) echo "${FAKE_MS:-00:00}";; *) exec /bin/date "$@";; esac\n' > "$T/fakebin/date"; chmod +x "$T/fakebin/date"
 export PATH="$T/fakebin:$PATH"
 G="git -c user.email=a@b -c user.name=t"
 cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/live-check.sh" "$S/" 2>/dev/null
@@ -32,6 +33,7 @@ for m in parallel serial; do
   cat > "$T/$m.sh" <<EOF
 #!/bin/bash
 echo "$m \$PWD" >> "$T/ran.log"
+[ -n "\${SLEEP_$m:-}" ] && sleep "\${SLEEP_$m}"
 [ "\${KILL_$m:-}" = 1 ] && exit 143
 [ "\${KILLFAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\n1 failed, 10 passed in 1.00s\n'; exit 143; }
 [ "\${FAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\nFAILED tests/test_x.py::test_x[case with space] - boom\nFAILED tests/test_y.py::test_b - boom\n3 failed, 10 passed in 1.00s\n'; exit 1; }
@@ -617,6 +619,11 @@ mark; rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-missed-$(dat
   || ko "a closed window recorded '$r_res' with alerts '$(cat "$ST/alerts.log" 2>/dev/null)': '$out'"
 mark; rm -f "$ST/nightly-result" "$ST/alerts.log"; out=$(ng FAKE_HOUR=03); rec
 [ -z "$r_res" ] && ok "a window not yet open records nothing" || ko "a window not yet open recorded '$r_res'"
+yday=$(date -v-1d +%F 2>/dev/null || date -d yesterday +%F)
+rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-$yday" "$ST/auto/nightly-missed-$yday"; out=$(ng FAKE_HOUR=00 SG_NIGHTLY_HOUR=23); rec
+[ "$r_res" = bounded ] && [ -e "$ST/auto/nightly-missed-$yday" ] && ok "a 23:00 window that closed at midnight with no run records one bounded attempt" \
+  || ko "a 23:00 window closed with no run recorded '$r_res': '$out'"
+rm -f "$ST/nightly-result" "$ST/alerts.log"
 
 # 33) (#1975) The dispatch stops in the window until the nightly ran that day, and while the nightly runs in it.
 mark; out=$(export FAKE_HOUR=04; hold)
@@ -656,10 +663,14 @@ end_check
 cat > "$T/ghread" <<EOF
 #!/bin/bash
 echo "\$1" >> "$T/gh.log"
+[ "\${GH_RC:-0}" = 0 ] || { echo 'refused: HTTP 403'; exit "\$GH_RC"; }
 case "\$1" in
-  *actions/workflows/nightly.yml/runs*) [ "\${GH_RC:-0}" = 0 ] || { echo 'refused: HTTP 403'; exit "\$GH_RC"; }
-    printf '{"workflow_runs":[%s]}' "\${GH_RUN:-}";;
+  *actions/workflows/nightly.yml/runs*) printf '{"workflow_runs":[%s]}' "\${GH_RUN:-}";;
+  *actions/artifacts\?name=nightly-dev-sha-*) w=\${1#*name=nightly-dev-sha-}; w=\${w%%&*}
+    if [ -n "\${GH_RUN:-}" ] && [ "\$w" = "\${GH_SHA:-}" ]; then printf '{"artifacts":[{"name":"nightly-dev-sha-%s","workflow_run":{"id":77}}]}' "\$w"
+    else printf '{"artifacts":[]}'; fi;;
   *actions/runs/77/artifacts*) printf '{"artifacts":[{"name":"nightly-dev-sha-%s"}]}' "\${GH_SHA:-}";;
+  *actions/runs/77) [ -n "\${GH_RUN:-}" ] && printf '%s' "\$GH_RUN" || exit 1;;
   *) exit 1;;
 esac
 EOF
@@ -668,9 +679,11 @@ vd() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_GHREAD="$T/ghread" HEALTH_NOTIFY="
   v_ts= v_res= v_sha= v_loc= v_gh= v_ghsha=
   [ -f "$ST/nightly-verdict" ] && IFS=$'\t' read -r v_ts v_res v_sha v_loc v_gh v_ghsha < "$ST/nightly-verdict"; }
 lrec() { printf '%s\t%s\t%s\t%s\t%s\t[]\n' "$(date +%s)" "$1" "$2" "$3" "$4" > "$ST/nightly-result"; }
-done_ok='{"id":77,"status":"completed","conclusion":"success"}'
-done_red='{"id":77,"status":"completed","conclusion":"failure"}'
-running='{"id":77,"status":"in_progress","conclusion":null}'
+today=$(date -u +%F)
+done_ok='{"id":77,"status":"completed","conclusion":"success","event":"schedule","created_at":"'$today'T07:00:00Z"}'
+done_red='{"id":77,"status":"completed","conclusion":"failure","event":"schedule","created_at":"'$today'T07:00:00Z"}'
+running='{"id":77,"status":"in_progress","conclusion":null,"event":"schedule","created_at":"'$today'T07:00:00Z"}'
+done_old='{"id":77,"status":"completed","conclusion":"success","event":"schedule","created_at":"2020-01-01T07:00:00Z"}'
 vcase() {  # <want> <label> [VAR=val...]
   local want=$1 label=$2; shift 2; rm -f "$ST/nightly-verdict" "$T/gh.log"; vd "$@"
   [ "$v_res" = "$want" ] && ok "verdict $want: $label" || ko "verdict '$v_res' (local '$v_loc', github '$v_gh' at '$v_ghsha'), want $want: $label"
@@ -682,6 +695,9 @@ vcase pass "both halves pass on the same dev sha" GH_RUN="$done_ok" GH_SHA="$sha
 vcase fail "the GitHub half fails" GH_RUN="$done_red" GH_SHA="$sha"
 vcase unproven "the GitHub half tested another sha" GH_RUN="$done_ok" GH_SHA=0000000000000000000000000000000000000000
 vcase unproven "the GitHub half is unfinished" GH_RUN="$running" GH_SHA="$sha"
+vcase unproven "a GitHub run of an earlier day never answers today's verdict" GH_RUN="$done_old" GH_SHA="$sha"
+/usr/bin/grep -q 'per_page=1$' "$T/gh.log" 2>/dev/null && /usr/bin/grep -q 'nightly.yml/runs' "$T/gh.log" \
+  && ko "the verdict read the latest run, not the run that tested the local sha" || ok "the verdict reads the run that tested the local sha"
 vcase unproven "the GitHub half has no run" GH_RUN=
 vcase unproven "the GitHub read is refused" GH_RC=2
 lrec fail "$sha" fail pass
@@ -733,5 +749,29 @@ out=$(ngh SG_GHREAD="$T/ghread" GH_RUN="$done_red" GH_SHA="$newtip"); rc=$?
   && ok "the GitHub half's red at the tip answers pytest red" \
   || ko "GitHub red at the tip: rc $rc, settle '$(cat "$T/settle.log" 2>/dev/null)', settled '$(cat "$(sf)" 2>/dev/null)'"
 obclean; rm -f "$ST/nightly-github-seen" "$ST/nightly-verdict"
+
+# 38) (#1975) The local half runs on the sha today's GitHub run tested, so both halves name one sha; with no such run it runs
+#     on the dev tip.
+mark; rm -f "$ST/nightly-result"
+out=$(env SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" SG_GHREAD="$T/ghread" GH_RUN="$running" GH_SHA="$sha" bash "$S/nightly.sh" 2>&1); rc=$?; rec; end_check
+[ "$r_sha" = "$sha" ] && ok "the local half runs on the sha today's GitHub run tested" \
+  || ko "the local half ran at '$r_sha', not the GitHub half's $sha: rc $rc, '$out'"
+mark; rm -f "$ST/nightly-result"
+out=$(env SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  HEALTH_NOTIFY="$T/notify.sh" SG_GHREAD="$T/ghread" GH_RUN= bash "$S/nightly.sh" 2>&1); rc=$?; rec; end_check
+[ "$r_sha" = "$newtip" ] && ok "with no GitHub run today, the local half runs on the dev tip" \
+  || ko "with no GitHub run the local half ran at '$r_sha', not the tip $newtip: rc $rc"
+
+# 39) (#1975) A nightly still running at its hour's end is stopped there: it records one bounded attempt, the alert names the
+#     bound, and the hour's close writes no second record. The dispatch hold ends with the hour.
+mark; rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-missed-$(date +%F)"
+out=$(ng FAKE_MS=59:58 SLEEP_parallel=6); rc=$?; rec
+[ "$r_res" = bounded ] && /usr/bin/grep -q 'bound' "$ST/alerts.log" 2>/dev/null && [ -e "$ST/auto/nightly-missed-$(date +%F)" ] \
+  && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
+  && ok "a nightly past its hour's end is stopped and records one bounded attempt" \
+  || ko "a nightly past its bound: rc $rc, record '$r_res', alerts '$(cat "$ST/alerts.log" 2>/dev/null)', '$out'"
+r0=$(cat "$ST/nightly-result" 2>/dev/null); out=$(ng FAKE_HOUR=05)
+[ "$(cat "$ST/nightly-result" 2>/dev/null)" = "$r0" ] && ok "the hour's close writes no second record" || ko "the hour's close rewrote the record"
 
 rm -rf "$T"; exit $fail

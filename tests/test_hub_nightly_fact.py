@@ -31,9 +31,14 @@ def hub():
     return mod
 
 
+GREEN = {"result": "pass", "sha": SHA, "local": "pass", "github": "pass", "github_sha": SHA}
+
+
 def _nightly(hub, **over):
+    """The nightly fact for one local record; the GitHub half passed at the same sha unless `verdict` says otherwise."""
     src = {"occ": {"live": 1, "agents": 1}, "quota": {"codex": None, "agy": None},
-           "nightly": {"result": "pass", "sha": SHA, "parallel": "pass", "serial": "pass", "ids": [], "ts": NOW - 240} | over}
+           "nightly": {"result": "pass", "sha": SHA, "parallel": "pass", "serial": "pass", "ids": [], "ts": NOW - 240,
+                       "verdict": GREEN} | over}
     return [i for i in hub.foot_items(src, NOW) if i["key"] == "nightly"]
 
 
@@ -202,3 +207,41 @@ def test_a_failing_test_whose_id_carries_a_space_is_read_whole(hub, tmp_path, mo
     (fact,) = [i for i in hub.foot_items({"nightly": hub.foot_sources(NOW)["nightly"]}, NOW) if i["key"] == "nightly"]
     assert fact["detail"] == ids
     assert "tests/test_x.py::test_x[case with space]" in fact["tip"]
+
+
+def test_a_local_pass_shows_pass_only_when_the_github_half_passed_at_the_same_sha(hub):
+    """Guard for the one verdict (#1975, ADR-0153 rule 1d): the line reads the combined verdict, never the local record alone.
+    A local pass beside a GitHub red is fail, beside an unproven or missing GitHub half it is unproven, and a verdict at
+    another sha proves nothing about this record."""
+    (fact,) = _nightly(hub, verdict=GREEN | {"result": "fail", "github": "fail"})
+    assert fact["text"] == "nightly fail 4m ago" and fact["bad"]
+    assert "github fail at 0123456" in fact["tip"]
+    (fact,) = _nightly(hub, verdict=GREEN | {"result": "unproven", "github": "unfinished"})
+    assert fact["text"] == "nightly unproven 4m ago" and fact["parts"][0]["tone"] == "warn"
+    (fact,) = _nightly(hub, verdict=GREEN | {"sha": "f" * 40, "github_sha": "f" * 40})
+    assert fact["text"] == "nightly unproven 4m ago"
+    (fact,) = _nightly(hub, verdict=None)
+    assert "pass" not in fact["text"], "a local pass with no verdict shows as pass"
+
+
+def test_the_footer_reads_the_verdict_nightly_sh_writes(hub, tmp_path, monkeypatch):
+    st = tmp_path / "st"
+    st.mkdir()
+    monkeypatch.setattr(hub, "STATE", st)
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tpass\t{SHA}\tpass\tpass\t[]\n")
+    (st / "nightly-verdict").write_text(f"{int(NOW - 30)}\tfail\t{SHA}\tpass\tfail\t{SHA}\n")
+    src = hub.foot_sources(NOW)["nightly"]
+    assert src["verdict"] == {"result": "fail", "sha": SHA, "local": "pass", "github": "fail", "github_sha": SHA}
+    (fact,) = [i for i in hub.foot_items({"nightly": src}, NOW) if i["key"] == "nightly"]
+    assert fact["bad"] and fact["text"] == "nightly fail 60s ago"
+    (st / "nightly-verdict").write_text("not a verdict\n")
+    assert hub.foot_sources(NOW)["nightly"]["verdict"] is None
+
+
+def test_a_closed_window_record_is_a_bounded_reading(hub, tmp_path, monkeypatch):
+    """The record of an hour that closed with no run (#1975) is a bounded attempt the hub reads, never a question mark."""
+    st = tmp_path / "st"
+    st.mkdir()
+    monkeypatch.setattr(hub, "STATE", st)
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tbounded\t{SHA}\tbounded:window\tbounded:window\t[]\n")
+    assert hub.foot_sources(NOW)["nightly"]["result"] == "bounded"
