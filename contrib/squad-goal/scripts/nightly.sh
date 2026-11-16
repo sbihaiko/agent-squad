@@ -46,6 +46,20 @@ here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
 [ -n "${SG_NIGHTLY_OFF:-}" ] && exit 0   # a profile that sets it keeps no nightly: a project may carry its own suite instead (ADR-0153)
+# (#1975, ADR-0153) The suite starts only in the profile's hour, America/Sao_Paulo (SG_NIGHTLY_HOUR, 04 by default). The dispatch
+# stops in that hour (ghcall.sh), so the live runs end and the suite gets the machine. When the hour has closed with no run that
+# day, the first cycle after it records one bounded attempt; no later cycle repeats it.
+nhour=$((10#${SG_NIGHTLY_HOUR:-04})); hnow=$((10#$(TZ=America/Sao_Paulo date +%H)))
+if [ "$hnow" -ne "$nhour" ]; then
+  if [ "$hnow" -gt "$nhour" ] && [ ! -e "$day" ] && [ ! -e "$st/auto/nightly-missed-$(date +%F)" ]; then
+    mk=$(/usr/bin/git -C "${SG_NIGHTLY_TREE:-$st/nightly-tree}" rev-parse -q --verify "origin/${SG_BASE:-dev}" 2>/dev/null) || mk=
+    printf '%s\tbounded\t%s\tbounded:window\tbounded:window\t[]\n' "$(date +%s)" "${mk:--}" > "$st/nightly-result.$$" \
+      && mv -f "$st/nightly-result.$$" "$st/nightly-result"
+    printf '%s NIGHTLY window closed at %s with no run: one bounded attempt\n' "$(date '+%F %T')" "${mk:0:7}" >> "$st/alerts.log"
+    touch "$st/auto/nightly-missed-$(date +%F)"
+  fi
+  echo "nightly: held: outside the $(printf '%02d' "$nhour"):00 window (America/Sao_Paulo); the suite runs in that window only (#1975)"; exit 0
+fi
 [ -e "$st/promote-reserve" ] && exit 0   # a proof is measuring in its own tree: two full suites saturate the box before either shows in the load average, and no day marker is written, so the nightly runs once the proof is over
 [ -e "$day" ] && exit 0   # it already ran today: no second suite, whatever started this one
 # (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly yields to them.

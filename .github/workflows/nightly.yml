@@ -1,0 +1,228 @@
+name: nightly
+
+on:
+  # 04:00 America/Sao_Paulo is 07:00 UTC. A schedule is not a branch push, so the no-push rule of ci.yml holds.
+  schedule:
+    - cron: "0 7 * * *"
+
+# The nightly runs the complete Linux suite on the dev tip, heavy tests included, in both modes: the xdist shards and the serial
+# shards of tests/ci_shards.py. The token is read-only, and the jobs check out dev, never the default branch.
+permissions:
+  contents: read
+
+jobs:
+  full-xdist-1:
+    name: full-xdist-1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 1)
+
+  full-xdist-2:
+    name: full-xdist-2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 2)
+
+  full-xdist-3:
+    name: full-xdist-3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 3)
+
+  full-xdist-4:
+    name: full-xdist-4
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 4)
+
+  full-xdist-5:
+    name: full-xdist-5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 5)
+
+  full-xdist-6:
+    name: full-xdist-6
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -n auto $(python3 tests/ci_shards.py 6)
+
+  full-serial-1:
+    name: full-serial-1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 1)
+
+  full-serial-2:
+    name: full-serial-2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 2)
+
+  full-serial-3:
+    name: full-serial-3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 3)
+
+  full-serial-4:
+    name: full-serial-4
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 4)
+
+  full-serial-5:
+    name: full-serial-5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 5)
+
+  full-serial-6:
+    name: full-serial-6
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQUAD_CI_RUNNER: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev,sdk]'
+      - run: python3 -m pytest -p no:xdist $(python3 tests/ci_shards.py 6)

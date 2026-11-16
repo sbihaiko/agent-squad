@@ -28,6 +28,7 @@
 # nightly.sh: the full suite once a day, one command per mode, run in the nightly tree. Unset: pytest, and a pytest that collects
 # no test (exit 5) counts as no suite, not red (#758). A repository without a Python suite names its own, e.g. `make clean all`.
 # : "${SG_NIGHTLY_PARALLEL:=make test}"; : "${SG_NIGHTLY_SERIAL:=make test}"
+# : "${SG_NIGHTLY_HOUR:=04}"   # the hour (America/Sao_Paulo) the nightly suite starts in; the dispatch stops in it, and the suite never starts outside it
 # The checks the nightly settles a proof obligation with (spec 1163). Unset: the fast gate's battery over this repository's
 # layout (ruff and mypy over `squad`/`tests`, then the full serial pytest), and a tree that does not hold those paths has
 # nothing measured: its obligation is reported unmeasured, never settled red. Another layout names its own here.
