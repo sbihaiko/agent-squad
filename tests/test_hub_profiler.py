@@ -2900,6 +2900,62 @@ def test_the_gate_rows_read_a_history_line_and_skip_a_line_that_is_no_whole_row(
                      "load_start": 1.5, "load_finish": 2.25}], "a short line, a finish that is no number and an unknown outcome are no row"
 
 
+def gate_queue_line(finish, start, tree="t-a", wait="30", wall="60", cpu="12", reused="no", caller="child",
+                    outcome="pass", reason="-", kind="fast", mode=None):
+    """The twenty-two fields gate.sh writes to the gate history, in the order hub_profiler.GATE_HISTORY_FIELDS names them:
+    the entry mode (#1798) sits before the queue fields, and a reused verdict is mode `reused`."""
+    mode = mode or ("reused" if reused == "yes" else "gated")
+    return "\t".join([str(finish), kind, "pass", "abc123", str(start), "delta", "root", outcome, reason, "pytest", "-", "1",
+                      "-", caller, "1.0", "2.0", mode, tree, wait, wall, cpu, reused])
+
+
+def test_the_gate_row_names_the_tree_the_wait_the_wall_the_cpu_and_the_reuse(prof):
+    """(#1856) The fields after the load tell a gate stage's queue time from its work: the tree the gate read, the seconds
+    it waited for the lock and its slots, its wall time, the CPU its command spent, and whether a green verdict answered
+    instead of a battery (ADR-0168). A row from before them answers '' for each, never a reading it does not hold."""
+    row = prof.gate_row(gate_queue_line(1000, 900))
+    assert (row["tree"], row["wait"], row["wall"], row["cpu"], row["reused"]) == ("t-a", "30", "60", "12", "no")
+    assert row["mode"] == "gated" and row["caller"] == "child", "the entry mode keeps its place before the queue fields"
+    assert prof.GATE_HISTORY_FIELDS[-5:] == ("tree", "wait", "wall", "cpu", "reused")
+    old = prof.gate_row(gate_line(1000, 900))
+    assert (old["tree"], old["wait"], old["wall"], old["cpu"], old["reused"]) == ("", "", "", "", ""), \
+        "a row from before the fields answers '' for each, never a reading it does not hold"
+    split = prof.gate_row(gate_queue_line(1000, 900, reason="red\tstands"))
+    assert split["reason"] == "red\tstands" and split["tree"] == "t-a" and split["reused"] == "no" and split["mode"] == "gated", \
+        "a reason that holds a tab is rejoined, so the columns after it keep their place"
+
+
+def test_the_gate_queue_splits_a_gate_stage_into_lock_wait_and_work(prof):
+    """(#1856) Over one window, by finish: the share of the gate stage that is lock wait and the number of distinct trees
+    that paid a gate. The rows answer directly; nothing here is inferred from a row that carries no reading."""
+    lines = [
+        gate_queue_line(WALL_NOW - 20, WALL_NOW - 90, tree="t-a", wait="30", wall="60"),
+        gate_queue_line(WALL_NOW - 30, WALL_NOW - 60, tree="t-b", wait="10", wall="20"),
+        gate_queue_line(WALL_NOW - 40, WALL_NOW - 40, tree="t-a", wait="0", wall="0", reused="yes"),
+        gate_line(WALL_NOW - 50, WALL_NOW - 60, outcome="fail"),            # a row from before the new fields
+        gate_queue_line(WALL_NOW - 5000, WALL_NOW - 5060, tree="t-c"),      # finished before the window
+        "not a gate history line",
+    ]
+    out = prof.gate_queue(lines, WALL_NOW - 600, WALL_NOW)
+    assert out["rows"] == 4 and out["trees"] == 2, "two distinct trees paid a gate; the old row names no tree"
+    assert out["trees_unnamed"] == 1 and out["wait_unknown"] == 1, "a row that carries no reading is counted, never guessed"
+    assert (out["wait_s"], out["wall_s"], out["stage_s"]) == (40.0, 90.0, 130.0), \
+        "the wait sums the rows that name one; an old row's wall is its own run time, which is what the field holds"
+    assert out["wait_share"] == 0.3077, "40 s of wait inside a 130 s stage"
+    assert out["reused"] == 1, "one gate's verdict was reused, so the saved gate is counted"
+
+
+def test_the_gate_queue_names_no_share_when_no_gate_paid_the_window(prof):
+    """A window no gate finished in answers no share, never a zero: an idle window and a queue of no seconds differ."""
+    out = prof.gate_queue([gate_queue_line(WALL_NOW - 5000, WALL_NOW - 5060)], WALL_NOW - 600, WALL_NOW)
+    assert out["rows"] == 0 and out["trees"] == 0 and out["wait_share"] is None
+
+
+def test_the_wall_view_carries_the_gate_queue_of_its_window(prof):
+    out = prof.wall([], [gate_queue_line(WALL_NOW - 20, WALL_NOW - 90, wait="30", wall="60")], 600, WALL_NOW)
+    assert out["queue"]["wait_s"] == 30.0 and out["queue"]["trees"] == 1 and out["queue"]["wait_share"] == 0.3333
+
+
 def test_the_wall_view_reads_the_state_folder_files_into_the_one_fold(served):
     mod, _, _, state = served
     state.mkdir(parents=True, exist_ok=True)
