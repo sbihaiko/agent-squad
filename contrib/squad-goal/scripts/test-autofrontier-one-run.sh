@@ -606,6 +606,28 @@ r=$(run)
 [ "$(marked 81)" = 0 ] && [ "$(ls "$d/st/cq" | $G -c -- '#81-')" = 1 ] && ok "AC: a second pass dispatches nothing and adds no comment" || ko "AC: second pass: $(marked 81) marked, $(ls "$d/st/cq"): '$r'"
 unset GHLOG; rm -f "$T/scripts/acpaths.py"
 
+# P (#1941, ADR-0150): two tickets whose bodies name no file, and whose diffs shared a path in an earlier wave, never share a run
+#   while both are open. The wave that refused the second child recorded the pair with the shared paths, and the filter refuses
+#   the second and names the pair and the paths. A closed ticket clears its pair. A pair with no record still joins one run.
+scene sharedpair 24
+issues '[{"number":1798,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":1856,"title":"a","body":"c","labels":[{"name":"wave:01"}]}]'
+printf '[{"issues":[1798,1856],"paths":["contrib/squad-goal/scripts/gate.sh","docs/loop-sequence.md"]}]' > "$d/st/shared-pairs.json"
+cp "$(dirname "$src")/cluster.py" "$T/scripts/"; cp "$(dirname "$src")/siblings.py" "$T/scripts/" 2>/dev/null
+r=$(run); rm -f "$T/scripts/cluster.py" "$T/scripts/siblings.py"
+[ "$(marked 1798)" = 1 ] && [ "$(marked 1856)" = 0 ] && ok "P: a recorded shared-path pair never joins one run" || ko "P: $(marked 1798) of #1798, $(marked 1856) of #1856 marked: '$r'"
+case "$r" in *"FRONTIER split #1856: a shared-path pair with #1798 (both change contrib/squad-goal/scripts/gate.sh, docs/loop-sequence.md) (ADR-0150); it waits for a later run"*) ok "P: the refusal names the pair and its paths";; *) ko "P: no pair line for #1856: '$r'";; esac
+scene sharedpair-none 24
+issues '[{"number":1798,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":1856,"title":"a","body":"c","labels":[{"name":"wave:01"}]}]'
+cp "$(dirname "$src")/cluster.py" "$T/scripts/"; cp "$(dirname "$src")/siblings.py" "$T/scripts/" 2>/dev/null
+r=$(run); rm -f "$T/scripts/cluster.py" "$T/scripts/siblings.py"
+[ "$(marked 1798 1856)" = 2 ] && ok "P: a pair with no record still joins one run" || ko "P: $(marked 1798 1856) of the pair marked with no record: '$r'"
+scene sharedpair-closed 24
+issues '[{"number":1856,"title":"a","body":"c","labels":[{"name":"wave:01"}]}]'
+printf '[{"issues":[1798,1856],"paths":["docs/loop-sequence.md"]}]' > "$d/st/shared-pairs.json"
+cp "$(dirname "$src")/cluster.py" "$T/scripts/"; cp "$(dirname "$src")/siblings.py" "$T/scripts/" 2>/dev/null
+r=$(run); rm -f "$T/scripts/cluster.py" "$T/scripts/siblings.py"
+[ "$(marked 1856)" = 1 ] && ok "P: a closed ticket clears its pair, and the open one dispatches" || ko "P: $(marked 1856) of #1856 marked after #1798 closed: '$r'"
+
 # I1 (#733): a pass that leaves Todo cards and picks none says so in one line, always. A silent frontier and a stuck one read
 #     the same in the log, and the owner found the last stall, not the loop. The line names the count of every reason a card
 #     waits; the per-card detail follows only when the reasons changed since the previous pass (a hash in auto/frontier-why),

@@ -1557,6 +1557,7 @@ REV_BASE=$WS rev 61
 r=$((cd "$T/c61" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-s 61) 2>&1)
 [ "$($O rev-parse "$WS")" = "$tip" ] && [ "$(inwave "$WS" 61)" = no ] && ok "SD: a sibling whose diff shares a file never enters the wave" || ko "SD: #61 entered: '$r'"
 case "$r" in *"WAVE REQUEUE #61"*shared60*) ok "SD: the shared file is named before the wave";; *) ko "SD: the shared file is not named: '$r'";; esac
+python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); sys.exit(0 if any(sorted(q["issues"])==[60,61] and q["paths"]==["shared60"] for q in p) else 1)' "$T/st/shared-pairs.json" 2>/dev/null && ok "SD: the refused pair is recorded with its shared path (#1941)" || ko "SD: no pair record: '$(cat "$T/st/shared-pairs.json" 2>&1)'"
 /usr/bin/grep -qx 'o 3 Todo 61' "$T/board.log" && ok "SD: its issue is back in the queue, as a body conflict leaves it" || ko "SD: no Todo card for #61: '$(cat "$T/board.log")'"
 [ ! -e "$T/st/auto/disp-61" ] && ok "SD: its dispatch marker is dropped, so a later run builds it alone" || ko "SD: the marker is kept"
 # The merge of the pair is never attempted: the run recorded #60 alone, so the landing carries #60 alone and never names #61
