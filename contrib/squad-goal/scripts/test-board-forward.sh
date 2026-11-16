@@ -83,8 +83,8 @@ seed; o=$(SG_MOVE_BY=loop run o 4 "Todo" 2003 2001 2>&1); rc=$?
 # #1909: only the owner moves a Backlog card to Todo. A hold names itself, keeps the card in Backlog, writes no rework label,
 # and is recorded; the owner's door moves it.
 seed; o=$(run o 4 "Todo" 2006 2>&1); rc=$?
-[ "$rc" -ne 0 ] && [ "$(col 2006)" = "Backlog" ] && [ "$(rework 2006)" = 0 ] && [ "$(rej)" = 1 ] && grep -q '"issue": 2006' "$T/st/board-rejections.jsonl" && printf '%s' "$o" | /usr/bin/grep -q 'held' \
-  && ok "an automated Backlog to Todo move is held: non-zero exit, the card keeps Backlog, no rework label, the hold is recorded" || ko "backlog hold: exit $rc, column $(col 2006), rework $(rework 2006), rejections $(rej): $o"
+[ "$rc" -eq 3 ] && [ "$(col 2006)" = "Backlog" ] && [ "$(rework 2006)" = 0 ] && [ "$(rej)" = 1 ] && grep -q '"issue": 2006' "$T/st/board-rejections.jsonl" && printf '%s' "$o" | /usr/bin/grep -q 'held' \
+  && ok "an automated Backlog to Todo move is held: exit 3, the card keeps Backlog, no rework label, the hold is recorded" || ko "backlog hold: exit $rc, column $(col 2006), rework $(rework 2006), rejections $(rej): $o"
 seed; o=$(SG_MOVE_BY=owner run o 4 "Todo" 2006 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(col 2006)" = "Todo" ] && ok "the owner moves a Backlog card to Todo" || ko "owner Backlog to Todo: exit $rc, column $(col 2006): $o"
 for why in no-landing reopened; do
