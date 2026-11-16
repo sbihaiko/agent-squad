@@ -39,7 +39,7 @@ A gate attempt ends in one of three outcomes, and the evidence is what tells the
 
 The same reading applies to a landing gate: a gate that measured a red holds everything until the red is fixed.
 
-- **The wave tip's check is the one exception.** A child enters its wave with no battery by default (spec 1797), so the
+- **The wave tip's check is the one exception.** A child enters its wave with no battery by default, so the
   check at the wave tip is the only proof its children get before they reach the base. An unproven tip check never
   lands the wave: the wave waits, no child is blamed, no try is counted, and the check runs again on a later pass. The
   wave's age cap bounds the wait.
