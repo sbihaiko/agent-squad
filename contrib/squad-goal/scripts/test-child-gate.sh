@@ -6,7 +6,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SG_STATE=$T/state SQUAD_CAPS_POLL=0.2
 mkdir -p "$T/proj/docs/squad" "$T/caps/gates" "$T/state"; printf 'caps:\n  gates: 1\n' > "$T/proj/docs/squad/defaults.yaml"   # one gate slot
-for s in test-a test-b; do
+for s in test-a test-b test-c; do
   printf '#!/bin/bash\necho "%s start $(date +%%s)" >> "%s/log"\nsleep 2\necho "%s end $(date +%%s)" >> "%s/log"\n' "$s" "$T" "$s" "$T" > "$T/proj/$s.sh"
 done
 cd "$T/proj" || exit 2
@@ -40,6 +40,17 @@ SG_CHILD_GATE_WAIT=1 bash "$d/child-gate.sh" ./test-b.sh > "$T/w.out" 2>&1; rcw=
 wait "$ph"
 [ "$rcw" = 75 ] && /usr/bin/grep -q 'no caps.gates slot' "$T/w.out" && ok "a wait past its bound names the full ceiling" || ko "wait bound rc=$rcw: $(cat "$T/w.out")"
 [ "$(/usr/bin/grep -cF "$T/proj/test-b.sh" "$hist" 2>/dev/null)" = "$nb0" ] && ok "a suite that never ran writes no history line" || ko "history after the expired wait: $(cat "$hist" 2>/dev/null)"
+
+# a suite a command starts under SG_GATE_SLOTS_HELD takes no slot: the full ceiling does not hold it, its row has wait 0 and the tree sha
+git -C "$T/proj" init -q && git -C "$T/proj" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+bash "$d/child-gate.sh" ./test-a.sh > "$T/s.out" 2>&1 & psl=$!
+sleep 0.5
+SG_GATE_SLOTS_HELD=1 bash "$d/child-gate.sh" ./test-c.sh > "$T/s2.out" 2>&1; rcs=$?
+wait "$psl"
+ca=$(/usr/bin/grep -n '^test-c start' "$T/log" | tail -1 | cut -d: -f1); ae=$(/usr/bin/grep -n '^test-a end' "$T/log" | tail -1 | cut -d: -f1)
+[ "$rcs" = 0 ] && [ -n "$ca" ] && [ -n "$ae" ] && [ "$ca" -lt "$ae" ] && ok "a suite under SG_GATE_SLOTS_HELD starts while the ceiling is full" || ko "exit $rcs, c started at line ${ca:-?}, a ended at line ${ae:-?}: $(cat "$T/s2.out")"
+hrow=$(/usr/bin/grep -F "$T/proj/test-c.sh" "$hist" 2>/dev/null | tail -1)
+[ "$(printf '%s' "$hrow" | cut -f3)" = 0 ] && [ "$(printf '%s' "$hrow" | cut -f8)" = "$(git -C "$T/proj" rev-parse HEAD)" ] && ok "its history row has wait 0 and the tree sha" || ko "row: ${hrow:-none}"
 
 [ "$fail" = 0 ] && echo "child-suite: all green" || echo "child-suite: FAILED"
 exit "$fail"

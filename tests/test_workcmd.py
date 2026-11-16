@@ -8,7 +8,9 @@ The default clears the fork's own check (#1785): `contrib/squad-goal/scripts/she
 idle machine, so a 120 s cap killed it, recorded `ac_failed:timeout after 120 s` and failed a run whose code was green.
 """
 import asyncio
+import pathlib
 import subprocess
+import time
 from types import SimpleNamespace
 
 from squad import gates, git, workcmd
@@ -242,3 +244,85 @@ def test_the_sdk_adapter_bounds_the_actor_pytest_workers(tmp_path, monkeypatch):
                           session_id=None, node="n")
     opts = SdkAdapter(query=object(), options_cls=lambda **kw: SimpleNamespace(**kw)).options(req)
     assert opts.env["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "3" and opts.env["SQUAD_GATE_WORKERS"] == "3"
+
+
+CHILD_GATE = str(pathlib.Path(__file__).resolve().parent.parent / "contrib/squad-goal/scripts/child-gate.sh")
+TIMED_SUITE = "sleep 5; bash " + CHILD_GATE + " ./suite.sh"
+
+
+def committed_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"],
+                   cwd=repo, check=True)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    return repo, sha
+
+
+def suite_row(state, suite, sha, run_s):
+    """One row as child-gate.sh writes it: finish, start, wait, load at start, load at finish, exit, suite, tree sha."""
+    state.mkdir(parents=True, exist_ok=True)
+    finish = int(time.time())
+    with open(state / "child-suite-history", "a") as fh:
+        fh.write(f"{finish}\t{finish - run_s}\t0\t0.1\t0.1\t0\t{suite}\t{sha}\n")
+
+
+def test_a_command_measured_longer_than_the_cap_stays_unproven(tmp_path, monkeypatch):
+    """#1936: a suite of this tree that ran past the cap shows the cap is too short, not the change, so every timeout stays unproven."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))
+    repo, sha = committed_repo(tmp_path)
+    suite_row(tmp_path / "state", repo / "suite.sh", sha, run_s=60)
+    first = workcmd.run(TIMED_SUITE, str(repo), timeout=0.2)
+    second = workcmd.run(TIMED_SUITE, str(repo), timeout=0.2)
+    assert first.unproven and second.unproven and not second.ok, second.evidence
+
+
+def test_a_suite_row_of_another_tree_measures_nothing(tmp_path, monkeypatch):
+    """#1936: a row names the tree it ran in; another tree's row says nothing about this tree's hang."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))
+    repo, _ = committed_repo(tmp_path)
+    suite_row(tmp_path / "state", repo / "suite.sh", "0" * 40, run_s=60)
+    first = workcmd.run(TIMED_SUITE, str(repo), timeout=0.2)
+    second = workcmd.run(TIMED_SUITE, str(repo), timeout=0.2)
+    assert first.unproven
+    assert not second.ok and not second.unproven and "measured red" in second.evidence, second.evidence
+
+
+def test_run_names_its_held_slots_to_the_command(tmp_path, monkeypatch):
+    """#1936: a command that holds gate slots is told how many, so child-gate.sh takes none again inside its cap."""
+    budget_env(monkeypatch)
+    monkeypatch.delenv("SG_GATE_SLOTS_HELD", raising=False)
+    assert workcmd.run('test "$SG_GATE_SLOTS_HELD" = 2', str(tmp_path)).ok
+    monkeypatch.setenv("SG_CHILD_SLOT_WAIT", "0.2")
+    c, holder = hold_every_gate_slot()
+    try:
+        r = workcmd.run('test -z "${SG_GATE_SLOTS_HELD+x}"', str(tmp_path))
+    finally:
+        holder.kill()
+    assert r.ok, r.evidence
+
+
+def test_a_command_cannot_extend_its_cap(tmp_path, monkeypatch):
+    """#1936: no file, pid or variable the command writes moves its cap; the command and the process it started end at the cap."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))
+    repo, _ = committed_repo(tmp_path)
+    fake = repo / "child-gate.sh"
+    fake.write_text("#!/bin/sh\nsleep 30\n")
+    fake.chmod(0o755)
+    cmd = f'mkdir -p "$SG_STATE" && echo 1 > "$SG_STATE/slots" && sh {fake} ./suite.sh; echo done'
+    started = time.monotonic()
+    r = workcmd.run(cmd, str(repo), timeout=0.3)
+    assert not r.ok and r.unproven and r.evidence == "timeout after 0.3 s", r.evidence
+    assert time.monotonic() - started < 5, "the command outlived its cap"
+
+
+def test_ac_verify_answers_unproven_for_an_explained_timeout_on_two_dispatches(tmp_path, monkeypatch):
+    """#1936: a timeout a suite of this tree explains is unproven on every dispatch, so a green change can land."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))
+    monkeypatch.setenv("SG_AC_TIMEOUT", "0.2")
+    repo, sha = committed_repo(tmp_path)
+    suite_row(tmp_path / "state", repo / "suite.sh", sha, run_s=60)
+    for _ in range(2):
+        r = gates.ac_verify({"commands_from": "spec"}, gates.GateInput(artifacts={"spec": {"ac_commands": [TIMED_SUITE]}}, facts={}, cwd=str(repo)))
+        assert r.ok and r.unproven, (r.findings, r.evidence)

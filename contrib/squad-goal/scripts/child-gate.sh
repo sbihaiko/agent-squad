@@ -3,8 +3,9 @@
 # It takes one caps.gates slot (ADR-0166's bound, the one a loop gate takes): a full ceiling makes it wait up to SG_CHILD_GATE_WAIT
 # seconds (default 900), and that wait is written as wait, never as run time. A second copy of the same suite file is refused at
 # once, with a reason on stderr, and exits 73. Each run appends one tab-separated line to $SG_STATE/child-suite-history:
-# finish epoch, start epoch, wait seconds, load at start, load at finish, exit code, suite path. The load is the one-minute
-# average from uptime, `-` when no reading is possible; it labels the run and decides nothing.
+# finish epoch, start epoch, wait seconds, load at start, load at finish, exit code, suite path, tree sha. The load is the
+# one-minute average from uptime, `-` when no reading is possible; it labels the run and decides nothing. Under
+# SG_GATE_SLOTS_HELD, set by the command runner that holds the slots for it, the suite takes no slot and its wait is 0.
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/caps.sh"
 [ $# -gt 0 ] || { echo "usage: child-gate.sh <suite> [args...]" >&2; exit 2; }
@@ -30,15 +31,22 @@ if ! take_lock; then
   exit 73
 fi
 holder="child-gate-$$"
-trap 'sg_caps release gates "$holder" >/dev/null 2>&1; rm -rf "$lock"' EXIT
+took=
+trap '[ -z "$took" ] || sg_caps release gates "$holder" >/dev/null 2>&1; rm -rf "$lock"' EXIT
 load() { local l; l=$(LC_ALL=C uptime 2>/dev/null | sed -n 's/.*load average[s]*: *\([0-9.]*\).*/\1/p'); echo "${l:--}"; }
-t0=$(date +%s)
-sg_caps take gates "$holder" --count 1 --wait "${SG_CHILD_GATE_WAIT:-900}" --pid $$ --target "$PWD" >/dev/null; rc=$?
-if [ "$rc" != 0 ]; then
-  echo "child-gate: no caps.gates slot within ${SG_CHILD_GATE_WAIT:-900}s; $suite did not run (exit $rc)" >&2; exit "$rc"
+if [ -n "${SG_GATE_SLOTS_HELD:-}" ]; then
+  start=$(date +%s); wait_s=0
+else
+  t0=$(date +%s)
+  sg_caps take gates "$holder" --count 1 --wait "${SG_CHILD_GATE_WAIT:-900}" --pid $$ --target "$PWD" >/dev/null; rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "child-gate: no caps.gates slot within ${SG_CHILD_GATE_WAIT:-900}s; $suite did not run (exit $rc)" >&2; exit "$rc"
+  fi
+  took=1
+  start=$(date +%s); wait_s=$((start - t0))
 fi
-start=$(date +%s); wait_s=$((start - t0)); load0=$(load)
+load0=$(load); sha=$(git rev-parse HEAD 2>/dev/null) || sha=-
 bash "$suite" "$@"; rc=$?
 fin=$(date +%s)
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$fin" "$start" "$wait_s" "$load0" "$(load)" "$rc" "$suite" >> "$st/child-suite-history"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$fin" "$start" "$wait_s" "$load0" "$(load)" "$rc" "$suite" "$sha" >> "${SG_STATE:-/tmp/sg-state}/child-suite-history"
 exit "$rc"

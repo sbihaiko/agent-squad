@@ -50,6 +50,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 
 ### Process
 
+- **A timeout that a suite of the same tree explains is unproven, and a command's held gate slots are named to it so the suite takes none twice** ([ADR-0175](docs/adr/0175-a-timeout-a-suite-explains-is-unproven.md)). Guard: `tests/test_workcmd.py`, `contrib/squad-goal/scripts/test-child-gate.sh`.
 - **ADRs are guides, never ledgers** ([ADR-0000](docs/adr/0000-adrs-are-guides.md)). Guard: none yet; a draft.
 - **A gate is a stop condition, never a target** ([ADR-0012](docs/adr/0012-gate-is-a-stop-condition.md)). Guard: none yet; a draft.
 - **A failing gate is a defect; expectations are re-anchored, never retuned** ([ADR-0018](docs/adr/0018-failing-gate-is-a-defect.md)). Guard: The full suite, run in both modes.
