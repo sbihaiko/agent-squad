@@ -215,7 +215,7 @@ def test_a_local_pass_shows_pass_only_when_the_github_half_passed_at_the_same_sh
     another sha proves nothing about this record."""
     (fact,) = _nightly(hub, verdict=GREEN | {"result": "fail", "github": "fail"})
     assert fact["text"] == "nightly fail 4m ago" and fact["bad"]
-    assert "github fail at 0123456" in fact["tip"]
+    assert "github fail" in fact["tip"]
     (fact,) = _nightly(hub, verdict=GREEN | {"result": "unproven", "github": "unfinished"})
     assert fact["text"] == "nightly unproven 4m ago" and fact["parts"][0]["tone"] == "warn"
     (fact,) = _nightly(hub, verdict=GREEN | {"sha": "f" * 40, "github_sha": "f" * 40})

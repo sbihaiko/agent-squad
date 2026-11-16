@@ -690,7 +690,7 @@ vcase() {  # <want> <label> [VAR=val...]
 }
 lrec pass "$sha" pass pass
 vcase pass "both halves pass on the same dev sha" GH_RUN="$done_ok" GH_SHA="$sha"
-[ "$v_sha" = "$sha" ] && [ "$v_ghsha" = "$sha" ] && /usr/bin/grep -q 'repos/o/r/actions/workflows/nightly.yml/runs' "$T/gh.log" \
+[ "$v_sha" = "$sha" ] && [ "$v_ghsha" = "$sha" ] && /usr/bin/grep -q "repos/o/r/actions/artifacts?name=nightly-dev-sha-$sha" "$T/gh.log" \
   && ok "the verdict names the dev sha both halves tested, read through the gh door" || ko "verdict sha '$v_sha', github sha '$v_ghsha', reads '$(cat "$T/gh.log" 2>/dev/null)'"
 vcase fail "the GitHub half fails" GH_RUN="$done_red" GH_SHA="$sha"
 vcase unproven "the GitHub half tested another sha" GH_RUN="$done_ok" GH_SHA=0000000000000000000000000000000000000000

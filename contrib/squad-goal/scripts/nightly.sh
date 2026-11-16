@@ -47,9 +47,11 @@ mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
 [ -n "${SG_NIGHTLY_OFF:-}" ] && exit 0   # a profile that sets it keeps no nightly: a project may carry its own suite instead (ADR-0153)
 # (#1975, ADR-0153) One verdict. The nightly has two halves: the GitHub half (.github/workflows/nightly.yml) runs every test a
-# Linux runner runs, and this script runs the rest, the local half. The verdict combines the local record with the latest
-# scheduled run of the GitHub half, read through the gh door (ghcall.sh) and never by a bare gh call. The GitHub half names
-# the dev sha it tested in the name of one artifact, `nightly-dev-sha-<sha>`. Fail in either half is fail. Pass in both halves
+# Linux runner runs, and this script runs the rest, the local half. The GitHub half names the dev sha it tested in the name of
+# one artifact, `nightly-dev-sha-<sha>`. The local half runs on the sha today's scheduled run tested, and on the dev tip when
+# no such run exists yet. The verdict combines the local record with the scheduled run that tested the local record's sha,
+# found by that artifact's name and read through the gh door (ghcall.sh), never by a bare gh call and never as the latest
+# run. A run of an earlier UTC day than the local record never answers it. Fail in either half is fail. Pass in both halves
 # on the same sha is pass. Any other pair is unproven: a half that is missing, unfinished, bounded, or at another sha.
 #   $SG_STATE/nightly-verdict: `<epoch> TAB <pass|fail|unproven> TAB <sha> TAB <local> TAB <github> TAB <github sha>`
 # The verdict is written after each local run, and a later call reads it again while it is unproven, at most once per
@@ -64,20 +66,40 @@ alert() {  # <message>
 # The GitHub half's results the nightly has read, one `<sha> TAB <pass|fail>` line each: a pytest obligation at that sha is
 # answered by it, so the local half never runs the full suite for it (ADR-0153 rule 1d).
 gh_seen() { awk -F'\t' -v s="$1" '$1 == s { r = $2 } END { if (r != "") print r }' "$st/nightly-github-seen" 2>/dev/null; }
+# utc_day <epoch>: the UTC day of a time, the day a scheduled run's `created_at` names.
+utc_day() { date -u -r "$1" +%F 2>/dev/null || date -u -d "@$1" +%F 2>/dev/null; }
+# gh_run_for <sha>: `<id> TAB <status> TAB <conclusion> TAB <created_at>` of the scheduled run whose artifact names the sha it
+# tested; nothing when no run tested it or GitHub gives no answer.
+gh_run_for() {
+  local id
+  id=$(. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/artifacts?name=nightly-dev-sha-$1&per_page=1" \
+    -q '.artifacts[0].workflow_run.id // empty' 2>/dev/null) || return 0
+  case "$id" in ''|*[!0-9]*) return 0;; esac
+  (. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/runs/$id" \
+    -q 'select(.event == "schedule") | "\(.id)\t\(.status)\t\(.conclusion)\t\(.created_at)"' 2>/dev/null) || true
+}
+# gh_today_sha: the dev sha today's scheduled run tested, by its artifact; nothing when no run of today names one.
+gh_today_sha() {
+  local id
+  [ -n "${SG_REPO:-}" ] || return 0
+  id=$(. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/workflows/nightly.yml/runs?event=schedule&created=%3E%3D$(date -u +%F)&per_page=1" \
+    -q '.workflow_runs[0] // empty | select(.created_at[0:10] == "'"$(date -u +%F)"'") | .id' 2>/dev/null) || return 0
+  case "$id" in ''|*[!0-9]*) return 0;; esac
+  (. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/runs/$id/artifacts" \
+    -q '.artifacts[].name | select(startswith("nightly-dev-sha-")) | ltrimstr("nightly-dev-sha-")' 2>/dev/null | head -n 1) || true
+}
 verdict_write() {
-  local lres=missing lsha= gres=missing gsha=- row id gst gco res sha
-  if [ -r "$st/nightly-result" ]; then IFS=$'\t' read -r _ lres lsha _ < "$st/nightly-result"; fi
+  local lres=missing lsha= lts= gres=missing gsha=- row gst gco gday res sha
+  if [ -r "$st/nightly-result" ]; then IFS=$'\t' read -r lts lres lsha _ < "$st/nightly-result"; fi
   case "$lres" in pass|fail|bounded) ;; *) lres=missing; lsha=;; esac
-  if [ "$lres" != fail ] && [ -n "${SG_REPO:-}" ]; then   # a local red is the verdict whatever GitHub says, so no read is spent
-    row=$(. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/workflows/nightly.yml/runs?event=schedule&per_page=1" \
-      -q '.workflow_runs[0] // empty | "\(.id)\t\(.status)\t\(.conclusion)"' 2>/dev/null) || row=
+  if [ "$lres" != fail ] && [ -n "${SG_REPO:-}" ] && [ -n "$lsha" ]; then   # a local red is the verdict whatever GitHub says
+    row=$(gh_run_for "$lsha")
     if [ -n "$row" ]; then
-      IFS=$'\t' read -r id gst gco <<<"$row"
-      case "$gst/$gco" in completed/success) gres=pass;; completed/failure) gres=fail;; completed/*) gres=${gco:-unknown};; *) gres=unfinished;; esac
-      case "$id" in ''|*[!0-9]*) ;; *)
-        gsha=$(. "$here/ghcall.sh" && gh_api "repos/$SG_REPO/actions/runs/$id/artifacts" \
-          -q '.artifacts[].name | select(startswith("nightly-dev-sha-")) | ltrimstr("nightly-dev-sha-")' 2>/dev/null | head -n 1) || gsha=
-        [ -n "$gsha" ] || gsha=-;; esac
+      IFS=$'\t' read -r _ gst gco gday <<<"$row"
+      if [ "${gday:0:10}" = "$(utc_day "$lts")" ]; then
+        gsha=$lsha
+        case "$gst/$gco" in completed/success) gres=pass;; completed/failure) gres=fail;; completed/*) gres=${gco:-unknown};; *) gres=unfinished;; esac
+      fi
     fi
   fi
   if [ "$lres" = fail ] || [ "$gres" = fail ]; then res=fail
@@ -109,15 +131,19 @@ if [ "${1:-}" != --run ] && [ -r "$st/nightly-result" ]; then
 fi
 # (#1975, ADR-0153) The suite starts only in the profile's hour, America/Sao_Paulo (SG_NIGHTLY_HOUR, 04 by default). The dispatch
 # stops in that hour (ghcall.sh), so the live runs end and the suite gets the machine. When the hour has closed with no run that
-# day, the first cycle after it records one bounded attempt; no later cycle repeats it.
+# day, the first cycle after it records one bounded attempt; no later cycle repeats it. A 23:00 hour closes at midnight, so
+# its record is written on the next day, under the day the hour opened.
 nhour=$((10#${SG_NIGHTLY_HOUR:-04})); hnow=$((10#$(TZ=America/Sao_Paulo date +%H)))
 if [ "$hnow" -ne "$nhour" ]; then
-  if [ "$hnow" -gt "$nhour" ] && [ ! -e "$day" ] && [ ! -e "$st/auto/nightly-missed-$(date +%F)" ]; then
+  wday=
+  if [ "$hnow" -gt "$nhour" ]; then wday=$(date +%F)
+  elif [ "$nhour" -eq 23 ]; then wday=$(date -v-1d +%F 2>/dev/null || date -d yesterday +%F 2>/dev/null); fi
+  if [ -n "$wday" ] && [ ! -e "$st/auto/nightly-$wday" ] && [ ! -e "$st/auto/nightly-missed-$wday" ]; then
     mk=$(/usr/bin/git -C "${SG_NIGHTLY_TREE:-$st/nightly-tree}" rev-parse -q --verify "origin/${SG_BASE:-dev}" 2>/dev/null) || mk=
     printf '%s\tbounded\t%s\tbounded:window\tbounded:window\t[]\n' "$(date +%s)" "${mk:--}" > "$st/nightly-result.$$" \
       && mv -f "$st/nightly-result.$$" "$st/nightly-result"
     printf '%s NIGHTLY window closed at %s with no run: one bounded attempt\n' "$(date '+%F %T')" "${mk:0:7}" >> "$st/alerts.log"
-    touch "$st/auto/nightly-missed-$(date +%F)"
+    touch "$st/auto/nightly-missed-$wday"
   fi
   echo "nightly: held: outside the $(printf '%02d' "$nhour"):00 window (America/Sao_Paulo); the suite runs in that window only (#1975)"; exit 0
 fi
@@ -149,6 +175,11 @@ g() { /usr/bin/git -C "$tree" "$@"; }
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || { echo "nightly: fetch of $base failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 tip=$(g rev-parse "origin/$base") || exit 1; dtip=$tip   # the dev tip the settlements are pruned against
+# (#1975, ADR-0153 rule 1d) Both halves name one sha: the local half runs on the sha today's GitHub run tested, when that run
+# exists and the sha can be had, and on the dev tip otherwise.
+ght=$(gh_today_sha)
+case "$ght" in *[!0-9a-f]*|'') ght=;; esac
+if [ -n "$ght" ] && { g cat-file -e "$ght^{commit}" 2>/dev/null || g fetch -q origin "$ght" 2>/dev/null; }; then tip=$ght; fi
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { echo "nightly: the tree could not check out $tip" >&2; exit 1; }
 py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
 # The two modes are one command each, so a caller may point them elsewhere: the whole suite, heavy included, in both.
@@ -242,25 +273,46 @@ mode_why() {
 # A start that is killed before a mode result leaves the record too, and it names the kill: no reader takes a killed start
 # for a red suite. It spends no day marker, so the next cycle tries again.
 pm=; sm=; pmf=; smf=; cur=parallel
+wdog=
+wdog_stop() { [ -n "$wdog" ] || return 0; kill -TERM "$wdog" 2>/dev/null; wait "$wdog" 2>/dev/null; wdog=; }
 killed() {  # <signal name> <exit code>
   trap - TERM INT HUP
-  [ -n "$mpid" ] && kill -TERM "$mpid" 2>/dev/null
+  wdog_stop
+  [ -n "$mpid" ] && { pkill -TERM -P "$mpid" 2>/dev/null; kill -TERM "$mpid" 2>/dev/null; }
   if [ -z "$tip" ]; then alert "NIGHTLY start killed by $1 before a tip was read"; exit "$2"; fi
   local n=$(( $2 - 128 ))
   [ -n "$pmf" ] || pm="bounded:signal-$n"
   [ -n "$smf" ] || sm="bounded:signal-$n"
   write_record bounded "$pm" "$sm" '[]'
-  alert "NIGHTLY start killed at ${tip:0:7} by $1 before the ${cur:-first} mode finished"
+  if [ -e "$st/nightly-bound-hit" ]; then
+    # The hour's end stopped the run: one bounded attempt for the hour, so the hour's close writes no second record.
+    rm -f "$st/nightly-bound-hit"; touch "$st/auto/nightly-missed-${day##*/nightly-}"
+    alert "NIGHTLY passed its hour's bound at ${tip:0:7} before the ${cur:-first} mode finished: one bounded attempt; the dispatch is released"
+  else
+    alert "NIGHTLY start killed at ${tip:0:7} by $1 before the ${cur:-first} mode finished"
+  fi
   exit "$2"
 }
 trap 'killed SIGTERM 143' TERM
 trap 'killed SIGINT 130' INT
 trap 'killed SIGHUP 129' HUP
 set +m   # serial.sh runs this command in its own group; job notices here would only write "Terminated: 15" over the log
+# (#1975, ADR-0153 rule 1b) The run is bounded by the end of its hour, when the dispatch hold ends: a watch stops it there, and
+# the trap above records the bounded attempt. SG_NIGHTLY_BOUND_SECONDS sets the bound in seconds instead.
+bleft=${SG_NIGHTLY_BOUND_SECONDS:-}
+if [ -z "$bleft" ]; then
+  bms=$(TZ=America/Sao_Paulo date +%M:%S); bleft=$(( 3600 - 10#${bms%%:*} * 60 - 10#${bms##*:} ))
+fi
+rm -f "$st/nightly-bound-hit"
+# The watch fires only when its own sleep ends on time: a stopped sleep or a stopped watch never stops the run.
+( sp=; trap '[ -n "$sp" ] && kill "$sp" 2>/dev/null; exit 0' TERM
+  sleep "$bleft" & sp=$!; wait "$sp" || exit 0
+  : > "$st/nightly-bound-hit"; kill -TERM $$ 2>/dev/null ) & wdog=$!
 run_mode "$par" "$pout" "${SG_NIGHTLY_PARALLEL:-}"; pm=$ms; pmf=1
 cur=serial
 run_mode "$ser" "$sout" "${SG_NIGHTLY_SERIAL:-}"; sm=$ms; smf=1   # both modes always run: the record says which one broke
 cur=
+wdog_stop
 trap - TERM INT HUP
 failed=$st/nightly-failing.$$   # one complete id per line, so no id is ever split
 { ids_of "$pout"; ids_of "$sout"; } | sort -u > "$failed"

@@ -164,7 +164,7 @@ gh_land_stop() {
 # or `bounded:<signal|exit>-<n>` for a leg that ended without naming a failing test (#1183). Anything else is a value the
 # loop cannot trust.
 sg_nightly_mode() {
-  case "$1" in pass|fail) return 0;; esac
+  case "$1" in pass|fail|bounded:window) return 0;; esac   # bounded:window: an hour that closed with no run (ADR-0153 rule 1b)
   case "$1" in fail:signal-[0-9]*|bounded:signal-[0-9]*|bounded:exit-[0-9]*) ;; *) return 1;; esac
   case "${1##*-}" in ''|*[!0-9]*) return 1;; esac   # the number after signal- or exit-, and nothing else
   return 0
