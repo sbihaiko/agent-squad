@@ -18,6 +18,20 @@ echo "$r" | /usr/bin/grep -qx 1300 && ok "same area outside the window stays apa
 echo "$r" | /usr/bin/grep -qx "1301 1302" && ok "shared file path clusters" || ko "files: '$r'"
 echo "$r" | /usr/bin/grep -qx 1303 && ok "unrelated issue alone" || ko "alone: '$r'"
 r=$(CL_MODE=files python3 "$d/cluster.py" <<<"$I"); echo "$r" | /usr/bin/grep -qx 1228 && ok "CL_MODE=files ignores the area rule" || ko "files mode: '$r'"
+# A bare file name that names one file of the checkout is that file's path (#2014): two bugs on one file, one written with
+# its folder and one without, are one cluster. A bare name of two files, or of none, adds no path.
+R=$(mktemp -d); git -C "$R" init -q; mkdir -p "$R/contrib/x" "$R/a" "$R/b"; : > "$R/contrib/x/test-nightly.sh"; : > "$R/a/dup.sh"; : > "$R/b/dup.sh"
+git -C "$R" add -A; J='[{"number":1401,"title":"t","body":"run `bash contrib/x/test-nightly.sh`","created_at":"2026-10-01T00:00:00Z"},
+{"number":1402,"title":"u","body":"The test-nightly.sh log shows this line.","created_at":"2026-10-02T00:00:00Z"},
+{"number":1403,"title":"v","body":"dup.sh is slow","created_at":"2026-10-03T00:00:00Z"},
+{"number":1404,"title":"w","body":"see a/dup.sh","created_at":"2026-10-04T00:00:00Z"},
+{"number":1405,"title":"x","body":"ghost.sh fails","created_at":"2026-10-05T00:00:00Z"},
+{"number":1406,"title":"y","body":"ghost.sh fails too","created_at":"2026-10-06T00:00:00Z"}]'
+r=$(SG_CHECKOUT="$R" python3 "$d/cluster.py" <<<"$J")
+echo "$r" | /usr/bin/grep -qx "1401 1402" && ok "a bare name of one checkout file clusters with its full path" || ko "bare name: '$r'"
+echo "$r" | /usr/bin/grep -qx 1403 && ok "a bare name of two checkout files adds no path" || ko "ambiguous bare name: '$r'"
+echo "$r" | /usr/bin/grep -qx 1405 && ok "a bare name of no checkout file adds no path" || ko "unknown bare name: '$r'"
+rm -rf "$R"
 # autobug: clusters become children. single.sh and startability.sh travel with the dispatchers: both run the pass under
 # single.sh (#1514) and source startability.sh (which sources ghcall.sh beside it), so a sandbox without them cannot start
 # a pass at all. envelope-spend.sh is what the request builder reads its child's spend from; address.sh is the seam.
