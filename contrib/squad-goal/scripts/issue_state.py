@@ -1050,6 +1050,46 @@ def _fresh_hub_items(require_fresh=True, repo=None):
     return None
 
 
+def _fast_states(repo):
+    """Every open card's state from ONE GraphQL page (#1796), or None when that read does not answer.
+
+    The REST items route answers a hundred cards a page whatever their column, and most of a mature board is closed, so
+    the reporting reads pay a dozen pages for the cards that matter. The fast read asks the project for the cards that are
+    not terminal, with their Status, in one page: the same read the hub's board already makes (board_fast). A missing
+    owner, project or module, a refusal, a partial answer or a read that names no card at all is no answer, and the caller
+    falls back to the whole-board read."""
+    owner, project = os.environ.get("SG_OWNER"), os.environ.get("SG_PROJECT")
+    if not owner or not project: return None
+    here = pathlib.Path(__file__).resolve().parent
+    try:
+        sys.path.insert(0, str(here))
+        import board_fast
+        import ghread
+        kind = board_state(repo=repo).binding.kind
+        def gql(query, variables, timeout):
+            out = ghread.graphql_read(query, variables, timeout=timeout, pass_name="board-states")
+            if not out.is_answer: raise RuntimeError(out.line())
+            if out.partial: raise RuntimeError("partial answer: " + ", ".join(out.partial))
+            return out.answer
+        nodes = board_fast.read_snapshot(gql, "organization" if kind == "orgs" else "user", owner, int(project),
+                                         ("Closed", "Abandoned"), board_fast.Budget(300), time.time() + 30)
+    except Exception:
+        return None
+    return _states_of(nodes, repo) or None
+
+
+def _states_of(nodes, repo):
+    """{issue: state} of the cards a fast-read snapshot carries, a card with no Status as "", and another repository's
+    card and an archived card left out (#770). A pure fold, so the mapping is tested without a carrier."""
+    m = {}
+    for n in nodes or ():
+        c = n.get("content") or {}
+        if n.get("isArchived") or c.get("number") is None: continue
+        if repo and (c.get("repository") or {}).get("nameWithOwner") != repo: continue
+        m[str(c["number"])] = (n.get("fieldValueByName") or {}).get("name") or ""
+    return m
+
+
 def main(argv):
     """The door for a shell caller: it asks the seam the same way a Python caller does."""
     args = argv[1:]
@@ -1103,8 +1143,11 @@ def main(argv):
         return 0
     if not args or args[0] not in ("--state",):
         cached = _fresh_hub_items(repo=repo)
+        fast = None if cached is not None else _fast_states(repo)
         if cached is not None:
             rows = {str(i["n"]): i["st"] for i in cached if i.get("n") is not None and i.get("st") is not None}
+        elif fast is not None:
+            rows = fast
         else:
             rows = board_state(repo=repo).read_all()
         for n, s in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{s}")
