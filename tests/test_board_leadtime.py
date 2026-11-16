@@ -718,3 +718,9 @@ def test_the_range_text_names_both_years_when_the_view_crosses_one(lt):
                    end=datetime(2027, 1, 3, tzinfo=UTC))
 
     assert chart["range"]["text"] == "Dec 30, 2026 to Jan 3, 2027 UTC"
+
+
+def test_a_twelve_hour_timeframe_names_whole_hours(lt):
+    """#2029: the 12-hour preset is half a day, and the chart text reads `last 12 hours`, never `12.0`."""
+    chart = lt.control_chart([], timeframe=0.5, now=BASE)
+    assert "last 12 hours" in json.dumps(chart), json.dumps(chart)[:300]

@@ -621,7 +621,7 @@ def test_a_stored_chart_range_waits_for_the_lead_chart_and_the_type_is_never_sto
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    fresh = {"ty": "bug", "tf": "7", "a": "Todo", "b": "", "own": False}   # a fresh page opens on the past week
+    fresh = {"ty": "bug", "tf": "12h", "a": "Todo", "b": "", "own": False}   # a fresh page opens on the past 12 hours (#2029)
     for stored in ({"tf": "30", "a": "Doing", "b": "Closed"}, {"ty": "task", "tf": "3", "a": "Doing"}, {}):
         assert loaded(stored) == fresh, "a stored chart range never reaches the Board tab's shared state"
 
@@ -908,3 +908,14 @@ console.log(JSON.stringify({fetched:FETCHED,before,draws:DRAWN.length,last:DRAWN
     dead = _page_harness(hub, answers, drive, onchange=_onchange(hub), render=True, real_draw=False)
     assert dead["draws"] == 0 and dead["afterHtml"] == dead["beforeHtml"] == "", \
         "a drawFlow that writes nothing leaves the element alone: the proof reads the page's own draw"
+
+
+def test_the_lead_chart_offers_twelve_hours_first_and_serves_it():
+    """#2029: the Timeframe list starts with Past 12 hours, and the route serves that preset as half a day."""
+    import importlib.util, pathlib
+    src = pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub.py"
+    text = src.read_text()
+    line = next(l for l in text.splitlines() if l.startswith("const LT_TF="))
+    assert line.startswith('const LT_TF=[["12h","Past 12 hours"],'), line
+    tf = next(l for l in text.splitlines() if l.startswith("LEAD_TIMEFRAMES = "))
+    assert '("12h", 0.5)' in tf, tf
