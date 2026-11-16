@@ -4,6 +4,7 @@
 #        wave.sh land <run>           when the run ends: the rebase on the moved base, the one push, and the closes
 #        wave.sh expired <run>        exit 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS)
 #        wave.sh requeue <issue> <why> [cap]  the child never enters: its issue goes back to the queue and the loop builds it again
+#        wave.sh retire <run>         end the run an age-cap requeue waits for, then requeue its issues once (#1970)
 #        wave.sh fail <issue> <run> <why>     the run ended with nothing delivered for the issue: one failed dispatch (#609)
 #        wave.sh probe-retry <issue>  the janitor sends again a probe's refutation that failed for a transient cause (#888)
 #        (a `probe` ticket whose run left its acceptance command unmet refutes its premise instead, in fail and requeue: #888)
@@ -522,6 +523,46 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
   SG_MOVE_REASON=no-landing board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Code Complete as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
+}
+
+# cap_hold <run> <run dir> <issue> <why>: an issue the age cap sends back to the queue waits for the end of its run (#1970).
+# The run that worked it may still run: it holds a run slot and spend, and the loop could dispatch the issue a second time.
+# auto/retire-<run> keeps the run folder on its first line and one "<issue> TAB <why>" line per issue; retire_run reads it.
+cap_hold() {
+  local m="$SG_STATE/auto/retire-$1" rd=$2
+  case "$rd" in /*) ;; *) rd="$PWD/$rd";; esac
+  mkdir -p "$SG_STATE/auto"
+  [ -s "$m" ] || printf '%s\n' "$rd" > "$m"
+  tail -n +2 "$m" | cut -f1 | /usr/bin/grep -qx "$3" || printf '%s\t%s\n' "$3" "$4" >> "$m"
+}
+
+# retire_run <run>: end the run its retire marker names, then requeue each issue the marker holds, once (#1970). The end goes
+# through squad/retire.py (SG_RETIRE_CMD replaces it in a test): the engine the record names is stopped by its pid and start
+# time, the end is verified, the work is kept and the killed verdict is written, which frees the run slot (ADR-0167). A run
+# that is not proven ended keeps its claim: no issue is requeued, the marker stays, and the watch cycle tries again
+# (`wave.sh retire <run>`). A requeue already done is listed in <marker>.done, so a pass that stopped midway repeats none.
+retire_run() {
+  local run=${1:?retire: a run is required} m rd out rc n why py
+  m="$SG_STATE/auto/retire-$run"; [ -s "$m" ] || return 0
+  rd=$(head -1 "$m")
+  if [ -n "${SG_RETIRE_CMD:-}" ]; then
+    out=$("$SG_RETIRE_CMD" "$rd" "killed/age-cap-requeue" 2>&1); rc=$?
+  else
+    py=${SG_SQUAD:+$SG_SQUAD/.venv/bin/python}; [ -n "$py" ] && [ -x "$py" ] || py=python3
+    out=$(PYTHONPATH="${SG_SQUAD:-${SG_CHECKOUT:-.}}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.retire "$rd" "killed/age-cap-requeue" --checkout "${SG_CHECKOUT:-.}" 2>&1); rc=$?
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  if [ "$rc" != 0 ]; then
+    echo "WAVE RETIRE-HOLD $run: the run is not proven ended (exit $rc), so its issues stay claimed and none is requeued: $(tail -n +2 "$m" | cut -f1 | tr '\n' ' ')"
+    return 1
+  fi
+  while IFS=$'\t' read -r n why <&3; do
+    [ -n "$n" ] || continue
+    /usr/bin/grep -qx "$n" "$m.done" 2>/dev/null && continue
+    requeue "$n" "$why" cap
+    echo "$n" >> "$m.done"
+  done 3< <(tail -n +2 "$m")
+  rm -f "$m" "$m.done"
 }
 
 fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
@@ -1509,7 +1550,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       elif [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
           wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child" keep
-          requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue" cap;; esac; done
+          cap_hold "$run" "$rd" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue";; esac; done
+        retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
       fi
       if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
       return 0; }
@@ -1580,7 +1622,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     for n in $(run_issues "$rd"); do case " $issues $amb $ent " in *" $n "*) ;; *)
       wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
       rq="$rq $n"
-      requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue" cap;; esac; done
+      cap_hold "$run" "$rd" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue";; esac; done
+    [ -n "$rq" ] && { retire_run "$run" || true; }   # the run ends before its issues go back to the queue (#1970)
   fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted
   # (cqflush.sh keeps one per issue, edited in place, #328). Each card reads the delivered column, which is what the landing
@@ -1664,5 +1707,6 @@ case "${1:-}" in
   requeue) shift; requeue "$@";;
   fail) shift; fail "$@";;
   probe-retry) shift; probe_retry "$@";;
-  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap] | wave.sh fail <issue> <run> <why> | wave.sh probe-retry <issue>" >&2; exit 2;;
+  retire) shift; retire_run "$@";;
+  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap] | wave.sh fail <issue> <run> <why> | wave.sh probe-retry <issue> | wave.sh retire <run>" >&2; exit 2;;
 esac

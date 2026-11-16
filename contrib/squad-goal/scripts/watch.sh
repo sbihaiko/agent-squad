@@ -121,7 +121,11 @@ while :; do
   # The guard keeps its own markers and alerts; its sentence, when it has one, goes to the cycle log and to stdout.
   guard_say=$("$(dirname "$0")/token-guard.sh" 2>/dev/null)
   [ -n "$guard_say" ] && { printf '%s %s\n' "$(date +%T)" "$guard_say" >> "$SG_STATE/cycle.log"; printf '%s\n' "$guard_say"; }
-  for r in $(cat "$SG_STATE/active-runs.txt"); do case "$seen" in *" $r "*) continue;; esac
+  for r in $(cat "$SG_STATE/active-runs.txt"); do
+    # An age-cap requeue waits for the end of its run (#1970): a retirement the landing could not prove is tried again here,
+    # each cycle, before the verdict is read, and the issues go back to the queue only once the run is proven ended.
+    [ -e "$SG_STATE/auto/retire-${r##*/}" ] && bash "$(dirname "$0")/wave.sh" retire "${r##*/}"
+    case "$seen" in *" $r "*) continue;; esac
     v=$(python3 -c "import json,sys
 landed=0; v=None
 for l in open((sys.argv[1] if sys.argv[1].startswith('/') else 'runs/'+sys.argv[1])+'/record.jsonl'):
