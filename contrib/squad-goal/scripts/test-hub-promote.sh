@@ -85,6 +85,19 @@ check("a spec batch that fails part way names the cards that moved and those tha
 lines = [json.loads(x) for x in hub.BATCH_AUDIT.read_text().splitlines()]
 check("each confirmed spec batch writes one audit line with its outcome",
       [x["outcome"] for x in lines] == ["moved", "refused", "partial"] and all(x["scope"] == 30 for x in lines), lines)
+# #1909: the owner's move of a spec carries its Backlog ticket in the same write, and that write is the owner's.
+spec_b = {"n": 40, "i": 140, "s": "open", "st": None, "l": ["spec"], "t": "t"}
+ticket_b = {"n": 41, "i": 141, "s": "open", "st": "Backlog", "l": [], "pa": 40, "t": "t"}
+hub.board_cache["items"] = [dict(spec_b), dict(ticket_b)]
+subs["answer"] = [{"number": 41, "state": "open", "labels": []}]
+calls.clear()
+got = hub.promote(40)
+hub.wait_for_moves()
+check("a spec with a Backlog ticket moves with it in one write", got.get("pending") == [40, 41] and [c[0] for c in calls] == [[40, 41]], (got, calls))
+seen2 = {}
+hub.subprocess.run = lambda argv, **kw: seen2.update(env=kw.get("env") or {}, argv=argv) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+real_write([40, 41])
+check("the write carries the spec and its ticket, by owner", seen2["env"].get("SG_MOVE_BY") == "owner" and seen2["argv"][-2:] == ["40", "41"], seen2)
 PY
 )
 echo "$out"; case "$out" in *FAIL*|*Error*|*Traceback*) fail=1;; esac

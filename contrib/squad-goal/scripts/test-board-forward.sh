@@ -13,6 +13,7 @@ echo x/y > "$T/urlrepo"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
+[ -e "TMPDIR/fail-next-read" ] && case "$a" in *"-X PATCH"*|*"-X POST"*) ;; *) rm -f "TMPDIR/fail-next-read"; echo "read refused" >&2; exit 1;; esac
 case "$a" in *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
   *"/labels"*) echo '[]';;
@@ -30,7 +31,7 @@ case "$a" in
 esac
 J
 sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-seed() { printf '2001\tTodo\n2002\tDoing\n2003\tCode Review\n2004\tCode Complete\n2005\tClosed\n' > "$T/cards.tsv"; : > "$T/gh.calls"; rm -f "$T/st/board-rejections.jsonl"; }
+seed() { printf '2001\tTodo\n2002\tDoing\n2003\tCode Review\n2004\tCode Complete\n2005\tClosed\n2006\tBacklog\n' > "$T/cards.tsv"; : > "$T/gh.calls"; rm -f "$T/st/board-rejections.jsonl" "$T/fail-next-read"; }
 run() { SG_STATE="$T/st" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" python3 "$T/s-board.py" "$@"; }
 col() { awk -F'\t' -v n="$1" '$1 == n {print $2}' "$T/cards.tsv"; }
 rework() { /usr/bin/grep -c "issues/$1/labels" "$T/gh.calls"; }
@@ -79,4 +80,29 @@ seed; o=$(SG_MOVE_BY=loop run o 4 "Doing" 2005 2>&1); rc=$?
 seed; o=$(SG_MOVE_BY=loop run o 4 "Todo" 2003 2001 2>&1); rc=$?
 [ "$rc" -eq 3 ] && [ "$(col 2003)" = "Code Review" ] && [ "$(col 2001)" = "Todo" ] && ok "a refusal in a batch leaves the other cards of the batch to their own moves" || ko "batch: exit $rc: $o"
 
+# #1909: only the owner moves a Backlog card to Todo. A hold names itself, keeps the card in Backlog, writes no rework label,
+# and is recorded; the owner's door moves it.
+seed; o=$(run o 4 "Todo" 2006 2>&1); rc=$?
+[ "$rc" -ne 0 ] && [ "$(col 2006)" = "Backlog" ] && [ "$(rework 2006)" = 0 ] && [ "$(rej)" = 1 ] && grep -q '"issue": 2006' "$T/st/board-rejections.jsonl" && printf '%s' "$o" | /usr/bin/grep -q 'held' \
+  && ok "an automated Backlog to Todo move is held: non-zero exit, the card keeps Backlog, no rework label, the hold is recorded" || ko "backlog hold: exit $rc, column $(col 2006), rework $(rework 2006), rejections $(rej): $o"
+seed; o=$(SG_MOVE_BY=owner run o 4 "Todo" 2006 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(col 2006)" = "Todo" ] && ok "the owner moves a Backlog card to Todo" || ko "owner Backlog to Todo: exit $rc, column $(col 2006): $o"
+for why in no-landing reopened; do
+  seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=$why run o 4 "Todo" 2006 2>&1); rc=$?
+  [ "$rc" -ne 0 ] && [ "$(col 2006)" = "Backlog" ] && ok "a $why reason does not lift the Backlog hold" || ko "$why hold: exit $rc, column $(col 2006): $o"
+done
+# A compare read that fails names the failure and writes no Todo: an automated writer cannot see the card, so it does not move it.
+seed; : > "$T/fail-next-read"; o=$(run o 4 "Todo" 2006 2>&1); rc=$?
+[ "$rc" -ne 0 ] && [ "$(col 2006)" = "Backlog" ] && ! /usr/bin/grep -qF -- '-X PATCH' "$T/gh.calls" && printf '%s' "$o" | /usr/bin/grep -qi 'read' \
+  && ok "an automated Todo write does not occur when the compare read fails" || ko "read failure: exit $rc, column $(col 2006), calls $(cat "$T/gh.calls"): $o"
+# #1909: a transition records who asked (by), the caller's pass (pass) and the reason; board.sh names `hand` when no pass is given.
+sh_move() { env -u SG_GH_PASS -u SG_MOVE_BY "$@" SG_STATE="$T/st" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" bash "$d/board.sh" o 4 Doing 2001; }
+seed; rm -f "$T/st/board-transitions.x_y.jsonl"; sh_move SG_GH_PASS=janitor SG_MOVE_BY=loop >/dev/null 2>&1
+case "$(cat "$T/st/board-transitions.x_y.jsonl" 2>/dev/null)" in *'"by": "loop"'*'"pass": "janitor"'*) ok "a move through board.sh records by loop and pass janitor";; *) ko "janitor pass: $(cat "$T/st/board-transitions.x_y.jsonl" 2>/dev/null)";; esac
+seed; rm -f "$T/st/board-transitions.x_y.jsonl"; sh_move SG_MOVE_BY=owner >/dev/null 2>&1
+case "$(cat "$T/st/board-transitions.x_y.jsonl" 2>/dev/null)" in *'"by": "owner"'*'"pass": "hand"'*) ok "an owner move with no pass records by owner and pass hand";; *) ko "owner move: $(cat "$T/st/board-transitions.x_y.jsonl" 2>/dev/null)";; esac
+seed; rm -f "$T/st/board-transitions.x_y.jsonl"; sh_move >/dev/null 2>&1
+case "$(cat "$T/st/board-transitions.x_y.jsonl" 2>/dev/null)" in *'"by": null'*'"pass": "hand"'*) ok "a move with no context records pass hand and no by";; *) ko "no context: $(cat "$T/st/board-transitions.x_y.jsonl" 2>/dev/null)";; esac
+seed; env -u SG_GH_PASS SG_STATE="$T/st" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" SG_GH_PASS=janitor bash "$d/board.sh" o 4 Todo 2006 >/dev/null 2>&1
+case "$(cat "$T/st/board-rejections.jsonl" 2>/dev/null)" in *'"pass": "janitor"'*'"reason": null'*) ok "a refusal records its pass and reason";; *) ko "refusal record: $(cat "$T/st/board-rejections.jsonl" 2>/dev/null)";; esac
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "all forward checks passed" || { echo "forward checks failed"; exit 1; }

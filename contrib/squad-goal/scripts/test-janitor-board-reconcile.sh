@@ -90,8 +90,8 @@ case "$a" in
         # #2060 is a spec whose every sub-issue is closed, but a landing named #2062 outside its run's dispatch set (#775):
         # that close has no evidence, so the spec is held open, never closed off it.
         2060) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":2}'; kids='[{"number":2061},{"number":2062}]';;
-        # The owner starts a spec by moving its card (#589): #2042 sits in Todo, so its children in Backlog (#2043) or with no
-        # card (#2045) follow it; #2044 is past Backlog and keeps its column. #2046 still sits in Backlog, so #2047 stays.
+        # #2042 sits in Todo with children in Backlog (#2043), with no card (#2045) and past Backlog (#2044): the pass lifts none
+        # of them. #2046 still sits in Backlog, so #2047 stays.
         2042) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":3,"completed":0}'; kids='[{"number":2043},{"number":2044},{"number":2045}]';;
         2046) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2047}]';;
         # A spec is never work (#665): its children's commits name it, but the fold alone sets its card. #2050's card was
@@ -302,11 +302,12 @@ done
 ! /usr/bin/grep -q ' 2029$' "$T/board.calls" 2>/dev/null && ok "a Closed spec whose child reopened keeps its column" || ko "#2029 moved: $(/usr/bin/grep ' 2029$' "$T/board.calls")"
 /usr/bin/grep -q '^api -X POST repos/x/y/issues/2029/labels -f labels\[\]=reverted$' "$T/gh.calls" 2>/dev/null && ok "it gains the reverted tag" || ko "#2029 not tagged: $(/usr/bin/grep 'issues/2029' "$T/gh.calls")"
 /usr/bin/grep -q 'SPEC-REVERTED #2029' "$T/st/cycle.log" 2>/dev/null && ok "the kept column is named in cycle.log" || ko "#2029 not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
-# The owner starts a spec by moving its card to Todo, and its children follow it there, forward only (#589). The spec card
-# keeps the owner's column: the fold writes nothing below Doing, so the two rules never fight.
-/usr/bin/grep -q '^STATUS o 4 Todo 2043$' "$T/board.calls" 2>/dev/null && ok "a Backlog child of a spec in Todo follows it to Todo" || ko "#2043 did not follow its spec: $(bc) $o"
-/usr/bin/grep -q '^ADD o 4 Todo 2045$' "$T/board.calls" 2>/dev/null && ok "a child with no card of a spec in Todo is added in Todo" || ko "#2045 not added Todo: $(bc)"
-/usr/bin/grep -q 'BOARD-RECONCILE #2043: card -> Todo (its spec #2042 sits in Todo: the owner started it)' "$T/st/cycle.log" 2>/dev/null && ok "the follow is named in cycle.log" || ko "#2043 follow not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# A spec in Todo lifts none of its Backlog tickets; the owner's move of the spec carries them (#1909). The spec card keeps
+# the owner's column: the fold writes nothing below Doing, so the two rules never fight.
+! /usr/bin/grep -q ' 2043$' "$T/board.calls" 2>/dev/null && ok "a spec in Todo lifts no Backlog ticket (#1909)" || ko "#2043 moved with its spec: $(bc) $o"
+! /usr/bin/grep -q '^ADD o 4 Todo 2045$' "$T/board.calls" 2>/dev/null && ok "a child with no card of a spec in Todo is not added in Todo (#1909)" || ko "#2045 added Todo: $(bc)"
+/usr/bin/grep -q '^ADD o 4 Backlog 2045$' "$T/board.calls" 2>/dev/null && ok "a child with no card of a spec in Todo is added in Backlog" || ko "#2045 not added Backlog: $(bc) $o"
+[ "$(/usr/bin/grep -c 'SPEC-HELD-IN-TODO #2042' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "a spec in Todo names its held Backlog tickets once" || ko "#2042 hold: $(/usr/bin/grep '2042' "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2044$' "$T/board.calls" 2>/dev/null && ok "a child past Backlog keeps its column" || ko "#2044 moved: $(/usr/bin/grep ' 2044$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 204[26]$' "$T/board.calls" 2>/dev/null && ok "the spec card keeps the owner's column" || ko "a spec moved: $(/usr/bin/grep -E ' 204[26]$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2047$' "$T/board.calls" 2>/dev/null && ok "a child of a spec in Backlog stays in Backlog" || ko "#2047 moved: $(/usr/bin/grep ' 2047$' "$T/board.calls")"
@@ -320,8 +321,8 @@ done
 # ADR-0142 rule 5, ADR-0143 rule 1). The lane reports the count in each column, so the spec card itself never moves there.
 ! /usr/bin/grep -q ' 2080$' "$T/board.calls" 2>/dev/null && ok "a spec in Todo with a ticket in progress stays in Todo" || ko "#2080 moved: $(/usr/bin/grep ' 2080$' "$T/board.calls")"
 ! /usr/bin/grep -q 'In Progress 2080' "$T/board.calls" 2>/dev/null && ok "a spec never follows a ticket into a work column" || ko "#2080 read as work: $(bc)"
-/usr/bin/grep -q '^STATUS o 4 Todo 2090$' "$T/board.calls" 2>/dev/null && ok "a spec in Backlog with a ticket in Todo is lifted to Todo" || ko "#2090 not lifted to Todo: $(bc) $o"
-/usr/bin/grep -q 'BOARD-RECONCILE #2090: card -> Todo (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the lift is named in cycle.log" || ko "#2090 lift not named: $(/usr/bin/grep 2090 "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q ' 2090$' "$T/board.calls" 2>/dev/null && ok "a spec in Backlog with a ticket in Todo is never lifted to Todo by the pass (#1909)" || ko "#2090 lifted: $(bc) $o"
+[ "$(/usr/bin/grep -c 'SPEC-HELD-IN-BACKLOG #2090' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "the hold is named once in cycle.log" || ko "#2090 hold not named once: $(/usr/bin/grep 2090 "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2092$' "$T/board.calls" 2>/dev/null && ok "a spec with no ticket in flight keeps the column the owner gave it" || ko "#2092 moved: $(/usr/bin/grep ' 2092$' "$T/board.calls")"
 /usr/bin/grep -q '^STATUS o 4 Todo 2094$' "$T/board.calls" 2>/dev/null && ok "a spec in a work column returns to Todo" || ko "#2094 not returned to Todo: $(bc) $o"
 # #1463: the REST items read omits #2096; the fallback GraphQL read carries its card in Code Complete, so the
