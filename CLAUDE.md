@@ -50,6 +50,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 
 ### Process
 
+- **A timeout that a suite of the same tree explains is unproven, and a command's held gate slots are named to it so the suite takes none twice** ([ADR-0175](docs/adr/0175-a-timeout-a-suite-explains-is-unproven.md)). Guard: `tests/test_workcmd.py`, `contrib/squad-goal/scripts/test-child-gate.sh`.
 - **ADRs are guides, never ledgers** ([ADR-0000](docs/adr/0000-adrs-are-guides.md)). Guard: none yet; a draft.
 - **A gate is a stop condition, never a target** ([ADR-0012](docs/adr/0012-gate-is-a-stop-condition.md)). Guard: none yet; a draft.
 - **A failing gate is a defect; expectations are re-anchored, never retuned** ([ADR-0018](docs/adr/0018-failing-gate-is-a-defect.md)). Guard: The full suite, run in both modes.
@@ -82,7 +83,6 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A gate stage reuses a green verdict for the same tree and the same suite, and records the reuse; a red is never reused and any doubt runs the suite** ([ADR-0168](docs/adr/0168-a-gate-stage-reuses-a-green-verdict.md)). Guard: `tests/test_gate_reuse.py`.
 - **A gate runs the test scope its stage names; the landing runs the full battery, and a delta that cannot cover the change falls through to it** ([ADR-0169](docs/adr/0169-a-gate-runs-the-test-scope-its-stage-names.md)). Guard: `tests/test_gate_scope.py`.
 - **A run with no record progress for thirty minutes is taken over, never requeued: it is ended and its issues stay claimed, and time spent waiting for a gate slot is no run time** ([ADR-0166](docs/adr/0166-a-run-past-thirty-minutes-is-taken-over.md)). Guard: `tests/test_janitor_takeover.py`.
-- **A timeout that a suite of the same tree explains is unproven, and a command's held gate slots are named to it so the suite takes none twice** ([ADR-0175](docs/adr/0175-a-timeout-a-suite-explains-is-unproven.md)). Guard: `tests/test_workcmd.py`, `contrib/squad-goal/scripts/test-child-gate.sh`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
 - **A not-startable marker names the build that wrote it; another build re-arms it** ([ADR-0159](docs/adr/0159-a-not-startable-marker-names-its-build.md)). Guard: `tests/test_not_startable_build.py`.
 - **A model omitted from a chain is investigated and recovered; only a real answer on its lane clears the streak** ([ADR-0160](docs/adr/0160-a-model-omitted-is-investigated-and-recovered.md)). Guard: `contrib/squad-goal/scripts/test-model-recover.sh`.
