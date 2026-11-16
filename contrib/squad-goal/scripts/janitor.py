@@ -1332,7 +1332,10 @@ def reconcile_board():
                 # (#942): the spec vocabulary's Closed and Abandoned are never written to it.
                 kid_cols = [have_cards.get(k, "") for k in _kids.get(n, [])]
                 todo = os.environ.get("SG_TODO", "Todo")
-                col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), todo, spec=is_spec, todo=todo)   # a spec reads Todo while a ticket is in flight, and never a work column (#1131)
+                # A spec reads Todo while a ticket is in flight, and never a work column (#1131). No child gives it a terminal
+                # column either (#1906): this walk holds open issues only, so the fold's own-state answer is None here, and a
+                # closed spec's card follows its issue through the terminal rule below.
+                col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), todo, spec=is_spec, todo=todo)
                 if is_spec and col == todo and have_cards.get(n, "") in ("", "Backlog"):   # only the owner starts a spec from Backlog or with no card (ADR-0142, #1909)
                     col = None
                     mk = st / "auto" / f"janitor-specheld-{n}"

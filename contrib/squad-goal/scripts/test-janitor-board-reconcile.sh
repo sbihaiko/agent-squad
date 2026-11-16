@@ -368,9 +368,10 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
 # A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
 # cards the pass already holds: the floor opens a new spec in Backlog, and a spec never takes Doing from its children (ADR-0142,
-# #1034), Closed when every child is terminal and one is Closed, Abandoned when every child is terminal and none is Closed.
+# #1034). The children's terminal columns give it no column either (#1906): the card follows the spec's own issue, so a spec
+# whose children are all closed keeps the owner's column here and reaches Closed on the pass that reads its own close.
 # The pass also closes the spec issue when every child is closed.
-for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Backlog 2028"; do
+for w in "ADD o 4 Backlog 2020" "ADD o 4 Backlog 2021" "ADD o 4 Backlog 2027" "ADD o 4 Backlog 2028"; do
   /usr/bin/grep -q "^$w\$" "$T/board.calls" 2>/dev/null && ok "spec fold: $w" || ko "spec fold: no '$w': $(/usr/bin/grep -E ' 20(20|21|27|28)$' "$T/board.calls")"
 done
 ! /usr/bin/grep -q 'Open Specs' "$T/board.calls" 2>/dev/null && ok "no spec is written to the old Open Specs column" || ko "Open Specs written: $(/usr/bin/grep 'Open Specs' "$T/board.calls")"

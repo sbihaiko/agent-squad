@@ -16,7 +16,8 @@ def _load():
 
 
 # the child columns, as the board names them: a worked table, never recomputed from the fold's own sets. None is no write:
-# a spec reads Todo while any child is in flight, and keeps the owner's column when none is (#1131)
+# a spec reads Todo while any child is in flight, and keeps the owner's column when none is (#1131). The children never give
+# a spec a terminal column: with no ticket in flight the spec's own issue state answers, and an open issue answers none (#1906)
 CASES = [
     ([], None),
     (["Todo"], "Todo"),
@@ -31,12 +32,12 @@ CASES = [
     (["Code Review", "Todo"], "Todo"),   # a child whose review holds it is in flight (#603)
     (["Code Review", "Done"], "Todo"),
     (["Done", "In Progress"], "Todo"),
-    (["Done"], "Closed"),
-    (["Done", "Done"], "Closed"),
-    (["Done", "Abandoned"], "Closed"),
-    (["Abandoned", "Done", "Abandoned"], "Closed"),
-    (["Abandoned"], "Abandoned"),
-    (["Abandoned", "Abandoned"], "Abandoned"),
+    (["Done"], None),
+    (["Done", "Done"], None),
+    (["Done", "Abandoned"], None),
+    (["Abandoned", "Done", "Abandoned"], None),
+    (["Abandoned"], None),
+    (["Abandoned", "Abandoned"], None),
     (["Abandoned", "Todo"], "Todo"),
     (["Abandoned", "In Progress"], "Todo"),
     (["Landing", "Todo"], "Todo"),
@@ -63,6 +64,42 @@ def test_every_combination_of_child_columns_folds_forward_or_writes_nothing():
     for size in range(0, 4):
         for kids in itertools.product(["Backlog", "Todo", "In Progress", "Done", "Abandoned"], repeat=size):
             assert fold(list(kids), spec=True)[0] in {None, "Todo", "Closed", "Abandoned"}
+
+
+# a spec's own issue state, as `own`: the column the issue earns (Closed or Abandoned), or None while it is open. The state
+# answers only when no ticket is in flight: a moved ticket still reads the queue column (#1906)
+OWN_CASES = [
+    ([], None, None),
+    ([], "Closed", "Closed"),
+    ([], "Abandoned", "Abandoned"),
+    (["Done"], None, None),
+    (["Done"], "Closed", "Closed"),
+    (["Done", "Abandoned"], "Closed", "Closed"),
+    (["Abandoned"], "Abandoned", "Abandoned"),
+    (["Backlog", "Done"], "Closed", "Closed"),
+    (["Todo"], "Closed", "Todo"),
+    (["In Progress"], "Abandoned", "Todo"),
+]
+
+
+@pytest.mark.parametrize("children,own,column", OWN_CASES)
+def test_a_spec_with_no_sub_issue_in_flight_follows_its_own_issue_state(children, own, column):
+    assert _load().fold(children, spec=True, own=own)[0] == column
+
+
+def test_a_spec_with_no_sub_issue_in_flight_never_folds_to_the_queue():
+    """The fold answers when no sub-issue is open, and its answer is never the column a dispatcher reads (#1906)."""
+    fold = _load().fold
+    for size in range(0, 4):
+        for kids in itertools.product(["Backlog", "Done", "Abandoned", "Closed"], repeat=size):
+            assert fold(list(kids), spec=True)[0] != "Todo", kids
+
+
+def test_a_spec_whose_own_issue_is_open_never_keeps_a_terminal_column():
+    """Every sub-issue closed and the spec's own issue still open: the card follows the issue, so the terminal column it
+    carries is the one to undo, never one the children give it (ADR-0143 rule 2, #1906)."""
+    assert _load().fold(["Done", "Done"], "Closed", spec=True) == ("Closed", True)
+    assert _load().fold([], "Abandoned", spec=True) == ("Abandoned", True)
 
 
 @pytest.mark.parametrize("current", ["Backlog", "Todo", "Doing", ""])
@@ -97,9 +134,10 @@ def test_a_terminal_spec_whose_child_reopens_keeps_its_column_and_is_tagged_agai
     assert (column, reverted) == (current, True)
 
 
-def test_a_spec_that_moves_forward_is_not_tagged():
-    assert _load().fold(["Done"], "Doing", spec=True) == ("Closed", False)
-    assert _load().fold(["Done"], "Closed", spec=True) == ("Closed", False)
+def test_a_spec_that_follows_its_own_issue_is_not_tagged():
+    """The card reaches the terminal column from its own issue, never from its children (#1906)."""
+    assert _load().fold(["Done"], "Doing", spec=True, own="Closed") == ("Closed", False)
+    assert _load().fold(["Done"], "Closed", spec=True, own="Closed") == ("Closed", False)
 
 
 def test_a_non_spec_parent_still_folds_to_the_work_column():
