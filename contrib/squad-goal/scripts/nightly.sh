@@ -26,9 +26,6 @@
 # notification (HEALTH_NOTIFY overrides the notifier). The alert names the mode, the exit status, the signal and the log
 # line that names the cause, never "no failing test named". The two mode logs stay in $SG_STATE/nightly-parallel.log and
 # nightly-serial.log.
-# An open bound marker (promote-pass.sh writes $SG_STATE/promote-bound, ADR-0164) moves the run to the oldest marked tip that
-# no pass or fail settlement in $SG_STATE/promote-bound-settled names; the result then settles that tip there -- pass, fail,
-# or bounded for an attempt the suite never finished, which leaves the marker open -- and dev waits a day.
 # It also settles the proof obligations a gate left unproven (spec 1163): it runs the checks each record in
 # $SG_STATE/obligations names over the tree that record names, writes settled-green or settled-red in
 # $SG_STATE/obligation-settled, clears the record it answered, reports an overdue one by name, and a settled red holds the
@@ -73,26 +70,10 @@ nt0=$(date +%s)   # the run's own start: the settlement below stops before the h
 tree=${SG_NIGHTLY_TREE:-$st/nightly-tree}; remote=${SG_NIGHTLY_REMOTE:-https://github.com/$SG_REPO.git}; base=${SG_BASE:-dev}
 export GIT_TERMINAL_PROMPT=0
 g() { /usr/bin/git -C "$tree" "$@"; }
-bound_open() {  # the oldest bound-ended tip that no pass or fail settlement names
-  [ -f "$st/promote-bound" ] || return 0
-  local t
-  while IFS=$'\t' read -r _ t _; do
-    [ -n "$t" ] || continue
-    # Only a proof closes the marker. A bounded settlement leaves it open, so the next nightly measures the marked tip
-    # again: the marker becomes a fact only when the suite finished (ADR-0164).
-    awk -F'\t' -v t="$t" '$2 == t && $3 != "bounded" { f = 1 } END { exit !f }' "$st/promote-bound-settled" 2>/dev/null \
-      || { printf '%s\n' "$t"; return 0; }
-  done < "$st/promote-bound"
-}
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || { echo "nightly: fetch of $base failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 tip=$(g rev-parse "origin/$base") || exit 1; dtip=$tip   # the dev tip the settlements are pruned against
-# ADR-0164 (#1046): an open bound marker names a tip the full suite never finished. The nightly proves that tip, not dev, and
-# settles the marker with its result; a red settles as red and fails the record.
-bt=$(bound_open)
-if [ -n "$bt" ] && ! g cat-file -e "$bt^{commit}" 2>/dev/null && ! g fetch -q origin "$bt" 2>/dev/null; then bt=; fi
-[ -n "$bt" ] && tip=$bt
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { echo "nightly: the tree could not check out $tip" >&2; exit 1; }
 py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
 # The two modes are one command each, so a caller may point them elsewhere: the whole suite, heavy included, in both.
@@ -250,10 +231,6 @@ elif [ "$res" = bounded ]; then
   case "$sm" in bounded:*) why="${why:+$why; }the serial mode $(mode_why "$sm" "$sout")";; esac
   alert "NIGHTLY full suite bounded at ${tip:0:7}: $why"
 fi
-# The marker is settled with what the run found: pass, fail, or bounded for an attempt the suite never finished. Only a
-# pass or a fail closes it; a bounded settlement leaves it open as unproven, so a later nightly proves the marked tip
-# again (ADR-0164).
-[ -n "$bt" ] && printf '%s\t%s\t%s\n' "$(date +%s)" "$bt" "$res" >> "$st/promote-bound-settled"
 odir=$st/obligations; sdir=$st/obligation-settled; olog=$st/obligation-settle.log
 # The default settlement commands are the checks the fast gate's battery runs (base-battery.sh): ruff and mypy over this
 # repository's layout, then the full serial suite. A profile names its own in SG_SETTLE_RUFF, SG_SETTLE_MYPY and

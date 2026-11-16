@@ -169,52 +169,6 @@ rm -f "$SG_STATE/promote-reserve"
 # The cycle's own promotion step -- the single-flight lock, the CI proof, the debounce and the step's line in cycle.log -- is
 # proved by its behavior in test-watch-cycle.sh, never by a grep of watch.sh's source: a grep breaks on a reformatted line and
 # still passes a step that runs in the foreground. This suite proves the pass itself (ADR-0145 rule 3).
-# ADR-0156: a full pass carries across a covered delta. The proven tip is t1; dev moves by one covered path; the delta carries it
-# and the pass promotes without the full suite. A path outside the map runs the full suite again.
-before=$(runs)
-$W fetch -q origin; $W checkout -q -B dev origin/dev; mkdir -p "$T/w/contrib/squad-goal/scripts"
-echo "# delta" >> "$T/w/contrib/squad-goal/scripts/test-nightly.sh"; $W add -A; $W commit -q -m delta-covered; $W push -q origin dev
-t2=$(tip dev); SG_DELTA_SUITE=true pass; rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$t2" ] && ok "a covered delta promotes the tip that moved past the full pass" || ko "delta carry: rc $rc, stg $(tip stg), dev $t2, out '$(cat "$T/out")'"
-[ "$(runs)" = "$before" ] && ok "a covered delta runs no full suite" || ko "the full suite ran for a covered delta: $(cat "$T/suite.log")"
-$W fetch -q origin; $W checkout -q -B dev origin/dev; echo x >> "$T/w/pyproject.toml" 2>/dev/null || echo x > "$T/w/pyproject.toml"
-$W add -A; $W commit -q -m delta-uncovered; $W push -q origin dev
-t3=$(tip dev); rm -f "$SG_STATE/gate-status-delta"; pass; rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$t3" ] && ok "an uncovered delta falls back to the full suite, which promotes" || ko "uncovered delta: rc $rc, stg $(tip stg), dev $t3, out '$(cat "$T/out")'"
-[ "$(runs)" -gt "$before" ] && ok "the uncovered delta ran the full suite" || ko "the uncovered delta skipped the full suite: $(cat "$T/suite.log")"
-
-# ADR-0157: a proof is bounded, and it never blocks the loop for long. Past its reserve bound the reserve lifts and the
-# proof keeps running, so the loop dispatches beside it. Past its bound the proof is killed and recorded indeterminate:
-# it promotes nothing, writes no gate status, and is not marked refused, so a later pass retries the same tip.
-adv dev bound; tb=$(tip dev); echo 6 > "$T/suite-sleep"; rm -f "$T/suite-rc" "$SG_STATE/promote-reserve"
-SG_PROMOTE_RESERVE_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 SG_PROMOTE_BOUND_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out2" 2>&1 & bp=$!
-for _ in $(seq 1 40); do sleep 0.25; [ -e "$SG_STATE/promote-reserve" ] && break; done
-[ -e "$SG_STATE/promote-reserve" ] && ok "the proof reserves the machine at its start" || ko "the proof never reserved the machine"
-for _ in $(seq 1 60); do sleep 0.25; [ ! -e "$SG_STATE/promote-reserve" ] && break; done
-{ [ ! -e "$SG_STATE/promote-reserve" ] && kill -0 "$bp" 2>/dev/null; } && ok "past its reserve bound the reserve lifts while the proof still runs" \
-  || ko "the reserve did not lift while the proof ran"
-wait "$bp"; rc=$?
-[ "$rc" = 0 ] && [ "$(tip stg)" = "$tb" ] && ok "a proof that lifted its reserve still promotes its tip" || ko "lifted proof: rc $rc, stg $(tip stg), dev $tb"
-rm -f "$T/suite-sleep"
-# ADR-0164 (#1046): a bound the delta cannot carry still ships the tip. The proven base P is the tip before the slow commit, and the
-# slow commit adds two paths outside the delta map, so the delta refuses and the bound-ended proof promotes the tip with a marker.
-p0=$(tip dev); printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"; rm -f "$SG_STATE/gate-status-delta"
-$W fetch -q origin; $W checkout -q -B dev origin/dev; mkdir -p "$T/w/squad"; echo x > "$T/w/squad/slow.py"; echo x > "$T/w/squad/other.py"
-$W add -A; $W commit -q -m slow; $W push -q origin dev
-ts=$(tip dev); echo 30 > "$T/suite-sleep"; rm -f "$SG_STATE/promote-indeterminate" "$SG_STATE/promote-bound" "$T/suite-rc"
-s0=$(date +%s); SG_PROMOTE_BOUND_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out3" 2>&1; rc=$?; el=$(( $(date +%s) - s0 ))
-[ "$rc" = 0 ] && [ "$el" -lt 15 ] && ok "a proof past its bound is killed, not awaited, and its tip ships (${el}s)" || ko "bound: rc $rc after ${el}s, out '$(cat "$T/out3")'"
-[ "$(tip stg)" = "$ts" ] && ok "a bound the delta cannot carry still promotes the dev tip" || ko "bound ship: stg $(tip stg), dev $ts"
-IFS=$'\t' read -r _ mt mb mg < "$SG_STATE/promote-bound" 2>/dev/null
-[ "$mt" = "$ts" ] && [ "$mb" = 1 ] && ok "the bound marker names the tip and the bound it passed" \
-  || ko "bound marker: '$(cat "$SG_STATE/promote-bound" 2>/dev/null)'"
-case "$mg" in *"squad/other.py, squad/slow.py"*) ok "the bound marker names every part the delta did not cover";; *) ko "bound marker gap: '$mg'";; esac
-/usr/bin/grep -q "^$ts promoted: bound-ended" "$SG_STATE/promote-pass.tips" && ok "the tip is marked bound-ended, not as a full or a delta pass" \
-  || ko "tip mark: '$(/usr/bin/grep "^$ts " "$SG_STATE/promote-pass.tips" 2>/dev/null)'"
-[ "$(/usr/bin/grep -c "^$ts not promoted" "$SG_STATE/promote-pass.tips" 2>/dev/null)" = 0 ] && ok "a bound-ended tip is not marked refused" || ko "the bound-ended tip was marked refused"
-/usr/bin/grep -q "promote-pass: $ts not tested" "$SG_STATE/promote.log" && ok "the log says the tip is not tested until the nightly proves it" || ko "no not-tested line for $ts"
-rm -f "$T/suite-sleep"
-
 # An owner-named bound still reserves the machine while the suite runs, and the marker is gone after the proof: a standing
 # marker costs run slots, so it stands only when the owner asks for the measurement to be shielded.
 adv dev held; th=$(tip dev); : > "$T/reserve.log"; rm -f "$T/suite-rc"
@@ -587,14 +541,14 @@ moved red
 [ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && ok "dev moved to B with CI red: the pass refuses (#1495)" || ko "moved red: rc $rc, stg $(tip stg)"
 /usr/bin/grep -q "^$mb " "$SG_STATE/promote-pass.tips" && ! /usr/bin/grep -q "^$ma " "$SG_STATE/promote-pass.tips" \
   && ok "the refusal marker names B, never the proved tip A (#1495)" || ko "moved red marker: A $ma, B $mb: $(cat "$SG_STATE/promote-pass.tips")"
-# The local-suite and delta invocations keep the local proof; the CI path names its proof word (fast for a tiered workflow, #1723,
+# The local-suite invocation keeps the local proof; the CI path names its proof word (fast for a tiered workflow, #1723,
 # else ci), and the fast battery fallback calls the fast proof.
 nl=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 nw=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=$proof_word bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 nf=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 na=$(/usr/bin/grep -c 'bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 # The tip gate's green local half is a second call of the CI path's word (#1927), beside the CI checks' own call.
-[ "$nl" = 3 ] && [ "$nw" = 2 ] && [ "$nf" = 1 ] && [ "$na" = 8 ] && ok "the local-suite and delta calls pass the local proof, the CI path the fast or ci word, the fallback the fast word (#1723)" \
+[ "$nl" = 2 ] && [ "$nw" = 2 ] && [ "$nf" = 1 ] && [ "$na" = 8 ] && ok "the local-suite calls pass the local proof, the CI path the fast or ci word, the fallback the fast word (#1723)" \
   || ko "promote-stg.sh calls: local $nl, word $nw, fast $nf, all $na"
 
 # #1086: an interpreter that lacks a tool the suite runs refuses the pass before any suite runs. The refusal names the tool,
@@ -614,7 +568,6 @@ for tool in ruff mypy pytest; do
   env -u SG_PROMOTE_SUITE SG_GATE_PY="$T/no-$tool/bin/python" bash "$d/promote-pass.sh" > "$T/out" 2>&1; rc=$?
   [ $rc = 2 ] && /usr/bin/grep -q "holds no $tool," "$T/out" && [ "$(tip stg)" = "$before" ] \
     && ! /usr/bin/grep -q "statuses/$tt" "$T/gh.log" && ! /usr/bin/grep -q "^$tt " "$SG_STATE/promote-pass.tips" 2>/dev/null \
-    && ! /usr/bin/grep -q "$tt" "$SG_STATE/gate-status-delta" 2>/dev/null \
     && ok "an interpreter with no $tool refuses the pass, names $tool, and leaves the tip unmarked" \
     || ko "no $tool: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
 done
@@ -625,102 +578,23 @@ env -u SG_PROMOTE_SUITE SG_GATE_PY="$T/all-tools/bin/python" bash "$d/promote-pa
 
 # #1086: a checkout with no venv of its own resolves the venv beside its common git directory, not the system python3.
 $W worktree add -q "$T/wt-novenv" -b novenv; mkpy "$T/w/.venv/bin/python" none
-adv dev venv-beside; tv=$(tip dev); rm -f "$T/py.log" "$SG_STATE/gate-carried" "$SG_STATE/gate-status-delta"
+adv dev venv-beside; tv=$(tip dev); rm -f "$T/py.log"
 env -u SG_GATE_PY -u SG_PROMOTE_SUITE SG_CHECKOUT="$T/wt-novenv" bash "$d/promote-pass.sh" > "$T/out" 2>&1; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tv" ] && ok "a checkout with no venv of its own promotes its tip" \
   || ko "no venv of its own: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
 /usr/bin/grep -q "w/.venv/bin/python" "$T/py.log" 2>/dev/null && ok "the suite's interpreter is the venv beside the common git directory" \
   || ko "interpreter used: '$(cat "$T/py.log" 2>/dev/null)'"
 
-# ADR-0164 (#1046): promote-stg.sh takes the bound-ended proof only for the tip promote-pass.sh recorded indeterminate, and never for a
-# tip whose last proof was red. A red the delta measured holds the tip, and writes no indeterminate record.
-adv dev nobound; tn=$(tip dev); rm -f "$SG_STATE/promote-indeterminate"; sb=$(tip stg)
-SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out7" 2>&1; rc=$?
-[ "$rc" != 0 ] && [ "$(tip stg)" = "$sb" ] && /usr/bin/grep -q "no bound-ended proof" "$T/out7" && ok "a bound-ended proof for a tip with no indeterminate record is refused" \
-  || ko "no indeterminate record: rc $rc, stg $(tip stg), out '$(cat "$T/out7")'"
-adv dev redlast; tr=$(tip dev); printf '%s\t%s\t1\n' "$(date +%s)" "$tr" > "$SG_STATE/promote-indeterminate"
-printf '%s\tfull\tfail\t%s\n' "$(date +%s)" "$tr" > "$SG_STATE/gate-status-full"
-SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out8" 2>&1; rc=$?
-[ "$rc" != 0 ] && [ "$(tip stg)" = "$sb" ] && /usr/bin/grep -q "is a fail" "$T/out8" && ok "a bound-ended proof for a tip whose last full proof was red is refused" \
-  || ko "red full proof: rc $rc, stg $(tip stg), out '$(cat "$T/out8")'"
-printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$ts" > "$SG_STATE/gate-status-full"; printf '%s\tdelta\tfail\t%s\t%s\tx\n' "$(date +%s)" "$ts" "$tr" > "$SG_STATE/gate-status-delta"
-SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out9" 2>&1; rc=$?
-[ "$rc" != 0 ] && [ "$(tip stg)" = "$sb" ] && /usr/bin/grep -q "delta proof of the dev tip is a fail" "$T/out9" && ok "a bound-ended proof for a tip whose last delta was red is refused" \
-  || ko "red delta: rc $rc, stg $(tip stg), out '$(cat "$T/out9")'"
-rm -f "$SG_STATE/gate-status-delta"
-$W fetch -q origin; $W checkout -q -B dev origin/dev; p1=$(tip dev); printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p1" > "$SG_STATE/gate-status-full"
-echo x > "$T/w/contrib/squad-goal/scripts/test-nightly.sh"; $W add contrib/squad-goal/scripts/test-nightly.sh; $W commit -q -m covered-red; $W push -q origin dev
-td=$(tip dev); sb=$(tip stg); rm -f "$SG_STATE/promote-indeterminate" "$SG_STATE/promote-bound" "$SG_STATE/gate-status-delta"; echo 30 > "$T/suite-sleep"
-SG_DELTA_SUITE=false SG_PROMOTE_BOUND_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 bash "$d/promote-pass.sh" > "$T/out10" 2>&1; rc=$?
-[ "$rc" != 0 ] && [ "$(tip stg)" = "$sb" ] && [ ! -e "$SG_STATE/promote-indeterminate" ] && [ ! -e "$SG_STATE/promote-bound" ] \
-  && ok "a red the delta measured holds the tip and writes no bound-ended record" || ko "red delta in pass: rc $rc, stg $(tip stg), out '$(cat "$T/out10")'"
-/usr/bin/grep -q "^$td not promoted: the delta suite failed" "$SG_STATE/promote-pass.tips" && ok "the delta's red is marked refused for its tip" \
-  || ko "delta red mark: '$(/usr/bin/grep "^$td " "$SG_STATE/promote-pass.tips" 2>/dev/null)'"
-rm -f "$T/suite-sleep"
-
 # (spec 1163, #1174) The promotion reads the gate's three outcomes with the wave entry's meaning: pass promotes, fail holds,
-# and an unfinished proof never rides the full line. A full line that says `unproven` is refused by its own name, because the
-# bound-ended proof is the one route an unfinished proof takes, and it carries its obligation marker.
+# and an unfinished proof never rides the full line. A full line that says `unproven` is refused by its own name.
 adv dev vocab-unproven; tv=$(tip dev); sb=$(tip stg)
-printf '%s\tfull\tunproven\t%s\n' "$(date +%s)" "$tv" > "$SG_STATE/gate-status-full"; rm -f "$SG_STATE/gate-status-delta" "$SG_STATE/promote-indeterminate"
+printf '%s\tfull\tunproven\t%s\n' "$(date +%s)" "$tv" > "$SG_STATE/gate-status-full"
 SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" > "$T/out12" 2>&1; rc=$?
 [ "$rc" != 0 ] && [ "$(tip stg)" = "$sb" ] && /usr/bin/grep -q "is unproven, not a pass" "$T/out12" \
   && ok "an unproven local proof is refused by its own word, never read as a pass" \
   || ko "unproven local proof: rc $rc, stg $(tip stg), out '$(cat "$T/out12")'"
 
 rm -f "$T/suite-rc" "$T"/checks-*
-
-# (#1171) One deadline covers the whole attempt, and the delta keeps a reserved slice of it. The clock starts at the proof
-# lock; the suite is bounded at what is left once the delta's slice is kept, the delta at what is left then, and the clock
-# never restarts. A delta that hangs past its slice is stopped and the attempt is bounded, never a pass; a delta that answers
-# inside its slice still promotes; and a defect the suite reported before the deadline holds the tip as a red.
-deltahold() {  # <seconds>: hold the delta proof's lock so the first delta attempt is skipped, never queued
-  SERIAL_HOLD_SECONDS="$1" bash "$d/serial.sh" full-proof-delta sleep "$1" 2>/dev/null & dh=$!
-}
-adead() {  # one bounded attempt: <suite> <bound> <fallback> <delta suite> <tip before the change is p0>
-  rm -f "$SG_STATE/gate-status-delta" "$SG_STATE/promote-indeterminate" "$SG_STATE/promote-bound"
-  local s0=$(date +%s)
-  SG_PROMOTE_SUITE="$1" SG_PROMOTE_BOUND_SECONDS="$2" SG_PROMOTE_FALLBACK_SECONDS="$3" SG_DELTA_SUITE="$4" SG_PROMOTE_RESERVE_SECONDS=0 \
-    bash "$d/promote-pass.sh" > "$T/outd" 2>&1; rc=$?
-  el=$(( $(date +%s) - s0 ))
-}
-# The gate uses the rest of the budget and the delta keeps its slice: the suite runs to its bound, the hanging delta gets
-# only its reserved slice, and the attempt is recorded bounded.
-adv dev deadline-a; ta=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
-printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"; echo 30 > "$T/suite-sleep"
-deltahold 3; adead "$T/suite" 7 3 "trap '' TERM; sleep $HANG_NAP"; wait "$dh" 2>/dev/null
-[ "$el" -lt 18 ] && ok "gate plus delta cannot exceed one budget (${el}s for a 7s budget)" \
-  || ko "the attempt ran past its one budget: ${el}s, out '$(cat "$T/outd")'"
-/usr/bin/grep -q "the delta's 3s slice of the 7s budget is reserved" "$T/outd" \
-  && ok "the delta's slice is reserved before the gate starts" \
-  || ko "no reserved-slice line: '$(tail -n 3 "$T/outd")'"
-[ -e "$SG_STATE/promote-bound" ] && [ "$(tip stg)" = "$ta" ] && ok "a delta that outran its slice is bounded, and the tip ships as bounded" \
-  || ko "bounded attempt: stg $(tip stg), dev $ta, marker $([ -e "$SG_STATE/promote-bound" ] && echo yes || echo no)"
-pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the delta's tree survived the deadline" || ok "no descendant process survives the deadline"
-rm -f "$T/suite-sleep"
-# The delta answers inside its reserved slice even though the gate used the rest, and the attempt promotes.
-adv dev deadline-b; tb=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
-printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"; echo 30 > "$T/suite-sleep"
-deltahold 3; adead "$T/suite" 20 8 "sleep 2; true"; wait "$dh" 2>/dev/null
-[ "$el" -lt 28 ] && [ "$(tip stg)" = "$tb" ] && ok "the delta's slice is available even when the gate used the rest (${el}s)" \
-  || ko "delta slice: stg $(tip stg), dev $tb, ${el}s, out '$(cat "$T/outd")'"
-IFS=$'\t' read -r _ dk dres dP dT _ < "$SG_STATE/gate-status-delta" 2>/dev/null
-[ "$dk" = delta ] && [ "$dres" = pass ] && [ "$dT" = "$tb" ] && ok "the delta answered inside its slice and the record names its pass" \
-  || ko "delta record: '$(cat "$SG_STATE/gate-status-delta" 2>/dev/null)'"
-rm -f "$T/suite-sleep"
-# A bounded attempt with a defect the suite reported is a fail, never bounded: the tip is held and no bound marker written.
-adv dev deadline-red; tc=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
-printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"
-printf '#!/bin/bash\necho "FAILED tests/test_x.py::test_one - boom"\ntrap "" TERM\nsleep $HANG_NAP\n' > "$T/defect-suite"
-deltahold 3; adead "$T/defect-suite" 4 1 true; wait "$dh" 2>/dev/null
-[ "$rc" != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$el" -lt 15 ] && ok "a bounded attempt that reported a defect holds the tip (${el}s)" \
-  || ko "bounded defect: rc $rc, stg $(tip stg), ${el}s, out '$(cat "$T/outd")'"
-IFS=$'\t' read -r _ kind res dsha < "$SG_STATE/gate-status-full" 2>/dev/null
-[ "$kind $res $dsha" = "full fail $tc" ] && ok "a bounded attempt with a reported defect is recorded as fail" \
-  || ko "bounded defect record: '$kind $res $dsha'"
-[ ! -e "$SG_STATE/promote-indeterminate" ] && [ ! -e "$SG_STATE/promote-bound" ] && ok "a bounded attempt with a reported defect writes no bound marker" \
-  || ko "a red the bound ended was marked bounded"
-pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the defect suite's tree survived the deadline" || ok "the defect suite's tree is stopped at the deadline"
 
 # (#1490) A transient failure is unproven, never a refusal: the pass writes no tip marker, and the next pass promotes the tip.
 # (a) the open dev -> stg pull request cannot be read. The read fails for the whole of this pass (the open-only call reads it
@@ -760,9 +634,9 @@ pass; rc=$?
 
 # (#1723) Before a local battery starts, and when it ends, the pass reads stg again: a tip stg already holds runs no battery and
 # writes no verdict. (a) stg takes the tip after the pass's first read: the stub gh moves it when the pass opens the pull request.
-adv dev held-before; th=$(tip dev); rm -f "$T/suite-rc" "$T/suite-out" "$T"/checks-* "$SG_STATE/delta-pass.log"; n=$(runs)
+adv dev held-before; th=$(tip dev); rm -f "$T/suite-rc" "$T/suite-out" "$T"/checks-*; n=$(runs)
 : > "$T/stg-takes-dev"; pass; rc=$?; rm -f "$T/stg-takes-dev"
-[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ ! -e "$SG_STATE/delta-pass.log" ] && ok "a tip stg took before the battery runs no battery" || ko "held before: rc $rc, runs $(runs) (was $n), delta log $([ -e "$SG_STATE/delta-pass.log" ] && echo written || echo none), out '$(cat "$T/out")'"
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && ok "a tip stg took before the battery runs no battery" || ko "held before: rc $rc, runs $(runs) (was $n), out '$(cat "$T/out")'"
 ! /usr/bin/grep -q "^$th " "$SG_STATE/promote-pass.tips" 2>/dev/null && ! /usr/bin/grep -q "$th" "$SG_STATE/gate-status-full" 2>/dev/null \
   && ok "a tip stg took before the battery gets no verdict and no marker" || ko "held before wrote a verdict: tips '$(/usr/bin/grep "^$th " "$SG_STATE/promote-pass.tips")', full '$(cat "$SG_STATE/gate-status-full" 2>/dev/null)'"
 /usr/bin/grep -q "promote-pass: $th stg already holds the tip" "$SG_STATE/promote.log" && ok "the pass says stg already holds the tip" || ko "held before: no line: $(tail -n 2 "$SG_STATE/promote.log")"

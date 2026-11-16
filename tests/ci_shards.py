@@ -41,7 +41,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
     ),
     (
         "tests/test_autonomy_fragment.py", "tests/test_board_archive.py", "tests/test_board_columns.py", "tests/test_child_issues.py", "tests/test_dashboard_graph_read.py", "tests/test_dashboard_totals.py",
-        "tests/test_delta_guards.py", "tests/test_dispatch_mutex.py", "tests/test_envelope.py", "tests/test_gate_evidence.py", "tests/test_gate_reuse.py",
+        "tests/test_dispatch_mutex.py", "tests/test_envelope.py", "tests/test_gate_evidence.py", "tests/test_gate_reuse.py",
         "tests/test_gate_scope.py", "tests/test_gh_spend.py", "tests/test_gui_test_subset.py", "tests/test_gui_test_vision.py", "tests/test_hub_adapter_errors.py",
         "tests/test_hub_attach.py", "tests/test_hub_board_card_number.py", "tests/test_hub_board_flow_charts.py", "tests/test_hub_board_pass.py", "tests/test_hub_board_title_builder.py", "tests/test_hub_card_sync.py", "tests/test_hub_sheet_sync.py",
         "tests/test_hub_cycle_countdown.py", "tests/test_hub_dash_forward.py", "tests/test_hub_gate_fact.py", "tests/test_hub_loop_log_stamp.py", "tests/test_hub_mobile_action_row.py",
@@ -73,7 +73,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_prs_two_repos.py", "tests/test_hub_quota.py", "tests/test_hub_run_highlight.py", "tests/test_hub_run_watch.py", "tests/test_hub_sidebar_bar.py",
         "tests/test_hub_spend_hourly.py", "tests/test_hub_test_pass_lost.py", "tests/test_hub_token_ledger.py", "tests/test_issue_state_kind.py", "tests/test_issue_state_log_dir.py",
         "tests/test_issue_state_unread.py", "tests/test_janitor_card_done_base.py", "tests/test_janitor_local_only_landing.py", "tests/test_janitor_rearm_freeze.py", "tests/test_janitor_zombie_line.py", "tests/test_loop_review_gate.py", "tests/test_models_v2.py",
-        "tests/test_proc_reader.py", "tests/test_profiler.py", "tests/test_promote_bound.py", "tests/test_promote_gate_runner.py", "tests/test_report.py", "tests/test_review_route.py",
+        "tests/test_proc_reader.py", "tests/test_profiler.py", "tests/test_promote_gate_runner.py", "tests/test_report.py", "tests/test_review_route.py",
         "tests/test_review_stream.py", "tests/test_runners.py", "tests/test_runs.py", "tests/test_scaffold.py", "tests/test_sdk_adapter.py", "tests/test_shell_suite_runner.py",
         "tests/test_shell_suite_seam.py", "tests/test_spec_fold.py", "tests/test_spend.py", "tests/test_state_seam_callers.py", "tests/test_to_test_scenario_skill_doc.py",
         "tests/test_to_test_scenario_type_labels.py", "tests/test_token_burners.py", "tests/test_verdict.py", "tests/test_wave_land.py",

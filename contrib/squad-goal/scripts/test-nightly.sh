@@ -131,9 +131,8 @@ rm -f "$ST/nightly-result"
 
 # 4c) (#1183) a leg killed by a signal names no failing test: it measured nothing, so the record says bounded with the
 #     signal it died of, never a red the suite found (ADR-0164). The two facts stay apart -- the serial leg finished, the
-#     parallel one was stopped -- the hold never stops delivery on it, and an open bound marker settles it as unproven.
-rm -f "$T/ran.log" "$ST/alerts.log" "$ST/nightly-result" "$ST/promote-bound" "$ST/promote-bound-settled" \
-  "$ST/nightly-bounded-noted"; mark
+#     parallel one was stopped -- the hold never stops delivery on it.
+rm -f "$T/ran.log" "$ST/alerts.log" "$ST/nightly-result" "$ST/nightly-bounded-noted"; mark
 out=$(ng KILL_parallel=1); rc=$?
 rec
 [ $rc = 1 ] && ok "a nightly with a killed leg exits 1" || ko "killed nightly rc $rc: $out"
@@ -145,25 +144,6 @@ o=$(hold); rc=$?
 [ $rc = 1 ] && ok "a bounded leg never holds delivery" || ko "a bounded leg held dispatch: rc $rc, '$o'"
 case "$o" in *bounded*) ok "the dispatch note names the stopped leg, so the reader tells it from a red";; *) ko "the dispatch note does not name the stopped leg: '$o'";; esac
 o2=$(hold); [ -z "$o2" ] && ok "the bounded note is said once for the record, not on every pass" || ko "the bounded note repeated: '$o2'"
-# A bounded settlement is unproven, so it never closes the marker: dev moves past the marked tip, the next nightly still
-# proves the marked tip, a pass then closes the marker, and the night after that proves the dev tip again.
-printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$sha" 1 "squad/x.py" >> "$ST/promote-bound"; mark
-out=$(ng KILL_parallel=1); rc=$?
-IFS=$'\t' read -r _ st_t st_r < "$ST/promote-bound-settled" 2>/dev/null
-[ "$st_t $st_r" = "$sha bounded" ] && ok "a bounded leg settles the bound marker as unproven, never as red" \
-  || ko "bounded settle: '$st_t $st_r' (rc $rc: $out)"
-$G -C "$T/src" commit -q --allow-empty -m after-bound; $G -C "$T/src" push -q "$T/origin.git" dev
-after=$($G -C "$T/src" rev-parse dev); rm -f "$T/ran.log"; mark
-out=$(ng); rc=$?; rec
-[ "$rc $r_res $r_sha" = "0 pass $sha" ] \
-  && ok "a bounded settle leaves the marker open: the next nightly still proves the marked tip, not the dev tip" \
-  || ko "re-prove after a bounded settle: rc $rc, record '$r_res $r_sha', want $sha, dev $after"
-[ "$(tail -n 1 "$ST/promote-bound-settled" 2>/dev/null | cut -f2,3 | tr '\t' ' ')" = "$sha pass" ] \
-  && ok "a pass settles the marker" || ko "settle after bounded: '$(tail -n 1 "$ST/promote-bound-settled" 2>/dev/null)'"
-mark; out=$(ng); rc=$?; rec
-[ "$rc $r_sha" = "0 $after" ] && ok "a settled marker sends the nightly back to the dev tip" \
-  || ko "after a pass settle: rc $rc, record sha $r_sha, dev $after"
-rm -f "$ST/promote-bound"
 
 # 4d) (#1183) A leg that named a failing test and was then killed is still red, unchanged: its ids are carried, the alert
 #     fires and delivery holds. Its mode also names the signal that stopped it, so the record keeps the stop reason.
@@ -257,27 +237,6 @@ rec
   && ok "a configured command that collects nothing measured nothing: bounded with its exit, never red (#1183)" \
   || ko "configured exit 5: rc $rc record '$r_res $r_par' (out: $out)"
 
-# 10) (#1046, ADR-0164) an open bound marker: the nightly proves the marked tip, not the dev tip, and settles the marker with
-#     the result. Dev moves past the marked tip first, so the record can only name the marked one.
-$G -C "$T/src" commit -q --allow-empty -m two; $G -C "$T/src" push -q "$T/origin.git" dev; newtip=$($G -C "$T/src" rev-parse dev)
-rm -f "$T/ran.log" "$ST/alerts.log" "$ST/nightly-result" "$ST/promote-bound" "$ST/promote-bound-settled"; mark
-printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$sha" 1 "squad/x.py" >> "$ST/promote-bound"
-out=$(ng); rc=$?; rec
-[ "$rc $r_res $r_sha" = "0 pass $sha" ] && ok "an open bound marker makes the nightly prove the marked tip" \
-  || ko "marked tip: rc $rc, record '$r_res $r_sha', dev $newtip (out: $out)"
-IFS=$'\t' read -r _ st_t st_r < "$ST/promote-bound-settled" 2>/dev/null
-[ "$st_t $st_r" = "$sha pass" ] && ok "the nightly settles the marker with its result" || ko "settled: '$st_t $st_r'"
-
-# 10b) the marker is settled: the next day's nightly proves the dev tip again
-mark; out=$(ng); rc=$?; rec
-[ "$rc $r_sha" = "0 $newtip" ] && ok "a settled marker no longer changes the nightly tip" || ko "after settle: rc $rc, record sha $r_sha, dev $newtip"
-
-# 10c) a red on the marked tip is settled as red and fails the record: the nightly never turns a red into a pass
-rm -f "$ST/promote-bound-settled" "$ST/alerts.log" "$ST/nightly-result"; mark
-out=$(ng FAIL_parallel=1); rc=$?; rec
-IFS=$'\t' read -r _ st_t st_r < "$ST/promote-bound-settled" 2>/dev/null
-[ "$rc $r_res $r_sha" = "1 fail $sha" ] && [ "$st_t $st_r" = "$sha fail" ] && ok "a red on the marked tip fails the record and settles the marker as red" \
-  || ko "red marked tip: rc $rc, record '$r_res $r_sha', settled '$st_t $st_r'"
 
 # --- proof obligations (spec 1163, ADR-0153): the nightly settles what a gate could not prove. It reads each record in
 #     $SG_STATE/obligations, runs the named checks over the named tree, and writes one settlement line in
