@@ -168,12 +168,13 @@ class State:
         fb = self.read_fallback(issue)
         return fb["state"] if fb else ""
 
-    def read_all(self):
+    def read_all(self, fresh=False):
         """Every state the carrier answers, in one read: {issue: state}.
 
         One read for the whole board, never one per issue: a pass that asks about many cards asks once.
+        `fresh` asks for a live read, for a caller that gates a write (#1796).
         """
-        return self.binding.read_all()
+        return self.binding.read_all(fresh=fresh)
 
     def read_one(self, issue):
         """The state of one card, read by its item's node id in one call (#1300): the compare and the proof of a single move
@@ -716,13 +717,20 @@ class BoardBinding:
         self._fallback[key] = ans
         return ans
 
-    def read_all(self):
+    def read_all(self, fresh=False):
         """Every card the carrier answers, in ONE read: {issue: state}, a card with no Status absent.
 
         The Status field is asked for by id -- a single-select value is carried only when the field is
         asked for, the way janitor.py reads it, and without `fields[]` the route answers the title alone.
         A row's repository url filters the map to this binding's repository, and a carrier that answers no
-        url (a stub, a carrier without one) is not filtered."""
+        url (a stub, a carrier without one) is not filtered.
+
+        The states ride the same window snapshot as `board` (#1796), so a reporting pass that asks for the
+        states seconds after another one sends no request."""
+        return self.board(fresh=fresh)[0]
+
+    def _read_all_live(self):
+        """The live Status-only read behind `read_all`, kept for a caller that names the states alone."""
         out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={self.status_field()['id']}", "--jq",
                        '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name=="Status")|.value.name|if type=="object" then .raw else . end))//""),'
                        ' (.content.repository_url//"")]|@tsv')
