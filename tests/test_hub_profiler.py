@@ -1981,12 +1981,14 @@ def test_the_route_answers_the_machine_load_on_the_strips_own_window(hub):
     now = time.time()
     rows = [f"{now - 600 + i * 60:.3f}\t{2.0 + i:.2f}\t{50.0 + i:.1f}" for i in range(11)]
     (state / "load-record.tsv").write_text("\n".join(rows) + "\n")
+    mod.LOAD_STATE.update(record_rows=None, record_stamp=None)
     code, v = ask(port, "GET", path="/api/profiler?sw=14400")
     assert code == 200
     load = v["load"]
     assert load["start"] == v["strip"]["start"] and load["end"] == v["strip"]["end"], "one column, one instant"
     assert load["label"] == "Machine load" and load["cores"] == (os.cpu_count() or 1)
     assert len(flat(load)) >= 10 and load["peak"] > 0 and load["gaps"], "an unrecorded head is a gap, never a zero"
+    assert [p["load"] for p in flat(load)] == [2.0 + i for i in range(11)], "the points are the file's own lines"
     assert table.reads == 0, "the load line reads files only"
 
 
@@ -2117,9 +2119,9 @@ def test_a_restarted_hub_writes_no_second_line_for_a_minute_the_record_holds(hub
     a minute across a restart (#1768)."""
     mod, _, _, state, _ = hub
     path = state / "load-record.tsv"
-    path.write_text(f"{LBASE - 30:.3f}\t1.00\t10.0\n")
+    path.write_text(f"{LBASE:.3f}\t1.00\t10.0\n")
     mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None)
-    mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE, load=2.0)
+    mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE + 30, load=2.0)
     assert len(path.read_text().splitlines()) == 1, "the minute is already written"
 
 
@@ -2207,8 +2209,71 @@ def test_one_load_read_a_tick_serves_every_profile_and_the_record(hub, monkeypat
     sample = {"cpu": 30.0, "ram": None, "gpu": None}
     mod.load_tick(sample, now=LBASE)                                   # the tick that turns the minute
     mod.load_tick(sample, now=LBASE + mod.LOAD_SAMPLE_SECS)            # the next tick, past the cache's window
-    assert (len(reads), len(cpu_reads)) == (2, 0), "one load read a tick, and no second CPU read"
-    assert path.read_text().split("\t")[1] == "2.50", "the record's line took the tick's own read"
+    assert (len(reads), len(cpu_reads)) == (1, 0), "one load read for the minute, and no CPU read beside it"
+    assert path.read_text().split("\t")[1] == "2.50", "the record's line took the minute's read"
+
+
+def test_a_tick_period_that_divides_no_minute_still_writes_one_line_a_minute_on_the_minute(hub):
+    """A line sits on its minute: a tick every seven seconds writes one line a minute (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
+    for i in range(26):
+        mod.load_tick({"cpu": 40.0, "ram": None, "gpu": None}, now=LBASE + 7 * i, load=2.0)
+    ats = [float(ln.split("\t")[0]) for ln in path.read_text().splitlines()]
+    assert ats == [LBASE, LBASE + 60, LBASE + 120], "one line on each minute, none on the tick's drift"
+
+
+def test_the_record_write_keeps_its_cap_whatever_the_width_of_its_lines(hub):
+    """The write keeps every line the cap can hold, however wide the lines are (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    n, pad = mod.LOAD_RECORD_MAX_LINES - 1, "p" * 200
+    path.write_text("".join(f"{LBASE - (n - i) * 60:.3f}\t1.00\t10.0\t{pad}\n" for i in range(n)))
+    rows = mod.load_record_add(LBASE, 2.0, 20.0)
+    assert len(rows) == mod.LOAD_RECORD_MAX_LINES, "every line the cap can keep is kept, however wide"
+
+
+def test_a_warm_record_drops_the_lines_after_now_as_the_writer_does(hub):
+    """A line after now is a clock's leftover: the warm rows leave it out, as the writer does (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.write_text(f"{LBASE:.3f}\t1.00\t10.0\n{LBASE + 3600:.3f}\t9.00\t90.0\n")
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
+    mod.load_tick({"cpu": 30.0, "ram": None, "gpu": None}, now=LBASE + 10, load=2.0)
+    assert [r["at"] for r in mod.LOAD_STATE["record_rows"]] == [LBASE], "a line after now is no row of this clock"
+
+
+def test_a_tick_with_no_readable_load_writes_no_line(hub, monkeypatch):
+    """A host that cannot read its load writes no line, so the chart shows a gap, not dashes (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
+    monkeypatch.setattr(mod, "_loadavg", lambda: None)
+    mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE)
+    assert not path.exists(), "no readable load, no line"
+
+
+def test_a_restart_after_a_stale_record_writes_its_line_with_no_share(hub):
+    """A stale record is a cold start: one sample is no minute's mean, so the line names no share (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.write_text(f"{LBASE - 600:.3f}\t1.00\t10.0\n")
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
+    mod.load_tick({"cpu": 42.0, "ram": None, "gpu": None}, now=LBASE, load=2.0)
+    assert path.read_text().splitlines()[-1].split("\t")[2] == "-", "one sample after a stale record names no share"
+
+
+def test_the_load_is_read_only_on_the_tick_that_turns_the_minute(hub, monkeypatch):
+    """A tick inside a minute the record holds reads no load (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.write_text(f"{LBASE:.3f}\t1.00\t10.0\n")
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
+    monkeypatch.setattr(mod, "_loadavg", lambda: (_ for _ in ()).throw(AssertionError("a load read inside the minute")))
+    mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE + 10)
 
 
 def test_the_load_view_folds_the_rows_the_sampler_kept(hub, monkeypatch):
@@ -2224,23 +2289,30 @@ def test_the_load_view_folds_the_rows_the_sampler_kept(hub, monkeypatch):
     assert [p["load"] for seg in out["segments"] for p in seg] == [3.0]
 
 
-def test_a_poll_folds_the_rows_the_sampler_kept_even_when_the_record_s_identity_moved(hub, monkeypatch):
-    """The page poll never stats and never re-reads the record: once the writer has kept its rows, every poll folds them,
-    even when the file's identity changed under it — the file changes each minute the sampler writes, so a poll that
-    keyed on that identity read the file every minute (#1768)."""
+def test_a_poll_re_reads_the_record_once_its_identity_moved(hub):
+    """A poll re-reads the record only when its identity moved, so another writer's line shows (#1768)."""
     mod, _, _, state, _ = hub
     path = state / "load-record.tsv"
     path.unlink(missing_ok=True)
-    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None)
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
     mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE, load=3.0)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(f"{LBASE + 60:.3f}\t9.00\t90.0\n")   # another writer's line: the identity the cache held no longer matches
-    monkeypatch.setattr(mod, "load_record_stamp",
-                        lambda: (_ for _ in ()).throw(AssertionError("a stat of the record on a poll")))
-    monkeypatch.setattr(mod, "load_record_rows",
-                        lambda: (_ for _ in ()).throw(AssertionError("a second read of the record")))
+        f.write(f"{LBASE + 60:.3f}\t9.00\t90.0\n")
     out = mod.load_view({"start": LBASE - 300, "end": LBASE + 120})
-    assert [p["load"] for seg in out["segments"] for p in seg] == [3.0], "the poll folds the rows the writer kept"
+    assert [p["load"] for seg in out["segments"] for p in seg] == [3.0, 9.0], "the poll shows the line another writer appended"
+
+
+def test_a_poll_with_an_unmoved_record_reads_nothing(hub, monkeypatch):
+    """An unmoved record costs a poll one stat and no read (#1768)."""
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
+    mod.load_tick({"cpu": 50.0, "ram": None, "gpu": None}, now=LBASE, load=3.0)
+    monkeypatch.setattr(mod, "load_record_rows",
+                        lambda: (_ for _ in ()).throw(AssertionError("a re-read of an unmoved record")))
+    out = mod.load_view({"start": LBASE - 300, "end": LBASE + 120})
+    assert [p["load"] for seg in out["segments"] for p in seg] == [3.0]
 
 
 def test_the_first_line_of_a_cold_record_carries_no_cpu_share(hub):

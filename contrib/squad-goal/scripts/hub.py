@@ -1029,11 +1029,10 @@ def attribute_pass(now=None):
 # written with the CPU sampling switch on or off. Every write replaces the whole file — a read, a join and one atomic
 # write of at most LOAD_RECORD_MAX_LINES lines, a cost bounded with the file — and it is synced before it is visible
 # (ADR-0030), so an interrupted hub leaves the record as it was, never a partial line.
-LOAD_RECORD_SECS = 60                     # the record's cadence
+LOAD_RECORD_SECS = hub_profiler.LOAD_CADENCE_S   # the record's cadence: one line per minute, each on its minute
 LOAD_RECORD_MAX_AGE = 24 * 3600           # the largest strip window
 LOAD_RECORD_MAX_LINES = LOAD_RECORD_MAX_AGE // LOAD_RECORD_SECS   # 1440: the age in lines, so a shorter cadence or a
                                           # clock that steps back can never grow the file past the age it was read for
-LOAD_RECORD_LINE_BYTES = 64               # a line's most: a 14-digit epoch, a load and a share, each under a dozen bytes
 
 def load_record_path():
     """The minute record's file, resolved when it is used: hubmux gives each profile its own STATE, and a resolution per
@@ -1058,9 +1057,7 @@ def _write_record(path, text):
     finally: os.close(fd)
 
 def _loadavg():
-    """The machine's one-minute load average, or None where the system does not answer: a missing value is no zero.
-    `load_average` keeps this read for one tick (LOAD_SAMPLE_SECS), so a second caller of the same tick pays no second
-    read, and the minute record falls back to it only when no tick's read was handed to it (#1768)."""
+    """The one-minute load average, or None where the system does not answer: a missing value is no zero."""
     try: return float(os.getloadavg()[0])
     except (AttributeError, OSError): return None
 
@@ -1070,92 +1067,85 @@ def load_average(now=None):
     now = time.time() if now is None else now
     return procscan.table(_loadavg, LOAD_SAMPLE_SECS, now)[0]
 
+def _minute(t):
+    return t - t % LOAD_RECORD_SECS
+
 def _record_tail(limit):
-    """The newest `limit` lines of the minute record, read from the file's end: a write parses only the lines a line cap
-    can keep, so its read is bounded by LOAD_RECORD_MAX_LINES and never by the file. A cut at the first byte is no line,
-    so it leaves; a file this hub cannot read is no record."""
+    """The newest `limit` complete lines of the record, read back from its end in blocks, never the whole file."""
     path = load_record_path()
     try:
         with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            start = max(0, size - limit * LOAD_RECORD_LINE_BYTES)
-            f.seek(start)
-            data = f.read(size - start)
+            pos = f.seek(0, os.SEEK_END)
+            data = b""
+            while pos > 0 and data.count(b"\n") <= limit:
+                step = min(4096, pos)
+                pos -= step
+                f.seek(pos)
+                data = f.read(step) + data
     except OSError:
         return []
     lines = data.decode("utf-8", "replace").splitlines()
-    if start > 0 and lines: lines = lines[1:]   # the first line of a cut is half a line
+    if pos > 0 and lines: lines = lines[1:]   # the first line of a cut is half a line
     return lines[-limit:]
 
-def load_record_add(now, load, cpu):
-    """Append the minute record's line, drop the lines past LOAD_RECORD_MAX_AGE and keep the newest LOAD_RECORD_MAX_LINES,
-    in one atomic write (ADR-0030): the destination holds the old record or the finished one, never half a line. The age
-    and the line cap bound the same file, so a cadence shorter than the one the age was read for cannot grow it. It reads
-    only the newest LOAD_RECORD_MAX_LINES - 1 lines, the ones the cap can keep, never the whole file. A line at or after
-    `now` is a leftover of a clock that stepped back: it leaves with this write, so the record's minutes run forward, and a
-    clock that steps forward keeps the lines before it, which are real minutes of the machine's past. Returns the rows the
-    chart folds, so one write serves the page and one file read serves the write."""
+def load_record_add(minute, load, cpu):
+    """Append the minute's line, keep the lines inside the age and the cap, and return the rows, in one atomic write."""
     keep = {}
     for raw in _record_tail(LOAD_RECORD_MAX_LINES - 1):
         fields = raw.split("\t")
         try: at = float(fields[0])
         except (IndexError, ValueError): continue
-        if now - LOAD_RECORD_MAX_AGE <= at < now: keep[at] = raw
-    keep[now] = "\t".join((f"{now:.3f}", "-" if load is None else f"{load:.2f}",
-                           "-" if cpu is None else f"{cpu:.1f}"))
+        if minute - LOAD_RECORD_MAX_AGE <= at < minute: keep[at] = raw
+    keep[minute] = "\t".join((f"{minute:.3f}", f"{load:.2f}", "-" if cpu is None else f"{cpu:.1f}"))
     lines = sorted(keep.items())[-LOAD_RECORD_MAX_LINES:]
     _write_record(load_record_path(), "\n".join(raw for _, raw in lines) + "\n")
     return [hub_profiler.load_row(raw) for _, raw in lines]
 
 def load_record_warm(now):
-    """The minute record as the file holds it, read once when this hub's state is cold: its rows, and the time of its
-    last line at or before `now`. A line later than `now` is no anchor, so a clock that stepped back never holds the
-    next write out, and a restart inside a minute the record already holds writes no second line for it (#1768)."""
-    rows = load_record_rows()
+    """Read the record once on a cold state: the rows not after `now`, and the minute of the last one."""
+    rows = [r for r in load_record_rows() if r["at"] < now]
     LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = rows, load_record_stamp()
-    return max((r["at"] for r in rows if r["at"] <= now), default=None)
+    return max((_minute(r["at"]) for r in rows), default=None)
+
+def _record_last(now):
+    if LOAD_STATE.get("record_at") is None:
+        LOAD_STATE["record_at"] = load_record_warm(now)
+    return LOAD_STATE["record_at"]
+
+def load_record_due(now):
+    """True when the minute of `now` has no line yet: the one tick whose load the record takes."""
+    last = _record_last(now)
+    return last is None or _minute(now) > last
 
 def load_record_tick(sample, now, load=None):
-    """Take this tick into the minute record: keep its CPU reading, and write the minute's line when the minute has
-    turned. The first tick writes at once unless the record already holds this minute, so a page never waits a minute
-    for the chart's first point and a restarted hub appends no duplicate line. On a cold record that first line carries
-    no CPU share, because one tick's reading is no minute's mean; from the second line on, the share is the mean of the
-    ticks since the line before it. A write this hub cannot make keeps the window one minute long: the minute still
-    advances and its samples leave, so the chart draws a gap and the next line's share is never a mean over the failed
-    stretch. The tick's CPU reading joins a running sum and a count, so a sampler set to a tiny interval costs no memory
-    for the minute it waits. `load` is the tick's own read of the machine's load: the record reads the average itself
-    only when no tick's read is handed to it."""
+    """Keep the tick's CPU in a running mean, and write the minute's line on the tick that turns the minute."""
     if sample.get("cpu") is not None:
         LOAD_STATE["record_cpu_sum"] = LOAD_STATE.get("record_cpu_sum", 0.0) + sample["cpu"]
         LOAD_STATE["record_cpu_n"] = LOAD_STATE.get("record_cpu_n", 0) + 1
-    last = LOAD_STATE.get("record_at")
-    cold = False
-    if last is None:
-        last = LOAD_STATE["record_at"] = load_record_warm(now)
-        cold = last is None            # no line at or before now: this tick's one sample is no minute's mean
-    if last is not None and now - last < LOAD_RECORD_SECS: return
+    last = _record_last(now)
+    minute = _minute(now)
+    if last is not None and minute <= last: return
+    cold = last is None or minute - last > LOAD_RECORD_SECS
     n = LOAD_STATE.get("record_cpu_n", 0)
     cpu = None if cold else (round(LOAD_STATE.get("record_cpu_sum", 0.0) / n, 1) if n else None)
-    try: rows = load_record_add(now, load_average(now) if load is None else load, cpu)
-    except OSError:
-        LOAD_STATE["record_at"], LOAD_STATE["record_cpu_sum"], LOAD_STATE["record_cpu_n"] = now, 0.0, 0   # a gap, never a broken sampler
-        return
-    LOAD_STATE["record_at"], LOAD_STATE["record_cpu_sum"], LOAD_STATE["record_cpu_n"] = now, 0.0, 0
-    LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = rows, load_record_stamp()
+    rows = None
+    if load is not None:
+        try: rows = load_record_add(minute, load, cpu)
+        except OSError: rows = None   # a gap, never a broken sampler
+    LOAD_STATE["record_at"], LOAD_STATE["record_cpu_sum"], LOAD_STATE["record_cpu_n"] = minute, 0.0, 0
+    if rows is not None:
+        LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = rows, load_record_stamp()
 
 def load_tick(sample=None, now=None, load=None):
-    """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, append the minute
-    record's line when the minute has turned, and — only while the machine is warned — work out which run owns that CPU.
-    The tick reads the machine's load once and hands it to the record, which takes this tick's own sample and load read:
-    the record adds no second reader of the machine, whatever its minute does."""
+    """One sampler pass: publish the reading, keep the warn history, and take the minute record on its turn."""
     s = sample if sample is not None else sample_load()
     now = time.time() if now is None else now
-    if load is None: load = load_average(now)   # one read a tick, shared by every profile and the record's line
     LOAD_STATE["cpu"] = (LOAD_STATE["cpu"] + [s["cpu"]])[-LOAD_HISTORY:]
     LOAD_STATE["ram"], LOAD_STATE["gpu"], LOAD_STATE["asof"] = s["ram"], s["gpu"], now
     LOAD_STATE["runs"] = attribute_pass(now) if sustained(LOAD_STATE["cpu"]) else {}
-    load_record_tick(s, now, load)
+    due = load_record_due(now)
+    if due and load is None: load = load_average(now)
+    load_record_tick(s, now, load if due else None)
     return LOAD_STATE
 
 # ---------------------------------------------------------------- the footer's facts (#1797)
@@ -2857,12 +2847,10 @@ def load_record_stamp():
     return (s.st_mtime_ns, s.st_size)
 
 def load_view(st):
-    """The machine load over the strip's own window `st`, folded by the rule layer from the rows the sampler kept: the
-    writer's parse serves every poll, and the record file is read only while this hub's state is cold. A poll stats
-    nothing — the file's identity changes each minute the sampler writes, so a poll that keyed on it read the file every
-    minute. No process table. The line shares the strip's time axis, so one column of the page is one instant in both."""
-    if LOAD_STATE.get("record_rows") is None:
-        LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), load_record_stamp()
+    """The machine load over the strip's window: one stat a poll, and a re-read only when the record's identity moved."""
+    stamp = load_record_stamp()
+    if LOAD_STATE.get("record_rows") is None or stamp != LOAD_STATE.get("record_stamp"):
+        LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), stamp
     return hub_profiler.load_chart(LOAD_STATE["record_rows"], st["start"], st["end"], os.cpu_count() or 1)
 
 def profiler_view(a, w=None, sw=None):
