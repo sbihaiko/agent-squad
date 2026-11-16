@@ -16,3 +16,8 @@ description, active voice, and an uncertainty in its own sentence. Light STE100 
 Solution, Further Notes, context): one idea per sentence with no word limit, so that a cause and its effect stay
 together. At both levels: one term for one concept, no noun stack of more than three words, a title of at most 12
 words. Domain terms are technical names, which STE100 allows; the vocabulary is not limited to the STE100 dictionary.
+
+**Run the writing check before the publish.** Write the body and the title to files, then run
+`python3 scripts/check_ste.py --title "<title>" <body-file>` from the repository root. It prints one line per finding
+(section, kind, detail, sentence) and exits 0: it warns and never blocks the publish. Show the findings with the draft,
+and let the writer fix or keep each one before the publish.

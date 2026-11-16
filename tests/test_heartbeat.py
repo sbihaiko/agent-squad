@@ -48,12 +48,18 @@ def one_row(pid=None, cpu=10.0, ppid=1):
     return [(pid or PID, ppid, cpu)]
 
 
+def table_for(rows):
+    """The process table the rows describe: each process keeps one start time, so the owned check holds on every read."""
+    from squad.procs import Proc
+    return {pid: Proc(pid=pid, ppid=ppid, pgid=0, start=0.0, command="", cpu=cpu) for pid, ppid, cpu in rows}
+
+
 def pass_once(tmp_path, events, rows, now, mtime, stamps=None, kills=None, **kw):
     folder = tmp_path / "run-x"
     folder.mkdir(exist_ok=True)
     rec(folder, *events, mtime=mtime)
     return heartbeat.scan(runlist(tmp_path, folder), tmp_path, stamps or tmp_path / "hb", now=now,
-                          rows=rows, kill=(lambda pid, sig: (kills or []).append((pid, sig))),
+                          rows=rows, read=lambda: table_for(rows), kill=(lambda pid, sig: (kills or []).append((pid, sig))),
                           mark=lambda folder, reason: (kills or []).append(("mark", str(folder), reason)) or True, **kw)
 
 
@@ -69,7 +75,7 @@ def test_a_flat_tree_and_a_frozen_record_kill_the_run_and_name_the_reason(tmp_pa
     marks, kills = [], []
     out = io.StringIO()
     got = heartbeat.scan(runlist(tmp_path, folder), tmp_path, stamps, now=T0 + 6 * MIN, rows=one_row(),
-                         kill=lambda pid, sig: kills.append((pid, sig)),
+                         read=lambda: table_for(one_row()), kill=lambda pid, sig: kills.append((pid, sig)),
                          mark=lambda f, r: marks.append((str(f), r)), out=out)
     assert [(m[1]) for m in marks] == ["killed: heartbeat_stale"]
     assert got and got[0]["node"] == "router" and got[0]["cpu_s"] == 10.0
@@ -122,7 +128,8 @@ def test_the_watchdog_stands_down_at_the_half_minute_it_is_told_to(tmp_path):
         folder = tmp_path / "run-x"
         (tmp_path / "hb" / "run-x").write_text(f"10.0 {T0}\n")
         assert heartbeat.scan(runlist(tmp_path, folder), tmp_path, tmp_path / "hb", now=T0 + 2 * MIN, rows=one_row(),
-                              kill=lambda *a: None, mark=lambda f, r: True)
+                              read=lambda: table_for(one_row()), kill=lambda *a: None, killpg=lambda *a: None,
+                              mark=lambda f, r: True)
     finally:
         del os.environ["HB_FLAT_MIN"], os.environ["HB_RECORD_MIN"]
 
@@ -153,3 +160,64 @@ def test_a_verdict_written_by_the_kill_is_what_the_record_carries(tmp_path):
 
 def test_the_usage_line_is_the_last_line_of_the_docstring():
     assert heartbeat.main([]) == 2
+
+
+def _proc(pid, ppid, pgid, start, command):
+    from squad.procs import Proc
+    return Proc(pid=pid, ppid=ppid, pgid=pgid, start=start, command=command)
+
+
+def test_a_run_kill_signals_the_owned_groups_of_its_tool_shells_and_reports_survivors():
+    """#1993: the owned set is the engine's descendants with their start times and groups. A shell's group is signalled, a
+    sibling is never touched, and the process that survives KILL is named."""
+    table = {
+        10: _proc(10, 1, 10, 100.0, "python3 -m squad start x"),
+        20: _proc(20, 10, 20, 200.0, "zsh -c sleep 540"),
+        21: _proc(21, 20, 20, 201.0, "sleep 540"),
+        30: _proc(30, 1, 30, 300.0, "zsh -c sleep 9"),
+    }
+    owned = heartbeat.owned_procs(10, table)
+    assert owned == {10: (100.0, 10), 20: (200.0, 20), 21: (201.0, 20)}
+    live = dict(table)
+    sent, groups = [], []
+
+    def kill(pid, sig):
+        sent.append((pid, sig))
+        if pid != 21:
+            live.pop(pid, None)
+
+    def killpg(pg, sig):
+        groups.append((pg, sig))
+        for pid in [p for p, q in live.items() if q.pgid == pg and p != 21]:
+            live.pop(pid)
+
+    survivors = heartbeat.kill_owned(owned, read=lambda: live, kill=kill, killpg=killpg, sleep=lambda s: None)
+    assert (20, signal.SIGTERM) in groups and (20, signal.SIGKILL) in groups
+    assert all(pid != 30 for pid, _ in sent) and all(pg != 30 for pg, _ in groups)
+    assert survivors == [21]
+
+
+def test_a_run_kill_never_signals_a_pid_whose_start_time_changed():
+    """#1993: a pid that now names a different process (a reused pid) is not the owned process and gets no signal."""
+    owned = {20: (200.0, 20)}
+    reused = {20: _proc(20, 1, 20, 999.0, "vim notes.txt")}
+    sent, groups = [], []
+    heartbeat.kill_owned(owned, read=lambda: reused, kill=lambda pid, sig: sent.append((pid, sig)),
+                         killpg=lambda pg, sig: groups.append((pg, sig)), sleep=lambda s: None)
+    assert sent == [] and groups == []
+
+
+def test_a_run_kill_never_signals_the_group_of_the_process_that_started_the_engine():
+    """#1993: an engine that is no group leader shares its parent's group. That group is the driver's, never the run's, so it
+    gets no signal; the engine itself still gets its TERM and KILL."""
+    table = {
+        5: _proc(5, 1, 5, 50.0, "bash watch.sh"),
+        10: _proc(10, 5, 5, 100.0, "python3 -m squad start x"),
+        20: _proc(20, 10, 20, 200.0, "zsh -c sleep 540"),
+    }
+    owned = heartbeat.owned_procs(10, table)
+    sent, groups = [], []
+    heartbeat.kill_owned(owned, read=lambda: table, kill=lambda pid, sig: sent.append((pid, sig)),
+                         killpg=lambda pg, sig: groups.append((pg, sig)), sleep=lambda s: None)
+    assert all(pg != 5 for pg, _ in groups) and (20, signal.SIGTERM) in groups
+    assert (10, signal.SIGTERM) in sent and all(pid != 5 for pid, _ in sent)

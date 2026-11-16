@@ -122,7 +122,8 @@ def stamp(stamp_dir, run, cpu, now):
     return None, None
 
 
-def scan(run_file, checkout, stamp_dir, now=None, rows=None, kill=os.kill, mark=K.mark_killed, out=None):
+def scan(run_file, checkout, stamp_dir, now=None, rows=None, kill=os.kill, mark=K.mark_killed, out=None, read=procs.snapshot,
+         killpg=os.killpg):
     """One heartbeat pass over the runs an active list names. Return one record per kill.
 
     `rows`, `kill` and `mark` are injectable so a test runs the pass with a stub run and no real process.
@@ -162,28 +163,75 @@ def scan(run_file, checkout, stamp_dir, now=None, rows=None, kill=os.kill, mark=
         if now - (since or now) < flat_min * 60:
             continue
         node = last_node(events)
-        kill_tree(pid, rows, kill)
+        try:
+            survivors = stop_run(pid, read, kill, killpg)
+        except procs.ReadError:
+            continue   # no owned set from an unreadable table, so nothing is signalled
         mark(folder, "killed: heartbeat_stale")
         s.unlink(missing_ok=True)
         line_text = f"HEARTBEAT KILL {folder.name}: flat at {cpu:.0f}s of CPU for {flat_min:.0f}m and its record still for {record_min:.0f}m; last node {node or 'none'}"
         print(line_text, file=out, flush=True)
+        for left in survivors:
+            print(f"HEARTBEAT SURVIVOR {folder.name}: pid {left} outlived SIGKILL", file=out, flush=True)
         done.append({"run": folder.name, "folder": str(folder), "cpu_s": cpu, "node": node, "at": now})
     return done
 
 
-def kill_tree(root, rows, kill=os.kill):
-    """SIGTERM the tree, then SIGKILL whatever ignores it. A process that is already gone is not an error."""
-    pids = process_tree(root, rows)
+def owned_procs(root, table):
+    """{pid: (start, pgid)} for `root` and every descendant at this read. A process with no start time is never owned: its
+    pid could not be checked again before a signal."""
+    by_parent = {}
+    for p in table.values():
+        by_parent.setdefault(p.ppid, []).append(p.pid)
+    out = {}
+    stack = [root]
+    while stack:
+        pid = stack.pop()
+        p = table.get(pid)
+        if p is None or p.start is None or pid in out:
+            continue
+        out[pid] = (p.start, p.pgid)
+        stack.extend(by_parent.get(pid, ()))
+    return out
+
+
+def _holds(table, pid, start):
+    """True while `pid` names the process that started at `start`, and is not a zombie."""
+    p = table.get(pid)
+    return p is not None and p.start == start and p.stat != "Z"
+
+
+def _signal(send, target, sig):
+    """One signal; a process that ended between the read and the signal is no error, so the pass goes on to the next run."""
+    try:
+        send(target, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def kill_owned(owned, read, kill=os.kill, killpg=os.killpg, sleep=time.sleep):
+    """TERM, then KILL, to each process group an owned process led at the owned read while an owned member still holds its
+    start time, and to each owned process that still holds its start time. Every signal follows a fresh read, so a reused pid is never signalled. A group
+    whose leader is not owned is never signalled: an engine that shares its parent's group would otherwise signal the parent,
+    the driver that started it. Return the owned pids that survive KILL."""
+    led = {g for _, (_, g) in owned.items() if g > 1 and g in owned and owned[g][1] == g}   # groups an owned process leads
     for sig in (signal.SIGTERM, signal.SIGKILL):
-        for pid in pids:
-            if not _alive(pid):
-                continue
-            try:
-                kill(pid, sig)
-            except (ProcessLookupError, PermissionError):
-                pass
+        now = read()
+        for pgid in sorted({g for pid, (start, g) in owned.items() if g in led and _holds(now, pid, start)}):
+            _signal(killpg, pgid, sig)
+        for pid, (start, _) in owned.items():
+            if _holds(read(), pid, start):
+                _signal(kill, pid, sig)
         if sig is signal.SIGTERM:
-            time.sleep(TERM_GRACE_S)
+            sleep(TERM_GRACE_S)
+    final = read()
+    return [pid for pid, (start, _) in owned.items() if _holds(final, pid, start)]
+
+
+def stop_run(root, read=procs.snapshot, kill=os.kill, killpg=os.killpg, sleep=time.sleep):
+    """End the run's owned processes: its engine, its descendants (the tool shells among them) and their groups, as one read
+    of the process table names them. Return the owned pids that survive."""
+    return kill_owned(owned_procs(root, read()), read, kill, killpg, sleep)
 
 
 def main(argv):

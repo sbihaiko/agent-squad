@@ -45,6 +45,7 @@ from squad import procs as P
 from squad.procs import ReadError  # re-exported: callers catch it here
 
 RUN_CMD = r"[s]quad start( |$)"   # a squad run's command, as heartbeat.sh reads it; SG_RUN_CMD_RE overrides it
+SHELL_WRAPPER = re.compile(r"^(\S*/)?(zsh|bash|sh|dash) -\w*c\b")   # a shell that runs a command by `-c`: its body is no run's process
 START_SLACK = 1.0                  # `ps` gives a start in whole seconds
 PS_LSTART = "%a %b %d %H:%M:%S %Y"
 UNKNOWN_EXIT = 3
@@ -107,15 +108,21 @@ def same_process(began, since) -> bool:
     return began <= since + START_SLACK
 
 
+def is_shell_wrapper(cmd: str) -> bool:
+    """True for a shell that runs a command by `-c`: the body names a command, and the shell is that command's wrapper, not it."""
+    return bool(SHELL_WRAPPER.match(cmd))
+
+
 def run_pid(events: list[dict], procs: Procs, run_cmd: str = RUN_CMD, self_pid: int | None = None) -> int | None:
     """The pid of the invocation's engine process while it runs as that process, else None. `procs` is one process snapshot.
-    The reader's own pid is never a run's."""
+    The reader's own pid is never a run's, and a shell wrapper is never the engine."""
     proc = engine_process(events)
     if proc is None:
         return None
     pid, since = proc
     seen = procs.get(pid)
-    if pid == self_pid or seen is None or not re.search(run_cmd, seen.cmd) or not same_process(seen.start, since):
+    if pid == self_pid or seen is None or is_shell_wrapper(seen.cmd) or not re.search(run_cmd, seen.cmd) \
+            or not same_process(seen.start, since):
         return None
     return pid
 

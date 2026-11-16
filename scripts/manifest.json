@@ -64,6 +64,11 @@
     "reason": "Builds vendor/skills; tests/test_vendor_skills.py"
   },
   {
+    "path": "scripts/check_ste.py",
+    "status": "live",
+    "reason": "Warn-only ASD-STE100 check of an issue body, run by the to-spec and to-tickets publish; tests/test_check_ste.py"
+  },
+  {
     "path": "scripts/gui_test_run_script.py",
     "status": "live",
     "reason": "Runs a whole gui-test/1 script end to end; the /to-test-scenario Run step; tests/test_gui_test_e2e.py"
