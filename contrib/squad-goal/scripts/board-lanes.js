@@ -7,6 +7,11 @@ const hasLabel=(x,l)=>(x.l||[]).includes(l);
 const plain=t=>String(t==null?"":t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");
 // A cell shows every card it holds: the owner reads the whole lane at once, so no cap and no "+N more" (#891).
 const cellView=rows=>({shown:rows,more:0});
+// A visible column's width (#1994): the weight of its card count, clamped to 1..4, on a track that never goes below
+// 320 px. An empty column keeps one share, so it stays visible at the minimum width and never takes room from a lane.
+const COL_MIN="320px", COL_WEIGHT_MAX=4;
+const colWeight=n=>Math.max(1,Math.min(COL_WEIGHT_MAX,n||0));
+const colTracks=counts=>counts.map(n=>`minmax(${COL_MIN},${colWeight(n)}fr)`).join(" ");
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
 const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
@@ -94,11 +99,12 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   const list=shown.filter(l=>!(o.hideDone&&l.done)).sort((a,b)=>rank(a)-rank(b)||order(a,b));
   const lc=o.lc||{};
   list.forEach(l=>{l.collapsed=Object.prototype.hasOwnProperty.call(lc,l.id)?!!lc[l.id]:l.done});   // a done lane starts collapsed (#891)
-  const open=list.filter(l=>!l.collapsed);
   const hide=new Set(o.hidden||[]);   // the user's hidden columns: never drawn, named in the pill with their whole total
-  const vc=cols.filter(c=>!hide.has(c)&&open.some(l=>l.counts[c]));   // a column with no card in an expanded lane is not drawn
-  const hc=cols.filter(c=>!vc.includes(c)&&!hide.has(c)&&list.some(l=>l.counts[c])).map(c=>({name:c,count:list.reduce((s,l)=>s+(l.counts[c]||0),0)}))
-    .concat(groups.filter(g=>!g.end&&hide.has(g.name)).map(g=>({name:g.name,count:g.items.length,user:true})));
+  // Every column the user leaves visible is drawn, even one holding no card at all (#1994): an empty visible column
+  // keeps its minimum width and its label, so a group shows each column the board has and an empty one reads as
+  // empty, never as missing. Only the user's hidden set removes a column from the board.
+  const vc=cols.filter(c=>!hide.has(c));
+  const hc=groups.filter(g=>!g.end&&hide.has(g.name)).map(g=>({name:g.name,count:g.items.length,user:true}));
   list.forEach(l=>{l.cells={};cols.forEach(c=>{l.cells[c]=l.vis.filter(x=>x.col===c)})});
   return{cols,vc,hc,lanes:list};
 }

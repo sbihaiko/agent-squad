@@ -1,6 +1,9 @@
 /* The swimlanes (#890, #891), drawn as the owner-approved mock (#889): one grid per board. Each lane is a header across the grid and one cell per drawn column. */
 body.dockb #bbody.lanes{display:block;overflow:visible}
-#bbody .lgrid{display:grid;grid-template-columns:repeat(var(--vc,1),minmax(170px,1fr));align-content:start;--sep:var(--line)}
+#bbody .lgrid{display:grid;grid-template-columns:var(--tracks,repeat(var(--vc,1),minmax(320px,1fr)));align-content:start;--sep:var(--line)}
+/* A board too narrow for one 320 px track per column wraps the lanes onto another row, so the page never scrolls
+   sideways; the weighted tracks hold while the columns still fit on one row (#1994). */
+@media (max-width:1100px){#bbody .lgrid{grid-template-columns:repeat(auto-fit,minmax(360px,1fr))}}
 #bbody .lcolh{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:8px 12px 10px;min-height:40px;background:var(--bg);border-bottom:2px solid var(--sep);font-size:var(--fs-body);font-weight:600;color:var(--fg)}
 #bbody .lcolh b{background:var(--panel);color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-lg);padding:0 8px;line-height:var(--chip-h);font-size:var(--fs-caption);font-weight:600}
 #bbody .lane{display:contents}
@@ -31,7 +34,15 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .lh-counts .lf{flex:none}
 #bbody .lh .lh-counts b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
 #bbody .lane.alarm .lh .lid{color:var(--err)}
-#bbody .cell{min-width:0;min-height:48px;display:flex;flex-direction:column;gap:8px;padding:8px;background:var(--panel);border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}
+/* A column is a lane of a card grid (#1994): the cards fill the lane's width on several per line, the lane wears a
+   light tint of its column colour, and its label names the column and the group's count of that column. */
+#bbody .cell{min-width:0;min-height:48px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));align-items:stretch;align-content:start;gap:8px;padding:8px;background:color-mix(in srgb,var(--cc,var(--mute)) 6%,var(--panel));border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}
+#bbody .cell .clh{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 2px 2px;font-size:var(--fs-caption);font-weight:600;color:var(--mute)}
+#bbody .cell .clh b{color:var(--fg);font-variant-numeric:tabular-nums}
+#bbody .cell>.more{grid-column:1/-1}
+/* A card's title shows two lines and the whole title is in its tooltip (#1994): a long title never grows one card past
+   the others on its line. */
+#bbody .cell .it .tt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-clamp:2;line-height:1.55;max-height:3.1em}   /* the standard property and the height cap clamp the title where `-webkit-line-clamp` is unknown */
 #bbody .cell:last-of-type{border-right:0}
 #bbody .cell .it{margin:0}
 #bbody .bugc{display:inline-block;border-radius:var(--radius-lg);padding:0 8px;line-height:var(--chip-h);border:1px solid var(--tint-err-line);background:var(--tint-err);color:var(--err);font-size:var(--fs-caption);font-weight:600}

@@ -2,7 +2,7 @@
 # Regression test for the hub footer ceilings: loop_caps() must find the squad package from a hub.py that runs outside the repository
 # (the live copy under ~/.claude/skills, where parents[3] is ~/.claude), and a failure to find it must be logged once, never swallowed
 # (no network, no server). usage: bash test-hub-caps.sh
-# mirrors: hub.py procscan.py hubstream.py hub-stream.js web-tokens.css chainhealth.py grokmark.py provkey.py session_send.py session_card.py sessions.py hub_voice.py hub_profiler.py hub-profiler.js hub-profiler.css modelreg.py registry.json router_envelope.py agyquota.py board-lanes.js board-lanes.css run-sheet.js run-sheet.css hub-switcher.js board_columns.py board_fast.py board_history.py board_flow_history.py board_cfd.py board_leadtime.py issue_state.py issue_ledger.py board_lag.py ghread.py ghthrottle.py hub-mobile.html hub-mobile-search.js hub-mobile-gesture.js hub-mobile-chart.js hub-mobile-move.js hub-mobile-card.js hub-mobile-loop.js hub-mobile-chat.js hub-mobile-voice.js hub-mobile-link.js hub-question-card.js hub-mobile-run.js hub-mobile-usage.js hub-mobile-specs.js hub-mobile-sw.js board-filter.js board-definition.json run-states.json hub-overlay.js vendor-html2canvas-1.4.1.min.js models_chains.py steprec.py
+# mirrors: hub.py procscan.py hubstream.py hub-stream.js web-tokens.css chainhealth.py grokmark.py provkey.py session_send.py session_card.py sessions.py hub_voice.py hub_profiler.py hub-profiler.js hub-profiler.css modelreg.py registry.json router_envelope.py agyquota.py board-lanes.js board-lanes.css run-sheet.js run-sheet.css hub-switcher.js board_columns.py board_fast.py board_history.py board_flow_history.py board_cfd.py board_leadtime.py issue_state.py issue_ledger.py board_lag.py ghread.py ghthrottle.py hub-mobile.html hub-mobile-search.js hub-mobile-gesture.js hub-mobile-chart.js hub-mobile-move.js hub-mobile-card.js hub-mobile-loop.js hub-mobile-chat.js hub-mobile-voice.js hub-mobile-link.js hub-question-card.js hub-mobile-run.js hub-mobile-usage.js hub-mobile-specs.js hub-mobile-sw.js board-filter.js board-definition.json run-states.json hub-overlay.js vendor-html2canvas-1.4.1.min.js models_chains.py steprec.py specstall.py revformat.py ci_state.py
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; for f in $(sed -n 's/^# mirrors: //p' "$0" | head -n 1); do cp "$d/$f" "$live/"; done   # the copy is the list the mirrors line states
@@ -54,7 +54,7 @@ PY
 /usr/bin/grep -q '"unscheduled":"Backlog"' "$T/names" && ok "the live copy names its board columns from the table beside it" \
   || ko "the live copy names no board column: $(cat "$T/names") ($(head -2 "$T/names.err" | tr '\n' ' '))"
 
-# 5. the copy is the list the `# mirrors:` line states, and that list holds every local module hub.py imports (#1108): the gate
+# 5. the copy is the list the `# mirrors:` line states, and that list holds every local module hub.py imports or loads by path (#1108, #2011): the gate
 # reads the same line to pick this suite whenever a listed file changes, so a new import that the list misses fails here.
 imported=$(python3 - "$d/hub.py" "$d" <<'PY'
 import ast, os, sys
@@ -63,6 +63,8 @@ mods = set()
 for n in ast.walk(ast.parse(open(src).read())):
     if isinstance(n, ast.Import): mods |= {a.name.split(".")[0] for a in n.names}
     elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0: mods.add(n.module.split(".")[0])
+    elif isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "spec_from_file_location":   # a module loaded by its file path (#2011)
+        mods |= {c.value[:-3] for a in n.args for c in ast.walk(a) if isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.endswith(".py")}
 print(" ".join(sorted(m + ".py" for m in mods if os.path.isfile(os.path.join(d, m + ".py")))))
 PY
 )

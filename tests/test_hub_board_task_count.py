@@ -29,7 +29,7 @@ NO_COUNT_CARD = (
     'data-bl="%5B%5D" data-ho="" data-hr="" data-prf="%5B%5D" style="--cc:#000000;--lc:var(--s2)">'   # no spec: its own number's slot, never grey (#1640)
     '<a class="id ghl" target=_blank rel=noopener title="open issue #1 on GitHub" '
     'aria-label="open issue #1 on GitHub" href="https://github.com/__REPO__/issues/1">#1 {ghm}</a>'   # the card names its issue number, and the number opens the issue like the mark (#1268)
-    '<span class=tt>a spec</span>'
+    '<span class=tt title="a spec">a spec</span>'   # the whole title is in the tooltip, because the lane clamps it to two lines (#1994)
     '<button class=syncb data-n="1" title="re-read only this card from GitHub now: its column, labels, holder, blockers and sub-issue count">Sync</button>'   # every issue card carries the one-card sync (#1668)
     '<span class=lbs><span class="">gui</span></span></div>'
 ).replace("{ghm}", re.search(r"const GHI='(.*?)';", HUB_PY.read_text()).group(1))
