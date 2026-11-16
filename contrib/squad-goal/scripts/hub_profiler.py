@@ -904,6 +904,112 @@ def _marks(events, landings, promotions, start, end):
     return out
 
 
+# ---------------------------------------------------------------- the wall time of the steps and the gates (#1748)
+# The Loop tab's wall-time view, folded from the dated step records (`steps.tsv`, #1750) and the gate history: each step of
+# the slow and the fast lane is a row of count, total, median and p90 wall time, and a step still in flight is a running row
+# with its age. The slow cycle's time is the gap between two starts of its heartbeat. Each gate row carries the mean load at
+# its start and at its finish. The fold is pure: a caller hands it the steps and the history lines it read.
+WALL_WINDOWS = (600, 3600, 86400)
+WALL_WINDOW_LABELS = {600: "10 minutes", 3600: "1 hour", 86400: "24 hours"}
+WALL_WINDOW_DEFAULT = 3600
+WALL_LANES = ("slow", "fast")
+FAST_LANE_STEPS = frozenset(("childcc", "autobug", "autofrontier"))   # the names fastloop.sh writes; the slow lane's are "*.sh"
+CYCLE_STEP = "heartbeat.sh"   # the one step of the slow cycle that starts on every pass
+
+
+def wall_window(w):
+    """The window the page chose in seconds, or the hour when it chose none the page offers."""
+    try:
+        s = int(w)
+    except (TypeError, ValueError):
+        return WALL_WINDOW_DEFAULT
+    return s if s in WALL_WINDOWS else WALL_WINDOW_DEFAULT
+
+
+def _stats(secs):
+    return {"count": len(secs), "total_s": round(sum(secs), 3), "median_s": round(percentile(secs, 50), 3),
+            "p90_s": round(percentile(secs, 90), 3)}
+
+
+def _mean(values):
+    vals = [v for v in values if v is not None]
+    return round(sum(vals) / len(vals), 3) if vals else None
+
+
+def step_wall(steps, since, now):
+    """The steps `steprec.fold` made -> the finished steps of the window per lane, sorted by total, and the steps still in
+    flight with their age. A skipped step ran for no time and joins no row; a step that started before `since` is no row."""
+    done, running = {}, []
+    for s in steps:
+        if s["start"] < since:
+            continue
+        lane = "fast" if s["name"] in FAST_LANE_STEPS else "slow"
+        if s["state"] == "running":
+            running.append({"lane": lane, "name": s["name"], "age_s": round(now - s["start"], 3)})
+        elif s["state"] == "done" and s["end"] is not None:
+            done.setdefault((lane, s["name"]), []).append(float(s["end"] - s["start"]))
+    out = {lane: [] for lane in WALL_LANES}
+    for (lane, name), secs in done.items():
+        out[lane].append({"lane": lane, "name": name, **_stats(secs)})
+    for lane in WALL_LANES:
+        out[lane].sort(key=lambda r: r["total_s"], reverse=True)
+    out["running"] = running
+    return out
+
+
+def cycle_time(steps, since):
+    """The slow cycle's time: the median and p90 of the gaps between consecutive heartbeat starts from `since` on. One start
+    gives no gap, and no gap is no cycle time."""
+    starts = sorted(s["start"] for s in steps if s["name"] == CYCLE_STEP and s["start"] >= since)
+    gaps = [float(b - a) for a, b in zip(starts, starts[1:])]
+    if not gaps:
+        return {"n": 0, "median_s": None, "p90_s": None}
+    return {"n": len(gaps), "median_s": round(percentile(gaps, 50), 3), "p90_s": round(percentile(gaps, 90), 3)}
+
+
+def gate_rows(lines):
+    """The gate-history lines -> one dict per whole row with a finish, a start, a kind and an outcome the page can place.
+    A line that is no whole row is no row, and a missing load is None."""
+    out = []
+    for line in lines:
+        row = gate_row(line)
+        if row is None:
+            continue
+        try:
+            finish, start = float(row["finish"]), float(row["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if row.get("outcome") not in GATE_OUTCOMES:
+            continue
+        out.append({"start": start, "finish": finish, "kind": row.get("kind") or "", "outcome": row["outcome"],
+                    "load_start": _load(row.get("load_start")), "load_finish": _load(row.get("load_finish"))})
+    return out
+
+
+def gate_wall(gates, since):
+    """The gate runs of the window by kind and outcome, sorted by total, with the mean load at their start and their finish,
+    each over the rows that hold a reading. A gate that finished before `since` is no row."""
+    groups = {}
+    for g in gates:
+        if g["finish"] < since or g["finish"] < g["start"]:
+            continue
+        groups.setdefault((g["kind"], g["outcome"]), []).append(g)
+    rows = []
+    for (kind, outcome), gs in groups.items():
+        rows.append({"kind": kind, "outcome": outcome, **_stats([g["finish"] - g["start"] for g in gs]),
+                     "load_start": _mean([g["load_start"] for g in gs]), "load_finish": _mean([g["load_finish"] for g in gs])})
+    rows.sort(key=lambda r: r["total_s"], reverse=True)
+    return rows
+
+
+def wall(steps, gate_lines, window_s, now):
+    """The Loop tab's wall-time view of the window `window_s` that ends at `now`: the step rows of each lane, the running steps,
+    the slow cycle's time and the gate rows, all from one `since`."""
+    since = now - window_s
+    return {"window_s": window_s, "since": since, "cycle": cycle_time(steps, since), **step_wall(steps, since, now),
+            "gates": gate_wall(gate_rows(gate_lines), since)}
+
+
 # ---------------------------------------------------------------- the machine load (#1768)
 # Under the strip and on the strip's own window, the machine's load average as one line, from the minute record the hub's
 # load monitor appends (time, load average, CPU share). Each record covers the minute that ends at its own time, so a
