@@ -5,6 +5,8 @@
 # usage: bash test-watch-orphan.sh [path/to/watch.sh]
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(cd "$(dirname "$0")" && pwd); src=${1:-$d/watch.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; B=$T/bin
+# A source not named watch.sh is refused (#2025): a suite given as the source copied itself in and ran itself at every level.
+case "$(basename "$src")" in watch.sh) ;; *) echo "$(basename "$0"): $src is not a watch.sh; refused" >&2; exit 2;; esac
 mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; lp=
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export STEPS=$T/steps.log

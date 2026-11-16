@@ -6,10 +6,17 @@
 # finish epoch, start epoch, wait seconds, load at start, load at finish, exit code, suite path, tree sha. The load is the
 # one-minute average from uptime, `-` when no reading is possible; it labels the run and decides nothing. Under
 # SG_GATE_SLOTS_HELD, set by the command runner that holds the slots for it, the suite takes no slot and its wait is 0.
+# One suite per call: an argument that names another suite file is refused, exit 2. The suite runs under ulimit -u at three
+# quarters of the user's process limit (SG_CHILD_GATE_MAXPROC overrides it).
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/caps.sh"
 [ $# -gt 0 ] || { echo "usage: child-gate.sh <suite> [args...]" >&2; exit 2; }
 suite=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); shift
+# One suite per call (#2025). A glob of suites gives the first suite the others as its arguments, and a suite that reads its
+# first argument as the script under test then runs a suite in its place. A watch suite ran itself that way at every level.
+for a in "$@"; do
+  case "$(basename "$a")" in test-*.sh) [ -f "$a" ] && { echo "child-gate: $a is a suite; run one suite per call, never a glob of suites" >&2; exit 2; };; esac
+done
 st=${SG_STATE:-/tmp/sg-state}; mkdir -p "$st" 2>/dev/null
 lock="$st/child-gate-$(printf '%s' "$suite" | cksum | cut -d' ' -f1).lock"
 # The folder exists a moment before its pid is written, so a start that reads it in that instant retries instead of calling a
@@ -46,7 +53,10 @@ else
   start=$(date +%s); wait_s=$((start - t0))
 fi
 load0=$(load); sha=$(git rev-parse HEAD 2>/dev/null) || sha=-
-bash "$suite" "$@"; rc=$?
+# The suite runs under a process bound below the user's own (#2025), so a runaway suite meets a fork error before the loop does.
+per=$(sysctl -n kern.maxprocperuid 2>/dev/null || ulimit -u); case "$per" in ''|*[!0-9]*) per=;; esac
+bound=${SG_CHILD_GATE_MAXPROC:-${per:+$(( per * 3 / 4 ))}}
+( [ -z "$bound" ] || ulimit -u "$bound" 2>/dev/null; exec bash "$suite" "$@" ); rc=$?
 fin=$(date +%s)
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$fin" "$start" "$wait_s" "$load0" "$(load)" "$rc" "$suite" "$sha" >> "${SG_STATE:-/tmp/sg-state}/child-suite-history"
 exit "$rc"
