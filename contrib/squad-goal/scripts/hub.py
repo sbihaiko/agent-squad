@@ -2829,6 +2829,28 @@ def strip_view(w=None, now=None):
     out["gates"] = strip_gates(out["start"], out["end"])   # the gates under the bar share the strip's own window
     return out
 
+WALL_TAIL_BYTES = 4 * 1024 * 1024   # the newest bytes of each file the wall view reads: the step file is cut at 256 KiB, the history only grows
+
+def _tail(path, limit=None):
+    """The file's newest `limit` bytes as whole lines: a tail that starts mid-line drops its first line."""
+    limit = WALL_TAIL_BYTES if limit is None else limit
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - limit))
+            data = f.read()
+    except OSError:
+        return []
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    return lines[1:] if size > limit else lines
+
+def wall_view(ww=None, now=None):
+    """The Loop tab's wall-time view of the window `ww` the page chose: the bounded tails of the dated step records and the gate
+    history, folded by the rule layer. It reads files only, so it shows with the CPU sampling switch off."""
+    now = time.time() if now is None else now
+    return hub_profiler.wall(steprec.fold(_tail(STATE / "steps.tsv")), _tail(STATE / "gate-history"),
+                             hub_profiler.wall_window(ww), now)
+
 def load_record_rows():
     """The minute record's lines as the chart reads them: `{at, load, cpu}`, a field the writer could not read as None.
     A line that names no time is no record: it never draws."""
@@ -2918,14 +2940,14 @@ def slot_view(window_s, now=None, cap=None):
             invs.extend(inv); caps.extend(marks)
     return hub_profiler.run_slots(None if readable == 0 else invs, caps, window_s, now, cap=cap, unreadable=bad)
 
-def profiler_view(a, w=None, sw=None):
+def profiler_view(a, w=None, sw=None, ww=None):
     """What the Loop tab reads: the switch, the window the tree covers, the tree of the loop, the context row apart from
     it, the facts of the reading, the loop state strip of its own window `sw`, the run slots in use and the machine load
-    under it, the trip bar and the time in failed runs table of the window `w` the page chose; no tree while the switch is
-    off, and the file views read files only, so they show with the switch off. The strip, the slots and the load are
-    folded from one `now`, so a column of the page is the same instant in each. All three are null for a caller the hub
-    refused, as the records are not read for one; the cap is read once, so the chart's ceiling and the rest of the page
-    name the same value."""
+    under it, the trip bar and the time in failed runs table of the window `w` the page chose, and the wall time of the
+    steps and gates of the window `ww`; no tree while the switch is off, and the file views read files only, so they show
+    with the switch off. The strip, the slots and the load are folded from one `now`, so a column of the page is the same
+    instant in each. All of them are null for a caller the hub refused, as the records are not read for one; the cap is
+    read once, so the chart's ceiling and the rest of the page name the same value."""
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
     now = time.time()
@@ -2938,6 +2960,8 @@ def profiler_view(a, w=None, sw=None):
            "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
            "strip": st, "slots": slot_view(sw, now, (loop_caps() or {}).get("runs")) if a.allowed else None, "load": load,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
+           "wall": wall_view(ww, now) if a.allowed else None,
+           "wall_windows": [{"s": s, "label": hub_profiler.WALL_WINDOW_LABELS[s]} for s in hub_profiler.WALL_WINDOWS],
            "write": write, "reason": "" if write else (a.reason if not a.allowed else PROFILER_READ_ONLY)}
     if not out["on"]: return out
     profiler_ensure()
@@ -7729,6 +7753,20 @@ function profSlots(s){
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
+// The wall time of the loop's steps and gates (#1748): the slow cycle's time at the top, each lane's steps by total, the steps
+// still in flight with their age, and the gates by kind and outcome with their mean load at the start and at the finish.
+let wallWin=3600;   // the wall-time view's window: its own three controls choose it, and the poll names it
+const profLoadNum=x=>x==null?"&#8212;":x.toFixed(2);
+function profWall(w,windows){
+ if(!w)return "";
+ const picks=(windows||[]).map(s=>`<button type=button data-wall="${s.s}" aria-pressed=${s.s===w.window_s}>${esc(s.label)}</button>`).join("");
+ const c=w.cycle||{},cyc=c.n>0?`The slow cycle takes a median of ${profTime(c.median_s)} and a p90 of ${profTime(c.p90_s)}, over ${c.n} cycle${c.n===1?"":"s"}.`:"Fewer than two heartbeats in the window: no cycle time.";
+ const steps=[...(w.slow||[]),...(w.fast||[])].map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td>${r.count}</td><td>${profSecs(r.total_s)}</td><td>${profSecs(r.median_s)}</td><td>${profSecs(r.p90_s)}</td></tr>`)
+  .concat((w.running||[]).map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td colspan=4>running for ${profSecs(r.age_s)}</td></tr>`));
+ const gates=(w.gates||[]).map(g=>`<tr><td class=pn><span class=pnm>${esc(g.kind)}</span></td><td>${esc(g.outcome)}</td><td>${g.count}</td><td>${profSecs(g.total_s)}</td><td>${profSecs(g.median_s)}</td><td>${profSecs(g.p90_s)}</td><td>${profLoadNum(g.load_start)}</td><td>${profLoadNum(g.load_finish)}</td></tr>`);
+ return `<section id=profwall><h3>Wall time of each step</h3><div role=group aria-label="Wall time window">${picks}</div><p class=tpn>${cyc}</p>`
+  +`<table id=profsteps aria-label="Wall time of each loop step, by lane"><thead><tr><th>Lane</th><th>Step</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th></tr></thead><tbody>${steps.join("")||`<tr><td colspan=6>no step finished in this window</td></tr>`}</tbody></table>`
+  +`<table id=profgates aria-label="Wall time of each gate run, by kind and outcome"><thead><tr><th>Kind</th><th>Outcome</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th><th>Load at start</th><th>Load at finish</th></tr></thead><tbody>${gates.join("")||`<tr><td colspan=8>no gate run in this window</td></tr>`}</tbody></table></section>`}
 function profTrip(t){
  if(!t)return "";
  const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
@@ -7747,20 +7785,21 @@ function profNote(v){
   +(at?`Last good reading at <time datetime="${at.toISOString()}">${esc(at.toLocaleTimeString())}</time>`+(v.interval_s?`, ${profSecs(v.interval_s)} after the one before. `:". "):"No good reading yet. ")
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")+" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,slots=profSlots(v.slots),load=profLoad(v.load),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+slots+load+trip;   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>`,slots=profSlots(v.slots),load=profLoad(v.load),wall=profWall(v.wall,v.wall_windows),trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+slots+load+wall+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+slots+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+slots+load+wall+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
+function profDraw(){if(!profV)return;const b=$("#profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),wb=!!a&&a.hasAttribute&&a.hasAttribute("data-wall");
  b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
+ const t=sw?b.querySelector("[data-prof]"):wb?b.querySelector(`[data-wall="${a.dataset.wall}"]`):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin+"&ww="+wallWin)).json();profDraw()}catch(e){}}
 async function profPost(on){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client:"desktop"})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 $("#profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on);return}
+ const wb=e.target.closest("button[data-wall]");if(wb){wallWin=Number(wb.dataset.wall);profPoll();return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
@@ -9601,10 +9640,11 @@ class H(BaseHTTPRequestHandler):
             out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
-        elif self.path.split("?", 1)[0] == "/api/profiler":   # the Loop tab (#1743); `?w=` is the failed-run table's window (#1751), `&sw=` the strip's (#1765)
+        elif self.path.split("?", 1)[0] == "/api/profiler":   # the Loop tab (#1743); `?w=` is the failed-run table's window (#1751), `&sw=` the strip's (#1765), `&ww=` the wall-time view's (#1748)
             q = re.search(r"[?&]w=(\d{1,9})\b", self.path)
             sw = re.search(r"[?&]sw=(\d{1,9})\b", self.path)
-            body, ct = json.dumps(profiler_view(a, q[1] if q else None, sw[1] if sw else None)).encode(), "application/json"
+            ww = re.search(r"[?&]ww=(\d{1,9})\b", self.path)
+            body, ct = json.dumps(profiler_view(a, q[1] if q else None, sw[1] if sw else None, ww[1] if ww else None)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/clip"):   # the answer's one Kore clip (#1603)
