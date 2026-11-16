@@ -12,6 +12,9 @@ __pycache__/
 # per-profile Slack settings: channel ids and names live only here (#924)
 contrib/squad-goal/scripts/profiles/*.slack.json
 
+# a child's scratch files: the one place a child writes inside its worktree, and the fast gate's delta skips it
+.scratch/
+
 # Claude Code local state
 build/
 runs/

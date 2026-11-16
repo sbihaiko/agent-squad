@@ -26,6 +26,6 @@ A hook checks every tool call, and a denied call costs a turn. Follow these rule
 
 - Run a test suite as `bash contrib/squad-goal/scripts/child-gate.sh <suite>`, never directly. It takes the machine's gate slot.
 - Pass one suite per `child-gate.sh` call, never a glob. The gate refuses a second suite as an argument.
-- Write and edit only inside your worktree. Put a scratch file inside your worktree too, never in `/tmp` or your home folder.
+- Write and edit only inside your worktree. Put a scratch file inside your worktree too, in its `.scratch/` folder, never in `/tmp` or your home folder.
 - Do not name `$SG_STATE` or the live skill copy (`~/.claude/skills/squad-goal`) in a command. They are the loop's, not yours.
 - Do not run `ps`. The kernel hides the process table from your session.
