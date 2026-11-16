@@ -5605,6 +5605,65 @@ def refresh_history():
         read_pause(HISTORY_EVERY)
 
 
+PREDICT_DEFECT = "BOARD-PENDING-OLD"   # the name a prediction past its bound is reported as (#1841)
+PREDICTED_SEEN = STATE / "board-predictions.json"   # issue -> the instant of the prediction the loop's log already named
+def predictions():
+    """The card writes the issue ledger holds pending for this profile's repository, by issue number (#1841): each one
+    carries its column, the instant the writer recorded it, and the writer's name. This is a read of the writer's own fact,
+    never a second writer (ADR-0149): only that writer's `boardw` or `boardx` ends a prediction. A state directory the
+    ledger cannot read predicts nothing, and one stderr line names it: a missing reading is not a reading of nothing."""
+    try: rows = issue_ledger.predictions(REPO)
+    except (RuntimeError, OSError, ValueError) as e:
+        print(f"hub: the ledger's predictions do not read ({e}): the board is the list read alone", file=sys.stderr)
+        return {}
+    return {int(r["n"]): r for r in rows}
+
+
+def predicted_draw(pred, read_column, read_at, window, closed, labels, cr):
+    """The draw of one prediction (#1841): the column the writer named, the freeze that column carries, the pending mark,
+    and the named defect when no read carried the write within its bound. None when the column is not one this board
+    ships, or when the read began after the write and already carries its column: then the board draws the read.
+    `read_at` is the instant the read that observed the card began; for a card the cache lacks it is the pass's own
+    instant, because the whole read is what failed to carry it. The bound is `window`, the setting's own seconds, measured
+    on the read's clock as the proved moves' window is, so a cache that stopped updating never expires a prediction."""
+    recorded = _columns_module.SHIPPED_NAME.get(pred["column"], pred["column"])
+    if recorded not in ORDER: return None   # a column this board does not ship is never drawn
+    at = pred.get("instant")
+    carried = isinstance(at, (int, float)) and read_at is not None and at < read_at
+    if carried and recorded == read_column: return None   # the read proves the write, however old it is
+    defect = PREDICT_DEFECT if carried and read_at - at >= window else None
+    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, labels, cr)[1], "state": "pending",
+            "recorded": recorded, "entry": None, "defect": defect, "at": at}
+
+
+def report_predictions(defects):
+    """One line in the loop's log for each prediction that outlived its bound (#1841): the issue, the writer, the column
+    it recorded and the bound. It is written once per issue and instant, so a page reload names it no second time; the
+    report is bookkeeping, and a state directory that refuses it never costs the served board."""
+    if not defects: return
+    with MOVES_LOCK:
+        try: seen = json.loads(PREDICTED_SEEN.read_text())
+        except (OSError, ValueError): seen = {}
+        if not isinstance(seen, dict): seen = {}
+        fresh = [d for d in defects if seen.get(str(d["n"])) != d["at"]]
+        if not fresh: return
+        for d in fresh: seen[str(d["n"])] = d["at"]
+        _tmp = _temp_name(PREDICTED_SEEN)
+        try:
+            _tmp.write_text(json.dumps(seen, sort_keys=True) + "\n"); os.replace(_tmp, PREDICTED_SEEN)
+        except OSError:
+            try: _tmp.unlink()
+            except OSError: pass
+            return
+    try:
+        with (STATE / "cycle.log").open("a") as f:
+            for d in fresh:
+                f.write(f"{time.strftime('%T')} hub {d['defect']} #{d['n']}: {d['by'] or 'a writer'} recorded {d['column']} "
+                        f"and no read carried it within {d['window']:g} s; the card stays drawn pending\n")
+    except OSError:
+        pass   # the report is bookkeeping: the served board never fails for it
+
+
 def drawn_column(i, moves, window):
     """The column the served board draws for one row, the freeze that column carries, and what the serve acts on:
     `read` (no entry names a column this board ships, or the read's column stands), `agree` (the read began after the
@@ -5662,6 +5721,8 @@ def board(moves=None):
     if moves is None: moves = read_moves() if overlay else {}   # the serve passes the record it already read, so one serve reads it once (#973); the record is read on every serve, so a page reload sees the same overlay (#650)
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
     agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds, the move's dispatch context)
+    preds = predictions() if overlay else {}   # the writes the ledger holds pending: the board's next read, predicted (#1841)
+    pred_defects, seen = [], set()   # seen: every issue number the cache carried this pass
     by, tally, drawn = {}, {}, []
     planned = spec_plan_parents(board_cache["items"])
     ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}   # history by role: a closed status is never a column on any page (#969)
@@ -5669,12 +5730,27 @@ def board(moves=None):
     flying = set(flying)
     taken = taken_map()   # the takeovers a card wears, read once per serve beside the holders it names
     for i in board_cache["items"]:
+        seen.add(int(i["n"]))
         d = flight_draw(i) if i["n"] in flying else drawn_column(i, moves, window)   # the one overlay rule the promote route asks too (#829)
+        pred = preds.get(int(i["n"]))
+        pd = None
+        if pred is not None:   # the writer's own fact outranks the cache, and a newer instant wins between two writers (#1841)
+            closed_i = str(i.get("s")).lower() == "closed"
+            read_col = _columns_module.view_column(i["st"], closed_i, i.get("l"), i.get("cr"))[0]
+            pd = predicted_draw(pred, read_col, i.get("ot"), window, closed_i, i.get("l"), i.get("cr"))
+            entry_at = move_time(d.get("entry")) if isinstance(d.get("entry"), dict) else None
+            if pd is not None and (entry_at is None or pd["at"] >= entry_at):
+                d = pd
+            else: pd = None
         st, fz = d["st"], d["fz"]
         if d["state"] == "agree": agreed.add(str(i["i"]))
         elif d["state"] == "expired": expired[str(i["i"])] = (i["n"], d["recorded"], st, has_context(d["entry"]))
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if d["state"] == "pending": row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
+        if pd is not None and pd["defect"]:   # a write no read carried within its bound: a named defect, never a silent card
+            row["pdx"] = pd["defect"]
+            pred_defects.append({"n": i["n"], "column": pd["recorded"], "by": pred["by"], "defect": pd["defect"],
+                                 "at": pd["at"], "window": window})
         if i["n"] in refused and i["n"] not in flying: row["mr"] = refused[i["n"]]   # the writer's reason, on the card until the owner moves it again (#1300)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
@@ -5702,6 +5778,21 @@ def board(moves=None):
         drawn.append((i["n"], st, row.get("pa"), label_wave(i.get("l") or []), _columns_module.SPEC_LABEL in row["l"]))
         if st in ends: tally[st] = tally.get(st, 0) + 1   # a closed row is never served: its count and the summaries carry it (#972)
         else: by.setdefault(st, []).append(row)
+    # A card the cache lacks, whose write the ledger holds pending, is still drawn (#1841): the read has not carried the
+    # write yet, and a prediction is never a silently missing card. The pass's own instant is the read's clock here, because
+    # the whole read is what failed to carry the card; past the bound the card wears the defect's name.
+    for n, pred in sorted(preds.items()):
+        if n in seen: continue
+        pd = predicted_draw(pred, None, board_cache.get("t"), window, False, [], None)
+        if pd is None: continue
+        row = {"n": n, "t": f"#{n}", "c": None, "l": [], "pd": True}
+        if pd["defect"]:
+            row["pdx"] = pd["defect"]
+            pred_defects.append({"n": n, "column": pd["recorded"], "by": pred["by"], "defect": pd["defect"],
+                                 "at": pd["at"], "window": window})
+        if pd["st"] in ends: tally[pd["st"]] = tally.get(pd["st"], 0) + 1   # a card in a terminal column is counted, never served (#972)
+        else: by.setdefault(pd["st"], []).append(row)
+        drawn.append((n, pd["st"], None, None, False))
     # The reverse of `blocked by`, one map so the view holds no rule of its own (ADR-0137, #919): a card carries the cards
     # it blocks, and the sheet renders that served fact.
     allrows = [r for rs in by.values() for r in rs]
@@ -5760,7 +5851,8 @@ def board(moves=None):
     # page never shows a board that silently lacks a card just added to the project.
     pending_new = {fd_int(fd) for fd in board_cache.get("fast_pending") or []} - {fd_int(i.get("fd")) for i in board_cache["items"]}
     pending_new.discard(None)
-    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "pending_new": len(pending_new), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
+    if pred_defects: report_predictions(pred_defects)   # the loop's log names each one once, whatever the page does
+    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "pending_new": len(pending_new), "pred": pred_defects, "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -5776,7 +5868,7 @@ def board_served():
     moves = read_moves() if overlay_on() else {}
     _HOLDER_CACHE.clear(); _ACTIVE_RUNS.clear()   # the key reads the same facts the body will: a memo from an earlier build would key this board on a liveness it no longer has (#1790)
     holders = [(i["n"], holder_fact(i)[1]) for i in board_cache["items"] if (i.get("h") or {}).get("run")]   # a holder's process moves with no board read (#1661)
-    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders], sort_keys=True, default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders, predictions()], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
     try:
         _HOLDERS_READ["v"] = True   # the key read every holder a moment ago: this build asks for none of them again

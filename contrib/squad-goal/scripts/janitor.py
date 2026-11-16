@@ -1022,9 +1022,23 @@ def refuse_comment(n, refusal, err, why):   # a refused write queues one comment
     rc, _ = _run(["bash", str(pathlib.Path(__file__).parent / "refusal.sh"), str(n), refusal, err, why])
     if rc: say(f"REFUSAL-COMMENT-FAILED #{n}: {refusal} was not queued for this issue (exit {rc})")
     return rc == 0
+def status_column(args):   # the Status column a board write sets, or None for a write that sets another fact of the card
+    a = list(args)
+    if a and a[0] == "--add": a = a[1:]
+    return a[2] if len(a) == 4 and not a[0].startswith("--") else None
+def predict_write(n, col, why):   # the write is a ledger event first (#1841): the board's next read is predicted before it lands
+    try: return ledger().board(f"{repo0}#{n}", "janitor", col, why, by="janitor") in ("recorded", "duplicate")
+    except (ImportError, RuntimeError, OSError, ValueError, KeyError) as e:
+        say(f"BOARD-PREDICT-FAILED #{n}: the ledger holds no prediction for {col}: {e}")   # the write still runs, and the defect is named
+        return False
+def prove_write(n, col):   # the writer's own proof ends the prediction: only this mark, or the event's drop, does (#1841)
+    try: ledger().boardw(f"{repo0}#{n}", "janitor", col, "janitor")
+    except (ImportError, RuntimeError, OSError, ValueError, KeyError): pass
 def board_write(args, n, why, reason=None):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
     gone = st / "auto" / f"janitor-gone-{n}"
     if gone.exists(): return False
+    col, pending = status_column(args), False
+    if col and not dry: pending = predict_write(n, col, why)   # a dry run writes nothing, and predicts nothing
     env = {**os.environ, "SG_MOVE_REASON": reason} if reason else None   # names why a card returns to Todo (#1059)
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True, env=env)
     if r.returncode:
@@ -1041,6 +1055,7 @@ def board_write(args, n, why, reason=None):   # the one writer of a card: a stat
         say(f"BOARD-WRITE-FAILED #{n}: {why}: {err}")
         if not dry: refuse_comment(n, "BOARD-WRITE-FAILED", err, why)   # a dry run acts on nothing, so it queues nothing
         return False
+    if pending: prove_write(n, col)   # the card write landed: the prediction is written, and no reader draws it pending
     a = args[1:] if args and args[0] == "--add" else args
     if len(a) == 4 and not a[0].startswith("--") and a[1] in _boards: _boards[a[1]][1][str(a[3])] = a[2]
     return True

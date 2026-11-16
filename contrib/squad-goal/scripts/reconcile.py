@@ -140,17 +140,44 @@ def move(n, to, why):
     MOVES.append(n)
     print(f"{'MOVE' if APPLY else 'WOULD MOVE'} #{n} {cur} -> {name} ({why})")
     if APPLY: write(n, name)
+_LEDGER = []   # the ledger module beside this script, imported once; None when it does not load
+def ledger_lib():
+    if not _LEDGER:
+        try: import issue_ledger; _LEDGER.append(issue_ledger)
+        except ImportError: _LEDGER.append(None)
+    return _LEDGER[0]
+_LEDGER_NAMED = []   # one line for a pass that cannot record its predictions: a setting the pass ignored never passes silently
+def predictor(kind, n, name):
+    """One board write through the one path that predicts it (#1841): `board` records the column before the API call, and
+    `boardw` is the writer's own proof that it landed. The event is keyed by the issue, carries the instant, the column and
+    this writer's name (ADR-0165). A ledger the pass cannot write predicts nothing, and one line on the stream names it:
+    the card write itself still happens, and a pass that kept its cards would hide a defect."""
+    lib = ledger_lib()
+    try:
+        if lib is None: raise RuntimeError("issue_ledger is not importable")
+        key = f"{REPO}#{n}"
+        return lib.boardw(key, "reconcile", name, "reconcile") if kind == "boardw" else lib.board(key, "reconcile", name, by="reconcile")
+    except (RuntimeError, OSError, ValueError, KeyError) as e:
+        if not _LEDGER_NAMED:
+            _LEDGER_NAMED.append(1)
+            print(f"RECONCILE: the ledger holds no prediction for this pass ({e}): the card writes still run", file=sys.stderr)
+        return None
 def write(n, name, add=False):
     """One writer call, in the one shape the writer takes: `<owner> <project> <status> <n>`, or its `--add` form. The shape
     is built here and nowhere else, so a caller cannot drop a field of it -- the pass that shipped #454 called
     `board.sh Closed 1090`, and board.py read the status as the owner and died with an IndexError on every write (#457).
     A refusal is named with the carrier's own text and ends the pass non-zero: a MOVE line beside a write that never
-    landed is a log that lies, which is what this pass filed for months (#454)."""
+    landed is a log that lies, which is what this pass filed for months (#454). The write is a ledger event first (#1841),
+    so a reader of the board draws its column over a cache that lags; the writer's own proof ends the prediction, and a
+    write no answer proved keeps its event pending, where the hub names it as a defect once its bound passes."""
     pre = [MOVE] + (["--add"] if add else []) + [OWNER, str(BOARD)]
+    predictor("board", n, name)
     r = subprocess.run([*pre, name, str(n)], capture_output=True, text=True)
     if r.returncode:
         REFUSED.append(n)
         print(f"WRITE REFUSED #{n} -> {name}: {(r.stderr or r.stdout).strip().replace(chr(10), ' ')[:200] or 'the writer said nothing'}")
+    else:
+        predictor("boardw", n, name)   # the carrier agreed: the prediction is written, and no reader draws it pending
 _state = {n: True for n in OPEN}
 _state.update({n: (v.get("state") != "closed") for n, v in EXTRA.items()})   # the batched answer settles the cards it covers (#1648)
 def is_open(d):

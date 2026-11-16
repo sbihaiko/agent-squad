@@ -20,10 +20,10 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py requeued <key> <run>                  the head the run requeued the issue on, "" when it did not
        issue_ledger.py review <key> <run> <verdict> <findings> [round]  one review of the issue's work: prints recorded|reset|duplicate|frozen|floor
        issue_ledger.py coder <key>                           the places down the coder chain the next attempt starts
-       issue_ledger.py board <key> <run> <column> <req> [instant]  one board write of a dispatch: prints recorded|duplicate|stale|floor
+       issue_ledger.py board <key> <run> <column> <req> [instant] [writer]  one board write: prints recorded|duplicate|stale|floor
        issue_ledger.py boardw <key> <run> <column> [actor]   that write landed, at this instant, by this actor: prints written|duplicate|superseded
        issue_ledger.py boardx <key> <run> <column>           the pending write is dropped unwritten: prints dropped|superseded
-       issue_ledger.py pending <key|owner/repo>              "<n>\t<run>\t<column>\t<instant>\t<req>" for each board write not yet landed
+       issue_ledger.py pending <key|owner/repo>              "<n>\t<run>\t<column>\t<instant>\t<req>\t<writer>" for each board write not yet landed
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
 seam's (ADR-0138), never a bare issue number. Owner intent stays on GitHub (ready-for-agent, the Todo card, frozen:owner,
@@ -62,12 +62,16 @@ branch), with the branch and the sha. Rule R reads it instead of a run's land he
 only when a landing pass wrote the fact. A `requeue` fact holds the head a run requeued the issue's child on, so the pass
 that requeued it is not tried again on the same head (the old auto/requeued-<run>-<child> marker, ADR-0149 rule 6).
 
-A `board` fact is one card write of a dispatch (ADR-0164): `{run, column, instant, state, req}`. Its identity is the run and the
-column, and its instant is the event's own time, set once when the event is first recorded. `board` records the event `pending`
-before the card write; `boardw` marks it `written` when the write lands, and `boardx` drops it unwritten when the gates no longer back it. A retry of the same event is a duplicate and keeps its
-first instant and its state; an event older than the fact is `stale`, so a late delivery never overwrites a newer one; a write
-for an event the fact no longer holds is `superseded`. `pending` lists what has not landed, so a dispatch that crashed between
-the event and its write finds the event and resumes it with the stored request.
+A `board` fact is one card write of a writer (ADR-0164): `{run, column, instant, state, req, by}`. Its identity is the run and
+the column, and its instant is the event's own time, set once when the event is first recorded; `by` is the writer's name, so
+a reader knows whose fact it reads. Every writer of a card -- the autobug dispatch, the janitor's reconcile and
+`reconcile.py` -- records its write through `board`, so one path holds every prediction of the board's next read (#1841).
+`board` records the event `pending`
+before the card write; `boardw` marks it `written` when the write lands, and `boardx` drops it unwritten when the gates no
+longer back it. A retry of the same event is a duplicate and keeps its first instant and its state; an event older than the
+fact is `stale`, so a late delivery never overwrites a newer one; a write for an event the fact no longer holds is
+`superseded`. `pending` lists what has not landed, so a dispatch that crashed between the event and its write finds the event
+and resumes it with the stored request.
 
 A `review` event is one review of the issue's work, keyed by its run and round (ADR-0151, ADR-0149 rule 1): a retry of one
 round is no second verdict. The streak holds the consecutive `changes` verdicts, the `moves` identical findings twice made
@@ -464,7 +468,7 @@ def _board(rec, ev):   # -> (recorded|duplicate|stale|floor, changed): one card 
     if old and ev["instant"] < old["instant"]: return "stale", False   # a late delivery never overwrites a newer event
     if old and (old["run"], old["column"]) == (run, col): return "duplicate", False   # the same event: the first instant stands
     rec["board"] = {"run": run, "column": col, "instant": ev["instant"], "state": "pending", "req": ev["req"],
-                    "project": ev["project"], "field": ev["field"]}
+                    "project": ev["project"], "field": ev["field"], "by": ev.get("by") or ""}
     return "recorded", True
 
 
@@ -563,9 +567,11 @@ def review(key, run, verdict, findings="", rnd=0):   # -> recorded|reset|duplica
     return transition(key, {"op": "review", "run": run, "verdict": verdict, "findings": findings, "round": rnd})
 
 
-def board(key, run, column, req="", instant=None):   # -> recorded|duplicate|stale|floor: a card write is an event, pending before it
+def board(key, run, column, req="", instant=None, by=""):
+    """-> recorded|duplicate|stale|floor: a card write is an event, pending before it (ADR-0164). The event carries its
+    instant, the column it targets and the writer's name, so a reader of the board knows whose write it predicts (#1841)."""
     return transition(key, {"op": "board", "run": run, "column": column, "req": req, "project": os.environ.get("SG_PROJECT", ""),
-                            "field": BOARD_FIELD, "instant": time.time() if instant is None else float(instant)})
+                            "field": BOARD_FIELD, "instant": time.time() if instant is None else float(instant), "by": by})
 
 
 def boardw(key, run, column, actor=""):   # -> written|duplicate|superseded: the card write of the event landed, at this instant, by this actor
@@ -587,10 +593,32 @@ def boardx(key, run, column):   # -> dropped|superseded: a pending card write th
     return transition(key, {"op": "boardx", "run": run, "column": column})
 
 
-def pending(target):   # -> [(n, run, column, instant, req)]: the board writes not yet landed, of one issue or of a repository
+def pending(target):   # -> [(n, run, column, instant, req, by)]: the board writes not yet landed, of one issue or of a repository
     recs = [(parse(target)[2], load(target))] if "#" in target else repo_files(target)
-    return [(n, b["run"], b["column"], b["instant"], b.get("req", "")) for n, rec in recs
+    return [(n, b["run"], b["column"], b["instant"], b.get("req", ""), b.get("by", "")) for n, rec in recs
             for b in [rec.get("board") or {}] if b.get("state") == "pending"]
+
+
+_PRED_CACHE: dict = {}   # (state dir, repository) -> (files' signature, predictions): the board reads it every serve (#1841)
+
+
+def predictions(repo, state=None):
+    """-> [{n, column, instant, by, req}]: each card write the repository's ledger holds pending, with the instant the
+    writer recorded it and the writer's name. A prediction is the writer's own fact, never GitHub's (#1841): a reader of
+    the board draws it over a cache that lags, and only the writer's proof (`boardw`) or its drop (`boardx`) ends it.
+    The pass is kept until one of the ledger files changes, as `open_episodes` keeps its own (#1746)."""
+    d = pathlib.Path(state) if state is not None else state_dir()
+    sig = _state_signature(d)
+    with _OPEN_LOCK:
+        kept = _PRED_CACHE.get((str(d), repo)) if sig is not None else None
+    if kept is not None and kept[0] == sig:
+        return kept[1]
+    rows = [{"n": n, "column": b["column"], "instant": b["instant"], "by": b.get("by", ""), "req": b.get("req", "")}
+            for n, rec in repo_files(repo) for b in [rec.get("board") or {}] if b.get("state") == "pending"]
+    if sig is not None:
+        with _OPEN_LOCK:
+            _PRED_CACHE[(str(d), repo)] = (sig, rows)
+    return rows
 
 
 def coder(key):   # the places down the coder chain the next fix attempt starts: one per repeated finding (ADR-0151 rule 2)
@@ -698,7 +726,8 @@ def main(argv):
             if diffs:
                 print(f"issue_ledger.py: replay of {key} differs: " + "; ".join(diffs), file=sys.stderr); return 1
             print(f"REPLAY {key}: ok")
-        elif op == "board" and len(rest) >= 3: print(board(key, rest[0], rest[1], rest[2], *(rest[3:4] or [])))
+        elif op == "board" and len(rest) >= 3:
+            print(board(key, rest[0], rest[1], rest[2], *(rest[3:4] or []), by=(rest[4] if len(rest) > 4 else "")))
         elif op == "boardw" and len(rest) >= 2: print(boardw(key, rest[0], rest[1], *(rest[2:3] or [""])))
         elif op == "boardx" and len(rest) >= 2: print(boardx(key, rest[0], rest[1]))
         elif op == "coder": print(coder(key))
