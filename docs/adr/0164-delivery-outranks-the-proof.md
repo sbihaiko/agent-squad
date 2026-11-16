@@ -23,6 +23,10 @@ A gate attempt ends in one of three outcomes, and the evidence is what tells the
   a later unproven attempt and a pass of another scope never release it. Only a pass that covers the red's scope and reran
   the checks that reported it releases it, and the record names which of the two released it — the green run on the same
   tree, or the change on a descendant that fixed it (ADR-0018).
+- **Two reds bound a rerun.** A red that names no cause runs once more on the same tree, with the same suite. A green
+  rerun releases it as a flake: the work lands, and the failing tests are filed as one bug, once per cause. A second red
+  on the same tree with the same failing tests runs no third check until the tree changes; it is a counted failure, so
+  the landing's try cap and the owner's alert apply. A red is the measurement of the tree, never the loop's own cause.
 - **An unfinished proof never holds delivery.** Past its bound (ADR-0163) the delta proof answers for the tip; past what
   the delta can carry, the tip is promoted with a marker that names the unproven part.
 - **A failed proof still holds delivery.** This decision never promotes a tip a test named.
@@ -39,4 +43,4 @@ and a gate that measured a red holds everything until the red is fixed.
 The ground truth stays off the delivery path. The nightly keeps the full suite in both modes, heavy included
 (ADR-0153); it is what turns a marker or an obligation into a fact, and it never gates a landing.
 
-Guard: `contrib/squad-goal/scripts/test-promote-pass.sh`, `tests/test_adr_index.py`.
+Guard: `contrib/squad-goal/scripts/test-promote-pass.sh`, `contrib/squad-goal/scripts/test-wave.sh`, `tests/test_adr_index.py`.
