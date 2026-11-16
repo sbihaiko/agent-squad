@@ -26,7 +26,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_coding_model_tools.py", "tests/test_dashboard_layer_focus.py", "tests/test_dashboard_narrow.py", "tests/test_dashboard_page.py", "tests/test_dashboard_parity.py",
         "tests/test_dashboard_view.py", "tests/test_each.py", "tests/test_entry_no_progress.py", "tests/test_fundroom.py", "tests/test_gate_lock.py",
         "tests/test_gh_budget_per_pass.py", "tests/test_glossary_name.py", "tests/test_graph.py", "tests/test_gui_test_e2e.py", "tests/test_gui_test_format.py",
-        "tests/test_hub_accessibility.py", "tests/test_hub_attachment.py", "tests/test_hub_board_move_async.py", "tests/test_hub_board_pending.py", "tests/test_hub_board_repo_scope.py",
+        "tests/test_hub_accessibility.py", "tests/test_hub_attachment.py", "tests/test_hub_board_move_async.py", "tests/test_hub_board_pending.py", "tests/test_hub_board_prediction.py", "tests/test_hub_board_repo_scope.py",
         "tests/test_hub_board_stale.py", "tests/test_hub_board_task_count.py", "tests/test_hub_child_transcript_usage.py", "tests/test_hub_gate_strip.py", "tests/test_hub_grok_quota_scan.py",
         "tests/test_hub_grok_refresh.py", "tests/test_hub_instruments.py", "tests/test_hub_lane_collapse.py", "tests/test_hub_lane_grid.py", "tests/test_hub_mobile_card_facts.py", "tests/test_hub_mobile_icons.py", "tests/test_hub_mobile_lanes.py",
         "tests/test_hub_mobile_motion.py", "tests/test_hub_mobile_reload.py", "tests/test_hub_mobile_text_targets.py", "tests/test_hub_mobile_warnings.py", "tests/test_hub_model_level_switch.py",

@@ -490,3 +490,41 @@ def test_the_reader_sees_the_count_the_cause_and_the_age_from_the_ledger_alone(t
     eps = json.loads(run(tmp_path, "read", "a/b#7", "episodes").stdout)
     assert len(eps) == 1 and eps[0]["count"] == 3 and eps[0]["cause"] == "gate lock"
     assert 0 <= eps[0]["age"] < 60
+
+
+def test_a_board_event_carries_its_instant_its_column_and_its_writer(tmp_path):
+    """One write path records a card write before it lands (#1841): the event is keyed by the issue and carries the
+    instant it was recorded, the column it targets, and the writer's name. A writer that names no run names itself."""
+    assert run(tmp_path, "board", "a/b#7", "janitor", "Doing", "", "1700000000", "janitor").stdout.strip() == "recorded"
+    fact = json.loads((tmp_path / "state" / "a__b__7.json").read_text())["board"]
+    assert fact["state"] == "pending"
+    assert (fact["run"], fact["column"], fact["instant"], fact["by"]) == ("janitor", "Doing", 1700000000.0, "janitor")
+
+
+def test_a_pending_write_is_a_prediction_with_its_writer(tmp_path):
+    """The reader of the board's next read asks the ledger for each write GitHub has not proven: the issue, the column,
+    the instant the writer recorded it, and the writer's name (#1841)."""
+    run(tmp_path, "board", "a/b#7", "janitor", "Doing", "", "1700000000", "janitor")
+    run(tmp_path, "board", "a/b#8", "reconcile", "Closed", "", "1700000500", "reconcile")
+    run(tmp_path, "board", "c/d#7", "janitor", "Doing", "", "1700000000", "janitor", repo="c/d")
+    rows = [line.split("\t") for line in run(tmp_path, "pending", "a/b").stdout.splitlines()]
+    assert [(r[0], r[2], r[5]) for r in rows] == [("7", "Doing", "janitor"), ("8", "Closed", "reconcile")]
+
+
+def test_an_unproven_write_keeps_its_pending_event_and_a_proven_one_loses_it(tmp_path):
+    """A write the API never answered keeps its prediction (#1841): only the writer's own proof, `boardw`, ends it. A
+    write the gates no longer back is dropped by name, and only a pending event can be dropped."""
+    run(tmp_path, "board", "a/b#7", "janitor", "Doing", "", "1700000000", "janitor")
+    assert run(tmp_path, "pending", "a/b#7").stdout.split("\t")[0] == "7", "an unproven write lost its pending event"
+    assert run(tmp_path, "boardw", "a/b#7", "janitor", "Doing", "janitor").stdout.strip() == "written"
+    assert run(tmp_path, "pending", "a/b#7").stdout == ""
+    assert run(tmp_path, "boardx", "a/b#7", "janitor", "Doing").stdout.strip() == "superseded", "a written event was dropped"
+
+
+def test_an_event_older_than_the_fact_the_ledger_holds_is_stale(tmp_path):
+    """The older-instant rule decides which writer's fact wins (#1841): an eventually consistent read that returns an old
+    value never overwrites a newer recorded write, and the newer fact stands with its own writer."""
+    assert run(tmp_path, "board", "a/b#7", "janitor", "Doing", "", "2000", "janitor").stdout.strip() == "recorded"
+    assert run(tmp_path, "board", "a/b#7", "reconcile", "Todo", "", "1000", "reconcile").stdout.strip() == "stale"
+    fact = json.loads((tmp_path / "state" / "a__b__7.json").read_text())["board"]
+    assert (fact["column"], fact["instant"], fact["by"]) == ("Doing", 2000.0, "janitor")
