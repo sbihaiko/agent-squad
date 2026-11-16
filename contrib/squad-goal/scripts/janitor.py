@@ -1058,8 +1058,11 @@ def reconcile_board():
     shipped = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the loop writes the shipped vocabulary once the board carries it (expand done); until then it writes today's options
     SHIPPED_NAME = FREEZE_LABEL = {}
     TERMINAL = ()
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
+    # The terminal column is one function for every vocabulary: the reconciler reads the same one, so the two passes cannot
+    # disagree about where a closed issue's card belongs (spec #132, #1932).
+    from board_columns import terminal_column, ROLE
     if shipped:
-        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
         from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past, CODE_REVIEW
     doing = "Doing" if shipped else "In Progress"
     GATING = "Gating"   # the shipped column between Code Complete and Closed; board_columns.ROLE names the same word (ADR-0170)
@@ -1287,8 +1290,8 @@ def reconcile_board():
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(set(expected) | (set(olabels) if oans else set()), key=int):   # every open issue, as when the floor named each one: a rule below can still move a card forward
         state, reason, _ = issue_info(n)
-        if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
-        if shipped and state == "closed" and not_planned(reason): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
+        term = terminal_column(state, reason)   # the one function the reconciler reads too: Abandoned when the issue was not delivered, Closed when it was (spec #132, #1932)
+        if term: set_expected(n, term if shipped else "Done", "issue is closed" if term == ROLE["abandoned"] else f"issue is closed as {reason}", "", "", 95 if term == ROLE["abandoned"] else 90)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
         if n not in specs and str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665)
