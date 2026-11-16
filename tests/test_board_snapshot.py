@@ -124,16 +124,19 @@ def test_the_snapshot_is_per_repository(tmp_path):
     assert len(files) == 2, f"one snapshot per repository, got {files}"
 
 
-def test_the_state_read_rides_the_same_snapshot(tmp_path):
-    """The reporting pass asks for the states seconds after another reader; the window answers both (#1796)."""
+def test_the_state_read_keeps_its_own_snapshot(tmp_path):
+    """The state read stays the Status-only answer, and two reporting passes inside the window send one request (#1796).
+
+    It is its own snapshot on purpose: a carrier that names no Run field still answers the state read, and a caller
+    that decides a write passes fresh."""
     board = Board()
     state = seam(tmp_path, board)
 
-    state.board()
-    states = state.read_all()
+    first = state.read_all()
+    second = state.read_all()
 
-    assert states == {"241": "Todo"}
-    assert board.reads == 1, "the state read is served from the window's snapshot"
+    assert first == second == {"241": "Todo"}
+    assert board.reads == 1, "the second state read is served from the window's snapshot"
 
 
 def test_a_live_state_read_asks_the_carrier(tmp_path):
