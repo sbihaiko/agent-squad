@@ -561,6 +561,27 @@ def test_the_answer_carries_the_last_reading_and_the_measured_interval(hub):
     assert 0 < v["interval_s"] < 5 and v["failed_readings"] == 0
 
 
+def test_two_readings_of_one_window_are_never_closer_than_one_period(hub, monkeypatch):
+    mod, port, _, _, table = hub
+    window, calls, intervals = mod.PROFILER["window"], [], []
+    add = window.add
+
+    def spy(now, reading, scope):
+        add(now, reading, scope)
+        intervals.append(window.interval)
+
+    def read():
+        calls.append(1)
+        if len(calls) == 1: time.sleep(0.05)   # the first read overruns the period; the next answers at once
+        return table()
+
+    monkeypatch.setattr(window, "add", spy)
+    monkeypatch.setattr(mod, "profiling_table", read)
+    ask(port, "POST", {"on": True})
+    wait(lambda: len(intervals) >= 2)
+    assert intervals[1] >= mod.PROFILER_SECS
+
+
 def test_a_failed_reading_is_counted_and_never_moves_the_last_reading(hub, monkeypatch):
     mod, port, _, _, _ = hub
     reads = []
