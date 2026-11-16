@@ -20,7 +20,7 @@ unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
-cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$d/fast-gate.sh" "$d/quality-reading.py" "$d/siblings.py" "$d/cluster.py" "$T/s/" 2>/dev/null
+cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$d/fast-gate.sh" "$d/quality-reading.py" "$d/siblings.py" "$d/cluster.py" "$d/autohunt.sh" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 {
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
@@ -41,7 +41,7 @@ chmod +x "$T/origin.git/hooks/pre-receive"
 pushes() { awk -F'\t' -v r="${1:-}" '$3==r || r=="" {print $1, $2, $3}' "$T/pushes.log" 2>/dev/null; }
 # The stub gh: every argv is logged, and a close answers GitHub's own shape. SWEEPS resets the log between cases.
 # RED_BASE=1 answers a red completed check on every check-runs read (the base's own check, #786); otherwise the read is not a check-run list.
-printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *"/actions/runs/"*"/jobs"*) echo "{\\"total_count\\":1,\\"jobs\\":[{\\"conclusion\\":\\"failure\\",\\"steps\\":[{\\"name\\":\\"run\\"}]}]}";; *"/check-runs"*) if [ -n "${RED_BASE:-}" ]; then echo "{\\"check_runs\\":[{\\"id\\":1,\\"name\\":\\"check (3.11)\\",\\"status\\":\\"completed\\",\\"conclusion\\":\\"failure\\",\\"details_url\\":\\"https://github.com/x/y/actions/runs/7801/job/1\\"}]}"; else echo "{}"; fi;; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\nfor a in "$@"; do case "$a" in body=@*) cat "${a#body=@}" >> "%s/gh-bodies.log";; esac; done\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *"/actions/runs/"*"/jobs"*) echo "{\\"total_count\\":1,\\"jobs\\":[{\\"conclusion\\":\\"failure\\",\\"steps\\":[{\\"name\\":\\"run\\"}]}]}";; *"/check-runs"*) if [ -n "${RED_BASE:-}" ]; then echo "{\\"check_runs\\":[{\\"id\\":1,\\"name\\":\\"check (3.11)\\",\\"status\\":\\"completed\\",\\"conclusion\\":\\"failure\\",\\"details_url\\":\\"https://github.com/x/y/actions/runs/7801/job/1\\"}]}"; else echo "{}"; fi;; *) echo "{}";; esac\n' "$T" "$T" > "$T/bin/gh"
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The remote is a bare repository on this machine: the whole suite runs against it, never against GitHub.
 [ "$($O rev-parse --is-bare-repository)" = true ] && ok "the suite runs against a bare local remote" || ko "the remote is not a bare repository"
@@ -696,18 +696,49 @@ wait "$wpid" 2>/dev/null
 case "$r" in *"the fetch of"*"failed"*) ko "K8: the fetch failed beside a second writer: '$r'";; *) ok "K8: the fetched ref survives a second writer on the fixture";; esac
 [ -n "$($O rev-parse -q --verify refs/heads/noise-20)" ] && [ "$($O rev-parse dev)" != "$before" ] && ok "K8: the second writer's ref and the wave's landing both reached the fixture" || ko "K8: the concurrent write did not happen: '$($O for-each-ref --format='%(refname)' | tr '\n' ' ')'"
 
-# K4 (#663): a landing that failed on a cause the loop itself caused -- here the base battery is red and no child's own
-# suite names the cause -- counts no landing try and freezes nothing: it is named once per issue it carries as
-# WAVE-LOOP-CAUSED, and the wave stays to land on a later cycle. A real work failure still counts and freezes at the cap (K).
+# W1961 (#1961): a tip check that is red and names no child is a measured red, never the loop's cause. The first red on a
+# tree runs the same check once more on the same tree. A green rerun releases the red: the wave lands, and the flaky test is
+# filed as one bug, once per cause. A second red on the same tree with the same failing tests runs no third check until the
+# tip moves: it is a counted landing try, so SG_WAVE_LAND_TRIES and the owner's alert apply. A moved tip re-arms the check.
+# flaky <calls file> <reds>: a tip check that logs each call and is red, with one pytest failure line, on its first <reds> calls.
+flaky() { printf '%s\n' "n=\$(( \$(/usr/bin/grep -c . '$1' 2>/dev/null || echo 0) + 1 )); echo call >> '$1'; [ \$n -le $2 ] || exit 0; echo 'FAILED tests/test_flaky.py::test_flaky - assert 0'; exit 1"; }
+calls() { /usr/bin/grep -c . "$1" 2>/dev/null || echo 0; }
+flakybugs() { /usr/bin/grep -c 'POST repos/x/y/issues -f title=.*test_flaky' "$T/gh.log" 2>/dev/null || echo 0; }
+# a: red, then green on the same tree: the wave lands after two gate calls and files one bug with the failure lines.
+W161=wave/run-161; start2 run-161 >/dev/null; child 1611 g1611 "origin/$W161"; en2 run-161 1611 >/dev/null
+: > "$T/gh.log"; C161=$T/calls-161; rm -f "$C161"
+r=$(SG_WAVE_TIP_GATES="$(flaky "$C161" 1)" SG_WAVE_CHILD_GATES=true land2 run-161 2>&1); rc=$?
+[ $rc = 0 ] && $O cat-file -e dev:g1611 2>/dev/null && ok "W1961: a red tip that is green on its rerun lands" || ko "W1961: red then green: exit $rc: '$r'"
+[ "$(calls "$C161")" = 2 ] && ok "W1961: red then green runs the tip check twice" || ko "W1961: tip check calls: $(calls "$C161")"
+case "$r" in *"released by the green run on the same tree"*) ok "W1961: the landing names the green run on the same tree that released the red";; *) ko "W1961: no release record: '$r'";; esac
+[ "$(flakybugs)" = 1 ] && ok "W1961: the flake files one bug" || ko "W1961: flaky bugs filed: $(flakybugs): '$(cat "$T/gh.log")'"
+/usr/bin/grep -q 'FAILED tests/test_flaky.py::test_flaky - assert 0' "$T/gh-bodies.log" && ok "W1961: the bug carries the failure lines" || ko "W1961: no failure line in the bug: '$(cat "$T/gh-bodies.log" 2>/dev/null)'"
+# The same flaky test on another wave is the same cause: no second bug.
+W162=wave/run-162; start2 run-162 >/dev/null; child 1621 g1621 "origin/$W162"; en2 run-162 1621 >/dev/null
+C162=$T/calls-162; rm -f "$C162"
+r=$(SG_WAVE_TIP_GATES="$(flaky "$C162" 1)" SG_WAVE_CHILD_GATES=true land2 run-162 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(flakybugs)" = 1 ] && ok "W1961: the same flaky test files no second bug" || ko "W1961: second flake: exit $rc, bugs $(flakybugs): '$r'"
+# b: red twice on the same tree with the same failing test: no third call, a named hold, a counted try, and the owner's alert
+# at the cap. It is never the loop's cause.
 W16=wave/run-16; start2 run-16 >/dev/null; child 160 lg "origin/$W16"; en2 run-16 160 >/dev/null
-: > "$T/gh.log"; before=$($O rev-parse dev); lr=""; tr=""
-for i in 1 2 3; do r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_GATES=true land2 run-16); rc=$?; lr="$lr$rc "; tr="$tr$(tries 160 run-16)"; done
-[ "$lr" = "1 1 1 " ] && ok "K4: a loop-caused landing failure exits 1" || ko "K4: exits $lr: '$r'"
-case "$r" in *"WAVE-LOOP-CAUSED #160:"*"no child's own suite names the cause; not counted"*) ok "K4: the loop-caused failure is named once per issue";; *) ko "K4: no WAVE-LOOP-CAUSED line: '$r'";; esac
-[ -z "$tr" ] && ok "K4: three loop-caused failures count no landing try" || ko "K4: tries counted: '$tr'"
-/usr/bin/grep -q 'frozen:owner' "$T/gh.log" && ko "K4: a loop-caused failure froze the issue" || ok "K4: a loop-caused failure freezes nothing"
-[ -e "$T/st/auto/wave-run-16" ] && ok "K4: the run keeps its wave marker" || ko "K4: the wave marker is gone"
-[ "$($O rev-parse dev)" = "$before" ] && ok "K4: dev does not move on a loop-caused failure" || ko "K4: dev moved"
+: > "$T/gh.log"; before=$($O rev-parse dev); C16=$T/calls-16; rm -f "$C16"; lr=""; tr=""; cr=""; all=""
+for i in 1 2 3; do r=$(SG_WAVE_TIP_GATES="$(flaky "$C16" 99)" SG_WAVE_CHILD_GATES=true land2 run-16 2>&1); rc=$?; lr="$lr$rc "; tr="$tr$(tries 160 run-16) "; cr="$cr$(calls "$C16") "; all="$all$r"; done
+[ "$lr" = "1 1 1 " ] && ok "W1961: a tip red twice on the same tree does not land" || ko "W1961: exits $lr: '$r'"
+[ "$cr" = "2 2 2 " ] && ok "W1961: two reds on the same tree run no third check" || ko "W1961: tip check calls per pass: $cr"
+case "$all" in *"WAVE-LOOP-CAUSED"*) ko "W1961: a measured red was read as the loop's cause: '$all'";; *) ok "W1961: a measured red is never the loop's cause";; esac
+case "$all" in *"red twice on the same tree"*"held until the tip moves"*) ok "W1961: the second red names the hold";; *) ko "W1961: no hold named: '$all'";; esac
+[ "$tr" = "1 2 3 " ] && ok "W1961: each held pass counts a landing try" || ko "W1961: tries: '$tr'"
+/usr/bin/grep -q 'frozen:owner' "$T/gh.log" && case "$r" in *"WAVE NEEDS-HUMAN"*) true;; *) false;; esac && ok "W1961: the hold reaches the owner at the cap" || ko "W1961: no owner alert: '$r'"
+[ "$($O rev-parse dev)" = "$before" ] && ok "W1961: dev does not move on a measured red" || ko "W1961: dev moved"
+# c: a moved tip re-arms the check: the next pass runs it again.
+W163=wave/run-163; start2 run-163 >/dev/null; child 1631 g1631 "origin/$W163"; en2 run-163 1631 >/dev/null
+C163=$T/calls-163; rm -f "$C163"
+for i in 1 2; do r=$(SG_WAVE_LAND_TRIES=9 SG_WAVE_TIP_GATES="$(flaky "$C163" 99)" SG_WAVE_CHILD_GATES=true land2 run-163 2>&1); done
+c0=$(calls "$C163")
+rm -rf "$T/w163"; $G clone -q "$T/origin.git" "$T/w163" 2>/dev/null
+(cd "$T/w163" && $G checkout -q dev && echo m163 > m163 && $G add m163 && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves under run-163" && $G push -q origin HEAD:dev)
+r=$(SG_WAVE_LAND_TRIES=9 SG_WAVE_TIP_GATES="$(flaky "$C163" 99)" SG_WAVE_CHILD_GATES=true land2 run-163 2>&1); rc=$?
+[ "$c0" = 2 ] && [ "$(calls "$C163")" = 4 ] && ok "W1961: a moved tip re-arms the check" || ko "W1961: calls before the move $c0, after $(calls "$C163"): '$r'"
 
 # K5 (#1684): the words a full gate budget really carries are the loop's cause. The capacity answer names "caps.gates is full",
 # and read as the child's defect it counted a failed dispatch and froze the issue after three, though the child did its work.
