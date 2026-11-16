@@ -43,8 +43,20 @@ def _folders(root, stamps):
     return made
 
 
+class _Noon:
+    """A clock frozen at this local day's noon (#1899): `time()` and an argument-less `localtime()` answer the frozen
+    instant, and every other `time` call is the module's own. A test of a day bucket may not sit near the day's edge, or
+    the same fixtures land on either side of midnight depending on when the runner starts."""
+    def __init__(self, at): self._at = at
+    def time(self): return self._at
+    def localtime(self, t=None): return time.localtime(self._at if t is None else t)
+    def __getattr__(self, name): return getattr(time, name)
+
+
 def test_the_status_spend_counts_today_alone_and_agrees_with_the_cost_chart(hub, tmp_path, monkeypatch):
-    now = time.time()
+    day_start = time.mktime(time.strptime(time.strftime("%Y%m%d", time.localtime()), "%Y%m%d"))
+    now = day_start + 12 * 3600   # noon of this local day: every fixture below is inside one day by construction
+    monkeypatch.setattr(hub, "time", _Noon(now))
     today = time.strftime("%Y%m%d", time.localtime(now))
     yday = time.strftime("%Y%m%d", time.localtime(now - DAY))
     week = time.strftime("%Y%m%d", time.localtime(now - 7 * DAY))
