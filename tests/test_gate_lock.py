@@ -159,7 +159,7 @@ def wave_runner(tmp_path):
     (st / "review-gui_1.md").write_text("VERDICT: APPROVE\n")
     (st / "review-gui_1.sha").write_text(sha + "\n")
     (st / "review-gui_1.base").write_text("wave/run-1\n")
-    env = _env(st) | POLL | {"SG_WAVE_GATES": f"echo gate >> {marker}; exit 1"}
+    env = _env(st) | POLL | {"SG_WAVE_GATES": f"echo gate >> {marker}; exit 1", "SG_WAVE_ENTRY_GATE": "on"}   # the entry gate is off by default (SPEC 1797)
     return (["bash", str(d / "wave.sh"), "enter", "run-1", "1"], child, env, st, f"test -e {marker}", marker)
 
 
