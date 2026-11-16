@@ -2886,7 +2886,7 @@ def test_the_wall_view_reads_the_state_folder_files_into_the_one_fold(served):
     mod, _, _, state = served
     state.mkdir(parents=True, exist_ok=True)
     (state / "steps.tsv").write_text("\n".join(step_lines(
-        ("c", "janitor", NOW - 100, NOW - 70, "done", "0"), ("r", "promote", NOW - 42, None, "", ""))) + "\n")
+        ("c", "janitor", int(NOW) - 100, int(NOW) - 70, "done", "0"), ("r", "promote", int(NOW) - 42, None, "", ""))) + "\n")
     (state / "gate-history").write_text(gate_line(NOW - 20, NOW - 30, outcome="pass") + "\n")
     out = mod.wall_view(600, NOW)
     assert [r["name"] for r in out["slow"]] == ["janitor"] and out["slow"][0]["total_s"] == 30.0
