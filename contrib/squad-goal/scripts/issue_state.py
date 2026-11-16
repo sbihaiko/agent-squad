@@ -491,18 +491,18 @@ class BoardBinding:
         return 0
 
     def priority_field(self):
-        """The Priority single-select field: `{"id"}`, the field's id, empty when the board carries none (#1977).
-        Only a found id is cached a day, so a field added to the board is read at the next call."""
+        """The Priority single-select field: `{"id", "opt"}`, the field's id and its option ids by name, empty when the board
+        carries none (#1977). Only a found id is cached a day, so a field added to the board is read at the next call."""
         def read_field():
             fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
             f = next((x for x in fs if isinstance(x, dict) and x.get("name") == PRIORITY), None) if isinstance(fs, list) else None
             if f and f.get("dataType") != "SINGLE_SELECT": raise RuntimeError(f"{PRIORITY!r} field is not a single select")
-            return {"id": f["id"] if f else ""}
+            return {"id": f["id"] if f else "", "opt": {self._text(o["name"]): o["id"] for o in (f or {}).get("options", [])}}
         cache = self.st / f"rest-priority-field-{self.owner}-{self.project}.json"
         try:
             if time.time() - cache.stat().st_mtime < 86400:
                 d = json.loads(cache.read_text())
-                if d.get("id"): return d
+                if d.get("id") and "opt" in d: return d
         except (OSError, ValueError): pass
         d = read_field()
         if d["id"]: cache.write_text(json.dumps(d))
@@ -522,6 +522,20 @@ class BoardBinding:
             n = n.strip()
             if n.isdigit() and p and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = p
         return m
+
+    def open_issue_labels(self):
+        """{issue: [label names]} for each open issue of the repository, in ONE REST read. A pull request is no card."""
+        out = self.api("--paginate", f"repos/{self.repo}/issues?state=open&per_page=100", "--jq",
+                       '.[]|select(.pull_request|not)|[.number,[.labels[].name]]|@json')
+        return {str(n): labels for n, labels in (json.loads(l) for l in out.splitlines() if l.strip())}
+
+    def write_priority(self, item_id, name):
+        """One PATCH of the Priority field to the option `name`. The option id is the field's, never the name.
+        The read that proves it is the seam's."""
+        field = self.priority_field()
+        if name not in field["opt"]: raise RuntimeError(f"no {PRIORITY!r} option {name!r} on the board")
+        self.api("-X", "PATCH", f"{self.base}/items/{item_id}", "--input", "-",
+                 inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][name]}]}))
 
     def write_gate_tries(self, issue, count):
         """One PATCH of the Gate Tries number. The read that proves it is the seam's (ADR-0144, ADR-0170)."""
@@ -1100,6 +1114,10 @@ def main(argv):
         if missing:
             print("UNREAD\t" + ",".join(missing))
             if os.environ.get("SG_STATE"): _name_unread(os.environ["SG_STATE"], missing, state.unanswered)
+        return 0
+    if args[:1] == ["--backfill-priority"]:
+        import priority_backfill
+        for n, p in priority_backfill.backfill(board_state(repo=repo).binding).items(): print(f"{n}\t{p}")
         return 0
     if args[:1] == ["--kinds"]:
         cached = _fresh_hub_items(repo=repo)
