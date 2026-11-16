@@ -140,8 +140,8 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="bash $T/base.sh" bash "$d
 [ $rc -ne 0 ] && ok "a base that does not resolve fails the gate: it is never skipped" || ko "unresolved base: rc $rc: $out"
 # The wave entry gate defaults to the fast gate, so a child's own changed scripts are proven before it enters.
 /usr/bin/grep -q 'SG_WAVE_GATES:=.*fast-gate\.sh' "$d/env.sh" && ok "the default wave entry gate is the fast gate" || ko "env.sh: the default SG_WAVE_GATES does not run fast-gate.sh"
-# The wave entry's own battery is on by default (#1800): a profile turns it off, and the entry then skips it.
-/usr/bin/grep -q 'SG_WAVE_ENTRY_GATE:=on' "$d/env.sh" && ok "the wave entry battery is on by default" || ko "env.sh: SG_WAVE_ENTRY_GATE does not default to on"
+# The wave entry's own battery is off by default (#1802): the wave's landing gate proves every child, and a profile turns it on.
+/usr/bin/grep -q 'SG_WAVE_ENTRY_GATE:=off' "$d/env.sh" && ok "the wave entry battery is off by default" || ko "env.sh: SG_WAVE_ENTRY_GATE does not default to off"
 
 # (#566) The default battery is the loop's one definition (base-battery.sh), and its pytest runs with a bounded worker count,
 # SG_GATE_WORKERS_CHILD, instead of `auto`. A stub python logs the argv of each leg: the count is set here, so this suite
