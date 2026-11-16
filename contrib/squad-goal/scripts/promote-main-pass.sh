@@ -24,8 +24,11 @@
 #                    it, and a recorded bug that is closed gives a new one. The hold time and the red sha are recorded.
 #        unproven    cancelled, timed out, never started, or past the flight bound: main stays, no bug, one alerts.log
 #                    line per tip that names the cause. The hold time is recorded.
-#   3. R is empty and the rule fires: main must be an ancestor of the stg tip (else one alert per main sha), and the tip
-#      must not be the sha of the last red verdict; then promote-stg.sh opens or reuses the pull request, removes the
+#   3. R is empty: main must be an ancestor of the stg tip (else one alert per main sha), and the tip must not be the sha of
+#      the last red verdict; neither hold yields to a later green run. Then a stg tip whose own complete tier has already
+#      completed green is promoted at once, with no wait for the window: the window names a tip so a burst earns one
+#      request, and it never blocks a tip whose proof is already in, whichever rule opened the read; the request record is
+#      a convenience, never the proof (ADR-0164). Otherwise promote-stg.sh opens or reuses the pull request, removes the
 #      label, sends it, and writes R only after the label is accepted.
 # The rule reads the first-parent chain of stg by committer date, with no local record:
 #   quiet    now - committer date of the stg tip >= SG_PROMOTE_MAIN_QUIET_S (300)
@@ -206,9 +209,25 @@ fi
 # 3. No request is open: the rule decides, on the first-parent chain of stg alone. A work commit a merge brought in is not
 # on that chain, so an old work commit never fires the ceiling by itself.
 [ "$names" = "[]" ] && exit 0
+# tier_green <sha>: true when every complete-tier job of the sha has a completed, non-skipped, green run. It reads one row
+# per name the way the dev pass does (promote-pass.sh ci_tier_green, one rule for the same check runs): the newest completed
+# run that is not a skip answers for the name, and a name with no such run, or a last one that is not success, is no proof.
+tier_green() {
+  local cr
+  cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=all" 2>/dev/null) || return 1
+  printf '%s' "$cr" | jq -e --argjson names "$names" '
+    .check_runs as $r
+    | [ $names[] as $n
+        | ([$r[] | select(.name == $n) | select(.status == "completed") | select(.conclusion != "skipped")] | sort_by(.id) | last) as $l
+        | select(($l == null) or ($l.conclusion != "success"))
+        | $n ] | length == 0
+  ' >/dev/null 2>&1
+}
 oldest=$(g rev-list --first-parent "origin/$main..origin/$stg" | tail -n 1); [ -n "$oldest" ] || exit 0
 tage=$(( now - $(g show -s --format=%ct "$stip") )); oage=$(( now - $(g show -s --format=%ct "$oldest") ))
-{ [ "$tage" -ge "$quiet" ] || [ "$oage" -ge "$ceiling" ]; } || exit 0
+win=0; { [ "$tage" -ge "$quiet" ] || [ "$oage" -ge "$ceiling" ]; } && win=1
+green=-1   # not read yet: a closed window needs the proof to open, and an open one still reads it for the move below
+[ "$win" = 1 ] || { tier_green "$stip" && green=1 || exit 0; }
 hraw=$(cat "$hold" 2>/dev/null); h=$(secs "${hraw%%[!0-9]*}" 0)
 if [ $(( now - h )) -lt "$rearm" ]; then   # a red, an unproven verdict or a refused move re-arms only after its own wait
   # A red's hold names the sha it measured (#1889): it stops applying as soon as the stg tip is another sha, and the quiet
@@ -220,8 +239,26 @@ if ! g merge-base --is-ancestor "$mtip" "$stip"; then
   alert_once "diverged-${mtip:0:12}" "$main at ${mtip:0:9} is not an ancestor of $stg at ${stip:0:9}: $main holds work $stg lacks, so no complete tier is requested; the owner resolves it"
   exit 0
 fi
+# The red verdict and the diverged main hold whatever a later run of the same sha says: they are read before the move below.
 red=$(cat "$redrec" 2>/dev/null)
 [ -n "$red" ] && [ "$red" = "$stip" ] && exit 0   # the tip of the last red verdict is not asked twice: a new tip is needed
+[ "$green" = -1 ] && { tier_green "$stip" && green=1 || green=0; }
+if [ "$green" = 1 ]; then
+  # The event is the trigger and this pass is its reader: the complete tier of the tip already ended green, so main takes
+  # the tip now instead of requesting a second run for it, whichever rule opened the read (ADR-0164).
+  o=$(SG_MAIN_BRANCH=$main SG_STG_BRANCH=$stg bash "$d/promote-main.sh" "$stip" 2>&1); rc=$?
+  if [ $rc = 3 ]; then   # the credential is out of this process's reach (#1896): no hold, the next pass that reaches it moves main
+    alert_once credential "$stip: the complete tier is green and $main did not move: $(printf '%s' "$o" | tail -1)"
+    say "$stip not promoted: $(printf '%s' "$o" | tail -1)"; exit 3
+  fi
+  if [ $rc = 0 ]; then
+    rm -f "$bugrec" "$hold" "$redrec"
+    say "$stip promoted: the complete tier is green on the $stg tip, $main is at ${stip:0:9}"; exit 0
+  fi
+  held
+  alert_once "refused-tip-${stip:0:12}" "the complete tier is green on the $stg tip ${stip:0:9} and $main did not move: $(printf '%s' "$o" | tail -1)"
+  say "$stip not promoted: $(printf '%s' "$o" | tail -1)"; exit 1
+fi
 # The pull request route is promote-stg.sh's alone. It compares the last red sha with the head sha the pull request answers,
 # so a tip that moved under this read is still never asked twice, and it writes R only after the label is accepted.
 o=$(SG_PROMOTE_OPEN_ONLY=1 SG_PROMOTE_OPEN_HEAD=$stg SG_PROMOTE_OPEN_BASE=$main SG_PROMOTE_OPEN_LABEL=promote \

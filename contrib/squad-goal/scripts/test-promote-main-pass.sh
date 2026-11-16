@@ -175,13 +175,54 @@ realign; adv stg stuck 7200; q=$(tip stg); request "$q" 3700; checks "$q" queued
 
 # 2) Neither rule: a fresh tip with a young chain is not requested.
 realign; adv stg young-a 3000; adv stg young-b 10; : > "$T/gh.log"; pass
-[ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "2 a fresh tip on a young chain is not requested" || ko "2 fired early: $(cat "$T/gh.log")"
+[ -z "$(req)" ] && [ "$(ghn 'labels')" = 0 ] && [ "$(ghn 'X POST repos/x/emu/pulls')" = 0 ] && ok "2 a fresh tip on a young chain is not requested" \
+  || ko "2 fired early: $(cat "$T/gh.log")"
+# 31) A tip whose complete tier has already completed green is promotable at once: the quiet window names a tip so a burst
+# earns one request, and it never blocks a tip whose proof is already in (ADR-0164). The request record is not the proof;
+# the check runs of the tip are, so a request whose record was lost still promotes on the evidence it left.
+realign; adv stg tip-green 300; g27=$(tip stg); m27=$(tip main); checks "$g27" success success; : > "$T/gh.log"; pass; rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$g27" ] && ok "31 a green complete tier on a young tip moves main at once, inside the quiet window" \
+  || ko "31 tip green: rc $rc, main $(tip main), stg tip $g27, out '$(cat "$T/out")'"
+[ -z "$(req)" ] && ok "31 a tip whose proof is already in records no request" || ko "31 record '$(req)'"
+[ ! -e "$T/merges" ] && ok "31 the promote-at-once path never merges the pull request" || ko "31 the pull request was merged"
+# A young tip whose tier has not reported is not promoted: the window still names the tip before a tier is requested.
+realign; adv stg tip-pending 300; g27p=$(tip stg); m27p=$(tip main); checks "$g27p" in_progress in_progress; : > "$T/gh.log"; pass
+[ "$(tip main)" = "$m27p" ] && [ -z "$(req)" ] && ok "31 a young tip whose tier is in flight is not promoted and not requested" \
+  || ko "31 tip pending: main $(tip main), record '$(req)', out '$(cat "$T/out")'"
+# 32) A green tier never overrides a hold: a sha a completed tier already proved red is not promoted because a later run of
+# the same sha ended green, and a green tier on a diverged main moves nothing.
+realign; adv stg red-then-green 300; r28=$(tip stg); m28=$(tip main); request "$r28" 600; checks "$r28" failure success; pass
+[ "$(cat "$ST/promote-main-red" 2>/dev/null)" = "$r28" ] && [ "$(tip main)" = "$m28" ] && ok "32 the red tier records the red sha and holds main" \
+  || ko "32 red first: red '$(cat "$ST/promote-main-red" 2>/dev/null)', main $(tip main)"
+checks "$r28" success success; old_hold; pass; rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$m28" ] && [ "$(cat "$ST/promote-main-red" 2>/dev/null)" = "$r28" ] && ok "32 a green run after a red verdict moves nothing" \
+  || ko "32 red then green: rc $rc, main $(tip main), red '$(cat "$ST/promote-main-red" 2>/dev/null)', out '$(cat "$T/out")'"
+rm -f "$T"/issue-*.state "$T/issues" "$T/comments"   # the red case leaves a bug behind: the later cases read none
+realign; adv stg div-green 300; dg=$(tip stg); adv main div-main 300; dgm=$(tip main); checks "$dg" success success; : > "$T/gh.log"; pass; rc=$?
+[ "$(tip main)" = "$dgm" ] && [ -z "$(req)" ] && ok "32 a green tier on a diverged main moves nothing" \
+  || ko "32 diverged green: main $(tip main), record '$(req)', out '$(cat "$T/out")'"
+/usr/bin/grep -q "not an ancestor" "$ST/alerts.log" && ok "32 the diverged main is named before any green tier promotes" \
+  || ko "32 no diverged alert: $(cat "$ST/alerts.log" 2>/dev/null)"
+# 33) The window names a tip and never holds a proof already in, whichever rule opened the read: a tip past the ceiling whose
+# complete tier has completed green is promoted at once instead of asking for a second run.
+realign; adv stg ceil-green-a 18000; adv stg ceil-green-b 10; cg=$(tip stg); cm=$(tip main); checks "$cg" success success; : > "$T/gh.log"; pass; rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$cg" ] && [ -z "$(req)" ] && [ "$(ghn 'labels')" = 0 ] && ok "33 a green tier past the ceiling is promoted at once, with no label" \
+  || ko "33 ceiling green: rc $rc, main $(tip main), record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+# 34) The tier is read as the dev pass reads it: the newest completed, non-skipped run of a name answers, so a re-run started
+# on the same sha does not hide the green run behind it.
+realign; adv stg tip-rerun 300; rr=$(tip stg); rm0=$(tip main); tse=$(iso $(( $(date +%s) - 60 )))
+printf '{"check_runs":[{"id":1,"name":"full-xdist","status":"completed","conclusion":"success","started_at":"%s"},{"id":2,"name":"full-xdist","status":"in_progress","conclusion":null,"started_at":"%s"},{"id":1,"name":"gui-e2e","status":"completed","conclusion":"success","started_at":"%s"}]}\n' "$tse" "$tse" "$tse" > "$T/checks-$rr.json"
+: > "$T/gh.log"; pass; rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$rr" ] && ok "34 a completed green run behind a newer open run still proves the tip" \
+  || ko "30 rerun: rc $rc, main $(tip main), record '$(req)', out '$(cat "$T/out")'"
+
 # 3) Ceiling: the oldest first-parent commit main lacks is past the ceiling, so a stg that keeps moving is still requested.
 realign; adv stg ceil-a 18000; adv stg ceil-b 10; pass
 [ "$(req)" = "$(tip stg)" ] && ok "3 the ceiling fires on a stg that keeps moving" || ko "3 ceiling: record '$(req)', out '$(cat "$T/out")'"
 # 4) A work commit older than the ceiling is not on the first-parent chain, so it fires nothing by itself.
 realign; merged promo 10 20000; : > "$T/gh.log"; pass
-[ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "4 an old work commit behind a fresh merge fires nothing" || ko "4 an old work commit fired: $(cat "$T/gh.log")"
+[ -z "$(req)" ] && [ "$(ghn 'labels')" = 0 ] && [ "$(ghn 'X POST repos/x/emu/pulls')" = 0 ] && ok "4 an old work commit behind a fresh merge fires nothing" \
+  || ko "4 an old work commit fired: $(cat "$T/gh.log")"
 
 # 14) main is not an ancestor of stg: nothing is requested, and one alert names it per main sha.
 realign; adv stg div-stg 7200; adv main div-main 7200; : > "$T/gh.log"; pass; pass
@@ -247,7 +288,8 @@ realign; adv stg short-quiet 700; s25=$(tip stg); : > "$T/gh.log"; passq; rc=$?
 [ $rc = 0 ] && [ "$(req)" = "$s25" ] && /usr/bin/grep -q "X POST repos/x/emu/issues/31/labels .*labels\[\]=promote" "$T/gh.log" \
   && ok "25 a tip quiet 700 s sends the label under the 300 s default window" || ko "25 700 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
 realign; adv stg still-moving 200; : > "$T/gh.log"; passq; rc=$?
-[ $rc = 0 ] && [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "25 a tip quiet 200 s is not requested under the 300 s default window" || ko "25 200 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
+[ $rc = 0 ] && [ -z "$(req)" ] && [ "$(ghn 'labels')" = 0 ] && [ "$(ghn 'X POST repos/x/emu/pulls')" = 0 ] \
+  && ok "25 a tip quiet 200 s is not requested under the 300 s default window" || ko "25 200 s: rc $rc, record '$(req)', gh '$(cat "$T/gh.log")', out '$(cat "$T/out")'"
 # 26) A red hold names the sha it measured, never the branch (#1889). A red on A holds main; a new stg tip B is not held
 # by a verdict about content no job ran, so the quiet window alone gates the request on B. While stg still holds A, the
 # pass waits.
