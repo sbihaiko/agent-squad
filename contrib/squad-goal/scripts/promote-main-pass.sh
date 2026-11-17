@@ -65,7 +65,7 @@ alert_once() {  # <key> <text>: one alerts.log line per key
 held() {  # [<sha>]: the hold time, and the sha a red measured; an unproven or refused-move hold names no sha
   local t; t=$(date +%s)
   if [ -n "${1:-}" ]; then put "$hold" "$(printf '%s\t%s' "$t" "$1")"; else put "$hold" "$t"; fi; }
-. "$d/ghcall.sh"; . "$d/basecheck.sh"
+. "$d/ghcall.sh"; . "$d/basecheck.sh"; . "$d/mainproof.sh"
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$main:refs/remotes/origin/$main" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) \
@@ -81,6 +81,10 @@ case "${SG_CI_WORKFLOW:-}" in
 esac
 names=$(bash "$d/promote-pass.sh" --ci-complete-job-names "$ci_file" 2>/dev/null | jq -Rnc '[inputs | select(. != "")]' 2>/dev/null)
 names=${names:-[]}
+# The one unproven set (promote-pass.sh --ci-unproven-conclusions), resolved here beside the names: the pass reads its rows
+# with these two facts, so a run the pass calls unproven is a run the workflow's guard starts the tier over.
+unp=$(bash "$d/promote-pass.sh" --ci-unproven-conclusions | jq -Rnc '[inputs | select(. != "")]' 2>/dev/null)
+unp=${unp:-[]}
 if [ "$names" = "[]" ]; then
   alert_once nonames "$ci_file names no complete tier job, so nothing proves $stg: $main stays where it is, and the owner moves it"
 fi
@@ -93,9 +97,6 @@ if [ -n "${R:-}" ]; then
   # says that red was already answered: the bug was filed or commented on, and the hold written, so this pass clears the
   # request alone and never comments on the same sha a second time.
   if [ "$(cat "$redrec" 2>/dev/null)" = "$R" ]; then rm -f "$rec"; say "$R red already answered: the request is cleared"; exit 0; fi
-  # The one unproven set (promote-pass.sh --ci-unproven-conclusions): the workflow's guard reads the same one, so a run the
-  # pass calls unproven is a run the guard starts the tier over.
-  unp=$(bash "$d/promote-pass.sh" --ci-unproven-conclusions | jq -Rnc '[inputs | select(. != "")]')
   v=flight; why="its check runs are not read"
   cr=
   [ "$names" = "[]" ] || cr=$(gh_api "repos/$SG_REPO/commits/$R/check-runs?per_page=100&filter=all") || cr=
@@ -211,19 +212,20 @@ fi
 # 3. No request is open: the rule decides, on the first-parent chain of stg alone. A work commit a merge brought in is not
 # on that chain, so an old work commit never fires the ceiling by itself.
 [ "$names" = "[]" ] && exit 0
-# tier_green <sha>: true when every complete-tier job of the sha has a completed, non-skipped, green run. It reads one row
-# per name the way the dev pass does (promote-pass.sh ci_tier_green, one rule for the same check runs): the newest completed
-# run that is not a skip answers for the name, and a name with no such run, or a last one that is not success, is no proof.
+# tier_green <sha>: true when every complete-tier job of the sha has a completed, non-skipped, green run. It reads the rows
+# through sg_check_run_rows (mainproof.sh) with the names and the unproven set this pass already resolved (#2039): the pass
+# and promote-main.sh, which proves a named sha, share the one row rule and never a second name resolution, so they cannot
+# disagree about which jobs the tier is. The newest completed run that is not a skip answers for the name, and a name with no
+# such run, or a last one that is not success, is no proof. On a false answer, $tier_why names each job that is not green, or
+# the reader's own reason when it could not read the runs, so a caller never reports a bare failure.
+tier_why=
 tier_green() {
-  local cr
-  cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=all" 2>/dev/null) || return 1
-  printf '%s' "$cr" | jq -e --argjson names "$names" '
-    .check_runs as $r
-    | [ $names[] as $n
-        | ([$r[] | select(.name == $n) | select(.status == "completed") | select(.conclusion != "skipped")] | sort_by(.id) | last) as $l
-        | select(($l == null) or ($l.conclusion != "success"))
-        | $n ] | length == 0
-  ' >/dev/null 2>&1
+  local rows rc
+  tier_why=
+  rows=$(sg_check_run_rows "$1" "$names" "$unp" 2>/dev/null); rc=$?
+  if [ "$rc" != 0 ]; then tier_why=${rows:-the complete tier rows of $1 could not be read}; return 1; fi
+  tier_why=$(printf '%s\n' "$rows" | awk -F'\t' 'NF && $2 != "green" { printf "%s%s (%s%s)", sep, $1, $2, ($3 != "" ? " " $3 : ""); sep = ", " }')
+  [ -z "$tier_why" ]
 }
 oldest=$(g rev-list --first-parent "origin/$main..origin/$stg" | tail -n 1); [ -n "$oldest" ] || exit 0
 tage=$(( now - $(g show -s --format=%ct "$stip") )); oage=$(( now - $(g show -s --format=%ct "$oldest") ))
@@ -266,5 +268,6 @@ fi
 o=$(SG_PROMOTE_OPEN_ONLY=1 SG_PROMOTE_OPEN_HEAD=$stg SG_PROMOTE_OPEN_BASE=$main SG_PROMOTE_OPEN_LABEL=promote \
   SG_PROMOTE_OPEN_RECORD=${rec##*/} SG_PROMOTE_OPEN_SKIP=$red bash "$d/promote-stg.sh" 2>&1); rc=$?
 if [ $rc != 0 ]; then say "$stip not requested: $(printf '%s' "$o" | tail -1)"; exit 1; fi
-[ -s "$rec" ] && say "$(cut -f1 "$rec") requested: the complete tier on the $stg tip ($([ "$tage" -ge "$quiet" ] && echo "quiet ${tage}s" || echo "ceiling ${oage}s"))"
+tierwhy=; [ -n "$tier_why" ] && tierwhy=", its own complete tier holds the direct move: $tier_why"
+[ -s "$rec" ] && say "$(cut -f1 "$rec") requested: the complete tier on the $stg tip ($([ "$tage" -ge "$quiet" ] && echo "quiet ${tage}s" || echo "ceiling ${oage}s"))$tierwhy"
 exit 0

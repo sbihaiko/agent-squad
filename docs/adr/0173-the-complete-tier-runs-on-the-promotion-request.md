@@ -43,6 +43,7 @@ window of the dev-to-stg step. A profile that promotes nothing makes it exit at 
 - **Green.** Every complete-tier job of the recorded sha is green: `promote-main.sh <sha>` moves `main` to that sha by a
   fast-forward. `stg` may already be ahead; `main` takes the proven sha and never the tip. The pull request is never
   merged, so `main` takes no merge commit, and `promote-stg.sh` refuses its merge route when the base is the main branch.
+  The script proves the sha itself before it pushes, through the pass's own reader: it trusts no caller.
 - **Red.** A job ran a step and failed. `main` stays. The pass keeps one open bug: it files it with `bug` and
   `ready-for-agent`, never as a loop defect, or comments on the open one. It records the hold time and the red sha. A red
   sha is never asked again; a new `stg` tip is needed.
@@ -52,7 +53,14 @@ window of the dev-to-stg step. A profile that promotes nothing makes it exit at 
 - **Done.** When `main` holds the `stg` tip, the pass clears the request and does nothing.
 
 `promote-main.sh <sha>` refuses a sha that is not on the first-parent chain of `stg`, and a sha `main` is not an ancestor
-of. With no argument it moves `main` to the `stg` tip, which is the owner's command.
+of. It reads the sha's complete-tier check runs before it pushes, through the one reader `mainproof.sh`, which the pass
+also uses. The move is refused, with the missing, red or unproven job named, unless every job is green. A read that fails
+proves nothing and holds `main` the same way. The reader takes the tier's job names from the pass's one resolver, and the
+pass hands its own resolved names and unproven set to the same row rule, so the pass names the tier once and neither reader
+re-derives it. A run that names no checkout reads the workflow of the tree the script lives in, so the owner's hand command
+needs no environment; a workflow file that cannot be read refuses the move and names its path. `SG_PROMOTE_UNPROVEN=owner`
+is the only override, and the script prints the line that says it used it. With no argument it moves `main` to the `stg`
+tip, which is the owner's command, and reads no tier.
 
 ## Settings
 
@@ -62,5 +70,6 @@ adds its wait to every promotion and holds `main` longer, so the saving never pa
 `SG_STG_BRANCH` name the pair; no script names a branch as a literal.
 
 Guard: `tests/test_tooling.py`, `contrib/squad-goal/scripts/test-promote-main-pass.sh`,
+`contrib/squad-goal/scripts/test-promote-main-proof.sh`,
 `contrib/squad-goal/scripts/test-promote.sh`, `contrib/squad-goal/scripts/test-promote-branch.sh`,
 `contrib/squad-goal/scripts/test-watch-cycle.sh`.
