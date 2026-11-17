@@ -14,6 +14,7 @@
 #profload{margin:0 0 18px}#profload .lsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 6px}#profload h3{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
 #profload svg{display:block;width:100%;height:120px}#profload .plg{fill:var(--edge)}#profload .pll{fill:none;stroke:var(--acc);stroke-width:1.5;vector-effect:non-scaling-stroke}#profload .pld{fill:var(--acc)}
 #profload .plc{stroke:var(--mute);stroke-width:1;stroke-dasharray:4 4;vector-effect:non-scaling-stroke}
+#profload .plct{fill:var(--mute);font-size:var(--fs-caption);letter-spacing:.04em;text-transform:uppercase}
 #proftrip .ptk.ptk-none{background:none;box-shadow:inset 0 0 0 1px currentColor}
 #proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#proftt th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#proftt th:first-child{text-align:left}#proftt td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#proftt td:first-child{text-align:left}
 #profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}

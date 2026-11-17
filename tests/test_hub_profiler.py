@@ -960,7 +960,7 @@ def test_the_entry_stands_before_settings_on_the_mobile_page():
 
 def test_the_page_polls_only_while_the_tab_shows_and_the_switch_is_on():
     src = page()
-    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\+"&ww="\+wallWin\)', src), "the read carries the profiler and the wall-time window"
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', src), "the read carries the profiler's window"
     assert re.search(r'fetch\("/api/profiler",\{method:"POST"', src)
     assert re.search(r'^const profDue=\(tab,hidden,v\)=>tab==="prof"&&!hidden&&!!v&&v\.on;', src, re.M)
 
@@ -2716,6 +2716,8 @@ def test_the_machine_load_line_stands_above_the_trip_bar_with_the_core_reference
     part = load_part(out)
     assert "class=pll" in part and "class=pld" in part, "the line joins its records and a lone record is a dot"
     assert re.search(r'class=plc[^>]*>[^<]*<title>[^<]*8 cores', part), "the core count is the reference line"
+    assert re.search(r'class=plct[^>]*>saturation &middot; 8 cores<', part), "one horizontal line names saturation, as the owner asked"
+    assert "the dashed line is saturation at 8 cores" in part, "the caption says what the line is"
     assert re.search(r'title="[^"]*no load record', part), "a gap names its reason"
     assert "Peak 9.50" in part and "with no load record" in part
 
@@ -3269,35 +3271,19 @@ WALL = {"window_s": 3600, "since": W0 - 3600, "label": "1 hour", "cycle": {"n": 
 WALL_WINDOWS = [{"s": 600, "label": "10 minutes"}, {"s": 3600, "label": "1 hour"}, {"s": 86400, "label": "24 hours"}]
 
 
-def test_the_wall_view_puts_the_slow_cycle_time_at_its_top_with_its_median_and_p90():
+def test_the_wall_view_is_gone_from_the_page():
+    """The owner removed the wall-time panel: it read as noise over the trip bar and the hot spots."""
     part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS, 'trip': TRIP})},new Set())")
-    assert "id=profwall" in part, "the wall-time view is drawn"
-    assert part.index("id=profwall") < part.index("id=proftrip"), "the wall-time view stands above the trip bar"
-    head = part[part.index("id=profwall"):part.index("janitor")]
-    assert "1.5 min" in head and "2.0 min" in head, "the slow cycle's median and p90 stand before the rows"
+    assert "id=profwall" not in part, "the wall-time panel is not drawn"
+    assert "Wall time of each step" not in part, "its title is gone with it"
+    assert "data-wall" not in part, "no window control of it stays"
+    assert "id=proftrip" in part, "the trip bar still stands"
 
 
-def test_the_wall_view_draws_each_lane_step_and_a_running_step_with_its_age():
-    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
-    assert part.index("janitor") < part.index("childcc"), "the slow lane's rows stand before the fast lane's"
-    assert "promote" in part and "42.00 s" in part, "a step still running shows its age"
-    assert "running" in part, "a running step is named as running"
-
-
-def test_the_wall_view_draws_each_gate_row_with_its_mean_load_at_start_and_finish():
-    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
-    assert "2.00" in part and "2.50" in part, "the gate row carries its mean load at the start and at the finish"
-
-
-def test_the_wall_view_offers_its_three_windows_and_marks_the_chosen_one():
-    part = run_js(f"profHtml({json.dumps({**VIEW, 'wall': WALL, 'wall_windows': WALL_WINDOWS})},new Set())")
-    for s in (600, 3600, 86400):
-        assert f'data-wall="{s}"' in part, "each window the page offers is a control"
-    assert 'data-wall="3600" aria-pressed=true' in part, "the window the view folded is the one pressed"
-
-
-def test_the_loop_tab_polls_with_the_wall_window_it_chose():
-    assert "ww=" in page() and "wallWin" in page(), "the poll names the wall window, so the page's choice reaches the hub"
+def test_the_loop_tab_polls_without_the_wall_window():
+    js = (SCRIPTS / "hub-profiler.js").read_text()
+    assert "wallWin" not in js and "profWall" not in js, "the page names no wall window: the panel is gone"
+    assert re.search(r'fetch\("/api/profiler\?w="\+profWin\)', js), "the poll carries the profiler's window alone"
 
 
 def test_the_gate_row_names_the_runner_and_the_ci_run_id(prof):
