@@ -571,6 +571,13 @@ for r in names:
         if nums and all(issue_read(x)[0] == "closed" for x in nums):
             say(f"CLOSED-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is closed; dropped from active-runs")
             continue
+        # #2138: a run whose verdict is final is over. Its line stays only while a wave stands for it (that wave still lands
+        # its children) or a live process or lease names it. Nothing else reads the line, and a line the loop counts as live
+        # work holds the child room the frontier needs. The five-minute floor lets the pass that wrote the verdict settle it.
+        if i["idle"] > 300 and not open_wave(n, i["run_id"]) \
+                and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
+            say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
+            continue
         if i["idle"] > 180:
             for q in inside(f):
                 c = procs.get(q, (0, ""))[1]

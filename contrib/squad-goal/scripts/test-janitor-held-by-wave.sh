@@ -77,4 +77,10 @@ printf '1566\tclosed\n' > "$T/iss.tsv"
 rm -f "$T/st/auto/wave-run-old" "$T/st/auto/waved-run-old" "$T/st/issue-facts.json"   # the earlier passes cached the issue open; this pass reads it closed
 run "$T/s" >/dev/null
 /usr/bin/grep -q "run-old" "$T/st/active-runs.txt" 2>/dev/null && ko "D: a finished run whose issues are all closed keeps its line: $(cat "$T/st/active-runs.txt" 2>/dev/null)" || ok "D: a finished run whose issues are all closed leaves active-runs"
+# E (#2138): the verdict is final and no wave stands for the run, so nothing reads its line again, whatever its issue says.
+# A line the loop counts as live work holds the child room the frontier needs, and the landing pass is no part of this rule.
+printf 'run-old\n' > "$T/st/active-runs.txt"
+printf '1566\topen\n' > "$T/iss.tsv"
+run "$T/s" >/dev/null
+/usr/bin/grep -q "run-old" "$T/st/active-runs.txt" 2>/dev/null && ko "E: a finished run with no wave keeps its line: $(cat "$T/st/active-runs.txt" 2>/dev/null)" || ok "E: a finished run with no wave and no process leaves active-runs"
 rm -rf "$T"; exit $fail
