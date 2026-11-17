@@ -1024,13 +1024,21 @@ def test_every_family_token_the_lead_chart_names_is_declared(hub):
     """#2171: every LT_* token the flow block names is declared beside it, so no draw raises a ReferenceError; the
     survival reading is one call in the one More pane, on both payload paths."""
     block = _flow_block(hub)
-    assert "LT_EXTRA" not in hub.PAGE, "the flow block names LT_EXTRA, and no line of the page declares it"
+    assert "LT_EXTRA" not in block, "the flow block names LT_EXTRA, and no line of the page declares it"
     names = sorted(set(re.findall(r"\bLT_[A-Z0-9_]+\b", block)))
     assert names, "the flow block names no family token"
     for name in names:
         assert re.search(rf"\b(?:const|let|var)\b[^\n;]*\b{name}\b", hub.PAGE), \
             f"the flow block names {name}, and the page declares no such token"
-    assert hub.PAGE.count("ltKM(c)") == 1, "the survival reading is called more than once for one card"
+    assert block.count("ltKM(c)") == 1, "the survival reading is called more than once for one card"
+
+
+def test_the_page_source_names_no_LT_EXTRA_token(hub):
+    """#2171: the dropped LT_EXTRA declaration leaves no use behind, so no draw raises a ReferenceError.
+
+    This is the review's repro as a test: `grep -n LT_EXTRA hub.py` finds no line at all."""
+    assert "LT_EXTRA" not in HUB_PY.read_text(), \
+        "hub.py still names LT_EXTRA, which no line of the page declares"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -1372,8 +1380,10 @@ def test_the_lead_plot_owns_most_of_the_card_at_the_owner_window(hub, board, tmp
     """#2171: the lead view applies a card height from the window it stands in, and that card is a column that hands
     every pixel below its one text line and one control row to the plot box.
 
-    A unit test cannot measure a browser layout, so this test claims the card height and the CSS hand-off only; it
-    states no percentage. The browser measurement is named in the issue, not here."""
+    A unit test cannot measure a browser layout, so this test states the box the page derives from the window: the
+    plot box is the card less its one text line and one control row, and that box is over 70% of the card at the
+    owner's 1700x1000 window. No headless browser runs the hub page here, so the rendered-box measurement is a node
+    check of the page's own functions, not a browser layout."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     lead = _flow(hub)["lead"]
     out = _render(hub, tmp_path, "lt-card-share.js", f"flowLead({json.dumps(lead)})")
@@ -1384,9 +1394,13 @@ def test_the_lead_plot_owns_most_of_the_card_at_the_owner_window(hub, board, tmp
     # The emitted height is the number the page's own rule names for this window, never a second layout constant.
     assert int(_render(hub, tmp_path, "lt-card-px.js", "String(ltCardPx())")) == card_h, \
         "the card's emitted height is not the height ltCardPx names for the window"
-    # The plot is the card's reason to exist, so it owns a meaningful share of it and never a sliver (#2171).
+    # The plot box is the svg's drawn height, ltPlotH() plus its own top and bottom margin (#2171).
     plot_h = int(_render(hub, tmp_path, "lt-plot-px.js", "String(ltPlotH())"))
-    assert plot_h >= card_h / 2, f"the plot box {plot_h} owns under half of the {card_h} px card"
+    plot_box = int(_render(hub, tmp_path, "lt-box-px.js", "String(ltPlotH()+2*ltP)"))
+    assert plot_box - plot_h == 128, f"the plot box {plot_box} does not hold the plot {plot_h} and its margins"
+    assert plot_box == card_h - 130, \
+        f"the plot box {plot_box} is not the {card_h} px card less its 130 px of chrome"
+    assert plot_box >= 0.70 * card_h, f"the plot box {plot_box} is under 70% of the {card_h} px card"
     assert "const ltCardPx=()=>ltCardH(ltWinH());" in hub.PAGE, "ltCardH is defined and never applied"
     css = hub.PAGE
     assert re.search(r"#flowb \.ltcard\{[^}]*display:flex[^}]*flex-direction:column", css), \
@@ -1465,33 +1479,99 @@ def test_the_lead_plot_frame_is_the_plot_box_the_card_hands_it(hub, board, tmp_p
         "the hub read does not carry the height the view draws"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_svg_view_box_matches_the_rendered_plot_box(hub, board, tmp_path):
-    """#2171: the drawn svg's viewBox height is the .ltplot box the page lays out, measured after the paint, never a
-    constant guess at the card's own text."""
-    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    lead = _flow(hub)["lead"]
+def _lt_harness(hub, tmp_path, name, tail, *, lead=None, reply=None, chart_body=None, box_h=612, window_h=1000, extra=()):
+    """A node harness for the lead chart's own code: a page box that records every paint, a document that hands back
+    one laid-out .ltplot box, and a fetch that records each URL and answers `reply` (the chart, by default)."""
     block = _flow_block(hub).split("const ltPx=")[0]
+    if reply is None and lead is not None:
+        reply = lead["control"]["all"]
     drawing = "\n".join([
         "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE,
-        "const window={innerHeight:1000};",
-        "const box={innerHTML:'',hidden:false,clientWidth:1200,querySelector:()=>null};",
-        "const plot={getBoundingClientRect:()=>({height:612})};",
-        "const document={querySelector:sel=>String(sel).includes('.ltplot')?plot:null};",
+        f"const window={{innerHeight:{window_h}}};",
+        "const PAINTS=[];",
+        "const box={_h:'',hidden:false,clientWidth:1200,querySelector:()=>null,"
+        "get innerHTML(){return this._h},set innerHTML(v){this._h=v;PAINTS.push(v)}};",
+        f"const plot={{getBoundingClientRect:()=>({{height:{box_h}}})}};",
+        "const document={querySelector:sel=>String(sel).includes('.ltplot')?plot:null,"
+        "addEventListener:()=>{},createElementNS:()=>({setAttribute:()=>{},querySelector:()=>null})};",
         "const $=()=>box;",
         "const barQuery=()=>'ty=bug';",
-        "const fetch=async()=>({json:async()=>({})});",
-        block, 'LT.tf="all";LT.tried=true;', f"FLOWK='lead';FLOWD={{lead:{{lead:{json.dumps(lead)},t:0}}}};",
-        "drawFlow();process.stdout.write(box.innerHTML);",
+        "const flowTabs=()=>{};",
+        "const URLS=[],REPLY=" + (json.dumps(reply) if reply is not None else "null") + ","
+        "BODY=" + (json.dumps(chart_body) if chart_body is not None else "null") + ";",
+        "const fetch=async u=>{URLS.push(String(u));"
+        "return {json:async()=>String(u).indexOf('/api/leadtime')===0?REPLY:(BODY===null?REPLY:BODY)}};",
+        *extra,
+        block, 'LT.tf="all";',
+        *([f"FLOWK='lead';FLOWD={{lead:{{lead:{json.dumps(lead)},t:0}}}};"] if lead is not None else []),
+        "const vb=p=>{const m=/<svg data-lt viewBox=\"0 0 [\\d.]+ ([\\d.]+)\"/.exec(p||'');return m?Number(m[1]):null};",
+        "const phs=()=>URLS.filter(u=>u.indexOf('/api/leadtime')>=0)"
+        ".map(u=>Number(/[&?]ph=(\\d+)/.exec(u)[1]));",
+        tail,
     ])
-    path = tmp_path / "lt-box-fit.js"
+    path = tmp_path / name
     path.write_text(drawing)
     result = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    m = re.search(r'<svg data-lt viewBox="0 0 [\d.]+ ([\d.]+)"', result.stdout)
-    assert m, "the card paints no lead chart"
-    assert float(m.group(1)) == 612, \
-        f"the svg viewBox height {m.group(1)} is not the 612 px plot box the page lays out"
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_svg_view_box_matches_the_rendered_plot_box(hub, board, tmp_path):
+    """#2171: the first paint draws the card's estimate and sends that height to the hub; the page then measures the
+    .ltplot box it laid out, redraws the svg to the measured height, and asks the hub again with that height."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_harness(hub, tmp_path, "lt-box-fit.js", (
+        ";(async()=>{await ltGet();for(let i=0;i<60;i++)await null;"
+        "const s=PAINTS.filter(p=>p.indexOf('<svg data-lt')>=0);"
+        "process.stdout.write(JSON.stringify({first:vb(s[0]),last:vb(s[s.length-1]),"
+        "phs:phs(),fitH:LT.fitH,plotH:ltPlotH(),paints:s.length}));})();"), lead=lead, box_h=470)
+
+    assert got["paints"] >= 2, "the page paints the chart once and never redraws it at the measured box"
+    assert got["first"] == got["phs"][0] + 128, \
+        f"the first paint's viewBox {got['first']} is not the request's ph {got['phs'][0]} plus its margins"
+    assert got["fitH"] == 470, f"the page did not take the measured .ltplot box: {got['fitH']}"
+    assert got["plotH"] == 342, f"ltPlotH() is not the measured box less its margins: {got['plotH']}"
+    assert got["last"] == 470, f"the redrawn viewBox {got['last']} is not the 470 px plot box"
+    assert got["phs"][-1] == got["plotH"], \
+        f"the hub was not asked again with the measured height: {got['phs']}"
+    assert got["phs"][-1] != got["phs"][0], "the second read still carries the first paint's estimate"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_later_lead_read_clears_the_refused_error_and_keeps_the_measured_height(hub, board, tmp_path):
+    """#2171: LT.err belongs to the read that set it. A resize or a zoom clears it before it fetches, and neither one
+    drops the plot box the page measured, so the next read carries the height the page draws."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_harness(hub, tmp_path, "lt-later-read.js", (
+        ";(async()=>{LT.fitH=470;LT.err='refused';LT.tried=true;drawFlow();const before=box.innerHTML;"
+        "await ltZoom('2026-10-01T00:00:00Z','2026-10-02T00:00:00Z');"
+        "process.stdout.write(JSON.stringify({before,after:box.innerHTML,fitH:LT.fitH,"
+        "ph:phs()[0],err:LT.err}));})();"), lead=lead, box_h=470)
+
+    assert "the lead chart could not be read" in got["before"], "the harness does not start on the error card"
+    assert "the lead chart could not be read" not in got["after"], \
+        "a later read leaves the refused read's error card in place"
+    assert "<svg data-lt" in got["after"], "a later read paints no chart"
+    assert got["err"] is None, "LT.err survives the read that answered"
+    assert got["fitH"] == 470, f"a zoom drops the measured plot box: {got['fitH']}"
+    assert got["ph"] == 342, f"a zoom asks the hub for the estimate, not the measured box: {got['ph']}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_reopen_over_the_chart_the_page_holds_paints_it_at_once(hub, board, tmp_path):
+    """#2171: opening the lead chart again never replaces the chart the page holds with the loading sentence."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_harness(hub, tmp_path, "lt-reopen-held.js", (
+        ";(async()=>{LT.zc=REPLY;LT.tried=true;flowOpen('lead');"
+        "process.stdout.write(JSON.stringify({painted:box.innerHTML}));})();"),
+        lead=lead, chart_body={"lead": lead, "t": 0})
+    assert "Loading the lead chart" not in got["painted"], \
+        "a reopen shows the loading sentence over the chart the page holds"
+    assert "<svg data-lt" in got["painted"], "a reopen paints no chart at once"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

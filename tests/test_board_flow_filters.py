@@ -350,6 +350,9 @@ def _page_harness(hub, answers, drive, onchange="", store=None, render=False, re
         # The page's own layout, re-stack and renderer, as one contiguous slice: the drawn markup is the page's output.
         lines.append(hub.PAGE[hub.PAGE.index("let flowW="):hub.PAGE.index("const ltEx=")])
     else:
+        # The lead reads carry the plot size the card hands the plot, so the card-sizing lines stand beside them (#2171).
+        lines.append(hub.PAGE[hub.PAGE.index("let flowW="):hub.PAGE.index("const flowX=")])
+        lines.append(_page_line(hub, "const ltP="))   # the plot's own margin, the height's last term
         lines += [_page_line(hub, p) for p in ("const flowFilter=", "const flowSave=", "let CF=")]
     # The two write paths are the page's own lines, never a look-alike: a regression that folded the chart range into
     # the Board record would show here (#1275).
@@ -621,7 +624,10 @@ EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
 await flowOpen("lead");await settle();
 EL["#flowb"].onchange({target:{id:"lty",value:"bug"}});await settle();await settle();
 console.log(JSON.stringify({fetched:FETCHED,ty:LT.ty,store:STORE,drawn:DRAWN[DRAWN.length-1]}));""", onchange=onchange)
-    assert out["fetched"] == [f"/api/chart/lead?{_bar()}", f"/api/chart/lead?{_bar(ty='bug')}"]
+    # Re-anchored (#2171): opening the lead chart also reads /api/leadtime at the plot size the window gives it, so
+    # this test reads the chart route's own requests and leaves the sized reads to the flow-chart tests.
+    assert [u for u in out["fetched"] if u.startswith("/api/chart/")] == \
+        [f"/api/chart/lead?{_bar()}", f"/api/chart/lead?{_bar(ty='bug')}"]
     assert out["ty"] == "bug"
     assert out["store"] == {}, "the choice stays for the visit and is never stored (#1247)"
     assert out["drawn"]["lead"]["type"] == "bug"
