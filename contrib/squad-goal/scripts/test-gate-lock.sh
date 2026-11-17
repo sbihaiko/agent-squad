@@ -152,4 +152,20 @@ for c in tip landing child; do
       || ko "$c gate at a full budget: rc=$rc out='$out' in $(( $(date +%s) - t0 ))s: $(tr '\n' ' ' < "$T/w.err")"
   fi
 done
+
+# (#2049, ADR-0174) A waiting tip check goes first in the queue: its waiting marker names it as the next holder, and a child
+# gate that waits for one slot takes the freed slot only after the tip check gives it back.
+rm -rf "$T/caps"; : > "$T/order"
+capsctl take gates holder --count 1 --target "$T/one" --pid "$live" >/dev/null 2>&1
+SG_GATE_CALLER=tip SG_GATE_WORKERS=1 bash "$T/s/gate.sh" sh -c "echo tip >> $T/order; sleep 1" 2>"$T/p.err" & tipj=$!
+for i in $(seq 1 100); do capsctl | /usr/bin/grep -q '"next": "tip"' && break; sleep 0.05; done
+capsctl | /usr/bin/grep -q '"holder": "gate-[0-9]*", "next": "tip"' && ok "a waiting tip check's marker names it as the next holder" \
+  || ko "no tip marker: $(capsctl) $(tr '\n' ' ' < "$T/p.err")"
+( capsctl take gates child-gate-4 --count 1 --wait 20 --target "$T/one" --pid "$live" >/dev/null 2>&1 && echo child >> "$T/order"
+  capsctl release gates child-gate-4 >/dev/null 2>&1 ) & kidj=$!
+sleep 0.5; capsctl release gates holder >/dev/null 2>&1
+wait "$tipj"; wait "$kidj"
+[ "$(tr '\n' ' ' < "$T/order")" = "tip child " ] && ok "the tip check takes the freed slot before a waiting child gate" \
+  || ko "order: '$(tr '\n' ' ' < "$T/order")': $(tr '\n' ' ' < "$T/p.err")"
+capsctl | /usr/bin/grep -q '"next"' && ko "the tip marker outlived the take: $(capsctl)" || ok "the tip marker goes with the take"
 cd "$T"; rm -rf "$T"; exit $fail
