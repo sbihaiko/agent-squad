@@ -15,8 +15,9 @@ EARLY = "2026-11-01T00:00:00Z"
 LATE = "2026-11-02T00:00:00Z"
 
 
-def card(number, priority=None, created=EARLY, repo=REPO):
-    return {"number": number, "repo": repo, "created": created, "priority": priority}
+def card(number, priority=None, created=EARLY, repo=REPO, blocked_by=(), state="open"):
+    edges = [{"repo": repo, "number": n, "state": "open"} for n in blocked_by]
+    return {"number": number, "repo": repo, "created": created, "priority": priority, "state": state, "blocked_by_edges": edges}
 
 
 def numbers(cards):
@@ -105,3 +106,49 @@ def test_creation_time_is_compared_as_an_instant_not_as_text():
 
 def test_a_number_given_as_text_sorts_as_its_integer():
     assert numbers([card("10", "high"), card(9, "high")]) == [9, "10"]
+
+
+def test_a_low_card_that_blocks_an_urgent_card_ranks_as_urgent():
+    cards = [card(1, "low"), card(2, "urgent", blocked_by=[1]), card(3, "high")]
+
+    assert numbers(cards) == [1, 2, 3]
+
+
+def test_the_priority_carries_across_a_chain_of_two_edges():
+    cards = [card(1, "low", created=LATE), card(2, "low", blocked_by=[1]), card(3, "urgent", blocked_by=[2]), card(4, "high")]
+
+    assert numbers(cards) == [2, 3, 1, 4]
+
+
+def test_the_queue_reads_the_board_once_and_keeps_each_stored_priority():
+    reads = []
+
+    def read():
+        reads.append(1)
+        return {"1": "low", "2": "urgent", "3": "high"}
+
+    ranked, held = priority_rank.queue([card(1), card(2, blocked_by=[1]), card(3)], read)
+
+    assert [c["number"] for c in ranked] == [1, 2, 3]
+    assert held == [] and reads == [1]
+    assert ranked[0]["priority"] == "low"
+
+
+def test_a_cycle_does_not_drop_the_urgent_rank_of_a_card_on_it():
+    cards = [card(1, "low", blocked_by=[2]), card(2, "normal", blocked_by=[1]), card(3, "urgent", blocked_by=[1])]
+
+    assert numbers(cards) == [1, 2, 3]
+
+
+def test_a_closed_card_does_not_raise_its_blocker():
+    cards = [card(1, "low"), card(2, "urgent", blocked_by=[1], state="closed"), card(3, "high")]
+
+    assert numbers(cards)[-1] == 1
+
+
+def test_a_closed_blocking_edge_does_not_raise_its_blocker():
+    blocker = card(1, "low")
+    dependent = card(2, "urgent")
+    dependent["blocked_by_edges"] = [{"repo": REPO, "number": 1, "state": "closed"}]
+
+    assert numbers([blocker, dependent, card(3, "high")])[-1] == 1

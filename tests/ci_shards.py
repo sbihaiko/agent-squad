@@ -66,7 +66,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_board_history_fixtures.py", "tests/test_board_write_unchanged.py", "tests/test_chat_facts.py", "tests/test_cli.py", "tests/test_config_write.py", "tests/test_dashboard_child_issues.py",
         "tests/test_dashboard_labels.py", "tests/test_dashboard_leak_guard.py", "tests/test_dashboard_replay.py", "tests/test_dashboard_server.py", "tests/test_dashboard_states.py",
         "tests/test_dashboard_tailnet.py", "tests/test_defaults.py", "tests/test_envelope_workspace.py", "tests/test_field_run.py", "tests/test_gate_tries_surface.py",
-        "tests/test_gh_aggregate_reads.py", "tests/test_gh_interface_check.py", "tests/test_gh_throttle.py", "tests/test_hub_board_blockers.py", "tests/test_hub_chain_shape.py",
+        "tests/test_gh_aggregate_reads.py", "tests/test_gh_interface_check.py", "tests/test_gh_throttle.py", "tests/test_hub_board_blockers.py", "tests/test_hub_board_priority.py", "tests/test_hub_chain_shape.py",
         "tests/test_hub_check_board.py", "tests/test_hub_ci_queued_chip.py", "tests/test_hub_history_writer.py", "tests/test_hub_host_guard.py", "tests/test_hub_lane_render.py",
         "tests/test_hub_live_card.py", "tests/test_hub_mobile_chat.py", "tests/test_hub_mobile_link.py", "tests/test_hub_mobile_photo.py", "tests/test_hub_mobile_refresh.py", "tests/test_hub_mobile_terminals.py",
         "tests/test_hub_mobile_usage.py",
@@ -118,7 +118,8 @@ SHARDS: tuple[tuple[str, ...], ...] = (
     ),
     (
         "tests/test_adapter_error_classes.py", "tests/test_adapter_refusals.py", "tests/test_adr_0145_waves.py", "tests/test_adr_index.py", "tests/test_board_fast_read.py",
-        "tests/test_board_gate_record.py", "tests/test_board_pin.py", "tests/test_board_wait.py", "tests/test_board_wait_pass.py", "tests/test_priority_rank.py", "tests/test_board_transitions.py", "tests/test_caps_partial.py", "tests/test_contract_probe.py",
+        "tests/test_board_gate_record.py", "tests/test_board_pin.py", "tests/test_board_wait.py", "tests/test_board_wait_pass.py",
+        "tests/test_board_priority.py", "tests/test_priority_rank.py", "tests/test_board_transitions.py", "tests/test_caps_partial.py", "tests/test_contract_probe.py", "tests/test_hub_card_wait.py",
         "tests/test_dashboard_child_review.py", "tests/test_dashboard_failures.py", "tests/test_dashboard_layout.py", "tests/test_dashboard_live_call.py", "tests/test_dashboard_pause.py",
         "tests/test_dashboard_record.py", "tests/test_gate_counts.py", "tests/test_gate_load_report.py", "tests/test_gh_callers.py", "tests/test_gh_door_child_merge.py", "tests/test_hub_board_cases.py",
         "tests/test_hub_board_filter_bar.py", "tests/test_hub_board_observation.py", "tests/test_hub_board_outcomes.py", "tests/test_hub_cache_split.py", "tests/test_hub_childcc_row.py",

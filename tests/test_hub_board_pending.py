@@ -519,8 +519,8 @@ def test_the_served_card_shape_is_the_old_one_plus_the_mark(served):
     board = get_board(port)
     pending = where(board, 7)[0][1]
     plain = where(board, 8)[0][1]
-    assert set(pending) == {"n", "t", "c", "l", "pd"}, f"the pending card's shape changed: {sorted(pending)}"
-    assert set(plain) == {"n", "t", "c", "l"}, f"the plain card's shape changed: {sorted(plain)}"
+    assert set(pending) == {"n", "t", "c", "l", "pd", "pr"}, f"the pending card's shape changed: {sorted(pending)}"
+    assert set(plain) == {"n", "t", "c", "l", "pr"}, f"the plain card's shape changed: {sorted(plain)}"
 
 
 def test_column_counts_are_taken_after_the_overlay(served):
