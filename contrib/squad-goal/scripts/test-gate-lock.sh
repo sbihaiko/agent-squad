@@ -157,7 +157,7 @@ done
 # gate that waits for one slot takes the freed slot only after the tip check gives it back.
 rm -rf "$T/caps"; : > "$T/order"
 capsctl take gates holder --count 1 --target "$T/one" --pid "$live" >/dev/null 2>&1
-SG_GATE_CALLER=tip SG_GATE_WORKERS=1 bash "$T/s/gate.sh" sh -c "echo tip >> $T/order; sleep 1" 2>"$T/p.err" & tipj=$!
+SG_GATE_CALLER=tip SG_GATE_WORKERS=1 bash "$T/s/gate.sh" sh -c "echo tip >> $T/order" 2>"$T/p.err" & tipj=$!
 for i in $(seq 1 100); do capsctl | /usr/bin/grep -q '"next": "tip"' && break; sleep 0.05; done
 capsctl | /usr/bin/grep -q '"holder": "gate-[0-9]*", "next": "tip"' && ok "a waiting tip check's marker names it as the next holder" \
   || ko "no tip marker: $(capsctl) $(tr '\n' ' ' < "$T/p.err")"
