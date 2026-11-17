@@ -89,6 +89,7 @@ HOLDER_FIELDS = ("Run", "Run started")
 # The number field the gate-attempt journal projects to (#1255, ADR-0170): one count per card.
 GATE_TRIES = "Gate Tries"
 PRIORITY = "Priority"
+WAIT = "Wait"
 
 
 class NotCarried(RuntimeError):
@@ -534,6 +535,47 @@ class BoardBinding:
         The read that proves it is the seam's."""
         field = self.priority_field()
         if name not in field["opt"]: raise RuntimeError(f"no {PRIORITY!r} option {name!r} on the board")
+        self.api("-X", "PATCH", f"{self.base}/items/{item_id}", "--input", "-",
+                 inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][name]}]}))
+
+    def wait_field(self):
+        """The Wait single-select field: `{"id", "opt"}`, the field's id and its option ids by name, empty when the board
+        carries none (#1902). Only a found id is cached a day."""
+        def read_field():
+            fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
+            f = next((x for x in fs if isinstance(x, dict) and x.get("name") == WAIT), None) if isinstance(fs, list) else None
+            if f and f.get("dataType") != "SINGLE_SELECT": raise RuntimeError(f"{WAIT!r} field is not a single select")
+            return {"id": f["id"] if f else "", "opt": {self._text(o["name"]): o["id"] for o in (f or {}).get("options", [])}}
+        cache = self.st / f"rest-wait-field-{self.owner}-{self.project}.json"
+        try:
+            if time.time() - cache.stat().st_mtime < 86400:
+                d = json.loads(cache.read_text())
+                if d.get("id") and "opt" in d: return d
+        except (OSError, ValueError): pass
+        d = read_field()
+        if d["id"]: cache.write_text(json.dumps(d))
+        return d
+
+    def read_waits(self):
+        """{issue: Wait name} for each card that carries one, in ONE items read. A card with no value is absent.
+        A board with no Wait field raises, so the caller holds the cards it would have written."""
+        fid = self.wait_field()["id"]
+        if not fid: raise RuntimeError(f"no {WAIT!r} field on the board")
+        out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={fid}", "--jq",
+                       '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name==%s)|.value.name|if type=="object" then .raw else . end))//""),'
+                       '(.content.repository_url//"")]|@tsv' % json.dumps(WAIT))
+        m = {}
+        for l in out.splitlines():
+            n, w, u = (l.split("\t") + ["", "", ""])[:3]
+            n = n.strip()
+            if n.isdigit() and w and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = w
+        return m
+
+    def write_wait(self, item_id, name):
+        """One PATCH of the Wait field to the option `name`. The option id is the field's, never the name.
+        The read that proves it is the seam's."""
+        field = self.wait_field()
+        if name not in field["opt"]: raise RuntimeError(f"no {WAIT!r} option {name!r} on the board")
         self.api("-X", "PATCH", f"{self.base}/items/{item_id}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][name]}]}))
 
