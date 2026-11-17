@@ -152,6 +152,58 @@ def suite_reason(cmd, root="", depth=0):
     return None
 
 
+# #2178: an issue closed while the base carried none of its work. A child session read its own tree as a delivery and
+# closed the issue; the loop then read the spec chain as delivered. One writer closes an issue: the landing, which holds
+# the proof. The wall is the command text, so every spelling of the write is read: `gh issue close`, a `gh issue edit`
+# that sets the state, and the API route a session reaches for instead. A comment and a read stay open to the child.
+_ISSUE_CLOSE_DENIAL = ("sandbox: closing an issue is denied; only the landing closes an issue, because it holds the proof "
+                       "that the base carries the work. Report the state in a comment, and leave the close to the landing")
+
+
+def _issue_close(verb, args):
+    """True when this command word writes an issue's state closed."""
+    if verb != "gh":
+        return False
+    words = [a for a in args if not a.startswith("-")]
+    if words[:2] == ["issue", "close"]:
+        return True
+    if words[:2] == ["issue", "edit"]:
+        for i, a in enumerate(args):
+            if a in ("--state", "-s") and i + 1 < len(args) and args[i + 1] == "closed":
+                return True
+            if a.startswith("--state=") and a.split("=", 1)[1] == "closed":
+                return True
+        return False
+    if words[:1] == ["api"]:
+        route = next((a for a in args if "issues/" in a), "")
+        method = "PATCH"
+        for i, a in enumerate(args):
+            if a in ("-X", "--method") and i + 1 < len(args):
+                method = args[i + 1].upper()
+            elif a.startswith("--method="):
+                method = a.split("=", 1)[1].upper()
+        closed = any(a.replace('"', "").replace("'", "") in ("state=closed", "state_reason=completed") for a in args)
+        return bool(route) and method == "PATCH" and closed
+    return False
+
+
+def issue_close_reason(cmd, depth=0):
+    """Why a Bash command that closes an issue is denied, or None (#2178). A shell's `-c` body is read as the command it is."""
+    for seg in _SEGMENT.split(cmd):
+        words = _segment_words(seg)
+        if not words:
+            continue
+        verb, args = os.path.basename(words[0]), words[1:]
+        if verb in _SHELLS:
+            body = _shell_body(args)
+            if body is not None and depth < 3 and (inner := issue_close_reason(body, depth + 1)):
+                return inner
+            continue
+        if _issue_close(verb, args):
+            return _ISSUE_CLOSE_DENIAL
+    return None
+
+
 def deny_reason(tool, tool_input, root, env=None, home=None):
     """Why the call is denied, or None when it may run. `root` is the session's worktree; a relative path is read from it."""
     env = os.environ if env is None else env
@@ -188,6 +240,8 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
             if needle in cmd:
                 return f"sandbox: a command that names {needle} is denied; the live skill copy and the loop state are not this session's to touch"
         if (reason := suite_reason(cmd, root)) is not None:
+            return reason
+        if (reason := issue_close_reason(cmd)) is not None:
             return reason
         return table_reason(cmd) or signal_reason(cmd)
     return None

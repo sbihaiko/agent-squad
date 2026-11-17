@@ -347,6 +347,23 @@ def test_a_child_may_read_a_suite_or_gate_through_the_wrapper(tmp_path, command)
     assert sandbox.deny_reason("Bash", {"command": command}, str(tmp_path)) is None
 
 
+@pytest.mark.parametrize("command", ["gh issue close 2151", "gh issue close 2151 --reason completed",
+                                     "gh issue edit 2151 --state closed", "bash -c 'gh issue close 2151'",
+                                     "gh api -X PATCH repos/sbihaiko/agent-squad/issues/2151 -f state=closed"])
+def test_a_child_cannot_close_an_issue(tmp_path, command):
+    """#2178: an issue closed with nothing in the base. Only the landing closes an issue; a child that closes its own
+    claims a delivery the base does not carry."""
+    reason = sandbox.deny_reason("Bash", {"command": command}, str(tmp_path), env={}, home=str(tmp_path / "h"))
+    assert reason and "only the landing closes an issue" in reason, reason
+
+
+@pytest.mark.parametrize("command", ["gh issue comment 2151 --body 'progress'", "gh issue view 2151",
+                                     "gh api repos/sbihaiko/agent-squad/issues/2151/timeline",
+                                     "gh issue list --state open"])
+def test_a_child_may_still_comment_on_or_read_an_issue(tmp_path, command):
+    assert sandbox.deny_reason("Bash", {"command": command}, str(tmp_path), env={}, home=str(tmp_path / "h")) is None, command
+
+
 def test_the_session_contract_states_every_rule_the_sandbox_enforces():
     """A session reads the sandbox rules before its first call, never only from a denial (#2022): one day held 131 denials,
     up to five of one kind in one session. Each rule `deny_reason` enforces has its line in the contract every session gets."""
@@ -354,5 +371,6 @@ def test_the_session_contract_states_every_rule_the_sandbox_enforces():
     text = (Path(__file__).resolve().parent.parent / "prompts" / "_contract.md").read_text()
     assert "## Sandbox" in text
     sect = text[text.index("## Sandbox"):]
-    for needle in ("contrib/squad-goal/scripts/child-gate.sh", "inside your worktree", "/tmp", "$SG_STATE", "live skill copy", "`ps`"):
+    for needle in ("contrib/squad-goal/scripts/child-gate.sh", "inside your worktree", "/tmp", "$SG_STATE", "live skill copy", "`ps`",
+                   "Do not close an issue"):
         assert needle in sect, needle
