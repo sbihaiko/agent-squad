@@ -1752,6 +1752,8 @@ land_queue() {
     [ "$n" -lt "$lim" ] || break
     r=${q##*/wland-}; r=${r%.queued}
     if [ "$r" = "${self##*/}" ] || [ -e "$SG_STATE/auto/wland-$r" ]; then rm -f "$q"; continue; fi
+    [ -s "$q" ] || { rm -f "$q"; continue; }                 # an empty marker names no folder: never claimed (#2068)
+    red_read "$(wave_of "$r")" && continue                    # a wave held red lands alone, never in a batch (#1961, #2068)
     h=$(cat "$SG_STATE/auto/wland-$r.busy" 2>/dev/null)
     [ -n "$h" ] && kill -0 "$h" 2>/dev/null && continue   # a pass of its own lives: it lands the run or queues it again
     printf '%s\n' "$$" > "$SG_STATE/auto/wland-$r.busy"; cr+=("$r"); crd+=("$(cat "$q")"); rm -f "$q"; n=$((n + 1))
