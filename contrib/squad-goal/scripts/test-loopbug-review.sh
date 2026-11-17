@@ -15,7 +15,7 @@ T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1;
 export SG_SHARED="$T/st"
 mkdir -p "$T/bin" "$T/st" "$T/s"
 cp "$d/review.sh" "$T/s/review.sh"
-cp "$d/revformat.py" "$d/ghcall.sh" "$d/ghread.py" "$d/modelreg.py" "$d/review-timeouts.py" "$d/grokmark.py" "$d/registry.json" "$d/models.json" "$d/address.sh" "$T/s/"
+cp "$d/revformat.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/modelreg.py" "$d/review-timeouts.py" "$d/grokmark.py" "$d/registry.json" "$d/models.json" "$d/address.sh" "$T/s/"
 [ -f "$d/loopbug.sh" ] && cp "$d/loopbug.sh" "$T/s/"
 : > "$T/s/codex-reset.py"
 cat > "$T/s/env.sh" <<J

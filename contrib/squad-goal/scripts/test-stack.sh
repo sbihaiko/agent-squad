@@ -4,7 +4,7 @@
 # The answer is READY or WAIT: a work branch is the unit of work, so an open blocker whose work has not landed waits (#361).
 # usage: bash test-stack.sh [path/to/stack.sh]
 src=${1:-$(dirname "$0")/stack.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,deadlock.py} "$T/s/"   # stack.sh reads the native relation through the GitHub door
+mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,deadlock.py} "$T/s/"   # stack.sh reads the native relation through the GitHub door
 printf 'export SG_REPO=x/y SG_CHECKOUT=%s SG_HUB_DIR=%s SG_BASE=main SG_STATE=%s/st\n' "$T/co" "$T/co/runs/.hub" "$T" > "$T/s/env.sh"
 echo '{"items":[{"n":1796,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"   # #1796: a card in Code Complete with no work branch landed
 # The body still names #1791, but only the native relation can block dispatch. #1800 has two open native blockers.

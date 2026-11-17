@@ -7,7 +7,7 @@ trap 'rm -rf "$T"' EXIT
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.2   # a review takes a review slot (caps.reviews, #567): a throwaway budget
 capsctl() { PYTHONPATH="$SG_SQUAD" python3 -m squad.caps "$@"; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"
-cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/grokmark.py" "$d/provkey.py" "$d/modelreg.py" "$d/registry.json" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/chainhealth.py" "$d/grokmark.py" "$d/provkey.py" "$d/modelreg.py" "$d/registry.json" "$d/models.json" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git}
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001

@@ -60,7 +60,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_slow_cap.py", "tests/test_stall.py", "tests/test_steprec.py", "tests/test_subject_config.py", "tests/test_tailnet_access.py", "tests/test_tailnet_check.py",
         "tests/test_tailnet_exposure_guard.py", "tests/test_to_test_scenario_areas.py", "tests/test_to_test_scenario_write_back_areas.py", "tests/test_voiced.py", "tests/test_voice_setup.py",
         "tests/test_operator_probe.py", "tests/test_operators.py", "tests/test_proxystop.py", "tests/test_launch_agents.py", "tests/test_workcmd.py",
-        "tests/test_workcmd_counts.py", "tests/test_check_ste.py",
+        "tests/test_workcmd_counts.py", "tests/test_check_ste.py", "tests/test_drain_policy.py",
     ),
     (
         "tests/test_board_history_fixtures.py", "tests/test_board_write_unchanged.py", "tests/test_chat_facts.py", "tests/test_cli.py", "tests/test_config_write.py", "tests/test_dashboard_child_issues.py",

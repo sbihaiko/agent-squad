@@ -6,7 +6,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co"
-cp "$d/branchfixpass.sh" "$d/revformat.py" "$d/branchfix.sh" "$d/workbranches.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/branchfixpass.sh" "$d/revformat.py" "$d/branchfix.sh" "$d/workbranches.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git} SG_CODING_RULES=rules
 export SG_FRONTIER_SKIP_LABELS=spec,needs-ratification,frozen:owner
@@ -143,9 +143,10 @@ r=$(OPEN="20" LABELED="20=loop-bug" fp); r="$r"$'\n'"$(OPEN="20" LABELED="20=loo
 r=$(OPEN="21 90" LABELED="90=loop-bug:dispatch" fp)
 [ "$(n gui/21-ls)" = 0 ] && ok "LOOP STOP holds the fix pass for a plain bug" || ko "a fix run started under LOOP STOP: '$r'"
 case "$r" in *"BRANCHFIX SKIP gui/21-ls: LOOP STOP holds, fixed outside the loop"*) ok "the skip names LOOP STOP";; *) ko "no LOOP STOP skip line: '$r'";; esac
-# 17) (#841) a loop-bug:* label on one branch skips that branch only; a plain bug on another branch still gets its one launch
+# 17) (#841) a loop-bug:* label on one branch skips that branch only; a plain bug on another branch still gets its one launch.
+# The class here is `loop-bug:publish`, which leaves dispatch open; an unknown class drains every restriction (#1980).
 : > "$T/launch.log"; push gui/22-lx; push gui/23-pl; rev gui/22-lx CHANGES "p.sh:1 fix"; rev gui/23-pl CHANGES "q.sh:1 fix"
-r=$(OPEN="22 23" LABELED="22=loop-bug:other" fp)
+r=$(OPEN="22 23" LABELED="22=loop-bug:publish" fp)
 [ "$(n gui/22-lx)" = 0 ] && ok "a loop-bug:* branch gets no fix run" || ko "a loop-bug:* branch was dispatched: '$r'"
 [ "$(n gui/23-pl)" = 1 ] && ok "a plain bug branch still gets one fix run" || ko "a plain bug branch dispatched $(n gui/23-pl) times: '$r'"
 # 17b) (#1708) the pass hands its list to the drain's one writer, and an open loop-bug of any spelling holds every fix run:

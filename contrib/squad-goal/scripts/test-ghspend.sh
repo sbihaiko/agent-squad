@@ -15,7 +15,7 @@ for v in $(compgen -e | grep '^SG_'); do unset "$v"; done
 unset HEALTH_DRY HEALTH_NOTIFY
 mkdir -p "$T/bin" "$T/hbin" "$T/st/auto" "$T/co" "$T/s" "$T/home"
 export SG_STATE="$T/st" HOME="$T/home" PATH="$T/bin:$PATH" STUB_DIR="$T"
-cp "$here/ghread.py" "$here/ghthrottle.py" "$here/ghspend.py" "$here/ghcall.sh" "$here/health.sh" "$T/s/"
+cp "$here/ghread.py" "$here/ghthrottle.py" "$here/ghspend.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/health.sh" "$T/s/"
 CLI="python3 $T/s/ghthrottle.py"; RD="python3 $T/s/ghread.py"
 LOG="$T/st/api.log"
 

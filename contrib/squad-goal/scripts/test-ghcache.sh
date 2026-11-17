@@ -13,7 +13,7 @@ bad() { echo "  FAILED: $1"; fails=$((fails + 1)); }
 mkdir -p "$T/bin" "$T/st"
 for v in $(compgen -e | grep '^SG_'); do unset "$v"; done
 export SG_STATE="$T/st" HOME="$T/home" PATH="$T/bin:$PATH"; mkdir -p "$HOME"
-cp "$here/ghread.py" "$here/ghthrottle.py" "$here/ghcall.sh" "$T/"
+cp "$here/ghread.py" "$here/ghthrottle.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$T/"
 CLI="python3 $T/ghthrottle.py"
 
 # The stub `gh`: one line per request in gh.log. A conditional request (`-H 'If-None-Match: <etag>'`) is answered 304 when

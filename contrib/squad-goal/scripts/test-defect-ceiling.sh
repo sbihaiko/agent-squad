@@ -19,7 +19,7 @@ scene() {
   D=$T/$1; S=$D/scripts
   mkdir -p "$S" "$D/st/auto" "$D/st/req" "$D/st/cq" "$D/home" "$D/bin"
   cp "$src" "$S/autohunt.sh"
-  cp "$here/ghcall.sh" "$here/ghread.py" "$S/"
+  cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$S/"
   cat > "$S/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$D/st; SG_CHECKOUT=$D/co; SG_BASE=main
 SG_CODING_RULES=rules; BOARD=true

@@ -12,7 +12,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/squad" "$T/bin"
-cp "$d/runreview.sh" "$d/issue_ledger.py" "$d/caps.sh" "$d/revformat.py" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$T/s/" 2>/dev/null
+cp "$d/runreview.sh" "$d/issue_ledger.py" "$d/caps.sh" "$d/revformat.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$T/s/" 2>/dev/null
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The gh door: the freeze label and the status comment go through ghcall.sh, and this stub records the write.
 printf '#!/bin/sh\nprintf "gh %%s\\\\n" "$*" >> "%s/gh.log"\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"; PATH="$T/bin:$PATH"; export PATH

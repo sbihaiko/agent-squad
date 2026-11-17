@@ -1787,7 +1787,9 @@ land_batch() {
   local -a rs=() rds=() ws=() tips=()
   local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0
   local rows issues anyref rfs nontest SG_REQUEUE_RUN
-  while [ $# -ge 2 ]; do rs+=("$1"); rds+=("$(case "$2" in /*) printf '%s' "$2";; *) printf 'runs/%s' "${2##*/}";; esac)")
+  while [ $# -ge 2 ]; do
+    rd=$2; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
+    rs+=("$1"); rds+=("$rd")
     ws+=("$(wave_of "$1")"); shift 2; done
   for i in "${!rs[@]}"; do
     [ -z "$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "${rs[$i]}" 2>/dev/null)" ] || { echo "WAVE BATCH: ${rs[$i]} owes a close, so each run lands alone"; return 10; }

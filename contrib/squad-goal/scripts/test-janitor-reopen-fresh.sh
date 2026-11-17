@@ -11,7 +11,7 @@ here="$(cd "$(dirname "$src")" && pwd)"
 GREP=$(command -v grep) || { echo "FAIL no grep on PATH" >&2; rm -rf "$T"; exit 1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
 cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
-cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
+cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
 # subst <file>: replace the TMPDIR placeholder with this run's temp dir, in place, with no sed -i and its BSD/GNU split.
 subst() { python3 - "$1" "$T" <<'P'
 import sys

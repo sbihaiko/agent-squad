@@ -24,7 +24,7 @@ here="$(cd "$(dirname "$src")" && pwd)"
 cp "$src" "$T/s/janitor.py"
 cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/board_columns.py" "$here/board-definition.json" \
    "$here/board_facts.py" "$here/spec_fold.py" "$here/gate_attempts.py" "$T/s/"
-cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
+cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$1" in

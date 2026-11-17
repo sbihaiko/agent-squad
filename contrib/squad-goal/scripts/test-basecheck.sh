@@ -13,7 +13,7 @@
 unset SG_SERIAL_HELD SG_BASE_CI_GATE SG_BASE_CI_RECHECK SG_BASE_CI_GRACE SG_BASE_CI_OK_TTL   # an ambient gate or loop setting must not decide these cases
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/bin" "$T/co" "$T/jobs"
-cp "$d/basecheck.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$T/s/"
+cp "$d/basecheck.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$T/s/"
 $G init -q -b dev "$T/co" && (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init)
 $G clone -q --bare "$T/co" "$T/origin.git" 2>/dev/null
 SHA=$($G -C "$T/origin.git" rev-parse refs/heads/dev); S9=${SHA:0:9}

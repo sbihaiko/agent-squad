@@ -4,7 +4,7 @@
 src=${1:-$(dirname "$0")/review.sh}; D=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SHARED="$T/st" SG_CAP_POLL=0.2; M="$SG_SHARED/grok-limited"
 mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"
-for f in loopbug.sh revformat.py ghcall.sh ghread.py modelreg.py review-timeouts.py registry.json grokmark.py; do cp "$D/$f" "$T/s/" 2>/dev/null; done; : > "$T/s/codex-reset.py"
+for f in loopbug.sh revformat.py ghcall.sh drainpolicy.py ghread.py modelreg.py review-timeouts.py registry.json grokmark.py; do cp "$D/$f" "$T/s/" 2>/dev/null; done; : > "$T/s/codex-reset.py"
 printf '{"review_models":["grok-4.6","claude:ok"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 cat > "$T/s/env.sh" <<J
 SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUDE.md

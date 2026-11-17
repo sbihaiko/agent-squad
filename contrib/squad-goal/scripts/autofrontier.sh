@@ -255,11 +255,8 @@ while [ $i -lt ${#cands[@]} ]; do
   skip=; bad=; for s in ${skipcsv//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
   [ -n "$skip" ] && { [ -z "$card" ] || why_card "$n" "skip label" "$bad"; continue; }
   tri=; case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) tri=1;; esac   # no triage label: the card is still taken, and its label is written after the claim (#1676)
-  # ADR-0171 (#1358): a loop defect is built only after a plan review approved its current body, whichever pass dispatches it.
-  if lb_is_loop_bug "$labels"; then
-    lbb=$(gh_api "repos/$SG_REPO/issues/$n" -q '.body // ""') || { [ -z "$card" ] || why_card "$n" "loop-bug" "its body is not readable, so its plan review cannot be checked"; continue; }
-    lbv=$(lb_plan_verdict "$SG_STATE" "$SG_REPO" "$n" "$(lb_body_hash "$lbb")") || { echo "FRONTIER skip #$n: loop-bug, no approving plan review of its current body ($lbv); review.sh --plan $SG_REPO $n" >&2; [ -z "$card" ] || why_card "$n" "loop-bug" "its plan review is $lbv"; continue; }
-  fi
+  # A loop-bug never enters dispatch, whatever its class: the loop does not build its own fix (#1980).
+  if lb_is_loop_bug "$labels"; then [ -z "$card" ] || why_card "$n" "loop-bug" "a loop defect is never dispatched"; continue; fi
   case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: the owner has not started it (#550)
   case "$refs" in *" $n "*) why_card "$n" busy "an open work branch names it"; continue;; esac
   case ",$busy," in *",$n,"*) why_card "$n" busy "a live run holds it"; continue;; esac

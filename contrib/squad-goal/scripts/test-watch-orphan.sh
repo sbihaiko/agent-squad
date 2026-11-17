@@ -11,7 +11,7 @@ mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; lp=
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export STEPS=$T/steps.log
 trap '[ -n "$lp" ] && kill -9 "$lp" 2>/dev/null; rm -rf "$T"' EXIT
-cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/" 2>/dev/null; cp "$d/models.json" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$S/"
+cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/" 2>/dev/null; cp "$d/models.json" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$S/"
 cat > "$S/env.sh" <<EOF
 export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
 export SG_WATCH_WAIT=3 SG_WATCH_POLL=1 SG_GH_AGGREGATE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001

@@ -199,6 +199,7 @@ test-spend-routed.sh 0.54
 test-stack.sh 1.17
 test-state-isolation.sh 1.45
 test-state-split.sh 1.75
+test-subst-case.sh 3.25
 test-tdd-red.sh 2.54
 test-test.sh 0.10
 test-throughput.sh 1.04

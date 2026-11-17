@@ -13,7 +13,7 @@ d=$(dirname "$0"); src=${1:-$d/watch.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st
 case "$(basename "$src")" in watch.sh) ;; *) echo "$(basename "$0"): $src is not a watch.sh; refused" >&2; exit 2;; esac
 mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export STEPS=$T/steps.log REC_SLEEP=5
-cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
+cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$S/"   # the cycle's reader and its throttle travel with it since #1893
 cp "$d/steprec.sh" "$S/"   # the step record writer the cycle sources, as the real scripts folder holds it (#1750)
 cp "$d/promotequiet.sh" "$S/"   # the promotion's debounce, sourced before its step (#1837): without it no promotion starts and no case reads one
 cat > "$S/env.sh" <<EOF

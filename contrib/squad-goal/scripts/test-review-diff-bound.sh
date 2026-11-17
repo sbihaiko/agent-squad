@@ -10,7 +10,7 @@ src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $
 G=/usr/bin/grep; git() { /usr/bin/git -c user.email=a@b -c user.name=t "$@"; }
 export SG_SHARED="$T/st"
 mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$T/s/"
-for f in revformat.py ghcall.sh ghread.py modelreg.py review-timeouts.py grokmark.py registry.json; do cp "$(dirname "$src")/$f" "$T/s/"; done; : > "$T/s/codex-reset.py"
+for f in revformat.py ghcall.sh drainpolicy.py ghread.py modelreg.py review-timeouts.py grokmark.py registry.json; do cp "$(dirname "$src")/$f" "$T/s/"; done; : > "$T/s/codex-reset.py"
 models() { printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]%s}' "$1" > "$T/s/models.json"; }
 cat > "$T/s/env.sh" <<J
 SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUDE.md

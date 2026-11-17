@@ -16,7 +16,7 @@ mkdir -p "$T/fakebin"
 printf '#!/bin/bash\ncase "$*" in *+%%H*) echo "${FAKE_HOUR:-04}";; *+%%M:%%S*) echo "${FAKE_MS:-00:00}";; *) exec /bin/date "$@";; esac\n' > "$T/fakebin/date"; chmod +x "$T/fakebin/date"
 export PATH="$T/fakebin:$PATH"
 G="git -c user.email=a@b -c user.name=t"
-cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/live-check.sh" "$S/" 2>/dev/null
+cp "$d/serial.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/live-check.sh" "$S/" 2>/dev/null
 sq=$(cd "$d/../../.." && pwd)   # the repository the live check reads its module from
 # The live check the nightly runs last (spec 1163, #1178) reads the live state and samples for an hour. In this suite it
 # samples once and reads the fixture's folders, so no case waits an hour and no case reads the owner's live state.
