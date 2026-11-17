@@ -1197,9 +1197,11 @@ def test_a_fixture_delivery_bar_total_equals_its_board_span(prof):
     bar_total = sum(c["sum_s"] for c in t["columns"] if c["sum_s"] is not None)
     # Every stage of the one delivery, named so the 340 s is no coincidence of this fixture: queue 100 s, wait 10 s,
     # coding 210 s, between 0 s, landing 10 s, after 10 s. `review` and `gates` read no time here.
+    assert {c["column"]: c["sum_s"] for c in t["columns"]} == {
+        "todo": 110.0, "doing": 210.0, "review": None, "gating": None, "landing": 10.0, "closed": 10.0}, \
+        "each column's segment is its own stages: the queue 100 s and the dispatch wait 10 s, coding 210 s and the " \
+        "0 s between two children, landing 10 s and the 10 s past the verdict; the card's absent stages read no time"
     assert bar_total == card["closed"] - card["todo"] == 340.0
-    assert {c["column"]: c["sum_s"] for c in t["columns"]}["todo"] == 110.0, \
-        "the queue and the dispatch wait share the Todo segment: 100 s before the run and 10 s to its first call"
 
 
 def test_the_percentile_is_the_linear_rule_the_doc_names(prof):
@@ -1225,18 +1227,38 @@ def test_the_trip_table_names_the_six_columns_in_board_order(prof):
     assert [r["label"] for r in t["columns"]] == ["Todo", "Doing", "Review", "Gating", "Landing", "Closed"]
 
 
-def test_the_trip_keeps_the_flat_stages_list_an_older_reader_reads(prof):
-    """The payload gains `columns`; it keeps the `stages` list an older reader of `GET /api/profiler` reads, one row per
-    record stage, in the record's own order, so the wire gains a shape and breaks none."""
+def test_the_wire_keeps_the_six_column_rows_under_stages(prof):
+    """The wire keeps `stages` as the six board-column rows, in board order, each with the five keys an older reader of
+    `GET /api/profiler` reads, so the payload gains `columns` and breaks no reader of `stages`."""
     t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
-    assert prof.TRIP_STAGES == ("queue", "wait", "coding", "between", "review", "gates", "landing", "after"), \
-        "TRIP_STAGES stays the flat tuple of stage keys"
-    assert [(r["stage"], r["label"]) for r in t["stages"]] == list(prof.TRIP_STAGES_LABELLED)
-    rows = {r["stage"]: r for r in t["stages"]}
+    assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "gating", "landing", "closed"], \
+        "six rows, in the board's order"
+    assert all(set(r) == {"column", "label", "median_s", "p90_s", "observations"} for r in t["stages"]), \
+        "a stages row keeps exactly the five keys the older reader reads"
+    todo = t["stages"][0]
+    assert (todo["label"], todo["median_s"], todo["p90_s"], todo["observations"]) == ("Todo", 2400.0, 2400.0, 3), \
+        "the Todo row answers its larger stage, the queue at 40 min over three deliveries"
+
+
+def test_the_record_stages_live_under_their_own_key(prof):
+    """The record's own per-stage rows move to `record_stages`, in the record's order, so the new fold keeps a readable
+    per-stage table without changing what `stages` means on the wire."""
+    t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
+    assert [(r["stage"], r["label"]) for r in t["record_stages"]] == list(prof.TRIP_STAGES_LABELLED)
+    rows = {r["stage"]: r for r in t["record_stages"]}
     assert rows["queue"]["median_s"] == 2400.0 and rows["wait"]["median_s"] == 20.0
     assert rows["wait"]["label"] == "Wait for a dispatch"
     assert set(rows["wait"]) == {"stage", "label", "observations", "median_s", "p90_s", "share"}, \
-        "the row keeps the six keys the old reader reads"
+        "the per-stage row keeps the six keys the fold answers"
+
+
+def test_the_wire_holds_six_column_rows_even_on_an_empty_window(prof):
+    """A window with no delivery still answers the six rows, each with no reading, so a cached page reads a table of the
+    board's own columns and never an absent key."""
+    t = prof.trip([], [], 0.0)
+    assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "gating", "landing", "closed"]
+    assert all(set(r) == {"column", "label", "median_s", "p90_s", "observations"} for r in t["stages"])
+    assert t["stages"][0]["median_s"] is None and t["stages"][0]["observations"] == 0
 
 
 def test_a_tie_in_a_column_hands_the_row_to_the_first_stage_in_board_order(prof):

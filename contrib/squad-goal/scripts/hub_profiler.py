@@ -589,8 +589,9 @@ def failed_run_table(rows, window_s, now):
 TRIP_COLUMNS = (("todo", "Todo", ("queue", "wait")), ("doing", "Doing", ("coding", "between")),
                 ("review", "Review", ("review",)), ("gating", "Gating", ("gates",)),
                 ("landing", "Landing", ("landing",)), ("closed", "Closed", ("after",)))
-# The record's own stage keys with their captions, in the order `trip_spans` names them. `TRIP_STAGES` stays the flat tuple
-# of keys the fold reads; the payload's `stages` list keeps this pair shape for a reader of the older wire.
+# The record's own stage keys with their captions, in the order `trip_spans` names them. `TRIP_STAGES` is the flat tuple
+# of stage keys the fold reads; `TRIP_STAGES_LABELLED` is the `(key, caption)` pairs. Only this module imports either; the
+# payload's `record_stages` list keeps the pair shape, while `stages` stays the six board-column rows of the older wire.
 TRIP_STAGES_LABELLED = (("queue", "Queued before the run"), ("wait", "Wait for a dispatch"), ("coding", "Coding"),
                         ("between", "Between two children"), ("review", "Review"), ("gates", "Gates"),
                         ("landing", "Landing"), ("after", "After the verdict"))
@@ -727,9 +728,11 @@ def trip(spans, gates, since):
     stage beside it in `beside`, with its own caption; a stage with no reading leaves `beside` None, so a run that names
     no card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians, the width its
     segment takes in the bar, so no measurement leaves the panel; `share` is that sum over the total. A row's `stage` is
-    the stage its median belongs to. The payload also keeps `stages`, one row per record stage in `TRIP_STAGES_LABELLED`
-    order with its own median and share, so a reader of the older wire still reads its shape. Fewer than
-    `TRIP_MIN_DELIVERIES` deliveries answer `bar` False, and the page says so and draws no bar.
+    the stage its median belongs to. The payload also keeps `stages`: the six board-column rows, in board order, each
+    with `column`, `label`, `median_s`, `p90_s` and `observations` of the column's larger stage, so a reader of the
+    older wire still reads its shape. The record's own per-stage rows live under `record_stages`, one row per entry of
+    `TRIP_STAGES_LABELLED` with its own median and share. Fewer than `TRIP_MIN_DELIVERIES` deliveries answer `bar`
+    False, and the page says so and draws no bar.
     """
     per = {key: [] for key in TRIP_STAGES}
     deliveries = 0
@@ -748,11 +751,13 @@ def trip(spans, gates, since):
     held = {col: [k for k in keys if readings[k][0] is not None] for col, _, keys in TRIP_COLUMNS}
     sums = {col: sum(readings[k][0] for k in ks) for col, ks in held.items()}
     total = sum(sums.values())
-    rows = []
+    rows, stages = [], []
     for col, label, keys in TRIP_COLUMNS:
         main = _row_stage(keys, readings)
         median, p90, n = readings[main]
         beside, others = None, [k for k in keys if k != main]
+        # A stage the record never held is None, never a zero, so it stands nowhere: when the main reading is a known
+        # zero, the unknown stage adds no second reading to the cell, and the column reads its zero alone.
         if others and readings[others[0]][0] is not None:
             omed, op90, on = readings[others[0]]
             beside = {"stage": others[0], "label": TRIP_STAGE_LABELS[others[0]], "observations": on,
@@ -763,15 +768,18 @@ def trip(spans, gates, since):
                      "sum_s": round(sums[col], 3) if held[col] else None,
                      "share": round(sums[col] / total, 4) if total and held[col] else 0.0,
                      "beside": beside})
-    stages, stage_total = [], sum(m for m in (readings[k][0] for k in TRIP_STAGES) if m)
+        stages.append({"column": col, "label": label, "observations": n,
+                       "median_s": round(median, 3) if median is not None else None,
+                       "p90_s": round(p90, 3) if p90 is not None else None})
+    record_stages, stage_total = [], sum(m for m in (readings[k][0] for k in TRIP_STAGES) if m)
     for key, label in TRIP_STAGES_LABELLED:
         med, p90, n = readings[key]
-        stages.append({"stage": key, "label": label, "observations": n,
-                       "median_s": round(med, 3) if med is not None else None,
-                       "p90_s": round(p90, 3) if p90 is not None else None,
-                       "share": round(med / stage_total, 4) if stage_total and med is not None else 0.0})
+        record_stages.append({"stage": key, "label": label, "observations": n,
+                              "median_s": round(med, 3) if med is not None else None,
+                              "p90_s": round(p90, 3) if p90 is not None else None,
+                              "share": round(med / stage_total, 4) if stage_total and med is not None else 0.0})
     return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "columns": rows, "stages": stages,
-            "label": TRIP_LABEL}
+            "record_stages": record_stages, "label": TRIP_LABEL}
 
 # The loop state strip (#1765): one strip across the top of the Loop tab, from the two records the loop already writes. The
 # switch audit (`loop-audit.jsonl`) gives active, draining and off: each line is one change, with its writer, origin and the
