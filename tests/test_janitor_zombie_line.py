@@ -39,12 +39,13 @@ def dead_pid() -> int:
     return p.pid
 
 
-def dead_run(tmp_path: Path, folder: Path, pid: int) -> None:
-    """The same dead run in any folder: started, one call by engine `pid` an hour ago, no verdict, record idle an hour."""
+def dead_run(tmp_path: Path, folder: Path, pid: int, run_id: str = RUN) -> None:
+    """The same dead run in any folder: started, one call by engine `pid` an hour ago, no verdict, record idle an hour.
+    `run_id` names the run the record claims, so a run whose open wave must not stand for a sibling's says its own."""
     rec = folder / "record.jsonl"
     rec.unlink(missing_ok=True)
     r = record.Record(rec)
-    r.append("run_start", run_id=RUN, graph_name="g", graph_hash="h", engine_options={}, root="main", plan=["main"])
+    r.append("run_start", run_id=run_id, graph_name="g", graph_hash="h", engine_options={}, root="main", plan=["main"])
     r.append("call_start", node="main", entry=1, session="s", pid=pid, limit=None, started_at=time.time() - 3600)
     old = time.time() - 3600
     for p in (rec, folder / "request.txt"):

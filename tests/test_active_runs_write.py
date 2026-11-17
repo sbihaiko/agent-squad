@@ -25,23 +25,12 @@ import time
 
 import pytest
 
-from squad import caps, record
+from squad import caps
 from tests.test_janitor_card_done_base import janitor, sandbox
-from tests.test_janitor_zombie_line import dead_pid, listed
+from tests.test_janitor_zombie_line import dead_pid, dead_run, listed
 
 RUN = "run-stacked"
 RACE = "run-race"
-
-
-def dead_zombie(folder: pathlib.Path, pid: int) -> None:
-    """The dead run of the zombie suite, under its own run id: the open wave of `run-stacked` never stands for it."""
-    rec = folder / "record.jsonl"
-    r = record.Record(rec)
-    r.append("run_start", run_id=folder.name, graph_name="g", graph_hash="h", engine_options={}, root="main", plan=["main"])
-    r.append("call_start", node="main", entry=1, session="s", pid=pid, limit=None, started_at=time.time() - 3600)
-    old = time.time() - 3600
-    for p in (rec, folder / "request.txt"):
-        os.utime(p, (old, old))
 
 
 def appended_at_the_first_gh_call(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -72,7 +61,7 @@ def test_a_line_appended_during_the_pass_survives_its_rewrite(tmp_path):
     zombie = tmp_path / "co/runs/run-zombie"
     zombie.mkdir(parents=True)
     (zombie / "request.txt").write_text("plain request of run-zombie\n")
-    dead_zombie(zombie, dead_pid())
+    dead_run(tmp_path, zombie, dead_pid(), zombie.name)
     act = tmp_path / "st/active-runs.txt"
     act.write_text(f"{RUN}\nrun-zombie\n")
     appended_at_the_first_gh_call(tmp_path)
@@ -88,32 +77,56 @@ def test_a_line_appended_during_the_pass_survives_its_rewrite(tmp_path):
 
 @pytest.mark.heavy
 def test_a_kept_line_is_retained_beside_the_appended_one(tmp_path):
-    """A run whose wave still stands for it keeps its line, and the rewrite writes it beside the line the launch appended.
+    """A live run keeps its line through `keep`, and the rewrite writes it beside the line the launch appended.
 
-    The reader that keeps every line it did not name is what carries `run-race` over; this case proves it never trades a
-    line it read for the appended one. Both lines answer, so the pass kept a line it read and lost nothing else."""
-    sandbox(tmp_path, "echo 0", wave="open")
-    zombie = tmp_path / "co/runs/run-zombie"
-    zombie.mkdir(parents=True)
-    (zombie / "request.txt").write_text("plain request of run-zombie\n")
-    dead_zombie(zombie, dead_pid())
-    act = tmp_path / "st/active-runs.txt"
-    act.write_text(f"{RUN}\nrun-zombie\n")
-    appended_at_the_first_gh_call(tmp_path)
+    `run-stacked` has no verdict and its own gate process is inside its folder, so no zombie rule and no open wave stand
+    for it: only the live-run keep path retains it. The reader that keeps every line it did not name carries `run-race`
+    over; this case proves it never trades a line it read for the appended one."""
+    sandbox(tmp_path, "echo 0", live=True)
+    run = tmp_path / "co/runs/run-stacked"
+    gate = tmp_path / "gate.sh"
+    gate.write_text("sleep 300\n")
+    holder = subprocess.Popen(["bash", str(gate)], cwd=run)
+    try:
+        # A finished run after the live one: its issue read is the first `gh` call, so the append lands between the pass's
+        # read of the list and its rewrite. The live run is processed first and makes no call.
+        done = tmp_path / "co/runs/run-done"
+        done.mkdir(parents=True)
+        (done / "request.txt").write_text("CHILD — GitHub issue(s) 2030:\n")
+        (done / "record.jsonl").write_text(
+            json.dumps({"event": "run_start", "run_id": "run-done", "ts": "2026-10-13T08:12:00Z"}) + "\n"
+            + json.dumps({"event": "verdict", "verdict": "pass", "reasons": [], "exit_code": 0}) + "\n")
+        old = time.time() - 3600
+        for p in (done / "record.jsonl", done / "request.txt", done):
+            os.utime(p, (old, old))
+        act = tmp_path / "st/active-runs.txt"
+        act.write_text(f"{RUN}\nrun-done\n")
+        appended_at_the_first_gh_call(tmp_path)
 
-    janitor(tmp_path, SG_SQUAD=str(pathlib.Path(__file__).resolve().parents[1]),
-            SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
+        janitor(tmp_path, SG_SQUAD=str(pathlib.Path(__file__).resolve().parents[1]),
+                SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
 
-    seen = (tmp_path / "st/race.seen").read_text()
-    assert seen.split() == [RUN, "run-zombie"], f"the append did not land after the pass read the list: {seen!r}"
-    got = listed(act)
-    assert got == [RUN, RACE], f"the kept line or the appended one left the rewrite: {got}"
+        seen = (tmp_path / "st/race.seen").read_text()
+        assert seen.split() == [RUN, "run-done"], f"the append did not land after the pass read the list: {seen!r}"
+        journal = (tmp_path / "st/cycle.log").read_text()
+        assert f"zombie run {RUN}" not in journal, (
+            f"the pass treated the live run as a zombie, so the line was retained by reaped, not by keep: {journal}")
+        assert not (tmp_path / "st/auto" / f"wave-{RUN}").exists(), "the kept line had to hold an open wave to survive"
+        assert "FINISHED-RUN run-done" in journal, f"the trigger run did not leave the list after its issue read: {journal}"
+        got = listed(act)
+        assert got == [RUN, RACE], f"the kept line or the appended one left the rewrite: {got}"
+    finally:
+        holder.terminate()
+        holder.wait(timeout=10)
 
 
 @pytest.mark.heavy
 def test_a_finished_run_line_leaves_the_list_on_the_pass_that_reads_it(tmp_path):
-    """#2138: a run whose verdict is final, with no wave standing for it and no process or lease naming it, leaves
-    active-runs on the pass that reads it. The line is gone from the rewrite, never merely from the pass's own listing."""
+    """#2144: a finished run is in both `keep` and `dropped` on the pass that reads it, and the rewrite still leaves it out.
+
+    The run has its verdict, no wave stands for it and no process or lease names it. The card pass must still read it
+    (#2138), so the pass keeps it, and its line must leave active-runs (#2144), so the pass drops it. The journal names
+    both, and the rewrite writes neither the dropped line nor a kept line that dropped: the two facts never cancel out."""
     sandbox(tmp_path, "echo 0")
     act = tmp_path / "st/active-runs.txt"
     assert listed(act) == [RUN], f"the sandbox wrote no line for the finished run: {listed(act)}"
@@ -121,6 +134,8 @@ def test_a_finished_run_line_leaves_the_list_on_the_pass_that_reads_it(tmp_path)
             SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
     journal = (tmp_path / "st/cycle.log").read_text()
     assert f"FINISHED-RUN {RUN}" in journal, f"the pass never named the finished-run drop: {journal}"
+    assert f"FINISHED-RUN-CARD {RUN}" in journal, (
+        f"the pass dropped the line but never kept the run for its card read: {journal}")
     got = listed(act)
     assert got == [], f"a finished run kept its active-runs line, so it still holds a child room (#2138): {got}"
 

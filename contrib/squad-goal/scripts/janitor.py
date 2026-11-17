@@ -492,12 +492,16 @@ def keep_run(r, f, i):   # one site marks a run readable this pass: `keep` for t
     ri = req_issues(f)
     if i["landed"]: landed_n |= ri
     held |= ri | i["acc"]; keep.append(r); return ri
-def drop_line(r, i=None, f=None):   # #2144: every run loop rule that leaves a run's line out of active-runs names it here, so
-    # `dropped` is the whole set of lines this pass drops and the rewrite can never keep one of them (#2138, ADR-0030). A run the
-    # card pass must still read (`i` is its record) joins `keep` too: dropping its line and losing its card is one defect, and the
-    # two lists are written together here, never apart.
+def drop_line(r):   # #2144: every run loop rule that leaves a run's line out of active-runs names it here, so `dropped` is the
+    # whole set of lines this pass drops and the rewrite can never keep one of them (#2138, ADR-0030). This is a pure leave-out
+    # primitive: it edits no other list and reads no file, so a caller that must also read the run for its card calls keep_run
+    # beside it (FINISHED-RUN does). The second keep source is `reaped`: a run whose open wave still lands it keeps its line
+    # there, and the rewrite keeps a reaped line whatever `dropped` says (see the zombie rule below).
+    # The record that feeds the card pass belongs to the caller's keep_run, never to this primitive. Only FINISHED-RUN drops a
+    # line and still reads the card, so only it calls keep_run beside the drop. The other callers drop with no record, and
+    # that is correct: GONE-RUN's issues are deleted, CLOSED-RUN's card the closed-issue Done rule already answered, the
+    # killed and never-started runs write reoffer markers for the card's way back, and a missing folder has no record.
     dropped.add(r)
-    if i is not None: keep_run(r, f, i)
 def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
     try: c = p.read_text().strip()
     except OSError: return False
@@ -602,7 +606,7 @@ for r in names:
         if i["idle"] > 300 and not open_wave(n, i["run_id"]) \
                 and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
-            drop_line(r, i, f)   # the card pass and rule Q still read the run's record (#2138), and the rewritten list leaves its line out (#2144)
+            drop_line(r); keep_run(r, f, i)   # the line leaves this pass (#2144), and the card pass and rule Q still read the run's record (#2138)
             continue
         if i["idle"] > 180:
             for q in inside(f):
@@ -695,7 +699,9 @@ for r in names:
             kill(q, f"leftover of zombie run {n}")
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
-        if wv: reaped.add(r)   # an open wave still lands this run: the line stays until the wave marker goes
+        if wv: reaped.add(r)   # an open wave still lands this run: the line stays until the wave marker goes. `reaped` is the
+        #                        second keep source beside `keep`: the rewrite keeps a reaped line without asking `dropped`,
+        #                        so this branch never calls drop_line -- its run is not dropped this pass.
         else: drop_line(r)     # with no open wave the line leaves the list here
         continue   # this pass's card rules still read the run's markers
     held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i; livef[n] = f
