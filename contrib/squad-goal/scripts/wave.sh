@@ -1660,9 +1660,12 @@ land_books() {
     # (#869) A child that entered the wave is not missing from it, even when its commit is not ahead of the base any more (the
     # rebase dropped it), and an issue a multi-issue commit named was requeued above with its own reason.
     for n in $(run_issues "$rd"); do case " $issues $amb $ent " in *" $n "*) ;; *)
+      why="the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue"
+      br=$(salvage "$run" "$n")   # the child's commits reach a branch before the queue sends the issue back (#2030)
+      [ -n "$br" ] && why="$why; its commits are on $br"
       wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
       rq="$rq $n"
-      cap_hold "$run" "$rd" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue";; esac; done
+      cap_hold "$run" "$rd" "$n" "$why";; esac; done
     [ -n "$rq" ] && { retire_run "$run" || true; }   # the run ends before its issues go back to the queue (#1970)
   fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted
@@ -1850,6 +1853,42 @@ land_batch() {
   rm -rf "$S"; return $brc
 }
 
+# salvage <run> <issue>: push the head of the child that worked <issue> to salvage/<issue>, so the wave's age cap sends the
+# issue back to the queue only after its commits reach a remote branch (#2030). stdout is the branch name, or nothing when
+# the record names no child of that issue, the child's worktree is gone, or the child stands on the base. A push it cannot
+# make names its reason on stderr and prints nothing on stdout, so the caller adds no branch to its comment and the requeue
+# goes on: a saved branch is a help, never a condition of the requeue.
+salvage() {
+  local run=${1:?} n=${2:?} rd child ws wt head cnt br err
+  rd=$(run_dir "$run")
+  read -r child ws < <(python3 - "$rd/record.jsonl" "$n" <<'PY'
+import json,re,sys
+rec,n=sys.argv[1],sys.argv[2]
+try: f=open(rec,errors="replace")
+except OSError: sys.exit(0)
+with f:
+    for l in f:
+        if '"spawn_accepted"' not in l: continue
+        try: d=json.loads(l)
+        except ValueError: continue
+        if not isinstance(d,dict) or d.get("event")!="spawn_accepted": continue
+        if not re.search(r"#"+re.escape(n)+r"\b",json.dumps(d.get("definition"))): continue
+        w=d.get("definition",{}) if isinstance(d.get("definition"),dict) else {}
+        w=w.get("workspace")
+        print(d.get("child") or "", w.replace("/","_") if w not in (None,"",".") else "target"); break
+PY
+)
+  [ -n "${child:-}" ] || return 0
+  wt="$rd/ws/${ws:-target}-$child"
+  [ -d "$wt" ] || { echo "salvage: the worktree of $child is not there: $wt" >&2; return 0; }
+  head=$($G -C "$wt" rev-parse -q --verify HEAD 2>/dev/null) || return 0
+  cnt=$($G -C "$wt" rev-list --count "origin/$base..$head" 2>/dev/null) || return 0
+  [ "${cnt:-0}" -gt 0 ] 2>/dev/null || return 0
+  br="salvage/$n"; err="$SG_STATE/salvage-$n.err"
+  $G -C "$wt" push -q origin "HEAD:refs/heads/$br" >/dev/null 2>"$err" || { echo "salvage: the push of ${head:0:9} to $br failed: $(tail -1 "$err" 2>/dev/null)" >&2; return 0; }
+  printf '%s\n' "$br"
+}
+
 case "${1:-}" in
   start) shift; start "$@";;
   enter) shift; enter "$@";;
@@ -1858,8 +1897,9 @@ case "${1:-}" in
   landconflict) shift; landconflict "$@";;
   landempty) shift; landempty "$@";;
   requeue) shift; requeue "$@";;
+  salvage) shift; salvage "$@";;
   fail) shift; fail "$@";;
   probe-retry) shift; probe_retry "$@";;
   retire) shift; retire_run "$@";;
-  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap] | wave.sh fail <issue> <run> <why> | wave.sh probe-retry <issue> | wave.sh retire <run>" >&2; exit 2;;
+  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap] | wave.sh salvage <run> <issue> | wave.sh fail <issue> <run> <why> | wave.sh probe-retry <issue> | wave.sh retire <run>" >&2; exit 2;;
 esac

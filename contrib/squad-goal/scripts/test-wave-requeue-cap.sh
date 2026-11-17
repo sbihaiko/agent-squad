@@ -191,6 +191,21 @@ hh hold --by hal9k 66; held 64 && held 66 || ko "the fixture needs two open hal9
 hw requeue 65 "the local gates failed: p" >/dev/null; o=$(hw requeue 65 "the local gates failed: q")
 case "$o" in *"WAVE HAND-FULL #65"*) ! held 65 && ok "two open hal9k holds fill the hand route, and the issue stays in the queue" || ko "#65 was held past the bound";; *) ko "full hand route: '$o'";; esac
 hw requeue 65 "the local gates failed: r" | /usr/bin/grep -q "WAVE STOP #65" && ok "with the hand route full, the cap still stops the issue" || ko "#65 did not stop at the cap"
+# The wave's age cap sends a child's issue back to the queue, and the loop then builds it again from the base: the commits
+# the child made reach no branch, so the cap pushes the child's head to salvage/<n> first and names that branch (#2030).
+o="$T/orig2030.git"; /usr/bin/git init -q --bare "$o"
+r="$T/co2030/run2030"; /usr/bin/git clone -q "$o" "$r"; /usr/bin/git -C "$r" checkout -q -b dev
+/usr/bin/git -C "$r" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "Refs #2030 base"; /usr/bin/git -C "$r" push -q origin dev
+wt="$r/ws/target-c"; /usr/bin/git -C "$r" worktree add -q -b child/2030 "$wt" dev
+/usr/bin/git -C "$wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "Refs #2030 the child's work"
+h2030=$(/usr/bin/git -C "$wt" rev-parse HEAD); mkdir -p "$r"; echo "$r" > "$T/st/active-runs.txt"
+printf '%s\n' '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #2030"}' > "$r/record.jsonl"
+out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run2030 2030 2>&1)
+[ "$out" = "salvage/2030" ] && ok "a capped child's head is pushed and its branch named (#2030)" || ko "salvage named '$out'"
+[ "$(/usr/bin/git -C "$o" rev-parse -q --verify refs/heads/salvage/2030)" = "$h2030" ] && ok "the salvage branch stands on the child's head (#2030)" || ko "salvage/2030 is not the child's head"
+/usr/bin/git -C "$wt" -c user.name=t -c user.email=t@t commit -q --allow-empty --amend -m "Refs #2030 base"
+out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run2031 2031 2>&1)
+[ -z "$out" ] && ok "a run that names no child of the issue salvages nothing (#2030)" || ko "a child of another issue: '$out'"
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail
