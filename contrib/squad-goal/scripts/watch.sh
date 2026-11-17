@@ -69,8 +69,9 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
   fi
   rm -f "$lk"
   # The detached pass landed its wave: `wland-<run>` is its success marker, read here once and then cleared.
-  if [ -e "$ran" ]; then rm -f "$ran" "$pass" "$pass.left"; return 0; fi
-  rm -f "$pass" "$pass.left"
+  if [ -e "$ran" ]; then rm -f "$ran" "$pass" "$pass.left" "$ran.queued"; return 0; fi
+  # A run waits in the landing queue (#2058) only after the childcc pass of this cycle got through: the pass below writes it again.
+  rm -f "$pass" "$pass.left" "$ran.queued"
   # The pass waits a bounded time (SG_LAND_WAIT one-second polls) for the childcc lock the fast lane may hold. The landing runs
   # under its own lock, never the childcc one: its gate wait can last hours, and the fast lane's pass must not queue behind it (#471).
   # A pass works one child and exits 3 when it left one for a later pass (#590): that is no pass, `$pass.left` says so, and the
@@ -85,7 +86,11 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
     # The busy marker is the pass's pid, written by this shell from `$!` right after the fork: /bin/bash 3.2 leaves `$BASHPID`
     # empty, so a marker the pass wrote could name no process and the single flight would never fire. The pass removes it when
     # it ends; a cycle that finds it names a dead pid removes it and reads the wave.
+    # The batch landing (#2058): the pass that holds the landing lock also lands the runs queued behind it (`wland-<run>.queued`,
+    # which names the run's folder), up to SG_LAND_BATCH runs behind one tip gate (wave.sh land_queue). A pass that finds the
+    # lock held queues its run. SG_LAND_BATCH=1 writes no queue marker, so each run lands in its own pass, as before.
     (
+      export SG_LAND_QUEUE=1
       wout=$(tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1); wrc=$?
       [ -n "$wout" ] && printf '%s\n' "$wout"
       rm -f "$pass"
@@ -102,7 +107,10 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
           echo "WATCH: ${run##*/} waits: its landing failed${c:+ ($c)}${c:- (no line of its own; its output is in this log)}, so it lands on a later cycle"
         fi
       fi
-      rm -f "$lk" ) &
+      rm -f "$lk"
+      # Written after the busy marker goes, so the pass that claims the run writes its own pid there and is never overwritten.
+      [ "$wrc" = 76 ] && [ ! -e "$ran" ] && [ "${SG_LAND_BATCH:-4}" != 1 ] && printf '%s\n' "$run" > "$ran.queued"
+      ) &
     printf '%s\n' "$!" > "$lk"
     return 1
   fi
