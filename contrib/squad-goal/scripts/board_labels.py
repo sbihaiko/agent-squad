@@ -1,8 +1,9 @@
 """The loop's label definition and the contradictory pairs one writer refuses (#1905).
 
 Two labels on one card state opposite things when one says the card is work an agent may take and the other says it is
-held or waiting. The shipped definition (board-definition.json) lists each startable label, each hold, each waiting
-label and every contradictory pair, so one file answers what a card may carry.
+held or waiting. The label definition (board-labels.json) lists each startable label, each hold, each waiting label and
+every contradictory pair, so one file answers what a card may carry. It is its own definition, not a section of the
+pinned board definition (ADR-0141): that file names the board's columns and kinds, and the pin refuses an edit to it.
 
 A writer that would leave one of these pairs writes neither label, and names the pair it refused. A repair pass corrects
 every existing contradictory card, and the hold wins there: the card keeps the label that is not startable and loses the
@@ -14,7 +15,7 @@ proven without a carrier.
 import json
 import pathlib
 
-DEFINITION = pathlib.Path(__file__).resolve().parent / "board-definition.json"
+DEFINITION = pathlib.Path(__file__).resolve().parent / "board-labels.json"
 
 
 def definition(path=None):

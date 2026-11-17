@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).parents[1] / "contrib" / "squad-goal" / "scripts"
-DEFINITION = SCRIPTS / "board-definition.json"
+DEFINITION = SCRIPTS / "board-labels.json"
 
 HOLDS = ("frozen:owner", "frozen:dependency", "frozen:not-startable")
 

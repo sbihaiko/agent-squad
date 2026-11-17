@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "eb3fc0d147f542233628885da598f8c12608713131c412cd5c1d4e13105d0834"
+PINNED = "d4a5577dcf5f6e0d47011c395d6e5557aa2fd3c30eb57e50558fc7c7d0eb68f0"
 SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Gating", "Closed", "Abandoned"]
 
 
@@ -115,6 +115,13 @@ def test_an_edited_pinned_copy_is_refused(tmp_path):
     path.write_text(path.read_text().replace("Backlog", "Icebox"))
     with pytest.raises(ValueError, match="pinned copy"):
         _load(tmp_path).shipped_columns()
+
+
+def test_a_label_rule_is_never_a_section_of_the_pinned_board_definition(columns):
+    """ADR-0141: the published definition names the board's columns, kinds, freezes and outcomes, never the loop's label
+    pairs. A section added here edits the artifact this repository carries, so the pin reports it and never adopts it;
+    the label rules live in their own definition, beside the pinned copy (ADR-0018)."""
+    assert "labels" not in json.loads((SCRIPTS / "board-definition.json").read_text())
 
 
 def test_a_published_definition_that_differs_is_reported(columns):
