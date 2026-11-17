@@ -98,4 +98,9 @@ case "$r" in WAIT*unknown*) ok "#1984: a card in an unknown component is held";;
 r=$(SG_STACK_ISSUE="$T/e2005.json" run 2005)
 case "$r" in WAIT*owner*) ok "#1984: a frozen blocker holds its dependent and names the owner";; *) ko "#1984 frozen blocker did not name the owner: '$r'";; esac
 grep -q "#2005.*owner" "$T/st/alerts.log" 2>/dev/null && ok "#1984: a frozen blocker writes one alert naming the owner" || ko "#1984 no owner alert in alerts.log"
+r=$(SG_STACK_ISSUE="$T/e2005.json" run 2005); [ "$(grep -c "#2005.*owner" "$T/st/alerts.log")" = 1 ] && ok "#1984: a repeated hold pass writes one alert" || ko "#1984 repeated hold wrote more than one alert"
+printf '%s\n' '[{"number":2007,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[],"blocked_by_edges":[{"repo":"x/y","number":2006,"state":"open"}],"blockers":[]},{"number":2006,"repo":"x/y","state":"open","labels":[{"name":"frozen:owner"}],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[],"blocked_by_edges":[],"blockers":[]}]' > "$T/g2.json"
+printf '%s\n' '{"number":2007,"body":"Work.","blocked_by":[],"blocked_by_read":true,"parent":null,"blockers":[]}' > "$T/e2007.json"
+r=$(SG_STACK_GRAPH="$T/g2.json" SG_STACK_ISSUE="$T/e2007.json" run 2007)
+case "$r" in *"WAIT dependency component of #2007 is held by owner"*"#2006"*) ok "#1984: an edge found only on the graph holds its component";; *) ko "#1984 graph-only edge did not hold: '$r'";; esac
 rm -rf "$T"; exit $fail
