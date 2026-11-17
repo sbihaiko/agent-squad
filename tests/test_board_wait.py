@@ -3,6 +3,10 @@
 The rule answers one closed value per card. The writer sends the value only where it changes, at most one batch per call.
 """
 import importlib.util
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).parents[1] / "contrib" / "squad-goal" / "scripts"
@@ -16,6 +20,12 @@ def _load(name, path):
 
 
 board_wait = _load("board_wait_under_test", SCRIPTS / "board_wait.py")
+
+
+def ledger(st, *args):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
+    env.update(SG_STATE=str(st), SG_REPO="a/b")
+    return subprocess.run([sys.executable, str(SCRIPTS / "issue_ledger.py"), *args], capture_output=True, text=True, env=env, timeout=15)
 
 
 def card(**facts):
@@ -138,3 +148,48 @@ def test_the_writer_reports_an_unknown_with_the_missing_input_it_names():
 
     assert written["10"].name == "unknown" and written["10"].missing == "record"
     assert binding.calls == [("I10", "unknown")]
+
+
+def test_a_settled_dispatch_write_reaches_doing_with_run_start_until_the_first_call(tmp_path):
+    assert ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1").stdout.strip() == "recorded"
+    assert ledger(tmp_path, "boardw", "a/b#7", "run-1", "Doing", "autobug dispatch").stdout.strip() == "written"
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+
+    column, wait = board_wait.dispatch_state(board, stood="Todo", called=False)
+
+    assert column == "Doing" and wait.name == "run start" and wait.missing is None
+
+
+def test_the_first_call_clears_run_start_and_never_moves_the_column(tmp_path):
+    ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1")
+    ledger(tmp_path, "boardw", "a/b#7", "run-1", "Doing", "autobug dispatch")
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+
+    column, wait = board_wait.dispatch_state(board, stood="Todo", called=True)
+
+    assert column == "Doing" and wait.name == "none" and wait.missing is None
+
+
+def test_a_pending_write_holds_the_card_where_it_stood_and_names_the_refusal(tmp_path):
+    ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1")
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+
+    column, wait = board_wait.dispatch_state(board, stood="Todo", called=False)
+
+    assert column == "Todo" and wait.name == "unknown" and wait.missing == "the card write is pending"
+
+
+def test_a_dropped_write_holds_the_card_where_it_stood_and_names_the_refusal(tmp_path):
+    ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1")
+    ledger(tmp_path, "boardx", "a/b#7", "run-1", "Doing")
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+
+    column, wait = board_wait.dispatch_state(board, stood="Todo", called=False)
+
+    assert column == "Todo" and wait.name == "unknown" and wait.missing == "the card write is dropped"
+
+
+def test_a_card_with_no_board_fact_holds_where_it_stood_and_names_the_missing_fact():
+    column, wait = board_wait.dispatch_state(None, stood="Todo", called=False)
+
+    assert column == "Todo" and wait.name == "unknown" and wait.missing == "no board fact"
