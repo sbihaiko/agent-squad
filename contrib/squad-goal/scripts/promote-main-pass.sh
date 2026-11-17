@@ -53,8 +53,9 @@ secs() { case "$1" in ''|*[!0-9]*) echo "$2";; *) echo "$1";; esac; }   # <value
 quiet=$(secs "${SG_PROMOTE_MAIN_QUIET_S:-}" 300); ceiling=$(secs "${SG_PROMOTE_MAIN_MAX_S:-}" 14400)
 rearm=$(secs "${SG_PROMOTE_MAIN_REARM_S:-}" 3600)
 flight=$(secs "${SG_PROMOTE_MAIN_FLIGHT_S:-}" 3600); grace=$(secs "${SG_PROMOTE_MAIN_GRACE_S:-}" 300)
-cred=${SG_PROMOTE_CREDENTIAL_HELPER:-osxkeychain}   # the one helper the fetch names (#2126)
-g() { /usr/bin/git -C "$tree" -c credential.helper= -c "credential.helper=$cred" "$@"; }
+cred=${SG_PROMOTE_CREDENTIAL_HELPER:-osxkeychain}   # the fallback helper the fetch names (#2126)
+own="!$d/promote-credential.sh"                    # the gh token, read by this process (#2126)
+g() { /usr/bin/git -C "$tree" -c credential.helper= -c "credential.helper=$own" -c "credential.helper=$cred" "$@"; }
 say() { echo "$(date -u +%FT%TZ) promote-main-pass: $*" >> "$log"; echo "promote-main-pass: $*"; }
 put() { printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"; }   # <file> <line>: one rename, so a kill leaves the old line or the new one
 alert_once() {  # <key> <text>: one alerts.log line per key
