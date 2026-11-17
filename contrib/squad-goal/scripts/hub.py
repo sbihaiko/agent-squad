@@ -445,7 +445,7 @@ def scan(p):
             if e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
-            elif e == "gate_result" and d.get("outcome") == "fail": red = True   # a measured red (ADR-0164): it outlives a takeover's cause
+            elif e == "gate_result": red = d.get("outcome") == "fail"   # the latest gate verdict is the measured red (ADR-0164)
             elif e == "land":
                 if d.get("outcome") == "pass": land = True
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
@@ -488,7 +488,7 @@ def state_of(r, age):
     if ver is None: return "running" if age < STALL_SECS else "stalled"
     if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
     if ver == "failed" and not r.get("measured_red", True):   # the janitor's takeover and the wave's age cap name their cause in the verdict (#2073); a cached run without the fact keeps its verdict
-        if "killed/taken-over" in reasons: return "taken over"
+        if "killed/taken-over" in reasons: return "taken-over"
         if "killed/age-cap-requeue" in reasons: return "retired-age-cap"
     return ver
 
@@ -531,7 +531,7 @@ def _titles():
         t = re.sub(r"^GUI test squad( pilot)?: ", "", it.get("t") or ""); TITLE[it["n"]] = t   # the whole title: a row clamps it in CSS, and a truncated string cannot be widened back
 def demoted(st, r, closed):
     """A failed / unverified / needs-human run whose every issue was closed afterwards (verified by hand, evidence on the issue) is no longer open business."""
-    if st in ("failed", "unverified", "needs-human") and r["issues"] and all(int(n) in closed for n in r["issues"]) and (r["land"] or st == "needs-human"): return "verified"
+    if st in ("failed", "unverified", "needs-human", "taken-over", "retired-age-cap") and r["issues"] and all(int(n) in closed for n in r["issues"]) and (r["land"] or st == "needs-human"): return "verified"
     return st
 def handled_of(st, r, checkout=None):
     """A needs-human run whose head is an ancestor of the fork's local/next (or whose PR is merged) is handled."""

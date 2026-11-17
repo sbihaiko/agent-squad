@@ -2,7 +2,7 @@
 # A run the janitor took over or the wave age cap retired reads as its own hub state, and only when its record names that cause
 # and holds no measured red (ADR-0029, ADR-0164). The raw verdict, exit code and reasons stay as recorded, whatever the state.
 # usage: bash test-hub-run-cause.sh [path/to/hub.py]
-d=$(cd "$(dirname "$0")" && pwd); export HUB_SRC=${1:-$d/hub.py}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
+d=$(cd "$(dirname "$0")" && pwd); export HUB_SRC=${1:-$d/hub.py} ROOT=$(cd "$d/../../.." && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_STATE="$T/st" HOME="$T/home"; mkdir -p "$HOME" "$T/hub" "$T/st"
 out=$(python3 - <<'PY' 2>&1
 import importlib.util, json, os, pathlib
@@ -25,11 +25,12 @@ TAKEN = "killed/taken-over"
 AGE_CAP = "killed/age-cap-requeue"
 
 taken = run("taken", [START, verdict([TAKEN])])
-check("a takeover cause shows the taken over state", hub.state_of(taken, 0), "taken over")
+check("a takeover cause shows the taken-over state", hub.state_of(taken, 0), "taken-over")
 check("the taken over run keeps its raw verdict", taken["verdict"], "failed")
 check("the taken over run keeps its exit code", taken["exit_code"], 1)
 check("the taken over run keeps its reasons", taken["reasons"], [TAKEN])
-check("a passed gate does not stop a takeover state", hub.state_of(run("taken-pass", [START, GREEN, verdict([TAKEN])]), 0), "taken over")
+check("a passed gate does not stop a takeover state", hub.state_of(run("taken-pass", [START, GREEN, verdict([TAKEN])]), 0), "taken-over")
+check("a red that a later green gate supersedes does not stop a takeover state", hub.state_of(run("red-then-green", [START, RED, GREEN, verdict([TAKEN])]), 0), "taken-over")
 
 capped = run("capped", [START, verdict([AGE_CAP])])
 check("an age cap cause shows the retired state", hub.state_of(capped, 0), "retired-age-cap")
@@ -45,10 +46,13 @@ red_cap = run("red-capped", [START, RED, verdict([AGE_CAP])])
 check("a measured red keeps the failed state after an age cap", hub.state_of(red_cap, 0), "failed")
 
 states = {r["state"]: r for r in hub.RUN_STATES}
-check("the taken over state is in the served table", "taken over" in states, True)
+css = pathlib.Path(os.environ["ROOT"], "dashboard/page.css").read_text()
+check("the taken-over state is in the served table", "taken-over" in states, True)
 check("the retired state is in the served table", "retired-age-cap" in states, True)
-check("the taken over badge reads its state", hub.badge_of("taken over")["text"], "taken over")
+check("the taken-over badge reads its table text", hub.badge_of("taken-over")["text"], "taken over")
 check("the retired badge reads its table text", hub.badge_of("retired-age-cap")["text"], "retired (age cap)")
+check("the taken-over class has a CSS rule", f".b.taken-over" in css, True)
+check("the retired class has a CSS rule", f".b.retired-age-cap" in css, True)
 PY
 )
 echo "$out"; case "$out" in *FAIL*|*Error*|*Traceback*) fail=1;; esac
