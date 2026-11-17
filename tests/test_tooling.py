@@ -541,6 +541,44 @@ def test_the_guard_and_the_pass_read_the_same_unproven_set(tmp_path):
     assert _guard_answer(tmp_path, None, "in_progress") == "run=false", "a tip whose tier is in flight starts it again"
 
 
+def _guard_with_other_run(tmp_path, job_status: str, job_conclusion: str | None) -> tuple[str, str]:
+    """The guard step's script on a tip with no run of its own, while another run of the pull request (id 22, sha def)
+    carries a complete-tier job in the given state: the `run=` line and the step's log."""
+    wf = _ci_workflow()
+    script = next(s["run"] for s in wf["jobs"][GUARD_JOB]["steps"] if s.get("id") == "once")
+    box = tmp_path / f"other-{job_status}-{job_conclusion}"
+    (box / "bin").mkdir(parents=True)
+    runs = {"workflow_runs": [{"id": 22, "head_sha": "def0000000", "status": job_status},
+                              {"id": 7, "head_sha": "abc", "status": "in_progress"}]}
+    jobs = {"jobs": [{"name": COMPLETE_TIER_JOBS[0], "status": job_status, "conclusion": job_conclusion}]}
+    gh = box / "bin" / "gh"
+    gh.write_text("#!/bin/bash\ncase \"$*\" in\n"
+                  f"  *actions/runs/22/jobs*) cat <<'JSON'\n{json.dumps(jobs)}\nJSON\n;;\n"
+                  f"  *actions/runs*) cat <<'JSON'\n{json.dumps(runs)}\nJSON\n;;\n"
+                  "  *) echo '{\"check_runs\": []}';;\nesac\n")
+    gh.chmod(0o755)
+    out = box / "out"
+    env = {**os.environ, "PATH": f"{box / 'bin'}{os.pathsep}{os.environ['PATH']}", "SHA": "abc", "REPO": "o/r",
+           "GITHUB_OUTPUT": str(out), "GITHUB_RUN_ID": "7", "HEAD_REF": "stg"}
+    r = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return out.read_text().strip(), r.stdout
+
+
+@pytest.mark.heavy
+def test_a_label_starts_no_complete_tier_while_another_runs(tmp_path):
+    """Guard for #2067: one complete tier at a time. A label on a new stg tip starts nothing while a complete-tier job
+    of another run of the pull request is in flight, and the log names that run and its sha; the run in flight is never
+    cancelled. A run that ended, or ended cancelled or timed out, holds nothing."""
+    answer, log = _guard_with_other_run(tmp_path, "in_progress", None)
+    assert answer == "run=false", "a label started a second complete tier while one was in flight"
+    assert "22" in log and "def0000" in log, f"the guard does not name the run in flight: {log!r}"
+    for status, conclusion in (("completed", "success"), ("completed", "cancelled"), ("completed", "timed_out")):
+        assert _guard_with_other_run(tmp_path, status, conclusion)[0] == "run=true", f"a {conclusion} run held the tier"
+    wf = _ci_workflow()
+    assert "cancel" not in json.dumps(wf["jobs"][GUARD_JOB]), "the guard cancels a run"
+
+
 def test_the_quiet_window_is_one_value_in_the_adr_and_the_pass():
     """Guard for ADR-0173 (#1890): the ADR's Settings line and promote-main-pass.sh name one quiet-window value.
 
