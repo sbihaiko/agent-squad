@@ -41,23 +41,29 @@ function profLoad(v){
  return `<section id=profload><div class=lsh><h3>${esc(v.label||"Machine load")}</h3></div>`
   +`<svg viewBox="0 0 ${PROF_LOAD_W} ${PROF_LOAD_H}" role=img aria-label="${esc(aria)}" preserveAspectRatio=none>${gaps}${segs}${core}</svg>`
   +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window; the dashed line is saturation at ${cores} cores${gap}.</p></section>`}
-// The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
-// medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
+// The trip of an issue (#1769, #2152): one stacked bar from the hub's fold, one segment and one row per board column, in
+// the board's order. A column that holds two stages reads its larger stage as the median and the p90, and the other
+// stage stands beside it in the same cell with its own median; the segment carries the sum of the column's stages, so no
+// measurement leaves the panel. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
 // The wall-time view of the loop's steps and gates was removed at the owner's request: the panel read as noise over the
 // trip bar and the hot spots, and the API still carries the data for a later view.
 const profLoadNum=x=>x==null?"&#8212;":x.toFixed(2);
+const profTripRead=(name,s)=>`${name}: median ${profTripNum(s.median_s)}, p90 ${profTripNum(s.p90_s)} (${s.observations} observation${s.observations===1?"":"s"})`;
+const profTripTitle=c=>{const main=profTripRead(c.label,c);
+ return c.beside?`${main}; ${c.beside.stage} median ${profTripNum(c.beside.median_s)}`:main};
+const profTripCell=c=>profTripNum(c.median_s)+(c.beside?` &middot; ${esc(c.beside.stage)} ${profTripNum(c.beside.median_s)}`:"");
 function profTrip(t){
  if(!t)return "";
  const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
  if(!t.bar)return `<section id=proftrip>${head}<p class=tpn>${n} deliver${n===1?"y":"ies"} in the last ${span}: fewer than three, so no bar is drawn.</p></section>`;
- const stages=t.stages||[],total=stages.reduce((a,s)=>a+(s.median_s||0),0);
- const seg=s=>{const pct=total&&s.median_s?100*s.median_s/total:0;
-  return `<i class="ptb-seg pts-${esc(s.stage)}" style="width:${pct.toFixed(2)}%" title="${esc(`${s.label}: median ${profTripNum(s.median_s)}, p90 ${profTripNum(s.p90_s)} (${s.observations} observation${s.observations===1?"":"s"})`)}"></i>`};
- const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each stage`)}">${stages.filter(s=>s.median_s>0).map(seg).join("")}</div>`;
- const rows=stages.map(s=>`<tr data-p="trip/${esc(s.stage)}"><td class=pn><i class="ptk ptk-${esc(s.stage)}${s.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(s.label)}</span></td><td>${profTripNum(s.median_s)}</td><td>${profTripNum(s.p90_s)}</td><td>${s.observations||0}</td></tr>`).join("");
- return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds their median time in each stage, in the order of the rows below.</p>${bar}`
-  +`<table id=proftt aria-label="The trip of an issue, a stage a row"><thead><tr><th>Stage</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
+ const cols=t.columns||[];
+ const seg=c=>{const pct=100*Math.max(0,c.share||0),painted=c.median_s>0;   // the fold's own share: the page never derives a second width
+  return `<i class="ptb-seg${painted?` pts-${esc(c.column)}`:" ptb-none"}" style="width:${pct.toFixed(2)}%" title="${esc(profTripTitle(c))}"></i>`};
+ const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each board column`)}">${cols.map(seg).join("")}</div>`;
+ const rows=cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td><td>${profTripCell(c)}</td><td>${profTripNum(c.p90_s)}</td><td>${c.observations||0}</td></tr>`).join("");
+ return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds six segments, one per board column, in the order of the rows below.</p>${bar}`
+  +`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Column</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;

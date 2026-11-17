@@ -2814,9 +2814,10 @@ def trip_gates(since):
     return out
 
 def trip_view(window_s, now=None):
-    """The Loop tab's trip bar (#1769): the stages of a delivery over the chosen window, folded by the rule layer from the
-    run records under this profile's run roots, the gate history, and the board transitions of the card each run works
-    (#1894). It reads files only, so it shows with the CPU sampling switch off."""
+    """The Loop tab's trip bar (#1769, #2152): the board's six columns of a delivery over the chosen window, folded by the
+    rule layer from the run records under this profile's run roots, the gate history, and the board transitions of the
+    card each run works (#1894). A run that names no card reads no column the card alone fills. It reads files only, so
+    it shows with the CPU sampling switch off."""
     now = time.time() if now is None else now
     since = now - window_s
     files = []
