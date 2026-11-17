@@ -59,3 +59,12 @@ def test_the_skill_says_the_write_back_files_bugs_and_the_map_is_committed():
 
 def test_the_skill_describes_the_migration_of_a_flat_scenario():
     assert "flat scenario" in SKILL and "re-parent" in SKILL
+
+
+def test_the_skill_writes_no_wave_label():
+    assert "This repository writes no wave label" in SKILL, (
+        "the repo patch states that the skill writes no wave label (#2132)")
+
+
+def test_the_skill_keeps_the_blocked_by_edge_of_a_setup_case():
+    assert "## Blocked by" in SKILL and "native" in SKILL.lower()
