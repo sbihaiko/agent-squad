@@ -14,12 +14,12 @@ echo '[{"n":7,"st":"Todo","s":"OPEN","l":[]},{"n":8,"st":"Doing","s":"OPEN","l":
 before=$(ls "$T" | sort)
 out=$(python3 "$T/s/board_migrate.py" --plan "$T/all.json" 2>&1); rc=$?
 [ $rc = 0 ] && ok "dry run exits 0" || ko "dry run exits $rc"
-[ "$(echo "$out" | grep -c '^MOVE #')" = 7 ] && ok "every move is listed" || ko "moves: $out"
-for o in Blocked "In Progress" Done "Open Specs" Merging Landing Testing Pushing; do echo "$out" | grep -q "^REMOVE option $o" && ok "removal listed: $o" || ko "removal missing: $o"; done
+[ "$(echo "$out" | grep -c '^MOVE #')" = 6 ] && ok "every move is listed" || ko "moves: $out"
+for o in Blocked "In Progress" Done "Open Specs" Merging Testing Pushing; do echo "$out" | grep -q "^REMOVE option $o" && ok "removal listed: $o" || ko "removal missing: $o"; done
 echo "$out" | grep -q '^MOVE #1 Open Specs -> Backlog +spec' && ok "Open Specs -> Backlog with the spec label" || ko "open specs: $out"
-echo "$out" | grep -q '^MOVE #3 Blocked -> Code Complete +frozen:owner' && ok "Blocked -> the column reached, owner marker" || ko "blocked: $out"
-echo "$out" | grep -q '^MOVE #8 Merging -> Code Complete' && ok "Merging -> Code Complete" || ko "merging: $out"
-echo "$out" | grep -q '^MOVE #9 Landing -> Code Complete' && ok "Landing -> Code Complete" || ko "landing: $out"
+echo "$out" | grep -q '^MOVE #3 Blocked -> Landing +frozen:owner' && ok "Blocked -> the column reached, owner marker" || ko "blocked: $out"
+echo "$out" | grep -q '^MOVE #8 Merging -> Landing' && ok "Merging -> Landing" || ko "merging: $out"
+echo "$out" | grep -q '^MOVE #9 ' && ko "landing: a card on the shipped Landing column is never moved" || ok "Landing is the shipped column, so it is no old option: its card is never moved"
 [ "$(ls "$T" | sort)" = "$before" ] && ok "the dry run wrote nothing" || ko "the dry run wrote a file"
 err=$(python3 "$T/s/board_migrate.py" --check "$T/all.json" 2>&1 >/dev/null); rc=$?
 [ $rc = 3 ] && ok "removal refused while a card carries an old option" || ko "check exit $rc"
