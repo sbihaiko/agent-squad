@@ -28,25 +28,25 @@ def _stored(card):
 
 
 def _effective(cards):
-    """Each card's level: its stored level, raised to the highest effective level of every open card it blocks, transitively."""
+    """Each card's level: the highest stored level among itself and the open cards it blocks, transitively."""
     stored = {_key(card): _stored(card) for card in cards}
     blocks = {}
     for card in cards:
+        if card["state"] != "open": continue
         for edge in card.get("blocked_by_edges") or []:
             blocker = (edge["repo"], int(edge["number"]))
-            if blocker in stored: blocks.setdefault(blocker, []).append(_key(card))
-    memo, visiting = {}, set()
+            if edge["state"] == "open" and blocker in stored: blocks.setdefault(blocker, []).append(_key(card))
 
-    def level(key):
-        if key in memo: return memo[key]
-        if key in visiting: return stored[key]
-        visiting.add(key)
-        found = [stored[key]] + [level(blocked) for blocked in blocks.get(key, [])]
-        visiting.discard(key)
-        memo[key] = max((x for x in found if x is not None), default=None)
-        return memo[key]
+    def reachable(key):
+        seen, todo = {key}, [key]
+        while todo:
+            for blocked in blocks.get(todo.pop(), []):
+                if blocked not in seen:
+                    seen.add(blocked)
+                    todo.append(blocked)
+        return seen
 
-    return {key: level(key) for key in stored}
+    return {key: max((stored[k] for k in reachable(key) if stored[k] is not None), default=None) for key in stored}
 
 
 def order(cards):

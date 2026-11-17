@@ -15,9 +15,9 @@ EARLY = "2026-11-01T00:00:00Z"
 LATE = "2026-11-02T00:00:00Z"
 
 
-def card(number, priority=None, created=EARLY, repo=REPO, blocked_by=()):
+def card(number, priority=None, created=EARLY, repo=REPO, blocked_by=(), state="open"):
     edges = [{"repo": repo, "number": n, "state": "open"} for n in blocked_by]
-    return {"number": number, "repo": repo, "created": created, "priority": priority, "blocked_by_edges": edges}
+    return {"number": number, "repo": repo, "created": created, "priority": priority, "state": state, "blocked_by_edges": edges}
 
 
 def numbers(cards):
@@ -132,3 +132,23 @@ def test_the_queue_reads_the_board_once_and_keeps_each_stored_priority():
     assert [c["number"] for c in ranked] == [1, 2, 3]
     assert held == [] and reads == [1]
     assert ranked[0]["priority"] == "low"
+
+
+def test_a_cycle_does_not_drop_the_urgent_rank_of_a_card_on_it():
+    cards = [card(1, "low", blocked_by=[2]), card(2, "normal", blocked_by=[1]), card(3, "urgent", blocked_by=[1])]
+
+    assert numbers(cards) == [1, 2, 3]
+
+
+def test_a_closed_card_does_not_raise_its_blocker():
+    cards = [card(1, "low"), card(2, "urgent", blocked_by=[1], state="closed"), card(3, "high")]
+
+    assert numbers(cards)[-1] == 1
+
+
+def test_a_closed_blocking_edge_does_not_raise_its_blocker():
+    blocker = card(1, "low")
+    dependent = card(2, "urgent")
+    dependent["blocked_by_edges"] = [{"repo": REPO, "number": 1, "state": "closed"}]
+
+    assert numbers([blocker, dependent, card(3, "high")])[-1] == 1
