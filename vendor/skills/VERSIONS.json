@@ -26,7 +26,7 @@
   },
   "to-spec": {
     "files": 2,
-    "sha256": "b8c6941781916a4e20579da8f0ffa34fc302dba1033e2e44d2b0147034937a4d",
+    "sha256": "9eca3ed485a5a2668a1b9dac8730c65ee170ffdb3ba965ad1388fdd15b43838d",
     "source": "skill:to-spec"
   },
   "to-test-scenario": {
@@ -36,7 +36,7 @@
   },
   "to-tickets": {
     "files": 2,
-    "sha256": "1bc6bbd561cb80de1283c2bfd6983cb246ef2115533df14806f79a318e75f541",
+    "sha256": "06bf7f08eb90a4c0db2969e884302c22cd2def91b3e23260a43f30dcd2c99372",
     "source": "skill:to-tickets"
   }
 }

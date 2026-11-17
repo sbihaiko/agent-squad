@@ -129,3 +129,5 @@ words. Domain terms are technical names, which STE100 allows; the vocabulary is 
 `python3 scripts/check_ste.py --title "<title>" <body-file>` from the repository root. It prints one line per finding
 (section, kind, detail, sentence) and exits 0: it warns and never blocks the publish. Show the findings with the draft,
 and let the writer fix or keep each one before the publish.
+
+**Native edges.** The upstream to-spec text names no blocking edge, so this section overrides nothing. A spec writes no blocking edge: it is a document, never work (ADR-0142), and its sub-issue link is its only relation to its tickets. The tickets that a spec publishes take their native edges through `python3 contrib/squad-goal/scripts/edge_write.py`, as the to-tickets section states.
