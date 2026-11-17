@@ -12,16 +12,16 @@ remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 main=${SG_MAIN_BRANCH:-main}; stg=${SG_STG_BRANCH:-stg}
 export GIT_TERMINAL_PROMPT=0
 W=$(mktemp -d) || exit 1; trap 'rm -rf "$W"' EXIT
-g() { /usr/bin/git -C "$W" "$@"; }
+cred=${SG_PROMOTE_CREDENTIAL_HELPER:-osxkeychain}   # the one helper the push names (#2126)
+g() { /usr/bin/git -C "$W" -c credential.helper= -c "credential.helper=$cred" "$@"; }   # `=` resets the inherited helpers
 no() { echo "promote-main: $*" >&2; exit 1; }
-# The credential (#1896). git resolves its own credential helper, and a helper whose store this process cannot reach
-# answers nothing: gh keeps its token in the login keychain, and the CI hook runs in a launchd session that carries no login
-# keychain. GIT_TERMINAL_PROMPT=0 then forbids the prompt, and the push dies with `could not read Username`. This script
-# proves nothing about a credential before it uses one: a probe resolves the helper a second time, under its own rules, and
-# a probe that fails where the push would succeed invents an environment defect. The only proof is the push or fetch git
-# itself reports as an authentication failure; then the helper git resolves in this same environment is read, and one line
-# names what could not be reached, on a code of its own. The caller knows the credential is the whole of it and leaves its
-# work for a process that can reach it.
+# The credential (#1896). A helper whose store this process cannot reach answers nothing: gh keeps its token in the login
+# keychain, and the CI hook runs in a launchd session that carries no login keychain. GIT_TERMINAL_PROMPT=0 then forbids the
+# prompt, and the push dies with `could not read Username`. This script proves nothing about a credential before it uses one:
+# a probe resolves the helper a second time, under its own rules, and a probe that fails where the push would succeed invents
+# an environment defect. The only proof is the push or fetch git itself reports as an authentication failure; then one line
+# names the helper this script named and what could not be reached, on a code of its own. The caller knows the credential is
+# the whole of it and leaves its work for a process that can reach it.
 auth_failure() {  # <git's output>: git failed at the credential, never at the repository
   case "$1" in
     *"could not read Username"*|*"could not read Password"*|*"Authentication failed"*|*"terminal prompts disabled"*) return 0;;
@@ -37,10 +37,7 @@ redacted() {  # <url>: scheme://host, with no userinfo, so a credential written 
   esac
 }
 no_credential() {  # <git's output>: one line that names the credential this process could not reach
-  local helper
-  helper=$(/usr/bin/git config --get-urlmatch credential.helper "$remote" 2>/dev/null | tail -1)
-  [ -n "$helper" ] || helper=$(/usr/bin/git config --get-all credential.helper 2>/dev/null | tail -1)
-  echo "promote-main: nothing was pushed: this process cannot reach the credential for $(redacted "$remote") (git's credential helper: ${helper:-none configured}), and git said: $(printf '%s' "$1" | tail -1); $main is where it was" >&2
+  echo "promote-main: nothing was pushed: this process cannot reach the credential for $(redacted "$remote") (git's credential helper: $cred), and git said: $(printf '%s' "$1" | tail -1); $main is where it was" >&2
   exit 3
 }
 g init -q . 2>/dev/null; g remote add origin "$remote"
