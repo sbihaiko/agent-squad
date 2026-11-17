@@ -1625,11 +1625,14 @@ def stop_of(n):   # why the issue is stopped, or "": its ledger stopped it (WAVE
     labs = issue_labels(n) & {"frozen:owner", "needs-owner"}
     return f"it carries {' '.join(sorted(labs))}" if labs else ""
 if owner and proj and repo0:
-    o_runs = list(names)   # the listed runs, then every run a dispatch marker names: the janitor prunes a finished run's line, and its marker still claims the issue (#2127)
+    o_runs = list(names)   # the listed runs, then every run whose request names a dispatch marker's issue: the janitor prunes a finished run's line, and its marker still claims the issue (#2127)
     o_seen = {folder(r) for r in names}
+    by_issue = {}   # a frontier marker holds its request name, never its run folder, so the run is found by the issue it names
+    for rf in (co / "runs").glob("*") if (co / "runs").is_dir() else []:
+        for n in req_issues(rf): by_issue.setdefault(n, []).append(rf)
     for dm in sorted((st / "auto").glob("disp-*")):
-        dh = marker_text(dm)
-        if dh and folder(dh).is_dir() and folder(dh) not in o_seen: o_seen.add(folder(dh)); o_runs.append(dh)
+        for rf in by_issue.get(dm.name[5:], []):
+            if rf not in o_seen: o_seen.add(rf); o_runs.append(str(rf))
     for r in o_runs:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
         if (st / "auto" / f"taken-{f.name}").exists(): continue   # a taken-over run's markers stand until its hand fix clears the taken marker (ADR-0166)

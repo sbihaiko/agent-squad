@@ -142,11 +142,13 @@ run >/dev/null   # the announcement is once per run, not once per pass
 [ "$(/usr/bin/grep -c 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "O: the drop is announced once" || ko "O re-announced: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ "$(/usr/bin/grep -c 'DISP MARKER DROPPED #1001' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "R: the marker is dropped and announced once" || ko "R re-announced or silent: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "R: a board that follows the writes is written once; the card does not flap" || ko "#901 flapped across passes: $(cat "$T/board.calls" 2>/dev/null)"
-# L (#2127): a needs-human run that left active-runs.txt, with no wave open and no rearm, releases its marker, so the frontier dispatches the issue again.
-mkdir -p "$T/co/runs/run-left"; printf 'CHILD — GitHub issue(s) 909 (bug; one PR):\n' > "$T/co/runs/run-left/request.txt"
+# L (#2127): a needs-human run that left active-runs.txt, with no wave open and no rearm, releases the marker its frontier request
+# wrote (the marker holds the request name, not the run folder), so the frontier dispatches the issue again.
+mkdir -p "$T/co/runs/run-left" "$T/st/req"; printf 'CHILD — GitHub issue(s) 909 (bug; one PR):\n' > "$T/co/runs/run-left/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #909 on fix/909-x"}\n{"event": "verdict", "verdict": "needs-human", "reasons": ["owner_decision"], "exit_code": 0}\n' > "$T/co/runs/run-left/record.jsonl"
-echo run-left > "$T/st/auto/disp-909"
-touch -t 202001010000 "$T/co/runs/run-left/record.jsonl" "$T/co/runs/run-left/request.txt" "$T/st/auto/disp-909"
+cp "$T/co/runs/run-left/request.txt" "$T/st/req/frontier-20261117-061147.txt"
+echo frontier-20261117-061147 > "$T/st/auto/disp-909"
+touch -t 202001010000 "$T/co/runs/run-left/record.jsonl" "$T/co/runs/run-left/request.txt" "$T/st/req/frontier-20261117-061147.txt" "$T/st/auto/disp-909"
 run >/dev/null
 [ ! -e "$T/st/auto/disp-909" ] && ok "L: a needs-human run that left active-runs.txt releases its marker" || ko "L disp-909 kept: the issue stays claimed for good: $(cat "$T/st/cycle.log" 2>/dev/null)"
 # M (#2127, ADR-0166): a taken-over run that left active-runs.txt keeps its marker while its auto/taken-<run> marker stands.
