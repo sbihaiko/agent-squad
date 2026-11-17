@@ -1159,10 +1159,12 @@ rm -f "$T/fail-1229"; mv "$T/s/issue_ledger-real.py" "$T/s/issue_ledger.py"
 # the pass names the issue and dispatches nothing; an approval of this body dispatches it; an approval of an older body is
 # stale, and a CHANGES review holds it. The dry pass names what it would dispatch.
 ab_fresh; . "$d/loopbug.sh"; printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"
+# The bare class drains dispatch (#1980), so the plan-review gate is proved on `loop-bug:publish`, the class that leaves
+# dispatch open. Case 32b below puts the bare class back to prove the drain.
 cat > "$T/issues.json" <<'JSON'
 [
   {"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
-  {"number":596,"title":"The loop cannot build its own fix","body":"step loop.py","created_at":"2026-10-18T08:00:00Z","labels":["bug","ready-for-agent","loop-bug"]}
+  {"number":596,"title":"The loop cannot build its own fix","body":"step loop.py","created_at":"2026-10-18T08:00:00Z","labels":["bug","ready-for-agent","loop-bug:publish"]}
 ]
 JSON
 todo 1228 596
@@ -1196,12 +1198,15 @@ case "$r" in *"(changes)"*) ok "32 a CHANGES plan review holds the loop-bug";; *
 rm -f "$T/st/review-x_y#596."*
 # 32b) (#1708, ADR-0146) with the loop switch beside the pass, any open loop-bug drains the loop: the pass asks for the drain
 # through `watchd.sh loopbug`, names the issue and dispatches nothing, a plan approval included. The approval releases the
-# hand build, never a dispatch.
+# hand build, never a dispatch. The bare class is back here, because it is the one that drains every restriction (#1980).
+/usr/bin/sed -i '' 's/"loop-bug:publish"/"loop-bug"/' "$T/issues.json"
 cp "$d/watchd.sh" "$T/s/"; printf 'VERDICT: APPROVE\n' > "$T/st/review-x_y#596.md"; printf '%s\n' "$body_h" > "$T/st/review-x_y#596.sha"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"LOOP STOP: #596 is a loop defect; the fix lands outside the loop"*) ok "32b a bare loop-bug stops the bug pass and is named";; *) ko "32b no stop for a bare loop-bug: '$r'";; esac
 case "$r" in *"[596]"*|*"[1228]"*) ko "32b the pass dispatched under an open loop-bug: '$r'";; *) ok "32b an approved loop-bug is not dispatched, and nothing else is";; esac
 printf '#!/bin/bash\necho "$1" >> "%s/loopbug.calls"; exit 2\n' "$T" > "$T/bin/lbcmd"; chmod +x "$T/bin/lbcmd"
+# The one writer is the only source here: the list carries no loop-bug, so an answer it cannot read stops nothing (#1980).
+/usr/bin/sed -i '' 's/,"loop-bug"\]/]/' "$T/issues.json"
 r=$(SG_LOOPBUG_CMD="$T/bin/lbcmd" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 [ -s "$T/loopbug.calls" ] && ok "32b the pass hands its issue list to the drain's one writer" || ko "32b the pass asked for no drain"
 case "$r" in *"LOOP STOP"*) ko "32b an unknown answer stopped the pass: '$r'";; *) ok "32b a list the rule cannot read asks for nothing and stops nothing";; esac

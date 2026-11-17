@@ -143,9 +143,10 @@ r=$(OPEN="20" LABELED="20=loop-bug" fp); r="$r"$'\n'"$(OPEN="20" LABELED="20=loo
 r=$(OPEN="21 90" LABELED="90=loop-bug:dispatch" fp)
 [ "$(n gui/21-ls)" = 0 ] && ok "LOOP STOP holds the fix pass for a plain bug" || ko "a fix run started under LOOP STOP: '$r'"
 case "$r" in *"BRANCHFIX SKIP gui/21-ls: LOOP STOP holds, fixed outside the loop"*) ok "the skip names LOOP STOP";; *) ko "no LOOP STOP skip line: '$r'";; esac
-# 17) (#841) a loop-bug:* label on one branch skips that branch only; a plain bug on another branch still gets its one launch
+# 17) (#841) a loop-bug:* label on one branch skips that branch only; a plain bug on another branch still gets its one launch.
+# The class here is `loop-bug:publish`, which leaves dispatch open; an unknown class drains every restriction (#1980).
 : > "$T/launch.log"; push gui/22-lx; push gui/23-pl; rev gui/22-lx CHANGES "p.sh:1 fix"; rev gui/23-pl CHANGES "q.sh:1 fix"
-r=$(OPEN="22 23" LABELED="22=loop-bug:other" fp)
+r=$(OPEN="22 23" LABELED="22=loop-bug:publish" fp)
 [ "$(n gui/22-lx)" = 0 ] && ok "a loop-bug:* branch gets no fix run" || ko "a loop-bug:* branch was dispatched: '$r'"
 [ "$(n gui/23-pl)" = 1 ] && ok "a plain bug branch still gets one fix run" || ko "a plain bug branch dispatched $(n gui/23-pl) times: '$r'"
 # 17b) (#1708) the pass hands its list to the drain's one writer, and an open loop-bug of any spelling holds every fix run:
