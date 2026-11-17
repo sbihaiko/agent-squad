@@ -96,11 +96,10 @@ def test_a_waiting_tip_check_takes_the_freed_slots_before_a_fourth_child_gate(tm
         assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None   # one free slot is no take
         c.release_many(kids[1])                                                # a second slot frees
         assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None
-        tip = c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")
-        assert tip is not None and len(tip) == 2                               # the tip check takes the freed slots
-        assert [w["holder"] for w in c.waiting()] == ["gate-tip"]             # a part take keeps its marker (#2049)
+        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None   # two free is no take (#2060)
         c.release_many(kids[2])
         assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None    # the third slot stays for the tip check
+        assert len(c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")) == 3   # the whole count
         c.release_holder("gates", "gate-tip")
         assert c.waiting() == []                                               # its release takes the marker with it
         assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None   # no waiter: the child gate takes a slot
@@ -120,23 +119,6 @@ def test_the_fourth_child_gate_waits_until_the_tip_check_releases_its_slots(tmp_
         tip = c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")
         assert len(tip) == 3
         assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None    # the budget is full
-        c.release_holder("gates", "gate-tip")
-        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None
-    finally:
-        holder.kill()
-
-
-def test_a_tip_check_that_took_part_of_its_slots_keeps_the_rest_from_a_child_until_it_releases(tmp_path):
-    holder, pid = live_pid()
-    try:
-        c = caps.Ceiling(THREE, tmp_path / "leases")
-        kids = [c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3)]
-        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None
-        c.release_many(kids[0])
-        c.release_many(kids[1])
-        assert len(c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")) == 2     # two free: it runs on two
-        c.release_many(kids[2])
-        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None     # the tip still holds: the child waits
         c.release_holder("gates", "gate-tip")
         assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None
     finally:

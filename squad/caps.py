@@ -341,14 +341,17 @@ class Ceiling:
         the slots that are free instead of giving up (#734). Fewer than two free is no take. A take is one locked step, so a gate
         never holds part of its slots while it waits for the rest.
         A `priority` take (a tip check or a landing check, ADR-0174, #2049) that gets no slot writes a waiting marker that names
-        `holder` and `next: priority`, and a take of all `n` removes it; a part take keeps it until `release_holder`. While that marker's pid lives, a take by any other holder gets
+        `holder` and `next: priority`, and its take removes it. A priority take is never a part take: it gets its whole count
+        (`n`, at most the ceiling) or none, because a full battery on part of its slots passed the gate bound (#2060). While that marker's pid lives, a take by any other holder gets
         no slot, so the freed slots wait for the priority holder; a dead waiter is reaped and never blocks."""
         with self._lock():
             if n <= 0:
                 return []
             mark = self.folder / "waiting" / _name(f"{kind}-{holder}")
-            free, want = self.caps[kind] - len(self._live(kind)), n
-            n = n if free >= n else (free if free >= 2 else 0)
+            free, want = self.caps[kind] - len(self._live(kind)), min(n, self.caps[kind])
+            n = n if free >= n else (free if free >= 2 and priority is None else 0)
+            if priority is not None:     # a priority check takes its whole count or none: a part take passed the gate bound (#2060)
+                n = want if free >= want else 0
             if priority is None and self._first(kind, holder) is not None:
                 n = 0
             if n == 0:
@@ -357,12 +360,8 @@ class Ceiling:
                     mark.write_text(json.dumps({"ceiling": f"caps.{kind}", "holder": holder, "pid": pid or os.getpid(),
                                                 "since": time.time(), "next": priority}))
                 return None
-            if priority is not None and n >= want:
+            if priority is not None:
                 mark.unlink(missing_ok=True)
-            elif priority is not None:     # a part take keeps its marker until it releases, so the slots it lacks never go to a child (#2049)
-                mark.parent.mkdir(parents=True, exist_ok=True)
-                mark.write_text(json.dumps({"ceiling": f"caps.{kind}", "holder": holder, "pid": pid or os.getpid(),
-                                            "since": time.time(), "next": priority}))
             out = []
             for i in range(n):
                 p = self.folder / kind / _name(f"{holder}.slot{i}")
