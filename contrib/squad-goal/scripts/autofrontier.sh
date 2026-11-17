@@ -230,6 +230,8 @@ gh_loop_stop "$F/issues.json" && exit 0
 python3 "$here/slicecut.py" release "$F/issues.json" 2>/dev/null | sed 's/^/FRONTIER /' >&2 || true
 # Too many finished children wait for review (#562): a new run only adds more, so the pass holds until childcc catches up.
 gh_dispatch_hold && exit 0
+# (#2056) The base carries a measured red: no new dispatch from this lane; the bug lane goes on, so the bug that owns it runs.
+. "$here/basered.sh"; sg_base_red_hold && exit 0
 gh_disk_stop && exit 0
 gh_bug_first && exit 0
 board=$(sg_board_rows "$(sg_go_csv "$F/issues.json" "$SG_FRONTIER_LABEL")") || { echo "FRONTIER: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
