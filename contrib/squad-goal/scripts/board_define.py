@@ -171,12 +171,15 @@ def contract(binding, status, definition, apply):
 
 def rename(binding, status, apply):
     """Rename each option of the Status field in place: one field call carries every option with its own id, so no card
-    moves. One items read after the call proves every card kept its column and the count is the same (#2154)."""
+    moves. One items read before the call counts the cards, and one after it proves every card kept its column and the
+    count is the same (#2154). A board already renamed takes no write and no read."""
     sent, changed = board_migrate.renamed(status["options"])
     for o in status["options"]:
         if o["name"] in board_migrate.RENAMES:
             print(f"RENAME {o['name']} -> {board_migrate.RENAMES[o['name']]}")
-    if not changed: print("no old name: the field already carries the shipped vocabulary")
+    if not changed:   # a board already renamed: no write, no items read, so a second call changes nothing
+        print("no old name: the field already carries the shipped vocabulary; nothing written")
+        return 0
     if not apply: print(f"dry run: {len(sent)} option(s) in one field call, nothing written"); return 0
     before = cards(binding, status)
     out = json.loads(binding.api("graphql", "--input", "-", inp=json.dumps({"query":

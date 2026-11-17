@@ -151,7 +151,16 @@ printf 'PVT_1\t5\ta/x\to_review\nPVT_2\t6\ta/x\to_landing\nPVT_3\t7\tb/y\to_clos
 : > "$T/graphql.in"; : > "$T/gh.calls"
 o=$(run --rename --apply o 4 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "--rename --apply exits 0" || ko "--rename exit $rc: $o"
-[ "$(grep -c 'api graphql' "$T/gh.calls")" -eq 1 ] && ok "the rename sends one field call" || ko "rename calls: $(cat "$T/gh.calls")"
+python3 - "$T/graphql.in" <<'P' && ok "the rename sends one field write" || ko "rename writes: $(cat "$T/graphql.in")"
+import json, sys
+calls = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+upd = [c for c in calls if "updateProjectV2Field" in c.get("query", "")]
+assert len(upd) == 1, calls
+P
+# the count is a real read before the call: the items read comes before the field write in the call log
+readline=$(grep -n 'items?per_page=100' "$T/gh.calls" | head -1 | cut -d: -f1)
+writeline=$(grep -n 'api graphql' "$T/gh.calls" | head -1 | cut -d: -f1)
+[ -n "$readline" ] && [ -n "$writeline" ] && [ "$readline" -lt "$writeline" ] && ok "the count reads the cards before the field call" || ko "call order: $(cat "$T/gh.calls")"
 python3 - "$T/graphql.in" <<'P' && ok "the call carries every option id, and the two old names read Review and Landing" || ko "rename payload: $(cat "$T/graphql.in")"
 import json, sys
 body = json.loads([l for l in open(sys.argv[1]) if l.strip()][-1])
@@ -166,11 +175,9 @@ import json, sys
 s = json.load(open(sys.argv[1]))[0]
 assert [(o["id"], o["name"]["raw"]) for o in s["options"]] == [("o_backlog", "Backlog"), ("o_review", "Review"), ("o_landing", "Landing"), ("o_closed", "Closed")]
 P
-first=$(python3 -c 'import json,sys;print(json.dumps(json.loads([l for l in open(sys.argv[1]) if l.strip()][-1]),sort_keys=True))' "$T/graphql.in")
-: > "$T/graphql.in"
+: > "$T/graphql.in"; : > "$T/gh.calls"
 o=$(run --rename --apply o 4 2>&1); rc=$?
-second=$(python3 -c 'import json,sys;print(json.dumps(json.loads([l for l in open(sys.argv[1]) if l.strip()][-1]),sort_keys=True))' "$T/graphql.in")
-[ "$rc" -eq 0 ] && [ "$first" = "$second" ] && ok "a second call sends the names the board already carries, changing nothing" || ko "second rename: exit $rc, first $first, second $second"
+[ "$rc" -eq 0 ] && [ ! -s "$T/graphql.in" ] && grep -q 'no old name' <<<"$o" && ok "a second call writes nothing, changing nothing" || ko "second rename: exit $rc, writes: $(cat "$T/graphql.in"): $o"
 
 # #770: with no SG_STATE the run names the gap and exits 2, never a KeyError traceback
 o=$(env -u SG_STATE PATH="$T/bin:$PATH" python3 "$T/board_define.py" --definition "$T/board.json" o 4 2>&1); rc=$?
