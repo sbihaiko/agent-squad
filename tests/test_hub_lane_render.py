@@ -34,6 +34,8 @@ def test_the_lane_renderer_is_wired_into_the_board_body():
     assert "const laneHtml=m=>{" in src, "the lane renderer is gone from the page"
     assert "const lanesHtml=laneHtml(model)" in src, "the board draws no lane model"
     assert '$("#bbody").innerHTML=lanesHtml' in src, "the board body never takes the lane markup"
+    assert 'if(model){if($("#bbody").dataset.h!==lanesHtml)' in src, \
+        "the column markup is written beside the lane markup: the body alternates on every poll"
 
 
 def test_the_served_page_carries_the_renderer(tmp_path, monkeypatch):

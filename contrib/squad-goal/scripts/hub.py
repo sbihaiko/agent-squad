@@ -6754,11 +6754,11 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 {const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
 <script>
 {const p=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";document.title=p?`Hub | ${decodeURIComponent(p)}`:"Hub";}   // the tab names the profile it shows, so two open hubs are told apart
-const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
+const $=s=>document.querySelector(s),ls=(()=>{try{return JSON.parse(localStorage.hub||"{}")||{}}catch(e){return {}}})();   // a page that cannot reach the device's storage still draws: the read is never the page's death
 const HUB_REPO=/*HUB_REPO*/;
 let SPECLC=new Map();   // issue number -> its spec colour, filled by the board read so the live-runs card can wear it
 let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set(),slots=[],hl=null,boardRows=[],ENDED=[];   // ENDED: the rows of /api/ended (#984)
-const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
+const save=()=>{try{localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src})}catch(e){}};
 // SIDEBAR{
 const sideBtn=$("#sbtn"),sideBody=$("#sbbody"),sideWide=matchMedia("(min-width: 601px)");
 function sidePaint(shut){const name=shut?"Open the Monitor bar":"Collapse the Monitor bar";document.documentElement.classList.toggle("sbshut",shut);sideBtn.setAttribute("aria-expanded",String(!shut));sideBtn.setAttribute("aria-label",name);sideBtn.title=name;sideBody.inert=shut}
@@ -7287,7 +7287,7 @@ async function pollStats(){try{pollSubs();
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
-const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
+const bo=ls.bo||{},saveB=()=>{ls.bo=bo;try{localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})}catch(e){}};
 bo.dock="bottom";   // the board always docks at the bottom
 dropRemoved(bo);   // a saved state from a control the board no longer has is dropped (#899)
 const sizeBoard=()=>{$("#board").style.height=""};   // the board is one pane of the Board tab: its height is the page's, never a dragged one (#889)
@@ -7662,8 +7662,8 @@ const model=buildBoard(all.filter(g=>!isPR(g.name)),{closed:COLNAME.issue_closed
 const lanesHtml=laneHtml(model);lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#bbody").classList.add("lanes");
 $("#lhc").innerHTML=model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
-if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}
-else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
+if(model){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
+else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // no lane model: the columns stand, and a scroll in progress is never interrupted
 boardRows=all.flatMap(g=>g.items);paintHL();
 }catch(e){}finally{lim.busy=0}}
 // highlight:begin

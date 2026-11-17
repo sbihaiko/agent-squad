@@ -205,7 +205,7 @@ def test_the_card_fits_the_sidebar_at_the_phone_width_on_rendered_dimensions(hub
 def test_each_row_carries_its_full_sentence_in_its_accessible_name_on_the_rendered_page(hub):
     def measure(page):
         return [page.get_by_role("img", name=s, exact=True).count()
-                for s in ("Tasks: 4 of 10 closed", "Bugs: 7 of 10 opened", "Loop-bugs: 4 of 10 opened")]
+                for s in ("Tasks: 4 of 10 closed", "Bugs: 3 of 7 closed", "Loop-bugs: 2 of 4 closed")]
     assert _rendered(hub, SPEED, measure) == [1, 1, 1]
 
 def test_the_monitor_carries_no_late_writes_row(hub):
