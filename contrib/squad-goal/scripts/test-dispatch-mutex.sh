@@ -2,6 +2,9 @@
 # Regression test for the mutual dispatch claim and live-run issue reading.
 # Offline: stub gh. usage: bash test-dispatch-mutex.sh [scripts dir]
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
+# The nightly window is one wall-clock hour of the day (#1533): a pass inside it holds every dispatch, so this suite names
+# the switch and its assertions never wait on the hour the gate happens to run.
+export SG_NIGHTLY_OFF=1
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
