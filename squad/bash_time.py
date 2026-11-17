@@ -6,6 +6,8 @@ history for the wait a gate call spent for a caps.gates slot. A run's record nev
 machine-wide figure, read apart from the call time it sits in.
 
 usage: python3 -m squad.bash_time --runs-dir DIR [--history FILE] [--hours 24] [--node-prefix route.router]
+
+`DIR` is any folder a record sits at or below: one run folder, a `runs` folder, or the parent of the gui trees.
 """
 import argparse
 import json
@@ -46,11 +48,8 @@ def classify(command):
 
 
 def _records(runs_dir):
-    for folder in sorted(Path(runs_dir).iterdir()):
-        for rel in ("record.jsonl", "run/record.jsonl"):
-            path = folder / rel
-            if path.is_file():
-                yield path
+    """Every record at or below one root: a run folder, a `runs` folder of runs, or the parent the loop writes below."""
+    return sorted(Path(runs_dir).rglob("record.jsonl"))
 
 
 def _progress_ends(runs_dir):
