@@ -69,3 +69,25 @@ def test_an_unread_record_keeps_unknown_even_when_the_field_carries_a_value(hub)
     answer = hub.card_wait(card(record=False), carried="gate slot")
 
     assert answer == {"wait": "unknown", "missing": "record", "run": None}
+
+
+def test_a_card_between_the_dispatch_and_the_first_call_reads_run_start(hub):
+    answer = hub.card_wait(card(board={"state": "written", "column": "Doing"}, column="Todo", called=False))
+
+    assert answer["wait"] == "run start" and answer["missing"] is None
+
+
+def test_the_trip_shows_doing_with_run_start_and_then_doing_with_no_reason(hub):
+    board = {"state": "written", "column": "Doing"}
+    before = hub.card_wait(card(board=dict(board), column="Doing", called=False), carried="run start")
+    after = hub.card_wait(card(board=dict(board), column="Doing", called=True), carried="none")
+
+    assert [before["wait"], after["wait"]] == ["run start", "none"]
+    assert board["column"] == "Doing", "the first call clears the reason and moves no column"
+
+
+@pytest.mark.parametrize("state", ["pending", "dropped"])
+def test_a_pending_or_dropped_write_answers_unknown_with_the_refusal(hub, state):
+    answer = hub.card_wait(card(board={"state": state, "column": "Doing"}, column="Todo", called=False))
+
+    assert answer["wait"] == "unknown" and answer["missing"] == f"the card write is {state}"

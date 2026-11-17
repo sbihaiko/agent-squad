@@ -26,8 +26,20 @@ def dispatch_state(board, stood, called):
     return board.get("column"), Wait("none" if called else "run start", None)
 
 
+def dispatch_of(card):
+    """(column, Wait) of one card a dispatch asked for, or None when its facts carry no board fact (#2128).
+
+    The card names the dispatch's board fact in `board`, its column in `column` and the run's first call in `called`."""
+    if not card.get("record"): return None
+    board = card.get("board")
+    if not board: return None
+    return dispatch_state(board, card.get("column"), bool(card.get("called")))
+
+
 def wait_of(card):
     if not card.get("record"): return Wait("unknown", "record")
+    dispatch = dispatch_of(card)
+    if dispatch: return dispatch[1]
     labels = card.get("labels", [])
     for label, name in HOLDS:
         if label in labels: return Wait(name, None)

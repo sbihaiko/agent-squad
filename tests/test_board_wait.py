@@ -193,3 +193,26 @@ def test_a_card_with_no_board_fact_holds_where_it_stood_and_names_the_missing_fa
     column, wait = board_wait.dispatch_state(None, stood="Todo", called=False)
 
     assert column == "Todo" and wait.name == "unknown" and wait.missing == "no board fact"
+
+
+def test_a_pass_writes_run_start_on_the_card_the_dispatch_settled(tmp_path):
+    ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1")
+    ledger(tmp_path, "boardw", "a/b#7", "run-1", "Doing", "autobug dispatch")
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+    binding = Binding(carried={}, items={"7": "I7"})
+
+    board_wait.sync_waits(binding, {"7": card(board=board, column="Doing", called=False)})
+
+    assert binding.calls == [("I7", "run start")]
+
+
+def test_the_first_call_writes_no_reason_and_moves_no_column(tmp_path):
+    ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1")
+    ledger(tmp_path, "boardw", "a/b#7", "run-1", "Doing", "autobug dispatch")
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+    binding = Binding(carried={"7": "run start"}, items={"7": "I7"})
+
+    board_wait.sync_waits(binding, {"7": card(board=board, column="Doing", called=True)})
+
+    assert binding.calls == [("I7", "none")]
+    assert board["column"] == "Doing", "the first call clears the reason and moves no column"
