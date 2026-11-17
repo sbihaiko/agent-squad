@@ -17,6 +17,19 @@ if [ -n "${SG_STACK_ISSUE:-}" ] && [ -s "$SG_STACK_ISSUE" ]; then issue=$(cat "$
 else issue=$(gh_api "repos/$SG_REPO/issues/$iss") || { echo "WAIT issue #$iss is not readable"; exit 0; }; fi
 # An answer that does not carry the relation (no issue, a REST shape) is not "no blockers": dispatch waits until it is read.
 printf '%s' "$issue" | jq -e '.blocked_by_read == true' >/dev/null 2>&1 || { echo "WAIT the blocked-by relation of #$iss is not readable"; exit 0; }
+body=$(printf '%s' "$issue" | jq -r '.body // ""')
+# The parent spec's column: from the caller's one board read, else from the seam. A parent the caller's rows lack is asked
+# for itself, so a board read that omits a spec's card is never read as "started".
+parent=$(printf '%s' "$issue" | jq -r '.parent // empty' 2>/dev/null)
+if [ -n "$parent" ]; then
+  col=""
+  [ -n "${SG_STACK_BOARD:-}" ] && [ -s "$SG_STACK_BOARD" ] && col=$(awk -F '\t' -v n="$parent" '$1 == n { print $2; exit }' "$SG_STACK_BOARD")
+  [ -n "$col" ] || col=$(python3 "$here/issue_state.py" --state "$parent" 2>/dev/null)
+  case "$col" in
+    Backlog) echo "WAIT ticket of spec #$parent: the spec's card sits in Backlog, and the owner starts a spec before any of its tickets (ADR-0142)"; exit 0;;
+    "") echo "WAIT ticket of spec #$parent: the spec carries no readable card, so the owner has not started it (ADR-0142)"; exit 0;;
+  esac
+fi
 # The dependency component of this card, from the pass's own issue list (#1984): an invalid or unknown component holds it, and
 # an owner hold names the owner and writes one alert. A pass that passes no list, or a copy of this script without deadlock.py
 # beside it, keeps the gates below.
@@ -30,19 +43,6 @@ if [ -n "${SG_STACK_GRAPH:-}" ] && [ -s "$SG_STACK_GRAPH" ] && [ -f "$here/deadl
             printf '%s STACK alert #%s waits on %s: %s\n' "$(date '+%F %T')" "$iss" "$va" "$vr" >> "$SG_STATE/alerts.log"
           fi
           exit 0;;
-  esac
-fi
-body=$(printf '%s' "$issue" | jq -r '.body // ""')
-# The parent spec's column: from the caller's one board read, else from the seam. A parent the caller's rows lack is asked
-# for itself, so a board read that omits a spec's card is never read as "started".
-parent=$(printf '%s' "$issue" | jq -r '.parent // empty' 2>/dev/null)
-if [ -n "$parent" ]; then
-  col=""
-  [ -n "${SG_STACK_BOARD:-}" ] && [ -s "$SG_STACK_BOARD" ] && col=$(awk -F '\t' -v n="$parent" '$1 == n { print $2; exit }' "$SG_STACK_BOARD")
-  [ -n "$col" ] || col=$(python3 "$here/issue_state.py" --state "$parent" 2>/dev/null)
-  case "$col" in
-    Backlog) echo "WAIT ticket of spec #$parent: the spec's card sits in Backlog, and the owner starts a spec before any of its tickets (ADR-0142)"; exit 0;;
-    "") echo "WAIT ticket of spec #$parent: the spec carries no readable card, so the owner has not started it (ADR-0142)"; exit 0;;
   esac
 fi
 # GitHub's blocked-by relation is the dispatch fact. A blocker the body names without that relation still holds the ticket
