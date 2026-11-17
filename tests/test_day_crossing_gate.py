@@ -7,7 +7,7 @@ Doing, or a closed issue's card stand outside Closed, turns this test red. The f
 """
 import importlib.util
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pytest
