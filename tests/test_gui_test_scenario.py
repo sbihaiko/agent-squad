@@ -203,17 +203,24 @@ def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
     assert gh.ops().index("ensure_label") < gh.ops().index("create_issue")
 
 
-def test_publishing_again_strips_a_wave_label_an_older_publish_wrote():
-    plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
-    first = tts.publish(plan, FakeGitHub(), board=True)
-    number = first["issues"]["HOME-01"]
-    gh = FakeGitHub(states={number: {"state": "open", "verdict": None,
-                                    "labels": ["wave:02", "Test-Case", "keep-me"]}})
-    tts.publish(plan, gh, board=True, saved=first["map"])
-    labels = [kw["labels"] for kw in gh.of("update_issue") if kw["number"] == number]
-    assert labels, "a known record is updated, never created twice"
-    assert not any(x.startswith("wave:") for x in labels[-1]), "the label an older publish wrote comes off (#2132)"
-    assert "keep-me" in labels[-1], "a label somebody added stays"
+def test_publishing_again_strips_the_wave_label_a_previous_publish_wrote():
+    old = tts.build_plan(covered_script(), markdown=MARKDOWN)
+    old["parent"]["labels"] = [*old["parent"]["labels"], "wave:01"]   # the plan a release before #2132 published
+    for issue in old["issues"]:
+        issue["labels"] = [*issue["labels"], "wave:02"]
+    first_gh = FakeGitHub()
+    first = tts.publish(old, first_gh, board=True)
+    written = {kw["title"]: kw["labels"] for kw in first_gh.of("create_issue")}
+    assert any(x.startswith("wave:") for labels in written.values() for x in labels), "the first publish writes a wave"
+    states = {first["parent"]: {"state": "open", "verdict": None, "labels": written["Test scenario: tiny"]}}
+    for key, number in first["issues"].items():
+        states[number] = {"state": "open", "verdict": None, "labels": written[f"{tts.NOT_RUN} Test case {key}"]}
+    gh = FakeGitHub(states=states)          # the state the first publish left behind
+    tts.publish(tts.build_plan(covered_script(), markdown=MARKDOWN), gh, board=True, saved=first["map"])
+    for number in states:
+        labels = [kw["labels"] for kw in gh.of("update_issue") if kw["number"] == number]
+        assert labels, f"#{number} is a known record and is updated, never created twice"
+        assert not any(x.startswith("wave:") for x in labels[-1]), f"the wave label on #{number} comes off (#2132)"
 
 
 # --- writing a run's results back ---
