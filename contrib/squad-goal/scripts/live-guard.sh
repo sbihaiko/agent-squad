@@ -81,7 +81,10 @@ notes() {
   if [ -n "$cl" ]; then once clutter "$cl" "LIVE-GUARD live clutter, not shipped: $cl"; else rm -f "$SG_STATE/live-guard.clutter"; fi
   ds=$(cat "$SG_STATE/driver.sha" 2>/dev/null); ps=$(cut -d' ' -f1 "$live/PUBLISHED" 2>/dev/null)
   if [ -n "$ds" ] && [ -n "$ps" ] && [ "$ds" != "$ps" ]; then
+    # The record holds while the loop keeps running; a restart moves driver.sha onto a newer build, and that build is the
+    # one the process holds, so an older record yields to it (#2191).
     db=$(cat "$SG_STATE/live-guard.driver" 2>/dev/null); [ -n "$db" ] || db=$ds   # the build the drivers effectively run
+    if [ "$db" != "$ds" ] && git -C "${SG_CHECKOUT:-}" merge-base --is-ancestor "$db" "$ds" 2>/dev/null; then db=$ds; fi
     ch=$(driver_changed "$db" "$ps"); cr=$?
     if [ "$cr" = 3 ]; then once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner)"
     elif [ -n "$ch" ]; then once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner): $(printf '%s' "$ch" | tr '\n' ' ' | sed 's/ $//')"

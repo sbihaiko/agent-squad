@@ -245,6 +245,31 @@ G -C "$w" commit -qam "the driver file again"; G -C "$w" push -q origin HEAD:stg
 out=$(ppass); vd=$(G -C "$T/percall" rev-parse HEAD)
 case "$out" in *"drivers run ${v:0:8}, published ${vd:0:8}: restart pending (owner)"*"scripts/watchd.sh"*) ok "a driver-file change names the restart and the file";; *) ko "the driver-file change was not named: $out";; esac
 
+# --- a restart moves the build the drivers run, and the guard reads its difference from that build (#2191) ------------
+# The record of the build the drivers effectively run holds while the loop keeps running: a publish that changes no driver
+# file records it. A restart moves driver.sha to a newer build, so that build is the one the process holds, and the next
+# publish must be read against it. Read against the older record, a driver file that changed before the restart names a
+# restart that already happened.
+mk restarted; st2=$T/st.restarted; mkdir -p "$st2"; w=$T/restarted.work
+r2pass() { SG_STATE=$st2 SG_CHECKOUT=$T/restarted SG_LIVE_DIR=$T/restarted.live bash "$S/live-guard.sh" 2>&1; }
+printf 'watchd a\n' > "$w/contrib/squad-goal/scripts/watchd.sh"
+G -C "$w" add -A; G -C "$w" commit -qm a; G -C "$w" push -q origin HEAD:stg
+out=$(r2pass); printf '%s\n' "$(G -C "$T/restarted" rev-parse HEAD)" > "$st2/driver.sha"   # the drivers start on this build
+printf 'janitor a\n' > "$w/contrib/squad-goal/scripts/janitor.py"                          # a per-call script only
+G -C "$w" add -A; G -C "$w" commit -qm "a per-call script"; G -C "$w" push -q origin HEAD:stg
+out=$(r2pass); rec=$(G -C "$T/restarted" rev-parse HEAD)                                    # no driver changed: recorded
+[ "$(cat "$st2/live-guard.driver" 2>/dev/null)" = "$rec" ] && ok "the record names the build the pass read" || ko "no record: $out"
+printf 'watchd b\n' > "$w/contrib/squad-goal/scripts/watchd.sh"
+G -C "$w" commit -qam "the driver file"; G -C "$w" push -q origin HEAD:stg
+out=$(r2pass); rst=$(G -C "$T/restarted" rev-parse HEAD)                                    # the restart is named, not made
+case "$out" in *"restart pending"*) ok "the driver-file change names the restart";; *) ko "no restart named: $out";; esac
+printf '%s\n' "$rst" > "$st2/driver.sha"                                                   # the owner restarts on it
+printf 'janitor b\n' > "$w/contrib/squad-goal/scripts/janitor.py"                           # one more per-call change
+G -C "$w" commit -qam "a per-call script again"; G -C "$w" push -q origin HEAD:stg
+out=$(r2pass); nxt=$(G -C "$T/restarted" rev-parse HEAD)
+case "$out" in *"restart pending"*) ko "a restart already made was named again: $out";; *) ok "a restart ahead of the record asks for no second restart";; esac
+[ "$(cat "$st2/live-guard.driver" 2>/dev/null)" = "$nxt" ] && ok "the guard records the restarted build as current" || ko "the record stayed on the older build: $(cat "$st2/live-guard.driver" 2>/dev/null)"
+
 # --- the publish closes the loop-bug issue its fix names, so the stop lifts by itself (#732) --------
 # The stop reads the issue state and nothing else (ADR-0149), so the step that makes the fix live is the one that
 # closes it: a published commit carrying `Closes #n` closes #n, with one comment naming the sha and the published time.
