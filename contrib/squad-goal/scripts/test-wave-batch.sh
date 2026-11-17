@@ -1,0 +1,107 @@
+#!/bin/bash
+# Regression test for the batch landing (#2058): the landing pass takes every run that waits for the landing lock, stacks
+# their waves on the base, runs one tip gate on that exact tip and pushes it by one fast-forward. A red or unproven batch
+# gate, or a stack conflict, falls back to one landing per run. SG_LAND_BATCH=1 keeps the one-run pass. A bare local remote,
+# a stub gh, a stub board: no GitHub call. usage: bash test-wave-batch.sh [scripts dir]
+unset REV REV_BASE REV_SHA SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS GATE_REUSE_FILE SG_LAND_BATCH SG_LAND_QUEUE SG_GATE_BATCH
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b
+d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+trap 'rm -rf "$T"' EXIT
+G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
+cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$d/fast-gate.sh" "$d/quality-reading.py" "$T/s/" 2>/dev/null
+export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SG_RETIRE_CMD=/usr/bin/true
+{
+  printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
+  printf 'export SG_LAND_REMOTE=%s/origin.git SG_BOARD_VOCAB=shipped\n: "${SG_WAVE_TIP_GATES:=true}"; export SG_WAVE_TIP_GATES\n' "$T"
+  printf '. %s/address.sh\n' "$T/s"
+} > "$T/s/env.sh"
+printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+$G init -q -b dev "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G commit -q -m init)
+$G clone -q --bare "$T/co" "$T/origin.git"; O="$G -C $T/origin.git"
+# The remote logs every ref a push writes: one batch is one push to dev.
+mkdir -p "$T/origin.git/hooks"
+printf '#!/bin/bash\nwhile read -r old new ref; do printf "%%s\\t%%s\\t%%s\\n" "$old" "$new" "$ref" >> "%s/pushes.log"; done\n' "$T" > "$T/origin.git/hooks/pre-receive"
+chmod +x "$T/origin.git/hooks/pre-receive"
+devpushes() { awk -F'\t' '$3 == "refs/heads/dev"' "$T/pushes.log" 2>/dev/null | /usr/bin/grep -c .; }
+closes() { sed -n 's#^api -X PATCH repos/x/y/issues/\([0-9]*\) -f state=closed -f state_reason=completed$#\1#p' "$T/gh.log" 2>/dev/null | sort -n | tr '\n' ' '; }
+# mkrun <run> <issue> [file]: the run's folder, its wave branch, and one child commit `work N (Refs #N)` that writes <file>.
+mkrun() { local run=$1 n=$2 f=${3:-g-$1} rd="$T/co/runs/$1"
+  mkdir -p "$rd"; : > "$rd/record.jsonl"; printf 'CHILD — work GitHub issue(s) %s: do it\n' "$n" > "$rd/request.txt"; echo "$run" > "$T/st/auto/disp-$n"
+  (cd "$T/co" && bash "$T/s/wave.sh" start "$run") >/dev/null
+  rm -rf "$T/c-$run"; $G clone -q "$T/origin.git" "$T/c-$run" 2>/dev/null
+  (cd "$T/c-$run" && $G checkout -q -b w "origin/wave/$run" && echo "$run" > "$f" && $G add "$f" \
+    && $G commit -q -m "work $n (Refs #$n)" && $G push -q origin "HEAD:refs/heads/wave/$run") 2>/dev/null
+  (. "$T/s/env.sh"; python3 "$T/s/issue_ledger.py" wave "x/y#$n" "$run" entered "child entered") >/dev/null; }
+# queue <run>: the run waits for the landing lock, as watch.sh marks it (wland-<run>.queued names the run's folder).
+queue() { printf '%s\n' "$T/co/runs/$1" > "$T/st/auto/wland-$1.queued"; }
+# The tip gate stub logs one line per gate: the batch it names and the tree it measured. BATCHRED=1 fails a batch gate only.
+TIP='printf "%s %s\n" "${SG_GATE_BATCH:--}" "$(/usr/bin/git rev-parse HEAD)" >> "$TIPLOG"; [ -z "${BATCHRED:-}" ] || [ -z "${SG_GATE_BATCH:-}" ]'
+export TIPLOG=$T/tip.log
+landq() { (cd "$T/co" && SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES=$TIP bash "$T/s/wave.sh" land "$1" "$T/co/runs/$1" 2>&1); }
+reset() { : > "$T/gh.log"; : > "$TIPLOG"; : > "$T/pushes.log"; }
+
+# a: three runs ready: one pass, one tip gate, one push, and all three waves land.
+mkrun run-a 11; mkrun run-b 12; mkrun run-c 13; queue run-b; queue run-c; reset
+r=$(landq run-a); rc=$?
+[ $rc = 0 ] && ok "a: the batch pass exits 0" || ko "a: exit $rc: '$r'"
+[ "$(/usr/bin/grep -c . "$TIPLOG")" = 1 ] && ok "a: one tip gate for three waves" || ko "a: tip gates: '$(cat "$TIPLOG")'"
+[ "$(devpushes)" = 1 ] && ok "a: one push to the base" || ko "a: pushes to dev: '$(cat "$T/pushes.log")'"
+$O cat-file -e dev:g-run-a 2>/dev/null && $O cat-file -e dev:g-run-b 2>/dev/null && $O cat-file -e dev:g-run-c 2>/dev/null \
+  && ok "a: all three waves are in the base" || ko "a: dev lacks a wave: '$r'"
+[ "$(cut -d' ' -f2 "$TIPLOG")" = "$($O rev-parse dev)" ] && ok "a: the pushed tip is the tip the gate measured" || ko "a: gate $(cat "$TIPLOG"), dev $($O rev-parse dev)"
+case "$(cut -d' ' -f1 "$TIPLOG")" in "3:run-a,run-b,run-c"|"3:run-a,run-c,run-b") ok "a: the gate names the batch size and its runs";; *) ko "a: batch '$(cat "$TIPLOG")'";; esac
+[ "$(closes)" = "11 12 13 " ] && ok "a: each issue of the batch closes" || ko "a: closes '$(closes)': '$r'"
+[ -e "$T/st/auto/wland-run-b" ] && [ -e "$T/st/auto/wland-run-c" ] && ok "a: each claimed run gets its landed marker" || ko "a: markers: $(ls "$T/st/auto")"
+ls "$T/st/auto" | /usr/bin/grep -qE '\.queued$|\.busy$' && ko "a: a queue or busy marker stays: $(ls "$T/st/auto")" || ok "a: no queue or busy marker stays"
+$O rev-parse -q --verify wave/run-b >/dev/null && ko "a: the wave branch of run-b stays" || ok "a: the wave branches go"
+rm -f "$T/st/auto"/wland-*
+
+# b: a red batch gate falls back to one landing per run; each run's own gate is green, so all land.
+mkrun run-d 21; mkrun run-e 22; mkrun run-f 23; queue run-e; queue run-f; reset
+r=$(BATCHRED=1 landq run-d); rc=$?
+[ $rc = 0 ] && ok "b: the pass exits 0 after the fallback" || ko "b: exit $rc: '$r'"
+[ "$(/usr/bin/grep -c '^3:' "$TIPLOG")" = 1 ] && [ "$(/usr/bin/grep -c '^- ' "$TIPLOG")" = 3 ] && ok "b: one batch gate, then one gate per run" || ko "b: tip gates: '$(cat "$TIPLOG")'"
+[ "$(devpushes)" = 3 ] && ok "b: each run lands by its own push" || ko "b: pushes to dev: '$(cat "$T/pushes.log")'"
+[ "$(closes)" = "21 22 23 " ] && ok "b: each issue closes on its own landing" || ko "b: closes '$(closes)': '$r'"
+[ -e "$T/st/auto/wland-run-e" ] && [ -e "$T/st/auto/wland-run-f" ] && ok "b: the claimed runs get their landed markers" || ko "b: markers: $(ls "$T/st/auto")"
+rm -f "$T/st/auto"/wland-*
+
+# c: two waves that change the same file conflict on the stack: the fallback lands the first and the second takes its own conflict path.
+mkrun run-g 31 same; mkrun run-h 32 same; queue run-h; reset
+r=$(landq run-g); rc=$?
+[ "$(/usr/bin/grep -c '^2:' "$TIPLOG")" = 0 ] && ok "c: a stack conflict runs no batch gate" || ko "c: tip gates: '$(cat "$TIPLOG")'"
+$O cat-file -e dev:same 2>/dev/null && ok "c: one of the two waves lands alone" || ko "c: neither landed: '$r'"
+case "$r" in *"WAVE CONFLICT"*) ok "c: the other wave takes the single-wave conflict path";; *) ko "c: no conflict line: '$r'";; esac
+rm -f "$T/st/auto"/wland-*
+
+# d: the base moves while the batch gate runs: the push is refused, and the new tip is gated again before the push.
+mkrun run-i 41; mkrun run-j 42; queue run-j; reset
+MOVE='[ -e "$TIPLOG.moved" ] || { : > "$TIPLOG.moved"; d=$(mktemp -d); /usr/bin/git clone -q "$SG_LAND_REMOTE" "$d" && (cd "$d" && echo o > other && /usr/bin/git add other && /usr/bin/git commit -q -m other && /usr/bin/git push -q origin HEAD:dev); rm -rf "$d"; }; '
+r=$( (cd "$T/co" && SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES="$MOVE$TIP" bash "$T/s/wave.sh" land run-i "$T/co/runs/run-i" 2>&1) ); rc=$?
+[ $rc = 0 ] && ok "d: the batch lands after the base moved" || ko "d: exit $rc: '$r'"
+[ "$(/usr/bin/grep -c '^2:' "$TIPLOG")" = 2 ] && ok "d: the moved tip is gated again" || ko "d: tip gates: '$(cat "$TIPLOG")'"
+[ "$(tail -1 "$TIPLOG" | cut -d' ' -f2)" = "$($O rev-parse dev)" ] && ok "d: the pushed tip is the tip of the second gate" || ko "d: gate $(cat "$TIPLOG"), dev $($O rev-parse dev)"
+$O cat-file -e dev:other 2>/dev/null && $O cat-file -e dev:g-run-i 2>/dev/null && $O cat-file -e dev:g-run-j 2>/dev/null && ok "d: both waves land on the moved base" || ko "d: dev lacks a commit: '$r'"
+rm -f "$T/st/auto"/wland-*
+
+# e: SG_LAND_BATCH=1 is the one-run pass: one gate that names no batch, and the queued run waits.
+mkrun run-k 51; mkrun run-l 52; queue run-l; reset
+r=$( (cd "$T/co" && SG_LAND_BATCH=1 SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES=$TIP bash "$T/s/wave.sh" land run-k "$T/co/runs/run-k" 2>&1) ); rc=$?
+[ $rc = 0 ] && [ "$(cat "$TIPLOG" | cut -d' ' -f1)" = - ] && ok "e: one gate with no batch" || ko "e: exit $rc, gates '$(cat "$TIPLOG")': '$r'"
+$O cat-file -e dev:g-run-l 2>/dev/null && ko "e: the queued run landed with SG_LAND_BATCH=1" || ok "e: the queued run waits"
+[ -e "$T/st/auto/wland-run-l.queued" ] && ok "e: its queue marker stays" || ko "e: the queue marker went"
+
+# f: with one run ready, the pass is the one-run pass: no batch is named.
+rm -f "$T/st/auto"/wland-*; mkrun run-m 61; reset
+r=$(landq run-m); rc=$?
+[ $rc = 0 ] && [ "$(cut -d' ' -f1 "$TIPLOG")" = - ] && ok "f: one run ready lands with the one-run pass" || ko "f: exit $rc, gates '$(cat "$TIPLOG")': '$r'"
+
+# g: the gate history row of a batch gate names its size and its runs in the run id field.
+(cd "$T/co" && SG_STATE=$T/st SG_GATE_BATCH=3:run-a,run-b,run-c SG_GATE_KIND=fast SG_GATE_CALLER=tip bash "$T/s/gate.sh" true) >/dev/null 2>&1
+[ "$(tail -1 "$T/st/gate-history" 2>/dev/null | awk -F'\t' '{ print $NF }')" = "batch:3:run-a,run-b,run-c" ] && ok "g: the history row names the batch" || ko "g: row '$(tail -1 "$T/st/gate-history" 2>/dev/null)'"
+(cd "$T/co" && SG_STATE=$T/st SG_GATE_KIND=fast bash "$T/s/gate.sh" true) >/dev/null 2>&1
+[ "$(tail -1 "$T/st/gate-history" 2>/dev/null | awk -F'\t' '{ print $NF }')" = - ] && ok "g: a gate with no batch keeps the empty run id" || ko "g: row '$(tail -1 "$T/st/gate-history" 2>/dev/null)'"
+
+[ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

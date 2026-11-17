@@ -1599,23 +1599,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     tipobl=
     [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
-    # The issues the wave delivers, read here, after the rebase, from what is ahead of the base: a commit the base already holds
-    # is dropped by the rebase, and its issue was not delivered by this landing. A repeat from a refused push reads them again.
-    # (#869) A commit that names exactly one issue delivers it (commit_refs). A commit that names several delivers none of them:
-    # the cluster child did not say which it fixed, so those issues are named and requeued below, never closed.
-    rows=$(commit_refs "$S" "origin/$base..HEAD")
-    anyref=$(sc log --format=%B "origin/$base..HEAD" 2>/dev/null | refs_in_message | wc -l | tr -d ' ')   # a RED commit's Refs counts here (#1003)
-    issues=$(printf '%s\n' "$rows" | awk '$1 == "D" { print $3 }' | sort -un | tr '\n' ' ')
-    amb=$(printf '%s\n' "$rows" | awk '$1 == "A" { for (i = 3; i <= NF; i++) print $i }' | sort -un | tr '\n' ' ')
-    # (#1474) The one issue a wave names closes when its only Refs sit on a test-only RED commit and a fix commit names none: the
-    # wave changes code, and its single `Refs #N` is N. A wave that changes test files only delivers nothing (#533), and so does a
-    # wave that names two issues (#869).
-    rfs=$(refs_of "$S" "origin/$base..HEAD")
-    nontest=$(sc diff --name-only "origin/$base" HEAD 2>/dev/null | while IFS= read -r f; do is_code_path "$f" && { echo "$f"; break; }; done)
-    if [ -z "$issues" ] && [ -z "$amb" ] && [ -n "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
-      issues=$(printf '%s' "$rfs" | tr -d ' ')
-      echo "WAVE-NOTE $w: the only Refs of the wave name #$issues, on a test-only RED commit, and its fix commit names none; the landing closes #$issues"
-    fi
+    land_read "origin/$base" HEAD
     # ONE push of the wave's tip to the base: one ref update, one CI run, and a push git refuses unless it is a fast-forward,
     # so no merge commit can land. Nothing else is pushed -- no child branch, and the wave branch goes once its work is in.
     out=$(sc push -q origin "HEAD:refs/heads/$base" 2>&1) && break
@@ -1625,8 +1609,36 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || {
       netfail "the fetch of $base from $remote" "$fo" || { gitwhy "$fo"; stuck "$run" "$w" "$S" "the fetch of $base from $remote failed: $GITWHY"; }; rm -rf "$S"; return 2; }
   done
+  local brc; land_books; brc=$?; rm -rf "$S"; return $brc
+}
+
+# land_read <from> <to>: the issues the landed range delivers, into rows, anyref, issues, amb, rfs and nontest. `land` reads
+# its wave's range; `land_batch` reads each wave's own range of the stacked tip (#2058).
+land_read() {
+    # The issues the wave delivers, read here, after the rebase, from what is ahead of the base: a commit the base already holds
+    # is dropped by the rebase, and its issue was not delivered by this landing. A repeat from a refused push reads them again.
+    # (#869) A commit that names exactly one issue delivers it (commit_refs). A commit that names several delivers none of them:
+    # the cluster child did not say which it fixed, so those issues are named and requeued below, never closed.
+    rows=$(commit_refs "$S" "$1..$2")
+    anyref=$(sc log --format=%B "$1..$2" 2>/dev/null | refs_in_message | wc -l | tr -d ' ')   # a RED commit's Refs counts here (#1003)
+    issues=$(printf '%s\n' "$rows" | awk '$1 == "D" { print $3 }' | sort -un | tr '\n' ' ')
+    amb=$(printf '%s\n' "$rows" | awk '$1 == "A" { for (i = 3; i <= NF; i++) print $i }' | sort -un | tr '\n' ' ')
+    # (#1474) The one issue a wave names closes when its only Refs sit on a test-only RED commit and a fix commit names none: the
+    # wave changes code, and its single `Refs #N` is N. A wave that changes test files only delivers nothing (#533), and so does a
+    # wave that names two issues (#869).
+    rfs=$(refs_of "$S" "$1..$2")
+    nontest=$(sc diff --name-only "$1" "$2" 2>/dev/null | while IFS= read -r f; do is_code_path "$f" && { echo "$f"; break; }; done)
+    if [ -z "$issues" ] && [ -z "$amb" ] && [ -n "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
+      issues=$(printf '%s' "$rfs" | tr -d ' ')
+      echo "WAVE-NOTE $w: the only Refs of the wave name #$issues, on a test-only RED commit, and its fix commit names none; the landing closes #$issues"
+    fi
+}
+
+# land_books: what follows a wave's push to the base -- the wave branch goes, and the issues it carries close. It reads the
+# caller's run, w, rd, S, sha, rows, issues, amb, anyref, nontest, capped, dropped and tipobl, so `land` and `land_batch`
+# (#2058) share one path after the push.
+land_books() {
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-  rm -rf "$S"
   rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; tipred_clear "$w"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
   sg_base_red "$base" >/dev/null   # the base right after the push (#786): a red head the wave lands on is reported now
   printf '%s\n' "$rows" | while read -r k sha ns; do
@@ -1725,10 +1737,119 @@ landconflict() {
   SG_REQUEUE_RUN=$run land_round "$run" "$m" "$bsha" "$files" unknown
 }
 
+# land_queue <run> [folder] (#2058): the landing pass watch.sh starts under the landing lock. With SG_LAND_QUEUE=1 it claims
+# the other runs that wait for that lock (watch.sh leaves `wland-<run>.queued`, which names the run's folder), oldest first,
+# up to SG_LAND_BATCH runs in all (default 4), and lands their waves behind one tip gate (land_batch). It writes its own pid
+# into the busy marker of each claimed run, so watch.sh starts no pass for that run while this one lives, and it writes
+# `wland-<run>` for each claimed run that landed; the caller writes the marker of <run>. With no other run waiting, with
+# SG_LAND_BATCH=1, or without SG_LAND_QUEUE (a hand call), this is `land` itself, unchanged.
+land_queue() {
+  local self=${1:-} srd=${2:-${1:-}} lim=${SG_LAND_BATCH:-4} q r h n=1 rc i
+  local -a cr=() crd=()
+  case $lim in ''|*[!0-9]*) lim=4;; esac
+  if [ "${SG_LAND_QUEUE:-}" != 1 ] || [ "$lim" -le 1 ] || [ -z "$self" ]; then land "$@"; return; fi
+  for q in $(/bin/ls -tr "$SG_STATE"/auto/wland-*.queued 2>/dev/null); do
+    [ "$n" -lt "$lim" ] || break
+    r=${q##*/wland-}; r=${r%.queued}
+    if [ "$r" = "${self##*/}" ] || [ -e "$SG_STATE/auto/wland-$r" ]; then rm -f "$q"; continue; fi
+    h=$(cat "$SG_STATE/auto/wland-$r.busy" 2>/dev/null)
+    [ -n "$h" ] && kill -0 "$h" 2>/dev/null && continue   # a pass of its own lives: it lands the run or queues it again
+    printf '%s\n' "$$" > "$SG_STATE/auto/wland-$r.busy"; cr+=("$r"); crd+=("$(cat "$q")"); rm -f "$q"; n=$((n + 1))
+  done
+  [ ${#cr[@]} -gt 0 ] || { land "$@"; return; }
+  echo "WAVE BATCH ${self##*/}: it lands with ${cr[*]} behind one tip gate"
+  local -a args=("${self##*/}" "$srd"); for i in "${!cr[@]}"; do args+=("${cr[$i]}" "${crd[$i]}"); done
+  land_batch "${args[@]}"; rc=$?
+  if [ $rc = 10 ]; then
+    # The fallback (#2058): no bisection in this version. Each run of the batch takes today's one-run landing, with its own
+    # gate and its own red path, so a red batch costs one gate more and changes no red path. The claimed runs go first, so the
+    # last lines are those of <run>, which watch.sh reads for its wait line; their own lines carry a `BATCH <run>:` prefix.
+    for i in "${!cr[@]}"; do
+      land "${cr[$i]}" "${crd[$i]}" 2>&1 | sed "s|^|BATCH ${cr[$i]}: |"
+      [ "${PIPESTATUS[0]}" = 0 ] && : > "$SG_STATE/auto/wland-${cr[$i]}"
+    done
+    land "${self##*/}" "$srd"; rc=$?
+  fi
+  for r in "${cr[@]}"; do [ "$(cat "$SG_STATE/auto/wland-$r.busy" 2>/dev/null)" = "$$" ] && rm -f "$SG_STATE/auto/wland-$r.busy"; done
+  return $rc
+}
+
+# land_batch <run> <folder> [<run> <folder>]... (#2058): the waves of the runs, stacked on the base in one scratch clone in
+# the order named, one tip gate on that exact tip, and one fast-forward push of it. A push the remote refuses repeats once from
+# the fetch, with a new stack and a new gate, as `land` does. After the push each run takes `land`'s own books (land_books)
+# over its own range of the stack: the claimed runs first, with the `BATCH <run>:` prefix and their `wland-<run>` marker, and
+# the first run last. Exit 10: the batch does not fit -- a run owes a close, is past its age cap or carries nothing, the base
+# is red, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused -- and the caller lands each
+# run alone. Exit 1: the gate ran no verdict, so every run waits for a later pass. Exit 2: the network failed.
+land_batch() {
+  local -a rs=() rds=() ws=() tips=()
+  local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0
+  local rows issues anyref rfs nontest SG_REQUEUE_RUN
+  while [ $# -ge 2 ]; do rs+=("$1"); rds+=("$(case "$2" in /*) printf '%s' "$2";; *) printf 'runs/%s' "${2##*/}";; esac)")
+    ws+=("$(wave_of "$1")"); shift 2; done
+  for i in "${!rs[@]}"; do
+    [ -z "$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "${rs[$i]}" 2>/dev/null)" ] || { echo "WAVE BATCH: ${rs[$i]} owes a close, so each run lands alone"; return 10; }
+    expired "${rs[$i]}" && { echo "WAVE BATCH: ${rs[$i]} is past its age cap, so each run lands alone"; return 10; }
+  done
+  S=$(mktemp -d) || return 10
+  sc() { $G -C "$S" "$@"; }
+  sc init -q . && sc remote add origin "$remote" 2>/dev/null
+  [ -n "$(sc config user.name)" ] || sc config user.name "${SG_LAND_NAME:-squad-goal}"
+  [ -n "$(sc config user.email)" ] || sc config user.email "${SG_LAND_EMAIL:-squad-goal@localhost}"
+  for i in "${!ws[@]}"; do
+    sc fetch -q origin "+refs/heads/${ws[$i]}:refs/remotes/origin/${ws[$i]}" >/dev/null 2>&1 || { rm -rf "$S"; return 10; }
+  done
+  ids=$(IFS=,; printf '%s' "${rs[*]}")
+  while :; do
+    fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || { netfail "the fetch of $base from $remote" "$fo" && { rm -rf "$S"; return 2; }; rm -rf "$S"; return 10; }
+    bstart=$(sc rev-parse "origin/$base"); tips=()
+    sc checkout -q -B land "origin/$base" 2>/dev/null || { rm -rf "$S"; return 10; }
+    for i in "${!ws[@]}"; do
+      [ "$(sc rev-list --count "origin/$base..origin/${ws[$i]}")" -gt 0 ] || { echo "WAVE BATCH: ${ws[$i]} carries nothing, so each run lands alone"; rm -rf "$S"; return 10; }
+      k=$(sc rev-parse land)
+      sc branch -q -f "b$i" "origin/${ws[$i]}"
+      out=$(sc rebase -q --onto land "origin/$base" "b$i" 2>&1) || { sc rebase --abort >/dev/null 2>&1
+        echo "WAVE BATCH: ${ws[$i]} conflicts on the stack, so each run lands alone"; rm -rf "$S"; return 10; }
+      [ "$(sc rev-parse HEAD)" != "$k" ] || { echo "WAVE BATCH: ${ws[$i]} adds nothing to the stack, so each run lands alone"; rm -rf "$S"; return 10; }
+      sc checkout -q -B land HEAD 2>/dev/null; tips+=("$(sc rev-parse HEAD)")
+    done
+    red=$(sg_base_red "$base") && { echo "WAVE BATCH: $red, so each run lands alone"; rm -rf "$S"; return 10; }
+    # One tip gate on the exact stacked tip, as wave_check runs it, with the batch named for the gate history (SG_GATE_BATCH).
+    # No child is blamed here: a red goes to the fallback, where each wave's own check keeps its red path.
+    if [ -n "$tipgate" ]; then
+      of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
+      clog="$SG_STATE/wave-check-batch.log"; touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
+      (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${rs[0]}" SG_GATE_CALLER=tip SG_GATE_BATCH="${#rs[@]}:$ids" && eval "$tipgate") >"$clog" 2>&1; rc=$?
+      oc=; [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null; rm -f "$of"
+      if { [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null; } || { [ $rc = 75 ] && waited_out "$(cat "$clog")"; }; then
+        echo "WAVE WAIT batch $ids: the tip's check did not run (the gate lock or slots are held); the batch lands on a later pass (its output is $clog)"; rm -rf "$S"; return 1
+      fi
+      case "$oc" in pass|unproven|fail) ;; *) oc=; [ $rc = 0 ] && oc=pass; [ $rc = 4 ] && oc=unproven;; esac
+      [ "$oc" = pass ] || { echo "WAVE BATCH: the tip's check of batch $ids is ${oc:-red}, so each run lands alone (its output is $clog)"; rm -rf "$S"; return 10; }
+    fi
+    out=$(sc push -q origin "HEAD:refs/heads/$base" 2>&1) && break
+    netfail "the push of batch $ids to $base" "$out" && { rm -rf "$S"; return 2; }
+    [ "$try" = 1 ] || { echo "WAVE BATCH: the push of batch $ids to $base was refused twice, so each run lands alone"; rm -rf "$S"; return 10; }
+    try=2
+  done
+  echo "WAVE BATCH $ids $(sc rev-parse HEAD) landed in $base (${#rs[@]} waves, one tip gate)"
+  # Each run's books, in its own range of the stack: run i spans tips[i-1]..tips[i], the first run bstart..tips[0].
+  for i in $(seq $(( ${#rs[@]} - 1 )) -1 0); do
+    run=${rs[$i]}; w=${ws[$i]}; rd=${rds[$i]}; sha=${tips[$i]}; SG_REQUEUE_RUN=$run
+    k=$bstart; [ "$i" = 0 ] || k=${tips[$((i - 1))]}
+    if [ "$i" = 0 ]; then land_read "$k" "$sha"; land_books; brc=$?
+    else
+      { land_read "$k" "$sha"; land_books; } 2>&1 | sed "s|^|BATCH $run: |"
+      [ "${PIPESTATUS[0]}" = 0 ] && : > "$SG_STATE/auto/wland-$run"
+    fi
+  done
+  rm -rf "$S"; return $brc
+}
+
 case "${1:-}" in
   start) shift; start "$@";;
   enter) shift; enter "$@";;
-  land) shift; land "$@";;
+  land) shift; land_queue "$@";;
   expired) shift; expired "$@";;
   landconflict) shift; landconflict "$@";;
   landempty) shift; landempty "$@";;

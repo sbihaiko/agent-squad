@@ -224,6 +224,7 @@ test-watchd-stop.sh 6.70
 test-watchd-supervisor.sh 2.68
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
+test-wave-batch.sh 25.79
 test-wave-compete.sh 8.03
 test-wave-dropped.sh 10.00
 test-wave-lifecycle.sh 58.00

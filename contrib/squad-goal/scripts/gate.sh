@@ -64,7 +64,8 @@
 # counted, a reader of gate time counts it in neither, and the share of a gate stage that is lock wait is read from the window
 # (hub_profiler.gate_queue), never inferred. A row from before these fields has 17 and reads as an unknown wait and no tree.
 # The runner field (#1927) is the proof that produced the verdict: `ci` when the gate's command names the CI half of a
-# hybrid proof (GATE_RUNNER), else `local`; the run id field names that CI run's id, `-` when none. A row from before these
+# hybrid proof (GATE_RUNNER), else `local`; the run id field names that CI run's id, `-` when none; a batch landing gate
+# (SG_GATE_BATCH, #2058) writes `batch:<size>:<runs>` there instead of `-`. A row from before these
 # two fields has 22 and reads as a local gate with no run. A gate that sets SG_GATE_STATUS=self writes no history line, as it
 # writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
@@ -259,6 +260,8 @@ gate_cpu_read() {  # sets gate_cpu_s: `-` when no reading is possible
 gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots> <red> [<reused>] [<runner>] [<run id>]
   local tree wall runner=${14:-${GATE_RUNNER:-local}} runid=${15:-${GATE_RUNNER_ID:--}}
   case "$runner" in ci|local) ;; *) runner=local;; esac   # the two words the proof has; anything else is a local gate
+  # A batch landing gate (#2058) names its batch in the run id field: `batch:<size>:<run>,<run>...`. The field count stays.
+  [ -n "${SG_GATE_BATCH:-}" ] && [ "$runid" = - ] && runid="batch:$SG_GATE_BATCH"
   fin=${gate_fin:-$(date +%s)}   # the finish epoch the line carries, and the epoch the obligation's deadline counts from (note)
   tree=$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null); [ -n "$tree" ] || tree=-
   wall=$(( fin - ${4:-$fin} )); [ "$wall" -ge 0 ] || wall=0
