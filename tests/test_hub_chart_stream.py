@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 HUB_PY = SCRIPTS / "hub.py"
 OPENED = "2026-10-01T09:00:00Z"
-BAR = "fs=&fk=&ty=task"   # the cumulative flow's route, at the tasks default it always sent (#1356); no wave key (SPEC 1965, #1988)
+BAR = "ty=task"   # the cumulative flow's route, at the tasks default it always sent (#1356); no wave key and no board filter (SPEC 1965, #1988)
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
@@ -83,15 +83,15 @@ def test_a_chart_subject_rises_only_when_its_own_input_changes(hub, board):
 def _chart_harness(hub, drive, onchange=""):
     # Re-anchored (#1247): the chart's settings are no longer stored, so there is no saveLT line; the LT_TYPES line
     # carries LT_START, the start the payload measures from, which ltOwn reads.
-    lines = ["const LT_TYPES=", "let FLOWFF=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet",
-             "const barMoved", "const pickFilter", "function squadChart(", "function squadStreamLost(",
+    lines = ["const LT_TYPES=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet",
+             "const barMoved", "function squadChart(", "function squadStreamLost(",
              "function squadStreamBack(", "pollBoard();setInterval(pollBoard", "function squadChartTick(", "setInterval(squadChartTick"]
     page = [next(line for line in hub.PAGE.splitlines() if line.startswith(p)) for p in lines]
     stubs = """
 const FETCHED=[],POLLED=[],INTERVALS=[],RUNS=[];
 globalThis.window={squadStreamLive:undefined};
 const el=()=>({hidden:true,handlers:{},addEventListener(t,f){this.handlers[t]=f}});
-const EL={"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el(),"#sse":el(),"#flowb":el()};
+const EL={"#flowov":el(),"#fwl":el(),"#sse":el(),"#flowb":el()};
 const $=s=>EL[s];
 globalThis.setInterval=(f,ms)=>{INTERVALS.push(f)};
 globalThis.fetch=async url=>{FETCHED.push(url);return {json:async()=>({t:1,cfd:{ranges:[]}})}};

@@ -47,7 +47,7 @@ def _node(script, *files):
 
 @pytest.mark.parametrize("marker", ['id=lf>', 'id=lf ', 'id=bsp', 'id=bz', 'id=bx', 'id="pip"', 'id=pip', 'id=pipf',
                                     'id=lfl', 'id="pipf"', 'maximize the board', 'id=fs', 'id=fk', 'id=lmode',
-                                    'id=flowchips', 'ffchip'])   # the Specs, Kinds and Swimlanes controls left the page (owner ask, SPEC 1965)   # 'Specs: all' left the list (#889): the mock's filter summaries read `Waves: all` and `Specs: all`
+                                    'id=flowchips', 'ffchip'])   # the Specs, Kinds and Swimlanes controls left the page at the owner's request (SPEC 1965)
 def test_the_removed_controls_are_not_on_the_page(hub, marker):
     assert marker not in hub.PAGE, f"{marker!r} is still on the page"
 
@@ -147,25 +147,13 @@ def test_an_abandoned_spec_is_not_an_option(hub):
     assert "492" not in _spec_options(groups, summary)
 
 
-def test_a_saved_spec_filter_naming_a_finished_spec_is_dropped_on_load(hub):
-    groups = [
-        {"name": "Doing", "items": [{"n": 889, "t": "SPEC 889", "l": ["spec"], "sp": True}]},
-        {"name": "Todo", "items": [{"n": 890, "t": "open", "l": [], "pa": 889}, {"n": 900, "t": "no spec", "l": []}]},
-        {"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]},
-    ]
-    kept = _node(f"console.log(JSON.stringify(keptSpecs({json.dumps(['41', '889', 'none'])},"
-                 f"{json.dumps(_with_ends(groups))})));", LANES_JS)
-    assert kept == ["889", "none"], "a finished spec's key survived the load"
-
-
-def test_a_saved_spec_filter_of_only_finished_specs_is_empty(hub):
-    groups = [{"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]}]
-    kept = _node(f"console.log(JSON.stringify(keptSpecs(['41'],{json.dumps(_with_ends(groups))})));", LANES_JS)
-    assert kept == [], "the board would filter to nothing"
-
-
 def test_the_page_builds_the_specs_options_from_the_unfinished_rule(hub):
-    assert "specOptions(" in hub.PAGE and "keptSpecs(" in hub.PAGE
+    """#981: a finished spec is never an option. The Specs filter left the page (SPEC 1965), so the rule that keeps a saved
+    key alive went with it, and the options alone are built from the page's read."""
+    page = hub.PAGE
+    assert "specOptions(boardGroups" in page, "the page builds no spec options"
+    assert "const gone=goneSpecsOf(groups,sum)" in page, "the options rule does not read the finished specs"
+    assert "keptSpecs(" not in page, "the page still carries the saved-key keeper of a removed control"
 
 
 def test_the_page_offers_the_specs_and_kinds_of_open_cards_only(hub):

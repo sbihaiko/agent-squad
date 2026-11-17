@@ -31,10 +31,12 @@ def hub():
     return mod
 
 
-def test_the_board_header_carries_labels_and_specs_and_no_kinds_control(hub):
+def test_the_board_header_carries_neither_specs_nor_kinds_control(hub):
+    """The Specs and Kinds controls left the header at the owner's request (SPEC 1965); the Kinds control was already gone."""
     head = hub.PAGE[hub.PAGE.index("<div id=board>"):hub.PAGE.index("<div id=bcases>")]
-    assert '<details id=fs' in head and '<details id=fk' in head, "the header lost the filter bar"
+    assert '<details id=fs' not in head and '<details id=fk' not in head, "the header still carries the filter bar"
     assert ">Kinds<" not in head and "id=bk " not in head, "the header still carries the Kinds control"
+    assert "<select id=lmode" not in head, "the header still carries the lane-mode control"
 
 
 def test_the_page_holds_no_trace_of_the_kinds_view(hub):

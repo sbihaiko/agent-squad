@@ -31,8 +31,6 @@ function specOptions(groups,sum={}){
     if(!gone.has(x.pa))parents.add(String(x.pa))})});
   const keys=[...parents];if(none)keys.push("none");
   return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
-// A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
-const keptSpecs=(saved,groups,sum)=>{const opts=specOptions(groups,sum);return saved.filter(k=>opts.includes(k))};
 // A saved hidden set drops every closed status on load: history is never a hidden column (#969).
 const keptHidden=(saved,groups)=>{const ends=new Set(groups.filter(g=>g.end).map(g=>g.name));return saved.filter(n=>!ends.has(n))};
 // <card-rules>: the spec color rules; the mobile page inlines this block alone (#917).

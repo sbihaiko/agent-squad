@@ -64,10 +64,13 @@ def test_board_has_no_collapsed_state(hub):
 
 
 def test_board_header_keeps_its_count_and_its_controls(hub):
-    """The count span stays; the header keeps the swimlane selector and the filter bar, and no maximize or collapse (#899)."""
+    """The count span stays; the header keeps Collapse all and Expand all, and no maximize, collapse, lane-mode or filter
+    control (#899; the lane mode and the filter bar left at the owner's request, SPEC 1965)."""
     head = _bhead(hub)
     assert '<span id=bt class=m></span>' in head
-    assert '<select id=lmode' in head and '<details id=fw' not in head and '<details id=fs' in head
+    assert 'id=lcall' in head and 'id=lexp' in head, "the header lost the collapse controls"
+    assert '<select id=lmode' not in head and '<details id=fs' not in head and '<details id=fk' not in head
+    assert '<details id=fw' not in head
     assert 'id=bz' not in head and 'id=bx' not in head
 
 
