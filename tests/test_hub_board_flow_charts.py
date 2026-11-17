@@ -655,7 +655,7 @@ def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
     chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-readable.js", chart)
-    for legend in re.findall(r'<p class="flg ltlg">(.*?)</p>', out):
+    for legend in re.findall(r'<p class="flg ltlg[^"]*">(.*?)</p>', out):
         assert "<em>" not in legend, "the legend still carries a prose sentence"
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     right = 64 + chart["plot_frame"]["width"]
@@ -731,14 +731,12 @@ def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board,
     lead = hub.flow_lead(ty="task")["lead"]
     out = _render(hub, tmp_path, "lt-head-excluded.js", f"flowLead({json.dumps(lead)})")
     head = re.search(r"<p class=fhead>(.*?)</p>", out).group(1)
-    assert "excluded" not in head, "the head line still states the exclusion"
     assert out.count("excluded") == 1, "the page states the exclusion more than once"
-    # Re-anchored (#1334): the one exclusion total sits in the header's summary row, not beside p85.
-    # Re-anchored (#1354): the total states its reason beside its count, so no bare count is served.
-    summary_row = re.findall(r"<p class=fhead>(.*?)</p>", out)[1]
-    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1: 1 closed as not planned<', summary_row), \
-        "the one total and its named cards sit in the header's summary row"
-    assert "window 20 issues" in head
+    # Re-anchored after the layout review (#2171): the one exclusion total sits in the single header line above the plot,
+    # with its reason beside its count and its hover naming the card; no second summary row states it again.
+    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1: 1 closed as not planned<', head), \
+        "the one total and its named cards sit in the header's one line"
+    assert "20 issues plotted" in head
     assert out.count("20 issues") == 1, "the rolling window is stated twice"
 
 
@@ -844,18 +842,21 @@ def test_the_legend_splits_series_from_summary_and_the_band_shows_until_hidden(h
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
     chart = _flow(hub)["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-legend.js", chart)
-    series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
+    # Re-anchored after the layout review (#2171): the series legend is one paragraph inside the plot's corner, and the
+    # reference values are the right gutter's tags, beside the lines they name; no second legend row states them.
+    series = re.search(r'<p class="flg ltlg[^"]*">(.*?)</p>', out).group(1)
     entries = re.findall(r"<span>(.*?)</span>", series)
     assert [re.sub(r"<[^>]+>", "", e) for e in entries] == ["Card", "Cluster", "Rolling mean", "Rolling spread ±1 SD"], entries
     assert str(chart["window"]["size"]) not in re.sub(r"<[^>]+>", "", series), \
         "the series legend restates the window the head line already names"
     assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
+    gutter = " ".join(re.findall(r'<text class=lttg[^>]*>(.*?)</text>', out))
     for label in ("Average", "Median", "p85"):
-        assert label in re.sub(r"<[^>]+>", "", summary), f"the summary row names no {label}"
-    assert "Gate time" not in series + summary, "gate time stays a text metric, not a legend entry"
+        assert label in gutter, f"the right gutter names no {label}"
+    assert "Gate time" not in series + gutter, "gate time stays a text metric, not a legend entry"
     on = _render(hub, tmp_path, "lt-legend-band.js", f"(LT.band=true,ltChart({json.dumps(chart)},null))")
     assert "<polygon" in on, "the band does not draw when the display asks for it"
-    series_on = re.findall(r'<p class="flg ltlg">(.*?)</p>', on)[0]
+    series_on = re.search(r'<p class="flg ltlg[^"]*">(.*?)</p>', on).group(1)
     band = next((e for e in re.findall(r"<span>(.*?)</span>", series_on) if "Rolling spread ±1 SD" in e), None)
     assert band and band.count("<i") == 1, "the band's label is split from its marker"
 
@@ -869,7 +870,7 @@ def test_the_band_shows_by_default_and_holds_the_readers_choice_across_redraws(h
     out = _lt_chart(hub, tmp_path, "lt-band-default.js", chart)
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     assert "<polygon" in plot, "the standard-deviation band does not draw by default"
-    series = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)[0]
+    series = re.findall(r'<p class="flg ltlg[^"]*">(.*?)</p>', out)[0]
     assert "Rolling spread ±1 SD" in re.sub(r"<[^>]+>", "", series), \
         "the series legend does not name the band it draws"
     assert "id=ltbd checked" in out, "the Band checkbox does not start checked"
@@ -934,9 +935,11 @@ def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carrie
     for name, tag in refs.items():
         assert _paint(tag, "stroke-dasharray") in [_paint(ln, "stroke-dasharray") for ln in gutter], \
             f"the gutter draws no swatch in {name}'s own pattern"
-    summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)[1]
+    # Re-anchored after the layout review (#2171): the reference values are the right gutter's own tags, beside the
+    # lines they name, so the page keeps no second summary row above the plot.
+    tags_text = " ".join(re.findall(r'<text class=lttg[^>]*>(.*?)</text>', out))
     for key in ("average", "median", "p85"):
-        assert f"<b>{chart[key]['text']}</b>" in summary, f"the summary row does not carry {key}'s value"
+        assert chart[key]["text"] in tags_text, f"the right gutter does not carry {key}'s value"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -961,7 +964,11 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
     assert average_col == _resolved("var(--chart-series-8)", tokens), "the average line does not take the chart grey"
     assert float(_paint(band, "fill-opacity")) > 0.16, "the band is no stronger than before"
     assert len({ink, trail_col, band_col, average_col}) == 4, "two marks share one role"
-    series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
+    # Re-anchored after the layout review (#2171): the series legend rides inside the plot's corner, so its paragraph
+    # carries one more class, and the reference values live in the right gutter beside their lines, never in a second
+    # legend row. The paint of each mark is read from the swatch rule that still names it, and from the gutter's own
+    # swatch for the reference lines.
+    series = re.search(r'<p class="flg ltlg[^"]*">(.*?)</p>', out).group(1)
     # Re-anchored (#1332): the legend's swatches are styled by class, so each class's paint is read from its rule.
     assert re.findall(r"<i class=(\w+)>", series) == ["lthollow", "ltfilled", "ltroll", "ltband"], \
         "the series legend does not name every drawn mark with its own swatch"
@@ -972,11 +979,9 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
         return {_resolved(v, tokens) for v in re.findall(r"var\(--[\w-]+\)", rule.group(1))}
     assert painted("ltroll") == {_resolved("var(--chart-bar)", tokens)}, "the trend swatch differs from its line"
     assert painted("ltband") == {_resolved("var(--chart-series-3)", tokens)}, "the band swatch differs from its fill"
-    assert re.findall(r"<i class=(\w+)>", summary) == ["ltsolid", "ltdash", "ltdot"], \
-        "the summary row carries no swatch for each reference pattern"
-    assert painted("ltsolid") == {_resolved("var(--chart-series-8)", tokens)}
-    assert painted("ltdash") == {_resolved("var(--chart-ok)", tokens)}
-    assert painted("ltdot") == {_resolved("var(--chart-series-5)", tokens)}, "the summary row paint differs from its line"
+    gutter = re.search(r'<svg data-lt.*?</svg>', out, re.S).group(0)
+    for role in ("var(--chart-series-8)", "var(--chart-ok)", "var(--chart-series-5)"):
+        assert f'stroke="{role}"' in gutter, f"the right gutter drops the reference line painted {role}"
     assert painted("lthollow") != painted("ltfilled"), \
         "the hollow and filled swatches resolve to one paint, so grayscale cannot tell a card from a cluster"
 
@@ -1823,30 +1828,32 @@ def test_the_stack_lives_in_the_dot_tooltip_and_gate_time_stays_a_text_metric(hu
     assert "<rect" not in plot, "the plot still draws a stacked bar"
     title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
     assert "Gating 18h" in title and "Todo 6h" in title, "the stage strip does not name each column's hours"
-    assert "Gate time" not in "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out)), \
+    assert "Gate time" not in "".join(re.findall(r'<p class="flg ltlg[^"]*">(.*?)</p>', out)), \
         "gate time is not a legend entry: zero has no counterpart on a log axis (#1304)"
     note = re.search(r'<p class="fnote ltkm">(.*?)</p>', out).group(1)
     assert f"Gate time {chart['gate']['text']}" in note, "gate time is not a text metric beside the survival reading"
 
 
-# SPEC 1327 #1334: the header states the summary in two rows, and the range control switches x from the one payload.
+# SPEC 1327 #1334: the header states the summary, and the range control switches x from the one payload.
+# Re-anchored after the layout review (#2171): one row above the plot names the measure, the window and the one exclusion
+# total; the extremes it used to state move behind More, so the plot keeps the card.
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_header_states_the_summary_in_two_rows(hub, board, tmp_path):
+def test_the_header_states_the_summary_in_one_row(hub, board, tmp_path):
     item, events = _done(3, "2026-10-04T09:00:00Z")
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z"),
                 3: ({**item, "cr": "not_planned"}, events)})
     lead = hub.flow_lead(ty="task")["lead"]
-    out = _render(hub, tmp_path, "lt-two-row-head.js", f"flowLead({json.dumps(lead)})")
+    out = _render(hub, tmp_path, "lt-one-row-head.js", f"flowLead({json.dumps(lead)})")
 
-    header = out.split("<p class=fhead><label>Timeframe")[0]   # the header rows, before the control row
+    header = out.split("<div class=ltrow>")[0]   # the header, before the control row
     rows = re.findall(r"<p class=fhead>(.*?)</p>", header)
-    assert len(rows) == 2, f"the header is not two rows: {rows}"
-    first, second = rows
-    assert "window 20 issues" in first, "the first row names the window"
-    assert "min <b>1d</b>" in second and "max <b>2d</b>" in second, "the second row states the summary"
-    assert "2 issues plotted" in second, "the second row states the plotted count"
-    assert re.search(r'title="1 closed as not planned: #3"[^>]*>excluded 1: 1 closed as not planned<', second), \
-        "the second row carries the one exclusion total with its reason (#1354)"
+    assert len(rows) == 1, f"the header is not one row: {rows}"
+    (first,) = rows
+    assert "20 issues plotted" in first, "the one row names the window"
+    assert re.search(r'title="1 closed as not planned: #3"[^>]*>excluded 1: 1 closed as not planned<', first), \
+        "the one row carries the one exclusion total with its reason (#1354)"
+    more = re.search(r"<details class=ltmore>.*?</details>", out, re.S).group(0)
+    assert "min <b>1d</b>" in more and "max <b>2d</b>" in more, "More does not state the summary it took from the header"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
