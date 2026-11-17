@@ -39,7 +39,6 @@ rec "$X" | sed -n 1p | grep -q '^2001 Todo Doing x/y$' && ok "the first transiti
 rec "$X" | sed -n 2p | grep -q '^2001 Doing Todo x/y$' && ok "the second transition takes the first one's to as its from" || ko "second transition: $(rec "$X")"
 o=$(run o 4 Todo 2001 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(rec "$X" | wc -l | tr -d ' ')" = 2 ] && ok "a move to the column the card already holds writes no transition" || ko "same-column move recorded: exit $rc, $(rec "$X"): $o"
-
 echo a/b > "$T/urlrepo"; o=$(run o 4 Todo 2002 2>&1); rc=$?
 echo x/y > "$T/urlrepo"
 X_LINES=$(rec "$X" | wc -l | tr -d ' ')
@@ -50,5 +49,16 @@ before=$(rec "$X" | head -n 2)
 o=$(run o 4 Doing 2003 2>&1); rc=$?
 after=$(rec "$X" | head -n 2)
 [ "$rc" -eq 0 ] && [ "$before" = "$after" ] && [ "$(rec "$X" | wc -l | tr -d ' ')" = 3 ] && ok "a later process appends and keeps the lines an earlier process wrote" || ko "restart: exit $rc, before [$before] after [$after]: $o"
+
+# (#2123) The record and the carrier disagree: the carrier holds Todo, the record's last line says Doing. The move writes
+# nothing, so nothing else ends the disagreement, and the dispatcher reads the record: the issue stays invisible to every
+# lane. The compare that reads the carrier's value records it.
+run o 4 Todo 2003 >/dev/null 2>&1   # the carrier holds Todo, as the record's own last line says
+printf '%s\n' '{"issue": 2003, "from": "Todo", "to": "Doing", "repo": "x/y", "by": "hand", "pass": "repair", "reason": null, "at": "2026-01-01T00:00:00Z", "item": null}' >> "$X"
+n_before=$(rec "$X" | wc -l | tr -d ' ')
+o=$(run o 4 Todo 2003 2>&1); rc=$?
+[ "$rc" -eq 0 ] && tail -1 "$X" | /usr/bin/grep -q '"from": "Doing", "issue": 2003' && tail -1 "$X" | /usr/bin/grep -q '"to": "Todo"' && ok "a record that disagrees with the carrier takes the carrier's column (#2123)" \
+  || ko "the disagreement stands: exit $rc, last '$(tail -1 "$X")': $o"
+[ "$(wc -l < "$X" | tr -d ' ')" = "$((n_before + 1))" ] && ok "the compare records one transition, never one per move" || ko "transitions after the repair: $((n_before + 1)) wanted, $(( $(wc -l < "$X") )) present"
 
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "all transition checks passed" || { echo "transition checks failed"; exit 1; }
