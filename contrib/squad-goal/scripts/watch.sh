@@ -81,6 +81,39 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
   [ -e "$pass.left" ] && { rm -f "$pass.left"
     echo "WATCH: ${run##*/} waits: its landing is deferred, the childcc pass left children of the run for a later pass, so its wave lands on a later cycle"; return 1; }
   if [ -e "$pass" ]; then
+    # (#2068) With the batch on, the run joins the landing queue now, by a move so a claiming pass never reads half a marker,
+    # and the cycle starts one landing pass after its last run (land_next), so that pass reads every run of this cycle.
+    if [ "${SG_LAND_BATCH:-4}" != 1 ]; then
+      printf '%s\n' "$run" > "$ran.queued.$$" && mv -f "$ran.queued.$$" "$ran.queued"
+      land_pending="$land_pending$run "
+      echo "WATCH: ${run##*/} waits: its wave is queued for this cycle's landing pass"; return 1
+    fi
+    land_fork "$run"; return 1
+  fi
+  h=$(cat "$L/pid" 2>/dev/null)
+  if [ -n "$h" ] && kill -0 "$h" 2>/dev/null; then
+    echo "WATCH: ${run##*/} waits: the childcc lock is held by pid $h (another pass is entering children), so its wave lands on a later cycle"
+  else
+    echo "WATCH: ${run##*/} waits: the pass that enters its children did not get through (it failed; its traceback is in this log), so its wave lands on a later cycle"
+  fi
+  return 1
+}
+# land_next: the one landing pass of the cycle (#2068), for the first queued run whose wave is not held red (#1961), else the
+# first queued run. The pass claims the other queued runs into its batch (wave.sh land_queue).
+land_next() {
+  local r first="" lead=""
+  for r in $land_pending; do
+    [ -n "$first" ] || first=$r
+    [ -e "$SG_STATE/auto/tipred-wave_${r##*/}.red" ] || { lead=$r; break; }
+  done
+  land_pending=""
+  lead=${lead:-$first}; [ -n "$lead" ] && land_fork "$lead"
+  return 0
+}
+# land_fork <run>: the run's detached landing pass.
+land_fork() {
+  local run=$1 ran pass lk
+  ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; lk="$ran.busy"
     # The landing runs detached (#955): the cycle returns at once, and the pass writes its own lines to this log. It leaves
     # `wland-<run>` when the wave is in $SG_BASE; a rebase conflict is terminal (#844): the wave is retired and the run is read.
     # The busy marker is the pass's pid, written by this shell from `$!` right after the fork: /bin/bash 3.2 leaves `$BASHPID`
@@ -107,20 +140,11 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
           echo "WATCH: ${run##*/} waits: its landing failed${c:+ ($c)}${c:- (no line of its own; its output is in this log)}, so it lands on a later cycle"
         fi
       fi
+      # A held lock keeps the run's queue marker, so the pass that holds the lock can claim it; any other end clears it.
+      [ "$wrc" = 76 ] || rm -f "$ran.queued"
       rm -f "$lk"
-      # Written after the busy marker goes, so the pass that claims the run writes its own pid there and is never overwritten.
-      [ "$wrc" = 76 ] && [ ! -e "$ran" ] && [ "${SG_LAND_BATCH:-4}" != 1 ] && printf '%s\n' "$run" > "$ran.queued"
       ) &
     printf '%s\n' "$!" > "$lk"
-    return 1
-  fi
-  h=$(cat "$L/pid" 2>/dev/null)
-  if [ -n "$h" ] && kill -0 "$h" 2>/dev/null; then
-    echo "WATCH: ${run##*/} waits: the childcc lock is held by pid $h (another pass is entering children), so its wave lands on a later cycle"
-  else
-    echo "WATCH: ${run##*/} waits: the pass that enters its children did not get through (it failed; its traceback is in this log), so its wave lands on a later cycle"
-  fi
-  return 1
 }
 while :; do
   orphaned && exit 0; c0=$SECONDS
@@ -167,6 +191,7 @@ if v:
         for n in $(head -c 200000 "$rd/record.jsonl" 2>/dev/null | grep -oE '(issue|Refs) #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do
           printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$(sg_cq_file "$n-run$$-${r##*-}.md")"; done; }
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
+  land_next   # the cycle's one landing pass, after every run of the cycle joined the queue (#2068)
   boot=0; v0=$(verdicts)   # the closing wait's baseline: the runs with a verdict now. One that lands in a later step is an event; one already here whose landing failed is not (#569)
   # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes. A run whose record already carries
   # its verdict is not a stalled run: it is over, and it waits for its wave to land (childcc keeps it in active-runs until
