@@ -25,7 +25,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/modelreg.py" "$d/liveholds.py" "$d/registry.json" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/issue_ledger.py" "$d/models.json" "$d/revformat.py" "$d/wavepause.py" "$d/basecheck.sh" "$d/board_columns.py" "$d/board-definition.json" "$T/s/" 2>/dev/null   # childcc.py names the claimed card through board_columns.py (#1359)
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/modelreg.py" "$d/liveholds.py" "$d/registry.json" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/issue_state.py" "$d/issue_ledger.py" "$d/models.json" "$d/revformat.py" "$d/wavepause.py" "$d/basecheck.sh" "$d/board_columns.py" "$d/board-definition.json" "$T/s/" 2>/dev/null   # childcc.py names the claimed card through board_columns.py (#1359)
 export SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots, a review a review slot (#567): a throwaway budget, and this repository's squad.caps under $T/squad
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.

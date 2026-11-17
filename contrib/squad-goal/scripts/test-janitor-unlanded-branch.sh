@@ -14,7 +14,7 @@
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/home"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$(dirname "$src")/spec_fold.py" "$T/s/"
 here="$(cd "$(dirname "$0")" && pwd)"   # this suite's own directory: the stubs it copies live beside it
-cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
+cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$1" in --add) echo "ADD $*" >> "TMPDIR/board.calls";; --run-fields|--clear-run) ;; *) echo "STATUS $*" >> "TMPDIR/board.calls";; esac

@@ -160,7 +160,7 @@ case "$sh_fix" in *'## Resolved'*) ok "the fix-round shape prints the '## Resolv
 case "$sh_full" in *'## Resolved'*) ko "the full-review shape prints '## Resolved' (that mode has no answers)";; *) ok "the full-review shape leaves out '## Resolved'";; esac
 # the prompt each mode sends, captured from a stubbed run of review.sh (its two halves meet here)
 prompt_of() { local W; W=$(mktemp -d); mkdir -p "$W/bin" "$W/st/cq"
-  cp "$(dirname "$src")/review.sh" "$W/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$W/"; cp "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/registry.json" "$W/"; cp "$src" "$W/revformat.py"; : > "$W/codex-reset.py"
+  cp "$(dirname "$src")/review.sh" "$W/review.sh"; cp "$(dirname "$src")/loopbug.sh" "$W/"; cp "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/drainpolicy.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/registry.json" "$W/"; cp "$src" "$W/revformat.py"; : > "$W/codex-reset.py"
   printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"review_max_lines":60,"anthropic_models":[]}' > "$W/models.json"
   printf 'SG_REPO=x/y; SG_STATE=%s/st; SG_BASE=main; SG_CHECKOUT=%s; SG_REVIEW_RULES=CLAUDE.md\n' "$W" "$W" > "$W/env.sh"
   cat > "$W/bin/gh" <<'J'

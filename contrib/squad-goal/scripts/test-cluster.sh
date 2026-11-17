@@ -35,7 +35,7 @@ rm -rf "$R"
 # autobug: clusters become children. single.sh and startability.sh travel with the dispatchers: both run the pass under
 # single.sh (#1514) and source startability.sh (which sources ghcall.sh beside it), so a sandbox without them cannot start
 # a pass at all. envelope-spend.sh is what the request builder reads its child's spend from; address.sh is the seam.
-mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/loopbug.sh" "$d/basered.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$d/envelope-spend.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$T/s/"; : > "$T/st/active-runs.txt"
+mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/loopbug.sh" "$d/basered.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$d/envelope-spend.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$T/s/"; : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 10\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent\n' "$T/st" "$T/co" > "$T/s/env.sh"   # exported, as the real env.sh does: a pass re-execs itself under single.sh, and an unexported SG_STATE is lost there
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"

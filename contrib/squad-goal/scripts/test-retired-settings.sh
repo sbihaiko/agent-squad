@@ -8,7 +8,7 @@
 here=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; G=/usr/bin/grep; GIT=/usr/bin/git
 ok() { printf 'ok   %s\n' "$1"; }; ko() { printf 'FAIL %s\n' "$1"; fail=1; }
 S=$T/scene; mkdir -p "$S/s/profiles" "$S/bin" "$S/co"
-cp "$here/env.sh" "$here/skiplabels.sh" "$here/address.sh" "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/workbranches.sh" \
+cp "$here/env.sh" "$here/skiplabels.sh" "$here/address.sh" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/workbranches.sh" \
    "$here/branchreviewpass.sh" "$here/caps.sh" "$here/branchreview.sh" "$here/chainhealth.py" "$here/modelreg.py" "$here/registry.json" "$here/models.json" "$S/s/" 2>/dev/null
 # the pass hands the repository to the review: the stub records that call, and keeps the verdict where branchland.sh reads it
 cat > "$S/s/review.sh" <<J

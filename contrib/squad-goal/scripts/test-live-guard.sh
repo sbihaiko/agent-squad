@@ -8,7 +8,7 @@ d=$(dirname "$0"); src=${1:-$d/live-guard.sh}; T=$(mktemp -d); . "$d/driver-tree
 
 S=$T/scripts; co=$T/co; live=$T/home/.claude/skills/squad-goal; repo=$co/contrib/squad-goal
 mkdir -p "$S" "$repo/scripts/profiles" "$live/scripts/profiles" "$T/st"
-cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"; cp "$d/ghcall.sh" "$d/modelreg.py" "$d/registry.json" "$S/"
+cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"; cp "$d/ghcall.sh" "$d/drainpolicy.py" "$d/modelreg.py" "$d/registry.json" "$S/"
 # The pass reads its checkout and its live skill from the profile, as every pass does: the fixture profile names both.
 cat > "$S/env.sh" <<EOF
 export SG_CHECKOUT=\${SG_CHECKOUT:-$co} SG_LIVE_DIR=\${SG_LIVE_DIR:-$live} SG_STATE=\${SG_STATE:-$T/st}

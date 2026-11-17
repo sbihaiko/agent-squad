@@ -11,7 +11,7 @@ export SG_TAKEOVER_SECONDS=1000000000000
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); src=${1:-$d/janitor.py}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/docs/squad"
-cp "$src" "$T/s/janitor.py"; cp "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$d/specstall.py" "$d/spec_fold.py" "$d/ghcall.sh" "$T/s/"
+cp "$src" "$T/s/janitor.py"; cp "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$d/specstall.py" "$d/spec_fold.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$T/s/"
 printf '#!/bin/bash\n' > "$T/s/board.sh"; printf '#!/bin/bash\n' > "$T/notify"; chmod +x "$T/notify"; export PATH="$T/bin:$PATH"
 # The one items read answers the cards in $T/cards, one `<number> TAB <Status>` a line; every other route answers nothing.
 printf '#!/bin/bash\ncase "$*" in\n  *projectsV2/4/fields*) echo FID4;;\n  *projectsV2/4/items*) cat "%s/cards" 2>/dev/null;;\nesac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"

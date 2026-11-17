@@ -12,7 +12,7 @@ bad() { echo "  FAILED: $1"; fails=$((fails + 1)); }
 for v in $(compgen -e | grep '^SG_'); do unset "$v"; done
 mkdir -p "$T/bin" "$T/st" "$T/s"
 export SG_STATE="$T/st" PATH="$T/bin:$PATH"
-cp "$here/ghread.py" "$here/ghcall.sh" "$T/s/"
+cp "$here/ghread.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$T/s/"
 LOG="$T/st/api.log"
 printf '#!/bin/bash\nprintf "%%s" "$GQL_BODY"; exit "$GQL_RC"\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"
 GQL='{"errors":[{"type":"RATE_LIMIT","code":"graphql_rate_limit","message":"API rate limit already exceeded for user ID 1."}]}'

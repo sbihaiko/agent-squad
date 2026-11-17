@@ -15,7 +15,7 @@ trap 'rm -rf "$T"' EXIT
 unset SG_STATE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_PROFILES_DIR SG_FILED_BY SG_FILED_LABELS SG_GH_PASS
 
 N=$T/loop; S=$N/scripts; mkdir -p "$S" "$N/st/auto" "$N/bin" "$N/co"
-for f in autorefuse.sh autohunt.sh ghcall.sh ghread.py refusal-names.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$S/$f"; done
+for f in autorefuse.sh autohunt.sh ghcall.sh drainpolicy.py ghread.py refusal-names.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$S/$f"; done
 # the profile of the fixture: one repository, this state dir, the board stubbed (the card is not what this suite proves)
 cat > "$S/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$N/st; SG_CHECKOUT=$N/co; SG_BASE=main

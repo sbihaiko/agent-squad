@@ -44,7 +44,7 @@ scene() {
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   /usr/bin/git init -q --bare "$T/$1/origin.git"   # the branch read of the case: a local bare repository, never github.com
   cp "$src" "$S/autohunt.sh"
-  cp "$here/ghcall.sh" "$here/ghread.py" "$here/workbranches.sh" "$here/refusal-names.sh" "$here/envelope-spend.sh" "$here/issue_ledger.py" "$here/caps.sh" "$here/priority_backfill.py" "$S/"   # the birth Priority table (#1978); the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361); the process read is caps.sh, which resolves to squad.procs through SG_SQUAD inside the child's sandbox (#1594)
+  cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/workbranches.sh" "$here/refusal-names.sh" "$here/envelope-spend.sh" "$here/issue_ledger.py" "$here/caps.sh" "$here/priority_backfill.py" "$S/"   # the birth Priority table (#1978); the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361); the process read is caps.sh, which resolves to squad.procs through SG_SQUAD inside the child's sandbox (#1594)
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"
