@@ -21,7 +21,9 @@ like any other bug.
    fallback still runs.
 2. **The label selects the chain.** A review reads the issue's labels once. An issue that carries `loop-bug`, or any label
    that begins with `loop-bug`, is reviewed on the loop-defect chain. Every other issue keeps the review chain. A failed label
-   read keeps the review chain and says so in one line on stderr.
+   read keeps the review chain and says so in one line on stderr. The class a suffix names (`loop-bug:landing`,
+   `loop-bug:publish`, or another) changes the restrictions the issue holds, never the chain it is reviewed on: the strongest
+   reviewer reads every class, because the class is a judgement about the defect's reach.
 3. **A loop defect is planned before it is built.** `review.sh --plan <issue>` reviews the issue alone: its title, body and
    acceptance criteria, with no branch and no diff. It walks the loop-defect chain. Its record is the record of a branch
    review, under the issue's key: the verdict in `review-<key>.md`, and the reviewed body hash in `review-<key>.sha`.
