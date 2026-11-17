@@ -7,6 +7,9 @@ self-edge is invalid; a blocker the reads could not prove is unknown, never vali
 Every case builds its graph by hand. No case reaches GitHub.
 """
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -79,6 +82,46 @@ def test_a_missing_page_is_unknown_for_its_component_only():
     graph = {A: node(complete=False), B: node(), C: node(), S: node(kind="spec")}
     assert deadlock.validate(graph, [(A, B)])["status"] == "unknown"
     assert deadlock.validate(graph, [(C, S)])["status"] == "valid"
+
+
+def _audit_cli(tmp_path, issues):
+    path = tmp_path / "issues.json"
+    path.write_text(json.dumps(issues))
+    out = subprocess.run([sys.executable, str(MODULE), "audit", str(path)], capture_output=True, text=True, check=True).stdout
+    return out.splitlines()
+
+
+def test_a_drain_audit_reports_a_loop_bug_on_dispatch_work_as_one_alert(tmp_path):
+    issues = [
+        {"repo": "o/r", "number": 1, "state": "open", "labels": [{"name": "loop-bug"}], "parent": None,
+         "blocked_by_edges": [{"repo": "o/r", "number": 2, "state": "open"}], "blocked_by_complete": True},
+        {"repo": "o/r", "number": 2, "state": "open", "labels": [{"name": "bug"}], "parent": None,
+         "blocked_by_edges": [], "blocked_by_complete": True},
+    ]
+    alerts = _audit_cli(tmp_path, issues)
+    assert len(alerts) == 1 and alerts[0].startswith("ALERT "), alerts
+    assert "o/r#1" in alerts[0] and "o/r#2" in alerts[0], alerts[0]
+
+
+def test_a_drain_audit_is_silent_for_a_loop_bug_with_no_open_dispatch_work(tmp_path):
+    issues = [
+        {"repo": "o/r", "number": 1, "state": "open", "labels": [{"name": "loop-bug"}], "parent": None,
+         "blocked_by_edges": [], "blocked_by_complete": True},
+    ]
+    assert _audit_cli(tmp_path, issues) == []
+
+
+def test_verdict_of_agrees_with_validate_for_a_shared_component():
+    issues = [
+        {"repo": "o/r", "number": 1, "state": "open", "labels": [], "parent": None,
+         "blocked_by_edges": [{"repo": "o/r", "number": 2, "state": "open"}], "blocked_by_complete": True},
+        {"repo": "o/r", "number": 2, "state": "open", "labels": [{"name": "frozen:owner"}], "parent": None,
+         "blocked_by_edges": [], "blocked_by_complete": True},
+    ]
+    via_validate = deadlock.validate(deadlock.graph_of(issues), [("o/r#1", "o/r#2")])
+    via_verdict = deadlock.verdict_of(issues, "o/r", 1)
+    assert via_verdict["status"] == via_validate["status"] == "held"
+    assert via_verdict["actor"] == via_validate["actor"] == "owner"
 
 
 def test_the_audit_reports_each_cause_once(monkeypatch):

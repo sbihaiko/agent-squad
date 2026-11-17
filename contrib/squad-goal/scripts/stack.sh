@@ -30,6 +30,21 @@ if [ -n "$parent" ]; then
     "") echo "WAIT ticket of spec #$parent: the spec carries no readable card, so the owner has not started it (ADR-0142)"; exit 0;;
   esac
 fi
+# The dependency component of this card, from the pass's own issue list (#1984): an invalid or unknown component holds it, and
+# an owner hold names the owner and writes one alert. A pass that passes no list, or a copy of this script without deadlock.py
+# beside it, keeps the gates below.
+if [ -n "${SG_STACK_GRAPH:-}" ] && [ -s "$SG_STACK_GRAPH" ] && [ -f "$here/deadlock.py" ]; then
+  v=$(python3 "$here/deadlock.py" verdict "$SG_STACK_GRAPH" "$SG_REPO" "$iss" 2>/dev/null) || v='{"status":"unknown","reasons":["the validator did not answer"],"actor":null}'
+  vs=$(printf '%s' "$v" | jq -r '.status'); vr=$(printf '%s' "$v" | jq -r '.reasons[0] // ""'); va=$(printf '%s' "$v" | jq -r '.actor // ""')
+  case "$vs" in
+    invalid|unknown) echo "WAIT dependency component of #$iss is $vs: $vr"; exit 0;;
+    held) echo "WAIT dependency component of #$iss is held by $va: $vr"
+          if [ -n "${SG_STATE:-}" ] && ! grep -qF "STACK alert #$iss waits on $va: $vr" "$SG_STATE/alerts.log" 2>/dev/null; then
+            printf '%s STACK alert #%s waits on %s: %s\n' "$(date '+%F %T')" "$iss" "$va" "$vr" >> "$SG_STATE/alerts.log"
+          fi
+          exit 0;;
+  esac
+fi
 # GitHub's blocked-by relation is the dispatch fact. A blocker the body names without that relation still holds the ticket
 # while it reads open (#1758): the body's "## Blocked by" section is how a ticket without the native edge states its wait,
 # and reading it as no edge dispatched tickets whose blocker was in flight. Its state is read alone, one call, and the note

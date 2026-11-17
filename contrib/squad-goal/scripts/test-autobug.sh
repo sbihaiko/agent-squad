@@ -89,7 +89,7 @@ printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 # 2b2 (#1620, ADR-0142 rule 6): a bug that is a ticket of a spec is not dispatched while the spec's card sits in Backlog,
 # whatever the bug's own card reads. The board's automation puts a linked sub-issue in Todo by itself, so the ticket's own
 # column proves nothing about the spec's, and the owner starts a spec before its tickets. The wait names the parent spec.
-cp "$d/stack.sh" "$T/s/stack.sh"
+cp "$d/stack.sh" "$d/deadlock.py" "$T/s/"
 python3 - "$T/issues.json" <<'PY'
 import json, sys
 p = sys.argv[1]; d = json.load(open(p))
