@@ -135,6 +135,10 @@ date +%s > "$ST/promote-main-hold"; : > "$T/gh.log"; pass
 [ -z "$(req)" ] && [ ! -s "$T/gh.log" ] && ok "9 inside the quiet window after a verdict the next tip is not requested" || ko "9 re-armed at once: $(cat "$T/gh.log")"
 old_hold; pass; r2=$(tip stg)
 [ "$(req)" = "$r2" ] && ok "9 past the quiet window the new tip is requested" || ko "9 no request after the window: '$(req)', out '$(cat "$T/out")'"
+# The request names the job its direct move waits on: the pass reads the rows through its own resolved tier names, and no
+# read that proves nothing is reported as a bare failure (#2039).
+/usr/bin/grep -q "full-xdist (missing)" "$T/out" && ok "9 the request names the job the direct move waits on" \
+  || ko "9 tier reason: '$(cat "$T/out")'"
 # 10) The next red comments on the open bug and files no second one.
 request "$r2" 600; checks "$r2" success failure; pass
 [ "$(cat "$T/issues")" = 41 ] && /usr/bin/grep -q "$r2" "$T/comments" 2>/dev/null && ok "10 a later red comments on the open bug" || ko "10 comment: issues $(cat "$T/issues"), comments '$(cat "$T/comments" 2>/dev/null)'"
@@ -211,10 +215,18 @@ realign; adv stg ceil-green-a 18000; adv stg ceil-green-b 10; cg=$(tip stg); cm=
 # 34) The tier is read as the dev pass reads it: the newest completed, non-skipped run of a name answers, so a re-run started
 # on the same sha does not hide the green run behind it.
 realign; adv stg tip-rerun 300; rr=$(tip stg); rm0=$(tip main); tse=$(iso $(( $(date +%s) - 60 )))
-printf '{"check_runs":[{"id":1,"name":"full-xdist","status":"completed","conclusion":"success","started_at":"%s"},{"id":2,"name":"full-xdist","status":"in_progress","conclusion":null,"started_at":"%s"},{"id":1,"name":"gui-e2e","status":"completed","conclusion":"success","started_at":"%s"}]}\n' "$tse" "$tse" "$tse" > "$T/checks-$rr.json"
+printf '{"check_runs":[{"id":1,"name":"full-xdist","status":"completed","conclusion":"success","started_at":"%s"},{"id":2,"name":"gui-e2e","status":"completed","conclusion":"success","started_at":"%s"},{"id":3,"name":"full-xdist","status":"in_progress","conclusion":null,"started_at":"%s"}]}\n' "$tse" "$tse" "$tse" > "$T/checks-$rr.json"
 : > "$T/gh.log"; pass; rc=$?
 [ $rc = 0 ] && [ "$(tip main)" = "$rr" ] && ok "34 a completed green run behind a newer open run still proves the tip" \
   || ko "30 rerun: rc $rc, main $(tip main), record '$(req)', out '$(cat "$T/out")'"
+# The newest completed run answers even when it is newer than a green one: an older success never answers over a newer
+# completed failure, so the tip is no proof and main stays.
+realign; adv stg tip-rerun-red 7200; rrd=$(tip stg); rrm=$(tip main)
+printf '{"check_runs":[{"id":1,"name":"full-xdist","status":"completed","conclusion":"success","started_at":"%s"},{"id":2,"name":"full-xdist","status":"completed","conclusion":"failure","started_at":"%s"},{"id":3,"name":"gui-e2e","status":"completed","conclusion":"success","started_at":"%s"}]}\n' "$tse" "$tse" "$tse" > "$T/checks-$rrd.json"
+pass; rc=$?
+[ "$(tip main)" = "$rrm" ] && /usr/bin/grep -q "full-xdist (red failure)" "$T/out" \
+  && ok "34 a newer completed failure answers over an older success, and the tip is no proof" \
+  || ko "34 newest completed: rc $rc, main $(tip main), out '$(cat "$T/out")'"
 
 # 3) Ceiling: the oldest first-parent commit main lacks is past the ceiling, so a stg that keeps moving is still requested.
 realign; adv stg ceil-a 18000; adv stg ceil-b 10; pass

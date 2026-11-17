@@ -27,10 +27,12 @@ checks() { local sha=$1 out="" n c i=0; shift
       *) out="$out{\"id\":$i,\"name\":\"$n\",\"status\":\"completed\",\"conclusion\":\"$c\",\"started_at\":\"2026-11-17T00:00:00Z\"},";; esac
   done
   printf '{"check_runs":[%s]}\n' "${out%,}" | sed 's/,]/]/' > "$T/checks-$sha.json"; }
-# The stub GitHub: it logs every call and answers a sha's check runs from $T/checks-<sha>.json.
+# The stub GitHub: it logs every call and answers a sha's check runs from $T/checks-<sha>.json. The flag $T/gh-fail makes it
+# fail the call, so a case can prove the refusal a read that proves nothing earns.
 cat > "$T/bin/gh" <<EOF
 #!/bin/bash
 echo "\$*" >> "$T/gh.log"
+[ -e "$T/gh-fail" ] && exit 1
 a="\$*"
 case "\$a" in
   *"/check-runs"*) s=\${a##*commits/}; s=\${s%%/*}; cat "$T/checks-\$s.json" 2>/dev/null || echo '{"check_runs":[]}';;
@@ -77,12 +79,51 @@ git -C "$R" update-ref refs/heads/main "$base"; checks "$sa" success success; rc
   && ok "6 a workflow with no complete-tier job moves nothing, and the refusal names the cause" || ko "6 no names: rc $rc, main $(tip main), out '$(cat "$T/out")'"
 
 # 7) The reader is the pass's own: the newest completed, non-skipped run of a name answers, so a green run behind a newer
-# open run still proves the sha.
+# open run and behind a newer skip still proves the sha. The runs carry distinct ids in chronological order, so the sort by
+# id decides which run answers, not the order of the list or the completed filter alone.
 git -C "$R" update-ref refs/heads/main "$base"
-printf '{"check_runs":[{"id":1,"name":"full-xdist","status":"completed","conclusion":"success","started_at":"2026-11-17T00:00:00Z"},{"id":2,"name":"full-xdist","status":"in_progress","conclusion":null,"started_at":"2026-11-17T01:00:00Z"},{"id":1,"name":"gui-e2e","status":"completed","conclusion":"success","started_at":"2026-11-17T00:00:00Z"}]}\n' > "$T/checks-$sa.json"
+printf '{"check_runs":[{"id":1,"name":"full-xdist","status":"completed","conclusion":"success","started_at":"2026-11-17T00:00:00Z"},{"id":2,"name":"gui-e2e","status":"completed","conclusion":"success","started_at":"2026-11-17T00:00:00Z"},{"id":3,"name":"full-xdist","status":"in_progress","conclusion":null,"started_at":"2026-11-17T01:00:00Z"},{"id":4,"name":"full-xdist","status":"completed","conclusion":"skipped","started_at":"2026-11-17T02:00:00Z"}]}\n' > "$T/checks-$sa.json"
 rc=$(main_move "$sa")
-[ "$rc" = 0 ] && [ "$(tip main)" = "$sa" ] && ok "7 a completed green run behind a newer open run still proves the sha" \
+[ "$rc" = 0 ] && [ "$(tip main)" = "$sa" ] && ok "7 a completed green run behind a newer open run and a newer skip still proves the sha" \
   || ko "7 rerun: rc $rc, main $(tip main), out '$(cat "$T/out")'"
+# The newest completed run answers even when it is newer than a green one: an older success never answers over a newer
+# completed failure.
+git -C "$R" update-ref refs/heads/main "$base"
+printf '{"check_runs":[{"id":1,"name":"full-xdist","status":"completed","conclusion":"success","started_at":"2026-11-17T00:00:00Z"},{"id":2,"name":"full-xdist","status":"completed","conclusion":"failure","started_at":"2026-11-17T01:00:00Z"},{"id":3,"name":"gui-e2e","status":"completed","conclusion":"success","started_at":"2026-11-17T00:00:00Z"}]}\n' > "$T/checks-$sa.json"
+rc=$(main_move "$sa")
+[ "$rc" = 1 ] && [ "$(tip main)" = "$base" ] && /usr/bin/grep -q "full-xdist (red failure)" "$T/out" \
+  && ok "7 a newer completed failure answers over an older success, and the refusal names it" || ko "7 newest completed: rc $rc, main $(tip main), out '$(cat "$T/out")'"
+
+# 8) The row reader answers for exactly the names and the unproven set it is given, with no second resolution from a
+# workflow file: promote-main-pass.sh resolves the tier once and hands it over, so the pass and the reader cannot disagree
+# about which jobs the tier is.
+. "$d/ghcall.sh"; . "$d/mainproof.sh"
+printf '{"check_runs":[{"id":1,"name":"alpha","status":"completed","conclusion":"success"},{"id":2,"name":"full-xdist","status":"completed","conclusion":"failure"}]}\n' > "$T/checks-$sa.json"
+rows=$(sg_check_run_rows "$sa" '["alpha"]' '[]'); rc=$?
+[ "$rc" = 0 ] && [ "$rows" = "$(printf 'alpha\tgreen\t')" ] \
+  && ok "8 the row reader answers for the names it is given, not the workflow's" || ko "8 given names: rc $rc, rows '$rows'"
+rows=$(sg_check_run_rows "$sa" '["alpha"]' '["cancelled"]'); rc=$?
+[ "$rc" = 0 ] && [ "$rows" = "$(printf 'alpha\tgreen\t')" ] && ok "8 an unproven set that does not name the conclusion leaves a green run green" \
+  || ko "8 given unproven set: rc $rc, rows '$rows'"
+# A read that proves nothing keeps its reason, so a caller can name the cause instead of a bare failure: the reason is the
+# one line the call prints on its failing exit, where the caller's command substitution reads it.
+: > "$T/gh-fail"
+rows=$(sg_check_run_rows "$sa" '["alpha"]' '[]' 2>/dev/null); rc=$?; rm -f "$T/gh-fail"
+[ "$rc" = 2 ] && [ -n "$rows" ] && ok "8 a read that fails keeps the reason that names it" \
+  || ko "8 read failure: rc $rc, reason '$rows'"
+
+# 9) A hand run names no checkout: the reader falls back to this script's own checkout, so promote-main.sh <sha> proves the
+# sha with no SG_* environment set.
+all=$(env -u SG_CHECKOUT -u SG_SQUAD -u SG_CI_WORKFLOW bash -c '. "$1/ghcall.sh"; . "$1/mainproof.sh"; sg_complete_proof "$2"' _ "$d" "$sa" 2>/dev/null); rc=$?
+want=$(bash "$d/promote-pass.sh" --ci-complete-job-names "$d/../../../.github/workflows/ci.yml" | sed '/^$/d' | sort)
+got=$(printf '%s\n' "$all" | cut -f1 | sed '/^$/d' | sort)
+[ "$rc" = 0 ] && [ "$got" = "$want" ] && ok "9 with no SG_* checkout the reader resolves this script's own workflow" \
+  || ko "9 own checkout: rc $rc, got '$(printf '%s' "$got" | tr '\n' ' ')', want '$(printf '%s' "$want" | tr '\n' ' ')'"
+
+# 10) A workflow file that cannot be read refuses the move and names the missing path, never a misleading empty tier.
+git -C "$R" update-ref refs/heads/main "$base"; rc=$(SG_CI_WORKFLOW=$T/nope.yml main_move "$sa")
+[ "$rc" = 1 ] && [ "$(tip main)" = "$base" ] && /usr/bin/grep -q "$T/nope.yml" "$T/out" \
+  && ok "10 an unreadable workflow file names the missing path and moves nothing" || ko "10 unreadable workflow: rc $rc, main $(tip main), out '$(cat "$T/out")'"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

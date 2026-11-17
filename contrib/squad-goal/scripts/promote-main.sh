@@ -66,15 +66,14 @@ if [ -n "$named" ]; then
   . "$d/ghcall.sh"; . "$d/mainproof.sh"
   rows=$(sg_complete_proof "$tip" 2>/dev/null); prc=$?
   bad=
-  if [ "$prc" = 3 ]; then bad="the workflow names no complete tier job, so nothing proves $tip"
-  elif [ "$prc" != 0 ]; then bad="the complete tier of $tip is unproven: its check runs could not be read"
+  if [ "$prc" != 0 ]; then bad=${rows:-the complete tier of $tip proves nothing}
   else bad=$(printf '%s\n' "$rows" | awk -F'\t' 'NF && $2 != "green" { printf "%s%s (%s %s)", sep, $1, $2, ($3 != "" ? $3 : "no run"); sep = ", " }')
   fi
   if [ -n "$bad" ]; then
     if [ "${SG_PROMOTE_UNPROVEN:-}" = owner ]; then
       echo "promote-main: SG_PROMOTE_UNPROVEN=owner overrides the complete-tier proof of $tip: $bad"
     else
-      no "refused: the complete tier of $tip is not green: $bad; $main stays where it is"
+      no "refused: no green complete tier proves $tip: $bad; $main stays where it is"
     fi
   fi
 fi

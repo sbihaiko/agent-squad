@@ -170,8 +170,8 @@ test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
 test-promote-branch.sh 1.94
 test-promote-main-credential.sh 0.53
-test-promote-main-pass.sh 24.04
-test-promote-main-proof.sh 2.98
+test-promote-main-pass.sh 44.77
+test-promote-main-proof.sh 5.90
 test-promote-pass.sh 120.00
 test-promote.sh 42.69
 test-publish-live.sh 2.50
