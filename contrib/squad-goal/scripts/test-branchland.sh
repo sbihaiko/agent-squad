@@ -6,18 +6,18 @@ unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this sui
 unset SG_BOARD_VOCAB   # the loop's shipped vocabulary (Closed, not Done) is ambient in a live shell; this suite expects the default
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/landstatus.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/drainpolicy.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$T/s/" 2>/dev/null
+cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/landstatus.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/drainpolicy.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$d/autohunt.sh" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init && $G branch -q dev)
 # The remote the landing pushes to: a bare copy with main and dev, and gui/7-x one commit ahead of dev. mkorigin rebuilds it per case.
 mkorigin() { rm -rf "$T/origin.git" "$T/w"; $G clone -q --bare "$T/co" "$T/origin.git"; $G clone -q "$T/origin.git" "$T/w" 2>/dev/null
-  (cd "$T/w" && $G checkout -q -b gui/7-x origin/dev && echo y > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "work" && $G push -q origin gui/7-x 2>/dev/null); }
+  (cd "$T/w" && $G checkout -q -b gui/7-x origin/dev && echo y > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "work (Refs #7)" && $G push -q origin gui/7-x 2>/dev/null); }
 mkorigin
 # mkbranch8: a second open work branch (issue 8), beside gui/7-x, so a case can prove that one branch's review holds only itself.
 mkbranch8() { rm -rf "$T/w8"; $G clone -q "$T/origin.git" "$T/w8" 2>/dev/null
-  (cd "$T/w8" && $G checkout -q -b gui/8-y origin/dev && echo y8 > h8 && $G add h8 && $G -c user.email=a@b -c user.name=t commit -q -m "work 8" && $G push -q origin gui/8-y 2>/dev/null); rm -rf "$T/w8"; }
+  (cd "$T/w8" && $G checkout -q -b gui/8-y origin/dev && echo y8 > h8 && $G add h8 && $G -c user.email=a@b -c user.name=t commit -q -m "work 8 (Refs #8)" && $G push -q origin gui/8-y 2>/dev/null); rm -rf "$T/w8"; }
 # The stub: no open PR unless PRS names one. CHECKS names the check-runs answer.
 cat > "$T/bin/gh" <<J
 #!/bin/bash
@@ -55,7 +55,7 @@ r=$(CHECKS="$GREEN" bl)
 /usr/bin/grep -q "statuses/$bsha -f state=pending" "$T/gh.log" && ok "the landing is marked pending on the tip it started from" || ko "no pending status on $bsha: $(/usr/bin/grep -c statuses "$T/gh.log") status calls"
 /usr/bin/grep -q "statuses/$($O rev-parse dev) -f state=success" "$T/gh.log" && ok "the landing is marked success on the tip it landed" || ko "no success status on $($O rev-parse dev)"
 /usr/bin/grep -q 'statuses/.* -f context=squad/landing' "$T/gh.log" && ok "the status names its context" || ko "the status names no context"
-$O merge-base --is-ancestor main dev && [ "$($O log --format=%s dev | head -1)" = work ] && ok "dev is a fast-forward of its old head" || ko "dev is not a fast-forward"
+$O merge-base --is-ancestor main dev && [ "$($O log --format=%s dev | head -1)" = "work (Refs #7)" ] && ok "dev is a fast-forward of its old head" || ko "dev is not a fast-forward"
 $O rev-list --merges dev | /usr/bin/grep -q . && ko "a merge commit landed" || ok "history stays linear"
 [ "$($O rev-parse main)" = "$($G -C "$T/co" rev-parse main)" ] && ok "main did not move" || ko "main moved"
 $O rev-parse -q --verify refs/heads/gui/7-x >/dev/null && ko "branch not deleted" || ok "the landed branch is deleted by push"
@@ -169,7 +169,7 @@ r=$(SG_LOCAL_GATE_CMD="$GATE_FIXED" CHECKS='{"check_runs":[]}' bl)
 rev APPROVE; r=$(SG_LOCAL_GATE_CMD="$GATE_FIXED" CHECKS='{"check_runs":[]}' bl)
 [ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "the fixed tip is gated again" || ko "a new tip inherited the skip: $(cat "$T/gate.log" 2>&1) '$r'"
 case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "the fix on dev: the branch lands, gated on the rebased tip";; *) ko "the rebased tip did not land: '$r'";; esac
-[ "$($O log --format=%s dev | head -3 | tr '\n' ,)" = "work again,work,fix on dev," ] && ok "dev holds the fix and the work, linear" || ko "dev history: $($O log --format=%s dev | head -3 | tr '\n' ,)"
+[ "$($O log --format=%s dev | head -3 | tr '\n' ,)" = "work again,work (Refs #7),fix on dev," ] && ok "dev holds the fix and the work, linear" || ko "dev history: $($O log --format=%s dev | head -3 | tr '\n' ,)"
 [ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && ok "the rebased gate checkout is removed" || ko "a gate worktree is left: $($G -C "$T/co" worktree list)"
 reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$RED" bl)
 [ ! -e "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a red check runs no gate and lands nothing" || ko "a red check ran the gate or landed"
@@ -255,7 +255,7 @@ case "$r" in *"BRANCHLAND LANDED gui/8-y"*) ok "the pass lands the other branch 
 
 # dev moved after the branch was cut: the branch is rebased on top, then lands
 reset; (cd "$T/w" && $G checkout -q dev && echo z > h && $G add h && $G -c user.email=a@b -c user.name=t commit -q -m "other" && $G push -q origin dev 2>/dev/null)
-r=$(CHECKS="$GREEN" bl); $O log --format=%s dev | tr '\n' ' ' | /usr/bin/grep -q "^work other init" && ok "a moved dev: the branch is rebased on top and lands" || ko "no rebase landing: $($O log --format=%s dev | tr '\n' ' ') $r"
+r=$(CHECKS="$GREEN" bl); $O log --format=%s dev | tr '\n' ' ' | /usr/bin/grep -q "^work (Refs #7) other init" && ok "a moved dev: the branch is rebased on top and lands" || ko "no rebase landing: $($O log --format=%s dev | tr '\n' ' ') $r"
 $O rev-list --merges dev | /usr/bin/grep -q . && ko "a merge commit landed" || ok "a moved dev: history stays linear"
 
 # a refused push says so and lands nothing
@@ -478,7 +478,8 @@ n=$(/usr/bin/grep -o ' | ' "$T/st/review-gui_7-x.md" 2>/dev/null | wc -l | tr -d
 # DEBT (#1500): a kept landing branch fix/<n>-land-<run> closes every `issue` line of its marker, moves each card forward, deletes
 # wave/run-<run> from the remote, and removes the marker; the branch-name issue is closed only through its own line. A marker with
 # no `issue` line (the #1344 form) closes the branch's own issue alone.
-land7() { reset; $O update-ref -d refs/heads/gui/7-x; (cd "$T/w" && $G checkout -q -b "wave/run-z" origin/dev && echo wz > wz && $G add wz && $G -c user.email=a@b -c user.name=t commit -q -m "wave work (Refs #7)" && $G push -q origin wave/run-z 2>/dev/null \
+land7() { reset; $O update-ref -d refs/heads/gui/7-x; (cd "$T/w" && $G checkout -q -b "wave/run-z" origin/dev && echo wz > wz && $G add wz && $G -c user.email=a@b -c user.name=t commit -q -m "wave work (Refs #7)" \
+  && echo wz9 > wz9 && $G add wz9 && $G -c user.email=a@b -c user.name=t commit -q -m "wave work nine (Refs #9)" && $G push -q origin wave/run-z 2>/dev/null \
   && $G checkout -q -b fix/7-land-run-z wave/run-z && $G push -q origin fix/7-land-run-z 2>/dev/null)
   rm -f "$T/st/review-fix_7-land-run-z".*; printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_7-land-run-z.md"; $O rev-parse fix/7-land-run-z > "$T/st/review-fix_7-land-run-z.sha"; }
 land7; printf 'origin/dev\nissue 7\nissue 9\nround 1 abc\n' > "$T/st/auto/kept-fix_7-land-run-z"
@@ -494,6 +495,15 @@ r=$(OPEN="7 9" CHECKS="$GREEN" bl)
 land7; printf 'origin/dev\n' > "$T/st/auto/kept-fix_7-land-run-z"
 r=$(OPEN="7 9" CHECKS="$GREEN" bl)
 /usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && ! /usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && [ ! -e "$T/st/auto/kept-fix_7-land-run-z" ] && ok "an old-form one-line marker closes the branch's own issue alone" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+# (#2184) A close proves that a commit the base carries names the issue with a `Refs #N` line. An `issue` line of the kept marker
+# that no landed commit names closes nothing, queues one note, and leaves the issue open with its card in Todo.
+land7; printf 'origin/dev\nissue 7\nissue 9\nissue 10\nround 1 abc\n' > "$T/st/auto/kept-fix_7-land-run-z"
+r=$(OPEN="7 9 10" CHECKS="$GREEN" bl)
+/usr/bin/grep -q 'issues/7 -f state=closed' "$T/gh.log" && /usr/bin/grep -q 'issues/9 -f state=closed' "$T/gh.log" && ! /usr/bin/grep -q 'issues/10 -f state=closed' "$T/gh.log" \
+  && ok "a marker line no landed commit names closes nothing, and the named ones close" || ko "closes: '$(/usr/bin/grep 'state=closed' "$T/gh.log")'"
+[ "$(ls "$T/st/cq" | /usr/bin/grep -c '^x__y#10-status~')" = 1 ] && ok "the unproven marker line queues one note on the issue" || ko "no note on #10: $(ls "$T/st/cq" 2>/dev/null)"
+! /usr/bin/grep -qx 'o 3 Done 10' "$T/board.log" && ok "the unproven marker line's card stays in Todo" || ko "the card of #10 moved: $(cat "$T/board.log")"
+[ -z "$(awk -F'\t' '$2=="fix/7-land-run-z" && $4=="10"' "$T/st/landed.tsv")" ] && ok "no landed row for the unproven marker line" || ko "landed.tsv: '$(cat "$T/st/landed.tsv")'"
 # (#1826) A kept landing branch whose tip the base already carries has landed: the pass writes its books, deletes the branch, its wave
 # branch and the marker, and spends no check, no review and no gate. Its tip is a dev commit, so a review of it reads an empty diff
 # and answers BLOCKED for ever, and each round moves the tip to a fresh try count.
