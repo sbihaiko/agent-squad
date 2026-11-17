@@ -51,7 +51,7 @@ import gate_attempts
 GATING = board_columns.ROLE["gating"]
 TODO = board_columns.ROLE["issue_todo"]
 CLOSED = board_columns.ROLE["issue_closed"]
-PATH_COLUMNS = (TODO, "Doing", "Code Complete", GATING, CLOSED)
+PATH_COLUMNS = tuple(board_columns.canonical(c) for c in (TODO, "Doing", "Code Complete", GATING, CLOSED))   # the definition's names (#2155)
 SETTLE_SECONDS = 900   # how late a board poll may record a Status change against the gate's own instant
 MATCH_SECONDS = 120    # how close an attempt's finish and a gate-history line's finish are one gate run
 HOUR = 3600.0
@@ -247,7 +247,7 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
     # 1. path: the five columns, forward along the board's axis.
     axis = _axis()
     order = {name: i for i, name in enumerate(axis)}
-    seq = [r["column"] for r in runs if r["on_board"] and r["column"] in order]
+    seq = [board_columns.canonical(r["column"]) for r in runs if r["on_board"] and board_columns.canonical(r["column"]) in order]
     first_order = [order[name] for name in dict.fromkeys(seq)]
     present = all(name in seq for name in PATH_COLUMNS)
     ordered = first_order == sorted(first_order)

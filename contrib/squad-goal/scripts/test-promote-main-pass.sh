@@ -278,6 +278,22 @@ request "$sr" 600; checks "$sr" failure success; pass
 [ "$(cat "$ST/promote-main-red" 2>/dev/null)" = "$sr" ] && ok "21 a run that started after the request answers on that same sha" \
   || ko "21 fresh run: red record '$(cat "$ST/promote-main-red" 2>/dev/null)', out '$(cat "$T/out")'"
 
+# 35) A green complete tier that ended before a later request is still the proof of the tip (#2195, ADR-0164): a later CI
+# event records a new request on a tip whose tier already ended green, and the request record is a convenience, never the
+# proof. The pass moves main to the tip, and writes no hold and no alert.
+realign; adv stg late-green 7200; lg=$(tip stg); lgm=$(tip main)
+CHK_AGE=1200 checks "$lg" success success; request "$lg" 600; : > "$T/gh.log"; pass; rc=$?
+[ $rc = 0 ] && [ "$(tip main)" = "$lg" ] && [ ! -e "$ST/promote-main-hold" ] && [ "$(alerts)" = 0 ] && [ -z "$(req)" ] \
+  && ok "35 a green tier that started before a later request moves main, with no hold and no alert" \
+  || ko "35 late request: rc $rc, main $(tip main), hold '$(cat "$ST/promote-main-hold" 2>/dev/null)', alerts '$(cat "$ST/alerts.log" 2>/dev/null)'"
+# (b) No green tier on the tip: the request started no run, so the tip is unproven and the hold is written.
+realign; adv stg late-none 7200; ln=$(tip stg); lnm=$(tip main); rm -f "$T/checks-$ln.json"
+request "$ln" 600; pass; rc=$?
+[ $rc != 0 ] && [ "$(tip main)" = "$lnm" ] && [ -s "$ST/promote-main-hold" ] && [ "$(alerts)" = 1 ] \
+  && /usr/bin/grep -q "started no run" "$ST/alerts.log" \
+  && ok "35 no green tier on the tip is unproven, and the hold is written" \
+  || ko "35 no tier: rc $rc, main $(tip main), hold '$(cat "$ST/promote-main-hold" 2>/dev/null)', alerts '$(cat "$ST/alerts.log" 2>/dev/null)'"
+
 # 24) The request record holds the head sha GitHub reports for the pull request, never the sha the pass read before it
 # opened one: GitHub answers a head that differs from the stg tip the pass read, and the record holds GitHub's answer.
 realign; adv stg gh-head 7200; gh_s=$(tip stg); other=$(tip main); [ "$other" != "$gh_s" ] || other=$(git -C "$R" rev-parse refs/heads/dev)

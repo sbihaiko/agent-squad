@@ -8,7 +8,9 @@
 # (promote-pass.sh --ci-complete-job-names). One pass does one thing:
 #   1. main holds the stg tip: nothing, and a request left behind is cleared.
 #   2. R is set: its complete tier answers. Only a run that started at or after the request time answers: a run of an
-#      older label event on the same sha is no evidence of this request.
+#      older label event on the same sha is no evidence of this request. A green tier that ended before the request is the
+#      exception: a later event can record a new request on a tip whose tier already ended green, so when the request
+#      started no run of a name, R is still promoted if every name's newest completed run is green (#2195, ADR-0164).
 #        answered    R is the recorded red sha: that red was answered before a kill took the pass, so the request is
 #                    cleared and nothing is read or written again.
 #        in flight   a name has a run that has not completed, or no run yet inside the grace (300 s): nothing, up to
@@ -88,6 +90,21 @@ unp=${unp:-[]}
 if [ "$names" = "[]" ]; then
   alert_once nonames "$ci_file names no complete tier job, so nothing proves $stg: $main stays where it is, and the owner moves it"
 fi
+# tier_green <sha>: true when every complete-tier job of the sha has a completed, non-skipped, green run. It reads the rows
+# through sg_check_run_rows (mainproof.sh) with the names and the unproven set this pass already resolved (#2039): the pass
+# and promote-main.sh, which proves a named sha, share the one row rule and never a second name resolution, so they cannot
+# disagree about which jobs the tier is. The newest completed run that is not a skip answers for the name, and a name with no
+# such run, or a last one that is not success, is no proof. On a false answer, $tier_why names each job that is not green, or
+# the reader's own reason when it could not read the runs, so a caller never reports a bare failure.
+tier_why=
+tier_green() {
+  local rows rc
+  tier_why=
+  rows=$(sg_check_run_rows "$1" "$names" "$unp" 2>/dev/null); rc=$?
+  if [ "$rc" != 0 ]; then tier_why=${rows:-the complete tier rows of $1 could not be read}; return 1; fi
+  tier_why=$(printf '%s\n' "$rows" | awk -F'\t' 'NF && $2 != "green" { printf "%s%s (%s%s)", sep, $1, $2, ($3 != "" ? " " $3 : ""); sep = ", " }')
+  [ -z "$tier_why" ]
+}
 R=; at=; [ -s "$rec" ] && IFS=$'\t' read -r R at < "$rec"; at=$(secs "${at:-}" 0)
 now=$(date +%s)
 if [ -n "${R:-}" ]; then
@@ -136,7 +153,13 @@ if [ -n "${R:-}" ]; then
         *) v=unproven; why="$rd failed, and nothing measured the fail";;
       esac
     elif [ -n "$ms" ]; then
-      v=unproven; why="the request started no run of $ms: the label event started nothing, or its run was skipped"
+      # A later CI event records a new request on a tip whose tier already ended green. The request time names the runs of
+      # this event, and a green tier that started earlier is still the proof of R: the request record is a convenience,
+      # never the proof (ADR-0164), so the newest completed run of each name answers here as it answers the direct move of
+      # the rule below. Only a green run answers: a stale run that measured nothing is no evidence of this request (#2195).
+      if tier_green "$R"; then v=green; else
+        v=unproven; why="the request started no run of $ms: the label event started nothing, or its run was skipped"
+      fi
     elif [ -n "$up" ]; then
       v=unproven; why="$up measured nothing"
     else
@@ -212,21 +235,6 @@ fi
 # 3. No request is open: the rule decides, on the first-parent chain of stg alone. A work commit a merge brought in is not
 # on that chain, so an old work commit never fires the ceiling by itself.
 [ "$names" = "[]" ] && exit 0
-# tier_green <sha>: true when every complete-tier job of the sha has a completed, non-skipped, green run. It reads the rows
-# through sg_check_run_rows (mainproof.sh) with the names and the unproven set this pass already resolved (#2039): the pass
-# and promote-main.sh, which proves a named sha, share the one row rule and never a second name resolution, so they cannot
-# disagree about which jobs the tier is. The newest completed run that is not a skip answers for the name, and a name with no
-# such run, or a last one that is not success, is no proof. On a false answer, $tier_why names each job that is not green, or
-# the reader's own reason when it could not read the runs, so a caller never reports a bare failure.
-tier_why=
-tier_green() {
-  local rows rc
-  tier_why=
-  rows=$(sg_check_run_rows "$1" "$names" "$unp" 2>/dev/null); rc=$?
-  if [ "$rc" != 0 ]; then tier_why=${rows:-the complete tier rows of $1 could not be read}; return 1; fi
-  tier_why=$(printf '%s\n' "$rows" | awk -F'\t' 'NF && $2 != "green" { printf "%s%s (%s%s)", sep, $1, $2, ($3 != "" ? " " $3 : ""); sep = ", " }')
-  [ -z "$tier_why" ]
-}
 oldest=$(g rev-list --first-parent "origin/$main..origin/$stg" | tail -n 1); [ -n "$oldest" ] || exit 0
 tage=$(( now - $(g show -s --format=%ct "$stip") )); oage=$(( now - $(g show -s --format=%ct "$oldest") ))
 win=0; { [ "$tage" -ge "$quiet" ] || [ "$oage" -ge "$ceiling" ]; } && win=1
