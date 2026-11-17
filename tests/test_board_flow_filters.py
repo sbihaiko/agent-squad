@@ -71,6 +71,12 @@ def test_a_new_sample_with_a_long_type_tail_keeps_its_column_and_frozen_flag(flo
     assert out["cells"] == [["issue", "none", "Todo", 0, 1, "a", "b"]], "the version, never the length, names the shape"
 
 
+def test_a_sample_that_names_no_shape_keeps_a_cell_the_move_does_not_touch(flow):
+    s = {"cells": [["issue", "none", "Todo", 0, 1, "a", "b"]], "counts": {}, "frozen": 0, "none": 0}
+    out = flow._rebucket_sample(s, 1)
+    assert out["cells"] == s["cells"], "the reader never guesses a cell's shape: an untouched cell keeps its bytes"
+
+
 def test_a_new_sample_is_re_bucketed_without_a_wave_in_its_cells(flow):
     s = flow.sample([_row(1, st="Closed")], now=_epoch(19))
     out = flow._rebucket_sample(s, 1)

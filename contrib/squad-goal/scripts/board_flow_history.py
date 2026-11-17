@@ -95,14 +95,16 @@ def sample(rows, now=None):
 
 
 def _version(s):
-    """The shape a sample names: its `v`, or 1 for a sample written before the key (#2132)."""
+    """The shape a sample names: its `v`, or 1 for a sample written before the key (#2132). This is the one place that
+    reads a shape from a sample: every helper below takes the version as a required argument, so no cell is ever read
+    in a shape that neither its sample nor the reader named."""
     return s.get("v", 1)
 
 
-def _cell_parts(cell, version=1):
+def _cell_parts(cell, version):
     """(kind, spec, wave, column, frozen, count, type) of one cell in the shape its sample's `version` names: the shape
     before #2132 carries the wave third, and the shape after it carries no wave. The version, never the length, decides:
-    a cell ends in a variable-length type tail."""
+    a cell ends in a variable-length type tail. `version` is required: a caller reads a shape it named, never a default."""
     if version < SAMPLE_VERSION:
         kind, spec, wave, column, fz, k, *typ = cell
     else:
@@ -111,12 +113,12 @@ def _cell_parts(cell, version=1):
     return kind, spec, wave, column, fz, k, typ
 
 
-def _cell(kind, spec, wave, column, fz, n, typ, version=1):
+def _cell(kind, spec, wave, column, fz, n, typ, version):
     """One cell in the shape its sample uses: the wave third for the shape before #2132, else no wave."""
     return [kind, spec, wave, column, fz, n, *typ] if version < SAMPLE_VERSION else [kind, spec, column, fz, n, *typ]
 
 
-def _totals_of(cells, version=1):
+def _totals_of(cells, version):
     """(counts, frozen, none) that a list of cells adds up to: counts holds the cards in a shipped column, by kind."""
     counts, frozen, none = {}, 0, 0
     for kind, _spec, _wave, column, fz, n, *_ in (_cell_parts(c, version) for c in cells):
@@ -178,20 +180,31 @@ def _rebucket_once(lines, rows, now):
 
 
 def _rebucket_sample(s, n):
-    """One sample with up to n closed cards moved from Closed to Abandoned, taken from the kinds that hold Closed."""
+    """One sample with up to n closed cards moved from Closed to Abandoned, taken from the kinds that hold Closed.
+
+    The shape comes from the sample's `v`, never from a cell's length, and a cell the move takes nothing from is kept
+    byte for byte. A cell the named shape does not explain leaves the whole sample untouched: a reader never guesses
+    a shape and never rewrites a cell it cannot read."""
     closed, abandoned = _columns.ROLE["issue_closed"], _columns.ROLE["abandoned"]
     if "cells" in s:
         version = _version(s)
-        moved, left = {}, n
-        for cell in s["cells"]:
-            kind, spec, wave, column, fz, k, typ = _cell_parts(cell, version)
-            take = min(k, left) if column == closed else 0
+        try:
+            parts = [_cell_parts(cell, version) for cell in s["cells"]]
+        except (TypeError, ValueError):
+            return dict(s)
+        if any(not isinstance(p[5], int) or isinstance(p[5], bool) for p in parts):
+            return dict(s)
+        moved, left = [], n
+        for cell, (kind, spec, wave, column, fz, k, typ) in zip(s["cells"], parts):
+            take = min(k, left) if column == closed and left else 0
+            if not take:
+                moved.append(cell)
+                continue
             left -= take
-            for key, k_taken in (((kind, spec, wave, abandoned, fz, tuple(typ)), take),
-                                 ((kind, spec, wave, column, fz, tuple(typ)), k - take)):
-                if k_taken:
-                    moved[key] = moved.get(key, 0) + k_taken
-        cells = [_cell(*key[:5], k_taken, key[5], version) for key, k_taken in moved.items()]
+            moved.append(_cell(kind, spec, wave, abandoned, fz, take, typ, version))
+            if k > take:
+                moved.append(_cell(kind, spec, wave, column, fz, k - take, typ, version))
+        cells = moved
         counts, frozen, none = _totals_of(cells, version)
         return {**s, "counts": counts, "frozen": frozen, "none": none, "cells": cells}
     counts, left = {k: dict(v) for k, v in s["counts"].items()}, n
