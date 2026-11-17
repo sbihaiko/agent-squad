@@ -19,6 +19,7 @@ cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$*" in
   *" 2009"*) echo "board refused #2009" >&2; exit 7;;
+  *" 2110"*) echo "#2110: refused, an automated writer moves 'Abandoned' back to 'Todo'; the card keeps 'Abandoned'" >&2; exit 3;;
 esac
 case "$1" in
   --run-fields) echo "RUN $2 $3 $4 $5 $6" >> "TMPDIR/board.calls";;
@@ -51,7 +52,7 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)   # one read answers every card: number, Status, repository
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
-    for n in 2002 2003 2005 2006 2009 2022 2023 2055 2083 2084 2085 2086 2087 2088 2089 2098 2099; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2098 and #2099: the children of run-land-fail (#2015); #2055 and #2083 to #2089: the children of the retried, aborted and human runs (#2015)
+    for n in 2002 2003 2005 2006 2009 2022 2023 2055 2083 2084 2085 2086 2087 2088 2089 2098 2099 2110; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2098 and #2099: the children of run-land-fail (#2015); #2055 and #2083 to #2089: the children of the retried, aborted and human runs (#2015); #2110: a Move a rule refuses (#2122)
     for n in 2001 2007 2008 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2004 2010 2011 2032 2050; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2050: a spec card a work rule wrongly moved forward (#665)
     printf '2051\tIn Progress\thttps://api.github.com/repos/x/y\n2052\tClosed\thttps://api.github.com/repos/x/y\n2053\tBacklog\thttps://api.github.com/repos/x/y\n2054\tBacklog\thttps://api.github.com/repos/x/y\n'   # #2050's children, and spec #2053 with its queued child
@@ -70,7 +71,7 @@ case "$a" in
     esac;;
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2055 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2083 2084 2085 2086 2087 2088 2089 2090 2091 2092 2093 2094 2095 2096 2097 2098 2099; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2055 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2083 2084 2085 2086 2087 2088 2089 2090 2091 2092 2093 2094 2095 2096 2097 2098 2099 2110; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -143,6 +144,9 @@ rec run-merged-pr '{"event":"run_start","run_id":"run-merged-pr","ts":"2026-10-1
 mk run-code-complete 2005
 rec run-code-complete '{"event":"run_start","run_id":"run-code-complete","ts":"2026-10-13T08:02:00Z"}
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+mk run-rule 2110
+rec run-rule '{"event":"run_start","run_id":"run-rule","ts":"2026-10-13T08:03:30Z"}
+{"event":"verdict","verdict":"failed","reasons":["red gate"],"exit_code":1}'
 mk run-failed 2006
 rec run-failed '{"event":"run_start","run_id":"run-failed","ts":"2026-10-13T08:03:00Z"}
 {"event":"verdict","verdict":"failed","reasons":["red gate"],"exit_code":1}'
@@ -294,7 +298,7 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 Todo 2006$' "$T/board.calls" 2>/dev/null && ok "failed unlanded run: card moves to Todo" || ko "#2006 not Todo: $(bc)"
 # A card a run left behind moves back to Todo with the reason named, so board.py's one backward move (#1059) admits it.
 /usr/bin/grep -q '^REASON 2005 no-landing$' "$T/board.calls" 2>/dev/null && ok "the move back to Todo names the reason a run that landed nothing gives (#1059)" || ko "#2005 moved without the reason: $(bc)"
-[ "$(/usr/bin/grep -c '^REASON ' "$T/board.calls" 2>/dev/null)" = "$(/usr/bin/grep -c 'nothing landed' "$T/st/cycle.log" 2>/dev/null)" ] && ok "only a move back to Todo carries the reason" || ko "reasons: $(/usr/bin/grep '^REASON ' "$T/board.calls") vs landed-nothing moves in cycle.log"
+[ "$(/usr/bin/grep -c '^REASON ' "$T/board.calls" 2>/dev/null)" = "$(/usr/bin/grep 'nothing landed' "$T/st/cycle.log" 2>/dev/null | /usr/bin/grep -vc '#2110')" ] && ok "only a move back to Todo carries the reason" || ko "reasons: $(/usr/bin/grep '^REASON ' "$T/board.calls") vs landed-nothing moves in cycle.log"
 ! /usr/bin/grep -q 'Code Complete 2006' "$T/board.calls" 2>/dev/null && ok "an older run's column never overrides the newest run's (#619)" || ko "#2006 took an older run's Code Complete: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2007$' "$T/board.calls" 2>/dev/null && ok "owner label: card moves to Blocked" || ko "#2007 not Blocked: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2012$' "$T/board.calls" 2>/dev/null && ok "ratification label: card moves to Blocked" || ko "#2012 not Blocked: $(bc)"
@@ -316,6 +320,15 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -qF 'BOARD-WRITE-FAILED #2009' "$cq" 2>/dev/null && /usr/bin/grep -qF 'board refused #2009' "$cq" 2>/dev/null \
   && ok "the comment carries the refusal's name and its error" || ko "comment body: $(cat "$cq" 2>/dev/null)"
 [ "$(ls "$T/st/cq" | /usr/bin/grep -c 'refusal')" = 1 ] && ok "one refused write is one comment" || ko "refusal comments: $(ls "$T/st/cq")"
+
+# (#2122) A move a board rule refuses is settled, not a failure: board.py exits 3 for a backward move, and the card keeps its
+# column (ADR-0143). The write can never land, so its pending ledger event ends here; one left pending holds every dispatch
+# (ADR-0165), which is how the bug lane stood still for hours on #2052.
+/usr/bin/grep -q 'BOARD-REJECTED #2110' "$T/st/cycle.log" 2>/dev/null && ok "a rule refusal is logged as rejected" || ko "rule refusal not logged: $(cat "$T/st/cycle.log" 2>/dev/null | tail -3)"
+fact=$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" read "x/y#2110" board 2>/dev/null)
+case "$fact" in *'"state": "pending"'*) ko "a rule refusal left its board event pending: '$fact'";; *) ok "a rule refusal ends its pending board event";; esac
+[ -z "$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending 'x/y#2110' 2>/dev/null)" ] && ok "the refused move waits on no dispatch" || ko "the refused move still waits: $(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending 'x/y#2110' 2>/dev/null)"
+! ls "$T/st/cq" | /usr/bin/grep -q '2110' && ok "a rule refusal queues no comment" || ko "a rule refusal queued a comment: $(ls "$T/st/cq")"
 /usr/bin/grep -q '^STATUS o 4 Done 2010$' "$T/board.calls" 2>/dev/null && ok "closed issue: card moves to Done" || ko "#2010 not Done: $(bc)"
 # #271: a run that asked for children credits a landing to the child that made it, never to every issue it held.
 # #2022's child landed its own work, so that card leaves Todo; #2023's child failed and committed nothing, so it has

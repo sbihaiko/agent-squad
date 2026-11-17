@@ -1034,6 +1034,9 @@ def predict_write(n, col, why):   # the write is a ledger event first (#1841): t
     except (ImportError, RuntimeError, OSError, ValueError, KeyError) as e:
         say(f"BOARD-PREDICT-FAILED #{n}: the ledger holds no prediction for {col}: {e}")   # the write still runs, and the defect is named
         return False
+def drop_write(n, col):   # a move a rule refuses can never land: its prediction ends unwritten, so no dispatch waits on it (#2122)
+    try: ledger().boardx(f"{repo0}#{n}", "janitor", col)
+    except (ImportError, RuntimeError, OSError, ValueError, KeyError): pass
 def prove_write(n, col):   # the writer's own proof ends the prediction: only this mark, or the event's drop, does (#1841)
     try: ledger().boardw(f"{repo0}#{n}", "janitor", col, "janitor")
     except (ImportError, RuntimeError, OSError, ValueError, KeyError): pass
@@ -1048,6 +1051,7 @@ def board_write(args, n, why, reason=None):   # the one writer of a card: a stat
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         named = next((l for l in msg if l.startswith("#")), None)   # board.py prints a read note beside the refusal (#96): the refusal is the line that names the card
         if r.returncode == 3:   # the seam refused a move back along the axis (ADR-0143): logged there, the card keeps its column, no comment
+            if pending: drop_write(n, col)   # the refusal is settled: a pending event would hold every dispatch (ADR-0165, #2122)
             say(f"BOARD-REJECTED #{n}: {why}: {named or msg[0]}")
             return False
         err = named or (msg[0] if msg else "no output")

@@ -122,11 +122,25 @@ automated = os.environ.get("SG_MOVE_BY") != "owner"   # any writer that is not t
 by = os.environ.get("SG_MOVE_BY") or None   # the dispatch context the caller names; a move with none records none (#861)
 pss = os.environ.get("SG_MOVE_PASS") or None   # the caller's pass, kept by board.sh (#1909)
 reason = os.environ.get("SG_MOVE_REASON") or None
+def recorded():   # issue -> the column the record's last line names: the value the dispatchers read (#2123)
+    t = st / f"board-transitions.{(state.binding.repo or 'board').replace('/', '_')}.jsonl"
+    try: rows = t.read_text().splitlines()
+    except OSError: return {}
+    last = {}
+    for line in rows:
+        try: d = json.loads(line)
+        except ValueError: continue
+        if isinstance(d, dict) and d.get("issue") is not None and d.get("to"): last[str(d["issue"])] = d["to"]
+    return last
+was = recorded()
 for n in nums:
     read_failed = None
     try: have = state.read_one(n) or None   # the compare: the card's own read, and no PATCH when it already carries the Status (#327)
     except (RuntimeError, ValueError) as e: have = None; read_failed = str(e)[:200] or "the read did not answer"   # an automated writer that cannot read the card never moves it to Todo (#1909)
-    if have == status: print(f"#{n} -> {status} (already carried, not written)"); continue
+    if have == status:
+        if was.get(str(n)) not in (None, status):   # the record and the carrier disagree: the compare records the carrier's column (#2123)
+            transitions.append({"issue": n, "item": None, "from": was[str(n)], "to": status, "by": by, "pass": pss, "reason": "the carrier already carried it"})
+        print(f"#{n} -> {status} (already carried, not written)"); continue
     if automated and read_failed and status == "Todo":
         print(f"#{n}: the compare read failed ({read_failed}); an automated writer does not move the card to 'Todo' unread", file=sys.stderr); rc = 1; continue
     if automated and refused_for_automated(have, status, reason):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
@@ -170,15 +184,16 @@ for n in nums:
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
         print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
+at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 if proved:   # the record and the refresh flag are one step: one move, one write path, one wake-up (#649)
     p = st / "board-moves.json"
     try: moves = json.loads(p.read_text())
     except (OSError, ValueError): moves = {}
     if not isinstance(moves, dict): moves = {}
-    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for iid, col in proved: moves[str(iid)] = {"column": col, "at": at, **({"by": by} if by else {})}   # a later move of the same item replaces its entry; the key is text, as the record reads back (#652)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # formed whole beside the record, then one atomic rename (ADR-0030)
     tmp.write_text(json.dumps(moves, sort_keys=True) + "\n"); os.replace(tmp, p)
+if transitions:   # a move the door proved, and the compare's repair of a record that disagreed with the carrier (#2123)
     repo = state.binding.repo or "board"
     t = st / f"board-transitions.{repo.replace('/', '_')}.jsonl"   # one record per repository: two repositories on one board never share it (#897)
     try: lines = t.read_text().splitlines()
