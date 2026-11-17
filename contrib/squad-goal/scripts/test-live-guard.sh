@@ -8,7 +8,7 @@ d=$(dirname "$0"); src=${1:-$d/live-guard.sh}; T=$(mktemp -d); . "$d/driver-tree
 
 S=$T/scripts; co=$T/co; live=$T/home/.claude/skills/squad-goal; repo=$co/contrib/squad-goal
 mkdir -p "$S" "$repo/scripts/profiles" "$live/scripts/profiles" "$T/st"
-cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"; cp "$d/ghcall.sh" "$d/drainpolicy.py" "$d/modelreg.py" "$d/registry.json" "$S/"
+cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"; cp "$d/ghcall.sh" "$d/ghthrottle.py" "$d/ghread.py" "$d/drainpolicy.py" "$d/modelreg.py" "$d/registry.json" "$S/"
 # The pass reads its checkout and its live skill from the profile, as every pass does: the fixture profile names both.
 cat > "$S/env.sh" <<EOF
 export SG_CHECKOUT=\${SG_CHECKOUT:-$co} SG_LIVE_DIR=\${SG_LIVE_DIR:-$live} SG_STATE=\${SG_STATE:-$T/st}
@@ -253,13 +253,14 @@ mkdir -p "$T/cbin"
 cat > "$T/cbin/gh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$T/gh.log"
+case "\$*" in *issues*) echo '[]';; esac   # the publish rules out an open issue's hold first: it needs a readable list
 exit 0
 EOF
 chmod +x "$T/cbin/gh"
 mk closes; w=$T/closes.work
 printf 'skill v3\n' > "$w/contrib/squad-goal/SKILL.md"; G -C "$w" add -A; G -C "$w" commit -qm "Fix the live copy" -m "Closes #732"
 G -C "$w" push -q origin HEAD:stg
-clpass() { SG_REPO=example/squad PATH="$T/cbin:$PATH" SG_CHECKOUT=$T/closes SG_LIVE_DIR=$T/closes.live bash "$S/live-guard.sh" 2>&1; }
+clpass() { mkdir -p "$T/st.closes"; SG_STATE=$T/st.closes SG_REPO=example/squad PATH="$T/cbin:$PATH" SG_CHECKOUT=$T/closes SG_LIVE_DIR=$T/closes.live bash "$S/live-guard.sh" 2>&1; }
 out=$(clpass); rc=$?
 [ "$rc" = 0 ] && ok "a pass that closes an issue still exits 0" || ko "the closing pass exited $rc: $out"
 case "$out" in *"LIVE-GUARD publish-live: closed #732"*) ok "the pass names the issue the publish closed";; *) ko "the close is not named: $out";; esac
