@@ -359,6 +359,28 @@ stop() {
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }
 
+# hand <issue> <why>: the issue's own count reached SG_HAND_AT (2 by default) below SG_REQUEUE_CAP, so the loop hands it to
+# HAL9K, the hand agent, instead of a third dispatch (#2053). The hand hold (squad.handhold) writes ready-for-HAL9K, which no
+# dispatch pass takes, and one comment lists the runs counted. The route is bounded: with SG_HAND_MAX (2) hal9k holds open,
+# the issue stays in the queue and reaches the stop at the cap. A hold that expires frees the issue, and its next failure
+# reaches the cap. SG_HAND_AT=off turns the route off. Returns 0 when it handed the issue over, else 1.
+hand() {
+  local n=$1 why=$2 at=${SG_HAND_AT:-2} py open out f runs
+  [ "$at" = off ] && return 1
+  [ "$c" -ge "$at" ] && [ "$c" -lt "${SG_REQUEUE_CAP:-3}" ] || return 1
+  py=${SG_SQUAD:+$SG_SQUAD/.venv/bin/python}; [ -n "$py" ] && [ -x "$py" ] || py=python3
+  open=$(PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.handhold holds 2>/dev/null | /usr/bin/grep -c ' hal9k ')
+  [ "${open:-0}" -lt "${SG_HAND_MAX:-2}" ] || { echo "WAVE HAND-FULL #$n: $open hal9k holds are open, so it stays in the queue"; return 1; }
+  out=$(PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.handhold hold --by hal9k "$n" 2>&1) \
+    || { echo "WAVE HAND-REFUSED #$n: $(printf '%s' "$out" | tail -1)"; return 1; }
+  runs=$(ledger read "$n" own 2>/dev/null | python3 -c 'import json,sys
+for x in json.load(sys.stdin).get("runs", []): print("- %s: %s" % (x.get("run") or "(no run named)", x.get("why", "")))' 2>/dev/null)
+  f=$(sg_cq_file "$n-wavehand$$.md" 2>/dev/null) && {
+    printf 'SQUAD-HAND: %s failed dispatches with no change in the work the base holds for it, so HAL9K takes the issue by hand (#2053).\n\nRuns:\n' "$c"
+    printf '%s\n' "$runs"; } > "$f"
+  echo "WAVE HAND #$n: $c failed dispatches with no change, so HAL9K takes it by hand: $why"
+}
+
 # loop_caused <why> [own|loop]: the loop caused this requeue, not the issue's work (#621): a child a held gate lock or the
 # wave's age cap kept out of the wave (#682; a wave that landed without a child for a cause wave.sh did not record is no loop
 # cause, so the janitor's "unknown" counts as the issue's own), an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
@@ -516,6 +538,7 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     if [ "$fresh" = 1 ] && [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then stop "$n" "$why"; return 0; fi
     if [ "$fresh" = 0 ] && [ "$stopped" = 1 ]; then
       echo "WAVE STOP #$n: already frozen, so it is not dispatched again: $why"; return 0; fi
+    [ "$fresh" = 1 ] && hand "$n" "$why"   # the hold keeps every dispatch pass off; the card still goes back to Todo below
   elif h=$(held_out "$n"); then   # a cap requeue counts nothing, so it reads the stop itself (#682): a stopped issue stays put
     echo "WAVE STOP #$n: $h, so the age cap does not put it back in the queue: $why"; return 0
   fi
@@ -578,6 +601,7 @@ fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivere
   count "$n" "$run" "$why"
   [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
   [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ] && { stop "$n" "$why"; return 0; }
+  hand "$n" "$why" && return 0
   echo "WAVE FAILED #$n: $c of ${SG_REQUEUE_CAP:-3} failed dispatches with no change (run $run): $why"
 }
 
@@ -1240,11 +1264,12 @@ file_conflict_bug() {
   body=$(mktemp) || return 0
   printf 'Wave %s conflicts with %s at %s in %s. Run %s is the second run to hit this conflict on this base, so the loop stopped requeuing #%s.\n\nFiled by wave.sh (ADR-0151 rule 2).\n' \
     "$w" "$base" "$at" "${paths:-no path named by git}" "$run" "$n" > "$body"
-  out=$(gh_send -X POST "repos/$SG_REPO/issues" -f "title=[SQUAD] wave rebase conflict on #$n: ${paths:-no path named by git}" \
-    -F "body=@$body" -f "labels[]=bug" -f "labels[]=loop-bug" 2>&1); rc=$?
+  # The loop's one filing door (#1978): the publish hold, the card in Todo and the birth Priority urgent of a loop-bug.
+  out=$(SG_FILED_BY=wave SG_FILED_LABELS=loop-bug bash "$here/autohunt.sh" --file \
+    "[SQUAD] wave rebase conflict on #$n: ${paths:-no path named by git}" "$body" 2>&1)
   rm -f "$body"
-  if [ "$rc" -eq 0 ]; then echo "WAVE-BUG #$n: the same rebase conflict on $base twice; filed as a loop bug"
-  else echo "WAVE-BUG #$n filing refused: $out"; fi
+  case "$out" in *"HUNT filed"*) echo "WAVE-BUG #$n: the same rebase conflict on $base twice; filed as a loop bug";;
+                 *) echo "WAVE-BUG #$n filing refused: $out";; esac
 }
 
 # The landing round (#1500). A landing conflict keeps the wave head on fix/<n>-land-<run>, <n> the lowest issue the wave head carries

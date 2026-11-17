@@ -84,6 +84,17 @@ def test_a_change_to_one_script_runs_the_tests_the_delta_reaches(tmp_path):
     assert pytest_line(argv).endswith("tests/test_loader.py tests/test_reader.py")
 
 
+def test_a_scratch_log_in_the_scratch_place_keeps_the_delta_scope(tmp_path):
+    """(2032) A child's untracked scratch log in its `.scratch` folder is no uncommitted change the delta cannot place: the
+    record keeps `delta` and the selection the committed diff reaches."""
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"})
+    (repo / ".scratch").mkdir()
+    (repo / ".scratch" / "fast-gate-1983-2.log").write_text("scratch\n")
+    sel, scope, argv = battery(tmp_path, repo, "fast")
+    assert sel == "selected 2 files" and scope == "delta"
+    assert pytest_line(argv).endswith("tests/test_alpha.py tests/test_beta.py")
+
+
 def test_an_uncovered_path_falls_back_to_the_full_battery_and_the_record_says_why(tmp_path):
     """(b) A delta that cannot cover the change is never a pass: the whole battery runs and the record names the path."""
     repo = tip(tmp_path, {"docs/notes.md": "notes\n"})

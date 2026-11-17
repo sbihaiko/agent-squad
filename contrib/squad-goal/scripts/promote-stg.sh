@@ -76,9 +76,14 @@ fi
 if [ "$stg" = "${SG_MAIN_BRANCH:-main}" ]; then
   echo "promote-stg: refused: the base is $stg, the main branch; it moves by promote-main.sh, a fast-forward, never by a merge" >&2; exit 1
 fi
-# The promotion reads the machine-wide gate lock (#392), so the proof cannot change under it and two promotions never overlap;
-# a pass already inside the lock just runs.
-case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_STATUS=self exec bash "$d/gate.sh" bash "$0" "$@";; esac
+# The local proof reads the machine-wide gate lock (#392), so the proof cannot change under it; a pass already inside the lock
+# just runs. A ci or fast proof runs no local suite, so it takes no gate lock and no gate slot (#2061): its own `promote-stg`
+# lock keeps two promotions from overlapping, and the promotion never waits behind the test gates.
+if [ "${SG_PROMOTE_PROOF:-ci}" = local ]; then
+  case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_STATUS=self exec bash "$d/gate.sh" bash "$0" "$@";; esac
+else
+  case ":${SG_SERIAL_HELD:-}:" in *":promote-stg:"*|*":gate:"*) ;; *) exec bash "$d/serial.sh" promote-stg bash "$0" "$@";; esac
+fi
 state=${SG_STATE:-/tmp/sg-state};   # the machine-wide default serial.sh uses: never TMPDIR, which is per user
 mkdir -p "$state"; log=$state/promote.log
 W=$(mktemp -d) || exit 1; trap 'rm -rf "$W"' EXIT

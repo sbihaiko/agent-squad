@@ -13,7 +13,9 @@ Filling the ceiling queues: `take` waits for a slot until its bound, writes a wa
 CeilingWaitExpired, which names the ceiling that was full.
 A gate takes its worker slots in one locked step (`try_take_many`): all it asks for when they are free, else the free slots when
 they number two or more, so a third gate runs with fewer workers instead of giving up (#734); fewer than two free is no take, and
-a gate never holds part of its slots while it waits for the rest. Bash takes and releases through `python3 -m squad.caps take|release`; the try mode skips at once (exit 73), as
+a gate never holds part of its slots while it waits for the rest. A tip check or a landing check waits first in the queue
+(ADR-0174, #2049): its take names a priority, it writes a waiting marker with `next`, and no other holder takes a slot while
+that marker's pid lives. Bash takes and releases through `python3 -m squad.caps take|release`; the try mode skips at once (exit 73), as
 `SERIAL_TRY` does for serial.sh, and a wait that outlives its bound exits 75. A count above the ceiling is lowered to it.
 
 The loop's free run slots are one count (`free_runs`, `Ceiling.run_holders`): every live lease machine-wide, and every run the
@@ -220,10 +222,12 @@ class Ceiling:
         return out
 
     def occupancy(self):
-        """{runs, children, gates, reviews, waiting}: live leases per kind and the live waits, each {ceiling, holder}."""
+        """{runs, children, gates, reviews, waiting}: live leases per kind and the live waits, each {ceiling, holder}, and
+        `next` (the check that waits) for a priority waiter, so the panel names the next holder."""
         with self._lock():
             occ = {k: len(self._live(k)) for k in KINDS}
-            occ["waiting"] = [{"ceiling": w["ceiling"], "holder": w["holder"]} for w in self._live("waiting")]
+            occ["waiting"] = [{"ceiling": w["ceiling"], "holder": w["holder"], **({"next": w["next"]} if w.get("next") else {})}
+                              for w in self._live("waiting")]
         return occ
 
     def waiting(self):
@@ -289,7 +293,7 @@ class Ceiling:
     def try_take(self, kind, holder, pid=None):
         """Take one slot of `kind` for `holder` if the ceiling has room. Return the lease path, or None when it is full."""
         with self._lock():
-            if len(self._live(kind)) >= self.caps[kind]:
+            if len(self._live(kind)) >= self.caps[kind] or self._first(kind, holder) is not None:
                 return None
             p = self.folder / kind / _name(holder)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -318,20 +322,47 @@ class Ceiling:
                 out.append(f"{holder} (lease pid {lease.get('pid', '?')}, live, since {at})")
             return out
 
-    def try_take_many(self, kind, holder, n, pid=None):
+    def _first(self, kind, holder):
+        """The live priority waiter of `kind` that is not `holder`, or None. Call it under the lock."""
+        return next((w for w in self._live("waiting")
+                     if w.get("next") and w.get("ceiling") == f"caps.{kind}" and w.get("holder") != holder), None)
+
+    def first_in_queue(self, kind):
+        """The holder of the live priority waiter of `kind`, or None: the next holder, whom a refusal names."""
+        with self._lock():
+            w = self._first(kind, None)
+            return w and w.get("holder")
+
+    def try_take_many(self, kind, holder, n, pid=None, priority=None):
         """Take `n` slots of `kind` for `holder` in one locked step, or none. Return the lease paths, or None when the ceiling
         gives no slot.
 
         The ceiling gives all `n` when it holds them, else every free slot when they number two or more, so a third gate runs with
         the slots that are free instead of giving up (#734). Fewer than two free is no take. A take is one locked step, so a gate
-        never holds part of its slots while it waits for the rest."""
+        never holds part of its slots while it waits for the rest.
+        A `priority` take (a tip check or a landing check, ADR-0174, #2049) that gets no slot writes a waiting marker that names
+        `holder` and `next: priority`, and a take of all `n` removes it; a part take keeps it until `release_holder`. While that marker's pid lives, a take by any other holder gets
+        no slot, so the freed slots wait for the priority holder; a dead waiter is reaped and never blocks."""
         with self._lock():
             if n <= 0:
                 return []
-            free = self.caps[kind] - len(self._live(kind))
+            mark = self.folder / "waiting" / _name(f"{kind}-{holder}")
+            free, want = self.caps[kind] - len(self._live(kind)), n
             n = n if free >= n else (free if free >= 2 else 0)
+            if priority is None and self._first(kind, holder) is not None:
+                n = 0
             if n == 0:
+                if priority is not None:
+                    mark.parent.mkdir(parents=True, exist_ok=True)
+                    mark.write_text(json.dumps({"ceiling": f"caps.{kind}", "holder": holder, "pid": pid or os.getpid(),
+                                                "since": time.time(), "next": priority}))
                 return None
+            if priority is not None and n >= want:
+                mark.unlink(missing_ok=True)
+            elif priority is not None:     # a part take keeps its marker until it releases, so the slots it lacks never go to a child (#2049)
+                mark.parent.mkdir(parents=True, exist_ok=True)
+                mark.write_text(json.dumps({"ceiling": f"caps.{kind}", "holder": holder, "pid": pid or os.getpid(),
+                                            "since": time.time(), "next": priority}))
             out = []
             for i in range(n):
                 p = self.folder / kind / _name(f"{holder}.slot{i}")
@@ -345,8 +376,9 @@ class Ceiling:
             self.release(lease)
 
     def release_holder(self, kind, holder):
-        """Give back every slot of `kind` that `holder` took, by one slot or by many."""
+        """Give back every slot of `kind` that `holder` took, by one slot or by many, and its priority waiting marker."""
         stem = _name(holder)[:-len(".json")]
+        (self.folder / "waiting" / _name(f"{kind}-{holder}")).unlink(missing_ok=True)
         for p in [self.folder / kind / f"{stem}.json", *(self.folder / kind).glob(f"{stem}.slot*.json")]:
             p.unlink(missing_ok=True)
 
@@ -407,10 +439,13 @@ def _take(args):
         n = cap
     poll = float(os.environ.get("SQUAD_CAPS_POLL") or 1.0)
     t0, said = time.monotonic(), False
-    leases = c.try_take_many(args.kind, args.holder, n, args.pid)
+    leases = c.try_take_many(args.kind, args.holder, n, args.pid, args.priority)
     while leases is None:
         held = ", ".join(c.holding(args.kind)) or "?"
         full = f"caps.{args.kind} is full ({cap} slots), held by {held}"
+        first = None if args.priority else c.first_in_queue(args.kind)
+        if first:
+            full = f"caps.{args.kind} keeps its freed slots for {first}, a waiting priority check (ADR-0174); held by {held}"
         if args.try_mode:
             print(f"caps: {full}: {args.holder} skipped, not queued (try)", file=sys.stderr)
             return SKIPPED
@@ -420,9 +455,11 @@ def _take(args):
         left = args.wait - (time.monotonic() - t0)
         if left <= 0:
             print(f"caps: {args.holder} waited {args.wait:g}s for caps.{args.kind}, held by {held}", file=sys.stderr)
+            if args.priority:
+                c.release_holder(args.kind, args.holder)   # a waiter that gives up leaves no marker
             return EXPIRED
         time.sleep(min(poll, left))
-        leases = c.try_take_many(args.kind, args.holder, n, args.pid)
+        leases = c.try_take_many(args.kind, args.holder, n, args.pid, args.priority)
     print(len(leases))
     return 0
 
@@ -430,7 +467,7 @@ def _take(args):
 def main(argv=None):
     """`python3 -m squad.caps [--target DIR]`: print the resolution with the live occupancy as JSON. A missing block exits 2 with its name.
     No `--target` reads the project file of the working directory, the resolution the loop reaches with `caps.ceiling(".")`.
-    `take <kind> <holder> [--count N] [--try] [--wait S] [--pid P]` takes slots; `release <kind> <holder>` gives them back."""
+    `take <kind> <holder> [--count N] [--try] [--wait S] [--pid P] [--priority CHECK]` takes slots; `release <kind> <holder>` gives them back."""
     import argparse
     import sys
     argv = sys.argv[1:] if argv is None else argv
@@ -447,6 +484,7 @@ def main(argv=None):
             s.add_argument("--pid", type=int, default=os.getppid())
             s.add_argument("--wait", type=float, default=0.0)
             s.add_argument("--try", dest="try_mode", action="store_true")
+            s.add_argument("--priority", default=None, help="the check that waits first in the queue (tip or landing, ADR-0174)")
     args = a.parse_args(argv)
     args.target = args.target if args.target is not None else "."   # the CLI resolves the working directory, as the loop does
     try:

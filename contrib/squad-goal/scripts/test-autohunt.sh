@@ -44,7 +44,7 @@ scene() {
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   /usr/bin/git init -q --bare "$T/$1/origin.git"   # the branch read of the case: a local bare repository, never github.com
   cp "$src" "$S/autohunt.sh"
-  cp "$here/ghcall.sh" "$here/ghread.py" "$here/workbranches.sh" "$here/refusal-names.sh" "$here/envelope-spend.sh" "$here/issue_ledger.py" "$here/caps.sh" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361); the process read is caps.sh, which resolves to squad.procs through SG_SQUAD inside the child's sandbox (#1594)
+  cp "$here/ghcall.sh" "$here/ghread.py" "$here/workbranches.sh" "$here/refusal-names.sh" "$here/envelope-spend.sh" "$here/issue_ledger.py" "$here/caps.sh" "$here/priority_backfill.py" "$S/"   # the birth Priority table (#1978); the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361); the process read is caps.sh, which resolves to squad.procs through SG_SQUAD inside the child's sandbox (#1594)
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"
@@ -163,8 +163,8 @@ printf 'repro\n' > "$T/file/body.md"
 n=$(bash "$S/autohunt.sh" --file "a defect" "$T/file/body.md" 2>&1)
 case "$n" in *"HUNT filed #42"*) ok "file helper logs HUNT filed #N";; *) ko "file helper: '$n'";; esac
 $G -qF "labels[]=bug" "$T/file/ghpost" && ok "file helper adds the bug label" || ko "no bug label: $(cat "$T/file/ghpost")"
-extra=$($G -oE 'labels\[\]=[^ ]+' "$T/file/ghpost" 2>/dev/null | $G -cvF 'labels[]=bug' || true)
-[ "${extra:-0}" -eq 0 ] && ok "file helper adds only the bug label" || ko "file helper added extra labels: $(cat "$T/file/ghpost")"
+extra=$($G -oE 'labels\[\]=[^ ]+' "$T/file/ghpost" 2>/dev/null | $G -cvxF -e 'labels[]=bug' -e 'labels[]=frozen:not-startable' || true)
+[ "${extra:-0}" -eq 0 ] && ok "file helper adds only the bug label and the publish hold (#1978)" || ko "file helper added extra labels: $(cat "$T/file/ghpost")"
 $G -qF "title=[SQUAD] a defect" "$T/file/ghpost" && ok "file helper prefixes the title with [SQUAD]" || ko "no [SQUAD] prefix: $(cat "$T/file/ghpost")"
 : > "$T/file/ghpost"
 bash "$S/autohunt.sh" --file "[SQUAD] already tagged" "$T/file/body.md" >/dev/null 2>&1
@@ -347,20 +347,44 @@ unset SG_FILED_LABELS SG_FILED_BY SG_TODO SG_FILE_PASS
 n=$(bash "$S/autohunt.sh" --file "a defect" "$f/body.md" 2>&1)
 case "$n" in *"HUNT filed #42"*) ok "21 the hunt logs the bug it filed";; *) ko "21 the hunt did not file: '$n'";; esac
 labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
-[ "$labels" = "labels[]=bug " ] && ok "21 the hunt labels the bug kind and nothing else" || ko "21 the hunt's labels: '$labels'"
+[ "$labels" = "labels[]=bug labels[]=frozen:not-startable " ] && ok "21 the hunt labels the bug kind and the publish hold, nothing else (#1978)" || ko "21 the hunt's labels: '$labels'"
 $G -qxF -- "--add o 1 Todo 42" "$f/board.calls" && ok "21 the card joins the board in Todo" || ko "21 the card's column: $(cat "$f/board.calls")"
 $G -qxF "posted=1" "$f/board.calls" && ok "21 the card is added after the filing POST, so its number is real" || ko "21 the card came before the filing: $(cat "$f/board.calls")"
 : > "$f/ghpost"; : > "$f/board.calls"
 n=$(SG_FILED_BY=autobug SG_FILED_LABELS=ready-for-agent bash "$S/autohunt.sh" --file "a second defect" "$f/body.md" 2>&1)
 labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
-[ "$labels" = "labels[]=bug labels[]=ready-for-agent " ] && ok "21 only a named caller adds the startable label" || ko "21 a caller's labels: '$labels'"
+[ "$labels" = "labels[]=bug labels[]=frozen:not-startable labels[]=ready-for-agent " ] && ok "21 only a named caller adds the startable label" || ko "21 a caller's labels: '$labels'"
 # 21b) (#1677) a bug filed for a person carries ready-for-human on the issue before its card reaches Todo, so no pass
 # takes it in the window between the two writes; a bug filed for the loop carries the bug kind and nothing extra.
 : > "$f/ghpost"; : > "$f/board.calls"
 n=$(SG_FILED_BY=manual SG_FILED_LABELS=ready-for-human bash "$S/autohunt.sh" --file "a defect for a person" "$f/body.md" 2>&1)
 case "$n" in *"HUNT filed #42"*) ok "21b the filing for a person lands";; *) ko "21b the filing for a person failed: '$n'";; esac
 labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
-[ "$labels" = "labels[]=bug labels[]=ready-for-human " ] && ok "21b a bug filed for a person carries ready-for-human" || ko "21b a person's labels: '$labels'"
+[ "$labels" = "labels[]=bug labels[]=frozen:not-startable labels[]=ready-for-human " ] && ok "21b a bug filed for a person carries ready-for-human" || ko "21b a person's labels: '$labels'"
 $G -qxF "posted=1" "$f/board.calls" && ok "21b the holder label is on the issue before its card reaches Todo" || ko "21b the card came first: $(cat "$f/board.calls")"
+
+# 22) (#1978) the birth policy: every filing carries the publish hold, its card joins Todo, and the board door sets the
+# birth Priority (a bug high, a loop-bug urgent) and reads it back. The hold is dropped only after both read back; a
+# Priority that does not read back keeps the hold, so the card stays out of dispatch. The spy fails `--priority` on demand.
+cat > "$S/board-spy.sh" <<'SPY'
+#!/bin/bash
+echo "$*" >> "$SGH_BOARD/board.calls"
+[ "$1" = --priority ] && [ -n "${SPY_PRIO_FAIL:-}" ] && { echo "#$4: issue $4 does not carry 'high' after the write" >&2; exit 1; }
+echo "card ok"
+SPY
+chmod +x "$S/board-spy.sh"
+: > "$f/ghpost"; : > "$f/board.calls"; : > "$GHLOG"
+n=$(bash "$S/autohunt.sh" --file "a born bug" "$f/body.md" 2>&1)
+$G -qxF -- "--priority o 1 42 high" "$f/board.calls" && ok "22 a bug is born with Priority high" || ko "22 the bug's Priority: $(cat "$f/board.calls")"
+[ "$(sed -n 1p "$f/board.calls")" = "--add o 1 Todo 42" ] && ok "22 the card joins Todo before its Priority is set" || ko "22 the board calls: $(cat "$f/board.calls")"
+$G -q 'DELETE repos/o/r/issues/42/labels/frozen%3Anot-startable' "$GHLOG" && ok "22 the hold is dropped once the Status and the Priority read back" || ko "22 the hold stays: $(cat "$GHLOG")"
+: > "$f/ghpost"; : > "$f/board.calls"; : > "$GHLOG"
+n=$(SG_FILED_BY=wave SG_FILED_LABELS=loop-bug bash "$S/autohunt.sh" --file "a born loop bug" "$f/body.md" 2>&1)
+$G -qxF -- "--priority o 1 42 urgent" "$f/board.calls" && ok "22 a loop-bug is born with Priority urgent" || ko "22 the loop-bug's Priority: $(cat "$f/board.calls")"
+: > "$f/ghpost"; : > "$f/board.calls"; : > "$GHLOG"
+n=$(SPY_PRIO_FAIL=1 bash "$S/autohunt.sh" --file "a bug whose priority is lost" "$f/body.md" 2>&1)
+case "$n" in *"HUNT filed #42"*) ok "22 a lost Priority never un-files the issue";; *) ko "22 the filing: '$n'";; esac
+$G -q 'labels/frozen' "$GHLOG" && ko "22 a card whose Priority does not read back lost its hold: $(cat "$GHLOG")" || ok "22 a card whose Priority does not read back stays held"
+case "$n" in *"held"*) ok "22 the held card is named";; *) ko "22 the hold is silent: '$n'";; esac
 
 rm -rf "$T"; exit $fail

@@ -26,6 +26,7 @@ MEASURED_LINE_GUARD = "tests/test_shell_suite_runner.py"
 # always run the full battery, so a cheaper check never weakens the gate a delivery stands on (ADR-0018). A stage this
 # list does not name is full too: a typo in a stage never narrows a gate.
 DELTA_STAGES = frozenset({"fast", "wave-entry", "wave-tip", "prepush"})
+SCRATCH = ".scratch"
 
 
 class _All(Exception):
@@ -238,7 +239,7 @@ def _answer(root, base):
         _all(f"no merge-base between {base} and HEAD")
     # The delta is the committed diff; a change the tree carries outside it cannot be placed, so it never selects nothing
     # for that change: the answer is the full battery, naming the files (#1249).
-    dirt = _git(root, "status", "--porcelain", "-z", "--no-renames")
+    dirt = _git(root, "status", "--porcelain", "-z", "--no-renames", "--", ".", f":(exclude){SCRATCH}")
     if dirt.returncode:
         _all("the tree's uncommitted state cannot be read")
     loose = sorted({entry[3:] for entry in dirt.stdout.split("\0") if len(entry) > 3})

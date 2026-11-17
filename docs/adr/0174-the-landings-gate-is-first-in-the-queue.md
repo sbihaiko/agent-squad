@@ -35,7 +35,14 @@ never freed.
 One slot per child makes the ceiling mean what it says: three children gate inside the same three-slot budget, and the
 worker total does not rise, because the ceiling is the machine's budget and it is not raised. The count never rides on
 the inherited name; a caller that wants another count names `SG_GATE_WORKERS_CHILD`. The landing is not starved by the
-rotation: while its gate waits, the children stand aside at the lock, so the slots drain to it.
+rotation: while its gate waits, the children stand aside at the lock, and a suite a child starts takes one slot through
+`child-gate.sh` with no lock at all. So the waiting tip check or landing check writes a priority waiting marker in the
+ceiling's `waiting/` folder, which names it as the next holder, and no other holder takes a gate slot while that
+marker's pid lives (`squad/caps.py`). The freed slots drain to it; a dead waiter names nobody and never blocks.
+
+Guard: `tests/test_caps_partial.py` and `contrib/squad-goal/scripts/test-gate-lock.sh` hold every slot, start a tip
+check, and start a fourth child gate: the tip check takes the freed slots, and the child gate waits until it gives
+them back.
 
 Guard: `contrib/squad-goal/scripts/test-fast-gate.sh` runs a child gate in the loop's own environment (the inherited
 count already set) and reads the count that reached the lease, never a stub that accepts any argument.
@@ -53,8 +60,9 @@ and answers the same. A caller that wants another count names `SG_GATE_WORKERS_C
 the ceiling: three one-slot gates or one full-battery gate are the same budget.
 
 A full battery needs every slot, and a run of one-slot gates is always leaving one free. So this gate waits for its
-slots while it holds the gate lock, bounded by `SG_GATE_SLOT_WAIT_SECONDS`. Nothing new can start while it waits, the
-gates already running end, and the slots drain to it: the same order the landing gets, for the same reason. The wait is
+slots while it holds the gate lock, bounded by `SG_GATE_SLOT_WAIT_SECONDS`. No new gate takes the lock while it waits,
+and the gates already running end, so the slots drain to it, unless a suite a child starts takes a freed slot first:
+only a tip check or a landing check keeps the freed slots for itself. The wait is
 gate wait, never run time (ADR-0166), because the gate's clock starts in `--run`, once the slots are held. Every other
 gate keeps the one-try take and the 73 it answers.
 

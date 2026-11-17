@@ -77,3 +77,131 @@ def test_the_take_command_prints_the_count_it_took(tmp_path):
         assert r.stdout.strip() == "4", r.stdout + r.stderr
     finally:
         holder.kill()
+
+
+# Issue #2049, ADR-0174: a waiting tip check or landing check goes first in the queue. While it waits it writes a priority
+# waiting marker, and a take by any other holder takes no slot while that marker's holder lives.
+THREE = {"runs": 10, "children": 20, "gates": 3, "reviews": 4}
+
+
+def test_a_waiting_tip_check_takes_the_freed_slots_before_a_fourth_child_gate(tmp_path):
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        kids = [c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3)]
+        assert all(kids) and c.occupancy()["gates"] == 3
+        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None
+        c.release_many(kids[0])                                                # one slot frees
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None    # the fourth child gate waits
+        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None   # one free slot is no take
+        c.release_many(kids[1])                                                # a second slot frees
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None
+        tip = c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")
+        assert tip is not None and len(tip) == 2                               # the tip check takes the freed slots
+        assert [w["holder"] for w in c.waiting()] == ["gate-tip"]             # a part take keeps its marker (#2049)
+        c.release_many(kids[2])
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None    # the third slot stays for the tip check
+        c.release_holder("gates", "gate-tip")
+        assert c.waiting() == []                                               # its release takes the marker with it
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None   # no waiter: the child gate takes a slot
+    finally:
+        holder.kill()
+
+
+def test_the_fourth_child_gate_waits_until_the_tip_check_releases_its_slots(tmp_path):
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        kids = [c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3)]
+        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None
+        for k in kids:
+            c.release_many(k)
+            assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None
+        tip = c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")
+        assert len(tip) == 3
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None    # the budget is full
+        c.release_holder("gates", "gate-tip")
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None
+    finally:
+        holder.kill()
+
+
+def test_a_tip_check_that_took_part_of_its_slots_keeps_the_rest_from_a_child_until_it_releases(tmp_path):
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        kids = [c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3)]
+        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None
+        c.release_many(kids[0])
+        c.release_many(kids[1])
+        assert len(c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")) == 2     # two free: it runs on two
+        c.release_many(kids[2])
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None     # the tip still holds: the child waits
+        c.release_holder("gates", "gate-tip")
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None
+    finally:
+        holder.kill()
+
+
+def test_with_no_waiting_tip_check_child_gates_take_slots_as_today(tmp_path):
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        assert all(c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3))
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None    # full: it waits, as today
+        c.release_holder("gates", "child-gate-1")
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None
+    finally:
+        holder.kill()
+
+
+def test_the_waiting_marker_names_the_tip_check_as_the_next_holder(tmp_path):
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        assert all(c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3))
+        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None
+        assert c.waiting() == [{"ceiling": "caps.gates", "holder": "gate-tip", "next": "tip"}]
+        c.release_holder("gates", "gate-tip")                                  # a waiter that gives up takes its marker away
+        assert c.waiting() == []
+    finally:
+        holder.kill()
+
+
+def test_a_dead_waiter_never_blocks_a_child_gate(tmp_path):
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    c = caps.Ceiling(THREE, tmp_path / "leases")
+    assert c.try_take_many("gates", "gate-tip", 3, pid=dead.pid, priority="tip") is not None   # free: taken, no marker
+    c.release_holder("gates", "gate-tip")
+    holder, pid = live_pid()
+    try:
+        assert all(c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3))
+        assert c.try_take_many("gates", "gate-tip", 3, pid=dead.pid, priority="tip") is None    # the marker names a dead pid
+        c.release_holder("gates", "child-gate-1")
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is not None
+    finally:
+        holder.kill()
+
+
+def test_the_take_command_writes_the_priority_marker_and_a_child_take_names_it(tmp_path):
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        assert all(c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3))
+        e = {**os.environ, "SQUAD_CAPS_DIR": str(tmp_path / "leases"), "PYTHONPATH": str(ROOT)}
+        proj = tmp_path / "proj" / "docs" / "squad"
+        proj.mkdir(parents=True)
+        (proj / "defaults.yaml").write_text("caps:\n  gates: 3\n")
+
+        def take(*a):
+            return subprocess.run([sys.executable, "-m", "squad.caps", "take", "gates", *a, "--pid", str(pid), "--try",
+                                   "--target", str(tmp_path / "proj")], capture_output=True, text=True, env=e, timeout=60)
+        r = take("gate-tip", "--count", "3", "--priority", "tip")
+        assert r.returncode == 73, r.stderr
+        assert c.waiting() == [{"ceiling": "caps.gates", "holder": "gate-tip", "next": "tip"}]
+        c.release_holder("gates", "child-gate-1")
+        r = take("child-gate-4", "--count", "1")
+        assert r.returncode == 73 and "gate-tip" in r.stderr, r.stderr
+    finally:
+        holder.kill()

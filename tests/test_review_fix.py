@@ -151,3 +151,30 @@ async def test_a_resume_replays_the_recorded_rounds_and_fix_entries(tmp_path):
     assert (repo / "a.txt").exists() and (repo / "b.txt").exists()
     out = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][-1]
     assert out["outcome"] == "pass"
+
+
+UNPROVEN = ("fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; "
+            "unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)")
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+@pytest.mark.parametrize("status,delivers", [("unproven", True), ("fail", False)])
+async def test_a_fix_round_whose_gate_is_unproven_goes_to_the_next_review(tmp_path, status, delivers):
+    """#2050: a fix entry whose gate measured nothing (`unproven`, exit 4) holds no red, so the round goes on to the next
+    review, as the first entry does since #2037; an approved head lands, and the landing gate measures it (ADR-0164). A fix
+    entry that measured a red still ends the round as `review_fix_failed`."""
+    fix = writer("b.txt", status=status, reasons=[UNPROVEN if status == "unproven" else "ac_failed"])
+    eng, repo, base = run_with(tmp_path, [4, 0], [writer("a.txt"), fix])
+    verdict = (await eng.run()).verdict
+    assert entries(tmp_path) == [(1, "pass"), (2, status)]
+    [land] = ev(tmp_path, "land")
+    if delivers:
+        assert verdict == "completed"
+        assert [r[3] for r in rounds(tmp_path)] == ["fix", "approve"] and len(logged(tmp_path)) == 2
+        assert land["outcome"] == "pass" and land["effect"]["rounds"] == 2
+        assert (repo / "a.txt").exists() and (repo / "b.txt").exists()
+    else:
+        assert verdict == "failed" and len(logged(tmp_path)) == 1
+        assert land["outcome"] == "fail" and land["reasons"][0] == "review_fix_failed"
+        assert git.head(repo) == base

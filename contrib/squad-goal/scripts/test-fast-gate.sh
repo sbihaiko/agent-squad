@@ -771,6 +771,24 @@ out=$(GATE_REUSE_FILE=$T/outer-reuse fg); rc=$?
   && ok "1927 a suite the fast gate runs inherits no GATE_REUSE_FILE" \
   || ko "1927 reuse leak: rc $rc ran '$(cat "$T/ran.log" 2>&1)' outer '$(cat "$T/outer-reuse" 2>&1)'"
 
+# (#2032) A child's scratch log in its worktree is no change the delta cannot place: the scratch place is git-ignored, and the
+# selector never reads it, so the delta keeps its scope. The repo's own .gitignore and a bare tree each prove one half.
+sg=$T/scratch-repo; mkdir -p "$sg/tests" "$sg/squad"
+printf 'def test_one():\n    pass\n' > "$sg/tests/test_one.py"
+cp "$d/../../../squad/testselect_inert.txt" "$sg/squad/"; cp "$d/../../../.gitignore" "$sg/.gitignore"
+git init -q -b dev "$sg"; $G -C "$sg" add -A; $G -C "$sg" commit -q -m base
+$G -C "$sg" checkout -q -b gui/2032; printf 'def test_one():\n    assert True\n' > "$sg/tests/test_one.py"; $G -C "$sg" commit -q -am change
+mkdir -p "$sg/.scratch"; echo scratch > "$sg/.scratch/fast-gate-1983-2.log"
+sel=$(cd "$sg" && PYTHONPATH="$(cd "$d/../../.." && pwd)" "$pyreal" -m squad.testselect --stage fast --base dev 2>/dev/null)
+[ "$sel" = "tests/test_one.py" ] && ok "2032 a scratch log in the git-ignored scratch place keeps the delta scope" || ko "2032 scratch log with the repo .gitignore: '$sel', want the delta tests/test_one.py"
+sb=$T/scratch-bare; mkdir -p "$sb/tests" "$sb/squad"; printf 'def test_one():\n    pass\n' > "$sb/tests/test_one.py"
+cp "$d/../../../squad/testselect_inert.txt" "$sb/squad/"
+git init -q -b dev "$sb"; $G -C "$sb" add -A; $G -C "$sb" commit -q -m base
+$G -C "$sb" checkout -q -b gui/2032; printf 'def test_one():\n    assert True\n' > "$sb/tests/test_one.py"; $G -C "$sb" commit -q -am change
+mkdir -p "$sb/.scratch"; echo scratch > "$sb/.scratch/fast-gate-1983-2.log"
+sel=$(cd "$sb" && PYTHONPATH="$(cd "$d/../../.." && pwd)" "$pyreal" -m squad.testselect --stage fast --base dev 2>/dev/null)
+[ "$sel" = "tests/test_one.py" ] && ok "2032 the selector skips the scratch place even when git does not ignore it" || ko "2032 scratch log without .gitignore: '$sel', want the delta tests/test_one.py"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail

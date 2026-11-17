@@ -299,6 +299,19 @@ class State:
             raise NotCarried(issue, want, carried())
         return want
 
+    def set_priority(self, issue, name):
+        """Set the card's Priority to `name`, then prove it by the read (#1978). An unchanged value sends no write
+        (ADR-0144). Returns True when a write was sent; a value no read carries raises NotCarried."""
+        def carried():
+            try: return self.binding.read_priorities().get(str(issue))
+            except (RuntimeError, ValueError): return None
+        if carried() == name: return False
+        iid = self.binding.item_id(issue)
+        if not iid: raise NotCarried(issue, name, None, "not on the board")
+        self.binding.write_priority(iid, name)
+        if carried() == name or self.binding.settle(lambda: carried() == name, self.binding.attempts): return True
+        raise NotCarried(issue, name, carried())
+
     def kinds(self):
         """Every kind the carrier answers, in one read: {issue: kind}. An item with no kind is absent."""
         return self.binding.kinds()
