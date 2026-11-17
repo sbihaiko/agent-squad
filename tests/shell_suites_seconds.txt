@@ -91,6 +91,7 @@ test-hub-mobile-sheet.sh 0.09
 test-hub-paragraph-gap.sh 0.08
 test-hub-promote.sh 0.28
 test-hub-question-card.sh 0.08
+test-hub-run-cause.sh 0.34
 test-hub-run-issue.sh 0.33
 test-hub-screenshot.sh 0.15
 test-hub-state-default.sh 0.20
@@ -141,6 +142,7 @@ test-janitor-rule-p.sh 1.48
 test-janitor-run-fields-unchanged.sh 1.75
 test-janitor-spec-stall.sh 4.19
 test-janitor-stale-card.sh 1.32
+test-janitor-takeover-cause.sh 0.84
 test-janitor-terminal-comment.sh 2.71
 test-janitor-unlanded-branch.sh 0.97
 test-janitor-watchd-orphan.sh 3.78

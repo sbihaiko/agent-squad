@@ -628,7 +628,7 @@ for r in names:
         say(msg)
         if not dry:
             open(st / "alerts.log", "a").write(f"{_now()} {msg}\n")
-            mark_killed(f)
+            mark_killed(f, "killed/taken-over")
             (st / "auto").mkdir(exist_ok=True)
             (st / "auto" / f"taken-{n}").write_text(f"run {i['run_id']}\nissues {' '.join(nums)}\n")
         held |= set(nums)

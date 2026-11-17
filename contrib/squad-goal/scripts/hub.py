@@ -384,7 +384,7 @@ def scan(p):
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
     node = None; model_cur = None
-    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
+    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; red = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
     accepted, done_kids, wts, defs, outs = set(), set(), set(), {}, {}
     ocalls = []   # one entry per outcome: the per-call shape a transcript call is matched against (#1756)
@@ -445,6 +445,7 @@ def scan(p):
             if e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
+            elif e == "gate_result" and d.get("outcome") == "fail": red = True   # a measured red (ADR-0164): it outlives a takeover's cause
             elif e == "land":
                 if d.get("outcome") == "pass": land = True
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
@@ -470,7 +471,7 @@ def scan(p):
             else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "calls": ocalls, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "v19": 1, "model": model_cur, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at, "node": node}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "calls": ocalls, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "v19": 1, "model": model_cur, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at, "node": node, "measured_red": red}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None or p in hist:   # a finished run is cached; a cached run that resumed leaves the cache
@@ -486,6 +487,9 @@ def state_of(r, age):
     ver, reasons = r["verdict"], r["reasons"]
     if ver is None: return "running" if age < STALL_SECS else "stalled"
     if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
+    if ver == "failed" and not r.get("measured_red", True):   # the janitor's takeover and the wave's age cap name their cause in the verdict (#2073); a cached run without the fact keeps its verdict
+        if "killed/taken-over" in reasons: return "taken over"
+        if "killed/age-cap-requeue" in reasons: return "retired (age cap)"
     return ver
 
 def run_roots(co):   # where a checkout keeps run folders: its runs/, and each run or child worktree's runs/ (#580, #585)
