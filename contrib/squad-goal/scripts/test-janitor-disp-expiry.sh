@@ -20,6 +20,11 @@
 #  (R2) a live run on the issue keeps its marker;
 #  (R3) a rearm older than the marker keeps it;
 #  (R4) a pending card write in the ledger keeps it (ADR-0165).
+# V (#2142): the loop dispatched an issue and the issue closed, but its marker stayed. sg_dispatch_claimed reads only
+#  the marker's existence, so a reopened issue read as already claimed and the frontier skipped it with no line.
+#  (V1) auto/disp-<n> of an issue that reads closed is dropped, with one line naming the issue;
+#  (V2) auto/bug-<n> of an issue that reads closed is dropped too;
+#  (V3) a marker of an issue that reads open stays.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-disp-expiry.sh [janitor.py]
 # The suite declares its own world (#393): the loop's own shell exports SG_* (SG_BOARD_VOCAB=shipped, SG_FORK_DIR, SG_LAND_BRANCH,
@@ -53,6 +58,9 @@ case "$*" in
   *projectsV2/4/items*) for n in 901 902 903 904 905; do s=$(/usr/bin/grep "^o 4 .* $n\$" "TMPDIR/board.calls" 2>/dev/null | tail -1 | sed "s/^o 4 \(.*\) $n\$/\1/"); printf '%s\t%s\n' "$n" "${s:-In Progress}"; done;;   # one read, every card: the column the pass last wrote, In Progress before any write
   *projectsV2/1/items*) ;;
   *issues/90*) echo open;;
+  *issues/1101*) echo closed;;
+  *issues/1103*) echo closed;;
+  *issues/1102*) echo open;;
 esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
@@ -158,4 +166,13 @@ echo run-taken > "$T/st/auto/disp-909"; echo "run run-taken" > "$T/st/auto/taken
 touch -t 202001010000 "$T/co/runs/run-taken/record.jsonl" "$T/co/runs/run-taken/request.txt" "$T/st/auto/disp-909"
 run >/dev/null
 [ -e "$T/st/auto/disp-909" ] && ok "M: a taken-over run keeps its marker while auto/taken-<run> stands" || ko "M disp-909 dropped although the run is taken over"
+# V (#2142): the marker of an issue that reads closed is a claim nothing releases. The issue closed, the marker stood,
+# and a reopen read as already claimed: the frontier skipped it with no line. Open issues keep their markers.
+echo frontier-close > "$T/st/auto/disp-1101"; echo frontier-close > "$T/st/auto/bug-1103"; echo frontier-open > "$T/st/auto/disp-1102"
+touch -t 202001010000 "$T/st/auto/disp-1101" "$T/st/auto/bug-1103" "$T/st/auto/disp-1102"
+run >/dev/null
+[ ! -e "$T/st/auto/disp-1101" ] && ok "V: a closed issue's disp marker is dropped (a reopen dispatches again)" || ko "V disp-1101 kept: the reopened issue reads as claimed"
+[ ! -e "$T/st/auto/bug-1103" ] && ok "V: a closed issue's bug marker is dropped" || ko "V bug-1103 kept: the bug board reads the issue claimed"
+[ -e "$T/st/auto/disp-1102" ] && ok "V: an open issue's marker stays" || ko "V disp-1102 dropped although the issue reads open"
+/usr/bin/grep -q 'DISP MARKER DROPPED #1101: its issue is closed' "$T/st/cycle.log" 2>/dev/null && ok "V: the drop names the issue and its cause" || ko "V line: $(cat "$T/st/cycle.log" 2>/dev/null)"
 rm -rf "$T"; exit $fail
