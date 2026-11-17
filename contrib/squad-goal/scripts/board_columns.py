@@ -25,13 +25,56 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "eb3fc0d147f542233628885da598f8c12608713131c412cd5c1d4e13105d0834"
+PIN_SHA256 = "f9d402b6f93a59dc1ca8165af5ec17161ddbb3670b55c23820dfcf241daf1281"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
-# the work reached, so it maps to None and the reconciler writes the marker instead.
-SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Code Complete", "Landing": "Code Complete"}
+# the work reached, so it maps to None and the reconciler writes the marker instead. `Landing` is the shipped column of
+# version 2, so it is no old option: a card the legacy board spelled that way already holds the column it names.
+SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Landing"}
 FREEZE_LABEL = {"owner": "frozen:owner", "gated": "frozen:dependency"}
-CODE_REVIEW = "Code Review"   # the child's code is done, and its review or a fix round holds it (#603)
+CODE_REVIEW = "Review"   # the child's code is done, and its review or a fix round holds it (#603)
+
+# The one alias map (ADR-0141, ADR-0170): each column's canonical name, the version 1 names it may still read, and the
+# option id a writer sends. A definition version 2 names `Review` and `Landing`; a board that still carries a version 1
+# definition, or an option the rename has not reached, spells the same columns `Code Review` and `Code Complete`. A
+# reader resolves either spelling before it compares two columns; a writer sends the option id of the column it writes,
+# so a rename on the board never refuses a write. The retired options of the pre-definition board (`In Progress`, `Done`,
+# `Open Specs`, `Blocked`, `Merging`) are a different set: SHIPPED_NAME names them, and a reader of the legacy vocabulary
+# never reads one as a shipped column.
+ALIAS_COLUMNS = (
+    {"name": "Backlog", "old": ()},
+    {"name": "Todo", "old": ()},
+    {"name": "Doing", "old": ()},
+    {"name": "Review", "old": ("Code Review",)},
+    {"name": "Landing", "old": ("Code Complete",)},
+    {"name": "Gating", "old": ()},
+    {"name": "Closed", "old": ()},
+    {"name": "Abandoned", "old": ()},
+)
+ALIAS = {spelling: entry["name"] for entry in ALIAS_COLUMNS for spelling in (entry["name"], *entry["old"])}
+
+
+def canonical(name):
+    """The canonical name of one spelling of a column; a name the map does not hold comes back as written."""
+    return ALIAS.get(name, name) if name else name
+
+
+def option_id(name, options):
+    """The option id a writer sends for one column, from the board's own {name: id} map.
+
+    Either spelling of the column answers, so a writer that names `Landing` writes the id of an option the board still
+    spells `Code Complete`. None when the board carries no option for the column."""
+    want = canonical(name)
+    for spelling, oid in (options or {}).items():
+        if canonical(spelling) == want:
+            return oid
+    return None
+
+
+def option_name(name, options):
+    """The name the board carries for one column, either spelling: what a seam that looks an option up by name needs."""
+    want = canonical(name)
+    return next((spelling for spelling in (options or {}) if canonical(spelling) == want), None)
 
 
 def _pin_beside_the_copy():
@@ -56,7 +99,8 @@ def _pinned_text():
     return text
 
 
-CURRENT_DEFINITION_VERSION = 1   # the version this reader knows; a version it does not know is unknown, never guessed
+CURRENT_DEFINITION_VERSION = 2   # the version this reader writes; it reads the versions below and refuses any other
+KNOWN_DEFINITION_VERSIONS = (1, 2)   # a board that still carries a version 1 definition reads under the canonical names
 
 
 class UnknownDefinition(Exception):
@@ -104,15 +148,17 @@ def _definition_from(text):
     """The columns one definition text names, each with its parsed `when`; UnknownDefinition when it is unknown.
 
     A file with no `definition_version` reads as the current version, with today's behaviour: only a version this reader
-    does not know is unknown. An expression outside the grammar is unknown too, named with its column."""
+    does not know is unknown. Every known version answers the canonical names, so a reader accepts a version 1 board and a
+    version 2 board and compares the columns of both through the alias map. An expression outside the grammar is unknown
+    too, named with its column."""
     data = json.loads(text)
     version = data.get("definition_version", CURRENT_DEFINITION_VERSION)
-    if version != CURRENT_DEFINITION_VERSION:
-        raise UnknownDefinition(f"the definition version {version!r} is not version {CURRENT_DEFINITION_VERSION}, the one this reader knows")
+    if version not in KNOWN_DEFINITION_VERSIONS:
+        raise UnknownDefinition(f"the definition version {version!r} is not one of {KNOWN_DEFINITION_VERSIONS}, the versions this reader knows")
     statuses = data.get("statuses") if isinstance(data, dict) else None
     if not isinstance(statuses, list) or not statuses:
         raise UnknownDefinition("the definition names no statuses")
-    return tuple({"name": s.get("name"), "fact": s.get("fact"), "description": s.get("description", ""),
+    return tuple({"name": canonical(s.get("name")), "fact": s.get("fact"), "description": s.get("description", ""),
                   "actor": s.get("actor"), "terminal": bool(s.get("terminal")),
                   "when": parse_expression(s.get("fact"), s.get("name"))}
                  for s in statuses)
@@ -220,9 +266,11 @@ def view_columns():
 
 def past(have, want):
     """True when the card's column `have` is further along the shipped axis than `want` (ADR-0143): a write of `want`
-    would move the card back. An old name is read as its shipped name; a name the axis does not hold is never past."""
+    would move the card back. Each side resolves to its canonical name through the alias map, so the same column in two
+    spellings is one column; a name the axis does not hold is never past."""
     order = [s["name"] for s in json.loads(_pinned_text())["statuses"]]
-    have = SHIPPED_NAME.get(have, have) if have else have
+    have = canonical(SHIPPED_NAME.get(have, have)) if have else have
+    want = canonical(want)
     return have in order and want in order and order.index(have) > order.index(want)
 
 
@@ -272,8 +320,8 @@ def terminal_column(state, reason=None):
     return ROLE["abandoned"] if not_planned(reason) else ROLE["issue_closed"]
 
 
-STATUS_FACT = {"Backlog": "spec", "Todo": "child_live", "Doing": "run_live", "Code Review": "review_wait",
-               "Code Complete": "wave_branch", "Gating": "gating", "Closed": "closed", "Abandoned": "abandoned"}
+STATUS_FACT = {"Backlog": "spec", "Todo": "child_live", "Doing": "run_live", "Review": "review_wait",
+               "Landing": "wave_branch", "Gating": "gating", "Closed": "closed", "Abandoned": "abandoned"}
 
 
 def view_column(status, closed, labels=(), reason=None, text=None):
@@ -288,7 +336,7 @@ def view_column(status, closed, labels=(), reason=None, text=None):
     labels = set(labels or ())
     owner = status == "Blocked" or FREEZE_LABEL["owner"] in labels
     freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None
-    name = SHIPPED_NAME.get(status, status) if status else None
+    name = canonical(SHIPPED_NAME.get(status, status)) if status else None
     if closed:
         facts = {"abandoned": True} if (name == ROLE["abandoned"] or not_planned(reason)) else {"closed": True}
         column, _, _ = resolve_column(facts, written=name or ROLE["issue_closed"], text=text)

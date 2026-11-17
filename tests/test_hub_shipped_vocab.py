@@ -48,16 +48,16 @@ CARDS = [  # (item, the column the table names, the freeze marker)
     (_item(2, "Doing"), "Doing", None),
     (_item(3, "Open Specs", labels=["spec"]), "Backlog", None),
     (_item(4, "Blocked"), "Backlog", "frozen:owner"),
-    (_item(5, "Code Complete"), "Code Complete", None),
-    (_item(6, "Landing"), "Code Complete", None),
-    (_item(7, "Merging"), "Code Complete", None),
+    (_item(5, "Code Complete"), "Landing", None),
+    (_item(6, "Landing"), "Landing", None),
+    (_item(7, "Merging"), "Landing", None),
     (_item(8, None), "Backlog", None),
     (_item(9, "Todo"), "Todo", None),
     (_item(10, "Done", state="closed"), "Closed", None),
     (_item(11, "Abandoned", state="closed"), "Abandoned", None),
     (_item(12, "Todo", state="closed"), "Closed", None),
     (_item(13, "Doing", labels=["frozen:owner"]), "Doing", "frozen:owner"),
-    (_item(14, "Code Review"), "Code Review", None),   # the child's review holds it (#603)
+    (_item(14, "Code Review"), "Review", None),   # the child's review holds it (#603)
 ]
 
 
@@ -129,6 +129,8 @@ def test_the_specs_come_from_the_items_and_no_column_holds_them(table, hub, boar
 
 def test_the_hub_holds_no_column_name_of_its_own(table):
     source = HUB_PY.read_text()
+    # `Review` is also a label of the models panel (MLAB), where it names a class of model, never a board column.
+    source = re.sub(r"MLAB=\{.*?\}", "", source)
     names = [c["name"] for c in table.view_columns()] + [lane["name"] for lane in table.LANES] + list(table.SHIPPED_NAME)
     for name in names:
         assert f'"{name}"' not in source and f"'{name}'" not in source, f"hub.py names {name!r} itself"

@@ -188,7 +188,7 @@ def test_a_board_change_recomputes_the_collapse_without_a_reload(hub):
 # The decision, not a starting point: the seven shipped statuses and the one open-PR lane (#247, #384, #440), each with
 # the one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "Backlog": "#90a4ae", "Todo": "#14b8c0", "Doing": "#e8d44d", "Code Review": "#ff8a5c", "Code Complete": "#f5b041",
+    "Backlog": "#90a4ae", "Todo": "#14b8c0", "Doing": "#e8d44d", "Review": "#ff8a5c", "Landing": "#f5b041",
     "Gating": "#f48fb1", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
 }
 RING = ["#9ccc65", "#d88cd0", "#b99126", "#2cbcd8"]   # reserved for the columns the Project gained later

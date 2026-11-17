@@ -1,6 +1,6 @@
 #!/bin/bash
 # The reconciler writes the shipped vocabulary (ADR-0141): with SG_BOARD_VOCAB=shipped the janitor writes Backlog, Todo,
-# Doing, Code Review, Code Complete, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging, Landing, Pushing or Testing. An owner
+# Doing, Review, Landing, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging, Pushing or Testing. An owner
 # label is a freeze marker over the column the work reached (the frozen:owner label), never a column of its own, and a spec
 # opens in Backlog. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-board-vocab.sh [janitor.py]
@@ -16,16 +16,16 @@ import sys
 statuses = {status["name"]: status["description"] for status in json.load(open(sys.argv[1]))["statuses"]}   # the wording; `fact` holds the expression (#1901)
 expected = {
     "Doing": "A live run holds it; a spec whose child is live work is marked here",
-    "Code Review": "The child's code is done; its review or a fix round holds it",
-    "Code Complete": "A child is in the wave branch",
+    "Review": "The child's code is done; its review or a fix round holds it",
+    "Landing": "A child is in the wave branch",
     "Gating": "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move",
     "Closed": "In dev",
 }
-if any(statuses.get(name) != fact for name, fact in expected.items()) or any(name in statuses for name in ("Pushing", "Testing", "Merging", "Landing")) or len(statuses) != 8 or any("pull request" in fact.lower() for fact in statuses.values()):
+if any(statuses.get(name) != fact for name, fact in expected.items()) or any(name in statuses for name in ("Pushing", "Testing", "Merging", "Code Review", "Code Complete")) or len(statuses) != 8 or any("pull request" in fact.lower() for fact in statuses.values()):
     print("FAIL ADR-0145 board vocabulary", file=sys.stderr)
     sys.exit(1)
 PY
-[ $? = 0 ] && ok "ADR-0145 columns name the wave and dev path, and Code Review the child's review (#603)" || ko "ADR-0145 board vocabulary"
+[ $? = 0 ] && ok "ADR-0145 columns name the wave and dev path, and Review the child's review (#603)" || ko "ADR-0145 board vocabulary"
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$1" in
@@ -48,10 +48,10 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
     for n in 2101 2102 2103 2104 2105 2107; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
-    printf '2108\tBacklog\thttps://api.github.com/repos/x/y\n'; printf '2110\tDoing\thttps://api.github.com/repos/x/y\n'; printf '2106\tTodo\thttps://api.github.com/repos/x/y\n';;
+    printf '2108\tBacklog\thttps://api.github.com/repos/x/y\n'; printf '2110\tDoing\thttps://api.github.com/repos/x/y\n'; printf '2106\tTodo\thttps://api.github.com/repos/x/y\n'; printf '2111\tLanding\thttps://api.github.com/repos/x/y\n'; printf '2112\tReview\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2101 2102 2103 2104 2106 2107 2108 2109 2110; do
+    sep=""; for n in 2101 2102 2103 2104 2106 2107 2108 2109 2110 2111 2112; do
       kids='[]'; case $n in
         2109) labs='{"nodes":[{"name":"spec"}]}'; kids='[{"number":2110},{"number":2107}]';;   # a spec with a child in Doing stays below Doing (ADR-0142)
         2102|2108) labs='{"nodes":[{"name":"spec"}]}';;
@@ -91,5 +91,9 @@ has '^STATUS o 4 Closed 2105$' && ok "a closed issue: Closed" || ko "#2105 not C
 has '^STATUS o 4 Abandoned 2106$' && ok "a wontfix issue: Abandoned" || ko "#2106 not Abandoned: $(bc)"
 ! has ' 2107$' && ok "a startable card already in Todo is not written" || ko "#2107 rewritten: $(bc)"
 ! has ' 2108$' && ok "a spec already in Backlog is not written" || ko "#2108 rewritten: $(bc)"
-! has 'Blocked\|In Progress\|Done\|Open Specs\|Merging\|Landing\|Pushing\|Testing' && ok "no write names Blocked, In Progress, Done, Open Specs, Merging, Landing, Pushing or Testing" || ko "an old option was written: $(bc)"
+! has 'Blocked\|In Progress\|Done\|Open Specs\|Merging\|Pushing\|Testing' && ok "no write names Blocked, In Progress, Done, Open Specs, Merging, Pushing or Testing" || ko "an old option was written: $(bc)"
+# A board renamed in place reads `Landing` and `Review`: the stranded-card compare resolves either spelling before it
+# compares, so a card on the version 2 name is the stranded card the rule names (#2151).
+has '^STATUS o 4 Todo 2111$' && ok "a stranded card the board spells Landing is recovered to Todo" || ko "#2111 not recovered from Landing: $(bc)"
+has '^STATUS o 4 Todo 2112$' && ok "a stranded card the board spells Review is recovered to Todo" || ko "#2112 not recovered from Review: $(bc)"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

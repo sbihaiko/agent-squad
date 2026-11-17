@@ -25,11 +25,11 @@ def _column(**given):
 
 
 def test_a_child_in_the_wave_branch_is_code_complete():
-    assert _column() == "Code Complete"
+    assert _column() == "Landing"
 
 
 def test_an_approved_wave_still_ahead_of_dev_is_code_complete():
-    assert _column(approved=True) == "Code Complete"
+    assert _column(approved=True) == "Landing"
 
 
 def test_a_wave_in_dev_with_a_running_ci_is_closed_not_held_open():
@@ -50,7 +50,7 @@ def test_a_child_that_did_not_enter_the_wave_has_no_wave_fact():
 
 
 def test_a_waiting_review_marks_code_review():
-    assert _column(entered=False, review_waits=True) == "Code Review"
+    assert _column(entered=False, review_waits=True) == "Review"
 
 
 def test_review_state_reads_the_verdict_for_the_tip_only():
@@ -66,7 +66,7 @@ def _spec(*children):
 
 
 def test_a_spec_with_a_ticket_in_flight_reads_todo():
-    for child in ("Todo", "In Progress", "Doing", "Code Review", "Code Complete", "Gating"):
+    for child in ("Todo", "In Progress", "Doing", "Code Review", "Code Complete", "Review", "Landing", "Gating"):
         assert columns.column_for(_spec(child))[0] == "Todo"
 
 
@@ -89,8 +89,10 @@ def test_an_open_work_issue_with_no_spec_label_still_reads_todo():
 def test_the_child_live_fact_marks_a_ticket_in_flight():
     assert facts.spec_facts(["Todo", "Closed", "Abandoned"]) == {"child_live": True}
     assert facts.spec_facts(["Code Complete"]) == {"child_live": True}
+    assert facts.spec_facts(["Landing"]) == {"child_live": True}   # the renamed column, read after the board moves (#2151)
     assert facts.spec_facts(["Gating"]) == {"child_live": True}
     assert facts.spec_facts(["Code Review", "Todo"]) == {"child_live": True}
+    assert facts.spec_facts(["Review", "Todo"]) == {"child_live": True}
     assert facts.spec_facts(["Backlog", "Closed"]) == {"child_live": False}
 
 

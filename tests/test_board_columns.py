@@ -71,9 +71,9 @@ def test_every_shipped_column_is_reachable_on_the_board(table, hub):
 
 def test_gating_reaches_the_lane_order_the_legend_the_phone_and_the_cfd_bands(table, hub, monkeypatch):
     """Every surface takes its order from the definition (spec #1218): the lane, the flow legend, the phone's served board
-    and the cumulative flow bands all carry Gating between Code Complete and Closed, and no page names it itself."""
+    and the cumulative flow bands all carry Gating between Landing and Closed, and no page names it itself."""
     names = [c["name"] for c in table.view_columns()]
-    assert names.index("Code Complete") + 1 == names.index("Gating") == names.index("Closed") - 1, names
+    assert names.index("Landing") + 1 == names.index("Gating") == names.index("Closed") - 1, names
     assert hub.ORDER == names, "the lane order leaves Gating out"
     assert hub.FLOW_BANDS == names, "the CFD bands leave Gating out"
     flow = json.loads(re.search(r"FLOW=(\[[^;]*?\]),", hub.PAGE).group(1))
@@ -84,11 +84,12 @@ def test_gating_reaches_the_lane_order_the_legend_the_phone_and_the_cfd_bands(ta
 
 
 def test_a_card_that_reached_gating_leaves_it_only_forward(table):
-    """#1257: a red or unproven attempt is a marker, not a move (ADR-0170). Gating sits between Code
-    Complete and Closed on the shipped axis, so a write back to Code Complete is past and refused,
-    and a card that left Gating forward never re-enters it for the same wave."""
-    assert table.past("Gating", "Code Complete"), "a write back from Gating is not past"
-    assert table.refused_for_automated("Gating", "Code Complete")
+    """#1257: a red or unproven attempt is a marker, not a move (ADR-0170). Gating sits between Landing
+    and Closed on the shipped axis, so a write back to Landing is past and refused, and a card that left
+    Gating forward never re-enters it for the same wave."""
+    assert table.past("Gating", "Landing"), "a write back from Gating is not past"
+    assert table.refused_for_automated("Gating", "Landing")
+    assert table.past("Gating", "Code Complete"), "a version 1 spelling of Landing reads the same column (#2151)"
     assert not table.past("Gating", "Closed"), "the one forward move out of Gating reads as past"
     assert table.past("Closed", "Gating"), "a re-entry into Gating after the wave landed is past"
 
@@ -207,7 +208,7 @@ def test_a_reopened_issue_returns_its_card_from_closed_to_todo_only(table):
     """#1420 (ADR-0143 rule 2): the reopen is the door from Closed to Todo; every other reopened move is refused."""
     assert not table.refused_for_automated("Closed", "Todo", "reopened")
     assert table.refused_for_automated("Closed", "Doing", "reopened")
-    assert table.refused_for_automated("Code Complete", "Todo", "reopened")
+    assert table.refused_for_automated("Landing", "Todo", "reopened")
     assert table.refused_for_automated("Closed", "Todo")
 
 

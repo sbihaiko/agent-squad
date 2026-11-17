@@ -11,8 +11,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "eb3fc0d147f542233628885da598f8c12608713131c412cd5c1d4e13105d0834"
-SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Gating", "Closed", "Abandoned"]
+PINNED = "f9d402b6f93a59dc1ca8165af5ec17161ddbb3670b55c23820dfcf241daf1281"
+SHIPPED = ["Backlog", "Todo", "Doing", "Review", "Landing", "Gating", "Closed", "Abandoned"]
 
 
 def _load(directory):
@@ -33,11 +33,11 @@ def test_the_pinned_copy_names_the_eight_shipped_columns_in_order(columns):
     assert [c["name"] for c in columns.shipped_columns() if c["terminal"]] == ["Closed", "Abandoned"]
 
 
-def test_gating_sits_between_code_complete_and_closed_with_its_fact_and_actor(columns):
+def test_gating_sits_between_landing_and_closed_with_its_fact_and_actor(columns):
     """A gate or a proof holds the card (spec #1218): the column waits between the wave branch and dev."""
     by = {c["name"]: c for c in columns.shipped_columns()}
     names = list(by)
-    assert names.index("Code Complete") + 1 == names.index("Gating") == names.index("Closed") - 1
+    assert names.index("Landing") + 1 == names.index("Gating") == names.index("Closed") - 1
     assert by["Gating"]["description"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move"
     assert by["Gating"]["fact"] == {"all": ["gating", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}]}}]}   # the fact is an expression (#1901)
     assert by["Gating"]["actor"] == "The gate" and not by["Gating"]["terminal"]
@@ -72,14 +72,14 @@ def test_the_definition_names_the_gate_tries_number_field(columns):
     assert definition["gateTries"] == {"type": "number"}
 
 
-def test_code_review_sits_between_doing_and_code_complete_with_its_fact_and_actor(columns):
+def test_review_sits_between_doing_and_landing_with_its_fact_and_actor(columns):
     """The child's code is done and its review or a fix round holds it (#603): Doing no longer names the review wait."""
     by = {c["name"]: c for c in columns.shipped_columns()}
     names = list(by)
-    assert names.index("Doing") + 1 == names.index("Code Review") == names.index("Code Complete") - 1
-    assert by["Code Review"]["description"] == "The child's code is done; its review or a fix round holds it"
-    assert by["Code Review"]["fact"] == {"all": ["review_wait", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch"]}}]}
-    assert by["Code Review"]["actor"] == "The review" and not by["Code Review"]["terminal"]
+    assert names.index("Doing") + 1 == names.index("Review") == names.index("Landing") - 1
+    assert by["Review"]["description"] == "The child's code is done; its review or a fix round holds it"
+    assert by["Review"]["fact"] == {"all": ["review_wait", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch"]}}]}
+    assert by["Review"]["actor"] == "The review" and not by["Review"]["terminal"]
     assert "review" not in by["Doing"]["description"].lower()
 
 
@@ -159,22 +159,22 @@ def test_the_pin_command_exits_one_on_a_mismatch(tmp_path):
     ({"spec": True, "child_live": False}, "Backlog", None),
     ({}, "Todo", None),
     ({"run_live": True}, "Doing", None),
-    ({"review_wait": True}, "Code Review", None),
-    ({"review_wait": True, "run_live": True}, "Code Review", None),
-    ({"review_wait": True, "wave_branch": True}, "Code Complete", None),
-    ({"wave_branch": True}, "Code Complete", None),
-    ({"landing": True, "wave_branch": True}, "Code Complete", None),
-    ({"dev_ci": True, "wave_branch": True}, "Code Complete", None),
+    ({"review_wait": True}, "Review", None),
+    ({"review_wait": True, "run_live": True}, "Review", None),
+    ({"review_wait": True, "wave_branch": True}, "Landing", None),
+    ({"wave_branch": True}, "Landing", None),
+    ({"landing": True, "wave_branch": True}, "Landing", None),
+    ({"dev_ci": True, "wave_branch": True}, "Landing", None),
     ({"dev_ci": True, "closed": True}, "Closed", None),
     ({"in_dev": True, "dev_ci": True}, "Closed", None),
     ({"in_dev": True, "owner": True}, "Closed", "frozen:owner"),
     ({"closed": True}, "Closed", None),
     ({"abandoned": True}, "Abandoned", None),
     ({"owner": True}, "Backlog", "frozen:owner"),
-    ({"owner": True, "wave_branch": True}, "Code Complete", "frozen:owner"),
+    ({"owner": True, "wave_branch": True}, "Landing", "frozen:owner"),
     ({"owner": True, "run_live": True}, "Doing", "frozen:owner"),
     ({"gated": True}, "Backlog", "frozen:dependency"),
-    ({"gated": True, "wave_branch": True}, "Code Complete", "frozen:dependency"),
+    ({"gated": True, "wave_branch": True}, "Landing", "frozen:dependency"),
 ])
 def test_each_card_lands_in_the_column_the_table_names(columns, facts, column, freeze):
     assert columns.column_for(facts) == (column, freeze)

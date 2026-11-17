@@ -5365,6 +5365,7 @@ def lead_zoom(query):
     a = (q.get("a") or [None])[0]
     if a is None: a = LEAD_START   # the page opens on the trip from Todo, the column the payload already measures from
     b = (q.get("b") or [""])[0] or None
+    a, b = _columns_module.canonical(a), _columns_module.canonical(b)   # a bookmark of either spelling reads its column (#2151)
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     fw, fs, fk, ty = board_filters(query)

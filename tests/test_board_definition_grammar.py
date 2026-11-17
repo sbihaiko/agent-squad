@@ -17,8 +17,8 @@ DEFINITION = SCRIPTS / "board-definition.json"
 TODAYS = [
     ({}, "Todo", None),
     ({"run_live": True}, "Doing", None),
-    ({"review_wait": True}, "Code Review", None),
-    ({"wave_branch": True}, "Code Complete", None),
+    ({"review_wait": True}, "Review", None),
+    ({"wave_branch": True}, "Landing", None),
     ({"gating": True}, "Gating", None),
     ({"closed": True}, "Closed", None),
     ({"in_dev": True}, "Closed", None),
@@ -29,8 +29,8 @@ TODAYS = [
     ({"spec": True, "child_live": True}, "Todo", None),
     ({"abandoned": True, "gating": True}, "Abandoned", None),
     ({"in_dev": True, "gating": True}, "Closed", None),
-    ({"review_wait": True, "wave_branch": True}, "Code Complete", None),
-    ({"run_live": True, "review_wait": True}, "Code Review", None),
+    ({"review_wait": True, "wave_branch": True}, "Landing", None),
+    ({"run_live": True, "review_wait": True}, "Review", None),
     ({"owner": True, "run_live": True}, "Doing", "frozen:owner"),
 ]
 
@@ -54,7 +54,7 @@ def _data():
 def test_the_shipped_definition_names_its_version_and_each_column_an_expression(table):
     data = _data()
 
-    assert data["definition_version"] == table.CURRENT_DEFINITION_VERSION == 1
+    assert data["definition_version"] == table.CURRENT_DEFINITION_VERSION == 2
     for status in data["statuses"]:
         table.parse_expression(status["fact"])
         assert isinstance(status["description"], str) and status["description"], status["name"]
@@ -75,11 +75,11 @@ def test_the_hub_read_and_the_writer_reach_the_same_column(table):
 
 
 def test_a_version_the_reader_does_not_know_keeps_the_last_written_column(table):
-    text = DEFINITION.read_text().replace('"definition_version": 1', '"definition_version": 2', 1)
+    text = DEFINITION.read_text().replace('"definition_version": 2', '"definition_version": 3', 1)
     column, freeze, unknown = table.resolve_column({"run_live": True}, written="Code Review", text=text)
 
     assert (column, freeze) == ("Code Review", None), "the reader guesses a column it does not know"
-    assert unknown and "2" in unknown
+    assert unknown and "3" in unknown
     assert table.column_for({"run_live": True}, written="Code Review", text=text) == ("Code Review", None)
     assert table.view_column("Doing", False, text=text) == ("Doing", None)
 
@@ -94,7 +94,7 @@ def test_an_expression_outside_the_grammar_is_unknown_and_the_written_column_sta
 
     assert column == "Code Complete" and unknown and "Gating" in unknown
     assert table.column_for({"gating": True}, written="Code Complete", text=text) == ("Code Complete", None)
-    assert table.view_column("Code Review", False, text=text) == ("Code Review", None)
+    assert table.view_column("Code Review", False, text=text) == ("Review", None)
 
 
 def test_a_definition_with_no_version_reads_as_the_current_version(table):

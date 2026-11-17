@@ -1216,7 +1216,7 @@ def reconcile_board():
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
     # The terminal column is one function for every vocabulary: the reconciler reads the same one, so the two passes cannot
     # disagree about where a closed issue's card belongs (spec #132, #1932).
-    from board_columns import terminal_column, ROLE
+    from board_columns import terminal_column, ROLE, canonical   # both spellings of a column resolve before a compare (#2151)
     if shipped:
         from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past, CODE_REVIEW
     doing = "Doing" if shipped else "In Progress"
@@ -1473,7 +1473,7 @@ def reconcile_board():
             # to Todo by the one backward move (ADR-0143), named no-landing, with one STRANDED line. A rule that ranked the card
             # this pass decides it instead.
             have_n = have_cards.get(n, "")
-            if (not is_spec and have_n in ({"Code Complete"} | ({CODE_REVIEW} if shipped else set())) and n not in expected
+            if (not is_spec and canonical(have_n) in ({canonical("Code Complete")} | ({canonical(CODE_REVIEW)} if shipped else set())) and n not in expected
                     and not holding(n) and not any((st / "auto" / f"{k}-{n}").exists() for k in ("disp", "bug"))
                     and not kept_marker(n) and branch_ahead_count(n) == "0" and branch_in_dev_count(n) == "0"
                     and not owner_frozen(n) and n not in held_owner and not (olabels[n] & STRAND_HOLDS)
@@ -1492,7 +1492,7 @@ def reconcile_board():
         if n not in specs and n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set, and a branch that names a spec is its children's (#665)
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
-        if n not in specs and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") == "Code Complete":   # a fresh branch is in dev too, so only a card that reached the wave is delivered by it, and a spec's branch is its children's (#665)
+        if n not in specs and branch_in_dev_count(n) != "0" and canonical(cards(proj)[1].get(str(n), "")) == canonical("Code Complete"):   # a fresh branch is in dev too, so only a card that reached the wave is delivered by it, and a spec's branch is its children's (#665)
             set_expected(n, "Closed" if shipped else "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
@@ -1501,7 +1501,7 @@ def reconcile_board():
     # card moves through the same loop below, and the record goes when the card carries the column. No marker, no hold and no
     # release: this block writes nothing. The format and the reader are squad/handhold.py's.
     HH = _handhold_module()
-    hand_columns = {doing, "Code Complete"} | ({CODE_REVIEW, GATING} if shipped else set())
+    hand_columns = {canonical(doing), canonical("Code Complete")} | ({canonical(CODE_REVIEW), canonical(GATING)} if shipped else set())
     released = {}
     for n, col in HH.releases(state=st).items():
         if issue_info(n)[0] == "closed":   # the closed-issue rule already names the card column (ADR-0143 rule 2), so a release has no move to make: the record goes, never a write the board refuses every pass (#1869)
@@ -1517,7 +1517,7 @@ def reconcile_board():
         if not have or issue_info(n)[0] == "closed": continue
         who = f"taken over from run {c['who']}" if c["kind"] == "taken" else f"held by {c['who']}"
         if have == os.environ.get("SG_TODO", "Todo"): set_expected(n, doing, f"the issue is {who}: somebody works it", rank=45)
-        elif have in hand_columns: set_expected(n, have, f"the issue is {who}: its card is not moved back", rank=45)
+        elif canonical(have) in hand_columns: set_expected(n, have, f"the issue is {who}: its card is not moved back", rank=45)
     for n, (_, want, why) in sorted(held_owner.items(), key=lambda kv: int(kv[0])):   # frozen:owner holds the card: R names the write it held back, and writes nothing
         have = have_all.get(str(n))
         if have is not None and have != want:
@@ -1547,7 +1547,7 @@ def reconcile_board():
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
-        if shipped and want in (doing, CODE_REVIEW, "Code Complete", GATING) and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
+        if shipped and canonical(want) in {canonical(x) for x in (doing, CODE_REVIEW, "Code Complete", GATING)} and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
         if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
@@ -1559,7 +1559,7 @@ def reconcile_board():
             held = (holders(proj) or {}).get(str(n))
             if run_id and held != {"run": run_id, "started": run_ts or ""}:   # only a holder or a start the card does not carry is written (#327)
                 if board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}") and holders(proj) is not None: holders(proj)[str(n)] = {"run": run_id, "started": run_ts or ""}   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
-        elif have in ("In Progress", "Doing", "Code Review") and have != want:
+        elif canonical(have) in {canonical(x) for x in ("In Progress", "Doing", "Code Review")} and canonical(have) != canonical(want):
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
     for n, want in sorted(released.items(), key=lambda kv: int(kv[0])):   # a release applies once: its record goes when the card carries the column
         if cards(proj)[1].get(str(n)) == want and not dry:
@@ -1871,6 +1871,8 @@ if left:
         for p in left: p.unlink(missing_ok=True)
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from board_columns import canonical   # rule P resolves both spellings of a column before a compare (#2151)
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     for l in sh("git", "-C", fd, "log", "-n", "200", "--format=%h %ct %s", fb).splitlines():
         h, ct, subj = (l.split(None, 2) + ["", ""])[:3]
@@ -1900,7 +1902,7 @@ if fd and fb:
             if holding(n): continue                          # a live run works it, or a wave still carries it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
-            if card_status(proj, n) not in ("In Progress", "Doing", "Code Review", "Code Complete"): continue   # only what the landing set: a card another step moved past it is never downgraded
+            if canonical(card_status(proj, n)) not in {canonical(x) for x in ("In Progress", "Doing", "Code Review", "Code Complete")}: continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
             marks = [mk.name] + [f"{k}-{n}" for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()]
@@ -1921,6 +1923,7 @@ hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-b
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     import ghthrottle
+    from board_columns import canonical   # the comment pass resolves both spellings of a column before a compare (#2151)
     floor = int(os.environ.get("SG_GH_FLOOR") or 300)
     low = next(((pool, left) for pool in ("core", "graphql") if (left := ghthrottle.pool_below(pool, floor)) is not None), None)   # GraphQL has a quota of its own (#1648)
     if low is not None:
@@ -1940,7 +1943,7 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
                     say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open{repair}")
                     if not dry: mk.touch()
             continue
-        if not (op and stt in ("Todo", "Blocked", "In Progress", "Doing", "Code Review", "Code Complete")): continue
+        if not (op and canonical(stt) in {canonical(x) for x in ("Todo", "Blocked", "In Progress", "Doing", "Code Review", "Code Complete")}): continue
         os.environ["SG_GH_PASS"] = "janitor"
         r, comments = door("gh_pages", f"repos/{repo}/issues/{n}/comments?per_page=100", "-q", r'.[]|[.created_at,(.body|gsub("\\n";" "))]|join("\t")')
         cm = [x.split("\t", 1) for x in comments.splitlines() if "\t" in x] if r == 0 else []
