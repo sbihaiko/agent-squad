@@ -135,13 +135,17 @@ def _copy(d, names, to):
         shutil.copy(d / name, to / name)
 
 
+WAVE_SCRIPTS = ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh",
+                "ghcall.sh", "ghread.py", "ghthrottle.py", "autohunt.sh", "basecheck.sh", "fast-gate.sh", "issue_ledger.py",
+                "revformat.py", "siblings.py", "wavepause.py")   # wave.sh sources ghcall.sh, which runs the two readers (#593)
+
+
 @pytest.fixture
 def wave_runner(tmp_path):
     """wave.sh enter in a child's worktree, with a gate that records its run and fails (so nothing is pushed)."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh",
-                    "ghcall.sh", "ghread.py", "ghthrottle.py"), d)   # wave.sh sources ghcall.sh, which runs the two readers (#593)
+    _copy(SCRIPTS, WAVE_SCRIPTS, d)
     co, origin = _repo_with_remote(tmp_path, ["wave/run-1"])
     st, marker = tmp_path / "st", tmp_path / "gate.ran"
     (st / "auto").mkdir(parents=True)
@@ -326,6 +330,13 @@ def test_a_wave_entry_under_a_held_gate_lock_holds_the_child_and_enters_on_a_lat
     with _grouped(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as later:
         later_out, later_err = later.communicate(timeout=60)
     assert subprocess.run(["bash", "-c", ran]).returncode == 0, f"the later pass never ran its gate: {later_out}{later_err}"
+
+
+def test_the_wave_runner_copies_every_script_wave_sh_uses():
+    """wave.sh reads its helpers beside it, so a copy that omits one fails with a missing file, not the case it tests."""
+    used = set(re.findall(r'\$here/([\w.-]+\.(?:sh|py))', (SCRIPTS / "wave.sh").read_text()))
+    missing = sorted(name for name in used if name not in WAVE_SCRIPTS and name != "env.sh")   # the fixture writes env.sh
+    assert not missing, f"wave.sh uses scripts the wave runner does not copy: {missing}"
 
 
 @pytest.mark.parametrize("name", ["test-gate-lock.sh", "test-serial.sh"])
