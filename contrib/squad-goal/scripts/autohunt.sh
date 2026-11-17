@@ -64,7 +64,9 @@ file_pass() {
 filed_ledger() { printf '%s/filed-%s' "$A" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' _)"; }
 file_issue() {
   local title=$1 name=$1 body=$2 fp=${3:-} pass led dup count resp rc num tagged card by=${SG_FILED_BY:-autohunt} l
-  local -a labs=(-f "labels[]=${SG_BUG_LABEL:-bug}")   # the bug kind, so the loop's own dispatcher picks the issue up
+  local hold=frozen:not-startable prio kinds="${SG_BUG_LABEL:-bug} ${SG_FILED_LABELS//,/ }"
+  # The publish hold (#1978): the issue is born held, so no pass dispatches it before its Status and Priority read back.
+  local -a labs=(-f "labels[]=${SG_BUG_LABEL:-bug}" -f "labels[]=$hold")   # the bug kind, so the loop's own dispatcher picks the issue up
   for l in ${SG_FILED_LABELS//,/ }; do [ -n "$l" ] && labs+=(-f "labels[]=$l"); done   # and the label that makes it startable beside it
   [ -n "$fp" ] || fp=$(fingerprint_of "$name"); [ -n "$fp" ] || fp=000000000000
   pass=$(file_pass)
@@ -106,9 +108,18 @@ except Exception:
   # dispatcher reads, through the one board door: it is the same add-then-write the board pass makes (janitor rule R),
   # so a card another pass already added is answered "already exists" and written to, never added twice. A refusal is
   # named on stderr and never un-files the issue; the board pass repairs the card on its next run.
+  # The birth Priority (#1978) is the one table's (priority_backfill.py): a bug high, a loop-bug urgent. The board door
+  # writes it only on a change and reads it back. The hold is dropped only when the Status and the Priority both read
+  # back; else it stays, the card stays out of dispatch, and the hold is named.
   if [ -n "$num" ]; then
-    card=$($BOARD --add "$SG_OWNER" "$SG_PROJECT" "${SG_TODO:-Todo}" "$num" 2>&1) \
-      || echo "HUNT: the card of #$num is not on the board: $card" >&2
+    if card=$($BOARD --add "$SG_OWNER" "$SG_PROJECT" "${SG_TODO:-Todo}" "$num" 2>&1) \
+      && prio=$(python3 "$here/priority_backfill.py" $kinds 2>/dev/null) && [ -n "$prio" ] \
+      && card=$($BOARD --priority "$SG_OWNER" "$SG_PROJECT" "$num" "$prio" 2>&1); then
+      gh_send --method DELETE "repos/$SG_REPO/issues/$num/labels/frozen%3Anot-startable" >/dev/null 2>&1 \
+        || echo "HUNT: #$num stays held by $hold: the hold's removal was refused" >&2
+    else
+      echo "HUNT: #$num stays held by $hold: its Status or Priority does not read back: ${card:-no Priority}" >&2
+    fi
   fi
   [ -n "$num" ] && echo "HUNT filed #$num" || echo "HUNT filed"
 }

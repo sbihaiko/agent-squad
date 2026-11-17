@@ -1240,11 +1240,12 @@ file_conflict_bug() {
   body=$(mktemp) || return 0
   printf 'Wave %s conflicts with %s at %s in %s. Run %s is the second run to hit this conflict on this base, so the loop stopped requeuing #%s.\n\nFiled by wave.sh (ADR-0151 rule 2).\n' \
     "$w" "$base" "$at" "${paths:-no path named by git}" "$run" "$n" > "$body"
-  out=$(gh_send -X POST "repos/$SG_REPO/issues" -f "title=[SQUAD] wave rebase conflict on #$n: ${paths:-no path named by git}" \
-    -F "body=@$body" -f "labels[]=bug" -f "labels[]=loop-bug" 2>&1); rc=$?
+  # The loop's one filing door (#1978): the publish hold, the card in Todo and the birth Priority urgent of a loop-bug.
+  out=$(SG_FILED_BY=wave SG_FILED_LABELS=loop-bug bash "$here/autohunt.sh" --file \
+    "[SQUAD] wave rebase conflict on #$n: ${paths:-no path named by git}" "$body" 2>&1)
   rm -f "$body"
-  if [ "$rc" -eq 0 ]; then echo "WAVE-BUG #$n: the same rebase conflict on $base twice; filed as a loop bug"
-  else echo "WAVE-BUG #$n filing refused: $out"; fi
+  case "$out" in *"HUNT filed"*) echo "WAVE-BUG #$n: the same rebase conflict on $base twice; filed as a loop bug";;
+                 *) echo "WAVE-BUG #$n filing refused: $out";; esac
 }
 
 # The landing round (#1500). A landing conflict keeps the wave head on fix/<n>-land-<run>, <n> the lowest issue the wave head carries

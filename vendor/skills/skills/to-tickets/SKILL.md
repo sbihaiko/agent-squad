@@ -137,10 +137,12 @@ reading aid: it never replaces the parent relation, and the sub-issue link stays
 a spec (a plan, a conversation) carries no prefix, and a prefix names the spec's number only, never a wave, a kind or a
 column.
 
-**Publish order, per ticket.** A new card is Todo the moment it joins the board, and Todo plus `ready-for-agent` is the
-dispatcher's go signal. So for each ticket: create the issue without `ready-for-agent`, then add it to the board and set
-its Status (Backlog; a bug's Todo). Read the Status back; a new card can read late, so read again before you move on.
-Then add `ready-for-agent` only after the Status reads back, and then link the ticket to its parent.
+**Publish order, per ticket.** A card in Todo with no holder is dispatched, so a ticket is held until it is complete.
+For each ticket: create the issue with the label `frozen:not-startable` set, which is the publish hold. Then add it to
+the board, and set the card to Status Backlog with Priority low. Set the Priority through the board door,
+`board.sh --priority <owner> <project> <n> low`, which writes only a changed value and reads it back. Read both back. A
+new card can read late, so read again before you move on. Then link the ticket to its parent and read the link back. Release the publish hold only
+after the Status, the Priority and the parent link all read back.
 
 **The kanban is the last step, not a side effect.** Publishing a ticket is not done when the issue exists: it is done
 when the card stands on the Squad Board. After the last ticket, read every new card back in one pass
