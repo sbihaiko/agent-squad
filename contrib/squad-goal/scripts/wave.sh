@@ -543,7 +543,7 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     echo "WAVE STOP #$n: $h, so the age cap does not put it back in the queue: $why"; return 0
   fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
-  SG_MOVE_REASON=no-landing board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Code Complete as a no-landing move (#1340)
+  SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-}" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Code Complete as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
 }

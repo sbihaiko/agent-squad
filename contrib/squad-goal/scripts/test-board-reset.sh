@@ -16,7 +16,7 @@ a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in *"/comments"*) cat > "TMPDIR/comment.in";; *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
   *"/comments"*) echo '{"id":1}';;
-  *"/labels"*) echo '[]';;
+  *"/labels"*) if [ -f "TMPDIR/fail-label" ] && [[ "$a" == *"-X POST"* && "$a" == *"issues/"* ]]; then rm -f "TMPDIR/fail-label"; echo "label refused" >&2; exit 1; fi; echo '[]';;
   *"-X PATCH"*items/*)
     n=${a#*items/}; n=${n%% *}; n=${n#ITEM}
     opt=$(python3 -c 'import json;print(json.load(open("TMPDIR/patch.in"))["fields"][0]["value"])')
@@ -31,7 +31,7 @@ case "$a" in
 esac
 J
 sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-seed() { printf '2001\tTodo\n2002\tDoing\n2003\tCode Review\n2004\tCode Complete\n2005\tClosed\n2007\tAbandoned\n' > "$T/cards.tsv"; : > "$T/gh.calls"; rm -f "$T/st/board-rejections.jsonl" "$T/st/board-resets.json" "$T/comment.in" "$T/patch.in"; }
+seed() { printf '2001\tTodo\n2002\tDoing\n2003\tCode Review\n2004\tCode Complete\n2005\tClosed\n2007\tAbandoned\n' > "$T/cards.tsv"; : > "$T/gh.calls"; rm -f "$T/st/board-rejections.jsonl" "$T/st/board-resets.json" "$T/comment.in" "$T/patch.in" "$T/fail-label"; }
 run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" python3 "$T/s-board.py" "$@"; }
 col() { awk -F'\t' -v n="$1" '$1 == n {print $2}' "$T/cards.tsv"; }
 comments() { /usr/bin/grep -c "issues/$1/comments" "$T/gh.calls"; }
@@ -70,5 +70,26 @@ seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-c run o 4 
 seed; o=$(SG_MOVE_BY=loop run o 4 Closed 2007 2>&1); rc=$?
 [ "$rc" -eq 3 ] && [ "$(col 2007)" = "Abandoned" ] && [ "$(comments 2007)" = 0 ] \
   && ok "a card in Abandoned stays in Abandoned when its issue closes" || ko "abandoned: exit $rc, column $(col 2007): $o"
+
+seed; SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-f run o 4 Todo 2004 >/dev/null 2>&1
+SG_MOVE_BY=loop SG_MOVE_REASON=reopened SG_MOVE_EVENT=reopen-f run o 4 Doing 2004 >/dev/null 2>&1
+[ "$(dropped 2004 'board-reset%3Ano-delivery')" = 1 ] && [ "$(labeled 2004 'board-reset:reopened')" = 0 ] && [ "$(comments 2004)" = 1 ] \
+  && ok "a forward move with a reset reason drops the reset label it answers and adds none" || ko "forward reset: dropped $(dropped 2004 'board-reset%3Ano-delivery'), reopened $(labeled 2004 'board-reset:reopened'), comments $(comments 2004): $(cat "$T/gh.calls")"
+
+seed; touch "$T/fail-label"; SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-e run o 4 Todo 2004 >/dev/null 2>&1
+awk -F'\t' -v OFS='\t' '$1 == 2004 {$2 = "Code Complete"} 1' "$T/cards.tsv" > "$T/cards.new" && mv "$T/cards.new" "$T/cards.tsv"
+SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-e run o 4 Todo 2004 >/dev/null 2>&1
+[ "$(comments 2004)" = 1 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 2 ] \
+  && ok "a label that fails once is applied on the next move without a second comment" || ko "partial failure: comments $(comments 2004), labels $(labeled 2004 'board-reset:no-delivery'): $(cat "$T/gh.calls")"
+
+seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing run o 4 Todo 2004 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(col 2004)" = "Todo" ] && [ "$(comments 2004)" = 0 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 0 ] \
+  && case "$o" in *SG_MOVE_EVENT*) true;; *) false;; esac \
+  && ok "a reset without an event id writes no comment and names the missing id" || ko "no event id: exit $rc, comments $(comments 2004): $o"
+
+seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-g SG_STATE="$T/st" SG_CHECKOUT="$T/nogit" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" python3 "$T/s-board.py" o 4 Todo 2004 2>&1); rc=$?
+[ "$(comments 2004)" = 0 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 0 ] \
+  && case "$o" in *sha*) true;; *) false;; esac \
+  && ok "a reset without a checkout sha writes no comment and names the missing sha" || ko "no sha: exit $rc, comments $(comments 2004): $o"
 
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "all reset checks passed" || { echo "reset checks failed"; exit 1; }

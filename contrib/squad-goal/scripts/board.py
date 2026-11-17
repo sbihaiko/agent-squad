@@ -54,7 +54,7 @@ later move of the same item. The file is formed in a temp file beside it and ren
 or the new one, never a part-written one (ADR-0030). Each proved move also appends one transition (card, from, to, instant, repository)
 to `$SG_STATE/board-transitions.<owner>_<name>.jsonl`, the record of its repository (#897). A skipped or unproven move records nothing, and a holder or
 test-case write records nothing."""
-import json, os, pathlib, subprocess, sys, time
+import fcntl, json, os, pathlib, subprocess, sys, time
 from board_columns import HOLD, RESET_LABEL, past, refused_for_automated, reset_comment
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
 args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]; proof = args[:1] == ["--proof"]; gate_tries = args[:1] == ["--gate-tries"]; priority = args[:1] == ["--priority"]
@@ -140,31 +140,44 @@ def ensure_label(label):   # the reset label exists in the repository before any
     try: state.binding.api("-X", "POST", f"repos/{state.binding.repo}/labels", "-f", f"name={label}", "-f", "color=ededed")
     except RuntimeError as e:
         if "already_exists" not in str(e): raise
-def settle_resets(moved, at):   # a reset names its move on the issue; a forward move drops the reset label it answers (#1904)
+def save_reset_book(posted, active):   # whole, then one rename (ADR-0030), after each step so a failed step never loses a done one
+    p = st / "board-resets.json"; tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"posted": sorted(posted), "active": active}, sort_keys=True) + "\n"); os.replace(tmp, p)
+def drop_reset_label(posted, active, key, n):   # -> True when the issue carries no reset label of this book after the call
+    label = active.get(key)
+    if not label: return True
+    try: state.binding.drop_label(n, label)
+    except RuntimeError as e: print(f"#{n}: the reset label {label!r} was not dropped: {e}", file=sys.stderr); return False
+    del active[key]; save_reset_book(posted, active); return True
+def settle_reset(posted, active, repo, n, label, have, status, at, event, sha):   # the comment, then the label, each marked once it lands (#1904)
+    key = f"{repo}#{n}"; mark = "|".join((key, label, event, sha))
+    try: ensure_label(label)
+    except RuntimeError as e: print(f"#{n}: the reset label {label!r} was not created: {e}", file=sys.stderr); return
+    if f"{mark}|comment" not in posted:
+        try: state.binding.api("-X", "POST", f"repos/{repo}/issues/{n}/comments", "--input", "-", inp=json.dumps({"body": reset_comment(have, status, reason, at, event)}))
+        except RuntimeError as e: print(f"#{n}: the reset comment failed: {e}", file=sys.stderr); return
+        posted.add(f"{mark}|comment"); save_reset_book(posted, active)
+    if f"{mark}|label" in posted: return
+    if active.get(key) not in (None, label) and not drop_reset_label(posted, active, key, n): return
+    try: state.binding.api("-X", "POST", f"repos/{repo}/issues/{n}/labels", "-f", f"labels[]={label}")
+    except RuntimeError as e: print(f"#{n}: the reset label {label!r} was not applied: {e}", file=sys.stderr); return
+    posted.add(f"{mark}|label"); active[key] = label; save_reset_book(posted, active)
+def settle_resets(moved, at):   # a reset names its move on the issue; any other move answers the reset label the issue carries (#1904)
     repo = state.binding.repo or "board"
     try: sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=os.environ.get("SG_CHECKOUT") or None, capture_output=True, text=True).stdout.strip()
     except OSError: sha = ""
-    event = os.environ.get("SG_MOVE_EVENT") or at   # a move with no event id is its own event: no later pass repeats it
-    posted, active = reset_book()
-    for n, have, status in moved:
-        key = f"{repo}#{n}"
-        if reason in RESET_LABEL and have:
-            label = RESET_LABEL[reason]
-            mark = "|".join((key, label, event, sha))
-            if mark in posted: continue
-            try:
-                state.binding.api("-X", "POST", f"repos/{repo}/issues/{n}/comments", "--input", "-", inp=json.dumps({"body": reset_comment(have, status, reason, at, event)}))
-                ensure_label(label)
-                if active.get(key) not in (None, label): state.binding.drop_label(n, active[key])
-                state.binding.api("-X", "POST", f"repos/{repo}/issues/{n}/labels", "-f", f"labels[]={label}")
-            except RuntimeError as e: print(f"#{n}: the reset note failed: {e}", file=sys.stderr); continue
-            posted.add(mark); active[key] = label
-        elif have and not past(have, status) and key in active:
-            label = active.pop(key)
-            try: state.binding.drop_label(n, label)
-            except RuntimeError as e: print(f"#{n}: the reset label {label!r} was not dropped: {e}", file=sys.stderr)
-    p = st / "board-resets.json"; tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # whole, then one rename (ADR-0030)
-    tmp.write_text(json.dumps({"posted": sorted(posted), "active": active}, sort_keys=True) + "\n"); os.replace(tmp, p)
+    event = os.environ.get("SG_MOVE_EVENT") or ""
+    with (st / "board-resets.lock").open("w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)   # one writer reads and writes the book at a time (ADR-0030)
+        posted, active = reset_book()
+        for n, have, status in moved:
+            if not have: continue
+            if reason in RESET_LABEL and past(have, status):
+                if not event or not sha:
+                    print(f"#{n}: the reset note needs SG_MOVE_EVENT and a checkout sha; none written", file=sys.stderr); continue
+                settle_reset(posted, active, repo, n, RESET_LABEL[reason], have, status, at, event, sha)
+            else: drop_reset_label(posted, active, f"{repo}#{n}", n)
+        fcntl.flock(lk, fcntl.LOCK_UN)
 was = recorded()
 moved = []
 for n in nums:
