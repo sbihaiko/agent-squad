@@ -802,6 +802,8 @@ def test_the_caption_names_the_start_column_the_bar_chose(hub, board):
 
 
 def test_the_caption_names_the_end_column_the_bar_chose(hub, board):
+    """The caption names both columns of the span it measured. The start opens on Todo, so a chosen end reads
+    `Todo -> <end>`, and the row a reader opens with no end reads `Todo -> closed`."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     span = "from=2026-09-01T00:00:00Z&to=2026-12-01T00:00:00Z"
     from urllib.parse import quote
@@ -809,7 +811,7 @@ def test_the_caption_names_the_end_column_the_bar_chose(hub, board):
     end = hub.ORDER[1]
     chosen = hub.lead_zoom(f"{span}&b={quote(end)}")["text"]
     assert chosen != default
-    assert f"opened -> {end}" in chosen
+    assert f"{hub.LEAD_START} -> {end}" in chosen
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
