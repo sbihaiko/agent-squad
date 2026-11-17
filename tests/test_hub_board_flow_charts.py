@@ -590,15 +590,20 @@ def test_the_lead_chart_shares_its_plot_frame_with_hub_clustering_and_page(hub, 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_lead_page_draws_the_plot_frame_supplied_by_the_hub(hub, board, tmp_path):
+    """Re-anchored (#2171): the width is the frame the hub clustered in, and the height is the plot box the card
+    hands the plot, so the svg fills the box it is stretched to."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     chart = _flow(hub)["lead"]["control"]["all"]
     chart["plot_frame"] = {"width": 700, "height": 240}
 
     out = _lt_chart(hub, tmp_path, "lt-supplied-frame.js", chart)
+    plot_h = int(_render(hub, tmp_path, "lt-supplied-plot.js", "String(ltPlotH())"))
 
     # Re-anchored (#1332): the layout reserves a right gutter sized to the longest reference tag, outside the plot.
-    assert re.search(r'viewBox="0 0 \d+ 368"', out), "the viewBox does not carry the supplied frame's height"
-    assert '<line x1=64 y1=304 x2=764 y2=304' in out
+    assert plot_h != 240, "the drawn height is the payload's fixed frame, not the card's plot box"
+    assert re.search(rf'viewBox="0 0 \d+ {plot_h + 128}"', out), "the viewBox height is not the card's plot box"
+    assert f'<line x1=64 y1={plot_h + 64} x2=764 y2={plot_h + 64}' in out, \
+        "the plot's floor line does not sit on the frame the card hands it"
 
 
 def test_the_control_chart_is_served_for_every_timeframe_on_the_log_axis(hub, board):
@@ -655,7 +660,7 @@ def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
     chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-readable.js", chart)
-    for legend in re.findall(r'<p class="flg ltlg[^"]*">(.*?)</p>', out):
+    for legend in re.findall(r'<p class="flg ltlg">(.*?)</p>', out):
         assert "<em>" not in legend, "the legend still carries a prose sentence"
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     right = 64 + chart["plot_frame"]["width"]
@@ -731,12 +736,14 @@ def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board,
     lead = hub.flow_lead(ty="task")["lead"]
     out = _render(hub, tmp_path, "lt-head-excluded.js", f"flowLead({json.dumps(lead)})")
     head = re.search(r"<p class=fhead>(.*?)</p>", out).group(1)
+    assert "excluded" not in head, "the head line still states the exclusion"
     assert out.count("excluded") == 1, "the page states the exclusion more than once"
-    # Re-anchored after the layout review (#2171): the one exclusion total sits in the single header line above the plot,
-    # with its reason beside its count and its hover naming the card; no second summary row states it again.
-    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1: 1 closed as not planned<', head), \
-        "the one total and its named cards sit in the header's one line"
-    assert "20 issues plotted" in head
+    # Re-anchored (#2171): the one exclusion total sits behind More, beside the extremes it belongs with.
+    # Re-anchored (#1354): the total states its reason beside its count, so no bare count is served.
+    more = out[out.index("<details class=ltmore>"):out.index("</details>")]
+    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1: 1 closed as not planned<', more), \
+        "the one total and its named cards do not sit behind More"
+    assert "20 issues plotted" in head, "the head line names the window in the one wording the board filter test reads"
     assert out.count("20 issues") == 1, "the rolling window is stated twice"
 
 
@@ -831,32 +838,35 @@ def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_legend_splits_series_from_summary_and_the_band_shows_until_hidden(hub, board, tmp_path):
-    """#1304: the series legend names only the drawn marks; statistics sit in one summary row.
+def test_the_legend_names_only_the_series_and_the_band_shows_until_hidden(hub, board, tmp_path):
+    """#1304: the series legend names only the drawn marks; statistics sit apart from it.
 
     Re-anchored by #1332: the series legend names every mark the plot draws — the card, the cluster and the rolling
     mean — and the band carries its own name, "Rolling spread ±1 SD"; the head line is the one place that states the
     window, so the legend never restates it from a second field. Re-anchored by #1353: the band draws by default, so
     its entry is in the first drawing; the display may still ask for it, and the entry follows the drawn mark.
+    Re-anchored by #2171: the legend is one row in the plot's own corner; each reference value sits in the right
+    gutter beside its line, so no summary row repeats it.
     """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
     chart = _flow(hub)["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-legend.js", chart)
-    # Re-anchored after the layout review (#2171): the series legend is one paragraph inside the plot's corner, and the
-    # reference values are the right gutter's tags, beside the lines they name; no second legend row states them.
-    series = re.search(r'<p class="flg ltlg[^"]*">(.*?)</p>', out).group(1)
+    rows = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
+    assert len(rows) == 1, f"the legend is not one row in the plot's corner: {len(rows)}"
+    series = rows[0]
     entries = re.findall(r"<span>(.*?)</span>", series)
     assert [re.sub(r"<[^>]+>", "", e) for e in entries] == ["Card", "Cluster", "Rolling mean", "Rolling spread ±1 SD"], entries
     assert str(chart["window"]["size"]) not in re.sub(r"<[^>]+>", "", series), \
         "the series legend restates the window the head line already names"
     assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
-    gutter = " ".join(re.findall(r'<text class=lttg[^>]*>(.*?)</text>', out))
+    assert "Gate time" not in series, "gate time stays a text metric, not a legend entry"
+    gutter = " ".join(re.findall(r'<text class=lttg[^>]*>(.*?)</text>', out))   # the reference values stay in the right gutter, beside their lines (#2171)
     for label in ("Average", "Median", "p85"):
         assert label in gutter, f"the right gutter names no {label}"
-    assert "Gate time" not in series + gutter, "gate time stays a text metric, not a legend entry"
+    assert "Gate time" not in gutter, "gate time is no reference tag either"
     on = _render(hub, tmp_path, "lt-legend-band.js", f"(LT.band=true,ltChart({json.dumps(chart)},null))")
     assert "<polygon" in on, "the band does not draw when the display asks for it"
-    series_on = re.search(r'<p class="flg ltlg[^"]*">(.*?)</p>', on).group(1)
+    series_on = re.findall(r'<p class="flg ltlg">(.*?)</p>', on)[0]
     band = next((e for e in re.findall(r"<span>(.*?)</span>", series_on) if "Rolling spread ±1 SD" in e), None)
     assert band and band.count("<i") == 1, "the band's label is split from its marker"
 
@@ -870,7 +880,7 @@ def test_the_band_shows_by_default_and_holds_the_readers_choice_across_redraws(h
     out = _lt_chart(hub, tmp_path, "lt-band-default.js", chart)
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     assert "<polygon" in plot, "the standard-deviation band does not draw by default"
-    series = re.findall(r'<p class="flg ltlg[^"]*">(.*?)</p>', out)[0]
+    series = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)[0]
     assert "Rolling spread ±1 SD" in re.sub(r"<[^>]+>", "", series), \
         "the series legend does not name the band it draws"
     assert "id=ltbd checked" in out, "the Band checkbox does not start checked"
@@ -913,9 +923,10 @@ def _paint(tag, name):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carries_each_value(hub, board, tmp_path):
-    """Re-anchored by #1304: a reference carries its value, and the summary row repeats each value once; the value never
-    sits over the dots. Re-anchored by #1332: the value sits in the reserved right gutter, outside the plot."""
+def test_each_reference_line_labels_itself_at_its_end_in_the_right_gutter(hub, board, tmp_path):
+    """Re-anchored by #1304: a reference carries its value; the value never sits over the dots. Re-anchored by #1332:
+    the value sits in the reserved right gutter, outside the plot. Re-anchored by #2171: the gutter is the one place
+    that carries it, so no summary row repeats it."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 4)})
     chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _render(hub, tmp_path, "lt-no-stat-in-plot.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
@@ -935,9 +946,8 @@ def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carrie
     for name, tag in refs.items():
         assert _paint(tag, "stroke-dasharray") in [_paint(ln, "stroke-dasharray") for ln in gutter], \
             f"the gutter draws no swatch in {name}'s own pattern"
-    # Re-anchored after the layout review (#2171): the reference values are the right gutter's own tags, beside the
-    # lines they name, so the page keeps no second summary row above the plot.
-    tags_text = " ".join(re.findall(r'<text class=lttg[^>]*>(.*?)</text>', out))
+    assert len(re.findall(r'<p class="flg ltlg">', out)) == 1, "a legend row repeats the values the gutter already names"
+    tags_text = " ".join(re.findall(r'<text class=lttg[^>]*>(.*?)</text>', out))   # each reference value keeps its own tag beside its line (#2171)
     for key in ("average", "median", "p85"):
         assert chart[key]["text"] in tags_text, f"the right gutter does not carry {key}'s value"
 
@@ -964,11 +974,7 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
     assert average_col == _resolved("var(--chart-series-8)", tokens), "the average line does not take the chart grey"
     assert float(_paint(band, "fill-opacity")) > 0.16, "the band is no stronger than before"
     assert len({ink, trail_col, band_col, average_col}) == 4, "two marks share one role"
-    # Re-anchored after the layout review (#2171): the series legend rides inside the plot's corner, so its paragraph
-    # carries one more class, and the reference values live in the right gutter beside their lines, never in a second
-    # legend row. The paint of each mark is read from the swatch rule that still names it, and from the gutter's own
-    # swatch for the reference lines.
-    series = re.search(r'<p class="flg ltlg[^"]*">(.*?)</p>', out).group(1)
+    series = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)[0]   # #2171: one legend row in the plot's corner
     # Re-anchored (#1332): the legend's swatches are styled by class, so each class's paint is read from its rule.
     assert re.findall(r"<i class=(\w+)>", series) == ["lthollow", "ltfilled", "ltroll", "ltband"], \
         "the series legend does not name every drawn mark with its own swatch"
@@ -979,7 +985,10 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
         return {_resolved(v, tokens) for v in re.findall(r"var\(--[\w-]+\)", rule.group(1))}
     assert painted("ltroll") == {_resolved("var(--chart-bar)", tokens)}, "the trend swatch differs from its line"
     assert painted("ltband") == {_resolved("var(--chart-series-3)", tokens)}, "the band swatch differs from its fill"
-    gutter = re.search(r'<svg data-lt.*?</svg>', out, re.S).group(0)
+    assert painted("ltsolid") == {_resolved("var(--chart-series-8)", tokens)}
+    assert painted("ltdash") == {_resolved("var(--chart-ok)", tokens)}
+    assert painted("ltdot") == {_resolved("var(--chart-series-5)", tokens)}, "a reference swatch differs from its line"
+    gutter = re.search(r'<svg data-lt.*?</svg>', out, re.S).group(0)   # the right gutter keeps every reference line in its own paint (#2171)
     for role in ("var(--chart-series-8)", "var(--chart-ok)", "var(--chart-series-5)"):
         assert f'stroke="{role}"' in gutter, f"the right gutter drops the reference line painted {role}"
     assert painted("lthollow") != painted("ltfilled"), \
@@ -1008,6 +1017,28 @@ def test_every_chart_token_the_lead_chart_paints_is_declared(hub, board, tmp_pat
         name = re.fullmatch(r"var\(--([\w-]+)\)", value).group(1)
         assert name in tokens, f"the lead chart paints var(--{name}), which no hub token declares"
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(", out + css), "the lead chart carries a colour literal"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_every_family_token_the_lead_chart_names_is_declared(hub):
+    """#2171: every LT_* token the flow block names is declared beside it, so no draw raises a ReferenceError; the
+    survival reading is one call in the one More pane, on both payload paths."""
+    block = _flow_block(hub)
+    assert "LT_EXTRA" not in block, "the flow block names LT_EXTRA, and no line of the page declares it"
+    names = sorted(set(re.findall(r"\bLT_[A-Z0-9_]+\b", block)))
+    assert names, "the flow block names no family token"
+    for name in names:
+        assert re.search(rf"\b(?:const|let|var)\b[^\n;]*\b{name}\b", hub.PAGE), \
+            f"the flow block names {name}, and the page declares no such token"
+    assert block.count("ltKM(c)") == 1, "the survival reading is called more than once for one card"
+
+
+def test_the_page_source_names_no_LT_EXTRA_token(hub):
+    """#2171: the dropped LT_EXTRA declaration leaves no use behind, so no draw raises a ReferenceError.
+
+    This is the review's repro as a test: `grep -n LT_EXTRA hub.py` finds no line at all."""
+    assert "LT_EXTRA" not in HUB_PY.read_text(), \
+        "hub.py still names LT_EXTRA, which no line of the page declares"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -1106,21 +1137,23 @@ def test_the_right_gutter_tags_never_overlap_when_the_values_are_close(hub, boar
     assert len({chart[k]["text"] for k in ("average", "median", "p85")}) == 1, "the fixture does not put the values on one"
     lt_p = int(re.search(r"const ltP=(\d+);", hub.PAGE).group(1))
     gap = int(re.search(r"const ltGap=(\d+);", hub.PAGE).group(1))
-    frame, bottom = chart["plot_frame"], lt_p + chart["plot_frame"]["height"]
+    # Re-anchored (#2171): the drawn frame height is the plot box the card hands the plot, never the payload's frame.
+    frame_w = chart["plot_frame"]["width"]
+    frame_h = int(_render(hub, tmp_path, "lt-gutter-frame.js", "String(ltPlotH())"))
+    bottom = lt_p + frame_h
 
-    def tags_for(chart_in, name, frame_in=None):
-        frame_in = frame_in or chart_in["plot_frame"]
-        out = _render(hub, tmp_path, name, f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart_in)},null))")
+    def tags_for(chart_in, name, width=frame_w, window_h=1000):
+        out = _render(hub, tmp_path, name, f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart_in)},null))", window_h=window_h)
         plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
         tags = re.findall(r"<text class=lttg [^>]*x=(\S+) y=(\S+) ", plot)
         assert len(tags) == 3, "the gutter does not carry one tag per drawn reference"
-        assert all(float(x) > lt_p + frame_in["width"] for x, _ in tags), "a tag sits inside the plot"
+        assert all(float(x) > lt_p + width for x, _ in tags), "a tag sits inside the plot"
         return sorted(float(y) for _, y in tags)   # the baseline each tag paints its text on
 
     def apart(chart_in, shift, name):
         c = json.loads(json.dumps(chart_in))
         for key, step in (("median", shift), ("p85", 2 * shift)):
-            c[key]["y"] = c["average"]["y"] + step / frame["height"]
+            c[key]["y"] = c["average"]["y"] + step / frame_h
         heights = tags_for(c, name)
         assert all(b - a >= gap for a, b in zip(heights, heights[1:], strict=False)), \
             f"two close tags overlap at {shift}px: {heights}"
@@ -1131,23 +1164,40 @@ def test_the_right_gutter_tags_never_overlap_when_the_values_are_close(hub, boar
     apart(chart, 7, "lt-gutter-7px.js")     # still closer than one body line
     low = json.loads(json.dumps(chart))
     for key, step in (("average", 0), ("median", 2), ("p85", 4)):
-        low[key]["y"] = step / frame["height"]
+        low[key]["y"] = step / frame_h
     heights = tags_for(low, "lt-gutter-floor.js")
     assert all(b - a >= gap for a, b in zip(heights, heights[1:], strict=False)), \
         f"the block that runs past the floor overlaps: {heights}"
     assert heights[0] >= lt_p, f"the block that slides up leaves the plot's top: {heights}"
     assert heights[-1] == pytest.approx(bottom), f"the block sits above the plot's floor instead of at it: {heights}"
 
-    for h, step in ((30, 30 / 2), (48, gap)):   # 30 is shorter than the block's two gaps; 48 just holds it
-        near = json.loads(json.dumps(chart))
-        near["plot_frame"] = {"width": frame["width"], "height": h}
-        for key, shift in (("average", 0), ("median", 2), ("p85", 4)):
-            near[key]["y"] = shift / h
-        heights = tags_for(near, f"lt-gutter-frame-{h}.js", near["plot_frame"])
-        assert heights[0] >= lt_p and heights[-1] <= lt_p + h + 1e-9, \
-            f"a tag leaves a {h}-unit frame: {heights}"
-        assert all(b - a == pytest.approx(step) for a, b in zip(heights, heights[1:], strict=False)), \
-            f"a {h}-unit frame does not space its tags at {step}: {heights}"
+    # A frame shorter than the block's own gaps spreads the tags evenly instead of stacking them (ltGutter's rule).
+    spread = _render(hub, tmp_path, "lt-gutter-spread.js",
+                     "ltGutter([{ly:30},{ly:28},{ly:26}].map(t=>({...t,name:'a',text:'x'})),0,30,16).map(t=>t.ty).join(',')")
+    assert spread == "0,15,30", f"a frame shorter than the block does not spread its tags: {spread}"
+
+    # A short window gives a short plot box, and the tags still sit inside it. The 178 units are the explicit
+    # number this window draws, never a value recomputed the way the page computes it.
+    h = int(_render(hub, tmp_path, "lt-gutter-window.js", "String(ltPlotH())", window_h=306))
+    assert h == 178, f"the short window draws {h} units, not the 178 the card hands the plot"
+    near = json.loads(json.dumps(chart))
+    for key, shift in (("average", 0), ("median", 2), ("p85", 4)):
+        near[key]["y"] = shift / h
+    heights = tags_for(near, "lt-gutter-short-frame.js", window_h=306)
+    assert heights[0] >= lt_p and heights[-1] <= lt_p + h + 1e-9, \
+        f"a tag leaves a {h}-unit frame: {heights}"
+    assert all(b - a == pytest.approx(gap) for a, b in zip(heights, heights[1:], strict=False)), \
+        f"a {h}-unit frame does not space its tags one body line apart: {heights}"
+    # The markup itself carries the tags inside the viewBox: every baseline sits between the plot's floor and its top.
+    short = _render(hub, tmp_path, "lt-gutter-short-markup.js",
+                    f"(LT.md=true,LT.p85=true,ltChart({json.dumps(near)},null))", window_h=306)
+    vb_h = float(re.search(r'viewBox="0 0 [\d.]+ ([\d.]+)"', short).group(1))
+    assert vb_h == 178 + 2 * lt_p, f"the short viewBox is {vb_h}, not the 178-unit frame and its margins"
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", short, re.S).group(1)
+    baselines = [float(_svg_attr(attrs, "y")) for attrs, _ in _svg_texts(plot) if _has_class(attrs, "lttg")]
+    assert len(baselines) == 3, "the short frame's markup carries no tag per reference"
+    assert min(baselines) >= lt_p and max(baselines) <= vb_h - lt_p, \
+        f"a tag leaves the viewBox's plot band: {sorted(baselines)} of 0..{vb_h}"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -1334,7 +1384,384 @@ def test_the_plot_height_is_computed_beside_the_width_from_the_window(hub):
     """#1144: the height is layout, computed where the width is computed today, never a series."""
     draw = next(line for line in hub.PAGE.splitlines() if line.startswith("const drawFlow="))
     assert "flowW=" in draw, "the width is no longer computed in drawFlow"
-    assert "flowH=flowHeight(window.innerHeight)" in draw, "the plot height is not computed beside the width"
+    assert "flowH=flowHeight(ltWinH())" in draw, "the plot height is not computed beside the width"
+
+
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_lead_card_stands_one_measurement_line_and_one_control_row_above_the_plot(hub, board, tmp_path):
+    """#2171: one measurement line and one row of filters and More stand above the plot; the extremes, the survival
+    reading and the exclusion detail sit behind More."""
+    item2, events2 = _done(2, "2026-10-02T09:00:00Z")
+    item3, events3 = _done(3, "2026-10-03T09:00:00Z")
+    item4, events4 = _done(4, "2026-10-04T09:00:00Z")
+    _seed(hub, {1: _done(1, "2026-10-01T15:00:00Z"),
+                2: ({**item2, "cr": "not_planned"}, events2),
+                3: ({**item3, "cr": "not_planned"}, events3),
+                4: ({**item4, "cr": "not_planned"}, events4)})
+    lead = _flow(hub)["lead"]
+    chart = lead["control"]["all"]
+    out = _render(hub, tmp_path, "lt-card-rows.js", f"flowLead({json.dumps(lead)})")
+    above = out[:out.index("<div class=ltplot>")]
+    assert above.count("<p class=fhead>") == 1, "the card stands more than one line above the plot"
+    assert '<p class=fhead>all cards · <b>Todo -> closed</b> · 20 issues plotted</p>' in above, \
+        "the measurement line does not state the exact window text"
+    assert above.count("<details class=ltmore>") == 1, "the control row carries no More disclosure"
+    assert "id=ltr" in above and "id=lty" in above, "the filter row does not sit above the plot"
+    more = out[out.index("<details class=ltmore>"):out.index("</details>")]
+    assert "min <b>" in more, "the extremes stand above the plot"
+    assert chart["survival"]["text"] in more, "the survival reading does not sit behind More"
+    assert '<em class=ltex title="3 closed as not planned: #2, #3, #4">excluded 3: 3 closed as not planned</em>' in more, \
+        "the exclusion detail does not carry its exact reason and named cards behind More"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_survival_reading_appears_once_with_and_without_the_summary(hub, board, tmp_path):
+    """#2171: the survival reading joins the one More pane exactly once, whether or not the payload carries a summary."""
+    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in (1, 2)})
+    lead = _flow(hub)["lead"]
+    chart = lead["control"]["all"]
+    assert chart["summary"], "the fixture payload carries no summary"
+    with_summary = _render(hub, tmp_path, "lt-km-summary.js", f"flowLead({json.dumps(lead)})")
+    bare = {**chart}
+    bare.pop("summary")
+    without = {**lead, "control": {**lead["control"], "all": bare}}
+    bare_out = _render(hub, tmp_path, "lt-km-no-summary.js", f"flowLead({json.dumps(without)})")
+    text = chart["survival"]["text"]
+    marker = '<p class="fnote ltkm">'   # the survival paragraph's own opening, never a text count (#2171)
+    assert with_summary.count(marker) == 1, "the survival paragraph is not drawn exactly once beside the summary"
+    assert bare_out.count(marker) == 1, "the survival paragraph is not drawn exactly once on the no-summary path"
+    assert with_summary.count(text) == 1, "the survival reading is drawn more than once beside the summary"
+    assert bare_out.count(text) == 1, "the survival reading is lost on the no-summary path"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_lead_plot_frame_is_the_plot_box_the_card_hands_it(hub, board, tmp_path):
+    """#2171: the svg viewBox height is the plot box the card hands the plot, so the marks fill it; the payload's fixed
+    212 px frame never sets the drawn height, and the hub read carries the same height."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["all"]
+    assert chart["plot_frame"]["height"] == 212, "the fixture payload no longer carries the fixed frame"
+    drawn = _render(hub, tmp_path, "lt-frame-height.js", f"(ltChart({json.dumps(chart)},null),String(LT_FRAME.height))")
+    assert int(drawn) > 212, f"the drawn plot frame is still the payload's fixed 212 px height: {drawn}"
+    view_box = _render(hub, tmp_path, "lt-frame-viewbox.js", f"(ltChart({json.dumps(chart)},null),String(LT_FRAME.height+2*ltP))")
+    # Re-anchored (#2171): with no page to measure, the card is the window's own height, and the svg draws that
+    # height less its two margins -- the viewBox and the drawn frame agree by construction, with no chrome estimate.
+    box = _render(hub, tmp_path, "lt-frame-box.js", "String(ltCardPx())")
+    assert int(view_box) == int(box), \
+        f"the svg viewBox height {view_box} is not the card's room {box}"
+    get = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltGet="))
+    resize = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltResize="))
+    send = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltSend="))
+    assert "LT.reqH=ltPlotH()" in get and "LT.reqH=ltPlotH()" in resize and "ph=${LT.reqH}" in send, \
+        "the hub read does not carry the height the view draws"
+
+
+def _lt_harness(hub, tmp_path, name, tail, *, lead=None, reply=None, chart_body=None, box_h=612, window_h=1000, extra=()):
+    """A node harness for the lead chart's own code: a page box that records every paint, a document that hands back
+    one laid-out .ltplot box, and a fetch that records each URL and answers `reply` (the chart, by default)."""
+    block = _flow_block(hub).split("const ltPx=")[0]
+    if reply is None and lead is not None:
+        reply = lead["control"]["all"]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE,
+        f"const window={{innerHeight:{window_h}}};",
+        "const PAINTS=[];",
+        "const box={_h:'',hidden:false,clientWidth:1200,querySelector:()=>null,"
+        "get innerHTML(){return this._h},set innerHTML(v){this._h=v;PAINTS.push(v)}};",
+        f"const plot={{getBoundingClientRect:()=>({{height:{box_h}}})}};",
+        "const document={querySelector:sel=>String(sel).includes('.ltplot')?plot:null,"
+        "addEventListener:()=>{},createElementNS:()=>({setAttribute:()=>{},querySelector:()=>null})};",
+        "const $=()=>box;",
+        "const barQuery=()=>'ty=bug';",
+        "const flowTabs=()=>{};",
+        "const URLS=[],REPLY=" + (json.dumps(reply) if reply is not None else "null") + ","
+        "BODY=" + (json.dumps(chart_body) if chart_body is not None else "null") + ";",
+        "const fetch=async u=>{URLS.push(String(u));"
+        "return {json:async()=>String(u).indexOf('/api/leadtime')===0?REPLY:(BODY===null?REPLY:BODY)}};",
+        *extra,
+        block, 'LT.tf="all";',
+        *([f"FLOWK='lead';FLOWD={{lead:{{lead:{json.dumps(lead)},t:0}}}};"] if lead is not None else []),
+        "const vb=p=>{const m=/<svg data-lt viewBox=\"0 0 [\\d.]+ ([\\d.]+)\"/.exec(p||'');return m?Number(m[1]):null};",
+        "const phs=()=>URLS.filter(u=>u.indexOf('/api/leadtime')>=0)"
+        ".map(u=>Number(/[&?]ph=(\\d+)/.exec(u)[1]));",
+        tail,
+    ])
+    path = tmp_path / name
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _lt_layout_harness(hub, tmp_path, name, tail, *, lead=None, reply=None, chart_body=None, plot_h=470,
+                       window_h=1000, pane_top=120, pane_pad=10, status_h=24, client_width=1200, extra=()):
+    """A node harness with a laid-out page, so the lead card is sized from measured boxes and never from a window
+    fraction. `#flowb` starts `pane_top` px down the window, carries `pane_pad` px of padding on each side, holds a
+    `status_h` px status line under the card and reports `client_width` for its content; the plot's svg box stands
+    `plot_h` px tall in the layout. The resize listener is registered, so `RESIZE()` drives the window's own event."""
+    block = _flow_block(hub).split("const ltPx=")[0]
+    resize = next(line for line in hub.PAGE.splitlines() if 'addEventListener("resize"' in line)
+    if reply is None and lead is not None:
+        reply = lead["control"]["all"]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE,
+        f"const window={{innerHeight:{window_h}}};",
+        f"const PANE={{w:{client_width}}};",
+        "const H={};const addEventListener=(k,f)=>{(H[k]=H[k]||[]).push(f)};",
+        "const RESIZE=()=>{(H.resize||[]).forEach(f=>f())};",
+        "const PAINTS=[];",
+        "const box={_h:'',hidden:false,get clientWidth(){return PANE.w},"
+        "get innerHTML(){return this._h},set innerHTML(v){this._h=v;PAINTS.push(v)},"
+        f"getBoundingClientRect:()=>({{top:{pane_top},height:{window_h - pane_top},bottom:{window_h}}})}};",
+        f"const plot={{getBoundingClientRect:()=>({{top:0,height:{plot_h},bottom:{plot_h}}})}};",
+        f"const stat={{getBoundingClientRect:()=>({{top:0,height:{status_h},bottom:{status_h}}})}};",
+        "const document={querySelector:sel=>{const s=String(sel);"
+        "return s.indexOf('.flstat')>=0?stat:s.indexOf('.ltplot')>=0?plot:s==='#flowb'?box:null},"
+        "addEventListener:()=>{},createElementNS:()=>({setAttribute:()=>{},querySelector:()=>null})};",
+        f"const getComputedStyle=()=>({{paddingTop:'{pane_pad}px',paddingBottom:'{pane_pad}px'}});",
+        "const $=()=>box;",
+        "const barQuery=()=>'ty=bug';",
+        "const flowTabs=()=>{};",
+        "const URLS=[],REPLY=" + (json.dumps(reply) if reply is not None else "null") + ","
+        "BODY=" + (json.dumps(chart_body) if chart_body is not None else "null") + ";",
+        "const fetch=async u=>{URLS.push(String(u));"
+        "if(typeof MOVE!=='undefined'&&MOVE&&String(u).indexOf('/api/leadtime')>=0)PANE.w=1200;"
+        "return {json:async()=>String(u).indexOf('/api/leadtime')===0?REPLY:(BODY===null?REPLY:BODY)}};",
+        *extra,
+        block, 'LT.tf="all";',
+        *([f"FLOWK='lead';FLOWD={{lead:{{lead:{json.dumps(lead)},t:0}}}};"] if lead is not None else []),
+        resize,
+        "const pws=()=>URLS.filter(u=>u.indexOf('/api/leadtime')>=0)"
+        ".map(u=>Number(/[&?]pw=(\\d+)/.exec(u)[1]));",
+        tail,
+    ])
+    path = tmp_path / name
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_card_takes_the_room_the_pane_has_and_never_overflows_the_window(hub, board, tmp_path):
+    """#2171: the card is sized from the room `#flowb` really has, measured at run time, never from the window less a
+    130 px guess. The pane starts 120 px down a 1000 px window, carries 10 px of padding above and below, and holds a
+    24 px status line under the card, so the card is 836 px and its bottom lands on the window's floor.
+
+    The series legend sits in its own band above the plot's box, so no circle can sit under it: the legend is a flow
+    item that ends where the svg's box begins, and every mark is drawn inside the svg."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_layout_harness(hub, tmp_path, "lt-card-room.js", (
+        ";(async()=>{await ltGet();for(let i=0;i<60;i++)await null;"
+        "const m=/<div class=ltcard style=\"height:(\\d+)px\">/.exec(box.innerHTML);"
+        "process.stdout.write(JSON.stringify({card:m?Number(m[1]):null,body:box.innerHTML}));})();"), lead=lead)
+
+    assert got["card"] == 836, f"the card is not the room the pane has: {got['card']}"
+    assert 120 + 10 + got["card"] + 24 + 10 <= 1000, "the card runs past the window's floor"
+    assert "LT_CHROME" not in hub.PAGE, "the card is still sized from a fixed chrome estimate"
+
+    body = got["body"]
+    box_html = re.search(r"<div class=ltplot>(.*?)</div>", body, re.S).group(1)
+    legend = re.search(r'<p class="flg ltlg">.*?</p>', box_html, re.S)
+    assert legend, "the plot's box holds no series legend"
+    svg = re.search(r"<svg data-lt.*?</svg>", box_html, re.S)
+    assert svg and legend.end() <= svg.start(), "the legend is not drawn before the plot's box"
+    assert not re.search(r"<circle", legend.group(0)), "a mark sits inside the legend"
+
+    css = hub.PAGE
+    rule = re.search(r"\.ltplot>\.ltlg\{([^}]*)\}", css)
+    assert rule and "position:absolute" not in rule.group(1), "the legend is pinned over the plot's marks"
+    column = re.search(r"#flowb \.ltcard \.ltplot\{([^}]*)\}", css)
+    assert column and "flex-direction:column" in column.group(1), "the plot's box is not the column the legend heads"
+    fill = re.search(r"#flowb \.ltcard \.ltplot>svg\{([^}]*)\}", css)
+    assert fill and "flex:1" in fill.group(1), "the plot does not take the box the legend leaves"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_no_mark_intersects_the_legend_band(hub, board, tmp_path):
+    """#2171: the legend holds a band of its own above the plot, so no circle's box meets the legend's rectangle. The
+    legend ends where the svg's box begins, and every mark sits at least the plot's top margin below that box's edge,
+    which is the first row the svg owns."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-09T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-legend-band.js", chart)
+    lt_p = int(re.search(r"const ltP=(\d+);", hub.PAGE).group(1))
+    box_html = re.search(r"<div class=ltplot>(.*?)</div>", out, re.S).group(1)
+    legend = re.search(r'<p class="flg ltlg">.*?</p>', box_html, re.S)
+    svg = re.search(r"<svg data-lt.*?</svg>", box_html, re.S)
+    assert legend and svg and legend.end() <= svg.start(), "the svg's box does not begin below the legend"
+    circles = re.findall(r"<circle [^>]*>", svg.group(0))
+    assert circles, "the fixture draws no mark"
+    tops = [float(_svg_attr(c, "cy")) - float(_svg_attr(c, "r")) for c in circles]
+    assert min(tops) >= lt_p, f"a mark reaches the plot's top band, where the legend sits: {min(tops)}"
+    assert not re.search(r"<circle", legend.group(0)), "a mark is drawn inside the legend"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_window_with_no_height_defers_the_sized_read_to_the_first_resize(hub, board, tmp_path):
+    """#2171: a page whose window states no height sends no sized read, so the hub never reads a chart at a height the
+    window does not have. The first resize, when the window has a height, sends that read."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_layout_harness(hub, tmp_path, "lt-zero-window.js", (
+        ";(async()=>{LT.zc=null;await ltGet();const first=URLS.length;"
+        "window.innerHeight=1000;RESIZE();for(let i=0;i<60;i++)await null;"
+        "process.stdout.write(JSON.stringify({first,after:URLS.length,urls:URLS,defer:LT.defer}));})();"),
+        lead=lead, window_h=0)
+    assert got["first"] == 0, "a window with no height still sends a sized read"
+    assert got["after"] >= 1, "the first resize after a zero-height window sends no read"
+    assert got["defer"] is False, "the deferred read still waits after the window states its height"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_lead_read_carries_the_pane_width_at_read_time(hub, board, tmp_path):
+    """#2171: the width a lead read carries is the pane's width at read time, never the 800 px default the first draw
+    recorded before the layout. When the pane's width moves under a read, the page asks again at the width it now has."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    stale = _lt_layout_harness(hub, tmp_path, "lt-pane-width.js", (
+        ";(async()=>{await ltGet();for(let i=0;i<60;i++)await null;"
+        "process.stdout.write(JSON.stringify({pws:pws(),urls:URLS}));})();"), lead=lead)
+    assert stale["pws"][0] == 1180, f"the first read carries no pane width: {stale['urls']}"
+
+    moved = _lt_layout_harness(hub, tmp_path, "lt-pane-moved.js", (
+        ";(async()=>{await ltGet();for(let i=0;i<60;i++)await null;"
+        "process.stdout.write(JSON.stringify({pws:pws()}));})();"),
+        lead=lead, client_width=820, extra=("const MOVE=true;",))
+    assert moved["pws"][0] == 800, f"the first read does not carry the stale pane width: {moved['pws']}"
+    assert moved["pws"][-1] == 1180, f"the read is not sent again at the pane's width: {moved['pws']}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_svg_view_box_matches_the_rendered_plot_box(hub, board, tmp_path):
+    """#2171: the first paint draws the card's estimate and sends that height to the hub; the page then measures the
+    .ltplot box it laid out, redraws the svg to the measured height, and asks the hub again with that height."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_harness(hub, tmp_path, "lt-box-fit.js", (
+        ";(async()=>{await ltGet();for(let i=0;i<60;i++)await null;"
+        "const s=PAINTS.filter(p=>p.indexOf('<svg data-lt')>=0);"
+        "process.stdout.write(JSON.stringify({first:vb(s[0]),last:vb(s[s.length-1]),"
+        "phs:phs(),fitH:LT.fitH,plotH:ltPlotH(),paints:s.length}));})();"), lead=lead, box_h=470)
+
+    assert got["paints"] >= 2, "the page paints the chart once and never redraws it at the measured box"
+    assert got["first"] == got["phs"][0] + 128, \
+        f"the first paint's viewBox {got['first']} is not the request's ph {got['phs'][0]} plus its margins"
+    assert got["fitH"] == 470, f"the page did not take the measured .ltplot box: {got['fitH']}"
+    assert got["plotH"] == 342, f"ltPlotH() is not the measured box less its margins: {got['plotH']}"
+    assert got["last"] == 470, f"the redrawn viewBox {got['last']} is not the 470 px plot box"
+    assert got["phs"][-1] == got["plotH"], \
+        f"the hub was not asked again with the measured height: {got['phs']}"
+    assert got["phs"][-1] != got["phs"][0], "the second read still carries the first paint's estimate"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_later_lead_read_clears_the_refused_error_and_keeps_the_measured_height(hub, board, tmp_path):
+    """#2171: LT.err belongs to the read that set it. A resize or a zoom clears it before it fetches, and neither one
+    drops the plot box the page measured, so the next read carries the height the page draws."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_harness(hub, tmp_path, "lt-later-read.js", (
+        ";(async()=>{LT.fitH=470;LT.err='refused';LT.tried=true;drawFlow();const before=box.innerHTML;"
+        "await ltZoom('2026-10-01T00:00:00Z','2026-10-02T00:00:00Z');"
+        "process.stdout.write(JSON.stringify({before,after:box.innerHTML,fitH:LT.fitH,"
+        "ph:phs()[0],err:LT.err}));})();"), lead=lead, box_h=470)
+
+    assert "the lead chart could not be read" in got["before"], "the harness does not start on the error card"
+    assert "the lead chart could not be read" not in got["after"], \
+        "a later read leaves the refused read's error card in place"
+    assert "<svg data-lt" in got["after"], "a later read paints no chart"
+    assert got["err"] is None, "LT.err survives the read that answered"
+    assert got["fitH"] == 470, f"a zoom drops the measured plot box: {got['fitH']}"
+    assert got["ph"] == 342, f"a zoom asks the hub for the estimate, not the measured box: {got['ph']}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_reopen_over_the_chart_the_page_holds_paints_it_at_once(hub, board, tmp_path):
+    """#2171: opening the lead chart again never replaces the chart the page holds with the loading sentence."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    got = _lt_harness(hub, tmp_path, "lt-reopen-held.js", (
+        ";(async()=>{LT.zc=REPLY;LT.tried=true;flowOpen('lead');"
+        "process.stdout.write(JSON.stringify({painted:box.innerHTML}));})();"),
+        lead=lead, chart_body={"lead": lead, "t": 0})
+    assert "Loading the lead chart" not in got["painted"], \
+        "a reopen shows the loading sentence over the chart the page holds"
+    assert "<svg data-lt" in got["painted"], "a reopen paints no chart at once"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_refused_lead_read_leaves_the_loading_sentence(hub, board, tmp_path):
+    """#2171: a rejected /api/leadtime read leaves the loading state at once and paints a plain error card.
+
+    A first read with no good chart behind it never repaints the cached payload's chart as if it were the answer: the
+    card carries the measurement line and one error sentence, and no chart mark at all (#2171)."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    block = _flow_block(hub).split("const ltPx=")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE,
+        "const window={innerHeight:1000};",
+        "const box={innerHTML:'',hidden:false,clientWidth:1200,querySelector:()=>null};",
+        "const $=()=>box;",
+        "const barQuery=()=>'ty=bug';",
+        "const fetch=async u=>{if(String(u).startsWith('/api/leadtime'))throw new Error('refused');return {json:async()=>({})}};",
+        block, 'LT.tf="all";', f"FLOWK='lead';FLOWD={{lead:{{lead:{json.dumps(lead)},t:0}}}};",
+        "ltGet().then(()=>process.stdout.write(box.innerHTML),e=>{process.stdout.write('ERR '+e)});",
+    ])
+    path = tmp_path / "lt-refused.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "ERR " not in result.stdout, result.stdout[:200]
+    out = result.stdout
+    assert "Loading the lead chart" not in out, "a refused read leaves the card in the loading state"
+    assert "<svg data-lt" not in out and "<circle" not in out and "class=ltplot" not in out, \
+        "a refused first read paints the cached chart's marks"
+    exact = re.fullmatch(r'<div class=ltcard style="height:(\d+)px">'
+                         r'<p class=fhead>[^<]*<b>[^<]*</b>[^<]*</p>'
+                         r'<p class=fnote>the lead chart could not be read; try again</p>'
+                         r'</div><p class=flstat role=status>data read [^<]*</p>', out)
+    assert exact, f"a refused first read does not paint one plain error card: {out[:400]}"
+    assert int(exact.group(1)) > 0, "the error card states no height"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_series_legend_heads_the_plot_in_its_own_band(hub, board, tmp_path):
+    """#2171: the series legend heads the plot's box in a band of its own, and the reference values stay in the right
+    gutter. The legend is a flow item, never an overlay, so it covers no mark of the plot."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-legend-band-head.js", chart)
+    box = re.search(r"<div class=ltplot>(.*?)</div>", out, re.S).group(1)
+    assert re.search(r'<p class="flg ltlg">', box), "the series legend stands outside the plot's box"
+    assert "<svg data-lt" in box, "the plot's box holds no chart"
+    assert len(re.findall(r'<p class="flg ltlg">', out)) == 1, "a second legend row stands outside the plot's box"
+    css = hub.PAGE
+    rule = re.search(r"\.ltplot>\.ltlg\{([^}]*)\}", css)
+    assert rule and "position:absolute" not in rule.group(1), "the series legend is laid over the plot's marks"
+    column = re.search(r"#flowb \.ltcard \.ltplot\{([^}]*)\}", css)
+    assert column and "flex-direction:column" in column.group(1), "the plot's box is not a column headed by the legend"
+
+
+def test_the_lead_chart_reads_its_plot_frame_from_the_window(hub):
+    """#2171: the page reads the lead chart at the plot size the window gives, never the payload's fixed 672x212 frame."""
+    # Re-anchored (#2171): every sized read sends the pane's width at read time and the plot height the view draws,
+    # through one sender, so no read carries the payload's fixed 672x212 frame or a width the layout has not met.
+    send = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltSend="))
+    assert "pw=${pw}" in send and "ph=${LT.reqH}" in send, "the lead chart still reads the payload's fixed frame"
+    get = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltGet="))
+    resize = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltResize="))
+    assert "ltSend(route,tok)" in get and "ltSend(route,tok)" in resize, \
+        "a resize still measures the stale frame instead of the window's"
+    opened = next(line for line in hub.PAGE.splitlines() if line.startswith("const flowOpen="))
+    assert "ltGet()" in opened and "ltOwn()" not in opened, "opening the lead chart skips the window-sized read"
+    block = _flow_block(hub)
+    draw = block[block.index("const drawFlow="):block.index("const flowOpen=")]
+    assert "!LT.zc" in draw, "the lead paints the payload's fixed frame before the window-sized read lands"
 
 
 def test_the_refresh_time_is_a_quiet_status_line(hub):
@@ -1729,10 +2156,11 @@ def test_a_live_run_click_never_leaves_the_tab_the_user_is_on(hub):
     assert 'setTab("flow",{runs:true})' not in hub.PAGE
 
 
-def _render(hub, tmp_path, name, expression, block=None, storage=None):
+def _render(hub, tmp_path, name, expression, block=None, storage=None, window_h=1000):
     # Re-anchored (#1247): the page no longer restores a stored choice, so the harness sets the visit's choice itself: the
     # All timeframe on the log axis, the view these drawings were written against.
     drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", storage or STORAGE,
+                         f"const window={{innerHeight:{window_h}}};",   # the owner window the lead card is sized from (#2171)
                          block or _flow_block(hub).split("const drawFlow")[0], 'LT.tf="all";',
                          f"process.stdout.write({expression});"])
     path = tmp_path / name
@@ -1828,32 +2256,31 @@ def test_the_stack_lives_in_the_dot_tooltip_and_gate_time_stays_a_text_metric(hu
     assert "<rect" not in plot, "the plot still draws a stacked bar"
     title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
     assert "Gating 18h" in title and "Todo 6h" in title, "the stage strip does not name each column's hours"
-    assert "Gate time" not in "".join(re.findall(r'<p class="flg ltlg[^"]*">(.*?)</p>', out)), \
+    assert "Gate time" not in "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out)), \
         "gate time is not a legend entry: zero has no counterpart on a log axis (#1304)"
     note = re.search(r'<p class="fnote ltkm">(.*?)</p>', out).group(1)
     assert f"Gate time {chart['gate']['text']}" in note, "gate time is not a text metric beside the survival reading"
 
 
-# SPEC 1327 #1334: the header states the summary, and the range control switches x from the one payload.
-# Re-anchored after the layout review (#2171): one row above the plot names the measure, the window and the one exclusion
-# total; the extremes it used to state move behind More, so the plot keeps the card.
+# SPEC 1327 #1334: the header states the measure and the window in one line, with the summary behind More (#2171).
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_header_states_the_summary_in_one_row(hub, board, tmp_path):
+def test_the_header_states_the_measurement_and_the_summary_sits_behind_more(hub, board, tmp_path):
+    """#2171: one measurement line stands above the plot; the summary it states sits behind More."""
     item, events = _done(3, "2026-10-04T09:00:00Z")
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z"),
                 3: ({**item, "cr": "not_planned"}, events)})
     lead = hub.flow_lead(ty="task")["lead"]
     out = _render(hub, tmp_path, "lt-one-row-head.js", f"flowLead({json.dumps(lead)})")
 
-    header = out.split("<div class=ltrow>")[0]   # the header, before the control row
+    header = out.split('<div class="fhead ltrow">')[0]   # the header, before the control row
     rows = re.findall(r"<p class=fhead>(.*?)</p>", header)
-    assert len(rows) == 1, f"the header is not one row: {rows}"
-    (first,) = rows
-    assert "20 issues plotted" in first, "the one row names the window"
-    assert re.search(r'title="1 closed as not planned: #3"[^>]*>excluded 1: 1 closed as not planned<', first), \
-        "the one row carries the one exclusion total with its reason (#1354)"
-    more = re.search(r"<details class=ltmore>.*?</details>", out, re.S).group(0)
-    assert "min <b>1d</b>" in more and "max <b>2d</b>" in more, "More does not state the summary it took from the header"
+    assert len(rows) == 1, f"the header is not one measurement line: {rows}"
+    assert "20 issues plotted" in rows[0], "the measurement line names the window"
+    more = out[out.index("<details class=ltmore>"):out.index("</details>")]
+    assert "min <b>1d</b>" in more and "max <b>2d</b>" in more, "More does not state the summary"
+    assert "2 issues plotted" in more, "More does not state the plotted count"
+    assert re.search(r'title="1 closed as not planned: #3"[^>]*>excluded 1: 1 closed as not planned<', more), \
+        "More does not carry the one exclusion total with its reason (#1354)"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
