@@ -77,6 +77,17 @@ def test_a_board_without_a_priority_field_raises(tmp_path):
         binding(tmp_path, board).read_priorities()
 
 
+def test_the_fields_route_spells_the_type_in_snake_case(tmp_path):
+    """The live board is read over REST, and that route spells the type `data_type: single_select` while GraphQL spells it
+    `dataType: SINGLE_SELECT`. A guard that reads only one spelling refuses every live board, so no card ever takes a
+    Priority (found on the Squad Board: the field was created and `board.sh --priority` still refused it)."""
+    rest = [FIELDS[0], {"id": "F_PRIO", "name": "Priority", "data_type": "single_select",
+                        "options": [{"id": "O_HIGH", "name": "high"}]}]
+    board = Board({1: "high"}, fields=rest)
+
+    assert binding(tmp_path, board).read_priorities() == {"1": "high"}
+
+
 def test_a_priority_field_that_is_not_a_single_select_raises(tmp_path):
     text = dict(FIELDS[1], dataType="TEXT")
     board = Board({1: "urgent"}, fields=[FIELDS[0], text])
