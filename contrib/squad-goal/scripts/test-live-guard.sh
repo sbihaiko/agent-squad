@@ -106,7 +106,7 @@ mk() { # mk NAME: bare origin $T/NAME.git, a clone at $T/NAME carrying contrib/s
   printf 'new file\n' > "$w/contrib/squad-goal/board-definition.json"; printf 'skill v2\n' > "$w/contrib/squad-goal/SKILL.md"
   G -C "$w" add -A; G -C "$w" commit -qm v2; G -C "$w" push -q origin HEAD:stg     # origin/stg is now a commit ahead of $T/$n
 }
-ffpass() { SG_CHECKOUT=$T/$1 SG_LIVE_DIR=$T/$1.live bash "$S/live-guard.sh" 2>&1; }
+ffpass() { mkdir -p "$T/st.$1"; SG_STATE=$T/st.$1 SG_CHECKOUT=$T/$1 SG_LIVE_DIR=$T/$1.live bash "$S/live-guard.sh" 2>&1; }
 
 mk behind; head0=$(G -C "$T/behind" rev-parse HEAD)
 out=$(ffpass behind)
@@ -140,7 +140,10 @@ case "$out" in *LIVE-GUARD*"not fast-forwarded"*fetch*) ok "the failed fetch is 
 mk other; G -C "$T/other" checkout -q -b topic; h=$(G -C "$T/other" rev-parse HEAD)
 out=$(ffpass other)
 [ "$(G -C "$T/other" rev-parse HEAD)" = "$h" ] && [ "$(G -C "$T/other" branch --show-current)" = topic ] && ok "a tree on another branch is left alone" || ko "the other-branch tree was touched: $out"
-case "$out" in *LIVE-GUARD*"not fast-forwarded"*topic*) ok "the other branch is reported by name";; *) ko "the other branch is not reported: $out";; esac
+case "$out" in *LIVE-GUARD*"is on topic, not stg"*) ok "the other branch is reported by name";; *) ko "the other branch is not reported: $out";; esac
+# A checkout on a work branch is no source, and the shipped page still follows: the pass publishes from its own stg tree.
+[ "$(cat "$T/other.live/SKILL.md")" = "skill v2" ] && [ -f "$T/other.live/board-definition.json" ] && ok "a tree on another branch still ships the stg process" || ko "the other-branch tree shipped nothing: $out"
+case "$out" in *LIVE-GUARD*published*) ok "the publish from the pass's own stg tree is named";; *) ko "the publish from the stg tree is silent: $out";; esac
 
 mk diverged; printf 'local\n' > "$T/diverged/local.txt"; G -C "$T/diverged" add -A; G -C "$T/diverged" commit -qm local; printf 'skill v0\n' > "$T/diverged.live/SKILL.md"; h=$(G -C "$T/diverged" rev-parse HEAD)
 out=$(ffpass diverged)
@@ -155,11 +158,16 @@ out=$(ffpass devonly)
 [ ! -e "$T/devonly.live/dev-defect.txt" ] && [ ! -e "$T/devonly/contrib/squad-goal/dev-defect.txt" ] && ok "a commit in dev that is not in stg is not published" || ko "a dev-only commit reached the live copy: $out"
 [ "$(cat "$T/devonly.live/SKILL.md")" = "skill v2" ] && ok "the publish still carries what stg holds" || ko "the stg content was not published: $out"
 
-# A checkout on dev or main publishes nothing: only stg is a source.
+# A checkout on dev or main is no source: its own commits never reach the live copy, and the shipped page still follows stg.
 for br in dev main; do
-  mk "on$br"; G -C "$T/on$br" checkout -q -b "$br"; out=$(ffpass "on$br")
-  [ "$(cat "$T/on$br.live/SKILL.md")" = "skill v1" ] && ok "a tree on $br is not published" || ko "a tree on $br was published: $out"
-  case "$out" in *LIVE-GUARD*"not fast-forwarded"*"not stg"*) ok "the $br tree is reported as not on stg";; *) ko "the $br tree is not reported: $out";; esac
+  mk "on$br"; G -C "$T/on$br" checkout -q -b "$br"
+  printf 'branch only\n' > "$T/on$br/contrib/squad-goal/$br-defect.txt"
+  G -C "$T/on$br" add -A; G -C "$T/on$br" commit -qm "$br only"; h=$(G -C "$T/on$br" rev-parse HEAD)
+  out=$(ffpass "on$br")
+  [ "$(G -C "$T/on$br" rev-parse HEAD)" = "$h" ] && [ "$(G -C "$T/on$br" branch --show-current)" = "$br" ] && ok "a tree on $br is left alone" || ko "the $br tree was touched: $out"
+  [ ! -e "$T/on$br.live/$br-defect.txt" ] && ok "a $br-only file never reaches the live copy" || ko "a $br-only file was published: $out"
+  [ "$(cat "$T/on$br.live/SKILL.md")" = "skill v2" ] && ok "a tree on $br still ships what stg holds" || ko "the $br tree shipped nothing from stg: $out"
+  case "$out" in *LIVE-GUARD*"is on $br, not stg"*) ok "the $br tree is reported as not on stg";; *) ko "the $br tree is not reported: $out";; esac
 done
 
 # --- unchanged input: the pass returns at once and does no work (issue #568) ----------------------
