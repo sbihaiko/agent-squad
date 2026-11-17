@@ -328,5 +328,11 @@ adv dev fw; tfw=$(tip dev); before=$(tip stg); rm -f "$T/pr"; printf '%s\tfull\t
 out=$(SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc = 1 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"not the fast proof"*) true;; *) false;; esac \
   && ok "a full word in the fast record never promotes" || ko "full word: rc $rc, out '$out'"
+# (#2061) A fast or ci proof runs no local suite, so the promotion takes no gate lock: it runs while another holder keeps it.
+adv dev nl; tnl=$(tip dev); rm -f "$T/pr"; printf '%s\tfast\tpass\t%s\n' "$(date +%s)" "$tnl" > "$SG_STATE/gate-status-promote"
+(bash "$d/serial.sh" gate sh -c "sleep 4") & hp=$!; for _ in $(seq 1 50); do [ -s "$SG_STATE/locks/gate/pid" ] && break; sleep 0.1; done
+s0=$(date +%s); out=$(SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh" 2>&1); rc=$?; s1=$(date +%s); wait $hp
+[ $rc = 0 ] && [ "$(tip stg)" = "$tnl" ] && ! printf '%s' "$out" | grep -q 'waiting for lock gate' && [ $((s1 - s0)) -lt 4 ] \
+  && ok "a fast-proof promotion runs while another holder keeps the gate lock" || ko "fast proof under a held gate lock: rc $rc, $((s1 - s0)) s, out '$out'"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
