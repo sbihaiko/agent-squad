@@ -189,6 +189,43 @@ def test_the_take_command_writes_the_priority_marker_and_a_child_take_names_it(t
         holder.kill()
 
 
+def run_take_cli(tmp_path, pid, holder, *args):
+    e = {**os.environ, "SQUAD_CAPS_DIR": str(tmp_path / "leases"), "PYTHONPATH": str(ROOT)}
+    proj = tmp_path / "proj" / "docs" / "squad"
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / "defaults.yaml").write_text("caps:\n  gates: 3\n")
+    return subprocess.run([sys.executable, "-m", "squad.caps", "take", "gates", holder, *args, "--pid", str(pid), "--try",
+                           "--target", str(tmp_path / "proj")], capture_output=True, text=True, env=e, timeout=60)
+
+
+def test_a_short_priority_take_names_the_free_slots_and_its_whole_count(tmp_path):
+    """(#2077) Two of three slots are free: the priority take gets none, and its line names the free count and the whole count."""
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        assert c.try_take_many("gates", "child-gate-44378", 1, pid=pid)
+        r = run_take_cli(tmp_path, pid, "gate-tip", "--count", "3", "--priority", "tip")
+        assert r.returncode == 73, r.stderr
+        assert "2 free slot(s) of 3" in r.stderr and "its whole count of 3" in r.stderr, r.stderr
+        assert "is full" not in r.stderr, r.stderr
+    finally:
+        holder.kill()
+
+
+def test_a_priority_take_with_no_free_slot_says_the_budget_is_full(tmp_path):
+    """(#2077) No slot is free: the line says the budget is full, and names its holders."""
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        assert all(c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3))
+        r = run_take_cli(tmp_path, pid, "gate-tip", "--count", "3", "--priority", "tip")
+        assert r.returncode == 73, r.stderr
+        assert "caps.gates is full (3 slots), held by child-gate-1" in r.stderr, r.stderr
+        assert "free slot" not in r.stderr, r.stderr
+    finally:
+        holder.kill()
+
+
 def test_a_priority_check_takes_the_whole_count_or_none(tmp_path):
     """(#2060) A tip or landing check never starts on part of its slots: two free of three is no take, and it keeps its
     marker, so no child takes the third slot; the take succeeds when all three are free."""
