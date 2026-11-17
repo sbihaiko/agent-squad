@@ -286,7 +286,8 @@ class RenameBoard:
             by = {o["id"]: o["name"] for o in body["variables"]["input"]["singleSelectOptions"]}
             self.names.update(by)
             for o in self.fields[0]["options"]:   # the next fields read answers the new name, as the live board does
-                if o["id"] in by: o["name"] = {"raw": by[o["id"]]}
+                if o["id"] in by:
+                    o["name"] = {"raw": by[o["id"]]}
             del self.cards[len(self.cards) - self.lost:]   # a card the call itself drops
         return "{}"
 
