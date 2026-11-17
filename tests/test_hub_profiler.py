@@ -1129,8 +1129,8 @@ def rec(start=1000.0, child="code.1", land_outcome="pass", verdict="completed", 
 def test_the_trip_spans_of_a_fixture_record_are_its_stages(prof):
     spans = prof.trip_spans(rec())
     assert spans == {"queue": None, "wait": 30.0, "coding": 200.0, "between": 0.0, "review": 56.0, "gates": 90.0,
-                     "landing": 150.0, "after": None, "end": 1500.0}, \
-        "with no card read, queue and after are None; the one child holds no gap, so between is a measured zero"
+                     "landing": 150.0, "after": None, "missing": ["todo", "closed"], "end": 1500.0}, \
+        "with no card read, queue and after are None and both card moves are missing; the one child holds no gap, so between is a measured zero"
 
 
 def test_a_run_that_landed_nothing_is_no_delivery(prof):
@@ -1173,6 +1173,28 @@ def test_a_card_that_waits_for_nothing_answers_zeros_never_a_missing_stage(prof)
     """The waiting stages are named on every delivery: a card that never waited answers 0, never a missing stage."""
     spans = prof.trip_spans(rec(), {"todo": 1000.0, "closed": 1500.0})
     assert (spans["queue"], spans["between"], spans["after"]) == (0.0, 0.0, 0.0)
+
+
+def test_a_card_with_no_record_answers_unknown_and_names_both_missing_moves(prof):
+    spans = prof.trip_spans(rec())
+    assert (spans["queue"], spans["after"]) == (None, None), "a card the board never read is unknown, never zero"
+    assert spans["missing"] == ["todo", "closed"], "the card's Todo and Closed moves are the inputs it lacks"
+
+
+def test_a_card_with_both_moves_names_no_missing_input(prof):
+    assert prof.trip_spans(rec(), {"todo": 1000.0, "closed": 1500.0})["missing"] == []
+
+
+def test_a_fixture_delivery_bar_total_equals_its_board_span(prof):
+    """The board span is the card's Todo to Closed; the bar total is the sum of the stage medians of that one delivery."""
+    evs = [ev("run_start", 100.0), ev("spawn_accepted", 110.0, child="code.1"),
+           ev("call_start", 110.0, node="router", entry=1),
+           ev("call_start", 110.0, node="code.1", entry=1), ev("outcome", 320.0, node="code.1", entry=1, outcome="pass"),
+           ev("land", 330.0, node="code.1", outcome="pass"), ev("verdict", 330.0, verdict="completed", exit_code=0, reasons=[])]
+    card = {"todo": 0.0, "closed": 340.0}
+    t = prof.trip([prof.trip_spans(evs, card)], [], since=0.0)
+    bar_total = sum(r["median_s"] for r in t["stages"] if r["median_s"] is not None)
+    assert bar_total == card["closed"] - card["todo"] == 340.0
 
 
 def test_the_percentile_is_the_linear_rule_the_doc_names(prof):
