@@ -7,6 +7,9 @@ self-edge is invalid; a blocker the reads could not prove is unknown, never vali
 Every case builds its graph by hand. No case reaches GitHub.
 """
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -79,6 +82,20 @@ def test_a_missing_page_is_unknown_for_its_component_only():
     graph = {A: node(complete=False), B: node(), C: node(), S: node(kind="spec")}
     assert deadlock.validate(graph, [(A, B)])["status"] == "unknown"
     assert deadlock.validate(graph, [(C, S)])["status"] == "valid"
+
+
+def test_a_drain_audit_reports_a_loop_bug_on_dispatch_work_as_one_alert(tmp_path):
+    issues = [
+        {"repo": "o/r", "number": 1, "state": "open", "labels": [{"name": "loop-bug"}], "parent": None,
+         "blocked_by_edges": [{"repo": "o/r", "number": 2, "state": "open"}], "blocked_by_complete": True},
+        {"repo": "o/r", "number": 2, "state": "open", "labels": [{"name": "bug"}], "parent": None,
+         "blocked_by_edges": [], "blocked_by_complete": True},
+    ]
+    path = tmp_path / "issues.json"
+    path.write_text(json.dumps(issues))
+    out = subprocess.run([sys.executable, str(MODULE), "audit", str(path)], capture_output=True, text=True, check=True).stdout
+    alerts = out.splitlines()
+    assert len(alerts) == 1 and alerts[0].startswith("ALERT ") and "loop-bug" in alerts[0], out
 
 
 def test_the_audit_reports_each_cause_once(monkeypatch):

@@ -298,6 +298,7 @@ go=${SG_FRONTIER_LABEL:-ready-for-agent}
 board=$(sg_board_rows) || { AB_REASON="the board did not answer"; echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
 printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
 export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from this pass's one board read (#1620)
+export SG_STACK_GRAPH="$F/issues.json"   # stack.sh holds a bug whose dependency component is invalid or unknown (#1984)
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "
 # (ADR-0150 across runs, #2016) The frontier's issue-to-file map, read here across the live runs too: a bug whose body names a
 # file a live run holds waits for a later pass, and the line names the holding run. The map is slicecut.py's (cluster.paths),

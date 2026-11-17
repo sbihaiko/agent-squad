@@ -6,6 +6,10 @@ Nothing here calls GitHub: every answer comes from the graph the caller already 
 """
 from __future__ import annotations
 
+import json
+import sys
+from pathlib import Path
+
 RANK = {"invalid": 0, "unknown": 1, "held": 2, "valid": 3}
 
 
@@ -139,7 +143,7 @@ def graph_of(issues):
             kind=kind, open=i.get("state") == "open", delivered=i.get("state") != "open",
             parent=key(i["repo"], i["parent"]) if i.get("parent") else None,
             blockers=[key(e["repo"], e["number"]) for e in i.get("blocked_by_edges") or []],
-            complete=i.get("blocked_by_complete") is True,
+            complete=i.get("blocked_by_complete") is True, hold="owner" if "frozen:owner" in labels else None,
         )
     for i in issues:
         for e in i.get("blocked_by_edges") or []:
@@ -164,5 +168,27 @@ def audit(issues):
     return out
 
 
+def verdict_of(issues, repo, number):
+    """The verdict for the component that holds one issue, read from the pass's own issue list."""
+    graph = graph_of(issues)
+    explicit = _explicit(graph)
+    comp = _component(explicit + _implicit(graph), {key(repo, number)})
+    return _verdict(_findings(graph, [e for e in explicit if e[0] in comp], comp))
+
+
 def new_causes(causes, seen):
     return [c for c in causes if c["cause"] not in seen]
+
+
+def main(argv):
+    command, path, *args = argv
+    issues = json.loads(Path(path).read_text())
+    if command == "verdict":
+        print(json.dumps(verdict_of(issues, *args)))
+    elif command == "audit":
+        for cause in audit(issues):
+            print(f"ALERT {cause['reason']}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

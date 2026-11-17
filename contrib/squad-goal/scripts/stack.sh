@@ -17,6 +17,18 @@ if [ -n "${SG_STACK_ISSUE:-}" ] && [ -s "$SG_STACK_ISSUE" ]; then issue=$(cat "$
 else issue=$(gh_api "repos/$SG_REPO/issues/$iss") || { echo "WAIT issue #$iss is not readable"; exit 0; }; fi
 # An answer that does not carry the relation (no issue, a REST shape) is not "no blockers": dispatch waits until it is read.
 printf '%s' "$issue" | jq -e '.blocked_by_read == true' >/dev/null 2>&1 || { echo "WAIT the blocked-by relation of #$iss is not readable"; exit 0; }
+# The dependency component of this card, from the pass's own issue list (#1984): an invalid or unknown component holds it, and
+# an owner hold names the owner and writes one alert. A pass that passes no list keeps the gates below.
+if [ -n "${SG_STACK_GRAPH:-}" ] && [ -s "$SG_STACK_GRAPH" ]; then
+  v=$(python3 "$here/deadlock.py" verdict "$SG_STACK_GRAPH" "$SG_REPO" "$iss" 2>/dev/null) || v='{"status":"unknown","reasons":["the validator did not answer"],"actor":null}'
+  vs=$(printf '%s' "$v" | jq -r '.status'); vr=$(printf '%s' "$v" | jq -r '.reasons[0] // ""'); va=$(printf '%s' "$v" | jq -r '.actor // ""')
+  case "$vs" in
+    invalid|unknown) echo "WAIT dependency component of #$iss is $vs: $vr"; exit 0;;
+    held) echo "WAIT dependency component of #$iss is held by $va: $vr"
+          [ -n "${SG_STATE:-}" ] && printf '%s STACK alert #%s waits on %s: %s\n' "$(date '+%F %T')" "$iss" "$va" "$vr" >> "$SG_STATE/alerts.log"
+          exit 0;;
+  esac
+fi
 body=$(printf '%s' "$issue" | jq -r '.body // ""')
 # The parent spec's column: from the caller's one board read, else from the seam. A parent the caller's rows lack is asked
 # for itself, so a board read that omits a spec's card is never read as "started".

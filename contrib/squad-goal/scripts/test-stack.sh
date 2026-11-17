@@ -4,7 +4,7 @@
 # The answer is READY or WAIT: a work branch is the unit of work, so an open blocker whose work has not landed waits (#361).
 # usage: bash test-stack.sh [path/to/stack.sh]
 src=${1:-$(dirname "$0")/stack.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py} "$T/s/"   # stack.sh reads the native relation through the GitHub door
+mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,deadlock.py} "$T/s/"   # stack.sh reads the native relation through the GitHub door
 printf 'export SG_REPO=x/y SG_CHECKOUT=%s SG_HUB_DIR=%s SG_BASE=main SG_STATE=%s/st\n' "$T/co" "$T/co/runs/.hub" "$T" > "$T/s/env.sh"
 echo '{"items":[{"n":1796,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"   # #1796: a card in Code Complete with no work branch landed
 # The body still names #1791, but only the native relation can block dispatch. #1800 has two open native blockers.
@@ -73,4 +73,29 @@ printf '{"number":1812,"body":"Work.","blocked_by":[1813],"blocked_by_read":true
 echo '{"items":[{"n":1813,"st":"Testing","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
 r=$(SG_STACK_ISSUE=$T/e1812.json run 1812)
 case "$r" in *"WAIT blocker #1813 is open"*) ok "#1812: a blocker in no column the board carries gates dispatch";; *) ko "#1812 read the removed column as a satisfied blocker: '$r'";; esac
+# #1984: the pass's issue list (SG_STACK_GRAPH) decides the dependency component. #2001 names #2002 only as a native edge, not in its body.
+mkdir -p "$T/st"; export SG_STACK_GRAPH="$T/g.json"
+cat > "$T/g.json" <<'J'
+[
+{"number":2001,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[2002],"blocked_by_edges":[{"repo":"x/y","number":2002,"state":"open"}],"blockers":[{"number":2002,"state":"open"}]},
+{"number":2002,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[2001],"blocked_by_edges":[{"repo":"x/y","number":2001,"state":"open"}],"blockers":[{"number":2001,"state":"open"}]},
+{"number":2003,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[],"blocked_by_edges":[],"blockers":[]},
+{"number":2004,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[2099],"blocked_by_edges":[{"repo":"x/y","number":2099,"state":"open"}],"blockers":[{"number":2099,"state":"open"}]},
+{"number":2005,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[2006],"blocked_by_edges":[{"repo":"x/y","number":2006,"state":"open"}],"blockers":[{"number":2006,"state":"open"}]},
+{"number":2006,"repo":"x/y","state":"open","labels":[{"name":"frozen:owner"}],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[],"blocked_by_edges":[],"blockers":[]}
+]
+J
+ent() { jq --argjson n "$1" '[.[]|select(.number==$n)][0]' "$T/g.json" > "$T/e$1.json"; }
+for n in 2001 2002 2003 2004 2005 2006; do ent "$n"; done
+r=$(SG_STACK_ISSUE="$T/e2001.json" run 2001)
+case "$r" in WAIT*invalid*) ok "#1984: a card in an invalid component is held";; *) ko "#1984 invalid component not held: '$r'";; esac
+r=$(SG_STACK_ISSUE="$T/e2001.json" run 2001)
+case "$r" in *"#2002"*) ok "#1984: the held verdict names the native edge's cycle";; *) ko "#1984 verdict omits the cycle: '$r'";; esac
+r=$(SG_STACK_ISSUE="$T/e2003.json" run 2003)
+case "$r" in READY*) ok "#1984: an unrelated card in the same pass stays eligible";; *) ko "#1984 unrelated card held: '$r'";; esac
+r=$(SG_STACK_ISSUE="$T/e2004.json" run 2004)
+case "$r" in WAIT*unknown*) ok "#1984: a card in an unknown component is held";; *) ko "#1984 unknown component not held: '$r'";; esac
+r=$(SG_STACK_ISSUE="$T/e2005.json" run 2005)
+case "$r" in WAIT*owner*) ok "#1984: a frozen blocker holds its dependent and names the owner";; *) ko "#1984 frozen blocker did not name the owner: '$r'";; esac
+grep -q "#2005.*owner" "$T/st/alerts.log" 2>/dev/null && ok "#1984: a frozen blocker writes one alert naming the owner" || ko "#1984 no owner alert in alerts.log"
 rm -rf "$T"; exit $fail
