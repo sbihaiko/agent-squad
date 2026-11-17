@@ -4,7 +4,7 @@
   {"state":"unverified","cls":null,"text":"unverified","label":"Work landed, the final gate had no command","color":"ok","css":"border-style:dashed","mark":"bar","hub_only":true,"tone":"ok","word":"unverified"},
   {"state":"failed","cls":"v-bad","text":"failed","label":"Run failed","color":"err","css":"","mark":"filled","tone":"err","word":"failed"},
   {"state":"taken over","cls":null,"text":"taken over","label":"Run taken over at the takeover bound, its cause recorded","color":"warn","css":"","mark":"bar","hub_only":true,"tone":"warn","word":"taken over"},
-  {"state":"retired (age cap)","cls":null,"text":"retired (age cap)","label":"Run retired at the wave age cap, its cause recorded","color":"none","css":"","mark":"hollow","hub_only":true,"tone":"none","word":"retired (age cap)"},
+  {"state":"retired-age-cap","cls":null,"text":"retired (age cap)","label":"Run retired at the wave age cap, its cause recorded","color":"none","css":"","mark":"hollow","hub_only":true,"tone":"none","word":"retired (age cap)"},
   {"state":"needs-human","cls":"v-human","text":"ended · needs a decision","label":"Run needs a person","color":"warn","css":"","mark":"filled","tone":"warn","word":"ended · needs a decision"},
   {"state":"handled","cls":null,"text":"ended · handled (landed in fork)","label":"Needs-human run, landed in the fork","color":"ok","css":"","mark":"none","hub_only":true,"tone":"ok","word":"ended · handled (landed in fork)"},
   {"state":"running","cls":"v-live","text":"running","label":"Run in progress","color":"run","css":"","mark":"filled","tone":"run","word":"running"},

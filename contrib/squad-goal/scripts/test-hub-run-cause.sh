@@ -32,7 +32,7 @@ check("the taken over run keeps its reasons", taken["reasons"], [TAKEN])
 check("a passed gate does not stop a takeover state", hub.state_of(run("taken-pass", [START, GREEN, verdict([TAKEN])]), 0), "taken over")
 
 capped = run("capped", [START, verdict([AGE_CAP])])
-check("an age cap cause shows the retired state", hub.state_of(capped, 0), "retired (age cap)")
+check("an age cap cause shows the retired state", hub.state_of(capped, 0), "retired-age-cap")
 check("the retired run keeps its raw verdict and reasons", (capped["verdict"], capped["exit_code"], capped["reasons"]), ("failed", 1, [AGE_CAP]))
 
 plain = run("plain", [START, verdict(["killed/no-process"])])
@@ -46,9 +46,9 @@ check("a measured red keeps the failed state after an age cap", hub.state_of(red
 
 states = {r["state"]: r for r in hub.RUN_STATES}
 check("the taken over state is in the served table", "taken over" in states, True)
-check("the retired state is in the served table", "retired (age cap)" in states, True)
+check("the retired state is in the served table", "retired-age-cap" in states, True)
 check("the taken over badge reads its state", hub.badge_of("taken over")["text"], "taken over")
-check("the retired badge reads its state", hub.badge_of("retired (age cap)")["text"], "retired (age cap)")
+check("the retired badge reads its table text", hub.badge_of("retired-age-cap")["text"], "retired (age cap)")
 PY
 )
 echo "$out"; case "$out" in *FAIL*|*Error*|*Traceback*) fail=1;; esac

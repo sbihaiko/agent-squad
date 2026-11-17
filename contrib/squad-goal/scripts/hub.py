@@ -489,7 +489,7 @@ def state_of(r, age):
     if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
     if ver == "failed" and not r.get("measured_red", True):   # the janitor's takeover and the wave's age cap name their cause in the verdict (#2073); a cached run without the fact keeps its verdict
         if "killed/taken-over" in reasons: return "taken over"
-        if "killed/age-cap-requeue" in reasons: return "retired (age cap)"
+        if "killed/age-cap-requeue" in reasons: return "retired-age-cap"
     return ver
 
 def run_roots(co):   # where a checkout keeps run folders: its runs/, and each run or child worktree's runs/ (#580, #585)
@@ -550,7 +550,7 @@ def badge_of(st, r=None):
     mark = row["mark"] if row else "none"
     if st == "handled": text = "ended · handled (landed in fork)"
     elif st == "needs-human": text = "ended · needs a decision"
-    else: text = st
+    else: text = row["text"] if row else st
     rc = r.get("exit_code")
     if rc is None and st in ("needs-human", "handled"): rc = 10
     title = f"exit {rc}" if rc is not None and st in ("needs-human", "handled") else ""
