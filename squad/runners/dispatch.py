@@ -73,7 +73,7 @@ class Dispatch:
         for row in ledger:
             out = self.e.artifacts.get(row["child"], None)
             tree = self.child_tree(row["child"])
-            for c in session.ac_commands(out)[0] if row["outcome"] == "pass" else []:
+            for c in session.ac_commands(out)[0] if V.delivers(row["outcome"]) else []:     # an unproven child delivered: the final gate proves it (#2050)
                 run = [c, tree if (self.e.fix_run or workcmd.reads_history(c)) else None]
                 if run not in runs:
                     runs.append(run)
@@ -453,7 +453,7 @@ class Dispatch:
                 out = await e.runs.fix(node, name, n + 1, review, sc.deadline_at, coder, self.repeated_round(name, n))
             elif fund is not None:
                 e.budget.release(fund)
-            if out["outcome"] != "pass":
+            if not V.delivers(out["outcome"]):      # an unproven fix holds no red: the next review reads it (#2050, ADR-0164)
                 if review_streak.unanswered(out["outcome"], out["reasons"]) and self.coder(node, name, d, n + 1) != coder:
                     standing = review      # the same finding, unanswered: the head did not move, and the next entry answers on the next coder
                     n += 1
