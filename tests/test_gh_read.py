@@ -404,3 +404,8 @@ def test_a_graphql_read_that_never_reaches_github_is_logged_as_failed(tmp_path, 
     with pytest.raises(OSError):
         ghread.graphql_read("query{x}", transport=gone)
     assert ghread.parse_call((tmp_path / "api.log").read_text().splitlines()[0]).outcome == "failed"
+
+
+def test_an_integer_write_field_is_sent_typed_so_github_reads_a_number():
+    argv = ghread.write_argv("repos/o/r/issues/3/dependencies/blocked_by", "POST", {"issue_id": 42, "note": "x"})
+    assert argv == ["--method", "POST", "repos/o/r/issues/3/dependencies/blocked_by", "-F", "issue_id=42", "-f", "note=x"]

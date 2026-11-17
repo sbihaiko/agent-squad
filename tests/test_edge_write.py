@@ -1,9 +1,8 @@
 """The native-edge writer: one blocking edge, written only after the deadlock validator passes it (#1985).
 
-Every case uses a fake `gh` that keeps its issues in a dict. No case reaches GitHub.
+The GitHub door (ghread) is replaced by a fake that keeps its issues in a dict. No case reaches GitHub.
 """
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -15,19 +14,20 @@ MODULE = SCRIPTS / "edge_write.py"
 TICKETS_DOOR = ROOT / ".agents/skills/agent-to-tickets/SKILL.md"
 
 sys.path.insert(0, str(SCRIPTS))
+import ghread  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location("edge_write", MODULE)
 edge_write = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(edge_write)
 
 REPO = "o/r"
-URL = "https://api.github.com/repos/o/r"
 
 
 def issue(number, blocked_by=(), parent=None, state="open", issue_id=None):
     return {"id": issue_id or 1000 + number, "state": state, "parent": parent, "blocked_by": list(blocked_by)}
 
 
-class FakeGh:
+class FakeDoor:
     def __init__(self, issues, fail_on=None, ignore_writes=False):
         self.issues = issues
         self.fail_on = fail_on
@@ -35,94 +35,103 @@ class FakeGh:
         self.attempts = 0
         self.posts = []
 
-    def __call__(self, argv):
-        if "--method" in argv:
-            return self._post(argv)
-        route = argv[1].split("?")[0]
-        number = int(route.split("/issues/")[1].split("/")[0])
+    def graphql_read(self, query, variables=None, transport=None, timeout=None, pass_name=None):
+        number = variables["number"]
         if number not in self.issues:
-            raise edge_write.GhFailed(f"HTTP 404 for issue {number}")
-        node = self.issues[number]
-        if route.endswith("/dependencies/blocked_by"):
-            return json.dumps([{"number": b, "state": self.issues[b]["state"], "repository_url": URL} for b in node["blocked_by"]])
-        if route.endswith("/sub_issues"):
-            kids = [n for n, v in self.issues.items() if v["parent"] == number]
-            return json.dumps([{"number": n, "state": self.issues[n]["state"]} for n in kids])
-        parent = f"{URL}/issues/{node['parent']}" if node["parent"] else None
-        return json.dumps({"id": node["id"], "number": number, "state": node["state"], "labels": [],
-                           "parent_issue_url": parent})
+            return ghread.Read(kind=ghread.FAILED, detail=f"no issue {number}")
+        return ghread.Read(kind=ghread.ANSWER, answer={"data": {"repository": {"issue": self._shape(number)}}})
 
-    def _post(self, argv):
+    def _shape(self, number):
+        node = self.issues[number]
+        kids = [n for n, v in self.issues.items() if v["parent"] == number]
+        return {
+            "databaseId": node["id"], "state": node["state"].upper(), "labels": {"nodes": []},
+            "parent": {"number": node["parent"]} if node["parent"] else None,
+            "subIssues": {"pageInfo": {"hasNextPage": False}, "nodes": [{"number": n} for n in kids]},
+            "blockedBy": {"pageInfo": {"hasNextPage": False},
+                          "nodes": [{"number": b, "state": self.issues[b]["state"].upper(),
+                                     "repository": {"nameWithOwner": REPO}} for b in node["blocked_by"]]},
+        }
+
+    def write(self, route, method="POST", fields=None, transport=None):
         self.attempts += 1
         if self.attempts == self.fail_on:
-            raise edge_write.GhFailed("HTTP 503 while writing the edge")
-        blocked = int(argv[3].split("/issues/")[1].split("/")[0])
-        blocker_id = int(argv[-1].split("=")[1])
-        blocker = next(n for n, v in self.issues.items() if v["id"] == blocker_id)
+            return ghread.Write(kind=ghread.FAILED, detail="HTTP 503 while writing the edge")
+        blocked = int(route.split("/issues/")[1].split("/")[0])
+        blocker = next(n for n, v in self.issues.items() if v["id"] == fields["issue_id"])
         self.posts.append((blocked, blocker))
         if not self.ignore_writes:
             self.issues[blocked]["blocked_by"].append(blocker)
-        return "{}"
+        return ghread.Write(kind=ghread.DONE, answer={})
 
 
-def test_a_valid_edge_is_written_once_and_read_back():
-    fake = FakeGh({1: issue(1), 2: issue(2)})
-    result = edge_write.add_edge(REPO, 1, 2, run=fake)
+@pytest.fixture
+def github(monkeypatch):
+    def install(door):
+        monkeypatch.setattr(ghread, "graphql_read", door.graphql_read)
+        monkeypatch.setattr(ghread, "write", door.write)
+        return door
+    return install
+
+
+def test_a_valid_edge_is_written_once_and_read_back(github):
+    door = github(FakeDoor({1: issue(1), 2: issue(2)}))
+    result = edge_write.add_edge(REPO, 1, 2)
     assert result["status"] == "written"
-    assert fake.posts == [(1, 2)]
-    assert fake.issues[1]["blocked_by"] == [2]
+    assert door.posts == [(1, 2)]
+    assert door.issues[1]["blocked_by"] == [2]
 
 
-def test_an_edge_that_makes_a_cycle_is_refused_with_its_path_and_never_posted():
-    fake = FakeGh({1: issue(1, blocked_by=[2]), 2: issue(2)})
-    result = edge_write.add_edge(REPO, 2, 1, run=fake)
+def test_an_edge_that_makes_a_cycle_is_refused_with_its_path_and_never_posted(github):
+    door = github(FakeDoor({1: issue(1, blocked_by=[2]), 2: issue(2)}))
+    result = edge_write.add_edge(REPO, 2, 1)
     assert result["status"] == "refused"
     assert result["path"] == ["o/r#1", "o/r#2", "o/r#1"]
     assert any("o/r#1 > o/r#2 > o/r#1" in reason for reason in result["reasons"])
-    assert fake.posts == []
+    assert door.posts == []
 
 
-def test_an_edge_that_already_exists_is_not_written_again():
-    fake = FakeGh({1: issue(1, blocked_by=[2]), 2: issue(2)})
-    assert edge_write.add_edge(REPO, 1, 2, run=fake)["status"] == "exists"
-    assert fake.posts == []
+def test_an_edge_that_already_exists_is_not_written_again(github):
+    door = github(FakeDoor({1: issue(1, blocked_by=[2]), 2: issue(2)}))
+    assert edge_write.add_edge(REPO, 1, 2)["status"] == "exists"
+    assert door.posts == []
 
 
-def test_an_unreadable_blocker_refuses_the_write_before_any_post():
-    fake = FakeGh({1: issue(1)})
+def test_an_unreadable_blocker_refuses_the_write_before_any_post(github):
+    door = github(FakeDoor({1: issue(1)}))
     with pytest.raises(edge_write.GhFailed):
-        edge_write.add_edge(REPO, 1, 99, run=fake)
-    assert fake.posts == []
+        edge_write.add_edge(REPO, 1, 99)
+    assert door.posts == []
 
 
-def test_a_closure_past_its_cap_is_unknown_and_refused(monkeypatch):
+def test_a_closure_past_its_cap_is_unknown_and_refused(github, monkeypatch):
     monkeypatch.setattr(edge_write, "CLOSURE_CAP", 1)
-    fake = FakeGh({1: issue(1), 2: issue(2)})
-    result = edge_write.add_edge(REPO, 1, 2, run=fake)
+    door = github(FakeDoor({1: issue(1), 2: issue(2)}))
+    result = edge_write.add_edge(REPO, 1, 2)
     assert result["status"] == "refused" and result["verdict"] == "unknown"
-    assert fake.posts == []
+    assert door.posts == []
 
 
-def test_a_write_that_does_not_read_back_is_not_reported_as_written():
-    fake = FakeGh({1: issue(1), 2: issue(2)}, ignore_writes=True)
+def test_a_write_that_does_not_read_back_is_not_reported_as_written(github):
+    github(FakeDoor({1: issue(1), 2: issue(2)}, ignore_writes=True))
     with pytest.raises(edge_write.WriteUnconfirmed):
-        edge_write.add_edge(REPO, 1, 2, run=fake)
+        edge_write.add_edge(REPO, 1, 2)
 
 
-def test_a_failed_publish_reruns_and_writes_each_missing_edge_once():
-    fake = FakeGh({1: issue(1), 2: issue(2), 3: issue(3)}, fail_on=2)
+def test_a_failed_publish_reruns_and_writes_each_missing_edge_once(github):
+    door = github(FakeDoor({1: issue(1), 2: issue(2), 3: issue(3)}, fail_on=2))
     with pytest.raises(edge_write.GhFailed):
-        edge_write.publish_edges(REPO, [(1, 2), (1, 3)], run=fake)
-    assert fake.posts == [(1, 2)]
-    fake.fail_on = None
-    results = edge_write.publish_edges(REPO, [(1, 2), (1, 3)], run=fake)
+        edge_write.publish_edges(REPO, [(1, 2), (1, 3)])
+    assert door.posts == [(1, 2)]
+    door.fail_on = None
+    results = edge_write.publish_edges(REPO, [(1, 2), (1, 3)])
     assert [r["status"] for r in results] == ["exists", "written"]
-    assert fake.posts == [(1, 2), (1, 3)]
+    assert door.posts == [(1, 2), (1, 3)]
 
 
 def test_the_strict_read_never_goes_through_the_throttle_snapshot():
     text = MODULE.read_text(encoding="utf-8")
-    for name in ("ghthrottle", "gh_aggregate", "SG_GHSNAP", "gh_snapshot"):
+    for name in ("ghthrottle", "gh_aggregate", "SG_GHSNAP", "gh_snapshot", "aggregate("):
         assert name not in text, name
 
 

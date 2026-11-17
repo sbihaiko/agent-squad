@@ -1,21 +1,33 @@
 """Write one native blocking edge only after the deadlock validator passes it (#1985).
 
-The strict read calls `gh api` directly. It never goes through the throttle's snapshot, so the check sees GitHub as it is now.
-A rerun finds the edges already written and writes only the missing ones.
+Every read and write goes through the GitHub door (ghread.py). The strict read is a direct GraphQL read, never the
+throttle's snapshot, so the check sees GitHub as it is now. A rerun finds the edges already written and writes only the
+missing ones.
 
 usage: python3 edge_write.py <owner/repo> BLOCKED:BLOCKER [BLOCKED:BLOCKER ...]
 """
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 
 import deadlock
+import ghread
 
 CLOSURE_CAP = 200
-PAGE = 100
 REFUSED = ("invalid", "unknown")
+
+ISSUE_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      databaseId state
+      labels(first: 100) { nodes { name } }
+      parent { number }
+      subIssues(first: 100) { pageInfo { hasNextPage } nodes { number } }
+      blockedBy(first: 100) { pageInfo { hasNextPage } nodes { number state repository { nameWithOwner } } }
+    }
+  }
+}"""
 
 
 class GhFailed(RuntimeError):
@@ -30,43 +42,26 @@ class WriteUnconfirmed(RuntimeError):
     pass
 
 
-def gh(argv):
-    proc = subprocess.run(["gh", *argv], capture_output=True, text=True, check=False)
-    if proc.returncode:
-        raise GhFailed(proc.stderr.strip() or f"gh exited {proc.returncode}")
-    return proc.stdout
-
-
-def _number(url):
-    return int(url.rsplit("/", 1)[1]) if url else None
-
-
-def _repo_of(url):
-    return "/".join(url.rsplit("/", 2)[-2:])
-
-
-def _get(run, route):
-    return json.loads(run(["api", route]))
-
-
-def _blockers(repo, number, run):
-    return _get(run, f"repos/{repo}/issues/{number}/dependencies/blocked_by?per_page={PAGE}")
-
-
-def _node(repo, number, run):
-    issue = _get(run, f"repos/{repo}/issues/{number}")
-    blocks = _blockers(repo, number, run)
-    subs = _get(run, f"repos/{repo}/issues/{number}/sub_issues?per_page={PAGE}")
+def _node(repo, number):
+    owner, name = repo.split("/")
+    res = ghread.graphql_read(ISSUE_QUERY, {"owner": owner, "name": name, "number": number})
+    if not res.is_answer:
+        raise GhFailed(res.message or res.detail or f"the read of {repo}#{number} {res.kind}")
+    issue = ((res.answer.get("data") or {}).get("repository") or {}).get("issue")
+    if issue is None:
+        raise GhFailed(f"{repo}#{number} is not readable")
+    blocked, kids = issue["blockedBy"], issue["subIssues"]
     return {
-        "repo": repo, "number": number, "id": issue["id"], "state": issue["state"],
-        "labels": issue.get("labels") or [], "parent": _number(issue.get("parent_issue_url")),
-        "blocked_by_edges": [{"repo": _repo_of(b["repository_url"]), "number": b["number"], "state": b["state"]} for b in blocks],
-        "blocked_by_complete": len(blocks) < PAGE and len(subs) < PAGE,
-        "children": [s["number"] for s in subs],
+        "repo": repo, "number": number, "id": issue["databaseId"], "state": issue["state"].lower(),
+        "labels": issue["labels"]["nodes"], "parent": issue["parent"]["number"] if issue["parent"] else None,
+        "blocked_by_edges": [{"repo": b["repository"]["nameWithOwner"], "number": b["number"], "state": b["state"].lower()}
+                             for b in blocked["nodes"]],
+        "blocked_by_complete": not blocked["pageInfo"]["hasNextPage"] and not kids["pageInfo"]["hasNextPage"],
+        "children": [k["number"] for k in kids["nodes"]],
     }
 
 
-def _closure(repo, seeds, run):
+def _closure(repo, seeds):
     nodes, todo = {}, list(seeds)
     while todo:
         number = todo.pop()
@@ -74,7 +69,7 @@ def _closure(repo, seeds, run):
             continue
         if len(nodes) >= CLOSURE_CAP:
             raise Unreadable(f"the waits around {sorted(seeds)} reach more than {CLOSURE_CAP} issues")
-        node = _node(repo, number, run)
+        node = _node(repo, number)
         nodes[number] = node
         todo.extend(e["number"] for e in node["blocked_by_edges"] if e["repo"] == repo)
         todo.extend(node["children"])
@@ -83,10 +78,16 @@ def _closure(repo, seeds, run):
     return nodes
 
 
-def add_edge(repo, blocked, blocker, run=gh):
+def _post(repo, blocked, blocker_id):
+    res = ghread.write(f"repos/{repo}/issues/{blocked}/dependencies/blocked_by", "POST", {"issue_id": blocker_id})
+    if res.kind != ghread.DONE:
+        raise GhFailed(res.message or res.detail or f"the write of {repo}#{blocked} {res.kind}")
+
+
+def add_edge(repo, blocked, blocker):
     """Write `blocked` waits on `blocker` when the validator passes it; return what happened."""
     try:
-        nodes = _closure(repo, [blocked, blocker], run)
+        nodes = _closure(repo, [blocked, blocker])
     except Unreadable as exc:
         return {"status": "refused", "verdict": "unknown", "reasons": [str(exc)], "path": []}
     if any(e["number"] == blocker and e["repo"] == repo for e in nodes[blocked]["blocked_by_edges"]):
@@ -95,16 +96,15 @@ def add_edge(repo, blocked, blocker, run=gh):
                                 [(deadlock.key(repo, blocked), deadlock.key(repo, blocker))])
     if verdict["status"] in REFUSED:
         return {"status": "refused", "verdict": verdict["status"], "reasons": verdict["reasons"], "path": verdict["witness"]}
-    run(["api", "--method", "POST", f"repos/{repo}/issues/{blocked}/dependencies/blocked_by",
-         "-F", f"issue_id={nodes[blocker]['id']}"])
-    if blocker not in {b["number"] for b in _blockers(repo, blocked, run)}:
+    _post(repo, blocked, nodes[blocker]["id"])
+    if not any(e["number"] == blocker and e["repo"] == repo for e in _node(repo, blocked)["blocked_by_edges"]):
         raise WriteUnconfirmed(f"the edge {repo}#{blocked} blocked by {repo}#{blocker} does not read back")
     return {"status": "written", "blocked": blocked, "blocker": blocker}
 
 
-def publish_edges(repo, pairs, run=gh):
+def publish_edges(repo, pairs):
     """Write each (blocked, blocker) pair in order; a failure stops the run and a rerun writes what is missing."""
-    return [add_edge(repo, blocked, blocker, run=run) for blocked, blocker in pairs]
+    return [add_edge(repo, blocked, blocker) for blocked, blocker in pairs]
 
 
 def main(argv):
