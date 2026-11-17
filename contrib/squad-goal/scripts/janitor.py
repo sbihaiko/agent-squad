@@ -478,7 +478,7 @@ def issue_read(x, fresh=False):   # one read answers every fact the passes ask o
 def issue_is_gone(x):   # a missing issue is not a transient read failure. The pass's one cached read of the issue says it: `gh api`
     # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
     return gone_msg("\t".join(issue_read(x)))
-live = {}; livef = {}; keep = []; settled = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed; settled: a finished run whose line left active-runs this pass, which the card pass still reads
+live = {}; livef = {}; keep = []; dropped = set(); held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed; dropped: every run whose line this pass leaves out of the list (#2144)
 def marker_mtime(p):   # #794: a marker can vanish between the glob, its test and its stat; a gone marker is no live marker: None
     try: return p.stat().st_mtime
     except FileNotFoundError: return None
@@ -486,6 +486,22 @@ def marker_text(p):   # #794: the text of a marker, or None when it vanished bef
     try: return p.read_text().strip()
     except FileNotFoundError: return None
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
+def keep_run(r, f, i):   # one site marks a run readable this pass: `keep` for the card pass and rule Q, `held` for the issues it
+    # may be working, and `landed_n` for the issues it landed, so no two sites read the request and settle the landing twice.
+    global held, landed_n
+    ri = req_issues(f)
+    if i["landed"]: landed_n |= ri
+    held |= ri | i["acc"]; keep.append(r); return ri
+def drop_line(r):   # #2144: every run loop rule that leaves a run's line out of active-runs names it here, so `dropped` is the
+    # whole set of lines this pass drops and the rewrite can never keep one of them (#2138, ADR-0030). This is a pure leave-out
+    # primitive: it edits no other list and reads no file, so a caller that must also read the run for its card calls keep_run
+    # beside it (FINISHED-RUN does). The second keep source is `reaped`: a run whose open wave still lands it keeps its line
+    # there, and the rewrite keeps a reaped line whatever `dropped` says (see the zombie rule below).
+    # The record that feeds the card pass belongs to the caller's keep_run, never to this primitive. Only FINISHED-RUN drops a
+    # line and still reads the card, so only it calls keep_run beside the drop. The other callers drop with no record, and
+    # that is correct: GONE-RUN's issues are deleted, CLOSED-RUN's card the closed-issue Done rule already answered, the
+    # killed and never-started runs write reoffer markers for the card's way back, and a missing folder has no record.
+    dropped.add(r)
 def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
     try: c = p.read_text().strip()
     except OSError: return False
@@ -553,13 +569,14 @@ for p in (st / "auto").glob("taken-*") if (st / "auto").is_dir() else []:   # T:
 for r in names:
     f = folder(r)
     if not f.exists():   # a child worktree can take its run folder with it; no missing folder owns an issue
-        missing.append((r, f))
+        missing.append((r, f)); drop_line(r)
         continue
     i = read(f)
     if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
         age = now - (f / "request.txt").stat().st_mtime if (f / "request.txt").exists() else 0
         if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
             say(f"NEVER-STARTED run {f.name} (no record.jsonl after {int(age // 60)} min) dropped from active-runs")
+            drop_line(r)
             free_never_started(f)   # the run frees its own issues; say() reports it in a dry run too
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
@@ -570,6 +587,7 @@ for r in names:
         nums = req_issues(f) | i["acc"]
         if nums and all(issue_is_gone(x) for x in nums):
             say(f"GONE-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is gone; dropped from active-runs")
+            drop_line(r)
             continue
         # #2138: the run has its verdict and every issue it names is closed, so nothing reads its line again: the card pass
         # has no card to move and the landing pass has no issue to wait for. A line the loop still counts as live work holds
@@ -577,14 +595,18 @@ for r in names:
         # an open issue keeps its line, as before: its wave or its card still read it.
         if nums and all(issue_read(x)[0] == "closed" for x in nums):
             say(f"CLOSED-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is closed; dropped from active-runs")
+            drop_line(r)
             continue
         # #2138: a run whose verdict is final is over. Its line stays only while a wave stands for it (that wave still lands
-        # its children) or a live process or lease names it. Nothing else reads the line, and a line the loop counts as live
-        # work holds the child room the frontier needs. The five-minute floor lets the pass that wrote the verdict settle it.
+        # its children) or a live process or lease names it. A line the loop counts as live work holds the child room the
+        # frontier needs. The five-minute floor lets the pass that wrote the verdict settle it.
+        # #2144: the line leaves now, but this pass still reads the run for its card and its markers. The card pass and rule
+        # Q read `keep`, so a run dropped before that read left its issue at no column, unfrozen and never requeued: the
+        # pass adds it to `keep` and to `dropped`, and the rewritten list leaves it out.
         if i["idle"] > 300 and not open_wave(n, i["run_id"]) \
                 and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
-            settled.append(r)   # the line leaves the list, but the card pass still reads the run's record (#2138)
+            drop_line(r); keep_run(r, f, i)   # the line leaves this pass (#2144), and the card pass and rule Q still read the run's record (#2138)
             continue
         if i["idle"] > 180:
             for q in inside(f):
@@ -616,11 +638,11 @@ for r in names:
                 and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not open_wave(n, i["run_id"]) \
                 and not holds_lease(n):
             say(f"killed run {n} (its process and its leases are gone) dropped from active-runs")
+            drop_line(r)
             if not dry:
                 for x in req_issues(f) | i["acc"]: (st / "auto" / f"reoffer-{x}").write_text(n + "\n")
             continue
-        if i["landed"]: landed_n |= req_issues(f)
-        keep.append(r); continue
+        keep_run(r, f, i); continue
     # A live run is one whose own process is inside its folder: its engine (`squad start`), a gate, or a session it started. A
     # helper the session left behind -- uv, caffeinate, a stray shell -- has a cwd there too, and reading any process as the run
     # kept a dead run "alive" for ever, its card in Doing and its active-runs line held (#745). The dashboard server the loop
@@ -677,10 +699,13 @@ for r in names:
             kill(q, f"leftover of zombie run {n}")
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
-        if wv: reaped.add(r)   # an open wave still lands this run: the line stays until the wave marker goes
-        continue   # with no open wave the line leaves the list here; this pass's card rules still read the run's markers
+        if wv: reaped.add(r)   # an open wave still lands this run: the line stays until the wave marker goes. `reaped` is the
+        #                        second keep source beside `keep`: the rewrite keeps a reaped line without asking `dropped`,
+        #                        so this branch never calls drop_line -- its run is not dropped this pass.
+        else: drop_line(r)     # with no open wave the line leaves the list here
+        continue   # this pass's card rules still read the run's markers
     held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i; livef[n] = f
-lines = [r for r in names if r in reaped or r in keep]
+lines = [r for r in names if r in reaped or (r in keep and r not in dropped)]
 # #1862: the list is rewritten through its one writer protocol, under the lock the launcher's append takes. It re-reads the
 # list, keeps every line this pass's read did not name (a run a launch started while the pass ran), writes a temporary file
 # beside the list and renames it into place (ADR-0030). A rewrite with nothing to change writes nothing.
@@ -1252,8 +1277,9 @@ def reconcile_board():
     # undoes the loop's own claim, the dispatch that moved the card out of Todo (ADR-0143, #550). No other rule moves a card
     # back into Todo or Backlog: only the owner does.
     runs = []; newest = {}   # a card follows the newest run that holds its issue: an older run's column never overrides it, whatever its rank (#619)
-    for r in [*keep, *settled]:   # a run whose line this pass dropped from active-runs still settles its card: none of its issues is closed, so the closed-issue Done rule never answered for it (#2138)
+    for r in keep:   # a run whose line this pass dropped from active-runs is in `keep` too, so it still settles its card: none of its issues is closed, so the closed-issue Done rule never answered for it (#2138, #2144)
         f = folder(r); i = read(f); nums = req_issues(f)
+        if r in dropped: say(f"FINISHED-RUN-CARD {r}: the card pass read the run this pass left out of active-runs (#2144)")
         if i: nums |= i["acc"]
         age = (1, "") if i is None else (0, str(i["run_ts"]))   # a run with no record yet (a dispatch marker) is the newest
         runs.append((f, i, nums, age))
