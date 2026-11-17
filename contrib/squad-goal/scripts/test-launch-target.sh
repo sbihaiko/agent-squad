@@ -147,4 +147,23 @@ rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/req93.txt"); argv=$(
 case "$argv" in *--keep-children*) ok "a run that cuts a wave starts with --keep-children";; *) ko "the wave run has no --keep-children: $argv";; esac
 rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/repl.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *--keep-children*) ko "a run that cuts no wave got --keep-children: $argv";; *) ok "a run that cuts no wave gets no --keep-children";; esac
+# #2044: a requeued issue starts its child from salvage/<issue> (#2030 pushes the child's commits there) when that branch is ahead
+# of the base and rebases onto it without conflict. A branch that conflicts is named in a status comment, and the child starts on the base.
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1; rm -rf "$co/runs"; : > "$T/st/active-runs.txt"
+sv="$T/salv"; git -C "$co" worktree add -q -b salvage/93 "$sv" origin/main
+(cd "$sv" && echo salvaged > salv.txt && git add salv.txt && git -c user.email=t@t -c user.name=t commit -qm "salvaged work")
+git -C "$sv" push -q origin HEAD:refs/heads/salvage/93; sv_sha=$(git -C "$sv" rev-parse HEAD)
+o=$(run "$T/req93.txt")
+[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$sv_sha" ] && ok "a requeued issue's child starts from its salvage branch when that branch is ahead of the base" || ko "gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not salvage/93 ${sv_sha:0:9}; out=$o"
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1; rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; rm -f "$T"/st/cq/*
+(cd "$sv" && echo salvaged-base > base.txt && git add base.txt && git -c user.email=t@t -c user.name=t commit -qm "salvaged base edit")
+adv="$T/adv"; git -C "$co" worktree add -q --detach "$adv" origin/main
+(cd "$adv" && echo moved > base.txt && git add base.txt && git -c user.email=t@t -c user.name=t commit -qm "base moves" && git push -q origin HEAD:refs/heads/main)
+git -C "$co" worktree remove --force "$adv"; main_sha=$(git -C "$T/origin.git" rev-parse refs/heads/main)
+git -C "$sv" push -q -f origin HEAD:refs/heads/salvage/93
+o=$(run "$T/req93.txt")
+[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$main_sha" ] && ok "a salvage branch that conflicts with the base leaves the child on the base" || ko "gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not the base ${main_sha:0:9}; out=$o"
+grep -qs "salvage/93" "$T/st/cq/"* && ok "the conflicting salvage branch is named in a status comment" || ko "no status comment names salvage/93: $o"
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" worktree remove --force "$sv" 2>/dev/null; git -C "$co" branch -D gui/93 salvage/93 >/dev/null 2>&1
+git -C "$T/origin.git" update-ref -d refs/heads/salvage/93
 rm -rf "$T"; exit $fail

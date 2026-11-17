@@ -190,6 +190,26 @@ def _landing_base(co):
     if r.returncode or not r.stdout.strip(): sys.exit(f"refusing to start: origin/{base} names no commit in {co} after the fetch (#580)")
     return r.stdout.strip()
 
+def _salvage_start(co, issue, land):
+    """`origin/salvage/<issue>` when a requeue pushed the child's commits there (#2030), the branch holds commits the landing
+    branch lacks, and it merges onto the landing branch without conflict (#2044); else None. A conflicting branch is named in a
+    status comment, and the start stays on the landing branch."""
+    ref = f"salvage/{issue}"; base = os.environ.get("SG_BASE") or "main"
+    try: f = subprocess.run(["git", "-C", co, "fetch", "-q", "origin", f"+refs/heads/{ref}:refs/remotes/origin/{ref}"], capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired: return None
+    if f.returncode: return None
+    tip = f"origin/{ref}"
+    if subprocess.run(["git", "-C", co, "merge-base", "--is-ancestor", tip, land], capture_output=True).returncode == 0: return None
+    m = subprocess.run(["git", "-C", co, "merge-tree", "--write-tree", "--quiet", land, tip], capture_output=True)
+    if m.returncode == 0: return tip
+    if m.returncode == 1:
+        repo = os.environ.get("SG_REPO", ""); cq = state / "cq"; cq.mkdir(parents=True, exist_ok=True)
+        leaf = f"{issue}-salvage-{os.getpid()}.md"
+        (cq / (f"{repo.replace('/', '__')}#{leaf}" if "/" in repo else leaf)).write_text(
+            f"{ref} does not rebase onto {base} without conflict, so the child starts from {base}. The branch stays on origin for a person to rebase.\n")
+        print(f"note: {tip} conflicts with {land}: the issue worktree starts from {base}, and the branch is named in a status comment (#2044)", file=sys.stderr)
+    return None
+
 def _run_worktree(co, land):
     """A linked worktree of the checkout that this run alone owns, on a new branch squad/run/<key> cut from `land` (#580). The
     key is unique per launch, so two launches of one request at once get two trees. The owner's HEAD, index and files never
@@ -308,7 +328,8 @@ if cut and len(issues) == 1:
         cut_ref = cut.group(1)
     else:
         print(f"note: CUT FROM {cut.group(1)} names no branch of {checkout}: the issue worktree starts from the base", file=sys.stderr)
-target = _named_target(checkout, named) if named else _issue_worktree(issues[0], cut_ref or land) if len(issues) == 1 else None
+salvage = _salvage_start(checkout, issues[0], land) if len(issues) == 1 and not named and not cut_ref else None
+target = _named_target(checkout, named) if named else _issue_worktree(issues[0], cut_ref or salvage or land) if len(issues) == 1 else None
 if len(issues) > 1 and not named: print(f"note: the request names {issues}: one run has one target, so this run gets {FALLBACK}", file=sys.stderr)
 if named:
     print(f"note: the run's target is the kept worktree {target} it fixes: the engine commits it (#654, ADR-0106 rule 4)", file=sys.stderr)
