@@ -1047,12 +1047,12 @@ def drop_write(n, col):   # a move a rule refuses can never land: its prediction
 def prove_write(n, col):   # the writer's own proof ends the prediction: only this mark, or the event's drop, does (#1841)
     try: ledger().boardw(f"{repo0}#{n}", "janitor", col, "janitor")
     except (ImportError, RuntimeError, OSError, ValueError, KeyError): pass
-def board_write(args, n, why, reason=None):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
+def board_write(args, n, why, reason=None, event=None):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
     gone = st / "auto" / f"janitor-gone-{n}"
     if gone.exists(): return False
     col, pending = status_column(args), False
     if col and not dry: pending = predict_write(n, col, why)   # a dry run writes nothing, and predicts nothing
-    env = {**os.environ, "SG_MOVE_REASON": reason} if reason else None   # names why a card returns to Todo (#1059)
+    env = {**os.environ, "SG_MOVE_REASON": reason or "", "SG_MOVE_EVENT": event or ""}   # names why a card returns to Todo (#1059) and the event a reset names on its issue (#1904)
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True, env=env)
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
@@ -1463,7 +1463,7 @@ def reconcile_board():
             _is.pop(n, None); _is.pop(str(n), None)   # the state is read again before the write (#775), and that read is live (#1999): the open list is a snapshot and the facts file a cache, so a close GitHub already reported never sends a landed card back
             if issue_info(n, fresh=True)[0] != "open": continue   # only a fresh open answer reopens the card: a close, a refusal or any other answer leaves it in Closed
             say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued; card -> Todo (reopened)")
-            if board_write([owner, str(proj), "Todo", str(n)], n, "the issue is open again", "reopened"):
+            if board_write([owner, str(proj), "Todo", str(n)], n, "the issue is open again", "reopened", f"reopen-{n}"):
                 have_all[str(n)] = "Todo"; expected.pop(n, None)
                 say(f"BOARD-RECONCILE #{n}: card -> Todo (the issue is open again)")
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
@@ -1479,7 +1479,7 @@ def reconcile_board():
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
             if note: queue_terminal(n, want, note)
-        elif have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None):
+        elif have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None, run_id):
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:

@@ -1211,7 +1211,7 @@ stuck() {
   export SG_GH_PASS=wave
   for n in $refs; do
     gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" >/dev/null 2>&1
-    SG_MOVE_REASON=no-landing board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Code Complete (#657, #1340); frozen:owner holds it out of the frontier
+    SG_MOVE_REASON=no-landing SG_MOVE_EVENT="$run" board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Code Complete (#657, #1340); frozen:owner holds it out of the frontier
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
