@@ -625,7 +625,7 @@ unset SG_BOARD_READ_BACKOFF
 # the whole settle bound: board.py says "a read failure, not a written card", and that is the board failing to answer, not
 # GitHub refusing the write -- the same as the HTTP 500 above. The door logged it by name and filed no bug; the next pass
 # writes the card again. The stub accepts the PATCH and never shows the Status.
-rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"; rm -f "$T"/st/rest-* "$T/bseen" "$T/bstatus" "$T/launched" "$T/st/board-transitions.x_y.jsonl"; touch "$T/b500" "$T/bnowrite"   # no proved write of case 12 stands: this card's write is the one that never catches up (#1995)
+rm -rf "$T/st/auto" "$T/st/state"; mkdir -p "$T/st/auto"; rm -f "$T"/st/rest-* "$T/bseen" "$T/bstatus" "$T/launched" "$T/st/board-transitions.x_y.jsonl"; touch "$T/b500" "$T/bnowrite"   # no proved write of case 12 stands: this card's write is the one that never catches up (#1995)
 : > "$T/filed"; : > "$T/st/cycle.log"
 export SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
@@ -1444,5 +1444,41 @@ r=$(AB_DRY=1 PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" ba
 case "$r" in *"AUTOBUG skip #1740"*) ko "40 a live run on another file held the bug: '$r'";; *) ok "40 a live run on another file holds nothing";; esac
 case "$r" in *"[1740]"*) ok "40 the bug is dispatched when no live run holds its file";; *) ko "40 the bug stayed held with no holder: '$r'";; esac
 : > "$TR/st/active-runs.txt"; rm -rf "$TR/co/runs/run-1741"
+
+# 13) (#2052) a card write refused because its issue was deleted (HTTP 410) names the deleted card once in the cycle log
+# and files no bug: GitHub has no issue to write, so a defect about it would never be fixed. Nothing launches for it.
+rm -rf "$T/st/auto" "$T/st/state" "$T/st/gh-cache"; rm -f "$T"/st/gh-*.json; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
+: > "$T/board.calls"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: gh: This issue was deleted (HTTP 410)" >&2; exit 1\n' "$T" > "$T/s/board.sh"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+: > "$T/filed"; : > "$T/st/cycle.log"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},parent:(if .parent then {number:.parent} else null end),comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) echo '{"data":{"repository":{"i1228":{"number":1228,"title":"Core: null deref","body":"step a.py","state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}}}}' ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo "[]" ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"; echo '{"number":903}' ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+export BOARD="$T/s/board.sh"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "13 the pass whose card is deleted finishes" || ko "13 the pass exited $rc: '$r'"
+[ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "13 a refused write for a deleted card files no bug" || ko "13 filed: $(cat "$T/filed")"
+[ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "13 no refusal is named for a deleted card" || ko "13 cycle.log: $(cat "$T/st/cycle.log")"
+[ "$($G -c 'GONE-ISSUE .*#1228' "$T/st/cycle.log")" = 1 ] && ok "13 the deleted card is named once in the cycle log" || ko "13 no GONE-ISSUE line: $(cat "$T/st/cycle.log")"
+[ ! -e "$T/launched" ] && ok "13 nothing launches for a deleted card" || ko "13 a run launched for a deleted card"
 
 rm -rf "$T"; exit $fail
