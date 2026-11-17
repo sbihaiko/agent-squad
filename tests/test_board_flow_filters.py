@@ -54,11 +54,34 @@ def flow():
 
 # -- the sample format -------------------------------------------------------------------------------------------------
 
-def test_a_sample_names_each_cards_kind_spec_and_wave(flow):
+def test_a_new_sample_carries_no_wave_in_its_cells(flow):
+    s = flow.sample([_row(1, pa=5, labels=["wave:04", "bug"])], now=_epoch(20))
+    assert s["cells"] == [["bug", "5", "Todo", 0, 1, "bug"]], "the wave label is no dimension of a new sample"
+
+
+def test_an_old_sample_with_a_wave_still_reads(flow, tmp_path):
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    old = {"t": _epoch(19), "counts": {"issue": {"Todo": 1}}, "frozen": 0, "none": 0,
+           "cells": [["issue", "none", "2", "Todo", 0, 1, "task"]]}
+    path.write_text(json.dumps(old) + "\n")
+    assert flow.samples(path) == [old]
+    flow.append(path, [_row(1)], now=_epoch(20))
+    assert flow.samples(path)[0] == old, "an old sample keeps its old reading"
+    assert flow.samples(path)[-1]["cells"] == [["issue", "none", "Todo", 0, 1, "task"]]
+
+
+def test_an_old_sample_is_re_bucketed_in_its_old_shape(flow):
+    old = {"t": _epoch(19), "counts": {"issue": {"Closed": 1}}, "frozen": 0, "none": 0,
+           "cells": [["issue", "none", "2", "Closed", 0, 1, "task"]]}
+    out = flow._rebucket_sample(old, 1)
+    assert out["cells"] == [["issue", "none", "2", "Abandoned", 0, 1, "task"]]
+
+
+def test_a_sample_names_each_cards_kind_spec_and_type(flow):
     s = flow.sample([_row(1, pa=5, labels=["wave:04", "bug"]), _row(2, labels=["loop-bug"]), _row(3)], now=_epoch(20))
-    assert ["bug", "5", "4", "Todo", 0, 1, "bug"] in s["cells"], "a bug-labelled card is the bar's kind bug"
-    assert ["bug", "none", "none", "Todo", 0, 1, "bug"] in s["cells"], "a loop bug is a bug too"
-    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
+    assert ["bug", "5", "Todo", 0, 1, "bug"] in s["cells"], "a bug-labelled card is the bar's kind bug"
+    assert ["bug", "none", "Todo", 0, 1, "bug"] in s["cells"], "a loop bug is a bug too"
+    assert ["issue", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_a_card_that_changes_spec_on_the_same_day_writes_a_new_sample(flow, tmp_path):
@@ -66,30 +89,25 @@ def test_a_card_that_changes_spec_on_the_same_day_writes_a_new_sample(flow, tmp_
     flow.append(path, [_row(1, pa=5)], now=_epoch(20))
     flow.append(path, [_row(1, pa=6)], now=_epoch(20) + 60)
     last = flow.samples(path)[-1]
-    assert ["issue", "6", "none", "Todo", 0, 1, "task"] in last["cells"], "equal counts with other cells is a new sample"
+    assert ["issue", "6", "Todo", 0, 1, "task"] in last["cells"], "equal counts with other cells is a new sample"
 
 
-def test_a_card_with_no_spec_and_no_wave_is_none(flow):
+def test_a_card_with_no_spec_is_none(flow):
     s = flow.sample([_row(1)], now=_epoch(20))
-    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
-
-
-def test_the_lowest_wave_label_names_the_wave_without_leading_zeros(flow):
-    s = flow.sample([_row(1, labels=["wave:10", "wave:02"])], now=_epoch(20))
-    assert ["issue", "none", "2", "Todo", 0, 1, "task"] in s["cells"]
+    assert ["issue", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_a_card_in_no_column_has_no_column_name_in_its_cell(flow):
     s = flow.sample([_row(1, st="Nowhere")], now=_epoch(20))
-    assert ["issue", "none", "none", None, 0, 1, "task"] in s["cells"]
+    assert ["issue", "none", None, 0, 1, "task"] in s["cells"]
 
 
 def test_the_cells_add_up_to_the_counts_the_flow_already_keeps(flow):
     rows = [_row(1, pa=5, labels=["wave:1"]), _row(2), _row(3, st="Nowhere")]
     s = flow.sample(rows, now=_epoch(20))
-    in_columns = sum(c[5] for c in s["cells"] if c[3] is not None)
+    in_columns = sum(c[4] for c in s["cells"] if c[2] is not None)
     assert in_columns == sum(n for by in s["counts"].values() for n in by.values())
-    assert sum(c[5] for c in s["cells"] if c[3] is None) == s["none"]
+    assert sum(c[4] for c in s["cells"] if c[2] is None) == s["none"]
 
 
 def test_the_spec_and_wave_keys_are_the_values_the_board_filter_offers(flow):
@@ -107,11 +125,11 @@ def _write_history(hub_mod, items, day=20):
                     now=datetime(2026, 10, day, 12, tzinfo=UTC).timestamp())
 
 
-def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
+def test_the_flow_history_keeps_each_cards_spec(hub, board):
     items = [_item(hub, 1, hub.COLUMN["unscheduled"], pa=5, labels=["wave:4"])]
     _write_history(hub, items)
     line = hub._flow.history_path(hub.BOARD, hub.REPO).read_text().splitlines()[-1]
-    assert ["issue", "5", "4", hub.COLUMN["unscheduled"], 0, 1, "task"] in json.loads(line)["cells"]
+    assert ["issue", "5", hub.COLUMN["unscheduled"], 0, 1, "task"] in json.loads(line)["cells"]
 
 
 @pytest.fixture(scope="module")
@@ -466,9 +484,9 @@ def test_a_card_is_a_spec_a_bug_or_a_task_by_its_labels(flow):
 
 def test_a_sample_names_each_cards_type_in_its_cell(flow):
     s = flow.sample([_row(1, labels=["spec"]), _row(2, labels=["bug"]), _row(3)], now=_epoch(20))
-    assert ["issue", "none", "none", "Todo", 0, 1, "spec"] in s["cells"]
-    assert ["bug", "none", "none", "Todo", 0, 1, "bug"] in s["cells"]
-    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
+    assert ["issue", "none", "Todo", 0, 1, "spec"] in s["cells"]
+    assert ["bug", "none", "Todo", 0, 1, "bug"] in s["cells"]
+    assert ["issue", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_the_bar_names_a_type_and_the_default_is_tasks(hub):

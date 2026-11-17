@@ -40,12 +40,13 @@ def history_path(board, repo):
     return pathlib.Path(board).with_name(f"hub-flow.{repo.replace('/', '_')}.jsonl")
 
 
-NONE = "none"                    # the board filter's value for a card with no spec, or no wave (the board's specKey and waveKey)
+NONE = "none"                    # the board filter's value for a card with no spec (the board's specKey)
 _WAVE = re.compile(r"wave:(\d+)$")
 
 
 def wave_key(labels):
-    """The wave the board filter reads: the lowest `wave:NN` label, without leading zeros, or `none` (the board's waveKey)."""
+    """The wave the board filter reads: the lowest `wave:NN` label, without leading zeros, or `none` (the board's waveKey).
+    The flow sample carries no wave (#2132); the board's Waves filter still reads the label."""
     nums = [int(m[1]) for label in labels or () for m in [_WAVE.match(str(label))] if m]
     return str(min(nums)) if nums else NONE
 
@@ -73,26 +74,43 @@ def type_key(row):
 
 
 def sample(rows, now=None):
-    """One sample. `cells` holds each card's kind (kind_key), spec, wave, column, frozen flag, count and type (type_key) as
-    [kind, spec, wave, column, frozen, n, type]: the charts filter by these (#904, #985). A card in no shipped column has column null.
+    """One sample. `cells` holds each card's kind (kind_key), spec, column, frozen flag, count and type (type_key) as
+    [kind, spec, column, frozen, n, type]: the charts filter by these (#904, #985). A card in no shipped column has column null.
+    A sample written before #2132 carries the card's wave third; a new one carries no wave, and the reader takes both.
     `counts`, `frozen` and `none` are the totals those cells add up to, so a reader of the older shape still works."""
     names = {c["name"] for c in _columns.view_columns()}
     cells = {}
     for r in rows:
         closed = str(r.get("s", "")).lower() == "closed"
         column, freeze = _columns.view_column(r.get("st"), closed, r.get("l"), r.get("cr"))
-        key = (kind_key(r), spec_key(r), wave_key(r.get("l")), column if column in names else None, 1 if freeze else 0, type_key(r))
+        key = (kind_key(r), spec_key(r), column if column in names else None, 1 if freeze else 0, type_key(r))
         cells[key] = cells.get(key, 0) + 1
-    listed = sorted(([kind, spec, wave, col, fz, n, typ] for (kind, spec, wave, col, fz, typ), n in cells.items()),
+    listed = sorted(([kind, spec, col, fz, n, typ] for (kind, spec, col, fz, typ), n in cells.items()),
                     key=json.dumps)   # one order, so equal cards are equal cells
     counts, frozen, none = _totals_of(listed)
     return {"t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen, "none": none, "cells": listed}
 
 
+def _cell_parts(cell):
+    """(kind, spec, wave, column, frozen, count, type) of one cell in either shape: a sample written before #2132 carries
+    the wave third, and a later one carries no wave."""
+    if len(cell) == 7:
+        kind, spec, wave, column, fz, k, *typ = cell
+    else:
+        kind, spec, column, fz, k, *typ = cell
+        wave = None
+    return kind, spec, wave, column, fz, k, typ
+
+
+def _cell(kind, spec, wave, column, fz, n, typ):
+    """One cell in the shape its sample uses: the wave third for a sample written before #2132, else no wave."""
+    return [kind, spec, wave, column, fz, n, *typ] if wave is not None else [kind, spec, column, fz, n, *typ]
+
+
 def _totals_of(cells):
     """(counts, frozen, none) that a list of cells adds up to: counts holds the cards in a shipped column, by kind."""
     counts, frozen, none = {}, 0, 0
-    for kind, _spec, _wave, column, fz, n, *_ in cells:
+    for kind, _spec, _wave, column, fz, n, *_ in (_cell_parts(c) for c in cells):
         if column is None:
             none += n
         else:
@@ -155,13 +173,15 @@ def _rebucket_sample(s, n):
     closed, abandoned = _columns.ROLE["issue_closed"], _columns.ROLE["abandoned"]
     if "cells" in s:
         moved, left = {}, n
-        for kind, spec, wave, column, fz, k, *typ in s["cells"]:
+        for cell in s["cells"]:
+            kind, spec, wave, column, fz, k, typ = _cell_parts(cell)
             take = min(k, left) if column == closed else 0
             left -= take
-            if take:
-                moved[(kind, spec, wave, abandoned, fz, *typ)] = moved.get((kind, spec, wave, abandoned, fz, *typ), 0) + take
-            moved[(kind, spec, wave, column, fz, *typ)] = moved.get((kind, spec, wave, column, fz, *typ), 0) + k - take
-        cells = [[*key[:5], v, *key[5:]] for key, v in moved.items()]
+            for key, k_taken in (((kind, spec, wave, abandoned, fz, tuple(typ)), take),
+                                 ((kind, spec, wave, column, fz, tuple(typ)), k - take)):
+                if k_taken:
+                    moved[key] = moved.get(key, 0) + k_taken
+        cells = [_cell(*key[:5], k_taken, key[5]) for key, k_taken in moved.items()]
         counts, frozen, none = _totals_of(cells)
         return {**s, "counts": counts, "frozen": frozen, "none": none, "cells": cells}
     counts, left = {k: dict(v) for k, v in s["counts"].items()}, n
