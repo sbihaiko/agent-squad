@@ -487,8 +487,16 @@ def _boardx(rec, ev):   # -> (dropped|superseded, changed): a pending event the 
     return "dropped", True
 
 
+def _priority(rec, ev):   # -> (recorded|duplicate|stale, changed): a spec's Priority reached this child at this version (#1979)
+    old = rec.get("priority") or {}
+    if old and ev["version"] < old["version"]: return "stale", False
+    if old and ev["version"] == old["version"]: return "duplicate", False
+    rec["priority"] = {"version": ev["version"], "value": ev["value"]}
+    return "recorded", True
+
+
 RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "conflict": _conflict, "review": _review,
-         "rearm": _rearm, "migrate": _migrate, "board": _board, "boardw": _boardw, "boardx": _boardx}
+         "rearm": _rearm, "migrate": _migrate, "board": _board, "boardw": _boardw, "boardx": _boardx, "priority": _priority}
 
 
 def transition(key, ev):   # the one transition function (ADR-0149): every event of every writer, under the issue's lock
@@ -572,6 +580,10 @@ def board(key, run, column, req="", instant=None, by=""):
     instant, the column it targets and the writer's name, so a reader of the board knows whose write it predicts (#1841)."""
     return transition(key, {"op": "board", "run": run, "column": column, "req": req, "project": os.environ.get("SG_PROJECT", ""),
                             "field": BOARD_FIELD, "instant": time.time() if instant is None else float(instant), "by": by})
+
+
+def priority(key, version, value):   # -> recorded|duplicate|stale: a spec's Priority reached this child at this version (#1979)
+    return transition(key, {"op": "priority", "version": int(version), "value": value})
 
 
 def boardw(key, run, column, actor=""):   # -> written|duplicate|superseded: the card write of the event landed, at this instant, by this actor

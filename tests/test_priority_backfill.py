@@ -7,6 +7,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,3 +143,119 @@ def test_a_closed_issue_is_not_touched(tmp_path):
 
     assert backfill(tmp_path, board) == {}
     assert board.patches == []
+
+
+def family(spec, kids):
+    """The spec and its children as the writer reads them: {number: {body, sub_issues, labels, state}}."""
+    by = {spec: {"body": "", "sub_issues": sorted(kids), "labels": [], "state": "open"}}
+    for n, (state, labels) in kids.items():
+        by[n] = {"body": f"Parent: #{spec}", "sub_issues": [], "labels": labels, "state": state}
+    return by
+
+
+def propagate(tmp_path, monkeypatch, board, spec, version, value, by):
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    state = issue_state.board_state("o", "4", "x/y", kind="users", state_dir=tmp_path, run=board,
+                                    env={"SG_BOARD_READ_BACKOFF": "0"})
+    return priority_backfill.propagate(state, "x/y", spec, version, value, by)
+
+
+def test_a_spec_change_to_high_sets_high_on_each_open_task_child(tmp_path, monkeypatch):
+    board = Board({1: "low", 2: None}, {})
+    by = family(9, {1: ("open", []), 2: ("open", [])})
+
+    assert propagate(tmp_path, monkeypatch, board, 9, 1, "high", by) == {"1": "recorded", "2": "recorded"}
+    assert board.cards == {1: "high", 2: "high"}
+
+
+def test_a_spec_change_to_low_leaves_a_bug_child_at_high(tmp_path, monkeypatch):
+    board = Board({3: None}, {})
+    by = family(9, {3: ("open", ["bug"])})
+
+    assert propagate(tmp_path, monkeypatch, board, 9, 1, "low", by) == {"3": "recorded"}
+    assert board.cards[3] == "high"
+
+
+def test_a_spec_change_never_sets_a_loop_bug_child_below_urgent(tmp_path, monkeypatch):
+    board = Board({4: "high"}, {})
+    by = family(9, {4: ("open", ["bug", "loop-bug"])})
+
+    propagate(tmp_path, monkeypatch, board, 9, 1, "low", by)
+
+    assert board.cards[4] == "urgent"
+
+
+def test_a_retry_of_the_same_event_writes_nothing(tmp_path, monkeypatch):
+    board = Board({1: None}, {})
+    by = family(9, {1: ("open", [])})
+    propagate(tmp_path, monkeypatch, board, 9, 1, "high", by)
+    patches = len(board.patches)
+
+    assert propagate(tmp_path, monkeypatch, board, 9, 1, "high", by) == {"1": "duplicate"}
+    assert len(board.patches) == patches
+
+
+def test_the_writer_refuses_a_stale_event(tmp_path, monkeypatch):
+    board = Board({1: None}, {})
+    by = family(9, {1: ("open", [])})
+    propagate(tmp_path, monkeypatch, board, 9, 2, "high", by)
+
+    assert propagate(tmp_path, monkeypatch, board, 9, 1, "low", by) == {"1": "stale"}
+    assert board.cards[1] == "high"
+    assert len(board.patches) == 1
+
+
+def test_the_writer_refuses_a_child_with_an_ambiguous_parent(tmp_path, monkeypatch):
+    board = Board({1: None, 5: None}, {})
+    by = family(9, {1: ("open", []), 5: ("open", [])})
+    by[5]["body"] = "Parent: #9\nParent: #8"
+
+    assert propagate(tmp_path, monkeypatch, board, 9, 1, "high", by) == {"1": "recorded", "5": "ambiguous"}
+    assert board.cards[5] is None
+
+
+def test_a_reopened_child_keeps_its_priority(tmp_path, monkeypatch):
+    board = Board({6: "urgent"}, {})
+
+    assert propagate(tmp_path, monkeypatch, board, 9, 1, "low", family(9, {6: ("closed", ["bug"])})) == {}
+    assert board.patches == []
+
+    board = Board({6: "urgent"}, {6: ("open", ["bug"])})
+    assert backfill(tmp_path, board) == {}
+    assert board.cards[6] == "urgent"
+
+
+def test_a_corrupt_ledger_holds_the_child_and_writes_nothing(tmp_path, monkeypatch):
+    board = Board({1: None}, {})
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "x__y__1.json").write_text("{")
+
+    assert propagate(tmp_path, monkeypatch, board, 9, 1, "high", family(9, {1: ("open", [])})) == {"1": "held"}
+    assert board.patches == []
+
+
+def test_no_priority_write_moves_a_column(tmp_path, monkeypatch):
+    board = Board({1: None, 2: None}, {})
+    by = family(9, {1: ("open", []), 2: ("open", ["bug", "loop-bug"])})
+
+    propagate(tmp_path, monkeypatch, board, 9, 1, "high", by)
+
+    assert board.patches and all(
+        [f["id"] for f in p["fields"]] == ["F_PRIO"] for p in board.patches)
+
+
+@pytest.mark.parametrize("labels, spec, want", [
+    ([], "high", "high"),
+    (["bug"], "low", "high"),
+    (["bug", "loop-bug"], "normal", "urgent"),
+    ([], "low", "low"),
+    ([], None, "low"),
+])
+def test_a_new_child_starts_at_its_spec_or_its_own_floor(labels, spec, want):
+    assert priority_backfill.birth(labels, spec) == want
+
+
+def test_the_cli_takes_the_spec_priority_for_a_new_child():
+    out = subprocess.run([sys.executable, str(SCRIPTS / "priority_backfill.py"), "--spec", "high", "task"],
+                         capture_output=True, text=True, check=True).stdout
+    assert out.split() == ["high"]
