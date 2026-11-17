@@ -1057,6 +1057,7 @@ def board_write(args, n, why, reason=None):   # the one writer of a card: a stat
         err = named or (msg[0] if msg else "no output")
         if gone_msg(err):
             say(f"GONE-ISSUE #{n}: board write refused because the issue is gone: {err}")
+            if pending: drop_write(n, col)   # a deleted issue has no card to write: its prediction ends unwritten (#2074)
             if not dry: gone.touch()
             return False
         say(f"BOARD-WRITE-FAILED #{n}: {why}: {err}")
