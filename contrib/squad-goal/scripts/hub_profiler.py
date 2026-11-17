@@ -631,7 +631,8 @@ def trip_spans(events, card=None):
     - `queue`: the card's Todo move to the run's start, when `card` names that move.
     - `after`: the verdict to the card's Closed move, when `card` names that move.
     `card` is `{"todo": epoch, "closed": epoch}`, read from the board's transitions by the caller. A wait the caller
-    measures is 0 when it did not happen, never a missing stage; `queue` and `after` are None when no card is read.
+    measures is 0 when it did not happen, never a missing stage; `queue` and `after` are None when no card is read, and
+    `missing` names each card move the caller did not read, `todo` or `closed`.
     A stage the record does not hold is None, never a zero. `end` is the verdict time; a run with no passed land or no
     verdict is no delivery.
     """
@@ -684,6 +685,7 @@ def trip_spans(events, card=None):
             "coding": coding, "between": between, "review": review, "gates": gates,
             "landing": _ts(land) - max(before) if before else None,
             "after": closed - end if closed is not None and end is not None and closed >= end else None,
+            "missing": [name for name, moved in (("todo", todo), ("closed", closed)) if moved is None],
             "end": end}
 
 
