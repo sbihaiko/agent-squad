@@ -181,6 +181,14 @@ redfix() { local br=$1 sha=$2 line=$3 b ref full tip
 gh_land_stop && exit 0
 sg_work_branches "$remote" || { echo "BRANCHLAND: $wb_err"; exit 0; }
 
+# base_refs: the issues a commit the base carries names with a `Refs #N` line (#2184), each named once, as " 7 9 ". A close
+# proves a delivery the way wave.sh's landing reads one: the base must hold a commit whose message names the issue. The base is
+# fetched once per landing pass to refs/sg-close/$land; a fetch that fails proves nothing, so that landing closes nothing.
+base_refs() { local ref="refs/sg-close/$land"
+  /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "+refs/heads/$land:$ref" >/dev/null 2>&1 || { printf ' '; return 0; }
+  printf ' %s ' "$(/usr/bin/git -C "$SG_CHECKOUT" log --format=%B "$ref" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' \
+    | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' ')"; }
+
 # bookkeep <branch> <landed sha> <green sentence> <issue> [delete-branch]: the books a landing writes (#695, #1500). The push that
 # lands a branch deletes it, so only a branch the base already carried is deleted here (#1826).
 bookkeep() { local br=$1 ms=$2 green=$3 i=$4 del=${5:-}
@@ -190,7 +198,12 @@ bookkeep() { local br=$1 ms=$2 green=$3 i=$4 del=${5:-}
   # (#1500) A kept landing branch fix/<n>-land-<run> closes every `issue` line of its marker; a marker with none (the #1344 form) closes
   # the branch's own issue. The marker is read here, before it is removed below.
   kmark="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; closeset=$(sed -n 's/^issue //p' "$kmark" 2>/dev/null | sort -un | tr '\n' ' '); closeset=${closeset:-$i}
+  # (#2184) A close proves that a commit the base carries names the issue. A marker line with no such commit closes nothing,
+  # queues one note, and leaves the issue open with its card in Todo; the base is read once, after the landing put the work in it.
+  brefs=$(base_refs); closed=""
   for ci in $closeset; do
+    case "$brefs" in
+    *" $ci "*)
     out=$(python3 "$here/issue_ledger.py" landed "$SG_REPO#$ci" "$br" branch "$ms" 2>&1) || echo "BRANCHLAND: the landed fact of #$ci was refused: $out"
     gh_send -X PATCH "repos/$SG_REPO/issues/$ci" -f state=closed -f state_reason=completed >/dev/null || echo "BRANCHLAND: #$ci did not close after the landing of $br"
     mkdir -p "$SG_STATE/cq"   # the delivery comment goes through the queue: cqflush.sh keeps one per issue, edited in place (#328)
@@ -200,12 +213,18 @@ EOT
     col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed   # the shipped vocabulary has no Done (#468)
     $BOARD "$SG_OWNER" "$SG_PROJECT" "$col" "$ci" >/dev/null
     printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$ci" >> "$SG_STATE/landed.tsv"   # the ledger the hub's last-landing fact reads: the landed branch is deleted by the push, so the remote no longer names it. The board draws no lane for it (#384): a landed branch is read from its issue card
+    closed="${closed:+$closed }$ci";;
+    *)
+    mkdir -p "$SG_STATE/cq"
+    printf 'Status update — branch %s: the landing as %s carries no commit that names #%s with a `Refs #%s` line, so #%s stays open and its card stays in Todo.\n' "$br" "$ms" "$ci" "$ci" "$ci" > "$(sg_cq_status "$ci" "branchland$$")";;
+    esac
   done
   case "$br" in fix/*-land-*) remote_run=${br#fix/*-land-}; /usr/bin/git -C "$SG_CHECKOUT" push -q "$remote" --delete "wave/$remote_run" >/dev/null 2>&1; rm -f "$SG_STATE/landround-$(printf '%s' "$br" | tr / _).head";; esac   # the retired wave branch goes with its landing (#1500)
   [ -n "$del" ] && /usr/bin/git -C "$SG_CHECKOUT" push -q "$remote" --delete "$br" >/dev/null 2>&1   # a branch the base already carried is not deleted by any push of ours (#1826)
   rm -f "$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"   # a landed rebase round's branch is gone, so its kept marker is too (#1344)
   sg_base_red "$land" >/dev/null   # the base right after the landing (#786): a red head it lands on is reported now, not at the next landing
-  echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"; }
+  if [ -n "$closed" ]; then echo "BRANCHLAND LANDED $br as $ms into $land, closed #${closed// /, #}"
+  else echo "BRANCHLAND LANDED $br as $ms into $land, closed no issue: no commit the base carries names one"; fi; }
 
 # A kept landing branch (fix/<n>-land-<run> with its marker) whose tip the base already carries has landed: the work reached the base
 # in an earlier round, and the tip it names now is the base's own commit, so no review, gate or push can add anything (#1826). Its
