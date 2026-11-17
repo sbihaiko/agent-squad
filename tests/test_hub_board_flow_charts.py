@@ -1020,6 +1020,20 @@ def test_every_chart_token_the_lead_chart_paints_is_declared(hub, board, tmp_pat
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_every_family_token_the_lead_chart_names_is_declared(hub):
+    """#2171: every LT_* token the flow block names is declared beside it, so no draw raises a ReferenceError; the
+    survival reading is one call in the one More pane, on both payload paths."""
+    block = _flow_block(hub)
+    assert "LT_EXTRA" not in hub.PAGE, "the flow block names LT_EXTRA, and no line of the page declares it"
+    names = sorted(set(re.findall(r"\bLT_[A-Z0-9_]+\b", block)))
+    assert names, "the flow block names no family token"
+    for name in names:
+        assert re.search(rf"\b(?:const|let|var)\b[^\n;]*\b{name}\b", hub.PAGE), \
+            f"the flow block names {name}, and the page declares no such token"
+    assert hub.PAGE.count("ltKM(c)") == 1, "the survival reading is called more than once for one card"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_three_reference_lines_show_by_default_and_their_patterns_differ(hub, board, tmp_path):
     """#1332: the average, the median and p85 all draw at first; each is a toggle. All three are 1px and
     carry distinct patterns (solid, dashed, dotted), and the rolling mean is the stronger 3px line."""
@@ -1370,6 +1384,9 @@ def test_the_lead_plot_owns_most_of_the_card_at_the_owner_window(hub, board, tmp
     # The emitted height is the number the page's own rule names for this window, never a second layout constant.
     assert int(_render(hub, tmp_path, "lt-card-px.js", "String(ltCardPx())")) == card_h, \
         "the card's emitted height is not the height ltCardPx names for the window"
+    # The plot is the card's reason to exist, so it owns a meaningful share of it and never a sliver (#2171).
+    plot_h = int(_render(hub, tmp_path, "lt-plot-px.js", "String(ltPlotH())"))
+    assert plot_h >= card_h / 2, f"the plot box {plot_h} owns under half of the {card_h} px card"
     assert "const ltCardPx=()=>ltCardH(ltWinH());" in hub.PAGE, "ltCardH is defined and never applied"
     css = hub.PAGE
     assert re.search(r"#flowb \.ltcard\{[^}]*display:flex[^}]*flex-direction:column", css), \
@@ -1422,10 +1439,11 @@ def test_the_survival_reading_appears_once_with_and_without_the_summary(hub, boa
     without = {**lead, "control": {**lead["control"], "all": bare}}
     bare_out = _render(hub, tmp_path, "lt-km-no-summary.js", f"flowLead({json.dumps(without)})")
     text = chart["survival"]["text"]
+    marker = '<p class="fnote ltkm">'   # the survival paragraph's own opening, never a text count (#2171)
+    assert with_summary.count(marker) == 1, "the survival paragraph is not drawn exactly once beside the summary"
+    assert bare_out.count(marker) == 1, "the survival paragraph is not drawn exactly once on the no-summary path"
     assert with_summary.count(text) == 1, "the survival reading is drawn more than once beside the summary"
     assert bare_out.count(text) == 1, "the survival reading is lost on the no-summary path"
-    assert with_summary.count("ltkm") == 1 and bare_out.count("ltkm") == 1, \
-        "the survival paragraph is not one paragraph on both paths"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -1448,8 +1466,40 @@ def test_the_lead_plot_frame_is_the_plot_box_the_card_hands_it(hub, board, tmp_p
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_svg_view_box_matches_the_rendered_plot_box(hub, board, tmp_path):
+    """#2171: the drawn svg's viewBox height is the .ltplot box the page lays out, measured after the paint, never a
+    constant guess at the card's own text."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    block = _flow_block(hub).split("const ltPx=")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", STORAGE,
+        "const window={innerHeight:1000};",
+        "const box={innerHTML:'',hidden:false,clientWidth:1200,querySelector:()=>null};",
+        "const plot={getBoundingClientRect:()=>({height:612})};",
+        "const document={querySelector:sel=>String(sel).includes('.ltplot')?plot:null};",
+        "const $=()=>box;",
+        "const barQuery=()=>'ty=bug';",
+        "const fetch=async()=>({json:async()=>({})});",
+        block, 'LT.tf="all";LT.tried=true;', f"FLOWK='lead';FLOWD={{lead:{{lead:{json.dumps(lead)},t:0}}}};",
+        "drawFlow();process.stdout.write(box.innerHTML);",
+    ])
+    path = tmp_path / "lt-box-fit.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    m = re.search(r'<svg data-lt viewBox="0 0 [\d.]+ ([\d.]+)"', result.stdout)
+    assert m, "the card paints no lead chart"
+    assert float(m.group(1)) == 612, \
+        f"the svg viewBox height {m.group(1)} is not the 612 px plot box the page lays out"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_a_refused_lead_read_leaves_the_loading_sentence(hub, board, tmp_path):
-    """#2171: a rejected /api/leadtime read leaves the loading state at once and paints a chart, not a spinner."""
+    """#2171: a rejected /api/leadtime read leaves the loading state at once and paints a plain error card.
+
+    A first read with no good chart behind it never repaints the cached payload's chart as if it were the answer: the
+    card carries the measurement line and one error sentence, and no chart mark at all (#2171)."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     lead = _flow(hub)["lead"]
     block = _flow_block(hub).split("const ltPx=")[0]
@@ -1468,8 +1518,16 @@ def test_a_refused_lead_read_leaves_the_loading_sentence(hub, board, tmp_path):
     result = subprocess.run(["node", str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "ERR " not in result.stdout, result.stdout[:200]
-    assert "Loading the lead chart" not in result.stdout, "a refused read leaves the card in the loading state"
-    assert "<div class=ltcard" in result.stdout, "a refused read paints no card at all"
+    out = result.stdout
+    assert "Loading the lead chart" not in out, "a refused read leaves the card in the loading state"
+    assert "<svg data-lt" not in out and "<circle" not in out and "class=ltplot" not in out, \
+        "a refused first read paints the cached chart's marks"
+    exact = re.fullmatch(r'<div class=ltcard style="height:(\d+)px">'
+                         r'<p class=fhead>[^<]*<b>[^<]*</b>[^<]*</p>'
+                         r'<p class=fnote>the lead chart could not be read; try again</p>'
+                         r'</div><p class=flstat role=status>data read [^<]*</p>', out)
+    assert exact, f"a refused first read does not paint one plain error card: {out[:400]}"
+    assert int(exact.group(1)) > 0, "the error card states no height"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
