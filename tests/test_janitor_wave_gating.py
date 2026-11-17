@@ -100,7 +100,7 @@ def test_a_landing_pass_moves_the_wave_card_out_of_gating(tmp_path, monkeypatch)
     ga, journal = _journal(tmp_path)
     ga.record_attempt(journal, 0, TIP, "fail", "", now=100, wave=RUN)
     ga.record_attempt(journal, 0, "landhead2", "pass", "", now=200, wave=RUN)
-    assert _column(mod, CHILD) == "Code Complete"
+    assert _column(mod, CHILD) == "Landing"
 
 
 @pytest.mark.heavy
@@ -110,7 +110,7 @@ def test_a_live_gate_marker_reads_gating_and_a_gone_gate_does_not(tmp_path, monk
     marker.write_text(f"{os.getpid()} {int(time.time())} 900\n")
     assert _column(mod, CHILD) == "Gating"
     marker.unlink()
-    assert _column(mod, CHILD) == "Code Complete"
+    assert _column(mod, CHILD) == "Landing"
 
 
 @pytest.mark.heavy

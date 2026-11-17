@@ -55,7 +55,7 @@ or the new one, never a part-written one (ADR-0030). Each proved move also appen
 to `$SG_STATE/board-transitions.<owner>_<name>.jsonl`, the record of its repository (#897). A skipped or unproven move records nothing, and a holder or
 test-case write records nothing."""
 import fcntl, json, os, pathlib, sys, time
-from board_columns import HOLD, RESET_LABEL, past, refused_for_automated, reset_comment
+from board_columns import HOLD, RESET_LABEL, canonical, option_name, past, refused_for_automated, reset_comment
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
 args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]; proof = args[:1] == ["--proof"]; gate_tries = args[:1] == ["--gate-tries"]; priority = args[:1] == ["--priority"]
 args = args[1:] if add or run_fields or clear_run or test_case or remove or proof or gate_tries or priority else args
@@ -114,8 +114,9 @@ if remove:
     (st / "board-dirty").touch(); sys.exit(rc)
 status, nums = args[2], [int(x) for x in args[3:]]
 F = state.binding.status_field()
-if status not in F["opt"]: (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True); F = state.binding.status_field()
-if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
+if option_name(status, F["opt"]) is None: (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True); F = state.binding.status_field()
+carried_name = option_name(status, F["opt"])   # the spelling the board carries for the column: either one resolves (#2151)
+if carried_name is None: sys.exit(f"no Status option {status!r}")
 tries = max(1, state.binding.attempts - 1)   # a write has one attempt fewer than the bound: the compare is one of the reads SG_BOARD_READ_ATTEMPTS bounds (#327)
 rc = 0; proved = []; transitions = []; refusals = []   # one card, one node read: no whole-board read answers the compare or the proof (#1300)
 automated = os.environ.get("SG_MOVE_BY") != "owner"   # any writer that is not the owner's door is automated (ADR-0143)
@@ -186,7 +187,7 @@ for n in nums:
     read_failed = None
     try: have = state.read_one(n) or None   # the compare: the card's own read, and no PATCH when it already carries the Status (#327)
     except (RuntimeError, ValueError) as e: have = None; read_failed = str(e)[:200] or "the read did not answer"   # an automated writer that cannot read the card never moves it to Todo (#1909)
-    if have == status:
+    if canonical(have) == canonical(status):
         if was.get(str(n)) not in (None, status):   # the record and the carrier disagree: the compare records the carrier's column (#2123)
             transitions.append({"issue": n, "item": None, "from": was[str(n)], "to": status, "by": by, "pass": pss, "reason": "the carrier already carried it"})
         print(f"#{n} -> {status} (already carried, not written)"); continue
@@ -209,7 +210,7 @@ for n in nums:
     for k in range(tries):   # the write is written again, then read back: a PATCH answered ok can be a write the card never carries (#105)
         if k and state.binding.backoff: time.sleep(state.binding.backoff * (2 ** (k - 1)))
         try:
-            state.write(n, status)
+            state.write(n, carried_name)   # the option the board carries for the column, either spelling (#2151)
             written = True
             break
         except NotCarried as e:
@@ -217,19 +218,19 @@ for n in nums:
             refused = e.refused or refused   # the seam carries the refusal it was given: the note names it, the read is the verdict
             if e.refused:   # a refused write can be an option id the cache kept and the board dropped or recreated: the next attempt reads the field again (#311)
                 (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True)
-                if status not in state.binding.status_field()["opt"]: sys.exit(f"no Status option {status!r}")
+                if option_name(status, state.binding.status_field()["opt"]) is None: sys.exit(f"no Status option {status!r}")
     if not written and last is not None and not last.refused:   # GitHub accepted the write and the read is behind it -- no Status yet (#403) or the old one (#434): read again within the settle bound, never written again
         def probe(n=n):
             global reads
             reads += 1
-            try: return state.read_one(n) == status
+            try: return canonical(state.read_one(n)) == canonical(status)
             except (RuntimeError, ValueError): return False
-        old = have not in (None, status)   # the card carried another Status before the write: a write it never carries is more likely lost than late, so its settle is capped (#438)
+        old = have is not None and canonical(have) != canonical(status)   # the card carried another Status before the write: a write it never carries is more likely lost than late, so its settle is capped (#438)
         cap = float(os.environ.get("SG_BOARD_OLD_SETTLE_SECONDS", "10")) if old else None
         written = bool(state.binding.settle(probe, tries, cap))
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
-        print(f"#{n} -> {status}"); proved.append((iid, status)); moved.append((n, have, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": status, "by": by, "pass": pss, "reason": reason})
+        print(f"#{n} -> {status}"); proved.append((iid, carried_name)); moved.append((n, have, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": carried_name, "by": by, "pass": pss, "reason": reason})
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
         print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1

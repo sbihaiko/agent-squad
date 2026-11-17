@@ -6,7 +6,10 @@ no client, so the same inputs always give the same facts. The table decides the 
 IN_DEV = ("behind", "identical")   # a compare standing: the branch tip is in the landing branch
 AHEAD = ("ahead", "diverged")     # a compare standing: the branch holds commits the landing branch lacks
 APPROVED = "VERDICT: APPROVE"
-LIVE_WORK = ("Todo", "In Progress", "Doing", "Code Review", "Code Complete", "Gating")   # a child card in Todo or beyond, before done
+# A child card in Todo or beyond, before done. The two renamed columns carry both spellings, the version 1 name and the
+# canonical one, so a card read before or after the board's rename is in flight either way (#2151): board_columns.ALIAS is
+# the one map that names the pair, and this module reads no host, so it holds the spellings as data.
+LIVE_WORK = ("Todo", "In Progress", "Doing", "Code Review", "Code Complete", "Review", "Landing", "Gating")
 
 
 def review_state(verdict_text, sha_text, tip):

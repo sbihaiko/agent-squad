@@ -218,7 +218,7 @@ def test_a_landed_child_waiting_for_its_open_wave_is_in_code_review(tmp_path):
     sandbox(tmp_path, "echo 0", landed=True, wave="open", card="Doing")
     janitor(tmp_path, **SHIPPED)
     log = writes(tmp_path)
-    assert f"STATUS o 4 Code Review {N}" in log, f"the card did not move to Code Review: {log}"
+    assert f"STATUS o 4 Review {N}" in log, f"the card did not move to Review: {log}"
     assert (tmp_path / f"st/auto/disp-{N}").exists(), "the dispatch marker went while the wave could still take the child"
 
 

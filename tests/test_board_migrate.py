@@ -9,7 +9,7 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 SCRIPT = SCRIPTS / "board_migrate.py"
-MOVED = ("Blocked", "In Progress", "Done", "Open Specs", "Merging", "Landing")
+MOVED = ("Blocked", "In Progress", "Done", "Open Specs", "Merging")
 RETIRED = ("Testing", "Pushing")   # the definition no longer names them, and no column replaces them
 OLD = MOVED + RETIRED
 ITEMS = [
@@ -49,7 +49,7 @@ def test_an_open_spec_lands_in_backlog_with_the_spec_label(mig):
 def test_a_blocked_card_lands_where_its_work_reached_with_the_owner_marker(mig):
     plan = mig.plan(ITEMS)
 
-    assert _move(plan, 3) == {"card": 3, "old": "Blocked", "new": "Code Complete", "add_labels": ["frozen:owner"]}
+    assert _move(plan, 3) == {"card": 3, "old": "Blocked", "new": "Landing", "add_labels": ["frozen:owner"]}
     assert _move(plan, 4)["new"] == "Backlog"
 
 
@@ -67,17 +67,17 @@ def test_a_card_closed_as_not_planned_moves_to_abandoned(mig):
     assert _move(plan, 13)["new"] == "Abandoned"
 
 
-def test_merging_and_landing_take_their_shipped_name_pushing(mig):
+def test_merging_takes_the_shipped_landing_and_a_landing_card_is_never_moved(mig):
     plan = mig.plan(ITEMS)
 
-    assert _move(plan, 9)["new"] == "Code Complete"
-    assert _move(plan, 10)["new"] == "Code Complete"
+    assert _move(plan, 9)["new"] == "Landing"
+    assert 10 not in {m["card"] for m in plan["moves"]}, "the legacy Landing card already holds the shipped column"
 
 
 def test_a_card_on_a_shipped_column_is_never_moved(mig):
     plan = mig.plan(ITEMS)
 
-    assert {m["card"] for m in plan["moves"]} == {1, 2, 3, 4, 5, 6, 9, 10}
+    assert {m["card"] for m in plan["moves"]} == {1, 2, 3, 4, 5, 6, 9}
 
 
 def test_the_plan_lists_every_old_option_for_removal_after_the_moves(mig):
@@ -90,8 +90,8 @@ def test_the_plan_lists_every_old_option_for_removal_after_the_moves(mig):
 def test_removal_is_refused_with_counts_while_a_card_carries_an_option(mig):
     counts = mig.carried(ITEMS)
 
-    assert counts == {"Blocked": 2, "In Progress": 1, "Done": 1, "Open Specs": 2, "Merging": 1, "Landing": 1}
-    assert "Blocked: 2" in mig.refusal(counts) and "Merging: 1" in mig.refusal(counts) and "Landing: 1" in mig.refusal(counts)
+    assert counts == {"Blocked": 2, "In Progress": 1, "Done": 1, "Open Specs": 2, "Merging": 1}
+    assert "Blocked: 2" in mig.refusal(counts) and "Merging: 1" in mig.refusal(counts)
 
 
 def test_removal_is_allowed_once_no_card_carries_an_old_option(mig):
@@ -128,10 +128,10 @@ def test_the_dry_run_prints_every_move_and_removal_and_writes_nothing(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "dry run: nothing is written" in out
     assert "MOVE #1 Open Specs -> Backlog +spec" in out
-    assert "MOVE #3 Blocked -> Code Complete +frozen:owner" in out
-    assert "MOVE #9 Merging -> Code Complete" in out
-    assert "MOVE #10 Landing -> Code Complete" in out
-    assert out.count("MOVE #") == 8
+    assert "MOVE #3 Blocked -> Landing +frozen:owner" in out
+    assert "MOVE #9 Merging -> Landing" in out
+    assert "MOVE #10" not in out, "a card on the shipped Landing column is never moved"
+    assert out.count("MOVE #") == 7
     assert all(f"REMOVE option {o}" in out for o in OLD)
     assert "REMOVE option Testing" in out and "REMOVE option Pushing" in out
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(before + ["items.json"])

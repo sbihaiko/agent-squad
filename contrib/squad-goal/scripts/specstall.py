@@ -7,16 +7,18 @@ ticket is progress; a commit that only mentions `#N`, and a TDD RED commit, are 
 usage: python3 specstall.py closers <issues.json> <dev-subjects>
 """
 import json
+import pathlib
 import re
 import sys
 
-# The shipped board's own axis, in the definition's order (#2002). The order is the fact this rule reads, so the whole
-# axis sits here and no reader carries half of it: `tests/test_spec_stall.py` proves it names the shipped columns.
-COLUMNS = ("Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Gating", "Closed", "Abandoned")
-# A card that wears a name the old vocabulary gave its column reads as the shipped column. Blocked is no column: it is
-# the owner's freeze over the column the work reached, so a card wears it on no axis of its own.
-SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Merging": "Code Complete",
-                "Landing": "Code Complete", "Blocked": None}
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the alias map sits beside this script (#2151)
+from board_columns import ALIAS_COLUMNS, SHIPPED_NAME, canonical   # noqa: E402  the one map of the board's column names
+
+# The shipped board's own axis, in the definition's order (#2002), read from the one alias map: `tests/test_spec_stall.py`
+# proves it names the shipped columns. A card that wears either spelling of a column reads as that column, and a card that
+# wears a retired pre-definition name reads as the column `SHIPPED_NAME` gives it. Blocked is no column: it is the owner's
+# freeze over the column the work reached, so a card wears it on no axis of its own.
+COLUMNS = tuple(entry["name"] for entry in ALIAS_COLUMNS)
 START = COLUMNS.index("Todo")   # the owner's go signal: a card that reached this column or any later one is started
 _CLOSING = re.compile(r"(?i)\b(?:close[sd]?|fix(?:es|ed)?)\s+#(\d+)\b")   # the keywords that close an issue when a commit lands
 
@@ -61,6 +63,7 @@ def progress_of(commits):
 
 def started(col):
     """True when the spec's card sits in Todo or a later column: the owner's move that starts a spec (ADR-0142 clause 5)."""
+    col = canonical(col)
     col = SHIPPED_NAME.get(col, col)
     return col in COLUMNS and COLUMNS.index(col) >= START
 

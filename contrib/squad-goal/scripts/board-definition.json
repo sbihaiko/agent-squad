@@ -1,5 +1,5 @@
 {
-  "definition_version": 1,
+  "definition_version": 2,
   "board": {
     "title": "Squad Board",
     "description": "The monotone board: eight columns for the issue, two terminals, the other entities beside the axis."
@@ -45,7 +45,7 @@
       "terminal": false
     },
     {
-      "name": "Code Review",
+      "name": "Review",
       "color": "ORANGE",
       "fact": {"all": ["review_wait", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch"]}}]},
       "description": "The child's code is done; its review or a fix round holds it",
@@ -53,7 +53,7 @@
       "terminal": false
     },
     {
-      "name": "Code Complete",
+      "name": "Landing",
       "color": "ORANGE",
       "fact": {"all": ["wave_branch", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating"]}}]},
       "description": "A child is in the wave branch",
