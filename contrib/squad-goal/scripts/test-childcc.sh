@@ -554,6 +554,17 @@ out=$(lpass pick); rc=$?
 [ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "neither run-owned child is reviewed or fixed by childcc" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
 [ "$rc" = 3 ] && ok "the child its run did not approve holds the pass, so the wave waits for it" || ko "pick: exit $rc: $out"
 
+# A run that approved the child's head and then ended before landing it left its approval in the record, and the child
+# stands at that head: the approval is the evidence the wave reads, so the child enters. A hold here would never clear,
+# because no actor reviews that head again (#2089).
+export GH_NUMS="6320:Doing"; rm -f "$T"/st/review-*
+happ=$(orun appl 6320 approve); rfile appl "$happ" APPROVE
+: > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass appl); rc=$?
+[ "$(/usr/bin/grep -c '^enter appl 6320' "$WAVE_CALLS")" = 1 ] && ok "a child its run approved and never landed enters on that approval (#2089)" || ko "approved head not entered: $(cat "$WAVE_CALLS") $out"
+! /usr/bin/grep -q 'approved no head for it' <<<"$out" && ok "an approved head is never deferred as one the run approved no head for (#2089)" || ko "deferred as unapproved: $out"
+[ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "the approved child is still never reviewed or fixed here" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
+
 # A deferral is diagnosable: every pass names each child it leaves and the cause, one line per child (#931). A child a
 # finished run never approved can never be approved: no actor reviews that head again, so the hold loses its path to one
 # and the deferral deadline owns it (ADR-0151 rule 5). The deadline runs, names the cause every pass, and the issue goes
