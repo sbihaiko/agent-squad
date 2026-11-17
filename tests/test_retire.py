@@ -4,9 +4,11 @@ The retirement ends the run's engine by proven ownership (the pid its record nam
 process of the run survives, keeps its work, and only then writes the terminal verdict. A survivor or an unknown read keeps
 the claim: nothing is written and the caller does not requeue. Every process here is a stub; no real process is signalled.
 """
+import importlib.util
 import json
 import signal
 import time
+from pathlib import Path
 
 from squad import procs as P
 from squad import record
@@ -14,6 +16,7 @@ from squad import retire as R
 
 NOW = 1_800_000_000.0
 ENGINE_START = NOW - 4000
+HUB_PY = Path(__file__).resolve().parent.parent / "contrib/squad-goal/scripts/hub.py"
 
 
 class World:
@@ -76,6 +79,25 @@ def go(folder, world, saved=None, wip_ok=True):
 def verdicts(folder):
     return [json.loads(line) for line in (folder / "record.jsonl").read_text().splitlines()
             if json.loads(line).get("event") == "verdict"]
+
+
+def hub_state(folder, tmp_path, monkeypatch):
+    for key, value in {"SG_REPO": "x/y", "SG_OWNER": "x", "SG_PROJECT": "4", "SG_CHECKOUT": str(tmp_path / "co"),
+                       "SG_HUB_DIR": str(tmp_path / "hub"), "SG_STATE": str(tmp_path / "st")}.items():
+        monkeypatch.setenv(key, value)
+    (tmp_path / "hub").mkdir()
+    spec = importlib.util.spec_from_file_location("hub_retire_state", HUB_PY)
+    hub = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hub)
+    return hub.state_of(hub.scan(folder / "record.jsonl"), 0)
+
+
+def test_an_age_cap_retirement_reads_as_retired_in_the_hub(tmp_path, monkeypatch):
+    f = run_folder(tmp_path, engine_events())
+    out = go(f, World())
+    assert out.ended, out.lines
+    assert [v["reasons"] for v in verdicts(f)] == [["killed/age-cap-requeue"]]
+    assert hub_state(f, tmp_path, monkeypatch) == "retired-age-cap"
 
 
 def test_the_engine_tree_ends_and_the_verdict_follows(tmp_path):
