@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -76,6 +77,45 @@ def test_page_renders_blocked_by_links_and_omits_an_empty_row(hub):
     assert 'href="https://github.com/__REPO__/issues/${' in cards or 'href="https://github.com/__REPO__/issues/' in cards
     assert "x.b" in cards
     assert re.search(r"x\.b\s*&&\s*x\.b\.length|x\.b\|\|\[\]\)\.length", cards)
+
+
+CARD_STUBS = """
+const esc = s => String(s);
+const colOf = () => "#000";
+const CN = {};
+const SLOTS = new Map();
+const cardColor = () => "var(--mute)";
+const tint = () => "";
+const gstrip = () => "";
+const age = () => "";
+const ageC = () => "";
+const bo = {labels: []};
+"""
+
+
+def _card_html(hub, card):
+    """One card drawn by the page's own renderer, run by node."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required")
+    src = re.search(r"^const cards=.*$", hub.PAGE, re.M).group(0)
+    script = CARD_STUBS + src + "\nconsole.log(JSON.stringify(cards({name: 'Todo'},"
+    script += f"[{json.dumps(card)}],[{json.dumps(card)}])));"
+    out = subprocess.run([node, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_a_hub_card_shows_its_open_blockers(hub):
+    """SPEC 1965, #1988: a hub card names the open blockers its row carries, with a link to each."""
+    html = _card_html(hub, {"n": 1506, "t": "blocked", "l": [], "b": [1496, 1497]})
+    assert "blocked by" in html, html
+    assert "#1496" in html and "#1497" in html, html
+
+
+def test_a_hub_card_with_no_open_blocker_shows_no_line(hub):
+    html = _card_html(hub, {"n": 1500, "t": "clear", "l": []})
+    assert "blocked by" not in html, html
 
 
 def test_blocker_line_stays_inside_a_300px_card(hub):

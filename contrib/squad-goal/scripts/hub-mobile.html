@@ -100,7 +100,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 .card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg);padding:var(--card-gap-y-phone) var(--card-gap-x-phone);font:var(--fs-body) system-ui,sans-serif;min-height:44px}
 .card .cid{display:block;color:var(--mute);font:var(--fs-caption) var(--font-mono);margin-bottom:2px}.shb{font-family:var(--font-mono)}
 .card .lchip{margin-left:6px}
-.card .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,var(--line))}   /* the spec in its color; the wave is text, never a shade (#917) */
+.card .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,var(--line))}   /* the spec in its color (#917) */
 .empty{color:var(--mute);text-align:center;padding:24px 0}
 .lane-h{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px;color:var(--mute);font-size:var(--fs-body);cursor:pointer;border-bottom:1px solid var(--line)}
 .lane-h .tw{width:14px;color:var(--mute)}
@@ -131,7 +131,6 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #sh-chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
 #sh-chips .chip,.card .lchip{display:inline-flex;align-items:center;min-height:var(--chip-h);padding:0 8px;border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-caption);color:var(--mute)}
 #sh-chips .chip.spec{border-color:var(--acc);color:var(--acc)}
-#sh-chips .chip.wave{color:var(--fg)}
 #sh-meta{margin:4px 0 10px}
 #sh-meta .mrow{display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);font-size:var(--fs-caption)}
 #sh-meta b{flex:0 0 84px;min-width:84px;color:var(--mute);font-weight:600}
@@ -1385,12 +1384,10 @@ function cardButton(x, i) {
   const b = document.createElement("button");
   b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n; b.dataset.hr = x.hr || "";
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
-  // The card wears its spec's color and its wave as a text chip (#917); the rules are the desktop board's (board-lanes.js).
+  // The card wears its spec's color and its spec as a text chip (#917); the rules are the desktop board's (board-lanes.js).
   b.setAttribute("style", "--lc:" + cardColor(mSlots(), x));
   const chip = (k, text) => { const c = document.createElement("span"); c.className = "lchip"; c.dataset.k = k; c.textContent = text; return c; };
   if (x.pa != null && !x.sp) id.append(chip("spec", x.pa));
-  const w = laneWaveOf(x);
-  if (w !== null) id.append(chip("wave", "W" + w));
   // The card's Gate Tries (issue 1255): the count the gate-attempt journal projects rides the row as its chip
   // text, a fact the row carries, so this page names no column of its own.
   if (x.gchip) id.append(chip("gate", x.gchip));
@@ -1432,9 +1429,8 @@ function laneHeader(l) {
   if (l.num != null) h.setAttribute("style", "--lc:" + specColor(mSlots(), l.num));   // the lane header takes its spec color (#917)
   const tw = document.createElement("span"); tw.className = "tw"; tw.textContent = l.collapsed ? "▸" : "▾";
   const id = document.createElement("span"); id.className = "lid"; id.textContent = l.sid;
-  const tt = document.createElement("span"); tt.className = "ltt"; tt.textContent = l.wl;
   const pc = document.createElement("span"); pc.className = "pc"; pc.textContent = l.total ? l.closed + "/" + l.total : "";
-  h.append(tw, id, tt, pc);
+  h.append(tw, id, pc);
   return h;
 }
 let cardNodes = new Map();   // card key -> {sig, el}: the nodes the last render drew
@@ -1500,8 +1496,7 @@ const esc = escHTML;const chipOf = (n, r) => `<a class="shb" data-n="${escHTML(n
 const rowHTML = (label, html) => '<div class="mrow"><b>' + label + '</b><span>' + html + "</span></div>";
 const ROWS = ["Column", "Labels", "Blocked by", "Blocks", "Runs", "PR · CI", "Opened"];
 function sheetChips(x) {
-  const wave = (x.l || []).map(l => (String(l).match(/^wave:(\d+)$/) || [])[1]).filter(Boolean)[0];
-  return (x.sp ? '<span class="chip spec">SPEC</span>' : "") + (wave ? '<span class="chip wave">W' + escHTML(wave) + "</span>" : "");
+  return x.sp ? '<span class="chip spec">SPEC</span>' : "";
 }
 function sheetMeta(x, d) {
   const prs = (x.prf || []).map(p => `<a class="shb" target="_blank" rel="noopener" href="https://github.com/${escHTML(p.r || x.r || "")}/pull/${escHTML(p.n)}">#${escHTML(p.n)}${p.ci ? " · CI " + escHTML(p.ci) : ""}</a>`);

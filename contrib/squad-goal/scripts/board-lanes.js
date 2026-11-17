@@ -12,26 +12,14 @@ const cellView=rows=>({shown:rows,more:0});
 const COL_MIN="320px", COL_WEIGHT_MAX=4;
 const colWeight=n=>Math.max(1,Math.min(COL_WEIGHT_MAX,n||0));
 const colTracks=counts=>counts.map(n=>`minmax(${COL_MIN},${colWeight(n)}fr)`).join(" ");
-const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
-const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
 const numCmp=(a,b)=>a==null?(b==null?0:1):b==null?-1:a-b;
-// A wave belongs to one spec: the same wave of two specs is two lanes and two Waves options (#980).
-const waveOptKey=x=>specKey(x)+"/"+waveKey(x);
-const sumKey=(spec,wave)=>(spec==null?"none":spec)+"/"+(wave==null?"none":wave);
-const waveLabel=(spec,wave)=>(spec==null?"No spec":"SPEC "+spec)+" · "+(wave==null?"No wave":"Wave "+wave);
-const waveLane=(spec,wave)=>{const num=spec==null?null:+spec;return[(num==null?"none":String(num))+"/"+(wave==null?"none":String(wave)),
-  {kind:"sw",num,wave,title:waveLabel(num,wave),sid:num==null?"No spec":"SPEC "+num,wl:wave==null?"No wave":"Wave "+wave}]};
-// The Waves filter's options: one per spec and wave the rows hold, in spec then wave order, each named for its spec (#980).
-function waveOptions(rows){
-  const seen=new Map();
-  rows.forEach(x=>{if(x.sp)return;const key=waveOptKey(x);if(!seen.has(key))seen.set(key,{key,spec:x.pa==null?null:+x.pa,wave:laneWaveOf(x)})});
-  return[...seen.values()].sort((a,b)=>numCmp(a.spec,b.spec)||numCmp(a.wave,b.wave)).map(o=>({key:o.key,label:waveLabel(o.spec,o.wave)}))}
 // A card's kind for the Kinds filter (#904): a pull request, a bug (labelled bug or loop-bug), or an issue.
 const kindKey=x=>x.kind==="pr"?"pr":(hasLabel(x,"bug")||hasLabel(x,"loop-bug"))?"bug":"issue";
 const KIND_OPTIONS=[["issue","Issue"],["bug","Bug"],["pr","PR"]];
 // The filters (#899, #904): an empty list means all; the lists combine with AND. Keys are the values the bar offers.
-const boardOk=(x,fw,fs,fk=[])=>(!fw.length||fw.includes(waveOptKey(x)))&&(!fs.length||fs.includes(specKey(x)))&&(!fk.length||fk.includes(kindKey(x)));
+// A `wave:NN` label is no filter and no lane (SPEC 1965, #1988).
+const boardOk=(x,fs,fk=[])=>(!fs.length||fs.includes(specKey(x)))&&(!fk.length||fk.includes(kindKey(x)));
 // A spec the summary names closed or abandoned: finished, so it has no lane and no option (#972).
 const goneSpecsOf=(groups,sum={})=>{const ends=new Set(groups.filter(g=>g.end).map(g=>g.name));return new Set((sum.specs||[]).filter(s=>ends.has(s.st)).map(s=>s.n))};
 // The Specs options (#981): a spec is one only while it is unfinished and an open ticket sits under it. A group with `end`
@@ -47,8 +35,7 @@ function specOptions(groups,sum={}){
 const keptSpecs=(saved,groups,sum)=>{const opts=specOptions(groups,sum);return saved.filter(k=>opts.includes(k))};
 // A saved hidden set drops every closed status on load: history is never a hidden column (#969).
 const keptHidden=(saved,groups)=>{const ends=new Set(groups.filter(g=>g.end).map(g=>g.name));return saved.filter(n=>!ends.has(n))};
-// <card-rules>: the spec color and wave chip rules; the mobile page inlines this block alone (#917). It reads
-// laneWaveOf, which each page declares once: the board above, the mobile page in its gesture module (#980).
+// <card-rules>: the spec color rules; the mobile page inlines this block alone (#917).
 // A spec's color (#917): the spec number picks a palette slot, number mod 8. A slot already taken goes to the next free
 // slot, so two specs differ while the palette has room. Specs are read in number order, so the board order changes nothing.
 const SPEC_GREY="var(--mute)";   // the stale board's cue alone (#1640): a board the hub names stale is drawn grey, never a card
@@ -59,43 +46,40 @@ const specColor=(slots,n)=>n==null||!Number.isFinite(Number(n))?SPEC_GREY:`var(-
 const cardSpec=x=>x.sp?x.n:(x.pa??x.n);   // a spec card wears its own color, and a card of no spec its number's: a card is never grey (#1640)
 const isLoopBug=x=>(x.l||[]).some(l=>l==="loop-bug"||String(l).startsWith("loop-bug:"));
 const cardColor=(slots,x)=>isLoopBug(x)?"var(--err)":specColor(slots,cardSpec(x));   // a loop-bug has no spec: it wears the Loop bugs lane red
-// The wave chip (#917): text that names the card's wave, never a shade; a card with no wave shows none.
-const waveChip=x=>{const w=laneWaveOf(x);return w===null?"":`<span class=lchip data-k=wave title="wave ${w}">W${w}</span>`};
 // </card-rules>
 const SPEC_IN_FLIGHT=["Todo","In Progress","Doing","Code Review","Code Complete","Gating"];   // a ticket in flight, identical to board_facts.py LIVE_WORK
-// groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, fk, text, lc, hideDone,
-// closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
+// groups: the issue columns in board order, each { name, items }. o: { fs, fk, text, lc, hideDone, closed, hidden }.
+// `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.
 function buildBoard(groups,o){
-  const mode=o.mode,ends=new Set(groups.filter(g=>g.end).map(g=>g.name)),cols=groups.filter(g=>!g.end).map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],fk=o.fk||[],text=o.text||(()=>true);
-  const hasFilter=!!(fw.length||fs.length||fk.length||o.search);
+  const ends=new Set(groups.filter(g=>g.end).map(g=>g.name)),cols=groups.filter(g=>!g.end).map(g=>g.name),closed=o.closed,fs=o.fs||[],fk=o.fk||[],text=o.text||(()=>true);
+  const hasFilter=!!(fs.length||fk.length||o.search);
   const specs=new Map(),rows=[];
   const goneSpecs=goneSpecsOf(groups,o.sum);   // a spec whose card is closed or abandoned has no work left: no lane (#890, #972)
-  const sumSpec=new Map((o.sum?.specs||[]).map(s=>[s.n,s])),sumWave=new Map((o.sum?.waves||[]).map(w=>[sumKey(w.spec,w.wave),w]));
+  const sumSpec=new Map((o.sum?.specs||[]).map(s=>[s.n,s]));
 groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(x.n))specs.set(x.n,{title:plain(x.t),st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
  return}rows.push({...x,col:g.name})}));
   const lanes=new Map(),ensure=(id,meta)=>{if(!lanes.has(id))lanes.set(id,{id,...meta,all:[],vis:[]});return lanes.get(id)};
   const laneOf=x=>{
     if(hasLabel(x,"loop-bug"))return["bugs",{kind:"bugs",title:"Loop bugs"}];
-    if(mode==="wave")return waveLane(x.pa,laneWaveOf(x));
     if(x.pa==null)return["none",{kind:"none",title:"No spec"}];
     const sp=specs.get(x.pa)||{title:"",st:""};
     return["s"+x.pa,{kind:"s",num:x.pa,title:sp.title,st:sp.st,sc:sp.sc}]};
-  if(mode!=="wave")specs.forEach((sp,num)=>ensure("s"+num,{kind:"s",num,title:sp.title,st:sp.st,sc:sp.sc}));   // a spec card on the board is always a lane
+  specs.forEach((sp,num)=>ensure("s"+num,{kind:"s",num,title:sp.title,st:sp.st,sc:sp.sc}));   // a spec card on the board is always a lane
   rows.forEach(x=>{if(goneSpecs.has(x.pa)&&ends.has(x.col))return;   // a closed spec keeps no lane: its open card falls to No spec, its closed card is history (#890)
-  const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(!ends.has(x.col)&&boardOk(x,fw,fs,fk)&&text(x))l.vis.push(x)});   // a closed status is history: its cards count for progress, never for a card, a count or the search (#969)
+  const[id,meta]=goneSpecs.has(x.pa)?["none",{kind:"none",title:"No spec"}]:laneOf(x),l=ensure(id,meta);l.all.push(x);if(!ends.has(x.col)&&boardOk(x,fs,fk)&&text(x))l.vis.push(x)});   // a closed status is history: its cards count for progress, never for a card, a count or the search (#969)
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
     l.doing=o.doing?l.all.filter(x=>x.col===o.doing).length:0;
     l.review=o.review?l.all.filter(x=>x.col===o.review).length:0;   // the review share of the bar, in its own colour after the held share (owner, 2026-11-02)   // the bar's held share: the cards a run claims, drawn in the closed green read through (owner, 2026-11-02)
-    const s=l.kind==="s"?sumSpec.get(l.num):l.kind==="sw"?sumWave.get(sumKey(l.num,l.wave)):l.kind==="none"?o.sum?.none:null;   // No spec: open cards plus the last seven days closed, counted by the hub (owner)   // a closed row is never served: the summary counts it (#972)
+    const s=l.kind==="s"?sumSpec.get(l.num):l.kind==="none"?o.sum?.none:null;   // No spec: open cards plus the last seven days closed, counted by the hub (owner)   // a closed row is never served: the summary counts it (#972)
     if(s){l.closed=s.closed;l.total=s.total;if(l.kind==="s"){l.far=s.far;l.farN=s.far_n}}   // the tickets' furthest column, a count beside the spec, never its own column (#1906)
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
     if(l.kind==="s"&&m){l.closed=+m[1];l.total=+m[2]}
     l.done=l.total>0&&l.closed===l.total&&!l.all.some(x=>!ends.has(x.col));l.inFlight=l.all.filter(x=>SPEC_IN_FLIGHT.includes(x.col)).length;l.started=l.kind==="s"&&(l.st==="Todo"||l.inFlight>0);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
   const frac=l=>l.total>0?l.closed/l.total:0;
-  const rank=l=>l.kind==="bugs"?0:mode==="wave"?((l.kind==="none"||(l.kind==="sw"&&l.num==null))?2:1):l.kind==="none"?3:l.started?1:2;
-  const order=(a,b)=>mode==="wave"?(numCmp(a.num,b.num)||numCmp(a.wave,b.wave)):a.started?((frac(b)-frac(a))||(b.inFlight-a.inFlight)||((a.num??0)-(b.num??0))):((a.num??0)-(b.num??0));
+  const rank=l=>l.kind==="bugs"?0:l.kind==="none"?3:l.started?1:2;
+  const order=(a,b)=>a.started?((frac(b)-frac(a))||(b.inFlight-a.inFlight)||((a.num??0)-(b.num??0))):((a.num??0)-(b.num??0));
   const list=shown.filter(l=>!(o.hideDone&&l.done)).sort((a,b)=>rank(a)-rank(b)||order(a,b));
   const lc=o.lc||{};
   list.forEach(l=>{l.collapsed=Object.prototype.hasOwnProperty.call(lc,l.id)?!!lc[l.id]:l.done});   // a done lane starts collapsed (#891)
@@ -111,7 +95,7 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
 
 // The lane header takes two rows of flex items (#2026). Row 1 holds the spec number, the title, the column chip, the GitHub
 // mark and the Sync press, the title taking the free space. Row 2 holds the progress bar, the fraction and the counts, the
-// counts at the right edge. A wave lane's name takes the free space of row 1 and ends in an ellipsis.
+// counts at the right edge.
 const laneHeadCols=[{k:"id",al:"flex-end"},{k:"title",al:"flex-start"},{k:"bar",al:"flex-start"},
   {k:"frac",al:"flex-end"},{k:"chip",al:"center"},{k:"gh",al:"flex-end"},{k:"sync",al:"flex-end"},
   {k:"counts",al:"flex-end"}];
@@ -123,7 +107,7 @@ const laneHeadRows=[["id","title","chip","gh","sync"],["bar","frac","counts"]];
 function laneHead(l,v){
   const fact=k=>({...laneHeadCols.find(c=>c.k===k)});
   const counted=l.kind==="s"||l.kind==="none";
-  const idText=l.kind==="s"?"SPEC "+l.num:l.kind==="bugs"?"Loop bugs":l.kind==="sw"?l.sid+" · "+l.wl:l.title;
+  const idText=l.kind==="s"?"SPEC "+l.num:l.kind==="bugs"?"Loop bugs":l.title;
   const titleText=l.kind==="s"?l.title:l.kind==="bugs"?"defects of the loop itself: a prefixed label halts dispatch, and loop-bug:landing halts the landing too (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";
   const count=n=>l.counts[n]?String(l.counts[n]):"–";
   // A spec keeps its own column (the chip), and the furthest column its tickets reached stands beside it as one more count
@@ -131,8 +115,8 @@ function laneHead(l,v){
   const counts=[v.todo,v.doing,v.review].map(n=>[n,count(n)]);
   if(l.kind==="s"&&l.far)counts.push(["furthest",l.far+(l.farN?` ${l.farN}`:"")]);
   const cell={
-    id:{...fact("id"),text:idText,full:l.kind==="sw"},
-    title:{...fact("title"),text:l.kind==="sw"?"":titleText},
+    id:{...fact("id"),text:idText},
+    title:{...fact("title"),text:titleText},
     bar:{...fact("bar"),on:counted,closed:l.closed,total:l.total,doing:l.doing,review:l.review},
     frac:{...fact("frac"),text:counted?l.closed+"/"+l.total:""},
     chip:{...fact("chip"),text:l.st||""},
@@ -143,5 +127,5 @@ function laneHead(l,v){
 }
 
 // A saved state from a control the board no longer has is dropped on load (#899): the labels filter, the Specs mode,
-// maximize, collapse and the pip. The kept keys (the filters, the lanes, the view) stay as they are.
-function dropRemoved(bo){for(const k of["labels","label","specs","max","off","pip"])delete bo[k];if(bo.fw)bo.fw=bo.fw.filter(k=>String(k).includes("/"));return bo}   // a Waves key is spec/wave now; a bare wave key is from before (#980)
+// maximize, collapse, the pip and the Waves filter (#1988). The kept keys (the filters, the lanes, the view) stay as they are.
+function dropRemoved(bo){for(const k of["labels","label","specs","max","off","pip","fw"])delete bo[k];return bo}

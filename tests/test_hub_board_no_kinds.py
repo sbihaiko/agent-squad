@@ -33,7 +33,7 @@ def hub():
 
 def test_the_board_header_carries_labels_and_specs_and_no_kinds_control(hub):
     head = hub.PAGE[hub.PAGE.index("<div id=board>"):hub.PAGE.index("<div id=bcases>")]
-    assert '<details id=fw' in head and '<details id=fs' in head, "the header lost the filter bar"
+    assert '<details id=fs' in head and '<details id=fk' in head, "the header lost the filter bar"
     assert ">Kinds<" not in head and "id=bk " not in head, "the header still carries the Kinds control"
 
 

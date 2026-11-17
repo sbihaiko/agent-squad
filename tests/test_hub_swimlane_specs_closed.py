@@ -1,7 +1,7 @@
 """A spec whose card is closed or abandoned draws no swimlane, and the lanes read the board's summaries, never closed rows.
 
-The board answer serves the open rows, one count per closed status, and one summary per spec and per wave (#972). A spec
-lane's and a wave lane's progress come from those summaries, so a closed ticket counts without being served. A closed
+The board answer serves the open rows, one count per closed status, and one summary per spec (#972). A spec lane's
+progress comes from that summary, so a closed ticket counts without being served. A closed
 spec keeps no lane: its open tickets fall to No spec, read from the spec summary's state. A spec whose tickets are all
 closed while its own card is open is a done lane, and Hide done lanes hides it.
 """
@@ -57,7 +57,7 @@ def _run(script):
 
 
 def _build(groups=GROUPS, summary=SUM, **o):
-    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed",
+    opts = {"fs": [], "lc": {}, "hideDone": False, "closed": "Closed",
             "abandoned": "Abandoned", "sum": summary, **o}
     return _run(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));")
 
@@ -126,23 +126,12 @@ def test_hide_done_lanes_hides_a_spec_whose_tickets_are_all_closed():
     assert "s700" not in ids and "s889" in ids, ids
 
 
-def test_a_wave_lane_counts_its_closed_tickets_from_the_summary():
-    groups = [
-        {"name": "Todo", "items": [{"n": 10, "t": "ten", "l": ["wave:01"], "pa": 889, "c": None}]},
-        {"name": "Closed", "end": True, "items": []},
-    ]
-    summary = {"specs": [], "waves": [{"spec": 889, "wave": 1, "closed": 2, "total": 3}]}
-    lane = _build(groups=groups, summary=summary, mode="wave")["lanes"][0]
-    assert lane["title"] == "SPEC 889 · Wave 1" and (lane["closed"], lane["total"]) == (2, 3), lane
-
-
 def test_spec_options_leave_out_a_finished_spec():
     opts = _run(f"console.log(JSON.stringify(specOptions({json.dumps(GROUPS)},{json.dumps(SUM)})));")
     assert opts == ["889"], opts
 
 
-@pytest.mark.parametrize("mode, lane_id", [("spec", "none"), ("wave", "none/none")])
-def test_a_lane_holding_an_open_ticket_is_never_done(mode, lane_id):
+def test_a_lane_holding_an_open_ticket_is_never_done():
     summary = {**SUM, "waves": [{"spec": None, "wave": None, "closed": 3, "total": 3}]}
-    lane = next(ln for ln in _build(summary=summary, mode=mode)["lanes"] if ln["id"] == lane_id)
+    lane = next(ln for ln in _build(summary=summary)["lanes"] if ln["id"] == "none")
     assert lane["n"] == 2 and lane["done"] is False, lane

@@ -67,7 +67,7 @@ def test_board_header_keeps_its_count_and_its_controls(hub):
     """The count span stays; the header keeps the swimlane selector and the filter bar, and no maximize or collapse (#899)."""
     head = _bhead(hub)
     assert '<span id=bt class=m></span>' in head
-    assert '<select id=lmode' in head and '<details id=fw' in head and '<details id=fs' in head
+    assert '<select id=lmode' in head and '<details id=fw' not in head and '<details id=fs' in head
     assert 'id=bz' not in head and 'id=bx' not in head
 
 

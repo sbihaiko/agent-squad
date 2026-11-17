@@ -16,7 +16,6 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .tw{color:var(--mute);width:14px;font-size:var(--fs-caption)}
 #bbody .lane.coll .lh .tw{color:var(--fg)}
 #bbody .lh .lid{white-space:nowrap;font-weight:600;font-size:var(--fs-heading);font-variant-numeric:tabular-nums;color:var(--lc,var(--fg));letter-spacing:-.01em}
-#bbody .lh .lid.sw{color:var(--fg)}
 #bbody .lh .sid{color:var(--lc,var(--fg))}
 #bbody .lh .lf{display:flex;align-items:center;min-width:0;overflow:hidden}
 #bbody .lh .ltt{font-size:var(--fs-body);font-weight:400;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}   /* a long title ends in an ellipsis; its whole text is in the tooltip */
@@ -29,8 +28,6 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .lst{font-size:var(--fs-caption);font-weight:600;color:var(--mute);border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;line-height:var(--chip-h);white-space:nowrap}
 #bbody .lh .lh-r1,#bbody .lh .lh-r2{display:flex;flex-wrap:nowrap;align-items:center;width:100%;min-width:0}
 #bbody .lh .lf-id{flex:none}
-#bbody .lh .lf-id.full{flex:1 1 0;min-width:0;justify-content:flex-start}
-#bbody .lh .lf-id.full .lid{min-width:0;overflow:hidden;text-overflow:ellipsis}
 #bbody .lh .lf-title{flex:1 1 0;padding-left:.6em}
 #bbody .lh .lf-chip,#bbody .lh .lf-sync{flex:none}
 #bbody .lh .lf-gh{flex:none;padding:0 .4em}

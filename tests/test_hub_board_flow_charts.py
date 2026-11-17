@@ -127,7 +127,7 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
     assert "<span id=bt class=m></span>" in head
     assert "id=bflow" not in head and "id=blead" not in head
-    assert '<details id=fw' in head and '<details id=fs' in head, "the header lost the filter bar"
+    assert '<details id=fs' in head and '<details id=fk' in head, "the header lost the filter bar"
     assert 'id=bsp' not in head and 'id=bz' not in head and 'id=bx' not in head, "a removed control is still in the header"
 
 
