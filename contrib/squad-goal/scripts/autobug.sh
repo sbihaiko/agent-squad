@@ -134,7 +134,7 @@ ab_board_write() {   # <run> <ledger column> <issue>...: the card write of those
   sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT $ids -> $bc" \
     "the cards $ids of the run this pass requested ($run)" \
     "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-    -- $BOARD --add $SG_OWNER $SG_PROJECT "$bc" "$@" || { [ $? = 4 ] && ab_board_drop "$run" "$col" "$@"; return 1; }
+    -- $BOARD --add $SG_OWNER $SG_PROJECT "$bc" "$@" || { case $? in 3|4) ab_board_drop "$run" "$col" "$@";; esac; return 1; }   # a board rule refuses the same move on every pass: its event ends (#2129)
   for n in "$@"; do python3 "$here/issue_ledger.py" boardw "$SG_REPO#$n" "$run" "$col" "${AB_ACTOR:-autobug dispatch}" >/dev/null || return 1; done
 }
 ab_launch() {   # <request> <run>: 0 when launch.py takes the request past its refusal window; a refusal names itself in the run's log
