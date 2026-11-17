@@ -27,8 +27,7 @@ LANE_A = {"kind": "s", "num": 12, "title": "Short title", "closed": 2, "total": 
           "st": "Todo", "counts": {"Todo": 5, "Doing": 1, "Code Review": 1}}
 LANE_B = {"kind": "s", "num": 7, "title": "A much longer spec title that wraps across the title column",
           "closed": 0, "total": 7, "doing": 0, "review": 0, "st": "Backlog", "counts": {"Doing": 1}}
-LANE_WAVE = {"kind": "sw", "num": 1158, "sid": "SPEC 1158", "wl": "Wave 2", "title": "SPEC 1158 · Wave 2",
-             "closed": 0, "total": 0, "doing": 0, "review": 0, "st": "", "counts": {}}
+LANE_NONE = {"kind": "none", "title": "No spec", "closed": 0, "total": 0, "doing": 0, "review": 0, "st": "", "counts": {}}
 
 
 @pytest.fixture(scope="module")
@@ -120,15 +119,6 @@ def test_the_fraction_and_the_chip_hold_their_own_text():
     assert cells[0]["chip"]["text"] == "Todo" and cells[1]["chip"]["text"] == "Backlog"
 
 
-def test_a_wave_lane_name_spans_the_whole_header_and_is_never_clipped(page):
-    out = _header_rule([LANE_WAVE])
-    row1 = out["headers"][0]["rows"][0]
-    assert row1[0]["full"] is True and row1[1]["text"] == "", row1
-    _, headers = _drawn_headers(page, [LANE_WAVE])
-    assert "lf lf-id full" in headers[0], headers[0]
-    assert "SPEC 1158</span> · Wave 2" in headers[0], headers[0]
-
-
 def test_the_counts_draw_one_line_in_fixed_order_joined_by_a_middle_dot(page):
     _, headers = _drawn_headers(page, [LANE_A, LANE_B])
     counts = headers[1].split('<span class="lf lf-counts"', 1)[1]
@@ -173,14 +163,6 @@ def test_the_lane_head_rows_span_the_header_and_stay_on_one_line_each():
     assert "margin-left:auto" in counts, counts
 
 
-def test_a_wave_lane_name_ends_in_an_ellipsis_and_keeps_its_full_text_in_a_tooltip(page):
-    css = LANES_CSS.read_text()
-    label = re.search(r"#bbody \.lh \.lf-id\.full \.lid\{[^}]*\}", css).group(0)
-    assert "text-overflow:ellipsis" in label and "overflow:hidden" in label and "min-width:0" in label, label
-    _, headers = _drawn_headers(page, [LANE_WAVE])
-    assert 'title="SPEC 1158 · Wave 2"' in headers[0], headers[0]
-
-
 def test_the_bar_cell_sizes_from_its_rule_not_from_an_inline_width():
     rule = re.search(r"#bbody \.lh \.lf-bar\{[^}]*\}", LANES_CSS.read_text()).group(0)
     assert "flex:0 1 8em" in rule and "min-width:4em" in rule, rule
@@ -195,11 +177,11 @@ def test_the_page_draws_every_header_from_the_rule_layer_on_one_grid(page):
 def test_a_spec_lane_header_carries_its_own_sync_press(page):
     """#1667: a spec is an issue on the same board, so its header takes the same Sync press its tickets do -- re-reading
     one card from GitHub never means opening the spec's sheet first."""
-    out = _header_rule([LANE_A, LANE_WAVE])
+    out = _header_rule([LANE_A, LANE_NONE])
     cells = [{c["k"]: c for row in h["rows"] for c in row} for h in out["headers"]]
     assert cells[0]["sync"]["on"] is True and cells[0]["sync"]["n"] == 12, cells[0]["sync"]
-    assert cells[1]["sync"]["on"] is False, "a wave lane names no one issue to re-read"
-    _, headers = _drawn_headers(page, [LANE_A, LANE_WAVE])
+    assert cells[1]["sync"]["on"] is False, "a No spec lane names no one issue to re-read"
+    _, headers = _drawn_headers(page, [LANE_A, LANE_NONE])
     assert '<button class=syncb data-n="12"' in headers[0], headers[0]
     assert SYNC_TITLE in headers[0], headers[0]
     assert "syncb" not in headers[1], headers[1]

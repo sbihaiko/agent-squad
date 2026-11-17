@@ -22,6 +22,7 @@ test-board-lag.sh 0.97
 test-board-migrate.sh 0.15
 test-board-move-unchanged.sh 1.72
 test-board-proof.sh 0.52
+test-board-reset.sh 1.00
 test-board-run-fields.sh 0.92
 test-board-test-case.sh 1.01
 test-board-transitions.sh 0.76

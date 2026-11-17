@@ -31,7 +31,7 @@
   },
   "to-test-scenario": {
     "files": 2,
-    "sha256": "02c6e5d8defecaaf8bb7f479313c75a8c555698a3bddad10cf815ef95318e91c",
+    "sha256": "95089e5e80f27f8d939b1327cf668efca4e48715468975a8226298be30586c83",
     "source": "skill:to-test-scenario"
   },
   "to-tickets": {

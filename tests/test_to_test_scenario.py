@@ -190,13 +190,14 @@ def test_the_per_case_plan_has_one_parent_and_one_issue_per_step_in_run_order(tm
     assert all(i["kind"] == "case" for i in plan["issues"])
 
 
-def test_the_parent_is_ready_for_agent_in_one_wave_and_the_cases_are_not(tmp_path):
-    plan = plan_of(tmp_path, wave="07")
-    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:07", "Test-Scenario"]
+def test_the_parent_is_ready_for_agent_and_no_issue_carries_a_wave(tmp_path):
+    plan = plan_of(tmp_path)
+    assert plan["parent"]["labels"] == ["ready-for-agent", "Test-Scenario"]
     for issue in plan["issues"]:
         assert issue["labels"] == ["Test-Case"]
         assert "ready-for-agent" not in issue["labels"]
         assert not any(label.startswith("wave:") for label in issue["labels"])
+    assert all("wave" not in issue for issue in plan["issues"]), "the plan carries no wave dimension"
 
 
 def test_a_case_names_its_setup_case_in_blocked_by(tmp_path):

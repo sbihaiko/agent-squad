@@ -1,7 +1,7 @@
 """`/to-test-scenario`: a manual GUI test scenario becomes a script, tracked issues and a run whose verdicts land back.
 
 Everything here is deterministic: reading the case ids of the Markdown and the step ids of the `gui-test/1` script,
-reporting the gap between them, building the issue **plan** (parent, sub-issues, labels, waves, `## Blocked by`), and
+reporting the gap between them, building the issue **plan** (parent, sub-issues, labels, `## Blocked by`), and
 turning a run's per-step results into sub-issue comments, closes and at most one bug. It also decides the coverage of
 the scenario by content hash plus the scenario's own issue plan (MesenAI #1223, MesenAI #1224). `write_back`, the
 command of MesenAI #1226, reads a run's results file and writes every verdict back to the case's issue: comment,
@@ -40,8 +40,8 @@ gives one, an exponential back-off otherwise) and retries the same call. `rest_r
 plan from the script; with a parsed scenario and its script it is the #1224 plan, gated on the content hash coverage.
 
 `gui-test/1` and the target adapter are unchanged (ADR-0272): one step per case and the step id is the case id, with
-`role: setup`/`recovery` for a step that only reaches a state (a setup step gates the cases of its batch, one wave
-later) and `nav.goal` for a path that is not what is under test (ADR-0271).
+`role: setup`/`recovery` for a step that only reaches a state (a setup step gates the cases of its batch through their
+`## Blocked by` edge) and `nav.goal` for a path that is not what is under test (ADR-0271).
 """
 import argparse
 import copy
@@ -404,7 +404,7 @@ def _scenario_parent_body(scenario, script, steps, edges, areas):
     ])
 
 
-def _plan_from_scenario(scenario, script, *, granularity="case", wave="01"):
+def _plan_from_scenario(scenario, script, *, granularity="case"):
     """The issue plan of a scenario the script covers: one parent and one issue per case (or per batch), in run order.
 
     Raises ScenarioError when the script does not cover the scenario exactly — a case with no step, a step with no
@@ -430,7 +430,7 @@ def _plan_from_scenario(scenario, script, *, granularity="case", wave="01"):
     areas = _area_tree(script, issues)
     return {"scenario": scenario["name"], "granularity": granularity,
             "parent": {"title": f"Test scenario: {scenario['name']}",
-                       "labels": [PARENT_LABEL, f"wave:{wave}", SCENARIO_LABEL],
+                       "labels": [PARENT_LABEL, SCENARIO_LABEL],
                        "body": _scenario_parent_body(scenario, script, steps, edges, areas)},
             "areas": areas, "issues": issues}
 # --------------------------------------------------------------------------- the area tree (ADR-0275)
@@ -579,15 +579,14 @@ def _plan_from_script(script, markdown=None, granularity="per-case", script_path
     parent_blocked = script.get("blocked_by") or []
     issues = (_plan_per_case if granularity == "per-case" else _plan_per_batch)(script, parent)
     for i in issues:
-        i["wave"] = f"{i['wave']:02d}"
-        i["labels"] = [CASE_LABEL, f"wave:{i['wave']}"]
+        i["labels"] = [CASE_LABEL]
     areas = _area_tree(script, issues)
     parent_body = _parent_body(name, script, script_path, purpose, parent_blocked, areas)
     all_steps = [s for _, _, s in steps(script)]
     return {
         "name": name,
         "granularity": granularity,
-        "parent": {"title": parent_title, "body": parent_body, "labels": [TRIAGE_LABEL, "wave:01", SCENARIO_LABEL]},
+        "parent": {"title": parent_title, "body": parent_body, "labels": [TRIAGE_LABEL, SCENARIO_LABEL]},
         "areas": areas,
         "issues": issues,
         "variants": script.get("variants") or {},
@@ -628,7 +627,7 @@ def _plan_per_case(script, parent):
         out.append({"cases": [s["id"]], "batch": batch["id"], "kind": kind,
                     "title": f"Test case {s['id']}",
                     "body": _case_body(s, kind, blockers, parent),
-                    "blocked_by": blockers, "wave": 1 + (1 if blockers else 0)})
+                    "blocked_by": blockers})
     return out
 
 
@@ -639,7 +638,7 @@ def _plan_per_batch(script, parent):
         out.append({"cases": [s["id"] for _, s in cases], "batch": batch["id"], "kind": "batch",
                     "title": f"Test batch {batch['id']}",
                     "body": _batch_body(batch, cases, [], parent),
-                    "blocked_by": [], "wave": 1})
+                    "blocked_by": []})
     return out
 
 
@@ -656,7 +655,7 @@ def build_plan(first, second=_NO_SCRIPT, **kwargs):
 
     `build_plan(script)`, with `markdown=`, `script_path=`, `purpose=`, `granularity="per-case"|"per-batch"`, is the
     plan of the #1223 pipeline: one issue per case, or per batch. `build_plan(scenario, script)` — a parsed scenario
-    and its script, with `granularity="case"|"batch"` and `wave="NN"` — is the #1224 plan, refused with a
+    and its script, with `granularity="case"|"batch"` — is the #1224 plan, refused with a
     `ScenarioError` while the coverage has a case with no step, a step with no case, or a stale case. The two
     signatures never collide: only the second half takes a second positional argument.
     """
@@ -834,7 +833,7 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
         held = state.get("title") or ""
         prefix = _held_emoji(held) or default
         kept = [x for x in state.get("labels") or [] if x not in OLD_TYPE_LABELS and x not in labels
-                and not x.startswith("wave:")]
+                and not x.startswith("wave:")]   # a wave label an older publish wrote comes off, and none is written (#2132)
         labels = list(labels) + kept          # the type label replaces the old one; a label somebody added stays
         call("update_issue", number=number, title=with_emoji(title, prefix) if prefix else title, body=body,
              labels=labels)

@@ -236,11 +236,11 @@ def test_the_phone_sheet_renders_githubs_html_and_never_frames_it(hub):
     assert "<iframe" not in sheet, "the sheet holds no frame"
 
 
-def test_the_phone_sheet_shows_the_spec_and_wave_chips_the_card_carries(hub):
+def test_the_phone_sheet_shows_the_spec_chip_and_no_wave_chip(hub):
     body = hub.MOBILE_PAGE
-    assert "chip spec" in body and "chip wave" in body, "the title carries the spec and wave chips"
+    assert "chip spec" in body, "the title carries the spec chip"
+    assert "chip wave" not in body and "laneWaveOf" not in body, "the wave chip is gone (SPEC 1965, #1988)"
     assert "x.sp" in body, "the spec chip reads the card's own fact, never a label rule of the view"
-    assert "wave:" in body, "the wave chip reads the card's wave label"
 
 
 def test_the_phone_todo_button_shows_only_for_a_promotable_card(hub):

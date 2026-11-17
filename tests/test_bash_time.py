@@ -79,6 +79,16 @@ def test_the_report_sums_end_events_by_class_over_24_hours(tmp_path):
     assert out["total_seconds"] == 344.0
 
 
+def test_the_report_reads_the_loop_layout_below_one_root(tmp_path):
+    """The loop writes <gui>/runs/<run>/record.jsonl; one --runs-dir over the parent finds every run below it."""
+    run = tmp_path / "gui-1" / "runs" / "run-a"
+    run.mkdir(parents=True)
+    (run / "record.jsonl").write_text(_line(
+        ts=RUN_NOW - 10, node="route.router.1", phase="end", command_class="gate", elapsed=300.0, tool="Bash") + "\n")
+    out = bash_time.report(tmp_path, now=RUN_NOW, hours=24, node_prefix="route.router")
+    assert out["seconds"] == {"gate": 300.0}
+
+
 def test_the_report_splits_gate_wait_from_gate_run_time(tmp_path):
     history = tmp_path / "child-suite-history"
     fin_in, start_in = RUN_NOW - 200, RUN_NOW - 260

@@ -1,7 +1,8 @@
 """A saved lane mode that no option names reads as Spec (#978).
 
 The page saves the Swimlanes mode in local storage. An older page saved "all", which no option names, so the select drew
-blank. The page now reads any saved mode outside spec, wave and none as spec, before the select and the lane model see it.
+blank. A saved mode the page no longer offers, `wave` included (SPEC 1965, #1988), reads as spec before the select and the
+lane model see it.
 """
 import shutil
 import subprocess
@@ -17,10 +18,10 @@ NODE = shutil.which("node")
 def _bo_line():
     line = next(ln for ln in HUB_PY.read_text().splitlines() if ln.startswith("const bo=ls.bo||{}"))
     return line.split(",saveB=")[0] + ";" + next(
-        (s for s in HUB_PY.read_text().splitlines() if s.startswith("if(![\"spec\",\"wave\",\"none\"].includes(bo.lmode))")), "")
+        (s for s in HUB_PY.read_text().splitlines() if s.startswith("if(![\"spec\",\"none\"].includes(bo.lmode))")), "")
 
 
-@pytest.mark.parametrize("saved,want", [("all", "spec"), (None, "spec"), ("wave", "wave"), ("none", "none")])
+@pytest.mark.parametrize("saved,want", [("all", "spec"), (None, "spec"), ("wave", "spec"), ("none", "none")])
 def test_a_saved_lane_mode_always_names_an_option(saved, want):
     if NODE is None:
         pytest.skip("node is required")

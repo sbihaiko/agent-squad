@@ -123,7 +123,7 @@ def test_the_specs_filter_asks_the_items_and_no_column_holds_them(table, hub, bo
     assert "Open Specs" not in hub.ORDER and "Open Specs" not in [g["name"] for g in board["groups"]]
     page = hub.PAGE
     assert '<details id=fs' in page, "the board has no Specs filter"
-    assert 'isPR(g.name)?boardOk({...x,kind:"pr"},[],[],fk):boardOk(x,fw,fs,fk)' in page, \
+    assert 'isPR(g.name)?boardOk({...x,kind:"pr"},[],fk):boardOk(x,fs,fk)' in page, \
         "the Specs filter is not a filter over the same items; the PR lane answers the Kinds filter only (#904)"
     assert "boardOk=" in page, "the filter rule is not the page's own"
 

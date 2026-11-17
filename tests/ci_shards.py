@@ -24,7 +24,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_ac_repeat.py", "tests/test_ac_verify_routes.py", "tests/test_actions.py", "tests/test_active_runs_write.py", "tests/test_adapt.py", "tests/test_agent_doors.py", "tests/test_spec_stall.py",
         "tests/test_bash_time.py", "tests/test_board_define.py", "tests/test_board_labels.py", "tests/test_board_lag.py", "tests/test_browser_bounds.py", "tests/test_chain_fallback.py", "tests/test_chain_view.py",
         "tests/test_coding_model_tools.py", "tests/test_dashboard_layer_focus.py", "tests/test_dashboard_narrow.py", "tests/test_dashboard_page.py", "tests/test_dashboard_parity.py",
-        "tests/test_dashboard_view.py", "tests/test_deadlock_validator.py","tests/test_edge_write.py","tests/test_each.py", "tests/test_entry_no_progress.py", "tests/test_fundroom.py", "tests/test_gate_lock.py",
+        "tests/test_dashboard_view.py", "tests/test_deadlock_validator.py","tests/test_edge_write.py","tests/test_wave_migrate.py","tests/test_each.py", "tests/test_entry_no_progress.py", "tests/test_fundroom.py", "tests/test_gate_lock.py",
         "tests/test_gh_budget_per_pass.py", "tests/test_glossary_name.py", "tests/test_graph.py", "tests/test_gui_test_e2e.py", "tests/test_gui_test_format.py",
         "tests/test_hub_accessibility.py", "tests/test_hub_attachment.py", "tests/test_hub_board_move_async.py", "tests/test_hub_board_pending.py", "tests/test_hub_board_prediction.py", "tests/test_hub_board_repo_scope.py",
         "tests/test_hub_board_stale.py", "tests/test_hub_board_task_count.py", "tests/test_hub_publish_restart.py", "tests/test_hub_child_transcript_usage.py", "tests/test_hub_gate_strip.py", "tests/test_hub_grok_quota_scan.py",
@@ -40,7 +40,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_transport_retry_record.py", "tests/test_two_flows.py", "tests/test_vendor_skills.py",
     ),
     (
-        "tests/test_autonomy_fragment.py", "tests/test_board_archive.py", "tests/test_board_columns.py", "tests/test_board_definition_grammar.py", "tests/test_child_issues.py", "tests/test_dashboard_graph_read.py", "tests/test_dashboard_totals.py",
+        "tests/test_autonomy_fragment.py", "tests/test_board_archive.py", "tests/test_board_columns.py", "tests/test_board_definition_grammar.py", "tests/test_board_reset.py", "tests/test_child_issues.py", "tests/test_dashboard_graph_read.py", "tests/test_dashboard_totals.py",
         "tests/test_dispatch_mutex.py", "tests/test_envelope.py", "tests/test_gate_evidence.py", "tests/test_gate_reuse.py",
         "tests/test_gate_scope.py", "tests/test_gh_spend.py", "tests/test_gui_test_subset.py", "tests/test_gui_test_vision.py", "tests/test_hub_adapter_errors.py",
         "tests/test_hub_attach.py", "tests/test_hub_board_card_number.py", "tests/test_hub_board_flow_charts.py", "tests/test_hub_board_pass.py", "tests/test_hub_board_title_builder.py", "tests/test_hub_card_sync.py", "tests/test_hub_sheet_sync.py",

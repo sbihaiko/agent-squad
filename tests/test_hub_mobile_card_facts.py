@@ -31,7 +31,6 @@ STUB = (
     "setAttribute(){},append(...c){this.children.push(...c)}});"
     "const document={createElement:mk};"
     "const specColor=()=>'#000';const mSlots=()=>({});const cardSpec=x=>x.sp?x.n:x.pa;const cardColor=()=>'#000';"
-    "const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\\d+)$/)||[])[1]).filter(Boolean)[0];return w?Number(w):null};"
     "const reasons={};"
     "const txt=x=>x.textContent+x.children.map(txt).join('');"
 )

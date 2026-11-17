@@ -40,12 +40,14 @@ def history_path(board, repo):
     return pathlib.Path(board).with_name(f"hub-flow.{repo.replace('/', '_')}.jsonl")
 
 
-NONE = "none"                    # the board filter's value for a card with no spec, or no wave (the board's specKey and waveKey)
+NONE = "none"                    # the board filter's value for a card with no spec (the board's specKey)
 _WAVE = re.compile(r"wave:(\d+)$")
+SAMPLE_VERSION = 2               # the sample shape with no wave (#2132); a sample with no `v` is the shape before it
 
 
 def wave_key(labels):
-    """The wave the board filter reads: the lowest `wave:NN` label, without leading zeros, or `none` (the board's waveKey)."""
+    """The wave the board filter reads: the lowest `wave:NN` label, without leading zeros, or `none` (the board's waveKey).
+    The flow sample carries no wave (#2132); the board's Waves filter still reads the label."""
     nums = [int(m[1]) for label in labels or () for m in [_WAVE.match(str(label))] if m]
     return str(min(nums)) if nums else NONE
 
@@ -73,26 +75,53 @@ def type_key(row):
 
 
 def sample(rows, now=None):
-    """One sample. `cells` holds each card's kind (kind_key), spec, wave, column, frozen flag, count and type (type_key) as
-    [kind, spec, wave, column, frozen, n, type]: the charts filter by these (#904, #985). A card in no shipped column has column null.
+    """One sample. `cells` holds each card's kind (kind_key), spec, column, frozen flag, count and type (type_key) as
+    [kind, spec, column, frozen, n, type]: the charts filter by these (#904, #985). A card in no shipped column has column null.
+    A sample written before #2132 carries the card's wave third; a new one carries no wave, and the reader takes both.
+    `v` names the shape, so the reader never guesses it from a cell's length: a sample with no `v` is the older shape.
     `counts`, `frozen` and `none` are the totals those cells add up to, so a reader of the older shape still works."""
     names = {c["name"] for c in _columns.view_columns()}
     cells = {}
     for r in rows:
         closed = str(r.get("s", "")).lower() == "closed"
         column, freeze = _columns.view_column(r.get("st"), closed, r.get("l"), r.get("cr"))
-        key = (kind_key(r), spec_key(r), wave_key(r.get("l")), column if column in names else None, 1 if freeze else 0, type_key(r))
+        key = (kind_key(r), spec_key(r), column if column in names else None, 1 if freeze else 0, type_key(r))
         cells[key] = cells.get(key, 0) + 1
-    listed = sorted(([kind, spec, wave, col, fz, n, typ] for (kind, spec, wave, col, fz, typ), n in cells.items()),
+    listed = sorted(([kind, spec, col, fz, n, typ] for (kind, spec, col, fz, typ), n in cells.items()),
                     key=json.dumps)   # one order, so equal cards are equal cells
-    counts, frozen, none = _totals_of(listed)
-    return {"t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen, "none": none, "cells": listed}
+    counts, frozen, none = _totals_of(listed, SAMPLE_VERSION)
+    return {"v": SAMPLE_VERSION, "t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen,
+            "none": none, "cells": listed}
 
 
-def _totals_of(cells):
+def _version(s):
+    """The shape a sample names: its `v`, or 1 for a sample written before the key (#2132). This is the one place that
+    reads a shape from a sample: every helper below takes the version as a required argument, so no cell is ever read
+    in a shape that neither its sample nor the reader named."""
+    return s.get("v", 1)
+
+
+def _cell_parts(cell, version):
+    """(kind, spec, wave, column, frozen, count, type) of one cell in the shape its sample's `version` names: the shape
+    before #2132 carries the wave third, and the shape after it carries no wave. The version, never the length, decides:
+    a cell ends in a variable-length type tail. `version` is required: a caller reads a shape it named, never a default."""
+    if version < SAMPLE_VERSION:
+        kind, spec, wave, column, fz, k, *typ = cell
+    else:
+        kind, spec, column, fz, k, *typ = cell
+        wave = None
+    return kind, spec, wave, column, fz, k, typ
+
+
+def _cell(kind, spec, wave, column, fz, n, typ, version):
+    """One cell in the shape its sample uses: the wave third for the shape before #2132, else no wave."""
+    return [kind, spec, wave, column, fz, n, *typ] if version < SAMPLE_VERSION else [kind, spec, column, fz, n, *typ]
+
+
+def _totals_of(cells, version):
     """(counts, frozen, none) that a list of cells adds up to: counts holds the cards in a shipped column, by kind."""
     counts, frozen, none = {}, 0, 0
-    for kind, _spec, _wave, column, fz, n, *_ in cells:
+    for kind, _spec, _wave, column, fz, n, *_ in (_cell_parts(c, version) for c in cells):
         if column is None:
             none += n
         else:
@@ -103,8 +132,8 @@ def _totals_of(cells):
 
 
 def append(path, rows, now=None, incomplete=None):
-    """Append one sample of `rows` when its counts or its cells differ from the last sample (a card that changes spec, wave
-    or kind changes the cells and no count, #904). Equal ones write a sample only when no
+    """Append one sample of `rows` when its counts or its cells differ from the last sample (a card that changes spec,
+    kind or type changes the cells and no count, #904). Equal ones write a sample only when no
     sample was written on this UTC day yet: at most one unchanged sample a day, so a quiet day is a point (#894). Old lines
     roll up past RAW_DAYS. `incomplete` is the reason the read is not whole (the caller's completeness signal): such a read
     is never a sample, at any total, and is recorded as a flow_skip line that names the reason. Returns the new sample, or None."""
@@ -151,18 +180,32 @@ def _rebucket_once(lines, rows, now):
 
 
 def _rebucket_sample(s, n):
-    """One sample with up to n closed cards moved from Closed to Abandoned, taken from the kinds that hold Closed."""
+    """One sample with up to n closed cards moved from Closed to Abandoned, taken from the kinds that hold Closed.
+
+    The shape comes from the sample's `v`, never from a cell's length, and a cell the move takes nothing from is kept
+    byte for byte. A cell the named shape does not explain leaves the whole sample untouched: a reader never guesses
+    a shape and never rewrites a cell it cannot read."""
     closed, abandoned = _columns.ROLE["issue_closed"], _columns.ROLE["abandoned"]
     if "cells" in s:
-        moved, left = {}, n
-        for kind, spec, wave, column, fz, k, *typ in s["cells"]:
-            take = min(k, left) if column == closed else 0
+        version = _version(s)
+        try:
+            parts = [_cell_parts(cell, version) for cell in s["cells"]]
+        except (TypeError, ValueError):
+            return dict(s)
+        if any(not isinstance(p[5], int) or isinstance(p[5], bool) for p in parts):
+            return dict(s)
+        moved, left = [], n
+        for cell, (kind, spec, wave, column, fz, k, typ) in zip(s["cells"], parts):
+            take = min(k, left) if column == closed and left else 0
+            if not take:
+                moved.append(cell)
+                continue
             left -= take
-            if take:
-                moved[(kind, spec, wave, abandoned, fz, *typ)] = moved.get((kind, spec, wave, abandoned, fz, *typ), 0) + take
-            moved[(kind, spec, wave, column, fz, *typ)] = moved.get((kind, spec, wave, column, fz, *typ), 0) + k - take
-        cells = [[*key[:5], v, *key[5:]] for key, v in moved.items()]
-        counts, frozen, none = _totals_of(cells)
+            moved.append(_cell(kind, spec, wave, abandoned, fz, take, typ, version))
+            if k > take:
+                moved.append(_cell(kind, spec, wave, column, fz, k - take, typ, version))
+        cells = moved
+        counts, frozen, none = _totals_of(cells, version)
         return {**s, "counts": counts, "frozen": frozen, "none": none, "cells": cells}
     counts, left = {k: dict(v) for k, v in s["counts"].items()}, n
     for by_column in counts.values():

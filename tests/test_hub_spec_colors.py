@@ -1,8 +1,9 @@
-"""Cards show their spec in its color and their wave as a chip (SPEC 889, #917).
+"""Cards show their spec in its color (SPEC 889, #917).
 
 The color comes from the spec number through the eight palette slots `--s1`..`--s8`. A card with no spec takes its own
-number's slot, so every card carries a color; grey (`var(--mute)`) is the stale board's cue alone (#1640). The wave is a
-text chip, never a shade. No card carries its column's left border. The spec filter shows each spec's color.
+number's slot, so every card carries a color; grey (`var(--mute)`) is the stale board's cue alone (#1640). The wave chip
+is gone with the wave lane (SPEC 1965, #1988). No card carries its column's left border. The spec filter shows each
+spec's color.
 
 The rules are `board-lanes.js`, run in node as the page carries them; the page text is checked for their use.
 """
@@ -74,17 +75,11 @@ def test_a_loop_bug_card_wears_the_loop_bugs_lane_red():
     assert re.fullmatch(r"var\(--s[1-8]\)", out[2]) and re.fullmatch(r"var\(--s[1-8]\)", out[3]), out
 
 
-def test_the_wave_chip_names_the_wave_and_a_card_with_no_wave_shows_none():
-    out = _node('console.log(JSON.stringify([waveChip({l:["wave:2"]}),waveChip({l:["bug"]}),waveChip({})]))')
-    assert ">W2<" in out[0] and "data-k=wave" in out[0], out
-    assert out[1] == "" and out[2] == "", out
-
-
-def test_the_card_wears_its_own_spec_color_and_wave_chip():
+def test_the_card_wears_its_own_spec_color_and_no_wave_chip():
     page = HUB_PY.read_text()
     card = re.search(r"const cards=\(g,it,shown\)=>.*", page).group(0)
     assert "--lc:${cardColor(SLOTS,x)}" in card, "the card does not set its spec color"
-    assert "${waveChip(x)}" in card, "the card does not draw the wave chip from the lane rule"
+    assert "waveChip" not in card and "data-k=wave" not in card, "the card still draws a wave chip"
 
 
 def test_the_spec_lane_header_takes_the_spec_color():
@@ -143,11 +138,11 @@ def test_the_mobile_page_carries_the_lane_rules():
         "the hub does not fill the card rules into the mobile page"
 
 
-def test_a_mobile_card_wears_its_spec_color_and_wave_chip():
+def test_a_mobile_card_wears_its_spec_color_and_no_wave_chip():
     page = MOBILE.read_text()
     card = re.search(r"function cardButton\(x, i\) \{.*?\n\}", page, re.S).group(0)
     assert "cardColor(mSlots(), x)" in card, "the mobile card does not set its spec color"
-    assert "laneWaveOf(x)" in card, "the mobile card draws no wave chip from the lane rule"
+    assert "laneWaveOf" not in card and 'chip("wave"' not in card, "the mobile card still draws a wave chip"
     assert re.search(r"\.card\{[^}]*border-top:3px solid var\(--lc", page), "the mobile card has no top line in its color"
     head = re.search(r"function laneHeader\(l\) \{.*?\n\}", page, re.S).group(0)
     assert "specColor(mSlots(), l.num)" in head, "the mobile lane header does not take the spec color"
@@ -201,7 +196,7 @@ def test_no_lane_model_carries_a_color_slot_of_its_own():
     """One source: both pages color a lane by specColor over the spec number, so neither lane model writes a slot index
     (`pi`) that no page reads and that could drift from the cards (#917)."""
     groups = [{"name": "Todo", "items": [{"n": 918, "t": "a", "pa": 917, "l": []}, {"n": 891, "t": "b", "pa": 890, "l": []}]}]
-    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed"}
+    opts = {"fs": [], "lc": {}, "hideDone": False, "closed": "Closed"}
     desk = _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)}).lanes))")
     gesture = (SCRIPTS / "hub-mobile-gesture.js").read_text()
     p = subprocess.run([NODE, "-"], capture_output=True, text=True, timeout=30, input=gesture + "\nconsole.log(JSON.stringify("

@@ -54,4 +54,21 @@ run; rc=$?
 [ $rc = 3 ] && ok "the default fallback helper also exits 3 when it answers nothing" || ko "default helper: exit $rc, out '$(cat "$T/out")'"
 /usr/bin/grep -q -F "osxkeychain" "$T/out" && ok "the default fallback helper is osxkeychain" || ko "the default helper is not named: '$(cat "$T/out")'"
 
+# #2137: the loop's process runs under launchd, whose PATH holds no gh (/usr/bin:/bin:/usr/sbin:/sbin). The helper seeds the
+# places gh installs to, so the default token command resolves there.
+mkdir -p "$T/home/.local/bin"
+printf '#!/bin/bash\n[ "${1:-}" = auth ] && echo tok-from-gh\n' > "$T/home/.local/bin/gh"; chmod +x "$T/home/.local/bin/gh"
+out=$(printf 'protocol=https\nhost=github.com\n\n' | env -i HOME="$T/home" PATH=/usr/bin:/bin bash "$d/promote-credential.sh" get)
+case "$out" in *"password=tok-from-gh"*) ok "the helper finds gh with no gh on the caller's PATH" ;;
+  *) ko "the helper answered '${out//password=*/password=<redacted>}' with no gh on the caller's PATH" ;;
+esac
+# The seed names the directory production finds gh in, not only the fixture's own: drop /opt/homebrew/bin and the case above still
+# passes, while the launchd push fails again. A command that prints its own PATH is the probe.
+printf '#!/bin/bash\necho "path:$PATH"\n' > "$T/home/.local/bin/showpath"; chmod +x "$T/home/.local/bin/showpath"
+out=$(printf 'protocol=https\nhost=github.com\n\n' | env -i HOME="$T/home" PATH=/usr/bin:/bin \
+  SG_PROMOTE_TOKEN_COMMAND="$T/home/.local/bin/showpath" bash "$d/promote-credential.sh" get)
+case "$out" in *"/opt/homebrew/bin"*) ok "the seeded PATH names the directory gh installs to" ;;
+  *) ko "the seeded PATH names no /opt/homebrew/bin: '${out//password=*/password=<redacted>}'" ;;
+esac
+
 [ $fail = 0 ] && echo "PASS test-promote-main-credential" || { echo "FAIL test-promote-main-credential"; exit 1; }

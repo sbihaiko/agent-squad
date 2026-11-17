@@ -2,7 +2,8 @@
 
 A card carries its parent spec as `pa`, served on its row, so the page builds the lanes with no GitHub read. Loop bugs
 sit in a "Loop bugs" lane first (ADR-0146), other cards with no spec in a "No spec" lane last, and a lane with a running
-card sorts before one without. The selector switches between Spec (the default), Wave and None (today's board).
+card sorts before one without. The selector switches between Spec (the default) and None (today's board). The board has
+no wave lane, no wave chip and no wave filter: a `wave:NN` label never makes a lane (SPEC 1965, #1988).
 
 The lane rule is `board-lanes.js`, a text the hub inlines into the page. These tests run that text in node, exactly as
 the page carries it, and read the served page for the selector.
@@ -64,8 +65,8 @@ def _node(script):
     return json.loads(p.stdout)
 
 
-def _build(groups, mode="spec", **o):
-    opts = {"mode": mode, "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "sum": SUM, **o}
+def _build(groups, **o):
+    opts = {"fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "sum": SUM, **o}
     return _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));")
 
 
@@ -86,13 +87,33 @@ def test_served_row_carries_its_parent_spec(hub, tmp_path, monkeypatch):
 
 # ---- the selector and the page ----
 
-def test_page_offers_spec_wave_and_none_with_spec_as_the_default(hub):
+def test_page_offers_spec_and_none_with_spec_as_the_default(hub):
     page = hub.PAGE
     assert '<select id=lmode' in page, "the lane selector is missing"
-    for value, label in (("spec", "Spec"), ("wave", "Wave"), ("none", "None")):
+    for value, label in (("spec", "Spec"), ("none", "None")):
         assert f'<option value={value}' in page and f'>{label}</option>' in page, f"{label} is not an option"
+    assert "<option value=wave>" not in page, "the Wave lane mode is still an option"
     assert 'bo.lmode||"spec"' in page, "Spec is not the default lane mode"
     assert 'bo.lmode==="none"' in page, "None does not draw today's board"
+
+
+def test_the_hub_has_no_wave_lane_chip_or_filter(hub):
+    """SPEC 1965, #1988: the hub drops the wave lane, the wave chip and the wave filter."""
+    page, rule = hub.PAGE, LANES_JS.read_text()
+    for gone in ("<option value=wave>", "<details id=fw", "waveOptions(", "waveChip("):
+        assert gone not in page, f"the hub still draws {gone}"
+    assert "data-k=wave" not in page, "a card still wears the wave chip"
+    for gone in ("waveOptions", "waveChip", "waveLane", "laneWaveOf", 'mode==="wave"'):
+        assert gone not in rule, f"the lane rule still carries {gone}"
+
+
+def test_a_wave_label_never_makes_a_lane(hub):
+    groups = [{"name": "Todo", "items": [
+        _row(10, "Todo", ["wave:02"], pa=889), _row(11, "Todo", ["wave:01"], pa=889), _row(12, "Todo", [], pa=889),
+    ]}]
+    model = _build(groups)
+    assert [ln["kind"] for ln in model["lanes"]] == ["s"], model["lanes"]
+    assert [r["n"] for r in model["lanes"][0]["all"]] == [10, 11, 12]
 
 
 def test_the_lane_counts_the_cards_a_run_holds():
@@ -233,81 +254,8 @@ def test_a_lane_with_a_running_card_sorts_before_one_without(hub):
     assert spec_ids == ["s889"], f"the open lane is not the only one: {spec_ids}"
 
 
-def test_wave_mode_groups_by_spec_and_wave_with_no_wave_last(hub):
-    groups = [{"name": "Todo", "items": [
-        _row(10, "Todo", ["wave:02"], pa=889), _row(11, "Todo", ["wave:01"], pa=889), _row(12, "Todo", [], pa=889),
-    ]}]
-    model = _build(groups, mode="wave")
-    assert [ln["title"] for ln in model["lanes"]] == ["SPEC 889 · Wave 1", "SPEC 889 · Wave 2", "SPEC 889 · No wave"]
-
-
-# ---- a wave lane is one spec's wave (SPEC 889, #980) ----
-
-WAVE_GROUPS = [
-    {"name": "Doing", "items": [
-        _row(889, "Doing", ["spec"], sp=True),
-        _row(900, "Doing", ["spec"], sp=True),
-        _row(12, "Doing", ["wave:01"], pa=889),
-    ]},
-    {"name": "Todo", "items": [
-        _row(10, "Todo", ["wave:01"], pa=889),
-        _row(11, "Todo", ["wave:01"], pa=900),
-        _row(13, "Todo", ["wave:02"], pa=900),
-        _row(14, "Todo", ["wave:02"]),
-        _row(15, "Todo", ["wave:02"], pa=889),
-    ]},
-]
-
-
-def _wave_lanes(**o):
-    return _build(WAVE_GROUPS, mode="wave", **o)["lanes"]
-
-
-def _lane(lanes, title):
-    return next(ln for ln in lanes if ln["title"] == title)
-
-
-def test_the_same_wave_of_two_specs_draws_two_lanes(hub):
-    lanes = _wave_lanes()
-    assert [ln["title"] for ln in lanes].count("SPEC 889 · Wave 1") == 1
-    assert [ln["title"] for ln in lanes].count("SPEC 900 · Wave 1") == 1
-    assert sorted(r["n"] for r in _lane(lanes, "SPEC 889 · Wave 1")["all"]) == [10, 12]
-    assert sorted(r["n"] for r in _lane(lanes, "SPEC 900 · Wave 1")["all"]) == [11]
-
-
-def test_a_wave_lane_header_names_its_spec_and_wave_in_the_spec_colour(hub):
-    lanes = _wave_lanes()
-    head = _lane(lanes, "SPEC 889 · Wave 1")
-    assert head["sid"] == "SPEC 889" and head["wl"] == "Wave 1"
-    nums = sorted({ln["num"] for ln in lanes if ln["num"] is not None})
-    slots = _node(f"const s=specSlots({json.dumps(nums)});console.log(JSON.stringify({json.dumps(nums)}.map(n=>specColor(s,n))))")
-    by_num = dict(zip(nums, slots, strict=True))
-    colour = {ln["title"]: by_num.get(ln["num"]) for ln in lanes}   # the header's own call: specColor(SLOTS,l.num)
-    assert colour["SPEC 889 · Wave 1"] == colour["SPEC 889 · Wave 2"], "a spec changes colour between its waves"
-    assert colour["SPEC 889 · Wave 1"] != colour["SPEC 900 · Wave 1"], "two specs share a colour"
-
-
-def test_wave_lanes_sort_by_spec_then_wave_with_no_spec_last(hub):
-    titles = [ln["title"] for ln in _wave_lanes()]
-    assert titles == [
-        "SPEC 889 · Wave 1", "SPEC 889 · Wave 2", "SPEC 900 · Wave 1", "SPEC 900 · Wave 2", "No spec · Wave 2",
-    ]
-
-
-def test_a_ticket_with_no_spec_draws_in_no_spec_wave_lane(hub):
-    lane = _lane(_wave_lanes(), "No spec · Wave 2")
-    assert [r["n"] for r in lane["all"]] == [14]
-    assert lane["sid"] == "No spec" and lane["wl"] == "Wave 2"
-
-
-def test_the_page_binds_the_wave_options_and_the_spec_colour_from_the_model(hub):
-    assert "waveOptions(allRows)" in hub.PAGE and "specColor(SLOTS,l.num)" in hub.PAGE
-    assert 'class=sid' in hub.PAGE and "l.wl" in hub.PAGE
-
-
-def test_a_collapsed_wave_lane_keeps_its_count_per_column(hub):
-    lid = _lane(_wave_lanes(), "SPEC 889 · Wave 1")["id"]
-    lane = _lane(_wave_lanes(lc={lid: True}), "SPEC 889 · Wave 1")
+def test_a_collapsed_spec_lane_keeps_its_count_per_column(hub):
+    lane = next(ln for ln in _build(GROUPS, lc={"s889": True})["lanes"] if ln["id"] == "s889")
     assert lane["collapsed"] is True
     assert lane["counts"] == {"Todo": 1, "Doing": 1}
 

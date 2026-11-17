@@ -214,6 +214,14 @@ UNCLAIM = (DOING, "Todo")   # the one backward move: the loop's dispatch undoes 
 HOLD = ("Backlog", "Todo")  # the owner's move that starts a card: no automated writer makes it, whatever the reason (ADR-0142, #1909)
 REOPENED = "reopened"         # the reason an issue open again gives: its Closed card returns to Todo and no other column (#1420)
 NO_LANDING = "no-landing"     # the reason a run that landed nothing gives: the column the loop set goes back to Todo (#1059)
+LAUNCH_REFUSED = "launch-refused"   # the reason a launch the loop refused gives: its card goes back to Todo (ADR-0165)
+RESET_LABEL = {NO_LANDING: "board-reset:no-delivery", LAUNCH_REFUSED: "board-reset:launch-refused", REOPENED: "board-reset:reopened"}   # the closed set a reset writes on its issue (#1904)
+RESET_CAUSE = {NO_LANDING: "the run landed nothing", LAUNCH_REFUSED: "launch.py refused the run", REOPENED: "the issue is open again"}
+
+
+def reset_comment(have, reached, reason, at, event):
+    return (f"Board reset: the card left {have} and reached {reached}.\n"
+            f"Cause: {RESET_CAUSE[reason]}.\nTime: {at}.\nEvent: {event}.")
 
 
 def refused_for_automated(have, want, reason=None):

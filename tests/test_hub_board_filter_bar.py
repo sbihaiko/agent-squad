@@ -1,7 +1,7 @@
-"""The board header keeps one filter bar: waves and specs, multi-select (SPEC 889, #899).
+"""The board header keeps one filter bar: specs and kinds, multi-select (SPEC 889, #899).
 
-Waves and specs filter the cards and the swimlanes, combined with AND; an empty selection means all, and the selection is
-kept on the device. The labels filter, the three-state Specs button, the maximize and collapse controls, and the floating
+Specs and kinds filter the cards and the swimlanes, combined with AND; an empty selection means all, and the selection is
+kept on the device. The wave filter is gone with the wave lane (SPEC 1965, #1988). The labels filter, the three-state Specs button, the maximize and collapse controls, and the floating
 run window (pip) are gone. A saved state from any of those controls is dropped on load.
 
 The rules are `board-lanes.js`, run in node as the page carries them.
@@ -51,12 +51,12 @@ def test_the_removed_controls_are_not_on_the_page(hub, marker):
     assert marker not in hub.PAGE, f"{marker!r} is still on the page"
 
 
-def test_the_filter_bar_has_a_waves_and_a_specs_multi_select(hub):
+def test_the_filter_bar_has_a_specs_and_a_kinds_multi_select(hub):
     page = hub.PAGE
-    assert '<details id=fw' in page and "<summary" in page
-    assert '<details id=fs' in page
-    assert 'bo.fw' in page and 'bo.fs' in page, "the selections are not kept in bo"
-    assert "<summary>Waves: all</summary>" in page and "<summary>Specs: all</summary>" in page, "the mock's filter summaries (#889)"
+    assert '<details id=fw' not in page and "Waves: all" not in page, "the wave filter survives"
+    assert '<details id=fs' in page and '<details id=fk' in page
+    assert 'bo.fs' in page and 'bo.fk' in page, "the selections are not kept in bo"
+    assert "<summary>Specs: all</summary>" in page and "<summary>Kinds: all</summary>" in page, "the mock's filter summaries (#889)"
 
 
 def test_a_saved_state_from_a_removed_control_is_dropped_on_load(hub):
@@ -76,39 +76,20 @@ def _card(n, labels=(), pa=None, ho=None):
 
 
 def test_an_empty_selection_shows_every_card(hub):
-    out = _node("console.log(JSON.stringify([boardOk({n:1,l:[]},[],[]),boardOk({n:2,l:['wave:03'],pa:9},[],[])]));", LANES_JS)
+    out = _node("console.log(JSON.stringify([boardOk({n:1,l:[]},[]),boardOk({n:2,l:['wave:03'],pa:9},[])]));", LANES_JS)
     assert out == [True, True]
 
 
-def test_each_waves_option_names_its_spec_and_the_same_wave_of_two_specs_is_two_options(hub):
-    rows = [
-        {"n": 10, "l": ["wave:01"], "pa": 889}, {"n": 11, "l": ["wave:01"], "pa": 900},
-        {"n": 12, "l": ["wave:02"]}, {"n": 13, "l": ["wave:01"], "pa": 889}, {"n": 14, "sp": True, "l": ["spec"]},
-    ]
-    opts = _node(f"console.log(JSON.stringify(waveOptions({json.dumps(rows)})));", LANES_JS)
-    assert [o["label"] for o in opts] == ["SPEC 889 · Wave 1", "SPEC 900 · Wave 1", "No spec · Wave 2"]
-    assert len({o["key"] for o in opts}) == 3
-    picked = _node(
-        f"console.log(JSON.stringify([boardOk({json.dumps(rows[0])},[{json.dumps(opts[1]['key'])}],[]),"
-        f"boardOk({json.dumps(rows[1])},[{json.dumps(opts[1]['key'])}],[])]));", LANES_JS)
-    assert picked == [False, True], "an option keeps only its own spec's wave"
-
-
-def test_a_saved_waves_selection_from_before_the_spec_option_is_dropped(hub):
-    out = _node("console.log(JSON.stringify(dropRemoved({fw:['2','none','889/2'],fs:['889']})));", LANES_JS)
-    assert out["fw"] == ["889/2"] and out["fs"] == ["889"]
-
-
-def test_waves_and_specs_combine_with_and(hub):
+def test_specs_and_kinds_combine_with_and(hub):
     cases = {
-        "wave 2 and spec 889": ({"n": 1, "l": ["wave:2"], "pa": 889}, ["889/2"], ["889"], True),
-        "wave 2 and spec 7": ({"n": 2, "l": ["wave:2"], "pa": 7}, ["889/2"], ["889"], False),
-        "wave 3 and spec 889": ({"n": 3, "l": ["wave:3"], "pa": 889}, ["889/2"], ["889"], False),
-        "no wave and no spec": ({"n": 4, "l": []}, ["none/none"], ["none"], True),
-        "wave 2, spec pending": ({"n": 5, "l": ["wave:2"]}, ["none/2"], ["none"], True),
+        "spec 889, a bug": ({"n": 1, "l": ["bug"], "pa": 889}, ["889"], ["bug"], True),
+        "spec 7, a bug": ({"n": 2, "l": ["bug"], "pa": 7}, ["889"], ["bug"], False),
+        "spec 889, an issue": ({"n": 3, "l": [], "pa": 889}, ["889"], ["bug"], False),
+        "no spec, an issue": ({"n": 4, "l": []}, ["none"], ["issue"], True),
+        "spec pending, an issue": ({"n": 5, "l": []}, ["none"], ["issue"], True),
     }
     script = "console.log(JSON.stringify({" + ",".join(
-        f"{json.dumps(k)}:boardOk({json.dumps(x)},{json.dumps(fw)},{json.dumps(fs)})" for k, (x, fw, fs, _) in cases.items()
+        f"{json.dumps(k)}:boardOk({json.dumps(x)},{json.dumps(fs)},{json.dumps(fk)})" for k, (x, fs, fk, _) in cases.items()
     ) + "}));"
     got = _node(script, LANES_JS)
     for name, (_, _, _, want) in cases.items():
@@ -118,13 +99,13 @@ def test_waves_and_specs_combine_with_and(hub):
 def test_the_filters_apply_to_the_swimlanes(hub):
     groups = [{"name": "Doing", "items": [
         {"n": 889, "t": "spec", "l": ["spec"], "sp": True},
-        {"n": 890, "t": "a", "l": ["wave:2"], "pa": 889},
-        {"n": 891, "t": "b", "l": ["wave:3"], "pa": 889},
-    ]}, {"name": "Todo", "items": [{"n": 900, "t": "c", "l": ["wave:2"]}]}]
-    opts = {"mode": "spec", "fw": ["889/2"], "fs": ["889"], "lc": {}, "hideDone": False, "closed": "Closed"}
+        {"n": 890, "t": "a", "l": [], "pa": 889},
+        {"n": 891, "t": "b", "l": [], "pa": 889},
+    ]}, {"name": "Todo", "items": [{"n": 900, "t": "c", "l": []}]}]
+    opts = {"fs": ["889"], "fk": ["issue"], "lc": {}, "hideDone": False, "closed": "Closed"}
     model = _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));", LANES_JS)
     shown = [r["n"] for ln in model["lanes"] for r in ln["vis"]]
-    assert shown == [890], f"the filters did not narrow the swimlanes: {shown}"
+    assert shown == [890, 891], f"the filters did not narrow the swimlanes: {shown}"
 
 
 # ---- the Specs options: an unfinished spec only (#981) ----
@@ -194,18 +175,8 @@ def test_the_page_builds_the_specs_options_from_the_unfinished_rule(hub):
     assert "specOptions(" in hub.PAGE and "keptSpecs(" in hub.PAGE
 
 
-def test_a_wave_held_only_by_closed_cards_is_not_an_option(hub):
-    groups = _with_ends([
-        {"name": "Todo", "items": [{"n": 1, "t": "open", "l": ["wave:1"], "pa": 889}]},
-        {"name": "Closed", "items": [{"n": 2, "t": "done", "l": ["wave:2"], "pa": 889}]},
-    ])
-    open_rows = [x for g in groups if not g["end"] for x in g["items"]]
-    opts = _node(f"console.log(JSON.stringify(waveOptions({json.dumps(open_rows)})));", LANES_JS)
-    assert [o["label"] for o in opts] == ["SPEC 889 · Wave 1"], opts
-
-
-def test_the_page_offers_the_specs_and_waves_of_open_cards_only(hub):
-    assert "allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items)" in hub.PAGE, "a closed card feeds the Waves options"
+def test_the_page_offers_the_specs_and_kinds_of_open_cards_only(hub):
+    assert "allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items)" in hub.PAGE, "a closed card feeds the options"
 
 
 # ---- the saved state from removed controls ----
@@ -214,6 +185,6 @@ def test_drop_removed_clears_the_old_keys_and_keeps_the_kept_ones(hub):
     bo = {"labels": ["x"], "label": "y", "lmode": "all", "specs": 2, "max": True, "off": False, "pip": {"x": 1},
           "fw": ["889/2"], "fs": [], "lc": {"s1": True}, "lmode_kept": 1}
     out = _node(f"let bo={json.dumps(bo)};dropRemoved(bo);console.log(JSON.stringify(bo));", LANES_JS)
-    for gone in ("labels", "label", "specs", "max", "off", "pip"):
+    for gone in ("labels", "label", "specs", "max", "off", "pip", "fw"):
         assert gone not in out, f"{gone} survived"
-    assert out["fw"] == ["889/2"] and out["lc"] == {"s1": True}, "a kept filter or collapse state was dropped"
+    assert out["fs"] == [] and out["lc"] == {"s1": True}, "a kept filter or collapse state was dropped"

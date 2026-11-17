@@ -54,11 +54,58 @@ def flow():
 
 # -- the sample format -------------------------------------------------------------------------------------------------
 
-def test_a_sample_names_each_cards_kind_spec_and_wave(flow):
+def test_a_new_sample_carries_no_wave_in_its_cells(flow):
+    s = flow.sample([_row(1, pa=5, labels=["wave:04", "bug"])], now=_epoch(20))
+    assert s["cells"] == [["bug", "5", "Todo", 0, 1, "bug"]], "the wave label is no dimension of a new sample"
+
+
+def test_a_new_sample_names_its_shape_so_a_reader_never_guesses(flow):
+    s = flow.sample([_row(1)], now=_epoch(20))
+    assert s["v"] == 2, "a new sample is the shape with no wave, and it says so (#2132)"
+
+
+def test_a_new_sample_with_a_long_type_tail_keeps_its_column_and_frozen_flag(flow):
+    s = {"v": 2, "t": _epoch(19), "counts": {"issue": {"Todo": 1}}, "frozen": 0, "none": 0,
+         "cells": [["issue", "none", "Todo", 0, 1, "a", "b"]]}
+    out = flow._rebucket_sample(s, 1)
+    assert out["cells"] == [["issue", "none", "Todo", 0, 1, "a", "b"]], "the version, never the length, names the shape"
+
+
+def test_a_sample_that_names_no_shape_keeps_a_cell_the_move_does_not_touch(flow):
+    s = {"cells": [["issue", "none", "Todo", 0, 1, "a", "b"]], "counts": {}, "frozen": 0, "none": 0}
+    out = flow._rebucket_sample(s, 1)
+    assert out["cells"] == s["cells"], "the reader never guesses a cell's shape: an untouched cell keeps its bytes"
+
+
+def test_a_new_sample_is_re_bucketed_without_a_wave_in_its_cells(flow):
+    s = flow.sample([_row(1, st="Closed")], now=_epoch(19))
+    out = flow._rebucket_sample(s, 1)
+    assert out["cells"] == [["issue", "none", "Abandoned", 0, 1, "task"]]
+
+
+def test_an_old_sample_with_a_wave_still_reads(flow, tmp_path):
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    old = {"t": _epoch(19), "counts": {"issue": {"Todo": 1}}, "frozen": 0, "none": 0,
+           "cells": [["issue", "none", "2", "Todo", 0, 1, "task"]]}
+    path.write_text(json.dumps(old) + "\n")
+    assert flow.samples(path) == [old]
+    flow.append(path, [_row(1)], now=_epoch(20))
+    assert flow.samples(path)[0] == old, "an old sample keeps its old reading"
+    assert flow.samples(path)[-1]["cells"] == [["issue", "none", "Todo", 0, 1, "task"]]
+
+
+def test_an_old_sample_is_re_bucketed_in_its_old_shape(flow):
+    old = {"t": _epoch(19), "counts": {"issue": {"Closed": 1}}, "frozen": 0, "none": 0,
+           "cells": [["issue", "none", "2", "Closed", 0, 1, "task"]]}
+    out = flow._rebucket_sample(old, 1)
+    assert out["cells"] == [["issue", "none", "2", "Abandoned", 0, 1, "task"]]
+
+
+def test_a_sample_names_each_cards_kind_spec_and_type(flow):
     s = flow.sample([_row(1, pa=5, labels=["wave:04", "bug"]), _row(2, labels=["loop-bug"]), _row(3)], now=_epoch(20))
-    assert ["bug", "5", "4", "Todo", 0, 1, "bug"] in s["cells"], "a bug-labelled card is the bar's kind bug"
-    assert ["bug", "none", "none", "Todo", 0, 1, "bug"] in s["cells"], "a loop bug is a bug too"
-    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
+    assert ["bug", "5", "Todo", 0, 1, "bug"] in s["cells"], "a bug-labelled card is the bar's kind bug"
+    assert ["bug", "none", "Todo", 0, 1, "bug"] in s["cells"], "a loop bug is a bug too"
+    assert ["issue", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_a_card_that_changes_spec_on_the_same_day_writes_a_new_sample(flow, tmp_path):
@@ -66,30 +113,25 @@ def test_a_card_that_changes_spec_on_the_same_day_writes_a_new_sample(flow, tmp_
     flow.append(path, [_row(1, pa=5)], now=_epoch(20))
     flow.append(path, [_row(1, pa=6)], now=_epoch(20) + 60)
     last = flow.samples(path)[-1]
-    assert ["issue", "6", "none", "Todo", 0, 1, "task"] in last["cells"], "equal counts with other cells is a new sample"
+    assert ["issue", "6", "Todo", 0, 1, "task"] in last["cells"], "equal counts with other cells is a new sample"
 
 
-def test_a_card_with_no_spec_and_no_wave_is_none(flow):
+def test_a_card_with_no_spec_is_none(flow):
     s = flow.sample([_row(1)], now=_epoch(20))
-    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
-
-
-def test_the_lowest_wave_label_names_the_wave_without_leading_zeros(flow):
-    s = flow.sample([_row(1, labels=["wave:10", "wave:02"])], now=_epoch(20))
-    assert ["issue", "none", "2", "Todo", 0, 1, "task"] in s["cells"]
+    assert ["issue", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_a_card_in_no_column_has_no_column_name_in_its_cell(flow):
     s = flow.sample([_row(1, st="Nowhere")], now=_epoch(20))
-    assert ["issue", "none", "none", None, 0, 1, "task"] in s["cells"]
+    assert ["issue", "none", None, 0, 1, "task"] in s["cells"]
 
 
 def test_the_cells_add_up_to_the_counts_the_flow_already_keeps(flow):
     rows = [_row(1, pa=5, labels=["wave:1"]), _row(2), _row(3, st="Nowhere")]
     s = flow.sample(rows, now=_epoch(20))
-    in_columns = sum(c[5] for c in s["cells"] if c[3] is not None)
+    in_columns = sum(c[4] for c in s["cells"] if c[2] is not None)
     assert in_columns == sum(n for by in s["counts"].values() for n in by.values())
-    assert sum(c[5] for c in s["cells"] if c[3] is None) == s["none"]
+    assert sum(c[4] for c in s["cells"] if c[2] is None) == s["none"]
 
 
 def test_the_spec_and_wave_keys_are_the_values_the_board_filter_offers(flow):
@@ -97,6 +139,8 @@ def test_the_spec_and_wave_keys_are_the_values_the_board_filter_offers(flow):
     assert flow.spec_key({"pa": 5}) == "5"
     assert flow.wave_key(["bug"]) == "none"
     assert flow.wave_key(["wave:04"]) == "4"
+    s = flow.sample([_row(1, labels=["wave:02"])], now=_epoch(20))
+    assert len(s["cells"][0]) == 6, "the board filter reads the label, and the sample carries no wave element (#2132)"
     assert flow.kind_key({"l": ["bug"]}) == "bug"
     assert flow.kind_key({"l": []}) == "issue"
 
@@ -107,11 +151,11 @@ def _write_history(hub_mod, items, day=20):
                     now=datetime(2026, 10, day, 12, tzinfo=UTC).timestamp())
 
 
-def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
+def test_the_flow_history_keeps_each_cards_spec(hub, board):
     items = [_item(hub, 1, hub.COLUMN["unscheduled"], pa=5, labels=["wave:4"])]
     _write_history(hub, items)
     line = hub._flow.history_path(hub.BOARD, hub.REPO).read_text().splitlines()[-1]
-    assert ["issue", "5", "4", hub.COLUMN["unscheduled"], 0, 1, "task"] in json.loads(line)["cells"]
+    assert ["issue", "5", hub.COLUMN["unscheduled"], 0, 1, "task"] in json.loads(line)["cells"]
 
 
 @pytest.fixture(scope="module")
@@ -354,15 +398,16 @@ const settle=()=>new Promise(r=>setTimeout(r,0));
     return json.loads(result.stdout)
 
 
-def _bar(fw="", fs="", fk="", ty="task"):
-    return f"fw={fw}&fs={fs}&fk={fk}&ty={ty}"
+def _bar(fs="", fk="", ty="task"):
+    """The bar's route query: Specs and Kinds, never a wave key (SPEC 1965, #1988)."""
+    return f"fs={fs}&fk={fk}&ty={ty}"
 
 
-def _cfd_bar(fw="", fs="", fk="", ty="task"):
+def _cfd_bar(fs="", fk="", ty="task"):
     """The cumulative flow's route query: its own Type state, which opens on the tasks default the route always sent; All
     adds the extra `every=1` and keeps `ty` at a value the wire already knows, so the old parameter's meaning stands (#1356)."""
     every = ty == "all"
-    return _bar(fw, fs, fk, "task" if every else ty) + ("&every=1" if every else "")
+    return _bar(fs, fk, "task" if every else ty) + ("&every=1" if every else "")
 
 
 def test_a_kind_pick_redraws_the_open_cumulative_flow_with_the_filtered_route(hub, board):
@@ -425,7 +470,7 @@ console.log(JSON.stringify({last:DRAWN[DRAWN.length-1]}));""", onchange=_onchang
     assert count == 0, "the answer for the picked kind is drawn, not the one read before the pick"
 
 
-def test_the_bar_has_a_kinds_control_beside_waves_and_specs(hub):
+def test_the_bar_has_a_kinds_control_beside_specs(hub):
     assert "<details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details>" in hub.PAGE
     assert 'pickFilter("fkl","fk")' in hub.PAGE
     # re-anchored (#973): the read may carry the ETag header and nothing else, so no bar value reaches the route
@@ -438,8 +483,8 @@ def test_the_board_keeps_a_card_by_its_kind(hub):
     script = lanes + """
 const rows=[{n:1,l:[]},{n:2,l:["bug"]},{n:3,l:["loop-bug"]},{n:4,kind:"pr",l:[]}];
 const groups=[{name:"Todo",items:rows.slice(0,3)}];
-console.log(JSON.stringify({kinds:rows.map(kindKey),bug:rows.filter(x=>boardOk(x,[],[],["bug"])).map(x=>x.n),
- lanes:buildBoard(groups,{mode:"spec",fw:[],fs:[],fk:["issue"],closed:"Closed"}).lanes.flatMap(l=>l.vis.map(x=>x.n))}));"""
+console.log(JSON.stringify({kinds:rows.map(kindKey),bug:rows.filter(x=>boardOk(x,[],["bug"])).map(x=>x.n),
+ lanes:buildBoard(groups,{fs:[],fk:["issue"],closed:"Closed"}).lanes.flatMap(l=>l.vis.map(x=>x.n))}));"""
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
@@ -466,9 +511,9 @@ def test_a_card_is_a_spec_a_bug_or_a_task_by_its_labels(flow):
 
 def test_a_sample_names_each_cards_type_in_its_cell(flow):
     s = flow.sample([_row(1, labels=["spec"]), _row(2, labels=["bug"]), _row(3)], now=_epoch(20))
-    assert ["issue", "none", "none", "Todo", 0, 1, "spec"] in s["cells"]
-    assert ["bug", "none", "none", "Todo", 0, 1, "bug"] in s["cells"]
-    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
+    assert ["issue", "none", "Todo", 0, 1, "spec"] in s["cells"]
+    assert ["bug", "none", "Todo", 0, 1, "bug"] in s["cells"]
+    assert ["issue", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_the_bar_names_a_type_and_the_default_is_tasks(hub):
@@ -644,7 +689,7 @@ def test_a_reload_restores_the_board_filter_and_the_chart_range_apart(hub, board
     # The board's own route and its card list, by the page's bar query and its boardOk, read before any chart opens: a
     # range that leaked into the Board tab's shared state would narrow both here (#1275).
     observe = """const snap=()=>({a:LT.a,own:ltOwn(),route:barQuery("board"),
-cards:BOARD_ROWS.filter(x=>boardOk(x,bo.fw||[],bo.fs||[],bo.fk||[])).map(x=>x.n)});
+cards:BOARD_ROWS.filter(x=>boardOk(x,bo.fs||[],bo.fk||[])).map(x=>x.n)});
 const pre=snap();"""
     report = "const post=snap();console.log(JSON.stringify({pre,post,bo,tf:LT.tf,a:LT.a,b:LT.b,store:STORE,fetched:FETCHED}));"
     first = _page_harness(hub, {}, 'pickFilter("fkl","fk");EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});'
@@ -697,12 +742,12 @@ console.log(JSON.stringify({fetched:FETCHED,ty:LT.ty,store:STORE,drawn:DRAWN[DRA
 
 # -- the Board filter chip: one chip names the filter and stops one chart following it (#1147) --------------------------
 
-def _chip_render(hub, fw=(), fs=(), fk=(), stopped=False):
+def _chip_render(hub, fs=(), fk=(), stopped=False):
     """The chip's markup, rendered by the page's own function."""
     block = _flow_block(hub).split("const drawFlow")[0]
     esc = _page_line(hub, "const esc=")
     script = "\n".join(["const COLORS={},COLNAME={};", esc, "const ls={};", block,
-                        f"process.stdout.write(flowFilterChip({json.dumps(list(fw))},{json.dumps(list(fs))},"
+                        f"process.stdout.write(flowFilterChip({json.dumps(list(fs))},"
                         f"{json.dumps(list(fk))},{str(stopped).lower()}));"])
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
@@ -713,14 +758,14 @@ def _chip_render(hub, fw=(), fs=(), fk=(), stopped=False):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_board_filter_chip_appears_exactly_when_the_filter_is_set(hub):
-    """#1147: the chip is drawn exactly when Waves, Specs or Kinds is non-empty, and it names each one that is set."""
+    """#1147: the chip is drawn exactly when Specs or Kinds is non-empty, and it names each one that is set."""
     assert _chip_render(hub) == "", "an empty Board filter draws no chip"
-    chip = _chip_render(hub, fw=["5/4"], fs=["2"], fk=["bug"])
+    chip = _chip_render(hub, fs=["2"], fk=["bug"])
     assert chip.count("id=ffchip") == 1, "one chip names the filter"
-    for name in ("Waves: 5/4", "Specs: 2", "Kinds: bug"):
+    for name in ("Specs: 2", "Kinds: bug"):
         assert name in chip, f"the chip does not name {name!r}"
     assert "id=ffx" in chip and "Stop following" in chip, "the chip carries its one action"
-    assert _chip_render(hub, fk=["bug"]).count("Waves:") == 0, "an unset filter is not named"
+    assert _chip_render(hub, fk=["bug"]).count("Specs:") == 0, "an unset filter is not named"
     markup = _chip_render(hub, fk=["<b>&"])
     assert "<b>" not in markup and "&lt;b&gt;" in markup, "a filter name is escaped into the chip"
 
