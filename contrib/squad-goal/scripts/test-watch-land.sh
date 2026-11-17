@@ -259,4 +259,25 @@ printf '%s' "$l" | /usr/bin/grep -q 'the push of wave/run-14 was refused by the 
 printf '%s' "$l" | /usr/bin/grep -q 'held since' && ko "a failed landing blamed a held lock: '$l'" || ok "a failed landing names no lock"
 rm -f "$T/plainfail"; cp "$T/wave.stub2" "$S/wave.sh"
 
+# 15) (#2058) a landing that finds the landing lock held queues its run for the batch: `wland-<run>.queued` names the run's
+# folder, and the pass that holds the lock lands it. The landing pass runs with SG_LAND_QUEUE=1. SG_LAND_BATCH=1 queues nothing.
+cat > "$S/wave.sh" <<EOS
+#!/bin/bash
+echo "wave \$* queue=\${SG_LAND_QUEUE:-}" >> "$STEPS"
+exit 0
+EOS
+chmod +x "$S/wave.sh"
+run run-15 pass; printf 'wave/run-15\n' > "$ST/auto/wave-run-15"; printf '%s\n' "$T/run-15" > "$ST/active-runs.txt"
+/bin/sleep 60 & wh=$!; mkdir -p "$ST/locks/single-wland"; echo "$wh" > "$ST/locks/single-wland/pid"
+run_cycle 1
+[ "$(cat "$ST/auto/wland-run-15.queued" 2>/dev/null)" = "$T/run-15" ] && ok "a held landing queues its run for the batch" || ko "no queue marker: '$(ls "$ST/auto")'"
+rm -f "$ST/auto/wland-run-15.queued"
+SG_LAND_BATCH=1 run_cycle 1
+[ -e "$ST/auto/wland-run-15.queued" ] && ko "SG_LAND_BATCH=1 queued the run" || ok "SG_LAND_BATCH=1 queues no run"
+kill "$wh" 2>/dev/null; wait "$wh" 2>/dev/null; rm -rf "$ST/locks/single-wland"
+run_cycle 1
+/usr/bin/grep -qE "^wave land run-15 /.*/run-15 queue=1$" "$STEPS" && ok "the landing pass runs with SG_LAND_QUEUE=1" || ko "steps: '$(cat "$STEPS")'"
+[ -e "$ST/auto/wland-run-15.queued" ] && ko "a landed run keeps its queue marker" || ok "a run whose pass got the lock is not queued"
+cp "$T/wave.stub2" "$S/wave.sh"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
