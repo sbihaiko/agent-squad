@@ -463,8 +463,9 @@ def test_the_complete_tier_starts_on_the_promote_label_alone():
     guard = wf["jobs"][GUARD_JOB]
     assert guard.get("if") == GUARD_IF, f"the guard starts on a promote label alone; found {guard.get('if')!r}"
     assert "needs" not in guard, "the guard waits on no job: it is what the tier waits on"
-    assert guard.get("permissions") == {"contents": "read", "checks": "read", "actions": "read"}, \
-        f"the guard checks out the tree, reads the tip's check runs and the pull request's runs in flight (#2067); found {guard.get('permissions')!r}"
+    assert guard.get("permissions") == {"contents": "read", "checks": "read", "actions": "read",
+                                       "pull-requests": "write"}, \
+        f"the guard checks out the tree, reads the tip's check runs and the pull request's runs in flight (#2067), and posts one comment on the pull request (#2194); found {guard.get('permissions')!r}"
     assert guard.get("outputs") == {"run": "${{ steps.once.outputs.run }}"}, \
         f"the guard answers one output the tier reads: {guard.get('outputs')!r}"
     text = "\n".join(str(s.get("run", "")) for s in guard["steps"])
@@ -577,6 +578,91 @@ def test_a_label_starts_no_complete_tier_while_another_runs(tmp_path):
         assert _guard_with_other_run(tmp_path, status, conclusion)[0] == "run=true", f"a {conclusion} run held the tier"
     wf = _ci_workflow()
     assert "cancel" not in json.dumps(wf["jobs"][GUARD_JOB]), "the guard cancels a run"
+
+
+# The tip a label asks for, and the tip of the run that holds the tier (#2194).
+TIP_SHA = "0123456789abcdef0123456789abcdef01234567"
+HOLD_SHA = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+def _guard_comment_calls(tmp_path, existing: list, in_flight: bool = True, tip_ran: bool = False):
+    """The guard step's script against a stub `gh` that records every call and answers the pull request's comments with
+    `existing` (#2194): the calls it made, one line each, and its `run=` answer."""
+    wf = _ci_workflow()
+    script = next(s["run"] for s in wf["jobs"][GUARD_JOB]["steps"] if s.get("id") == "once")
+    (tmp_path / "bin").mkdir(parents=True)
+    box = tmp_path / "box"
+    box.mkdir()
+    calls = box / "calls"
+    calls.write_text("")
+    checks = [{"id": 1, "name": COMPLETE_TIER_JOBS[0], "status": "completed", "conclusion": "success",
+               "run_id": 31}] if tip_ran else []
+    runs = {"workflow_runs": [{"id": 22, "head_sha": HOLD_SHA, "status": "in_progress"},
+                              {"id": 7, "head_sha": HOLD_SHA, "status": "in_progress"}] if in_flight else []
+            }
+    jobs = {"jobs": [{"name": COMPLETE_TIER_JOBS[0], "status": "in_progress", "conclusion": None}]}
+    gh = tmp_path / "bin" / "gh"
+    gh.write_text(
+        "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$CALLS\"\ncase \"$*\" in\n"
+        f"  *issues/5/comments\\?per_page=100*) cat <<'JSON'\n{json.dumps(existing)}\nJSON\n;;\n"
+        "  *issues/5/comments*) echo '{\"id\": 99}';;\n"
+        f"  *actions/runs/22/jobs*) cat <<'JSON'\n{json.dumps(jobs)}\nJSON\n;;\n"
+        f"  *actions/runs*) cat <<'JSON'\n{json.dumps(runs)}\nJSON\n;;\n"
+        f"  *) cat <<'JSON'\n{json.dumps({'check_runs': checks})}\nJSON\n;;\n"
+        "esac\n")
+    gh.chmod(0o755)
+    out = box / "out"
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}", "SHA": TIP_SHA,
+           "REPO": "o/r", "GITHUB_OUTPUT": str(out), "GITHUB_RUN_ID": "7", "HEAD_REF": "stg", "PR": "5",
+           "CALLS": str(calls)}
+    r = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return calls.read_text().splitlines(), out.read_text().strip()
+
+
+def _comment_posts(calls: list[str]) -> list[str]:
+    """The calls that post a comment on pull request 5: the comments path with no read query, the one write route."""
+    return [c for c in calls if "/issues/5/comments" in c and "?" not in c]
+
+
+@pytest.mark.heavy
+def test_a_promote_label_that_starts_no_tier_leaves_one_comment(tmp_path):
+    """Guard for #2194: a `promote` label that starts no complete tier leaves its reason where a person looks.
+
+    The guard answers `run=false` when the tip already carries the tier or when another tier is in flight, and every tier
+    job skips; the job log is no place a person reads the pull request. The guard posts one comment on the pull request
+    naming the reason, the run that holds the tier and the sha it waits on. A label that starts the tier writes nothing
+    extra, and one tip carries one comment: the guard reads the pull request's comments for the tip's sha first.
+    """
+    calls, answer = _guard_comment_calls(tmp_path / "inflight", existing=[])
+    assert answer == "run=false", "the guard starts no tier while another is in flight"
+    posts = _comment_posts(calls)
+    assert len(posts) == 1, f"a label that starts no tier posts one comment; posted {posts}"
+    body = posts[0]
+    assert "in flight" in body, f"the comment names the reason it starts no tier: {body!r}"
+    assert "22" in body, f"the comment names the run that holds the tier: {body!r}"
+    assert HOLD_SHA in body, f"the comment names the sha the holding run waits on: {body!r}"
+    assert TIP_SHA in body, f"the comment names the tip, so a second guard run on that tip posts nothing: {body!r}"
+    assert any("?" in c and "/issues/5/comments" in c for c in calls), "the guard reads the comments of the pull request"
+
+    calls, answer = _guard_comment_calls(tmp_path / "carries", existing=[], in_flight=False, tip_ran=True)
+    assert answer == "run=false", "a tip that already carries the tier starts it not"
+    posts = _comment_posts(calls)
+    assert len(posts) == 1, f"a tip that already carries the tier leaves one comment; posted {posts}"
+    assert "already carries" in posts[0], f"the comment names the reason it starts no tier: {posts[0]!r}"
+
+    calls, answer = _guard_comment_calls(tmp_path / "starts", existing=[], in_flight=False)
+    assert answer == "run=true", "a label on a tip with no tier starts the complete tier"
+    assert _comment_posts(calls) == [], f"a label that starts the tier writes nothing extra; posted {calls}"
+
+    calls, answer = _guard_comment_calls(tmp_path / "again", in_flight=True,
+                                         existing=[{"id": 41, "body": f"no tier this time; the tip is {TIP_SHA}."}])
+    assert answer == "run=false", "the second label on an in-flight tier starts nothing"
+    assert _comment_posts(calls) == [], f"a second guard run on the same tip posts nothing; posted {calls}"
+
+    wf = _ci_workflow()
+    assert (wf["jobs"][GUARD_JOB].get("permissions") or {}).get("pull-requests") == "write", \
+        "the guard posts a comment on the pull request, so its token writes one"
 
 
 def test_the_quiet_window_is_one_value_in_the_adr_and_the_pass():

@@ -23,7 +23,9 @@ on:
 # the tier's entry, never a sibling it waits behind, and the twelve shard jobs still start together. The guard counts a run
 # that measured something or is still in flight; a run that ended cancelled or timed out measured nothing, so it does not
 # stop the tier, and a tip the promotion calls unproven can be proven again. The guard and the promotion read that set
-# from one seam, `promote-pass.sh --ci-unproven-conclusions`. The fast-battery job carries one explicit GUI e2e run beside
+# from one seam, `promote-pass.sh --ci-unproven-conclusions`. A label the guard answers `run=false` leaves its reason on
+# the pull request: one comment names the reason, the run that holds the tier and the sha it waits on, and a tip carries
+# one such comment (#2194). The fast-battery job carries one explicit GUI e2e run beside
 # the battery: the battery's `-m "not heavy"` leaves that file's `heavy` tests out. The complete tier's GUI e2e job carries
 # them alone. On each tier the host-bound tests are deselected by name (ADR-0139), and the complete tier also simulates a
 # runner (SQUAD_CI_RUNNER=1), so every deselected test prints its id and reason in the job log (#1323).
@@ -119,6 +121,7 @@ jobs:
       contents: read
       checks: read
       actions: read
+      pull-requests: write
     outputs:
       run: ${{ steps.once.outputs.run }}
     steps:
@@ -134,20 +137,28 @@ jobs:
         # (#2067) One complete tier at a time: a complete-tier job of another run of this pull request that has not
         # completed holds the label, and the guard names that run and its sha. The run in flight is never cancelled; the
         # promotion pass labels the newest stg tip after it ends, and main moves to the sha that run proved (ADR-0173).
+        # (#2194) A label that starts no tier leaves its reason where a person looks: one comment on the pull request
+        # naming the reason, the run that holds the tier and the sha it waits on. A tip carries one such comment: the
+        # guard reads the pull request's comments for the tip's sha first, so a second guard run on that tip writes
+        # nothing. A label that starts the tier writes nothing extra.
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
           HEAD_REF: ${{ github.head_ref }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
           names=$(bash contrib/squad-goal/scripts/promote-pass.sh --ci-complete-job-names .github/workflows/ci.yml)
           unproven=$(bash contrib/squad-goal/scripts/promote-pass.sh --ci-unproven-conclusions | jq -Rnc '[inputs | select(. != "")]')
           runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100&filter=all" 2>/dev/null \
             | jq -r --argjson u "$unproven" '.check_runs[] | select(.conclusion != "skipped") | select(.conclusion as $c | $u | any(. == $c) | not) | .name' 2>/dev/null || true)
           run=true
+          why=""
+          wait=""
           for n in $names; do
             if printf '%s\n' "$runs" | grep -qxF "$n"; then
               echo "the tip already carries $n: the complete tier started on it"; run=false
+              why="the tip already carries the complete tier"
             fi
           done
           want=$(printf '%s\n' $names | jq -Rnc '[inputs | select(. != "")]')
@@ -156,9 +167,19 @@ jobs:
             if gh api "repos/$REPO/actions/runs/${f%%:*}/jobs?per_page=100" 2>/dev/null \
               | jq -e --argjson n "$want" '[.jobs[]? | select(.status != "completed") | select(.name as $x | $n | index($x))] | length > 0' >/dev/null 2>&1; then
               s=${f#*:}; echo "a complete tier is in flight: run ${f%%:*} on ${s:0:9}; this label starts nothing"; run=false
+              why="a complete tier is in flight"
+              wait=" Run ${f%%:*} holds it, and the tip it waits on is $s."
             fi
           done
           echo "complete tier: $names"
+          if [ "$run" = false ] && [ -n "${PR:-}" ]; then
+            body="This \`promote\` label starts no complete tier: $why.$wait The tip is $SHA; the tier starts on a label after that run ends. One comment is left per tip."
+            seen=$(gh api "repos/$REPO/issues/$PR/comments?per_page=100" 2>/dev/null \
+              | jq -r --arg s "$SHA" '.[]? | select((.body // "") | contains($s)) | .id' 2>/dev/null || true)
+            if [ -z "$seen" ]; then
+              gh api "repos/$REPO/issues/$PR/comments" --method POST -f body="$body" >/dev/null
+            fi
+          fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
   full-xdist-1:
