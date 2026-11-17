@@ -7662,8 +7662,8 @@ const model=buildBoard(all.filter(g=>!isPR(g.name)),{closed:COLNAME.issue_closed
 const lanesHtml=laneHtml(model);lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#bbody").classList.add("lanes");
 $("#lhc").innerHTML=model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
-if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}
-else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
+if(model){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
+else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // no lane model: the columns stand, and a scroll in progress is never interrupted
 boardRows=all.flatMap(g=>g.items);paintHL();
 }catch(e){}finally{lim.busy=0}}
 // highlight:begin
