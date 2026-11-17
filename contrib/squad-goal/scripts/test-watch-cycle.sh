@@ -285,6 +285,19 @@ touch -t 202001010000 "$ST/promote-defer"   # the stamp is older than the bound
 printf '%s\twave\n' "$(date +%s)" > "$ST/landed.tsv"; run_cycles 1 SG_PROMOTE_QUIET_SECONDS=900 SG_PROMOTE_MAX_DEFER=1800; pwait "promote ci"
 [ "$(pcount "promote ci")" = 1 ] && ok "15 past the deferral bound a continuing stream still promotes once" || ko "15 the stream starved the pass ($(pcount 'promote ci'); steps '$(tr '\n' ' ' < "$PROM")'; cycle.log '$(tr '\n' '|' < "$ST/cycle.log" 2>/dev/null)'; stamp '$(cat "$ST/promote-defer" 2>/dev/null)' landed '$(tr '\n' '|' < "$ST/landed.tsv" 2>/dev/null)')"
 rm -f "$ST/landed.tsv" "$ST/promote-defer"
+# 15b) (#2147) While the quiet window holds the promotion, the cycle names it in its own log, once for one reason: a green
+# dev tip that waits then reads as a wait on the loop, never as a loop that did not see the pull request. The line names
+# the seconds since the last landing and the window, and a second cycle with the same landing adds no second line.
+: > "$PROM"; : > "$ST/cycle.log"; rm -f "$ST/promote-defer" "$ST/promote-defer-said"
+printf '%s\twave\n' "$(( $(date +%s) - 120 ))" > "$ST/landed.tsv"; run_cycles 1; /bin/sleep 0.3
+n1=$(/usr/bin/grep -c "PROMOTE defer:" "$ST/cycle.log" 2>/dev/null); n1=${n1:-0}
+run_cycles 1; /bin/sleep 0.3
+n2=$(/usr/bin/grep -c "PROMOTE defer:" "$ST/cycle.log" 2>/dev/null); n2=${n2:-0}
+[ "$n1" = 1 ] && ok "15b a held promotion is named once in the cycle log" || ko "15b the held promotion wrote $n1 line(s): $(tr '\n' '|' < "$ST/cycle.log" 2>/dev/null)"
+[ "$n2" = 1 ] && ok "15b a second cycle with the same landing adds no line" || ko "15b the same reason wrote $n2 lines"
+line=$(/usr/bin/grep -m1 "PROMOTE defer:" "$ST/cycle.log" 2>/dev/null)
+case "$line" in *900*|*"the window"*) ok "15b the line names the quiet window" ;; *) ko "15b the line names no window: $line" ;; esac
+rm -f "$ST/landed.tsv" "$ST/promote-defer" "$ST/promote-defer-said"
 
 # 16) (ADR-0173) The cycle runs the stg-to-main pass by itself: one step per cycle, detached under its own single-flight lock
 # (`single.sh promote-main`) and outside the promotion's quiet window, so a burst of landings never postpones the read of a

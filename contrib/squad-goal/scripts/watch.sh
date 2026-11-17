@@ -232,7 +232,8 @@ if v:
   # merge and never for a suite. Its own lines go to promote.log, its outcome to this cycle log.
   promote_quiet && { srec_start promote; drec=$srec_id; ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?; srec_end "$drec" promote "$rc"
     if [ "$rc" = 76 ]; then echo "$(date +%T) PROMOTE waits: a pass in flight holds the promote lock (pid $(cat "$SG_STATE/locks/single-promote/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
-    else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null & }
+    else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null & } \
+    || promote_defer_note   # a held window names itself once per reason (#2147): a green dev tip that waits is never silent
   # The stg-to-main step (ADR-0173): every cycle, detached under its own single-flight lock, and outside the quiet window
   # above. It asks for the complete CI tier on the stg tip once stg is quiet or its oldest unpromoted commit is old, reads
   # the request it left, and moves main by a fast-forward when the tier is green. A landing costs a job on the runner
