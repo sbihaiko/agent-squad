@@ -8,6 +8,9 @@
 # The stage names the scope: an intermediate stage (fast, wave-entry, wave-tip, prepush) runs the delta the change reaches,
 # while the landing, the promotion proof and the nightly run the full battery. A delta the selector cannot cover falls through
 # to the full battery with its reason, so no stage ever passes by a narrower check (ADR-0018).
+# A child's own gate narrows instead of widening (#2085, ADR-0169 rule 4): it is bounded (ADR-0163) and waits behind its
+# siblings' gates, so a change the delta cannot place runs no pytest there, and the gate records the reason and ends unproven.
+# The landing gate runs the full battery over the branch, so the narrowed scope defers the proof and never weakens it.
 # `ruff check .` is never the battery: it lints this loop's own scripts, which no other gate lints, and it is red at every tip
 # (1378 findings, all under contrib/squad-goal/scripts), so a child could never enter a wave (#447).
 # The battery's pytest runs with SG_GATE_WORKERS workers, never `auto`: `auto` takes every core, and a gate beside a second
@@ -16,25 +19,33 @@
 # runs, not when it is built: the count never rises above the slots the gate holds. It is not an SG_ name, so a gate command that
 # drops the SG_* variables still reads it.
 
-# sg_battery_run <python> <base> <workers> <yes|no> <stage>: ruff and mypy on the whole tree, then pytest over the files that
-# squad/testselect.py answers for <base> at <stage>; `no` runs pytest over the whole tree. A stage the selector does not know
-# as a delta stage answers `all`, so the whole tree runs too. An empty selection (`none: <reason>`, or no line) runs no pytest
-# and logs `no pytest ran: the selection is empty: <reason>`, which the fast gate records as unproven (#1249). The line it logs, and writes
-# to $GATE_SELECT_FILE when a gate set one, says `selected N files` or `all: <reason>`; $GATE_SCOPE_FILE says `delta` or
-# `full`, the scope that line names. A delta the selector cannot cover answers `all` with its reason, so the full battery
-# runs and the record says why the delta refused: a cheaper scope never narrows a gate (ADR-0018).
+# sg_battery_run <python> <base> <workers> <yes|no> <stage> [<narrow>]: ruff and mypy on the whole tree, then pytest over the
+# files that squad/testselect.py answers for <base> at <stage>; `no` runs pytest over the whole tree. A stage the selector
+# does not know as a delta stage answers `all`, so the whole tree runs too. An empty selection (`none: <reason>`, or no line)
+# runs no pytest and logs `no pytest ran: the selection is empty: <reason>`, which the fast gate records as unproven (#1249).
+# The line it logs, and writes to $GATE_SELECT_FILE when a gate set one, says `selected N files` or `all: <reason>`;
+# $GATE_SCOPE_FILE says `delta` or `full`, the scope that line names. A delta the selector cannot cover answers `all` with
+# its reason, so the full battery runs and the record says why the delta refused: a cheaper scope never narrows a gate
+# (ADR-0018). <narrow> `yes` is the child's own gate (#2085): an `all` answer there runs no pytest and keeps the `delta`
+# scope, and the line names the change the delta cannot cover, so the gate ends unproven with that reason (ADR-0169 rule 4).
 sg_battery_run() {
-  local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} scope why="the selector named no test file" out= defs=
+  local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} narrow=${6:-no} scope why="the selector named no test file" \
+        out= defs= prefix="the selection is empty: "
   "$py" -m ruff check squad tests && "$py" -m mypy squad || return
   if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
   case $files in none:*) why=${files#none: }; files=;; esac
-  case $files in all:*) line=$files; scope=full;; *) line="selected $(printf '%s\n' "$files" | /usr/bin/grep -c .) files"; scope=delta;; esac
+  case $files in
+    all:*) if [ "$narrow" = yes ] && [ "$4" = yes ]; then
+             line="selected 0 files"; scope=delta; why=${files#all: }; prefix="the delta cannot cover the change: "
+           else line=$files; scope=full; fi;;
+    *) line="selected $(printf '%s\n' "$files" | /usr/bin/grep -c .) files"; scope=delta;;
+  esac
   echo "$line"
   [ -z "${GATE_SELECT_FILE:-}" ] || echo "$line" > "$GATE_SELECT_FILE"
   [ -z "${GATE_SCOPE_FILE:-}" ] || echo "$scope" > "$GATE_SCOPE_FILE"
   # (#1249) No pytest ran, so nothing is proven: the line names why, and fast-gate.sh reads it as an unproven verdict.
-  [ "$line" != "selected 0 files" ] || { echo "no pytest ran: the selection is empty: $why"; return 0; }
+  [ "$line" != "selected 0 files" ] || { echo "no pytest ran: $prefix$why"; return 0; }
   # (#1726) One pass, at the project's own line: the parallel run lifts no cap, so the slow-cap guard records every unmarked
   # call at or over that line instead of hiding it under a 20 s threshold. The output is kept in a file the record is read
   # from and tee'd on, so a run the deadline stops still logs what it printed before it.
@@ -64,14 +75,15 @@ sg_battery_run() {
   return "${rc:-0}"
 }
 
-# sg_base_battery <python> <base> [<stage>]: the command a gate hands to SG_FAST_CMD, sg_battery_run with its definition
-# inlined, so the command needs no function of this file in its shell. The stage is read here and written into the command,
-# because the gate runs it with no SG_* variable: SG_GATE_STAGE names it when the caller omits it, and `fast` is the default.
-# SG_TEST_SELECT=no, read when the command is built, runs the whole tree. A gate run by hand, before env.sh is read, gets the
-# same worker count env.sh holds by default.
+# sg_base_battery <python> <base> [<stage>] [<narrow>]: the command a gate hands to SG_FAST_CMD, sg_battery_run with its
+# definition inlined, so the command needs no function of this file in its shell. The stage is read here and written into the
+# command, because the gate runs it with no SG_* variable: SG_GATE_STAGE names it when the caller omits it, and `fast` is the
+# default. <narrow> is the child's own gate (#2085), written into the command for the same reason: it is `yes` there and `no`
+# everywhere else. SG_TEST_SELECT=no, read when the command is built, runs the whole tree. A gate run by hand, before env.sh is
+# read, gets the same worker count env.sh holds by default.
 sg_base_battery() {
-  local select=yes stage=${3:-${SG_GATE_STAGE:-fast}}; [ "${SG_TEST_SELECT:-yes}" = no ] && select=no
-  printf '%s\nsg_battery_run %q %q %q %s %q\n' "$(declare -f sg_battery_run)" "$1" "$2" "${SG_GATE_WORKERS:-6}" "$select" "$stage"
+  local select=yes stage=${3:-${SG_GATE_STAGE:-fast}} narrow=${4:-no}; [ "${SG_TEST_SELECT:-yes}" = no ] && select=no
+  printf '%s\nsg_battery_run %q %q %q %s %q %s\n' "$(declare -f sg_battery_run)" "$1" "$2" "${SG_GATE_WORKERS:-6}" "$select" "$stage" "$narrow"
 }
 
 # sg_shell_suites <top> <merge-base>: the shell suite names (`test-<n>.sh`, without prefix or suffix) a tree changes against

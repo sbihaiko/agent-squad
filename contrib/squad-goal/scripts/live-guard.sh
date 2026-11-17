@@ -108,9 +108,26 @@ notes
 # source: it is named and nothing is published. A dirty tree (a file the publish copies; machine config is not dirt), a
 # diverged tree and a failed fetch are named, nothing is published, and the tree is never touched. The base here is stg,
 # never $SG_BASE: that one names where work branches start.
+# A tree on a work branch is no source and is never touched, but the shipped page still follows the process: the pass keeps
+# its own tree at origin/stg and publishes from it. Without one, the live skill would wait for a person to put the checkout
+# back on stg -- hours, the last time -- and every page the owner reads would be a build of the process it no longer has.
+ship_tree() {  # the pass's own source at origin/stg, kept in the state folder; prints its path, else nothing
+  local s=${SG_STATE:-}/ship-tree url
+  [ -n "${SG_STATE:-}" ] || return 1
+  url=$(git -C "$SG_CHECKOUT" remote get-url origin 2>/dev/null) || return 1   # the real origin, never the checkout: its stg lags
+  if [ ! -d "$s/.git" ]; then
+    mkdir -p "$SG_STATE" || return 1
+    git clone --quiet --no-checkout "$url" "$s" >/dev/null 2>&1 || return 1
+  else git -C "$s" remote set-url origin "$url" >/dev/null 2>&1; fi
+  GIT_TERMINAL_PROMPT=0 git -C "$s" fetch --quiet origin "$base" >/dev/null 2>&1 || return 1
+  git -C "$s" checkout --quiet -f -B "$base" "origin/$base" >/dev/null 2>&1 || return 1
+  [ -f "$s/contrib/squad-goal/SKILL.md" ] && printf '%s\n' "$s"
+}
 if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
   base=stg; tree=$SG_CHECKOUT; cur=$(git -C "$tree" branch --show-current)
-  if [ "$cur" != "$base" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is on ${cur:-a detached head}, not $base; nothing is published"; exit 0
+  if [ "$cur" != "$base" ]; then
+    echo "LIVE-GUARD main tree $tree is on ${cur:-a detached head}, not $base: it is left alone and the pass publishes from its own $base tree"
+    tree=$(ship_tree) || { echo "LIVE-GUARD no $base tree to publish from and the main tree is on ${cur:-a detached head}; nothing is published"; exit 0; }
   elif [ -n "$(git -C "$tree" status --porcelain --untracked-files=no -- contrib/squad-goal ':!contrib/squad-goal/scripts/models.json' ':!contrib/squad-goal/scripts/profiles')" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: a shipped file is dirty; nothing is published"; exit 0
   elif ! GIT_TERMINAL_PROMPT=0 git -C "$tree" fetch --quiet origin "$base" >/dev/null 2>&1; then echo "LIVE-GUARD main tree $tree not fast-forwarded: git fetch origin $base failed; nothing is published"; exit 0
   else
@@ -120,6 +137,7 @@ if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
       [ "$from" = "$to" ] || echo "LIVE-GUARD main tree $tree fast-forwarded $base $from..$to"
     else echo "LIVE-GUARD main tree $tree not fast-forwarded: $base has diverged from origin/$base (not a fast-forward); nothing is published"; exit 0; fi
   fi
+  repo=$tree/contrib/squad-goal   # the source the publish reads: the main tree when it stands on stg, else the pass's own
 fi
 
 kf=$SG_STATE/live-guard.key; key=

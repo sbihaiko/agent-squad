@@ -15,6 +15,11 @@ unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from
 # SERIAL_HOLD_SECONDS; serial.sh exports SG_SERIAL_HELD and reads SERIAL_POLL_SECONDS; a gate caller sets SG_GATE_KIND and
 # SG_GATE_STATUS. All of them go, beside REV.
 unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
+# The loop's own profile reaches a child session, and env.sh below reads its wave settings with `:=`, so a name that is
+# already set wins over the case's default: an inherited SG_WAVE_ENTRY_GATE=off enters every child ungated (case B reads a
+# gate-status that is never written, case C's failing gates are skipped) and an inherited SG_WAVE_TIP_GATES decides a tip
+# check the case asked for. Each case names its own, so neither ambient value may reach it.
+unset SG_WAVE_ENTRY_GATE SG_WAVE_TIP_GATES
 # gate.sh exports GATE_REUSE_FILE to the command it runs (its --run), so this suite run under a gate inherits it: a memo hit of
 # an entry then marks the outer gate's row instead of writing its own reuse row, and the row this suite reads is missing (#1798).
 unset GATE_REUSE_FILE
@@ -1084,6 +1089,21 @@ case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AE: an unproven tip check blamed 
 [ -z "$(/usr/bin/grep -- '--proof\|Closed' "$T/board.log" 2>/dev/null)" ] && ok "AE: a held wave delivers no card" || ko "AE: a held wave wrote a card: $(cat "$T/board.log" 2>/dev/null)"
 [ "$(awk -F'\t' '$8 == "unproven"' "$T/st/gate-history" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
   && ok "AE: the gate record names the tip's unproven outcome" || ko "AE: gate history: '$(cat "$T/st/gate-history" 2>&1)'"
+
+# AG (#2149): an unproven tip past the age cap still never lands, and it frees the run all the same. Before, the rc=5 branch
+# returned before the age-cap requeue, so an unproven tip held its issue for ever: the wave never lands, the run never ends,
+# and nothing else frees the issue. The capped pass puts each issue the wave holds back in the queue and ends the run.
+start2 run-53 >/dev/null; child 530 g530 "origin/wave/run-53"; en2 run-53 530 >/dev/null
+printf 'run-53\n' > "$T/st/auto/disp-530"
+mkdir -p "$T/co/runs/run-53"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #530 work"}}' > "$T/co/runs/run-53/record.jsonl"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-53"
+: > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' bash '$T/unproven-tip.sh'" SG_WAVE_CHILD_GATES='exit 1' land2 run-53 2>&1); rc=$?
+[ $rc != 0 ] && ! $O cat-file -e dev:g530 2>/dev/null && case "$r" in *"WAVE WAIT"*unproven*) true;; *) false;; esac \
+  && ok "AG: an unproven tip past the age cap never lands" || ko "AG: tip exit $rc: '$r'"
+case "$r" in *"WAVE REQUEUE #530"*"age cap"*) ok "AG: the capped unproven wave puts its issue back in the queue";; \
+  *) ko "AG: the issue of the capped unproven wave stayed claimed: '$r'";; esac
 
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"

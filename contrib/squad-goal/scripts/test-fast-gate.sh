@@ -145,12 +145,16 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="bash $T/base.sh" bash "$d
 
 # (#566) The default battery is the loop's one definition (base-battery.sh), and its pytest runs with a bounded worker count,
 # SG_GATE_WORKERS_CHILD, instead of `auto`. A stub python logs the argv of each leg: the count is set here, so this suite
-# reads no profile's default and depends on no worker count.
-printf '#!/bin/bash\necho "$*" >> "%s/py.log"\ncase "$*" in *squad.testselect*) echo "all: stub";; esac\nexit 0\n' "$T" > "$T/py"; chmod +x "$T/py"
+# reads no profile's default and depends on no worker count. (The stub answers a delta: a child's gate never builds a full
+# battery, so an `all` answer there runs no pytest and the gate ends unproven, which this case does not prove.)
+printf '#!/bin/bash\necho "$*" >> "%s/py.log"\ncase "$*" in *squad.testselect*) echo tests/test_x.py;; esac\nexit 0\n' "$T" > "$T/py"; chmod +x "$T/py"
 rm -f "$T/ran.log" "$T/py.log"; $G -C "$R" checkout -q dev   # no script changes at the base: the battery alone runs
 out=$(cd "$R" && SG_FAST_BASE=dev SG_GATE_PY="$T/py" SG_GATE_WORKERS_CHILD=3 bash "$d/fast-gate.sh" 2>&1); rc=$?
 [ $rc = 0 ] && ok "the default battery passes on a stub python" || ko "default battery: rc $rc: $out"
 /usr/bin/grep -q -- '-m ruff check squad tests' "$T/py.log" && /usr/bin/grep -q -- '-m mypy squad' "$T/py.log" && ok "the default battery runs ruff and mypy" || ko "default battery: '$(cat "$T/py.log" 2>&1)'"
+# (#2085) The child's gate keeps the `fast` stage: the narrowing is the caller's rule, never a stage of its own, so the
+# selector is asked what the change reaches, exactly as every other intermediate gate asks (ADR-0169 rules 1 and 8).
+/usr/bin/grep -q -- 'squad.testselect --stage fast --base dev' "$T/py.log" && ok "the child's gate keeps the fast stage" || ko "child stage: '$(cat "$T/py.log" 2>&1)'"
 /usr/bin/grep 'pytest' "$T/py.log" | /usr/bin/grep -q -- '-n 3' && ok "the default battery's pytest runs with SG_GATE_WORKERS_CHILD" || ko "the worker count: '$(grep pytest "$T/py.log" 2>&1)'"
 /usr/bin/grep -q -- '-n auto' "$T/py.log" && ko "the default battery runs pytest -n auto" || ok "the default battery never runs pytest -n auto"
 /usr/bin/grep -q 'sg_base_battery' "$d/fast-gate.sh" && ok "fast-gate builds its default command from the shared definition" || ko "fast-gate keeps its own copy of the base battery"
@@ -183,12 +187,35 @@ out=$(SLOW_IDS="tests/test_a.py::test_one" selrun); rc=$?
   && ok "1726 only the recorded call runs once more, serially, at the line" || ko "1726 serial rerun: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass selected 2 files delta" ] && ok "the status line states the selected file count and the delta scope" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+# (#2085, ADR-0169 rule 4) A child's gate is bounded (ADR-0163) and waits behind its siblings' gates, so it never widens to
+# the full battery: a change the delta cannot place runs no pytest, and the gate records `selected 0 files` with the `delta`
+# scope and ends unproven with the selector's reason. The landing gate runs the full battery over the branch.
 echo "all: no test imports squad/x.py" > "$T/select.out"
+rm -f "$SG_STATE/gate-history"
 out=$(selrun); rc=$?
-[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ok "an all answer runs the whole battery" || ko "all argv: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
-[ "$(/usr/bin/grep -c -- '-m pytest' "$T/argv.log")" = 1 ] && ok "a full selection runs one pass, never a full serial battery beside the gate's budget" || ko "full selection passes: '$(/usr/bin/grep -- '-m pytest' "$T/argv.log" 2>&1)'"
+[ $rc = 4 ] && ! /usr/bin/grep -q -- "-m pytest" "$T/argv.log" && ok "an all answer at the child's gate runs no pytest: the child never builds a full battery" || ko "all argv: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
+case "$(last "$out")" in "fast-gate: unproven: no pytest ran: the delta cannot cover the change: no test imports squad/x.py"*) ok "an all answer ends unproven and names the change the delta cannot cover";; *) ko "all verdict line: '$(last "$out")'";; esac
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
-[ "$sel $scope" = "all: no test imports squad/x.py full" ] && ok "the status line states the all reason and the full scope" || ko "all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+[ "$sel $scope" = "selected 0 files delta" ] && ok "an all answer keeps the delta scope and records that no file was selected" || ko "all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+IFS=$'\t' read -r _ hk hres _ _ hsel _ hoc hrs hran hnot _ < "$SG_STATE/gate-history" 2>/dev/null
+[ "$hres $hoc $hnot" = "fail unproven pytest" ] && [ "$hrs" = "no pytest ran: the delta cannot cover the change: no test imports squad/x.py" ] \
+  && ok "the history keeps the child's unplaced change apart from a suite that passed" || ko "all history: '$(cat "$SG_STATE/gate-history" 2>&1)'"
+# The wave entry is not the child's bounded gate: it keeps the fall-through, so a change the delta cannot place still runs
+# the full battery and the tree is proven before it enters (ADR-0169 rule 8). This is the rule the child's narrowing owes.
+out=$(selrun SG_GATE_CALLER=entry); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -Eq -- '^-m pytest .* -m not heavy$' "$T/argv.log" && ok "an entry gate keeps the full-battery fallback an all answer owes" || ko "entry all argv: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
+[ "$sel $scope" = "all: no test imports squad/x.py full" ] && ok "the entry gate's all answer records the full scope" || ko "entry all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+# (#2085, ADR-0168 rule 1) The narrowed battery is a different suite from the entry gate's: a pass the child won answers no
+# entry gate, which still owes the full battery for the same tree.
+nm=$T/memo-narrow; mkdir -p "$nm"
+nrun() { rm -f "$T/argv.log"; (cd "$R" && env -u SG_TEST_SELECT -u SG_FAST_CMD SG_FAST_BASE=dev SG_STATE="$nm" SG_FAST_MEMO=1 SG_GATE_PY="$T/selpy" SG_FAST_RETRY_CMD=false "$@" bash "$d/fast-gate.sh" 2>&1); }
+printf 'tests/test_a.py\n' > "$T/select.out"
+out=$(nrun); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -Eq -- '^-m pytest .*tests/test_a\.py$' "$T/argv.log" && ok "the child's delta gate passes and keeps its memo" || ko "narrow memo pass: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
+printf 'all: no test imports squad/x.py\n' > "$T/select.out"
+out=$(nrun SG_GATE_CALLER=entry); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -Eq -- '^-m pytest .* -m not heavy$' "$T/argv.log" && ok "an entry gate runs its own battery: a child's narrowed pass is no memo for it" || ko "narrow memo reuse: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
 # (#1249) A gate that runs no test never records a pass. An empty selection is unproven (exit 4), its reason is the one the
 # selector gave, the verdict line names it, and the history keeps it apart from a suite that passed: outcome unproven, pytest
 # in the not-run list. A selector that answers nothing at all is unproven too, with a reason that says it named no file.
@@ -662,26 +689,25 @@ ccase() {  # <env assignment>...: field 14 of the one history row a fresh state 
 }
 c=$(ccase); [ "$c" = child ] && ok "a gate that names no caller is recorded as the child's" || ko "unnamed caller recorded as '$c', want child"
 c=$(ccase SG_GATE_CALLER=entry); [ "$c" = entry ] && ok "a named caller is recorded as named" || ko "entry caller recorded as '$c', want entry"
-# (#1872) The scope decides the child's count: a delta takes one slot, and a full battery takes the full count and queues as a
-# priority waiter at the gate lock, so a run of one-slot gates cannot starve it. The stub gate.sh records the values that
-# reached the lock, so the case reads what a slot take would see, never a word in the script.
+# (#1872, #2085) A child's count is one whatever the selector answers: its battery is a delta, and a change the delta cannot
+# place runs no pytest at all, so no child gate is ever a full battery that would need the whole count to fit its bound. The
+# full-battery wait belongs to the delivery's own gates. The stub gate.sh records the values that reached the lock, so the
+# case reads what a slot take would see, never a word in the script.
 ps=$T/pscripts; mkdir -p "$ps"
 cp "$d/fast-gate.sh" "$d/base-battery.sh" "$d/caps.sh" "$ps"/
 printf '#!/bin/bash\nprintf "wait=%%s caller=%%s workers=%%s\\n" "${SG_GATE_SLOT_WAIT:-}" "${SG_GATE_CALLER:-}" "${SG_GATE_WORKERS:-}" >> "%s/gate.log"\nexit 0\n' "$T" > "$ps/gate.sh"
 psel() {  # <selector answer> [env assignment]...: one child gate, the values its lock call carried, read back
   rm -f "$T/gate.log"
   printf '#!/bin/bash\necho "$*" >> "%s/pargv.log"\ncase "$*" in *squad.testselect*) echo "%s";; esac\nexit 0\n' "$T" "$1" > "$T/pselpy"; chmod +x "$T/pselpy"; shift
-  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_WORKERS_CHILD -u SG_GATE_WORKERS_CHILD_ALL -u SG_GATE_CALLER -u SG_SERIAL_PRIORITY -u SG_FAST_CMD "$@" SG_STATE="$(mktemp -d "$T/ps.XXXXXX")" SG_FAST_BASE=dev SG_GATE_PY="$T/pselpy" SG_FAST_RETRY_CMD=false bash "$ps/fast-gate.sh" >/dev/null 2>&1)
+  (cd "$R" && env -u SG_GATE_WORKERS -u SG_GATE_WORKERS_CHILD -u SG_GATE_CALLER -u SG_SERIAL_PRIORITY -u SG_FAST_CMD "$@" SG_STATE="$(mktemp -d "$T/ps.XXXXXX")" SG_FAST_BASE=dev SG_GATE_PY="$T/pselpy" SG_FAST_RETRY_CMD=false bash "$ps/fast-gate.sh" >/dev/null 2>&1)
   /usr/bin/tail -1 "$T/gate.log" 2>/dev/null
 }
 o=$(psel "$(printf 'tests/test_a.py\ntests/test_b.py')")
 case "$o" in "wait= "*) ok "a delta child takes one slot and waits for no slot inside the lock";; *) ko "delta child: '$o', want workers=1 and no slot wait";; esac
 case "$o" in *"workers=1"*) ok "a delta child takes one slot";; *) ko "delta child: '$o', want workers=1";; esac
 o=$(psel "all: the delta cannot place the change")
-case "$o" in *"workers=3"*) ok "an all child takes the full count";; *) ko "all child: '$o', want workers=3";; esac
-case "$o" in "wait=1"*) ok "an all child waits for its slots inside the lock";; *) ko "all child: '$o', want wait=1";; esac
-o=$(psel "all: the delta cannot place the change" SG_GATE_WORKERS_CHILD_ALL=2)
-case "$o" in *"workers=2"*) ok "a caller names the count a full-battery child takes";; *) ko "named all count: '$o', want workers=2";; esac
+case "$o" in *"workers=1"*) ok "an all child takes one slot: its change runs no full battery";; *) ko "all child: '$o', want workers=1";; esac
+case "$o" in "wait= "*) ok "an all child waits for no slot inside the lock";; *) ko "all child wait: '$o', want none";; esac
 o=$(psel "all: the delta cannot place the change" SG_GATE_CALLER=entry)
 case "$o" in *"workers=1"*) ko "an entry gate took the child's scope count: '$o'";; *) ok "an entry gate keeps its own count";; esac
 case "$o" in "wait= "*) ok "an entry gate waits for no slot inside the lock";; *) ko "entry wait: '$o', want none";; esac
