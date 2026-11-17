@@ -102,18 +102,12 @@ drain_cancel() { w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ]
 # that already ended. The waiter's own state directory is part of its command line, so a waiter serving another state
 # directory is no waiter here (#1471).
 is_waiter() { $SG_PS -p "$1" -ww -o command= 2>/dev/null | grep -qF -- "watchd.sh drain-wait $SG_STATE"; }
-# The one label rule for a loop defect (ADR-0146): an open issue is a loop-bug when a label is `loop-bug` or starts with
-# `loop-bug:`. Any open loop-bug drains the loop, and the loop starts again when none is open (#1708). The reader answers
-# three ways and unknown never reads as none: a body that is no JSON list (an empty body, an error object) is unknown, so a
-# failed read neither drains the loop nor starts it. A pull request is no issue.
+# The dispatch restriction of drainpolicy.py (#1980) decides the drain: the loop starts again when no dispatch-blocking
+# loop-bug is open (#1708). The reader answers three ways and unknown never reads as none: a body that is no JSON list
+# (an empty body, an error object) is unknown, so a failed read neither drains the loop nor starts it.
 # loop_bug_of   stdin: the open-issue list. 0 and the first number when a loop-bug is open, 1 when none is, 2 when unknown.
 loop_bug_of() {
-  local j n
-  j=$(cat)
-  printf "%s" "$j" | jq -e "type == \"array\"" >/dev/null 2>&1 || return 2
-  n=$(printf "%s" "$j" | jq -r "[.[]|select(.pull_request|not)|select(any(.labels[]?; ((.name? // .) as \$l | \$l == \"loop-bug\" or (\$l | startswith(\"loop-bug:\")))))][0].number // empty" 2>/dev/null) || return 2
-  [ -n "$n" ] || return 1
-  printf "%s\n" "$n"
+  python3 "$(dirname "$0")/drainpolicy.py" dispatch
 }
 # loop_bug_open   The same answer from one read of the open issues through the one seam.
 loop_bug_open() {

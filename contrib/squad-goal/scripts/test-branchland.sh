@@ -6,7 +6,7 @@ unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this sui
 unset SG_BOARD_VOCAB   # the loop's shipped vocabulary (Closed, not Done) is ambient in a live shell; this suite expects the default
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/landstatus.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$T/s/" 2>/dev/null
+cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/landstatus.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/drainpolicy.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -349,8 +349,10 @@ case "$lbat$lcmd" in *"-n auto"*) ko "the landing check runs pytest -n auto";; *
 reset; r=$(SG_GH_AGGREGATE_WINDOW=0 LANDBUG=641 CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a loop-bug:landing issue stops the landing" || ko "a branch landed under a loop-bug:landing issue: '$r'"
 case "$r" in *"LOOP STOP: #641 is a loop defect in the landing path; no wave lands until it closes"*) ok "the pass names the landing stop";; *) ko "no landing stop line: '$r'";; esac
+# A plain `loop-bug` is a full drain (#1980): it stops the landing too. This replaces the earlier rule that let a green branch
+# land beside it; the contradiction is named for #2041.
 reset; r=$(SG_GH_AGGREGATE_WINDOW=0 LANDBUG=641 LANDBUG_LABEL=loop-bug CHECKS="$GREEN" bl)
-[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ko "a plain loop-bug stopped the landing: '$r'" || ok "a plain loop-bug lets an approved branch land"
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a plain loop-bug stops the landing (#1980)" || ko "a branch landed under a plain loop-bug: '$r'"
 # The rerun of what failed stays serial, and runs only the names the gate failed: the id list, never the battery.
 rerunline=$(/usr/bin/grep -E '^rerun=' "$d/branchland.sh")
 case "$rerunline" in *'$SG_GATE_FAILED'*) ok "the rerun runs only the failed names";; *) ko "the rerun does not take the failed names: '$rerunline'";; esac

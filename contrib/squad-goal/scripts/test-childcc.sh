@@ -3,7 +3,7 @@
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 unset SG_BOARD_VOCAB SG_CHILDCC_BUDGET   # the old-vocabulary cases and the one-child passes need them unset; a caller that exports them must not turn the suite red
 src=${1:-$(dirname "$0")/childcc.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/revformat.py" "$(dirname "$src")/board_columns.py" "$T/"
+mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/drainpolicy.py" "$(dirname "$src")/revformat.py" "$(dirname "$src")/board_columns.py" "$T/"
 printf '#!/bin/bash\necho "$@" >> %s/moves\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
@@ -277,12 +277,6 @@ rc=0; out=$(pass lb) || rc=$?
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 out=$(pass lb)
 [ "$(ent lb 5600)" = 1 ] && ok "closing the issue resumes the entry with no other action" || ko "entry did not resume: $(cat "$WAVE_CALLS")"
-# A bare `loop-bug` names a defect the loop works beside, so it stops nothing (owner answer B1).
-cat > "$T/issues-open.json" <<'JSON'
-{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":597,"title":"A defect beside the path","body":"","state":"OPEN","labels":{"nodes":[{"name":"loop-bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}
-JSON
-out=$(pass lb)
-echo "$out" | /usr/bin/grep -q "LOOP STOP" && ko "a bare loop-bug stopped the pass: $out" || ok "a bare loop-bug stops nothing"
 
 # Code Review (#603): with the shipped vocabulary, childcc moves a Doing card to Code Review when it starts the review of a
 # child and when it defers a child that waits for review, through board.sh, once per child. A card past Code Review (Code
@@ -760,5 +754,12 @@ unprun unp 5110 unproven; : > "$WAVE_CALLS"; rm -f "$T/moves"; out=$(lpass unp);
 unprun flr 5111 fail; : > "$WAVE_CALLS"; rm -f "$T/moves"; out=$(lpass flr); rc=$?
 [ "$(ent flr 5111)" = 0 ] && [ ! -e "$T/st/auto/cc-flr-c" ] && ok "a child whose gate ended fail never enters its wave" || ko "failed child entered: waves '$(cat "$WAVE_CALLS")', out $out"
 /usr/bin/grep -q ' 5111$' "$T/moves" 2>/dev/null && ko "a failed child moved to Code Complete" || ok "a failed child moves no card"
+# A bare `loop-bug` is a full drain (#1980): it stops the child entry as well. This replaces owner answer B1, which let a
+# bare loop-bug stop nothing; the contradiction is named for #2041.
+cat > "$T/issues-open.json" <<'JSON'
+{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":597,"title":"A defect beside the path","body":"","state":"OPEN","labels":{"nodes":[{"name":"loop-bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}
+JSON
+out=$(pass lb)
+echo "$out" | /usr/bin/grep -q "LOOP STOP: #597" && ok "a bare loop-bug drains the child entry (#1980)" || ko "a bare loop-bug did not stop the pass: $out"
 
 rm -rf "$T"; exit $fail

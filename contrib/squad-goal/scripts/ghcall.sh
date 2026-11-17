@@ -110,7 +110,9 @@ sg_loop_build() {
 # log and to the issue's line on the board, not only to stdout. `loop-bug:landing` stops the landing as well (gh_land_stop, #641).
 gh_loop_stop() {
   local j=${1:?gh_loop_stop: an issues file is required} n line f lb
-  n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) | . == "loop-bug:dispatch" or . == "loop-bug:landing" or . == "loop-bug:infra")))][0].number // empty' "$j" 2>/dev/null) || return 1
+  n=$(python3 "$ghcall_here/drainpolicy.py" dispatch < "$j" 2>/dev/null); rc=$?
+  [ "$rc" = 2 ] && return 1
+  [ "$rc" = 0 ] || n=""
   # SG_LOOPBUG_CMD is the seam a suite names; a copy of the scripts with no watchd.sh asks for no drain and keeps the halt.
   if [ -n "${SG_LOOPBUG_CMD:-}" ] || [ -f "$ghcall_here/watchd.sh" ]; then
     lb=$(${SG_LOOPBUG_CMD:-bash "$ghcall_here/watchd.sh" loopbug} "$j" 2>/dev/null) && [ -z "$n" ] && n=$lb
@@ -136,7 +138,9 @@ gh_loop_stop() {
 gh_land_stop() {
   local o n line
   o=$(gh_aggregate "repos/$SG_REPO/issues?state=open") || return 1
-  n=$(printf '%s' "$o" | jq -r '[.[]|select(any(.labels[]?; ((.name? // .) == "loop-bug:landing")))][0].number // empty' 2>/dev/null) || return 1
+  n=$(printf '%s' "$o" | python3 "$ghcall_here/drainpolicy.py" landing 2>/dev/null); rc=$?
+  [ "$rc" = 2 ] && return 1
+  [ "$rc" = 0 ] || n=""
   [ -n "$n" ] || return 1
   line="LOOP STOP: #$n is a loop defect in the landing path; no wave lands until it closes"
   printf '%s\n' "$line"

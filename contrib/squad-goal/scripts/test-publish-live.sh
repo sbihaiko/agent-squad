@@ -148,6 +148,7 @@ out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1
 cb="$T/closes"; mkdir -p "$cb/contrib/squad-goal/scripts" "$T/cbin"
 cat > "$T/cbin/gh" <<EOF
 #!/bin/bash
+case "\$*" in *state=open*) echo '[]'; exit 0;; esac
 printf '%s\n' "\$*" >> "$T/gh.log"
 exit 0
 EOF
@@ -196,6 +197,7 @@ printf 'skill v7\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; gi
 mkdir -p "$T/fbin"
 cat > "$T/fbin/gh" <<EOF
 #!/bin/bash
+case "\$*" in *state=open*) echo '[]'; exit 0;; esac
 printf '%s\n' "\$*" >> "$T/gh.log"
 case "\$*" in *state=closed*) exit 1;; esac
 exit 0
@@ -350,5 +352,47 @@ out=$(prun); rc=$?
 printf 'skill P3\n' > "$pr/contrib/squad-goal/SKILL.md"; git -C "$pr" commit -qam "outside squad"
 out=$(prun); rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$pl/SKILL.md")" = "skill P3" ] && ok "a change outside squad/ publishes" || ko "a change outside squad/ (rc $rc): $out"
+
+# --- an open loop-bug:publish holds a publish to its reviewed sha (#1980) ----------------------------
+# The hold reads the open issues of the origin repository. Only the reviewed sha its issue names passes; a missing or
+# other sha is refused, and an unreadable read is refused too.
+hb="$T/hold"; hr="$hb/repo"; hl="$hb/live"; hbin="$hb/bin"; mkdir -p "$hr/contrib/squad-goal/scripts" "$hl/scripts" "$hbin" "$T/hst"
+git init -q -b main "$hr"; git -C "$hr" remote add origin https://github.com/example/squad.git
+printf 'skill h1\n' > "$hr/contrib/squad-goal/SKILL.md"; git -C "$hr" add -A; git -C "$hr" commit -qm base
+hsha=$(git -C "$hr" rev-parse HEAD)
+printf 'skill h2\n' > "$hr/contrib/squad-goal/SKILL.md"; git -C "$hr" add -A; git -C "$hr" commit -qm "Fix the hold path"
+hfix=$(git -C "$hr" rev-parse HEAD)
+printf 'skill v0\n' > "$hl/SKILL.md"
+cat > "$hbin/gh" <<EOF
+#!/bin/bash
+case "\$*" in
+  *state=open*) [ -e "$hb/hold.fail" ] && exit 1; cat "$hb/hold.json"; exit 0;;
+esac
+printf '%s\n' "\$*" >> "$hb/gh.log"; exit 0
+EOF
+chmod +x "$hbin/gh"
+hrun() { env -u SG_SQUAD -u SG_REPO SG_STATE="$T/hst" PATH="$hbin:$PATH" bash "$src" "$hr/contrib/squad-goal" "$hl" 2>&1; }
+hset() { printf '%s\n' "$1" > "$hb/hold.json"; }
+hset '[{"number":596,"title":"a publish defect","body":"no sha line here","labels":[{"name":"loop-bug:publish"}]}]'
+out=$(hrun); rc=$?
+[ "$rc" = 3 ] && ok "H1: a publish hold with no reviewed sha refuses (exit 3)" || ko "H1: rc $rc: $out"
+case "$out" in *"#596"*) ok "H1: the refusal names the holding issue";; *) ko "H1: the refusal does not name #596: $out";; esac
+[ "$(cat "$hl/SKILL.md")" = "skill v0" ] && ok "H1: a held publish writes nothing" || ko "H1: a held publish wrote the live skill"
+hset "[{\"number\":596,\"title\":\"a publish defect\",\"body\":\"reviewed-sha: 0000000000000000000000000000000000000000\",\"labels\":[{\"name\":\"loop-bug:publish\"}]}]"
+out=$(hrun); rc=$?
+[ "$rc" = 3 ] && [ "$(cat "$hl/SKILL.md")" = "skill v0" ] && ok "H2: a sha the hold does not name refuses (exit 3)" || ko "H2: rc $rc: $out"
+hset "[{\"number\":596,\"title\":\"a publish defect\",\"body\":\"Fixed here.\\nreviewed-sha: $hsha\",\"labels\":[{\"name\":\"loop-bug:publish\"}]}]"
+out=$(hrun); rc=$?
+[ "$rc" = 3 ] && ok "H3: the sha before the fix does not pass the hold" || ko "H3: rc $rc: $out"
+hset "[{\"number\":596,\"title\":\"a publish defect\",\"body\":\"Fixed here.\\nreviewed-sha: $hfix\",\"labels\":[{\"name\":\"loop-bug:publish\"}]}]"
+out=$(hrun); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$hl/SKILL.md")" = "skill h2" ] && ok "H4: the reviewed sha of the fix passes the hold" || ko "H4: the reviewed sha did not publish (rc $rc): $out"
+touch "$hb/hold.fail"; printf 'skill v0\n' > "$hl/SKILL.md"
+out=$(hrun); rc=$?
+[ "$rc" = 3 ] && [ "$(cat "$hl/SKILL.md")" = "skill v0" ] && ok "H5: an unreadable issue list refuses (exit 3)" || ko "H5: rc $rc: $out"
+case "$out" in *"could not be read"*) ok "H5: the refusal says the list could not be read";; *) ko "H5: refusal line: $out";; esac
+rm -f "$hb/hold.fail"; hset '[]'
+out=$(hrun); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$hl/SKILL.md")" = "skill h2" ] && ok "H6: no open publish hold lets the publish run" || ko "H6: rc $rc: $out"
 
 rm -rf "$T"; [ $fail = 0 ] && echo "test-publish-live: all checks green" || { echo "test-publish-live: failed"; exit 1; }

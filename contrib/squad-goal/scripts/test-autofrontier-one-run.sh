@@ -52,7 +52,7 @@ printf 'import os,sys\nopen(os.environ["LAUNCHLOG"], "a").write("launch\\n")\nif
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,issue_ledger.py,workbranches.sh,loopbug.sh,watchd.sh,basered.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,drainpolicy.py,issue_ledger.py,workbranches.sh,loopbug.sh,watchd.sh,basered.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
 # The issues an open work branch names (#361, workbranches.sh): the real read is `git ls-remote` against github.com, which no
 # fixture may reach, so the stand-in answers WORK_ISSUES (none unless a case sets it) (#756).
 printf '#!/bin/bash\nsg_work_issues() { echo "${WORK_ISSUES:-}"; }\n' > "$T/scripts/workbranches.sh"
@@ -511,6 +511,15 @@ case "$r" in *"LOOP STOP: #1374 is a loop defect; the fix lands outside the loop
 issues '[{"number":94,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 94)" = 1 ] && ok "Y1b: closing the issue resumes dispatch" || ko "Y1b: dispatch did not resume: '$r'"
+
+# Y2 (#1980): an open `loop-bug:publish` holds the publish only. The frontier dispatches normal work beside it, and the
+# loop-bug itself never enters dispatch, whatever its class.
+scene loopbugpublish
+issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":596,"title":"a publish defect","body":"b","labels":[{"name":"wave:01"},{"name":"loop-bug:publish"}]}]'
+r=$(run)
+[ "$(marked 91)" = 1 ] && ok "Y2: an open loop-bug:publish lets the frontier dispatch normal work" || ko "Y2: the publish-only loop-bug stopped dispatch: '$r'"
+[ "$(marked 596)" = 0 ] && ok "Y2: a loop-bug:publish issue never enters dispatch" || ko "Y2: the loop-bug went out: '$r'"
+case "$r" in *"LOOP STOP:"*) ko "Y2: a publish-only loop-bug named a dispatch stop: '$r'";; *) ok "Y2: a publish-only loop-bug names no dispatch stop";; esac
 
 # Y2 (#615): under SG_MIN_FREE_GB GiB free on the volume of $SG_STATE or of $TMPDIR, the frontier pass dispatches nothing
 # and names the volume in the loop log; at or over the floor it dispatches as before.

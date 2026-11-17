@@ -188,6 +188,22 @@ verify() {
   return $rc
 }
 
+# An open loop-bug:publish holds every sha but the reviewed sha its issue names (#1980). The hold clears when the publish below
+# closes that issue, which happens only after the copy verifies. An unreadable issue list refuses, since no read proves no hold.
+# No known repository means no issue to read, as no close can name one.
+if [ -z "$check" ]; then
+  hold_repo=$(publish_repo 2>/dev/null) || hold_repo=""
+  if [ -n "$hold_repo" ]; then
+    hold_sha=$(git -C "$src" rev-parse HEAD 2>/dev/null)
+    hold_issues=$(gh_aggregate "repos/$hold_repo/issues?state=open") || { echo "publish-live: refused: the open issues of $hold_repo could not be read, so no publish hold is ruled out" >&2; exit 3; }
+    hold_n=$(printf '%s' "$hold_issues" | python3 "$here/drainpolicy.py" publish "$hold_sha" 2>/dev/null); hold_rc=$?
+    case $hold_rc in
+      0) echo "publish-live: refused: #$hold_n holds the publish and names no reviewed sha $hold_sha" >&2; exit 3;;
+      1) ;;
+      *) echo "publish-live: refused: the open issues of $hold_repo could not be read, so no publish hold is ruled out" >&2; exit 3;;
+    esac
+  fi
+fi
 sha=$(git -C "$src" rev-parse HEAD 2>/dev/null)
 rc=0
 for f in $(shipped); do
