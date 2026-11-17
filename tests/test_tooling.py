@@ -580,9 +580,11 @@ def test_a_label_starts_no_complete_tier_while_another_runs(tmp_path):
     assert "cancel" not in json.dumps(wf["jobs"][GUARD_JOB]), "the guard cancels a run"
 
 
-# The tip a label asks for, and the tip of the run that holds the tier (#2194).
+# The tip a label asks for, the tip of the run that holds the tier, and the marker the guard's own comment carries
+# (#2194). The marker scopes the dedupe read: a person who quotes the tip sha leaves the guard's comment required.
 TIP_SHA = "0123456789abcdef0123456789abcdef01234567"
 HOLD_SHA = "fedcba9876543210fedcba9876543210fedcba98"
+GUARD_MARKER = "<!-- squad-promote-run-false -->"
 
 
 def _guard_comment_calls(tmp_path, existing: list, in_flight: bool = True, tip_ran: bool = False):
@@ -603,7 +605,10 @@ def _guard_comment_calls(tmp_path, existing: list, in_flight: bool = True, tip_r
     jobs = {"jobs": [{"name": COMPLETE_TIER_JOBS[0], "status": "in_progress", "conclusion": None}]}
     gh = tmp_path / "bin" / "gh"
     gh.write_text(
-        "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$CALLS\"\ncase \"$*\" in\n"
+        # A write carries its body on stdin (`--input -`), so the stub records that too: the assertion reads the body
+        # the guard posts, not a shell word.
+        "#!/bin/bash\ninp=''\ncase \"$*\" in *--input*) inp=$(cat);; esac\n"
+        "printf '%s %s\\n' \"$*\" \"$inp\" >> \"$CALLS\"\ncase \"$*\" in\n"
         f"  *issues/5/comments\\?per_page=100*) cat <<'JSON'\n{json.dumps(existing)}\nJSON\n;;\n"
         "  *issues/5/comments*) echo '{\"id\": 99}';;\n"
         f"  *actions/runs/22/jobs*) cat <<'JSON'\n{json.dumps(jobs)}\nJSON\n;;\n"
@@ -620,9 +625,10 @@ def _guard_comment_calls(tmp_path, existing: list, in_flight: bool = True, tip_r
     return calls.read_text().splitlines(), out.read_text().strip()
 
 
-def _comment_posts(calls: list[str]) -> list[str]:
-    """The calls that post a comment on pull request 5: the comments path with no read query, the one write route."""
-    return [c for c in calls if "/issues/5/comments" in c and "?" not in c]
+def _comment_posts(calls: list[str], method: str = "POST") -> list[str]:
+    """The calls that write a comment on pull request 5 with `method`: the comments path with no read query, the one
+    write route. A POST adds a comment; a PATCH refreshes the one comment the tip already carries."""
+    return [c for c in calls if "/issues/5/comments" in c and "?" not in c and f"--method {method}" in c]
 
 
 @pytest.mark.heavy
@@ -655,14 +661,41 @@ def test_a_promote_label_that_starts_no_tier_leaves_one_comment(tmp_path):
     assert answer == "run=true", "a label on a tip with no tier starts the complete tier"
     assert _comment_posts(calls) == [], f"a label that starts the tier writes nothing extra; posted {calls}"
 
-    calls, answer = _guard_comment_calls(tmp_path / "again", in_flight=True,
-                                         existing=[{"id": 41, "body": f"no tier this time; the tip is {TIP_SHA}."}])
+    calls, answer = _guard_comment_calls(
+        tmp_path / "again", in_flight=True,
+        existing=[{"id": 41, "body": f"{GUARD_MARKER} no tier this time; the tip is {TIP_SHA}."}])
     assert answer == "run=false", "the second label on an in-flight tier starts nothing"
     assert _comment_posts(calls) == [], f"a second guard run on the same tip posts nothing; posted {calls}"
+    assert _comment_posts(calls, "PATCH"), "the tip's one comment is refreshed in place, never duplicated"
 
     wf = _ci_workflow()
     assert (wf["jobs"][GUARD_JOB].get("permissions") or {}).get("pull-requests") == "write", \
         "the guard posts a comment on the pull request, so its token writes one"
+
+
+@pytest.mark.heavy
+def test_the_guard_comment_names_one_cause_and_dedupes_on_its_marker(tmp_path):
+    """Guard for #2194: when both `run=false` causes hold, the comment names one cause and one remedy.
+
+    The tip-carried cause is terminal: a tip that already carries the complete tier waits on no run, so the comment
+    names that reason and carries no holding run. A comment that only quotes the tip sha, written by a person or another
+    step, is no comment of the guard: the guard still posts its own, and it finds its own by its marker.
+    """
+    calls, answer = _guard_comment_calls(tmp_path / "both", existing=[], in_flight=True, tip_ran=True)
+    assert answer == "run=false", "a tip that carries the tier starts it not, whatever else runs"
+    posts = _comment_posts(calls)
+    assert len(posts) == 1, f"a label that starts no tier posts one comment; posted {posts}"
+    body = posts[0]
+    assert "already carries" in body, f"the comment names the cause that holds: {body!r}"
+    assert GUARD_MARKER in body, f"the comment carries the guard's marker, so the dedupe reads its own: {body!r}"
+    assert "holds it" not in body and HOLD_SHA not in body, \
+        f"the comment names a run that holds nothing against a tip that already proved the tier: {body!r}"
+
+    calls, answer = _guard_comment_calls(
+        tmp_path / "quoted", in_flight=True,
+        existing=[{"id": 42, "body": f"please check {TIP_SHA} before the label"}])
+    assert len(_comment_posts(calls)) == 1, \
+        f"a comment that quotes the tip sha is no comment of the guard; posted {calls}"
 
 
 def test_the_quiet_window_is_one_value_in_the_adr_and_the_pass():

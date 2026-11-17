@@ -138,9 +138,10 @@ jobs:
         # completed holds the label, and the guard names that run and its sha. The run in flight is never cancelled; the
         # promotion pass labels the newest stg tip after it ends, and main moves to the sha that run proved (ADR-0173).
         # (#2194) A label that starts no tier leaves its reason where a person looks: one comment on the pull request
-        # naming the reason, the run that holds the tier and the sha it waits on. A tip carries one such comment: the
-        # guard reads the pull request's comments for the tip's sha first, so a second guard run on that tip writes
-        # nothing. A label that starts the tier writes nothing extra.
+        # naming one reason with one remedy. A tip that already carries the tier is terminal: no run holds it, so the
+        # comment names no holding run. A tip carries one such comment; the guard finds its own by a marker and the tip's
+        # sha, so a person's comment that quotes the sha neither hides it nor stops it, and a second guard run refreshes
+        # that one comment in place. A label that starts the tier writes nothing extra.
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.pull_request.head.sha }}
@@ -159,25 +160,36 @@ jobs:
             if printf '%s\n' "$runs" | grep -qxF "$n"; then
               echo "the tip already carries $n: the complete tier started on it"; run=false
               why="the tip already carries the complete tier"
+              wait=""
+              break
             fi
           done
           want=$(printf '%s\n' $names | jq -Rnc '[inputs | select(. != "")]')
-          for f in $(gh api "repos/$REPO/actions/runs?event=pull_request&branch=$HEAD_REF&per_page=50" 2>/dev/null \
-            | jq -r --arg me "${GITHUB_RUN_ID:-}" '.workflow_runs[]? | select(.status != "completed") | select((.id | tostring) != $me) | "\(.id):\(.head_sha)"' 2>/dev/null); do
-            if gh api "repos/$REPO/actions/runs/${f%%:*}/jobs?per_page=100" 2>/dev/null \
-              | jq -e --argjson n "$want" '[.jobs[]? | select(.status != "completed") | select(.name as $x | $n | index($x))] | length > 0' >/dev/null 2>&1; then
-              s=${f#*:}; echo "a complete tier is in flight: run ${f%%:*} on ${s:0:9}; this label starts nothing"; run=false
-              why="a complete tier is in flight"
-              wait=" Run ${f%%:*} holds it, and the tip it waits on is $s."
-            fi
-          done
+          # The tip-carried cause is terminal: it waits on no run, so the in-flight read never replaces it.
+          if [ "$run" = true ]; then
+            for f in $(gh api "repos/$REPO/actions/runs?event=pull_request&branch=$HEAD_REF&per_page=50" 2>/dev/null \
+              | jq -r --arg me "${GITHUB_RUN_ID:-}" '.workflow_runs[]? | select(.status != "completed") | select((.id | tostring) != $me) | "\(.id):\(.head_sha)"' 2>/dev/null); do
+              if gh api "repos/$REPO/actions/runs/${f%%:*}/jobs?per_page=100" 2>/dev/null \
+                | jq -e --argjson n "$want" '[.jobs[]? | select(.status != "completed") | select(.name as $x | $n | index($x))] | length > 0' >/dev/null 2>&1; then
+                s=${f#*:}; echo "a complete tier is in flight: run ${f%%:*} on ${s:0:9}; this label starts nothing"; run=false
+                why="a complete tier is in flight"
+                wait=" Run ${f%%:*} holds it, the tip it waits on is $s, and the tier starts on a label after that run ends."
+              fi
+            done
+          fi
           echo "complete tier: $names"
           if [ "$run" = false ] && [ -n "${PR:-}" ]; then
-            body="This \`promote\` label starts no complete tier: $why.$wait The tip is $SHA; the tier starts on a label after that run ends. One comment is left per tip."
+            mark="<!-- squad-promote-run-false -->"
+            body="$mark This \`promote\` label starts no complete tier: $why.$wait The tip is $SHA. One comment is left per tip."
             seen=$(gh api "repos/$REPO/issues/$PR/comments?per_page=100" 2>/dev/null \
-              | jq -r --arg s "$SHA" '.[]? | select((.body // "") | contains($s)) | .id' 2>/dev/null || true)
+              | jq -r --arg m "$mark" --arg s "$SHA" \
+                  '.[]? | select((.body // "") | startswith($m) and contains($s)) | .id' 2>/dev/null | head -n1 || true)
             if [ -z "$seen" ]; then
-              gh api "repos/$REPO/issues/$PR/comments" --method POST -f body="$body" >/dev/null
+              jq -nc --arg b "$body" '{body:$b}' \
+                | gh api "repos/$REPO/issues/$PR/comments" --method POST --input - >/dev/null
+            else
+              jq -nc --arg b "$body" '{body:$b}' \
+                | gh api "repos/$REPO/issues/$PR/comments/$seen" --method PATCH --input - >/dev/null
             fi
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
