@@ -463,8 +463,8 @@ def test_the_complete_tier_starts_on_the_promote_label_alone():
     guard = wf["jobs"][GUARD_JOB]
     assert guard.get("if") == GUARD_IF, f"the guard starts on a promote label alone; found {guard.get('if')!r}"
     assert "needs" not in guard, "the guard waits on no job: it is what the tier waits on"
-    assert guard.get("permissions") == {"contents": "read", "checks": "read"}, \
-        f"the guard checks out the tree and reads the tip's check runs; found {guard.get('permissions')!r}"
+    assert guard.get("permissions") == {"contents": "read", "checks": "read", "actions": "read"}, \
+        f"the guard checks out the tree, reads the tip's check runs and the pull request's runs in flight (#2067); found {guard.get('permissions')!r}"
     assert guard.get("outputs") == {"run": "${{ steps.once.outputs.run }}"}, \
         f"the guard answers one output the tier reads: {guard.get('outputs')!r}"
     text = "\n".join(str(s.get("run", "")) for s in guard["steps"])

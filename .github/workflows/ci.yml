@@ -118,6 +118,7 @@ jobs:
     permissions:
       contents: read
       checks: read
+      actions: read
     outputs:
       run: ${{ steps.once.outputs.run }}
     steps:
@@ -130,10 +131,14 @@ jobs:
         # that ended in the unproven set measured nothing, so it does not count either: the tier starts again on that tip.
         # The complete-tier names are the jobs started on that label, read from this file, never a list kept here, and
         # the unproven set is the promotion's own.
+        # (#2067) One complete tier at a time: a complete-tier job of another run of this pull request that has not
+        # completed holds the label, and the guard names that run and its sha. The run in flight is never cancelled; the
+        # promotion pass labels the newest stg tip after it ends, and main moves to the sha that run proved (ADR-0173).
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           names=$(bash contrib/squad-goal/scripts/promote-pass.sh --ci-complete-job-names .github/workflows/ci.yml)
           unproven=$(bash contrib/squad-goal/scripts/promote-pass.sh --ci-unproven-conclusions | jq -Rnc '[inputs | select(. != "")]')
@@ -143,6 +148,14 @@ jobs:
           for n in $names; do
             if printf '%s\n' "$runs" | grep -qxF "$n"; then
               echo "the tip already carries $n: the complete tier started on it"; run=false
+            fi
+          done
+          want=$(printf '%s\n' $names | jq -Rnc '[inputs | select(. != "")]')
+          for f in $(gh api "repos/$REPO/actions/runs?event=pull_request&branch=$HEAD_REF&per_page=50" 2>/dev/null \
+            | jq -r --arg me "${GITHUB_RUN_ID:-}" '.workflow_runs[]? | select(.status != "completed") | select((.id | tostring) != $me) | "\(.id):\(.head_sha)"' 2>/dev/null); do
+            if gh api "repos/$REPO/actions/runs/${f%%:*}/jobs?per_page=100" 2>/dev/null \
+              | jq -e --argjson n "$want" '[.jobs[]? | select(.status != "completed") | select(.name as $x | $n | index($x))] | length > 0' >/dev/null 2>&1; then
+              s=${f#*:}; echo "a complete tier is in flight: run ${f%%:*} on ${s:0:9}; this label starts nothing"; run=false
             fi
           done
           echo "complete tier: $names"
