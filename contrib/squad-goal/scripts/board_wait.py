@@ -38,11 +38,11 @@ def dispatch_of(card):
 
 def wait_of(card):
     if not card.get("record"): return Wait("unknown", "record")
-    dispatch = dispatch_of(card)
-    if dispatch: return dispatch[1]
     labels = card.get("labels", [])
     for label, name in HOLDS:
         if label in labels: return Wait(name, None)
+    dispatch = dispatch_of(card)
+    if dispatch: return dispatch[1]
     if card.get("run_live"): return Wait("live run", None)
     if "queued" not in card: return Wait("unknown", "queued")
     queued = card["queued"]
