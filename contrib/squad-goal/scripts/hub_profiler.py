@@ -589,7 +589,13 @@ def failed_run_table(rows, window_s, now):
 TRIP_COLUMNS = (("todo", "Todo", ("queue", "wait")), ("doing", "Doing", ("coding", "between")),
                 ("review", "Review", ("review",)), ("gating", "Gating", ("gates",)),
                 ("landing", "Landing", ("landing",)), ("closed", "Closed", ("after",)))
-TRIP_STAGES = tuple(key for _, _, keys in TRIP_COLUMNS for key in keys)   # the record's own stage keys, as `trip_spans` names them
+# The record's own stage keys with their captions, in the order `trip_spans` names them. `TRIP_STAGES` stays the flat tuple
+# of keys the fold reads; the payload's `stages` list keeps this pair shape for a reader of the older wire.
+TRIP_STAGES_LABELLED = (("queue", "Queued before the run"), ("wait", "Wait for a dispatch"), ("coding", "Coding"),
+                        ("between", "Between two children"), ("review", "Review"), ("gates", "Gates"),
+                        ("landing", "Landing"), ("after", "After the verdict"))
+TRIP_STAGE_LABELS = dict(TRIP_STAGES_LABELLED)
+TRIP_STAGES = tuple(key for key, _ in TRIP_STAGES_LABELLED)
 TRIP_MIN_DELIVERIES = 3   # fewer than three deliveries say so and draw no bar: a median of two is no profile
 TRIP_LABEL = "The trip of an issue"
 _START = frozenset(("run_start", "resume"))   # an event that opens an invocation: the fold reads the last one only
@@ -703,6 +709,13 @@ def gate_span(gate, since):
     return finish - start
 
 
+def _row_stage(keys, readings):
+    """The stage whose median a column answers: the larger median, and a known reading over an unknown one, because zero
+    seconds is a reading and None is none. Equal medians keep the column's own order (`queue` before `wait`, `coding`
+    before `between`), never a dict's order."""
+    return max(keys, key=lambda k: (readings[k][0] is not None, readings[k][0] if readings[k][0] is not None else 0.0))
+
+
 def trip(spans, gates, since):
     """The trip of one issue as one stacked bar of the board's columns: each column's median and p90 over the deliveries
     of a window, in the board's order, `Todo`, `Doing`, `Review`, `Gating`, `Landing` and `Closed`.
@@ -711,10 +724,12 @@ def trip(spans, gates, since):
     gate-history row of the window, `start` and `finish` in seconds. A delivery is a run whose verdict is at or after
     `since`; each gate row after `since` adds one observation to the gates stage, beside the gates each record holds.
     A column that holds two stages answers the larger of the two medians as its `median_s` and `p90_s`, and the other
-    stage beside it in `beside`; a stage with no reading leaves `beside` None, so a run that names no card reads no
-    column the card alone fills. `sum_s` is the sum of the column's stage medians, the width its segment takes in the
-    bar, so no measurement leaves the panel; `share` is that sum over the total. A row's `stage` is the stage its median
-    belongs to. Fewer than `TRIP_MIN_DELIVERIES` deliveries answer `bar` False, and the page says so and draws no bar.
+    stage beside it in `beside`, with its own caption; a stage with no reading leaves `beside` None, so a run that names
+    no card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians, the width its
+    segment takes in the bar, so no measurement leaves the panel; `share` is that sum over the total. A row's `stage` is
+    the stage its median belongs to. The payload also keeps `stages`, one row per record stage in `TRIP_STAGES_LABELLED`
+    order with its own median and share, so a reader of the older wire still reads its shape. Fewer than
+    `TRIP_MIN_DELIVERIES` deliveries answer `bar` False, and the page says so and draws no bar.
     """
     per = {key: [] for key in TRIP_STAGES}
     deliveries = 0
@@ -735,19 +750,28 @@ def trip(spans, gates, since):
     total = sum(sums.values())
     rows = []
     for col, label, keys in TRIP_COLUMNS:
-        main = max(keys, key=lambda k: (readings[k][0] is not None, readings[k][0] or 0.0))
+        main = _row_stage(keys, readings)
         median, p90, n = readings[main]
         beside, others = None, [k for k in keys if k != main]
         if others and readings[others[0]][0] is not None:
             omed, op90, on = readings[others[0]]
-            beside = {"stage": others[0], "observations": on, "median_s": round(omed, 3), "p90_s": round(op90, 3)}
+            beside = {"stage": others[0], "label": TRIP_STAGE_LABELS[others[0]], "observations": on,
+                      "median_s": round(omed, 3), "p90_s": round(op90, 3)}
         rows.append({"column": col, "label": label, "stage": main, "observations": n,
                      "median_s": round(median, 3) if median is not None else None,
                      "p90_s": round(p90, 3) if p90 is not None else None,
                      "sum_s": round(sums[col], 3) if held[col] else None,
                      "share": round(sums[col] / total, 4) if total and held[col] else 0.0,
                      "beside": beside})
-    return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "columns": rows, "label": TRIP_LABEL}
+    stages, stage_total = [], sum(m for m in (readings[k][0] for k in TRIP_STAGES) if m)
+    for key, label in TRIP_STAGES_LABELLED:
+        med, p90, n = readings[key]
+        stages.append({"stage": key, "label": label, "observations": n,
+                       "median_s": round(med, 3) if med is not None else None,
+                       "p90_s": round(p90, 3) if p90 is not None else None,
+                       "share": round(med / stage_total, 4) if stage_total and med is not None else 0.0})
+    return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "columns": rows, "stages": stages,
+            "label": TRIP_LABEL}
 
 # The loop state strip (#1765): one strip across the top of the Loop tab, from the two records the loop already writes. The
 # switch audit (`loop-audit.jsonl`) gives active, draining and off: each line is one change, with its writer, origin and the

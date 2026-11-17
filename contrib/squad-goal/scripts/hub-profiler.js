@@ -51,8 +51,8 @@ const profTripNum=s=>s==null?"&#8212;":profTime(s);
 const profLoadNum=x=>x==null?"&#8212;":x.toFixed(2);
 const profTripRead=(name,s)=>`${name}: median ${profTripNum(s.median_s)}, p90 ${profTripNum(s.p90_s)} (${s.observations} observation${s.observations===1?"":"s"})`;
 const profTripTitle=c=>{const main=profTripRead(c.label,c);
- return c.beside?`${main}; ${c.beside.stage} median ${profTripNum(c.beside.median_s)}`:main};
-const profTripCell=c=>profTripNum(c.median_s)+(c.beside?` &middot; ${esc(c.beside.stage)} ${profTripNum(c.beside.median_s)}`:"");
+ return c.beside?`${main}; ${esc(c.beside.label||c.beside.stage)} median ${profTripNum(c.beside.median_s)}`:main};
+const profTripCell=c=>profTripNum(c.median_s)+(c.beside?` &middot; ${esc(c.beside.label||c.beside.stage)} ${profTripNum(c.beside.median_s)}`:"");
 function profTrip(t){
  if(!t)return "";
  const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
