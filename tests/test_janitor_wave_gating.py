@@ -168,7 +168,7 @@ def _reconcile(tmp_path: Path, monkeypatch, card: str, standing: str, live_gate:
     mod.cards = lambda p: (True, have)
     writes = []
 
-    def board_write(args, n, why, reason=None):
+    def board_write(args, n, why, reason=None, event=None):   # the janitor's writer carries the run the write belongs to (#861)
         writes.append((list(args), reason))
         a = args[1:] if args and args[0] == "--add" else args
         if len(a) == 4 and not a[0].startswith("--") and a[1] in have:

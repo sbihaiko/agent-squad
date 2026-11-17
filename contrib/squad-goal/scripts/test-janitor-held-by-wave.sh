@@ -30,15 +30,16 @@ case "$a" in
   *graphql*)   # the one open-issue list: every issue this repository has open
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     sep=""
-    while IFS=$'\t' read -r n s; do
+    while IFS=$'\t' read -r n s l; do
       [ "$s" = open ] || continue
-      printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}' "$sep" "$n" "$n"; sep=,
+      printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":{"nodes":[%s]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$(printf '%s' "${l:-}" | awk -F, 'NF&&$0!=""{for(i=1;i<=NF;i++){printf "%s{\"name\":\"%s\"}",(i>1?",":""),$i}}')"; sep=,
     done < ISSFILE
     printf ']}}}}';;
   *repos/x/y/issues/*)
     n=${a##*issues/}; n=${n%% *}; n=${n%%\?*}
     s=$(awk -F'\t' -v n="$n" '$1==n{print $2}' ISSFILE); s=${s:-open}
-    case "$a" in *"@tsv"*) printf '%s\t\tIssue %s\t\n' "$s" "$n";; *) echo "$s";; esac;;
+    l=$(awk -F'\t' -v n="$n" '$1==n{print $3}' ISSFILE)
+    case "$a" in *"@tsv"*) printf '%s\t\tIssue %s\t%s\n' "$s" "$n" "$l";; *) echo "$s";; esac;;
 esac
 J
 sed -i.bak "s|ISSFILE|$T/iss.tsv|" "$T/bin/gh"; rm -f "$T/bin/gh.bak"; chmod +x "$T/bin/gh"
@@ -78,9 +79,17 @@ rm -f "$T/st/auto/wave-run-old" "$T/st/auto/waved-run-old" "$T/st/issue-facts.js
 run "$T/s" >/dev/null
 /usr/bin/grep -q "run-old" "$T/st/active-runs.txt" 2>/dev/null && ko "D: a finished run whose issues are all closed keeps its line: $(cat "$T/st/active-runs.txt" 2>/dev/null)" || ok "D: a finished run whose issues are all closed leaves active-runs"
 # E (#2138): the verdict is final and no wave stands for the run, so nothing reads its line again, whatever its issue says.
-# A line the loop counts as live work holds the child room the frontier needs, and the landing pass is no part of this rule.
+# The line leaves, and the run is `settled` for the card pass, which still reads its record this pass (#2085).
 printf 'run-old\n' > "$T/st/active-runs.txt"
+rm -f "$T/st/issue-facts.json"
 printf '1566\topen\n' > "$T/iss.tsv"
 run "$T/s" >/dev/null
 /usr/bin/grep -q "run-old" "$T/st/active-runs.txt" 2>/dev/null && ko "E: a finished run with no wave keeps its line: $(cat "$T/st/active-runs.txt" 2>/dev/null)" || ok "E: a finished run with no wave and no process leaves active-runs"
+# F (#2085): every issue the run names is marked rework, so its delivery was rejected and its card is queued again. The line
+# still leaves: a line the frontier reads as a live run would hold the issue against its next dispatch for ever.
+printf 'run-old\n' > "$T/st/active-runs.txt"
+rm -f "$T/st/issue-facts.json"
+printf '1566\topen\trework\n' > "$T/iss.tsv"
+run "$T/s" >/dev/null
+/usr/bin/grep -q "run-old" "$T/st/active-runs.txt" 2>/dev/null && ko "F: a rework run keeps its line: $(cat "$T/st/active-runs.txt" 2>/dev/null)" || ok "F: a run whose only work was rejected leaves active-runs"
 rm -rf "$T"; exit $fail

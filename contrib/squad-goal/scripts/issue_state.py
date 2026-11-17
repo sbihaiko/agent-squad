@@ -92,6 +92,12 @@ PRIORITY = "Priority"
 WAIT = "Wait"
 
 
+def _data_type(field):
+    """The field's type, whichever spelling the route that answered uses: the REST fields route writes `data_type:
+    single_select`, and GraphQL writes `dataType: SINGLE_SELECT`. A guard that reads one spelling refuses the other."""
+    return str(field.get("dataType") or field.get("data_type") or "").upper()
+
+
 class NotCarried(RuntimeError):
     """The write is not carried by the read that follows it: the named failure, never a written card.
 
@@ -510,7 +516,7 @@ class BoardBinding:
         def read_field():
             fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
             f = next((x for x in fs if isinstance(x, dict) and x.get("name") == PRIORITY), None) if isinstance(fs, list) else None
-            if f and f.get("dataType") != "SINGLE_SELECT": raise RuntimeError(f"{PRIORITY!r} field is not a single select")
+            if f and _data_type(f) != "SINGLE_SELECT": raise RuntimeError(f"{PRIORITY!r} field is not a single select")
             return {"id": f["id"] if f else "", "opt": {self._text(o["name"]): o["id"] for o in (f or {}).get("options", [])}}
         cache = self.st / f"rest-priority-field-{self.owner}-{self.project}.json"
         try:
@@ -557,7 +563,7 @@ class BoardBinding:
         def read_field():
             fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
             f = next((x for x in fs if isinstance(x, dict) and x.get("name") == WAIT), None) if isinstance(fs, list) else None
-            if f and f.get("dataType") != "SINGLE_SELECT": raise RuntimeError(f"{WAIT!r} field is not a single select")
+            if f and _data_type(f) != "SINGLE_SELECT": raise RuntimeError(f"{WAIT!r} field is not a single select")
             return {"id": f["id"] if f else "", "opt": {self._text(o["name"]): o["id"] for o in (f or {}).get("options", [])}}
         cache = self.st / f"rest-wait-field-{self.owner}-{self.project}.json"
         try:

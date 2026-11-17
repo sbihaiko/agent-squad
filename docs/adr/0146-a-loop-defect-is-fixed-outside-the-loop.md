@@ -31,6 +31,16 @@ machinery. So the loop now stops itself for any open loop-bug, and starts itself
 7. **The stop reaches the loop log and the issue's line on the board, never only stdout.** The owner reads why the loop stopped, and the issue that holds it, without opening a terminal.
 8. **A start is refused while any loop-bug issue is open.** `watchd.sh start` reads the open issues once, through the one seam, and refuses with the issue's number and a non-zero exit while any open issue carries `loop-bug` or a label that begins with `loop-bug:`. Backlog is included. A start on an already-running loop is not a start, so it still cancels an owner drain and succeeds; under the loop-bug drain mark it refuses while the issue is open. A read that fails proves nothing: with no drain mark the loop starts and one line on stderr says the check did not run (decision 6); with the mark the start refuses and the mark stays. Closing the issue after its publish is the clearing action.
 9. **The agent that finds a defect in the loop labels the issue and builds nothing in the loop.** The label is the switch: the next pass drains the loop, and closing the issue after the publish starts it. `watchd.sh drain` by hand is the owner's stop and stays off until the owner starts it. A defect in what the page shows is not a loop defect and takes `bug`: a display defect that once stopped all dispatch cost the owner the delivery it was meant to protect (owner answer B1).
+10. **The label names the class, and the class names the restrictions it holds.** `drainpolicy.py` is the one map, and every caller reads it: a dispatch pass, the child entry, the landing and the publish. The table below is that map. A class stops what its defect can corrupt and leaves the rest of the loop working, so one broken path costs the delivery of that path and no other. `loop-bug:publish` holds the publish alone, because a publish that carries a broken copy is the defect itself and the copy a later publish reads is the one that stands.
+
+    | label | dispatch | child entry | landing | publish |
+    |---|---|---|---|---|
+    | `loop-bug` | held | held | held | held |
+    | `loop-bug:landing` | held | held | held | open |
+    | `loop-bug:publish` | open | open | open | held |
+    | any other `loop-bug:<class>` | held | held | held | held |
+
+    A class the table does not name takes the full drain: a new class is safe before its entry is written, never after. The publish restriction reads the issue's `reviewed-sha:` line and refuses a sha the review did not cover.
 
 ## Consequences
 
