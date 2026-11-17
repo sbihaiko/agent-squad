@@ -59,6 +59,24 @@ def test_a_new_sample_carries_no_wave_in_its_cells(flow):
     assert s["cells"] == [["bug", "5", "Todo", 0, 1, "bug"]], "the wave label is no dimension of a new sample"
 
 
+def test_a_new_sample_names_its_shape_so_a_reader_never_guesses(flow):
+    s = flow.sample([_row(1)], now=_epoch(20))
+    assert s["v"] == 2, "a new sample is the shape with no wave, and it says so (#2132)"
+
+
+def test_a_new_sample_with_a_long_type_tail_keeps_its_column_and_frozen_flag(flow):
+    s = {"v": 2, "t": _epoch(19), "counts": {"issue": {"Todo": 1}}, "frozen": 0, "none": 0,
+         "cells": [["issue", "none", "Todo", 0, 1, "a", "b"]]}
+    out = flow._rebucket_sample(s, 1)
+    assert out["cells"] == [["issue", "none", "Todo", 0, 1, "a", "b"]], "the version, never the length, names the shape"
+
+
+def test_a_new_sample_is_re_bucketed_without_a_wave_in_its_cells(flow):
+    s = flow.sample([_row(1, st="Closed")], now=_epoch(19))
+    out = flow._rebucket_sample(s, 1)
+    assert out["cells"] == [["issue", "none", "Abandoned", 0, 1, "task"]]
+
+
 def test_an_old_sample_with_a_wave_still_reads(flow, tmp_path):
     path = tmp_path / "hub-flow.x_y.jsonl"
     old = {"t": _epoch(19), "counts": {"issue": {"Todo": 1}}, "frozen": 0, "none": 0,
@@ -115,6 +133,8 @@ def test_the_spec_and_wave_keys_are_the_values_the_board_filter_offers(flow):
     assert flow.spec_key({"pa": 5}) == "5"
     assert flow.wave_key(["bug"]) == "none"
     assert flow.wave_key(["wave:04"]) == "4"
+    s = flow.sample([_row(1, labels=["wave:02"])], now=_epoch(20))
+    assert len(s["cells"][0]) == 6, "the board filter reads the label, and the sample carries no wave element (#2132)"
     assert flow.kind_key({"l": ["bug"]}) == "bug"
     assert flow.kind_key({"l": []}) == "issue"
 
