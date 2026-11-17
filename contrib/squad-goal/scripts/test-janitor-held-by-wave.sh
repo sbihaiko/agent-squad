@@ -70,4 +70,11 @@ printf '1566\topen\n' > "$T/iss.tsv"
 cp "$T/st/cycle.log" "$T/cycle.before"
 o3=$(run "$T2")
 [ "$(/usr/bin/grep -c "$line" "$T/st/cycle.log" 2>/dev/null)" -gt "$(/usr/bin/grep -c "$line" "$T/cycle.before" 2>/dev/null)" ] && ok "C: an unanswered open-issue list still prints the line" || ko "C: an unanswered list silenced the line: $o3"
+# D (#2138): the run is over and every issue it names is closed, so nothing reads its line again. No wave stands for it
+# either. The line leaves active-runs: a finished run the loop still counts as live work holds the child room the frontier
+# needs, and six such lines left it with none.
+printf '1566\tclosed\n' > "$T/iss.tsv"
+rm -f "$T/st/auto/wave-run-old" "$T/st/auto/waved-run-old" "$T/st/issue-facts.json"   # the earlier passes cached the issue open; this pass reads it closed
+run "$T/s" >/dev/null
+/usr/bin/grep -q "run-old" "$T/st/active-runs.txt" 2>/dev/null && ko "D: a finished run whose issues are all closed keeps its line: $(cat "$T/st/active-runs.txt" 2>/dev/null)" || ok "D: a finished run whose issues are all closed leaves active-runs"
 rm -rf "$T"; exit $fail

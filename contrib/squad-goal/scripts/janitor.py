@@ -564,6 +564,13 @@ for r in names:
         if nums and all(issue_is_gone(x) for x in nums):
             say(f"GONE-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is gone; dropped from active-runs")
             continue
+        # #2138: the run has its verdict and every issue it names is closed, so nothing reads its line again: the card pass
+        # has no card to move and the landing pass has no issue to wait for. A line the loop still counts as live work holds
+        # the child room the frontier needs, and six such lines left it reporting "no slot" with nothing running. A run with
+        # an open issue keeps its line, as before: its wave or its card still read it.
+        if nums and all(issue_read(x)[0] == "closed" for x in nums):
+            say(f"CLOSED-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is closed; dropped from active-runs")
+            continue
         if i["idle"] > 180:
             for q in inside(f):
                 c = procs.get(q, (0, ""))[1]
