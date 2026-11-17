@@ -441,7 +441,12 @@ def _take(args):
     leases = c.try_take_many(args.kind, args.holder, n, args.pid, args.priority)
     while leases is None:
         held = ", ".join(c.holding(args.kind)) or "?"
-        full = f"caps.{args.kind} is full ({cap} slots), held by {held}"
+        free = max(cap - c.occupancy()[args.kind], 0)
+        if free:
+            need = f"its whole count of {n}" if args.priority else "2"
+            full = f"caps.{args.kind} has {free} free slot(s) of {cap}: {args.holder} needs {need}; held by {held}"
+        else:
+            full = f"caps.{args.kind} is full ({cap} slots), held by {held}"
         first = None if args.priority else c.first_in_queue(args.kind)
         if first:
             full = f"caps.{args.kind} keeps its freed slots for {first}, a waiting priority check (ADR-0174); held by {held}"

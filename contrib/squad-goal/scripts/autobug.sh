@@ -72,6 +72,7 @@ sg_refused() {   # <refusal name> <address> <exit code> <error text> <concerns> 
   rm -f "$body"
   echo "AUTOBUG: the refused write is filed as a bug${filed:+ ($filed)}" >&2
 }
+AB_GONE_RE='HTTP(/[0-9.]+)? 410\b|could not resolve to an issue|this issue was deleted'
 sg_write() {   # <refusal name> <address> <concerns> <guard> -- <command…>: the one write door of this pass
   local name=$1 addr=$2 concerns=$3 guard=$4; shift 4; [ "${1:-}" = "--" ] && shift
   local out rc
@@ -85,10 +86,10 @@ sg_write() {   # <refusal name> <address> <concerns> <guard> -- <command…>: th
     return "$rc"
   fi
   # A deleted issue (HTTP 410, or GitHub's stable message) has no card to write, so no bug about it can be fixed. Named in
-  # the log and filed as no bug: the terminal refusal the janitor reports as GONE-ISSUE.
-  if printf '%s' "$out" | /usr/bin/grep -qiE 'HTTP(/[0-9.]+)? 410\b|could not resolve to an issue|this issue was deleted'; then
+  # the log and filed as no bug: the terminal refusal the janitor reports as GONE-ISSUE. Exit 4 tells the caller to drop its pending event.
+  if printf '%s' "$out" | /usr/bin/grep -qiE "$AB_GONE_RE"; then
     echo "$(date +%T) ${SG_GH_PASS:-autobug} GONE-ISSUE $name $addr: $(printf '%s' "$out" | tr '\n' ' ')" >> "$SG_STATE/cycle.log"
-    return "$rc"
+    return 4
   fi
   # A board rule's refusal is the rule working, not a defect to fix: board.py exits 3 for a backward move or a Backlog-to-Todo
   # hold, records it in board-rejections.jsonl, and leaves the card where it stands (#1059, #1909, ADR-0143). Filing it opened
@@ -133,7 +134,7 @@ ab_board_write() {   # <run> <ledger column> <issue>...: the card write of those
   sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT $ids -> $bc" \
     "the cards $ids of the run this pass requested ($run)" \
     "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-    -- $BOARD --add $SG_OWNER $SG_PROJECT "$bc" "$@" || return 1
+    -- $BOARD --add $SG_OWNER $SG_PROJECT "$bc" "$@" || { [ $? = 4 ] && ab_board_drop "$run" "$col" "$@"; return 1; }
   for n in "$@"; do python3 "$here/issue_ledger.py" boardw "$SG_REPO#$n" "$run" "$col" "${AB_ACTOR:-autobug dispatch}" >/dev/null || return 1; done
 }
 ab_launch() {   # <request> <run>: 0 when launch.py takes the request past its refusal window; a refusal names itself in the run's log
@@ -171,11 +172,16 @@ ab_drop() {   # <run> <ledger column> <issue>...: a pending event its gates no l
   for n in "$@"; do rm -f "$A/bug-$n"; python3 "$here/issue_ledger.py" boardx "$SG_REPO#$n" "$run" "$col" >/dev/null; done
   echo "AUTOBUG $run: its pending $col write is dropped; the gates no longer back its issue(s), nothing launched" >&2
 }
+ab_issue_gone() {   # <issue>: 0 when GitHub answers that the issue is deleted (HTTP 410), the terminal refusal sg_write names
+  printf '%s' "$(gh_api "repos/$SG_REPO/issues/$1" 2>&1)" | /usr/bin/grep -qiE "$AB_GONE_RE"
+}
 ab_resume() {   # the pending events of earlier passes: a Doing event launches its stored request once, and only while its issues still pass the gates
-  local groups run col req ids n board AB_ACTOR="autobug resume"
+  local groups run col req ids n board kept AB_ACTOR="autobug resume"
   groups=$(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | awk -F'\t' 'NF>=5 { k=$2 "\t" $3 "\t" $5; ids[k]=ids[k] " " $1 } END { for (k in ids) print k "\t" substr(ids[k], 2) }')
   while IFS=$'\t' read -r run col req ids <&3; do
     [ -n "$run" ] || continue
+    kept=""; for n in $ids; do if ab_issue_gone "$n"; then ab_board_drop "$run" "$col" "$n"; echo "AUTOBUG $run: #$n is deleted; its pending $col write is dropped, nothing launches for it" >&2; else kept+="$n "; fi; done
+    ids=${kept% }; [ -n "$ids" ] || continue
     if [ "$col" = Doing ]; then
       board=$(python3 "$here/issue_state.py" 2>/dev/null) || { echo "AUTOBUG $run: the board did not answer; its pending card write waits" >&2; continue; }
       for n in $ids; do ab_resume_startable "$n" "$board" || { ab_drop "$run" Doing $ids; continue 2; }; done

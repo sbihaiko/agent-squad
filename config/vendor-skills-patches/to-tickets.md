@@ -33,3 +33,5 @@ words. Domain terms are technical names, which STE100 allows; the vocabulary is 
 `python3 scripts/check_ste.py --title "<title>" <body-file>` from the repository root, once per ticket. It prints one line
 per finding (section, kind, detail, sentence) and exits 0: it warns and never blocks the publish. Show the findings with
 the breakdown, and let the writer fix or keep each one before the publish.
+
+**Native edges.** This section overrides the upstream sentence "Use the platform's native blocking relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues." On this repository's tracker, every blocking edge is a native edge, and a "Blocked by" line in a body is never an edge. Write each edge with `python3 contrib/squad-goal/scripts/edge_write.py <owner>/<repo> <blocked>:<blocker> ...`, blockers first. The writer calls the deadlock validator before each write, refuses an invalid or unknown edge and prints its cycle path, and reads each accepted edge back. A rerun after a failed publish writes each missing edge once. This section adds no `wave:NN` label.

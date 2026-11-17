@@ -774,11 +774,11 @@ def gh_write_transport(argv: list[str]) -> Transport:
 
 
 def write_argv(route: str, method: str = "POST", fields: Any = None) -> list[str]:
-    """The argv `gh api` runs for one write: the method, the route, then one `-f <k>=<v>` per field."""
+    """The argv `gh api` runs for one write: the method, the route, then one field per pair, typed when it is an integer."""
     argv = ["--method", method.upper(), route]
     pairs = fields.items() if isinstance(fields, Mapping) else (fields or [])
     for key, value in pairs:
-        argv += ["-f", f"{key}={value}"]
+        argv += ["-F" if isinstance(value, int) else "-f", f"{key}={value}"]
     return argv
 
 

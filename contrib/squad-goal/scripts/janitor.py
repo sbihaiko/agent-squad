@@ -1057,6 +1057,7 @@ def board_write(args, n, why, reason=None):   # the one writer of a card: a stat
         err = named or (msg[0] if msg else "no output")
         if gone_msg(err):
             say(f"GONE-ISSUE #{n}: board write refused because the issue is gone: {err}")
+            if pending: drop_write(n, col)   # a deleted issue has no card to write: its prediction ends unwritten (#2074)
             if not dry: gone.touch()
             return False
         say(f"BOARD-WRITE-FAILED #{n}: {why}: {err}")
@@ -1624,8 +1625,17 @@ def stop_of(n):   # why the issue is stopped, or "": its ledger stopped it (WAVE
     labs = issue_labels(n) & {"frozen:owner", "needs-owner"}
     return f"it carries {' '.join(sorted(labs))}" if labs else ""
 if owner and proj and repo0:
-    for r in names:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
+    o_runs = list(names)   # the listed runs, then every run whose request names a dispatch marker's issue: the janitor prunes a finished run's line, and its marker still claims the issue (#2127)
+    o_seen = {folder(r) for r in names}
+    by_issue = {}   # a frontier marker holds its request name, never its run folder, so the run is found by the issue it names
+    for rf in (co / "runs").glob("*") if (co / "runs").is_dir() else []:
+        for n in req_issues(rf): by_issue.setdefault(n, []).append(rf)
+    for dm in sorted((st / "auto").glob("disp-*")):
+        for rf in by_issue.get(dm.name[5:], []):
+            if rf not in o_seen: o_seen.add(rf); o_runs.append(str(rf))
+    for r in o_runs:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
+        if (st / "auto" / f"taken-{f.name}").exists(): continue   # a taken-over run's markers stand until its hand fix clears the taken marker (ADR-0166)
         if not (i and i["verdict"] and i["idle"] > 180): continue   # a run still moving keeps its marker
         req = f / "request.txt"
         nums = issues_named(req.read_text()) if req.exists() else set()

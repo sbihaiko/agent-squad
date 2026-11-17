@@ -1470,7 +1470,7 @@ cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},parent:(if .parent then {number:.parent} else null end),comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
-  *"issue(number:"*) echo '{"data":{"repository":{"i1228":{"number":1228,"title":"Core: null deref","body":"step a.py","state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}}}}' ;;
+  *"issue(number:"*) if [ -e "$T/gone1228" ]; then echo "GraphQL: Could not resolve to an issue with the number of 1228. (repository.issue)" >&2; exit 1; fi; echo '{"data":{"repository":{"i1228":{"number":1228,"title":"Core: null deref","body":"step a.py","state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}}}}' ;;
   *pulls?state=open*) echo "[]" ;;
   *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
   *"issues?state=open"*) echo "[]" ;;
@@ -1488,6 +1488,17 @@ r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "13 no refusal is named for a deleted card" || ko "13 cycle.log: $(cat "$T/st/cycle.log")"
 [ "$($G -c 'GONE-ISSUE .*#1228' "$T/st/cycle.log")" = 1 ] && ok "13 the deleted card is named once in the cycle log" || ko "13 no GONE-ISSUE line: $(cat "$T/st/cycle.log")"
 [ ! -e "$T/launched" ] && ok "13 nothing launches for a deleted card" || ko "13 a run launched for a deleted card"
+[ -z "$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)" ] && ok "13 the deleted card's pending write is dropped" || ko "13 pending write kept: $(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)"
+
+# 13c) (#2074) a pending card write whose issue is deleted is dropped by the resume pass: nothing is written or launched.
+rm -rf "$T/st/auto" "$T/st/state" "$T/st/gh-cache" "$T/launched"; rm -f "$T"/st/gh-*.json; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+: > "$T/filed"; : > "$T/board.calls"; : > "$T/st/cycle.log"; touch "$T/gone1228" "$T/req-old.json"
+SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" board x/y#1228 run-old Doing "$T/req-old.json" >/dev/null
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ -z "$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)" ] && ok "13c the resume pass drops the pending write of a deleted issue" || ko "13c pending kept: $(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)"
+[ ! -s "$T/board.calls" ] && ok "13c no card write is sent for a deleted issue" || ko "13c board calls: $(cat "$T/board.calls")"
+[ ! -e "$T/launched" ] && [ ! -s "$T/filed" ] && ok "13c nothing launches and no bug is filed" || ko "13c launched or filed: $(cat "$T/filed")"
+rm -f "$T/gone1228"
 
 # 13b) (#2094) a card write the board refuses by its own rule (a backward move, exit 3) is recorded by the board and named in
 # the cycle log, and it files no bug: the rule working is no defect to fix, and filing it opened one issue per pass.

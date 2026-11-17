@@ -1783,17 +1783,19 @@ land_queue() {
 # the order named, one tip gate on that exact tip, and one fast-forward push of it. A push the remote refuses repeats once from
 # the fetch, with a new stack and a new gate, as `land` does. After the push each run takes `land`'s own books (land_books)
 # over its own range of the stack: the claimed runs first, with the `BATCH <run>:` prefix and their `wland-<run>` marker, and
-# the first run last. Exit 10: the batch does not fit -- a run owes a close, is past its age cap or carries nothing, the base
-# is red, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused -- and the caller lands each
-# run alone. Exit 1: the gate ran no verdict, so every run waits for a later pass. Exit 2: the network failed.
+# the first run last. A wave with nothing ahead of the base leaves the batch before it is sized and lands empty on its own
+# (`land`), after the batch's books. Exit 10: the batch does not fit -- a run owes a close, is past its age cap, fewer than two
+# waves carry commits, the base is red, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused --
+# and the caller lands each run alone. Exit 1: the gate ran no verdict, so every run waits for a later pass. Exit 2: the network failed.
 land_batch() {
-  local -a rs=() rds=() ws=() tips=()
-  local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0
+  local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
+  local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0 self0 selfrd er erd
   local rows issues anyref rfs nontest SG_REQUEUE_RUN
   while [ $# -ge 2 ]; do
     rd=$2; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
     rs+=("$1"); rds+=("$rd")
     ws+=("$(wave_of "$1")"); shift 2; done
+  self0=${rs[0]:-}; selfrd=${rds[0]:-}
   for i in "${!rs[@]}"; do
     [ -z "$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "${rs[$i]}" 2>/dev/null)" ] || { echo "WAVE BATCH: ${rs[$i]} owes a close, so each run lands alone"; return 10; }
     expired "${rs[$i]}" && { echo "WAVE BATCH: ${rs[$i]} is past its age cap, so each run lands alone"; return 10; }
@@ -1806,13 +1808,19 @@ land_batch() {
   for i in "${!ws[@]}"; do
     sc fetch -q origin "+refs/heads/${ws[$i]}:refs/remotes/origin/${ws[$i]}" >/dev/null 2>&1 || { rm -rf "$S"; return 10; }
   done
-  ids=$(IFS=,; printf '%s' "${rs[*]}")
   while :; do
     fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || { netfail "the fetch of $base from $remote" "$fo" && { rm -rf "$S"; return 2; }; rm -rf "$S"; return 10; }
     bstart=$(sc rev-parse "origin/$base"); tips=()
     sc checkout -q -B land "origin/$base" 2>/dev/null || { rm -rf "$S"; return 10; }
+    kr=() krd=() kw=()
     for i in "${!ws[@]}"; do
-      [ "$(sc rev-list --count "origin/$base..origin/${ws[$i]}")" -gt 0 ] || { echo "WAVE BATCH: ${ws[$i]} carries nothing, so each run lands alone"; rm -rf "$S"; return 10; }
+      if [ "$(sc rev-list --count "origin/$base..origin/${ws[$i]}")" -gt 0 ]; then kr+=("${rs[$i]}"); krd+=("${rds[$i]}"); kw+=("${ws[$i]}")
+      else echo "WAVE BATCH: ${ws[$i]} carries nothing, so it lands empty outside the batch"; ers+=("${rs[$i]}"); erds+=("${rds[$i]}"); fi
+    done
+    rs=("${kr[@]}"); rds=("${krd[@]}"); ws=("${kw[@]}")
+    [ "${#rs[@]}" -ge 2 ] || { echo "WAVE BATCH: ${#rs[@]} wave(s) with commits left, so each run lands alone"; rm -rf "$S"; return 10; }
+    ids=$(IFS=,; printf '%s' "${rs[*]}")
+    for i in "${!ws[@]}"; do
       k=$(sc rev-parse land)
       sc branch -q -f "b$i" "origin/${ws[$i]}"
       out=$(sc rebase -q --onto land "origin/$base" "b$i" 2>&1) || { sc rebase --abort >/dev/null 2>&1
@@ -1844,12 +1852,19 @@ land_batch() {
   for i in $(seq $(( ${#rs[@]} - 1 )) -1 0); do
     run=${rs[$i]}; w=${ws[$i]}; rd=${rds[$i]}; sha=${tips[$i]}; SG_REQUEUE_RUN=$run
     k=$bstart; [ "$i" = 0 ] || k=${tips[$((i - 1))]}
-    if [ "$i" = 0 ]; then land_read "$k" "$sha"; land_books; brc=$?
+    if [ "$run" = "$self0" ]; then land_read "$k" "$sha"; land_books; brc=$?
     else
       { land_read "$k" "$sha"; land_books; } 2>&1 | sed "s|^|BATCH $run: |"
       [ "${PIPESTATUS[0]}" = 0 ] && : > "$SG_STATE/auto/wland-$run"
     fi
   done
+  for i in "${!ers[@]}"; do
+    er=${ers[$i]}; erd=${erds[$i]}
+    [ "$er" = "$self0" ] && continue
+    ( land "$er" "$erd" ) 2>&1 | sed "s|^|BATCH $er: |"
+    [ "${PIPESTATUS[0]}" = 0 ] && : > "$SG_STATE/auto/wland-$er"
+  done
+  for er in "${ers[@]}"; do [ "$er" = "$self0" ] && { ( land "$self0" "$selfrd" ); brc=$?; }; done
   rm -rf "$S"; return $brc
 }
 

@@ -9,7 +9,7 @@ ko() { echo "FAIL $1"; fail=1; }
 here="$(cd "$(dirname "$src")" && pwd)"
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
 cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/spec_fold.py" "$T/s/"
-cp "$here/issue_state.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
+cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 n="${!#}"
@@ -47,6 +47,7 @@ o1=$(run)
 o2=$(run)
 [ "$(/usr/bin/grep -c 'project-write/4660' "$T/gh.calls")" = 1 ] && ok "410: the board write is sent once" || ko "410 writes: $(/usr/bin/grep 'project-write/4660' "$T/gh.calls")"
 [ "$(/usr/bin/grep -c 'GONE-ISSUE #4660' "$T/st/cycle.log")" = 1 ] && ok "410: the deleted issue is reported once by name" || ko "410 reports: $(cat "$T/st/cycle.log")"
+[ "$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" read x/y#4660 board 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))')" = dropped ] && ok "410: the prediction recorded for the deleted issue's write is dropped" || ko "410 prediction: $(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" read x/y#4660 board 2>/dev/null)"
 [ "$(/usr/bin/grep -c 'project-write/4661' "$T/gh.calls")" = 2 ] && ok "502: the board write is retried on each pass" || ko "502 writes: $(/usr/bin/grep 'project-write/4661' "$T/gh.calls")"
 [ "$(/usr/bin/grep -c 'BOARD-WRITE-FAILED #4661' "$T/st/cycle.log")" = 2 ] && ok "502: each refusal is reported" || ko "502 reports: $(cat "$T/st/cycle.log")"
 ! /usr/bin/grep -qx 'run-finished-gone' "$T/st/active-runs.txt" && ok "a finished run whose issues are gone leaves active-runs" || ko "active runs: $(cat "$T/st/active-runs.txt")"

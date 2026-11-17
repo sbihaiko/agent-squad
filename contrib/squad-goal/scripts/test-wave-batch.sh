@@ -114,4 +114,30 @@ r=$(landq run-n); rc=$?
 [ -e "$T/st/auto/wland-run-p.queued" ] && ok "h: the held-red run keeps its marker" || ko "h: the held-red run's marker went"
 rm -f "$T/st/auto/tipred-wave_run-p.red"
 
+# mkempty <run>: a run whose wave carries nothing ahead of the base.
+mkempty() { local run=$1 rd="$T/co/runs/$1"
+  mkdir -p "$rd"; : > "$rd/record.jsonl"
+  (cd "$T/co" && bash "$T/s/wave.sh" start "$run") >/dev/null; }
+
+# i (#2075): an empty wave leaves the batch and lands empty; the two waves with commits stay in one batch behind one tip gate.
+rm -f "$T/st/auto"/wland-*; mkempty run-q; mkrun run-r 81; mkrun run-s 82; queue run-r; queue run-s; reset
+r=$(landq run-q); rc=$?
+[ $rc = 0 ] && ok "i: the pass exits 0" || ko "i: exit $rc: '$r'"
+[ "$(/usr/bin/grep -c . "$TIPLOG")" = 1 ] && case "$(cut -d' ' -f1 "$TIPLOG")" in "2:run-r,run-s"|"2:run-s,run-r") ok "i: one tip gate for the two waves with commits";; *) false;; esac || ko "i: tip gates: '$(cat "$TIPLOG")': '$r'"
+[ "$(devpushes)" = 1 ] && ok "i: one push to the base" || ko "i: pushes to dev: '$(cat "$T/pushes.log")'"
+$O cat-file -e dev:g-run-r 2>/dev/null && $O cat-file -e dev:g-run-s 2>/dev/null && ok "i: both waves with commits are in the base" || ko "i: dev lacks a wave: '$r'"
+[ "$(closes)" = "81 82 " ] && ok "i: each issue of the two waves closes" || ko "i: closes '$(closes)': '$r'"
+$O rev-parse -q --verify wave/run-q >/dev/null && ko "i: the empty wave of run-q stays" || ok "i: the empty wave lands empty and its branch goes"
+[ -e "$T/st/auto/wland-run-r" ] && [ -e "$T/st/auto/wland-run-s" ] && ok "i: each claimed run gets its landed marker" || ko "i: markers: $(ls "$T/st/auto")"
+rm -f "$T/st/auto"/wland-*
+
+# j (#2075): an empty wave and one wave with commits: the wave with commits lands alone, behind its own gate.
+mkempty run-t; mkrun run-u 91; queue run-u; reset
+r=$(landq run-t); rc=$?
+[ $rc = 0 ] && ok "j: the pass exits 0" || ko "j: exit $rc: '$r'"
+[ "$(/usr/bin/grep -c . "$TIPLOG")" = 1 ] && [ "$(cut -d' ' -f1 "$TIPLOG")" = - ] && ok "j: the wave with commits gets its own gate, no batch" || ko "j: gates '$(cat "$TIPLOG")': '$r'"
+$O cat-file -e dev:g-run-u 2>/dev/null && ok "j: the wave with commits is in the base" || ko "j: dev lacks run-u: '$r'"
+[ "$(closes)" = "91 " ] && ok "j: its issue closes" || ko "j: closes '$(closes)': '$r'"
+rm -f "$T/st/auto"/wland-*
+
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
