@@ -46,17 +46,18 @@ def _node(script, *files):
 # ---- the removed controls are gone from the page ----
 
 @pytest.mark.parametrize("marker", ['id=lf>', 'id=lf ', 'id=bsp', 'id=bz', 'id=bx', 'id="pip"', 'id=pip', 'id=pipf',
-                                    'id=lfl', 'id="pipf"', 'maximize the board'])   # 'Specs: all' left the list (#889): the mock's filter summaries read `Waves: all` and `Specs: all`
+                                    'id=lfl', 'id="pipf"', 'maximize the board', 'id=fs', 'id=fk', 'id=lmode',
+                                    'id=flowchips', 'ffchip'])   # the Specs, Kinds and Swimlanes controls left the page at the owner's request (SPEC 1965)
 def test_the_removed_controls_are_not_on_the_page(hub, marker):
     assert marker not in hub.PAGE, f"{marker!r} is still on the page"
 
 
-def test_the_filter_bar_has_a_specs_and_a_kinds_multi_select(hub):
+def test_the_board_reads_no_filter_state_the_page_no_longer_sets(hub):
+    """A control that left the page must leave no reader: an undeclared name throws inside the board poll and the whole
+    board stays blank, because the poll swallows the error (SPEC 1965)."""
     page = hub.PAGE
-    assert '<details id=fw' not in page and "Waves: all" not in page, "the wave filter survives"
-    assert '<details id=fs' in page and '<details id=fk' in page
-    assert 'bo.fs' in page and 'bo.fk' in page, "the selections are not kept in bo"
-    assert "<summary>Specs: all</summary>" in page and "<summary>Kinds: all</summary>" in page, "the mock's filter summaries (#889)"
+    for name in ("bo.fk", "bo.fs", "f||fs.length||fk.length", "boardOk({...x,kind:\"pr\"}", "specTitle"):
+        assert name not in page, f"the board still reads {name!r}, which the page no longer sets"
 
 
 def test_a_saved_state_from_a_removed_control_is_dropped_on_load(hub):
@@ -154,25 +155,13 @@ def test_an_abandoned_spec_is_not_an_option(hub):
     assert "492" not in _spec_options(groups, summary)
 
 
-def test_a_saved_spec_filter_naming_a_finished_spec_is_dropped_on_load(hub):
-    groups = [
-        {"name": "Doing", "items": [{"n": 889, "t": "SPEC 889", "l": ["spec"], "sp": True}]},
-        {"name": "Todo", "items": [{"n": 890, "t": "open", "l": [], "pa": 889}, {"n": 900, "t": "no spec", "l": []}]},
-        {"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]},
-    ]
-    kept = _node(f"console.log(JSON.stringify(keptSpecs({json.dumps(['41', '889', 'none'])},"
-                 f"{json.dumps(_with_ends(groups))})));", LANES_JS)
-    assert kept == ["889", "none"], "a finished spec's key survived the load"
-
-
-def test_a_saved_spec_filter_of_only_finished_specs_is_empty(hub):
-    groups = [{"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]}]
-    kept = _node(f"console.log(JSON.stringify(keptSpecs(['41'],{json.dumps(_with_ends(groups))})));", LANES_JS)
-    assert kept == [], "the board would filter to nothing"
-
-
 def test_the_page_builds_the_specs_options_from_the_unfinished_rule(hub):
-    assert "specOptions(" in hub.PAGE and "keptSpecs(" in hub.PAGE
+    """#981: a finished spec is never an option. The Specs filter left the page (SPEC 1965), so the rule that keeps a saved
+    key alive went with it, and the options alone are built from the page's read."""
+    page = hub.PAGE
+    assert "specOptions(boardGroups" in page, "the page builds no spec options"
+    assert "const gone=goneSpecsOf(groups,sum)" in page, "the options rule does not read the finished specs"
+    assert "keptSpecs(" not in page, "the page still carries the saved-key keeper of a removed control"
 
 
 def test_the_page_offers_the_specs_and_kinds_of_open_cards_only(hub):
@@ -183,8 +172,8 @@ def test_the_page_offers_the_specs_and_kinds_of_open_cards_only(hub):
 
 def test_drop_removed_clears_the_old_keys_and_keeps_the_kept_ones(hub):
     bo = {"labels": ["x"], "label": "y", "lmode": "all", "specs": 2, "max": True, "off": False, "pip": {"x": 1},
-          "fw": ["889/2"], "fs": [], "lc": {"s1": True}, "lmode_kept": 1}
+          "fw": ["889/2"], "fs": ["889"], "fk": ["bug"], "lc": {"s1": True}}
     out = _node(f"let bo={json.dumps(bo)};dropRemoved(bo);console.log(JSON.stringify(bo));", LANES_JS)
-    for gone in ("labels", "label", "specs", "max", "off", "pip", "fw"):
+    for gone in ("labels", "label", "specs", "max", "off", "pip", "fw", "lmode", "fs", "fk"):
         assert gone not in out, f"{gone} survived"
-    assert out["fs"] == [] and out["lc"] == {"s1": True}, "a kept filter or collapse state was dropped"
+    assert out["lc"] == {"s1": True}, "the collapse state a kept control writes was dropped"

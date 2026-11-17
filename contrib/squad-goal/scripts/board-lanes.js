@@ -31,8 +31,6 @@ function specOptions(groups,sum={}){
     if(!gone.has(x.pa))parents.add(String(x.pa))})});
   const keys=[...parents];if(none)keys.push("none");
   return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
-// A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
-const keptSpecs=(saved,groups,sum)=>{const opts=specOptions(groups,sum);return saved.filter(k=>opts.includes(k))};
 // A saved hidden set drops every closed status on load: history is never a hidden column (#969).
 const keptHidden=(saved,groups)=>{const ends=new Set(groups.filter(g=>g.end).map(g=>g.name));return saved.filter(n=>!ends.has(n))};
 // <card-rules>: the spec color rules; the mobile page inlines this block alone (#917).
@@ -127,5 +125,6 @@ function laneHead(l,v){
 }
 
 // A saved state from a control the board no longer has is dropped on load (#899): the labels filter, the Specs mode,
-// maximize, collapse, the pip and the Waves filter (#1988). The kept keys (the filters, the lanes, the view) stay as they are.
-function dropRemoved(bo){for(const k of["labels","label","specs","max","off","pip","fw"])delete bo[k];return bo}
+// maximize, collapse, the pip, the Waves filter (#1988), and the lane mode with the Specs and Kinds filter (owner ask, SPEC 1965).
+// The kept keys (the lanes, the view) stay as they are.
+function dropRemoved(bo){for(const k of["labels","label","specs","max","off","pip","fw","lmode","fs","fk"])delete bo[k];return bo}

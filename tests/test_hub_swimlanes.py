@@ -87,14 +87,14 @@ def test_served_row_carries_its_parent_spec(hub, tmp_path, monkeypatch):
 
 # ---- the selector and the page ----
 
-def test_page_offers_spec_and_none_with_spec_as_the_default(hub):
+def test_the_page_draws_the_spec_lanes_with_no_lane_mode_control(hub):
+    """The Swimlanes control left the page at the owner's request, and the lanes are the model it always drew: no page
+    statement reads a lane mode, and the board draws its lanes unconditionally (SPEC 1965)."""
     page = hub.PAGE
-    assert '<select id=lmode' in page, "the lane selector is missing"
-    for value, label in (("spec", "Spec"), ("none", "None")):
-        assert f'<option value={value}' in page and f'>{label}</option>' in page, f"{label} is not an option"
-    assert "<option value=wave>" not in page, "the Wave lane mode is still an option"
-    assert 'bo.lmode||"spec"' in page, "Spec is not the default lane mode"
-    assert 'bo.lmode==="none"' in page, "None does not draw today's board"
+    for gone in ("<select id=lmode", "<option value=wave>", "bo.lmode"):
+        assert gone not in page, f"the page still draws {gone}"
+    assert "const model=buildBoard(" in page, "the board does not draw its lanes"
+    assert "const lanesHtml=laneHtml(model)" in page, "the lanes are drawn behind a mode test"
 
 
 def test_the_hub_has_no_wave_lane_chip_or_filter(hub):

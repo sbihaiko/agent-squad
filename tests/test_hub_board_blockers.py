@@ -174,10 +174,10 @@ def test_a_column_hidden_by_the_eye_keeps_its_chip_and_never_gets_a_line(hub):
         "a column the user hid is a chip, never one of the strip's lines (#1809)"
 
 
-def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
+def test_a_board_change_recomputes_the_collapse_without_a_reload(hub):
+    """#899: the board repaints from one poll, which recomputes the lanes and the collapse at the bottom of the page; no
+    step reloads the page. The filter bar's own handler left the page (SPEC 1965), so the poll is the one road it takes."""
     page = hub.PAGE
-    handler = re.search(r'const pickFilter=[^\n]*', page).group(0)   # the filter bar's one handler, for waves and specs (#899)
-    assert "pollBoard()" in handler and "location.reload" not in handler
     poll = page[page.index("async function pollBoard()"): page.index("finally{lim.busy=0}}")]
     assert 'if($("#bbody").dataset.h!==html)' in poll and "location.reload" not in poll
     assert re.search(r"setInterval\(pollBoard,", page), "a card moving or a run ending must repaint the strip on its own"

@@ -41,25 +41,6 @@ function profLoad(v){
  return `<section id=profload><div class=lsh><h3>${esc(v.label||"Machine load")}</h3></div>`
   +`<svg viewBox="0 0 ${PROF_LOAD_W} ${PROF_LOAD_H}" role=img aria-label="${esc(aria)}" preserveAspectRatio=none>${gaps}${segs}${core}</svg>`
   +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window; the dashed line is saturation at ${cores} cores${gap}.</p></section>`}
-// The run slots in use (#1766): a step line of the slots a run holds against the cap as its dashed ceiling. The hub folds
-// the line, its ceiling steps and its gaps on the window the route folds the loop state for; the page draws them at the
-// same percentages of the same start and end, so a column of the page is one instant in both views.
-function profSlots(s){
- if(!s||((!s.rows||!s.rows.length)&&(!s.gaps||!s.gaps.length)))return "";
- const span=(s.end-s.start)||1,x=t=>(100*(t-s.start)/span).toFixed(2),top=Math.max(1,s.top||1);
- const y=n=>(100*(1-(n||0)/top)).toFixed(2),rows=s.rows||[],caps=s.ceilings||[],gaps=s.gaps||[];
- const step=rs=>rs.length?`M${x(rs[0].start)} ${y(rs[0].slots!=null?rs[0].slots:rs[0].cap)}`
-  +rs.map((r,i)=>`${i?`V${y(r.slots!=null?r.slots:r.cap)}`:""}H${x(r.end)}`).join(""):"";
- const peak=s.peak||0,capText=s.cap!=null?`a ceiling of ${s.cap}`:"no run cap read";
- const band=gaps.map(g=>`<i class="lsg" style="left:${x(g.start)}%;width:${(100*(g.end-g.start)/span).toFixed(2)}%" title="${esc("No readable record: "+(g.reason||"no record"))}"></i>`).join("");
- const why=[...new Set(gaps.map(g=>g.reason||"no record"))];
- const aria=`The run slots in use over the last ${profTime(span)}: at most ${peak} of ${capText}`
-  +(gaps.length?", with a stretch that has no readable record.":".");
- return `<section id=profslots><div class=lslotsh><h4>${esc(s.label||"Run slots in use")}</h4></div>`
-  +`<div class=lslwrap>${band}<svg class=lsl viewBox="0 0 100 100" preserveAspectRatio=none role=img aria-label="${esc(aria)}">`
-  +(caps.length?`<path class="lscap" vector-effect=non-scaling-stroke d="${step(caps)}"></path>`:"")
-  +(rows.length?`<path class="lsline" vector-effect=non-scaling-stroke d="${step(rows)}"></path>`:"")+`</svg></div>`
-  +`<p class=lpn>at most ${peak} of ${capText}${why.length?` · no readable record: ${esc(why.join("; "))}`:""}</p></section>`}
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
@@ -86,11 +67,13 @@ function profNote(v){
   +(v.coverage==null?"":v.coverage>=1?"Read every process.":`Read ${(100*v.coverage).toFixed(1)}% of the processes.`)
   +" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>${!v.write&&v.reason?`<p class=lpr>${esc(v.reason)}</p>`:""}`,slots=profSlots(v.slots),load=profLoad(v.load),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+slots+load+trip;   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2></div>`,load=profLoad(v.load),trip=profTrip(v.trip);
+ // The switch ends the page: the readings stand above it, and the switch that turns them on or off follows them (owner ask).
+ const foot=`<div class=lph id=proffoot>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>${!v.write&&v.reason?`<p class=lpr>${esc(v.reason)}</p>`:""}`;
+ if(!v.on||!v.tree)return head+load+trip+foot;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+slots+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
-  +(v.context?profCtx(v.context,open):"")}
+ return head+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+  +(v.context?profCtx(v.context,open):"")+foot}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
 function profDraw(){if(!profV)return;const b=document.getElementById("profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");

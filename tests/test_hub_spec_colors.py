@@ -111,11 +111,15 @@ def test_no_card_carries_the_column_left_border():
         assert not re.search(r"border(-left|-top)?(-color)?:[^;}]*var\(--cc", body), rule.strip()
 
 
-def test_the_spec_filter_shows_each_spec_color():
+def test_the_card_number_wears_its_spec_color():
+    """#917: one colour per spec option, and every card's left edge and number wear it. The Specs filter left the page
+    (SPEC 1965), so the one place a spec colour is drawn is the card itself."""
     page = HUB_PY.read_text()
-    bar = re.search(r"const fillBar=.*?\n.*?\n", page).group(0)
-    assert "class=sw" in bar, "the filter options draw no swatch"
-    assert re.search(r'fillBar\("fsl",.*specColor\(SLOTS,', page), "the spec filter passes no spec color"
+    line = next(ln for ln in page.splitlines() if ln.startswith("const sOpts=specOptions("))
+    assert "SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)])" in line, \
+        "the board read builds no spec colour per card"
+    card = next(ln for ln in page.splitlines() if ln.startswith("const cards=(g,it,shown)=>{") )
+    assert "--lc:${cardColor(SLOTS,x)}" in card, "the card draws no spec colour"
 
 
 TOKENS_CSS = SCRIPTS / "web-tokens.css"

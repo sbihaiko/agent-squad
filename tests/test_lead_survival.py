@@ -222,10 +222,11 @@ def test_a_chart_range_is_stored_under_its_own_key_and_never_in_the_board_record
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_chart_key_carries_the_range_only(hub):  # noqa: F811
-    """#1275, #1247: the key owns the Start and End; the timeframe and the Type stay the visit's choice."""
+    """#1275, #1247: the key owns the End only. The Start opens on Todo every visit, so a range a reader chose once never
+    becomes the default (owner ask); the timeframe and the Type stay the visit's choice too."""
     body = re.search(r"chartSave=\(\)=>\{try\{localStorage\.setItem\(CHART_KEY,JSON\.stringify\((\{.*?\})\)\)\}catch",
                      _page_line(hub, "const CHART_KEY="))
-    assert body and body.group(1) == "{a:LT.a,b:LT.b}", "the chart key carries the Start and End only"
+    assert body and body.group(1) == "{b:LT.b}", "the chart key carries the End only, never the Start"
     onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
     for ctl in ("ltr", "lty"):
         line = next(row for row in onchange.splitlines() if f'"{ctl}"' in row)

@@ -3046,29 +3046,23 @@ SLOTS = {"window_s": 14400, "start": W0 - 14400, "end": W0, "label": "Run slots 
          "gaps": [{"start": W0 - 1800, "end": W0, "reason": "no run record"}]}
 
 
-def test_the_slots_chart_is_drawn_as_its_own_panel_above_the_trip_bar():
-    """The loop state panel is gone, so the chart stands on its own: it is the tab's first view, and its column at 62.5% of
-    the window is the window's own."""
+def test_the_run_slots_panel_is_gone_from_the_page():
+    """The owner removed the run-slots panel: the tab reads the load line and the trip bar, and no slot chart stands above
+    them. The slots payload may still reach the page; no view draws it."""
     out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'slots': SLOTS, 'trip': TRIP})},new Set())")
-    assert "id=profslots" in out, "the chart draws with no loop state panel above it"
-    assert "id=profstrip" not in out, "the chart does not bring the loop state panel back"
-    assert out.index("id=profslots") < out.index("id=proftrip"), "the chart stands above the trip bar"
-    assert "H62.50" in out, "the boundary at 62.5% of the window is the chart's own column"
+    assert "id=profslots" not in out, "the run-slots panel is still drawn"
+    assert "Run slots in use" not in out and "at most" not in out, "a caption of the removed panel is still drawn"
+    assert "id=proftrip" in out, "the trip bar went with the panel"
 
 
-def test_the_slots_chart_draws_the_ceiling_and_names_its_gap():
-    part = run_js(f"profHtml({json.dumps({**VIEW, 'slots': SLOTS})},new Set())")
-    assert re.search(r'class="lscap"', part), "the run cap is drawn as the ceiling"
-    assert re.search(r"#profslots \.lscap\{[^}]*stroke-dasharray", page()), "the ceiling is dashed, so it never reads as the line"
-    assert "H75.00" in part, "a change of the cap is a step at its own time"
-    assert "no run record" in part, "a part with no readable record names its reason"
-    assert "at most 2 of a ceiling of 3" in part, "the caption names the peak and the ceiling"
-
-
-def test_the_slots_chart_draws_its_zero_line_with_no_run_in_the_window():
-    empty = {**SLOTS, "rows": [], "peak": 0}
-    part = run_js(f"profHtml({json.dumps({**VIEW, 'slots': empty})},new Set())")
-    assert "id=profslots" in part and "no run record" in part, "a window with no run still draws its gap and its ceiling"
+def test_the_cpu_sampling_switch_ends_the_page():
+    """The switch that turns sampling on or off follows the readings it controls: it stands after the load line, the trip
+    bar and the hot-spot table, never above them."""
+    on = run_js(f"profHtml({json.dumps({**VIEW, 'slots': SLOTS, 'trip': TRIP})},new Set())")
+    assert re.search(r'role=switch aria-label="CPU sampling"', on), "the switch left the page"
+    assert on.index("id=proftrip") < on.index('aria-label="CPU sampling"'), "the switch stands above the trip bar"
+    assert on.index("id=proft") < on.rindex('aria-label="CPU sampling"'), "the switch stands above the hot-spot table"
+    assert re.search(r"<span class=lpl[^>]*>CPU sampling</span>", on), "the switch lost its label"
 
 
 # ---------------------------------------------------------------- the wall time of the steps and the gates (#1748)
