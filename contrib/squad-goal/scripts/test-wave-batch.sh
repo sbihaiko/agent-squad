@@ -104,4 +104,14 @@ r=$(landq run-m); rc=$?
 (cd "$T/co" && SG_STATE=$T/st SG_GATE_KIND=fast bash "$T/s/gate.sh" true) >/dev/null 2>&1
 [ "$(tail -1 "$T/st/gate-history" 2>/dev/null | awk -F'\t' '{ print $NF }')" = - ] && ok "g: a gate with no batch keeps the empty run id" || ko "g: row '$(tail -1 "$T/st/gate-history" 2>/dev/null)'"
 
+# h (#2068): a queue marker that is empty, or a run whose wave is held red (#1961), is never claimed into a batch.
+rm -f "$T/st/auto"/wland-*; mkrun run-n 71; mkrun run-o 72; mkrun run-p 73; : > "$T/st/auto/wland-run-o.queued"; queue run-p
+printf 'sha\n' > "$T/st/auto/tipred-wave_run-p.red"; reset
+r=$(landq run-n); rc=$?
+[ $rc = 0 ] && [ "$(cut -d' ' -f1 "$TIPLOG")" = - ] && ok "h: no batch forms from an empty marker or a held-red wave" || ko "h: exit $rc, gates '$(cat "$TIPLOG")': '$r'"
+[ "$(closes)" = "71 " ] && ok "h: only the leading run's issue closes" || ko "h: closes '$(closes)': '$r'"
+[ -e "$T/st/auto/wland-run-o.queued" ] && ko "h: the empty marker stays" || ok "h: the empty marker goes"
+[ -e "$T/st/auto/wland-run-p.queued" ] && ok "h: the held-red run keeps its marker" || ko "h: the held-red run's marker went"
+rm -f "$T/st/auto/tipred-wave_run-p.red"
+
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

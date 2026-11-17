@@ -280,4 +280,24 @@ run_cycle 1
 [ -e "$ST/auto/wland-run-15.queued" ] && ko "a landed run keeps its queue marker" || ok "a run whose pass got the lock is not queued"
 cp "$T/wave.stub2" "$S/wave.sh"
 
+# 16) (#2068) every run that is ready in one cycle joins one batch: the cycle writes each run's queue marker, and then starts
+# one landing pass, so the pass reads the markers of every run of that cycle. A run whose wave is held red never leads it.
+cat > "$S/wave.sh" <<EOS
+#!/bin/bash
+echo "wave \$1 \$2 sees \$(cd "$ST/auto" && /bin/ls *.queued 2>/dev/null | tr '\n' ' ')" >> "$STEPS"
+exit 0
+EOS
+chmod +x "$S/wave.sh"; rm -f "$ST"/auto/wland-*
+run run-16a pass; run run-16b pass; run run-16c pass
+for x in a b c; do printf 'wave/run-16%s\n' "$x" > "$ST/auto/wave-run-16$x"; done
+printf '%s\n%s\n%s\n' "$T/run-16a" "$T/run-16b" "$T/run-16c" > "$ST/active-runs.txt"
+printf 'sha\n' > "$ST/auto/tipred-wave_run-16a.red"
+run_cycle 1
+[ "$(/usr/bin/grep -c '^wave land' "$STEPS")" = 1 ] && ok "one cycle starts one landing pass" || ko "landing passes: '$(cat "$STEPS")'"
+/usr/bin/grep -q '^wave land run-16b sees wland-run-16a.queued wland-run-16b.queued wland-run-16c.queued $' "$STEPS" \
+  && ok "the pass reads the queue marker of every run of its cycle, led by a run not held red" || ko "steps: '$(cat "$STEPS")'"
+ls "$ST/auto" | /usr/bin/grep -q '\.queued\.' && ko "a queue marker's temporary file stays" || ok "no temporary queue file stays"
+/usr/bin/grep -qE '> *"\$ran\.queued"' "$S/watch.sh" && ko "watch.sh writes the queue marker in place" || ok "watch.sh writes the queue marker by a move"
+rm -f "$ST"/auto/wland-* "$ST/auto/tipred-wave_run-16a.red"; cp "$T/wave.stub2" "$S/wave.sh"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
