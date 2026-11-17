@@ -28,17 +28,34 @@ def wait_of(card):
     return Wait(queued, None)
 
 
-def sync_waits(binding, cards, batch=BATCH):
-    """Send each card's Wait only where it differs from the carried value, at most `batch` writes per call.
-    Returns {issue: Wait} for the writes made."""
+def _pending(binding, cards):
+    """Each card on the board whose Wait differs from the carried value, as (issue, item id, Wait)."""
     carried = binding.read_waits()
     on_board = binding.items()
-    written = {}
+    pending = []
     for issue, facts in sorted(cards.items(), key=lambda kv: int(kv[0])):
         if issue not in on_board: continue
         answer = wait_of(facts)
-        if carried.get(issue) == answer.name: continue
-        if len(written) >= batch: break
-        binding.write_wait(on_board[issue], answer.name)
+        if carried.get(issue) != answer.name: pending.append((issue, on_board[issue], answer))
+    return pending
+
+
+def sync_waits(binding, cards, batch=BATCH):
+    """Send each card's Wait only where it differs from the carried value, at most `batch` writes per call.
+    Returns {issue: Wait} for the writes made."""
+    written = {}
+    for issue, item, answer in _pending(binding, cards)[:batch]:
+        binding.write_wait(item, answer.name)
         written[issue] = answer
     return written
+
+
+def wait_pass(binding, cards, batch=BATCH):
+    """Send every changed Wait of one pass, in batches of at most `batch` writes. Returns the batches, each {issue: Wait}."""
+    pending = _pending(binding, cards)
+    batches = []
+    for start in range(0, len(pending), batch):
+        chunk = pending[start:start + batch]
+        for _, item, answer in chunk: binding.write_wait(item, answer.name)
+        batches.append({issue: answer for issue, _, answer in chunk})
+    return batches
