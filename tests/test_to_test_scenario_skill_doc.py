@@ -67,4 +67,5 @@ def test_the_skill_writes_no_wave_label():
 
 
 def test_the_skill_keeps_the_blocked_by_edge_of_a_setup_case():
-    assert "## Blocked by" in SKILL and "native" in SKILL.lower()
+    assert "order of a case comes from its" in SKILL, "the setup case orders a case by its `## Blocked by` edge (#2132)"
+    assert "`## Blocked by` edge" in SKILL and "native" in SKILL.lower()

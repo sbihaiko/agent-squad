@@ -203,6 +203,19 @@ def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
     assert gh.ops().index("ensure_label") < gh.ops().index("create_issue")
 
 
+def test_publishing_again_strips_a_wave_label_an_older_publish_wrote():
+    plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
+    first = tts.publish(plan, FakeGitHub(), board=True)
+    number = first["issues"]["HOME-01"]
+    gh = FakeGitHub(states={number: {"state": "open", "verdict": None,
+                                    "labels": ["wave:02", "Test-Case", "keep-me"]}})
+    tts.publish(plan, gh, board=True, saved=first["map"])
+    labels = [kw["labels"] for kw in gh.of("update_issue") if kw["number"] == number]
+    assert labels, "a known record is updated, never created twice"
+    assert not any(x.startswith("wave:") for x in labels[-1]), "the label an older publish wrote comes off (#2132)"
+    assert "keep-me" in labels[-1], "a label somebody added stays"
+
+
 # --- writing a run's results back ---
 
 def _run(results, **over):
