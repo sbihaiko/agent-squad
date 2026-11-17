@@ -1,10 +1,11 @@
 # The project settings for this repository (squad/project_settings.py): only the keys the owner changed.
-# Owner ruling: four runs and twelve children live at once. Each live run re-reads its whole context on every turn, so
-# concurrency multiplies the cache read. The owner watches the CPU at four.
+# Owner ruling: three runs and twelve children live at once. Each live run re-reads its whole context on every turn, so
+# concurrency multiplies the cache read. The owner watches the CPU at three. Three runs match the three gate slots: at
+# four, a child's entry gate waited behind its siblings and hit its fifteen-minute bound unproven.
 # The ceiling bounds every child's grant, and the owner granted a child cap up to 30 USD: a lower ceiling refuses the
 # dispatch node's own grant with spend_over_ceiling.
 caps:
-  runs: 4
+  runs: 3
   children: 12
   gates: 3                          # one loop gate of three workers at a time on this 8-core machine (owner): at six slots
                                     # three gates ran at once and the load average passed 140; at two a gate ran slow (#1716)
