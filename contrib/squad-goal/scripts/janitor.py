@@ -27,6 +27,7 @@
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  U  an auto/disp-<n> marker whose named run or request is no longer live (no active-runs.txt entry and no run folder under the run root names it) and whose issue's ledger records the owner's rearm newer than the marker's mtime, with no pending card write: the marker is dropped (#1586), so the frontier answers the issue startable again. The card is rule R's and the dispatch count is rule O's, so U writes one line and nothing else; a live run, an older rearm and a pending card write (ADR-0165) each hold the marker. `auto/taken-*` is rule T's own case (ADR-0166) and is never read.
+ V  a wave marker of a run that ended: `auto/wave-<run>`, `wave-start-<run>` and `wave-pause-<run>` stand for the run's landing pass, and the loop lands a wave only for a line of active-runs.txt. A run that left the listing can never land it again, and the marker stayed for ever (1325 of them, #2140). The pass drops the markers of a run no line names and no live process works, and names each one; a listed run's wave, and a folder a live process works, stay.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
@@ -677,6 +678,22 @@ lines = [r for r in names if r in reaped or r in keep]
 # list, keeps every line this pass's read did not name (a run a launch started while the pass ran), writes a temporary file
 # beside the list and renames it into place (ADR-0030). A rewrite with nothing to change writes nothing.
 if not dry: _active_runs_module().rewrite(act, names, lines)
+# V: a wave marker `auto/wave-<run>` stands for a run's landing pass, and only a line of active-runs.txt makes the loop land
+# that wave (watch.sh reads the run from the listing): a run that left the listing can never land it again, so its marker stays
+# for ever (1325 of them on 2026-11-17, #2140). The pass drops the wave markers of a run no line names and no live process
+# works, and names each one; the wave of a live run, or of a folder a live process works, stays.
+if (st / "auto").is_dir():
+    live_names = set()
+    for r in lines:
+        lf = folder(r); live_names.add(lf.name)
+        li = live.get(lf.name) or read(lf)
+        if li: live_names.add(li["run_id"])
+    for wp in sorted((st / "auto").glob("wave-*")):
+        wrun = next((wp.name[len(k):] for k in ("wave-start-", "wave-pause-", "wave-") if wp.name.startswith(k)), "")
+        if not wrun or wrun in live_names: continue
+        if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(co / "runs" / wrun)): continue
+        say(f"WAVE-DROPPED {wp.name}: its run is not in active-runs and no process works its folder, so the wave can no longer land")
+        if not dry: wp.unlink(missing_ok=True)
 # S: the counted ceiling beside the per-run reap. B, J and C each kill the dashboard of one run the pass knows about, so when any of
 # them stops working for any other reason -- a run that left active-runs.txt, a record the pass cannot read -- nothing bounds the
 # count and the dashboards of finished runs accumulate (the freeze of 2026-10-13 left 41 alive). This reads the process table the

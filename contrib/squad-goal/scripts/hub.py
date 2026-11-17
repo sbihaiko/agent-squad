@@ -2763,8 +2763,11 @@ def card_waits(store, numbers):
 
 def card_wait(card, carried=None):
     """The card's Wait: the value the loop wrote to the field when there is one, else the loop's rule (board_wait.wait_of).
-    An unread input stays unknown and names what is missing; a live run keeps its name beside the Wait."""
-    answer = board_wait.wait_of(card)
+    A card a dispatch asked for answers through `board_wait.dispatch_state` (#2128): Doing with `run start` from the
+    dispatch's settled write until the run's first call, and Doing with no reason after it. An unread input stays unknown
+    and names what is missing; a live run keeps its name beside the Wait."""
+    dispatch = board_wait.dispatch_of(card)
+    answer = dispatch[1] if dispatch else board_wait.wait_of(card)
     wait, missing = (answer.name, answer.missing) if answer.name == "unknown" else (carried or answer.name, None)
     return {"wait": wait, "missing": missing, "run": card.get("run") if card.get("run_live") else None}
 

@@ -133,4 +133,4 @@ def test_the_narrow_layout_fixes_the_columns_and_wraps_the_name(hub):
 def test_the_wall_time_tables_scroll_inside_their_section_on_a_phone(hub):
     """The wall-time view (#1748) draws eight columns of gates; on a 390 px screen they scroll inside their own section, so no
     row widens the page and every column stays reachable."""
-    assert re.search(r"#profb #profwall\{[^}]*overflow-x:auto", hub.MOBILE_PAGE), "the wall-time tables scroll in their section"
+    assert "#profwall" not in hub.MOBILE_PAGE, "the removed wall-time panel leaves no rule behind"

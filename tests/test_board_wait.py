@@ -89,6 +89,13 @@ def test_a_live_run_answers_live_run_before_a_queued_wait():
     assert answer.name == "live run"
 
 
+def test_a_held_card_answers_its_hold_even_with_a_settled_board_fact():
+    answer = board_wait.wait_of(card(board={"state": "written", "column": "Doing"}, column="Doing", called=False,
+                                     labels=["frozen:owner"], queued="gate slot"))
+
+    assert answer.name == "owner"
+
+
 def test_an_owner_freeze_answers_owner_and_never_a_queued_work_wait():
     answer = board_wait.wait_of(card(labels=["frozen:owner"], queued="gate slot"))
 
@@ -189,7 +196,46 @@ def test_a_dropped_write_holds_the_card_where_it_stood_and_names_the_refusal(tmp
     assert column == "Todo" and wait.name == "unknown" and wait.missing == "the card write is dropped"
 
 
+def test_an_unsettled_write_answers_unknown_with_the_refusal_and_never_run_start():
+    for state in ("pending", "dropped"):
+        answer = board_wait.wait_of(card(board={"state": state, "column": "Doing"}, column="Doing", called=False))
+
+        assert answer.name == "unknown" and answer.missing == f"the card write is {state}"
+
+
 def test_a_card_with_no_board_fact_holds_where_it_stood_and_names_the_missing_fact():
     column, wait = board_wait.dispatch_state(None, stood="Todo", called=False)
 
     assert column == "Todo" and wait.name == "unknown" and wait.missing == "no board fact"
+
+
+def test_a_pass_writes_run_start_on_the_card_the_dispatch_settled(tmp_path):
+    ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1")
+    ledger(tmp_path, "boardw", "a/b#7", "run-1", "Doing", "autobug dispatch")
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+    binding = Binding(carried={}, items={"7": "I7"})
+
+    board_wait.sync_waits(binding, {"7": card(board=board, column="Doing", called=False)})
+
+    assert binding.calls == [("I7", "run start")]
+    assert board_wait.dispatch_state(board, stood="Todo", called=False)[0] == "Doing"
+
+
+def test_a_pass_writes_no_run_start_on_a_card_no_dispatch_asked_for():
+    binding = Binding(carried={}, items={"8": "I8"})
+
+    board_wait.sync_waits(binding, {"8": card(queued=None)})
+
+    assert binding.calls == [("I8", "none")]
+
+
+def test_the_first_call_writes_no_reason_and_moves_no_column(tmp_path):
+    ledger(tmp_path, "board", "a/b#7", "run-1", "Doing", "/req/1")
+    ledger(tmp_path, "boardw", "a/b#7", "run-1", "Doing", "autobug dispatch")
+    board = json.loads(ledger(tmp_path, "read", "a/b#7", "board").stdout)
+    binding = Binding(carried={"7": "run start"}, items={"7": "I7"})
+
+    board_wait.sync_waits(binding, {"7": card(board=board, column="Doing", called=True)})
+
+    assert binding.calls == [("I7", "none")]
+    assert board["column"] == "Doing", "the first call clears the reason and moves no column"

@@ -34,12 +34,13 @@ function profLoad(v){
   return b>a?`<rect class=plg x="${px(a)}" y="0" width="${(PROF_LOAD_W*(b-a)/span).toFixed(1)}" height="${PROF_LOAD_H}" title="${esc(String(g.reason||"no load record"))}"></rect>`:""}).join("");
  const segs=(v.segments||[]).map(seg=>seg.length>1?`<polyline class=pll points="${seg.map(p=>px(p.at)+","+py(p.load)).join(" ")}"></polyline>`
   :seg.length?`<circle class=pld cx="${px(seg[0].at)}" cy="${py(seg[0].load)}" r="2.5" title="${esc("load "+Number(seg[0].load).toFixed(2)+" at "+profStamp(seg[0].at))}"></circle>`:"").join("");
- const cores=v.cores||1,core=`<line class=plc x1="0" y1="${py(cores)}" x2="${PROF_LOAD_W}" y2="${py(cores)}"><title>The machine's ${cores} cores</title></line>`;
+ const cores=v.cores||1,cy=py(cores),core=`<line class=plc x1="0" y1="${cy}" x2="${PROF_LOAD_W}" y2="${cy}"><title>Saturation: the machine's ${cores} cores</title></line>`
+  +`<text class=plct x="${PROF_LOAD_W-6}" y="${Math.max(11,(Number(cy)-5)).toFixed(1)}" text-anchor=end>saturation &middot; ${cores} cores</text>`;   // the owner asked for one horizontal line that names saturation
  const gap=(v.gap_s||0)>0?`, ${profTime(v.gap_s)} with no load record, drawn as a gap`:"";
- const aria=`Machine load over the last ${profTime(span)}: peak ${Number(v.peak||0).toFixed(2)} against ${cores} cores${gap}`;
+ const aria=`Machine load over the last ${profTime(span)}: peak ${Number(v.peak||0).toFixed(2)} against a saturation of ${cores} cores${gap}`;
  return `<section id=profload><div class=lsh><h3>${esc(v.label||"Machine load")}</h3></div>`
   +`<svg viewBox="0 0 ${PROF_LOAD_W} ${PROF_LOAD_H}" role=img aria-label="${esc(aria)}" preserveAspectRatio=none>${gaps}${segs}${core}</svg>`
-  +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window${gap}.</p></section>`}
+  +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window; the dashed line is saturation at ${cores} cores${gap}.</p></section>`}
 // The run slots in use (#1766): a step line of the slots a run holds against the cap as its dashed ceiling. The hub folds
 // the line, its ceiling steps and its gaps on the window the route folds the loop state for; the page draws them at the
 // same percentages of the same start and end, so a column of the page is one instant in both views.
@@ -62,20 +63,9 @@ function profSlots(s){
 // The trip of an issue (#1769): one stacked bar from the hub's fold. A stage is one segment, its width its share of the
 // medians; its hover and the table under the bar name the median and the p90. Fewer than three deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
-// The wall time of the loop's steps and gates (#1748): the slow cycle's time at the top, each lane's steps by total, the steps
-// still in flight with their age, and the gates by kind and outcome with their mean load at the start and at the finish.
-let wallWin=3600;   // the wall-time view's window: its own three controls choose it, and the poll names it
+// The wall-time view of the loop's steps and gates was removed at the owner's request: the panel read as noise over the
+// trip bar and the hot spots, and the API still carries the data for a later view.
 const profLoadNum=x=>x==null?"&#8212;":x.toFixed(2);
-function profWall(w,windows){
- if(!w)return "";
- const picks=(windows||[]).map(s=>`<button type=button data-wall="${s.s}" aria-pressed=${s.s===w.window_s}>${esc(s.label)}</button>`).join("");
- const c=w.cycle||{},cyc=c.n>0?`The slow cycle takes a median of ${profTime(c.median_s)} and a p90 of ${profTime(c.p90_s)}, over ${c.n} cycle${c.n===1?"":"s"}.`:"Fewer than two heartbeats in the window: no cycle time.";
- const steps=[...(w.slow||[]),...(w.fast||[])].map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td>${r.count}</td><td>${profSecs(r.total_s)}</td><td>${profSecs(r.median_s)}</td><td>${profSecs(r.p90_s)}</td></tr>`)
-  .concat((w.running||[]).map(r=>`<tr><td class=pn><span class=pnm>${esc(r.lane)}</span></td><td>${esc(r.name)}</td><td colspan=4>running for ${profSecs(r.age_s)}</td></tr>`));
- const gates=(w.gates||[]).map(g=>`<tr><td class=pn><span class=pnm>${esc(g.kind)}</span></td><td>${esc(g.outcome)}</td><td>${g.count}</td><td>${profSecs(g.total_s)}</td><td>${profSecs(g.median_s)}</td><td>${profSecs(g.p90_s)}</td><td>${profLoadNum(g.load_start)}</td><td>${profLoadNum(g.load_finish)}</td></tr>`);
- return `<section id=profwall><h3>Wall time of each step</h3><div role=group aria-label="Wall time window">${picks}</div><p class=tpn>${cyc}</p>`
-  +`<table id=profsteps aria-label="Wall time of each loop step, by lane"><thead><tr><th>Lane</th><th>Step</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th></tr></thead><tbody>${steps.join("")||`<tr><td colspan=6>no step finished in this window</td></tr>`}</tbody></table>`
-  +`<table id=profgates aria-label="Wall time of each gate run, by kind and outcome"><thead><tr><th>Kind</th><th>Outcome</th><th>Count</th><th>Total</th><th>Median</th><th>p90</th><th>Load at start</th><th>Load at finish</th></tr></thead><tbody>${gates.join("")||`<tr><td colspan=8>no gate run in this window</td></tr>`}</tbody></table></section>`}
 function profTrip(t){
  if(!t)return "";
  const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
@@ -96,19 +86,18 @@ function profNote(v){
   +(v.coverage==null?"":v.coverage>=1?"Read every process.":`Read ${(100*v.coverage).toFixed(1)}% of the processes.`)
   +" A process that lives between two readings is not counted."}
 function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>${!v.write&&v.reason?`<p class=lpr>${esc(v.reason)}</p>`:""}`,slots=profSlots(v.slots),load=profLoad(v.load),wall=profWall(v.wall,v.wall_windows),trip=profTrip(v.trip);
- if(!v.on||!v.tree)return head+slots+load+wall+trip;   // the file views read files only, so the switch does not gate them
+ const head=`<div class=lph><h2>Loop</h2>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>${!v.write&&v.reason?`<p class=lpr>${esc(v.reason)}</p>`:""}`,slots=profSlots(v.slots),load=profLoad(v.load),trip=profTrip(v.trip);
+ if(!v.on||!v.tree)return head+slots+load+trip;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+slots+load+wall+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+slots+load+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")}
 // profiler:end
 let profV=null,profErr="";const profOpen=new Set();
-function profDraw(){if(!profV)return;const b=document.getElementById("profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof"),wb=!!a&&a.hasAttribute&&a.hasAttribute("data-wall");
+function profDraw(){if(!profV)return;const b=document.getElementById("profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
  b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
- const t=sw?b.querySelector("[data-prof]"):wb?b.querySelector(`[data-wall="${a.dataset.wall}"]`):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin+"&ww="+wallWin)).json();profDraw()}catch(e){}}
+ const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
+async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
 async function profPost(on,client){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 function profMount(client){document.getElementById("profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on,client);return}
- const wb=e.target.closest("button[data-wall]");if(wb){wallWin=Number(wb.dataset.wall);profPoll();return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});}
