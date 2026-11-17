@@ -1600,7 +1600,16 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # 5 (#1802, spec 1797): the tip's check is unproven. The entry runs no battery by default, so this check is the one proof
     # of the wave's children: an unproven one never moves the base. The wave waits, blames no child and counts no try; the
     # check runs again on a later pass, and the age cap bounds the wait (ADR-0164).
-    [ $rc = 5 ] && { echo "WAVE WAIT $w: the tip's check is unproven, and an unproven tip never lands; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
+    # (#2149) The age cap is what frees the run: past it, a wave that never lands would hold its issues for ever, because no
+    # other pass ends a run whose wave waits. The capped pass puts each issue the wave still holds back in the queue and ends
+    # the run, as the capped-empty landing does; an unproven tip still never lands.
+    [ $rc = 5 ] && { if [ "$capped" = 1 ]; then
+        for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
+          wave_fact "$run" "$n" refused "the tip's check stayed unproven through the wave's age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s), so the wave never landed with this child" keep
+          cap_hold "$run" "$rd" "$n" "the tip's check stayed unproven through the wave's age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): it is back in the queue";; esac; done
+        retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
+      fi
+      echo "WAVE WAIT $w: the tip's check is unproven, and an unproven tip never lands; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
     tipobl=
     [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
