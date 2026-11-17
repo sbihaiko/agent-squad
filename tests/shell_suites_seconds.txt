@@ -10,6 +10,7 @@ test-autofrontier-spec-first.sh 7.18
 test-autohunt.sh 9.69
 test-autorefuse.sh 1.79
 test-basecheck.sh 3.73
+test-basered.sh 0.36
 test-board-add.sh 8.13
 test-board-clear-run.sh 0.65
 test-board-define.sh 0.79

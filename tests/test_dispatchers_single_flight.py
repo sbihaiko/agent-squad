@@ -60,7 +60,7 @@ def _scripts(tmp_path, cluster_sleep):
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
     for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py",
-                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py", "loopbug.sh"):
+                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py", "loopbug.sh", "basered.sh"):
         (d / name).write_text((SCRIPTS / name).read_text())
     (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
     (d / "startability.sh").write_text(STARTABILITY)

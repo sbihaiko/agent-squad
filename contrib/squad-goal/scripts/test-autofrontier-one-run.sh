@@ -52,7 +52,7 @@ printf 'import os,sys\nopen(os.environ["LAUNCHLOG"], "a").write("launch\\n")\nif
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,issue_ledger.py,workbranches.sh,loopbug.sh,watchd.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,issue_ledger.py,workbranches.sh,loopbug.sh,watchd.sh,basered.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
 # The issues an open work branch names (#361, workbranches.sh): the real read is `git ls-remote` against github.com, which no
 # fixture may reach, so the stand-in answers WORK_ISSUES (none unless a case sets it) (#756).
 printf '#!/bin/bash\nsg_work_issues() { echo "${WORK_ISSUES:-}"; }\n' > "$T/scripts/workbranches.sh"
