@@ -17,6 +17,7 @@ stub copies the list there, so a case proves the pass had not rewritten it yet.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import threading
@@ -24,12 +25,23 @@ import time
 
 import pytest
 
-from squad import caps
+from squad import caps, record
 from tests.test_janitor_card_done_base import janitor, sandbox
-from tests.test_janitor_zombie_line import dead_pid, dead_run, listed
+from tests.test_janitor_zombie_line import dead_pid, listed
 
 RUN = "run-stacked"
 RACE = "run-race"
+
+
+def dead_zombie(folder: pathlib.Path, pid: int) -> None:
+    """The dead run of the zombie suite, under its own run id: the open wave of `run-stacked` never stands for it."""
+    rec = folder / "record.jsonl"
+    r = record.Record(rec)
+    r.append("run_start", run_id=folder.name, graph_name="g", graph_hash="h", engine_options={}, root="main", plan=["main"])
+    r.append("call_start", node="main", entry=1, session="s", pid=pid, limit=None, started_at=time.time() - 3600)
+    old = time.time() - 3600
+    for p in (rec, folder / "request.txt"):
+        os.utime(p, (old, old))
 
 
 def appended_at_the_first_gh_call(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -60,7 +72,7 @@ def test_a_line_appended_during_the_pass_survives_its_rewrite(tmp_path):
     zombie = tmp_path / "co/runs/run-zombie"
     zombie.mkdir(parents=True)
     (zombie / "request.txt").write_text("plain request of run-zombie\n")
-    dead_run(tmp_path, zombie, dead_pid())
+    dead_zombie(zombie, dead_pid())
     act = tmp_path / "st/active-runs.txt"
     act.write_text(f"{RUN}\nrun-zombie\n")
     appended_at_the_first_gh_call(tmp_path)
@@ -71,7 +83,19 @@ def test_a_line_appended_during_the_pass_survives_its_rewrite(tmp_path):
     seen = (tmp_path / "st/race.seen").read_text()
     assert seen.split() == [RUN, "run-zombie"], f"the append did not land after the pass read the list: {seen!r}"
     got = listed(act)
-    assert got == [RACE], f"the pass rewrote the list from its own stale read and lost the launched run: {got}"
+    assert got == [RUN, RACE], f"the pass rewrote the list from its own stale read and lost the launched run: {got}"
+
+
+@pytest.mark.heavy
+def test_a_finished_run_line_leaves_the_list_on_the_pass_that_reads_it(tmp_path):
+    """#2138: a run whose verdict is final, with no wave standing for it and no process or lease naming it, leaves
+    active-runs on the pass that reads it. The line is gone from the rewrite, never merely from the pass's own listing."""
+    sandbox(tmp_path, "echo 0")
+    act = tmp_path / "st/active-runs.txt"
+    janitor(tmp_path, SG_SQUAD=str(pathlib.Path(__file__).resolve().parents[1]),
+            SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
+    got = listed(act)
+    assert got == [], f"a finished run kept its active-runs line, so it still holds a child room (#2138): {got}"
 
 
 @pytest.mark.heavy

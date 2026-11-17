@@ -259,9 +259,16 @@ def test_the_wave_entry_still_moves_a_code_review_card_to_code_complete(tmp_path
 def test_a_finished_run_still_reads_its_card_on_the_pass_that_drops_its_line(tmp_path):
     """#2144: a run whose verdict is final leaves active-runs, and the same pass still reads it for its card.
 
-    The drop ran before the card pass read the run, so the issue sat at no column and nothing moved it again."""
+    The drop ran before the card pass read the run, so the issue sat at no column and nothing moved it again. The journal
+    proves the order: the pass names the drop, the card pass names the run it read after that drop, and one invocation is
+    one pass, so the card read the run this pass dropped rather than a later pass's."""
     sandbox(tmp_path, "echo 0", landed=True)
     janitor(tmp_path)
+    journal = (tmp_path / "st/cycle.log").read_text()
     log = writes(tmp_path)
+    assert "FINISHED-RUN run-stacked" in journal, f"the finished run never left active-runs on this pass: {journal}"
+    assert "FINISHED-RUN-CARD run-stacked" in journal, (
+        f"the card pass did not read the run whose line this pass dropped, so its card stays at no column: {journal}")
     assert f"ADD o 4 Code Complete {N}" in log, f"the card did not reach Code Complete: {log}"
-    assert (tmp_path / "st/active-runs.txt").read_text().split() == [], "the finished run kept its active-runs line"
+    assert (tmp_path / "st/active-runs.txt").read_text().split() == [], (
+        "the finished run kept its active-runs line, so it still holds the child room rule #2138 won")

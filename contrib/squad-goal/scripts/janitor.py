@@ -486,6 +486,14 @@ def marker_text(p):   # #794: the text of a marker, or None when it vanished bef
     try: return p.read_text().strip()
     except FileNotFoundError: return None
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
+def card_read_of_dropped(r, f, i):   # #2144: one site pairs the two lists a run dropped from active-runs needs: `keep`, which the
+    # card pass and rule Q read this pass, and `dropped`, which the rewritten list leaves out. A site that writes one without the
+    # other either loses the run's card or keeps the line that holds the child room the frontier needs (#2138, ADR-0030), so no
+    # other site writes `dropped`, and one read of the request's issues answers the held set and the landed set.
+    global held, landed_n
+    ri = req_issues(f)
+    if i["landed"]: landed_n |= ri
+    held |= ri | i["acc"]; keep.append(r); dropped.add(r)
 def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
     try: c = p.read_text().strip()
     except OSError: return False
@@ -587,8 +595,7 @@ for r in names:
         if i["idle"] > 300 and not open_wave(n, i["run_id"]) \
                 and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
-            if i["landed"]: landed_n |= req_issues(f)
-            held |= req_issues(f) | i["acc"]; keep.append(r); dropped.add(r)   # the card pass and rule Q still read the run's record (#2138), and the rewritten list leaves its line out (#2144)
+            card_read_of_dropped(r, f, i)   # the card pass and rule Q still read the run's record (#2138), and the rewritten list leaves its line out (#2144)
             continue
         if i["idle"] > 180:
             for q in inside(f):
@@ -1258,6 +1265,7 @@ def reconcile_board():
     runs = []; newest = {}   # a card follows the newest run that holds its issue: an older run's column never overrides it, whatever its rank (#619)
     for r in keep:   # a run whose line this pass dropped from active-runs is in `keep` too, so it still settles its card: none of its issues is closed, so the closed-issue Done rule never answered for it (#2138, #2144)
         f = folder(r); i = read(f); nums = req_issues(f)
+        if r in dropped: say(f"FINISHED-RUN-CARD {r}: the card pass read the run this pass left out of active-runs (#2144)")
         if i: nums |= i["acc"]
         age = (1, "") if i is None else (0, str(i["run_ts"]))   # a run with no record yet (a dispatch marker) is the newest
         runs.append((f, i, nums, age))
