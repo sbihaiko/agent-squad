@@ -541,14 +541,14 @@ moved red
 [ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && ok "dev moved to B with CI red: the pass refuses (#1495)" || ko "moved red: rc $rc, stg $(tip stg)"
 /usr/bin/grep -q "^$mb " "$SG_STATE/promote-pass.tips" && ! /usr/bin/grep -q "^$ma " "$SG_STATE/promote-pass.tips" \
   && ok "the refusal marker names B, never the proved tip A (#1495)" || ko "moved red marker: A $ma, B $mb: $(cat "$SG_STATE/promote-pass.tips")"
-# The local-suite invocation keeps the local proof; the CI path names its proof word (fast for a tiered workflow, #1723,
+# The local-suite invocation keeps the local proof (one call since e2a654e78 removed the local delta proof); the CI path names its proof word (fast for a tiered workflow, #1723,
 # else ci), and the fast battery fallback calls the fast proof.
 nl=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 nw=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=$proof_word bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 nf=$(/usr/bin/grep -c 'SG_PROMOTE_PROOF=fast bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 na=$(/usr/bin/grep -c 'bash "$d/promote-stg.sh"' "$d/promote-pass.sh")
 # The tip gate's green local half is a second call of the CI path's word (#1927), beside the CI checks' own call.
-[ "$nl" = 2 ] && [ "$nw" = 2 ] && [ "$nf" = 1 ] && [ "$na" = 8 ] && ok "the local-suite calls pass the local proof, the CI path the fast or ci word, the fallback the fast word (#1723)" \
+[ "$nl" = 1 ] && [ "$nw" = 2 ] && [ "$nf" = 1 ] && [ "$na" = 5 ] && ok "the local-suite calls pass the local proof, the CI path the fast or ci word, the fallback the fast word (#1723)" \
   || ko "promote-stg.sh calls: local $nl, word $nw, fast $nf, all $na"
 
 # #1086: an interpreter that lacks a tool the suite runs refuses the pass before any suite runs. The refusal names the tool,
