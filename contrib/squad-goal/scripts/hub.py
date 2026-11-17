@@ -6385,7 +6385,7 @@ PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport 
 <script>if(matchMedia("(max-width: 600px)").matches&&localStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
 /*WEB_TOKENS*/
-:root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
+:root{--col-w:167px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body)/1.55 var(--font-ui);display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:280px;padding:12px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}#content{flex:1;min-width:0;overflow:auto}.pane{display:none;padding:12px 16px}.pane.on{display:block}.pane>h2{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:4px 0 8px}
