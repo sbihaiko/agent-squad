@@ -38,13 +38,22 @@ sg_todo_of() {   # the Todo issues of the rows on stdin; the go list's UNREAD an
 # write order, in board-transitions.<repo>.jsonl, so the last recorded write of a card is the latest column a writer
 # proved. A card whose last recorded write sets another column is no Todo signal until a later write sets Todo, whatever
 # the read answers. A record that cannot be read filters nothing, as for any filter that cannot run.
+# The record masks the read only while the read catches up, and a write lands seconds after it is made. A record older
+# than that window is a memory of a past write, never the truth now: the owner moves a card in GitHub's own view, and
+# that write is recorded by nobody, so a record that never expired hid every later hand move for good (#2151).
 sg_recorded_todo() {   # <issue> a line on stdin: print the ones the transition record does not contradict
   local f
   if [ -z "${SG_STATE:-}" ] || [ -z "${SG_REPO:-}" ]; then cat; return 0; fi
   f="$SG_STATE/board-transitions.${SG_REPO//\//_}.jsonl"
   python3 -c '
-import json, sys
-path, todo = sys.argv[1], sys.argv[2]
+import json, sys, time
+from datetime import datetime
+path, todo, trust = sys.argv[1], sys.argv[2], float(sys.argv[3])
+def stamp(r):
+    at = r.get("at")
+    if not isinstance(at, str): return None
+    try: return datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except ValueError: return None
 last = {}
 try:
     with open(path, encoding="utf-8") as f:
@@ -52,12 +61,17 @@ try:
             try: r = json.loads(line)
             except ValueError: continue
             n, to = r.get("issue"), r.get("to")
-            if n is not None and to is not None: last[str(n)] = to
+            if n is not None and to is not None: last[str(n)] = (to, stamp(r))
 except OSError:
     last = {}
+now = time.time()
 for n in sys.stdin.read().split():
-    if last.get(n, todo) == todo: print(n)
-' "$f" "${SG_TODO:-Todo}"
+    rec = last.get(n)
+    # A write named in the record with no instant is trusted: it is a writer that predates this bound, and the sure fix
+    # is the writer, never a reader that guesses an age.
+    if rec and (rec[1] is None or now - rec[1] <= trust) and rec[0] != todo: continue
+    print(n)
+' "$f" "${SG_TODO:-Todo}" "${SG_RECORD_TRUST_SECONDS:-300}"
 }
 sg_todo_cards() {
   local out; out=$(sg_board_rows "$@") || return 1
