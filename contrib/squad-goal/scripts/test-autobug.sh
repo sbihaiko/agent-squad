@@ -5,9 +5,12 @@ export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volum
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 # The free slots come from the machine-wide caps (squad/caps.py) of this checkout, with leases in the sandbox, never the real ones.
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
+# The nightly window is one wall-clock hour of the day (#1533): a pass that runs inside it holds every dispatch, so this
+# suite names the switch and its assertions never wait on the hour the gate happens to run.
+export SG_NIGHTLY_OFF=1
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/basered.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$d/issue_ledger.py" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/basered.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$d/issue_ledger.py" "$d/liveholds.py" "$T/s/"
 # The fixture reaches no network (#556): `sg_work_issues` runs `git ls-remote` on the repository's https remote,
 # and an unset remote took every pass to github.com -- 0.7 s per pass at best, a stall at worst. git refuses the
 # transport itself, so the read answers "no branch" at once, the same fact a 404 gives, and no pass leaves the machine.
@@ -1485,5 +1488,16 @@ r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "13 no refusal is named for a deleted card" || ko "13 cycle.log: $(cat "$T/st/cycle.log")"
 [ "$($G -c 'GONE-ISSUE .*#1228' "$T/st/cycle.log")" = 1 ] && ok "13 the deleted card is named once in the cycle log" || ko "13 no GONE-ISSUE line: $(cat "$T/st/cycle.log")"
 [ ! -e "$T/launched" ] && ok "13 nothing launches for a deleted card" || ko "13 a run launched for a deleted card"
+
+# 13b) (#2094) a card write the board refuses by its own rule (a backward move, exit 3) is recorded by the board and named in
+# the cycle log, and it files no bug: the rule working is no defect to fix, and filing it opened one issue per pass.
+rm -rf "$T/st/auto" "$T/st/state" "$T/st/gh-cache" "$T/launched"; rm -f "$T"/st/gh-*.json; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: the card keeps its column: a move back from Abandoned is refused (ADR-0143)" >&2; exit 3\n' "$T" > "$T/s/board.sh"
+chmod +x "$T/s/board.sh"; : > "$T/filed"; : > "$T/st/cycle.log"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "13b the pass whose card the rule refuses finishes" || ko "13b the pass exited $rc: '$r'"
+[ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "13b a board rule's refusal files no bug" || ko "13b filed: $(cat "$T/filed")"
+[ "$($G -c 'BOARD-REFUSED .*#1228' "$T/st/cycle.log")" = 1 ] && ok "13b the refused card is named once in the cycle log" || ko "13b no BOARD-REFUSED line: $(cat "$T/st/cycle.log")"
 
 rm -rf "$T"; exit $fail

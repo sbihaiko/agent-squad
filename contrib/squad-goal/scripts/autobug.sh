@@ -90,6 +90,13 @@ sg_write() {   # <refusal name> <address> <concerns> <guard> -- <command…>: th
     echo "$(date +%T) ${SG_GH_PASS:-autobug} GONE-ISSUE $name $addr: $(printf '%s' "$out" | tr '\n' ' ')" >> "$SG_STATE/cycle.log"
     return "$rc"
   fi
+  # A board rule's refusal is the rule working, not a defect to fix: board.py exits 3 for a backward move or a Backlog-to-Todo
+  # hold, records it in board-rejections.jsonl, and leaves the card where it stands (#1059, #1909, ADR-0143). Filing it opened
+  # one bug per pass for as long as the rule held: thirteen issues for one abandoned card (#2094).
+  if [ "$rc" -eq 3 ] && [ "$name" = BOARD-WRITE-FAILED ]; then
+    echo "$(date +%T) ${SG_GH_PASS:-autobug} BOARD-REFUSED $addr: $(printf '%s' "$out" | tr '\n' ' ')" >> "$SG_STATE/cycle.log"
+    return "$rc"
+  fi
   sg_refused "$name" "$addr" "$rc" "$out" "$concerns" "$guard"
   return "$rc"
 }
