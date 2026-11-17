@@ -131,7 +131,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_page_reload.py", "tests/test_hub_router_envelope.py", "tests/test_hub_router_queue_models.py", "tests/test_hub_run_share.py", "tests/test_hub_run_sheet.py",
         "tests/test_hub_spec_colors.py", "tests/test_hub_tab_title.py", "tests/test_hub_usage_layout.py", "tests/test_instructions.py", "tests/test_issue_state_wave.py",
         "tests/test_killed.py", "tests/test_lead_span.py", "tests/test_model_ctx.py", "tests/test_model_window.py", "tests/test_no_suite_wall_clock.py",
-        "tests/test_not_startable_build.py", "tests/test_pause.py", "tests/test_premise_check.py", "tests/test_procs.py", "tests/test_project_settings.py",
+        "tests/test_not_startable_build.py", "tests/test_pause.py", "tests/test_premise_check.py", "tests/test_procs.py", "tests/test_ticket_premise.py", "tests/test_project_settings.py",
         "tests/test_quality_reading.py", "tests/test_quickstart_tailnet.py", "tests/test_record.py", "tests/test_retired_profile.py", "tests/test_review_parallel.py",
         "tests/test_run_monitor.py", "tests/test_salvage_note.py", "tests/test_sandbox.py", "tests/test_session_send.py", "tests/test_skillpath.py",
         "tests/test_suite_state_isolation.py", "tests/test_testselect.py", "tests/test_to_test_scenario_migrate.py", "tests/test_to_test_scenario_records_bugs.py", "tests/test_to_test_scenario_title_emoji.py",
