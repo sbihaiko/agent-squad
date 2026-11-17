@@ -5387,11 +5387,14 @@ def _lead_plot(query=None):
 def lead_zoom(query):
     """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), measured
     from the start column `a` to the end column `b` (#905); the y axis is always log (#1355). An old `scale` value in the
-    query changes nothing: the route takes no scale option and serves the log axis (#1355). No `a` is the card's opened
-    instant; no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
-    q = urllib.parse.parse_qs(query)
+    query changes nothing: the route takes no scale option and serves the log axis (#1355). No `a` is the trip from `Todo`,
+    the column a card starts its work in; an empty `a` is the card's opened instant. No `b`, or the closed column, is its
+    closed instant. The bar's values in the query filter its rows (#904)."""
+    q = urllib.parse.parse_qs(query, keep_blank_values=True)   # an empty `a` is the reader's own "Created", never the default
     q.pop("scale", None)   # #1355: an old bookmark's `scale=jira` is a documented no-op; every chart is log, and no `scale` key stays in the payload
-    a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
+    a = (q.get("a") or [None])[0]
+    if a is None: a = LEAD_START   # the page opens on the trip from Todo, the column the payload already measures from
+    b = (q.get("b") or [""])[0] or None
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     fw, fs, fk, ty = board_filters(query)
@@ -7540,7 +7543,7 @@ const flowFilterChip=(fs,fk,stopped)=>{const names=flowFilterNames(fs,fk);if(!na
 const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["12h","Past 12 hours"],["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Last week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
-const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe and the Type stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
+const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the End only: the Start opens on Todo every visit, and a reader's own start holds for that visit (owner ask)
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltGap=16;   // the least vertical space between two gutter tag baselines, one body line (#1332)
 const ltTextW=s=>9*String(s).length;   // a tag's estimated painted width at the body size: a loose nine units per character, so the gutter holds the longest tag (#1332)

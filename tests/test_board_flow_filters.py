@@ -705,21 +705,25 @@ const pre=snap();"""
     assert second["bo"] == first["bo"] == {"fk": ["bug"]}, "a chart range never touches the Board filter"
     assert second["store"]["hub"] == first["store"]["hub"], "a chart range leaves the Board key as it was"
     assert set(second["store"]) == {"hub", "squad-chart"}
-    assert json.loads(second["store"]["squad-chart"]) == {"a": "Doing", "b": ""}, \
+    assert json.loads(second["store"]["squad-chart"]) == {"b": ""}, \
         "the chart key carries the range only; the timeframe stays the visit's choice (#1247)"
 
-    span = f"/api/leadtime?tf=12h&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
+    # The Start opens on Todo every visit (owner ask), so only the End comes back from the key.
+    stored = {**second["store"], "squad-chart": json.dumps({"b": "Code Review"})}
+    span = f"/api/leadtime?tf=12h&a=Todo&b=Code%20Review&{_bar(fk='bug', ty='bug')}"
     answers = {f"/api/chart/lead?{_bar(fk='bug', ty='bug')}": {"lead": {}, "t": 1}, span: {"dots": []}}
     third = _page_harness(hub, answers, observe + 'await flowOpen("lead");await settle();' + report,
-                          onchange=onchange, store=second["store"])
+                          onchange=onchange, store=stored)
     assert third["bo"] == {"fk": ["bug"]}, "the Board filter survives the reload untouched"
     assert (third["pre"]["a"], third["pre"]["own"]) == ("Todo", False), \
-        "the restored range stays off the board: the Board tab reads the payload's own start"
+        "the Start opens on Todo and the stored End stays off the board until the chart opens"
+    assert (third["post"]["a"], third["post"]["own"]) == ("Todo", True), \
+        "the opened chart reads the stored End from the Start Todo"
     assert "a=Doing" not in third["pre"]["route"] and "b=" not in third["pre"]["route"], \
-        "the board's own route carries neither the stored Start nor a stored End"
+        "the board's own route carries neither a Start nor an End"
     assert third["pre"]["cards"] == first["pre"]["cards"] == [2], "the chart range never narrows the board's cards"
-    assert third["tf"] == "12h" and third["a"] == "Doing", "the range is restored when the lead chart opens; the timeframe is not"
-    assert span in third["fetched"], "the restored range is what the opened chart reads"
+    assert third["tf"] == "12h" and third["a"] == "Todo", "the Start opens on Todo; the timeframe is not restored"
+    assert span in third["fetched"], "the stored End is what the opened chart reads"
     assert third["post"]["route"] == third["pre"]["route"] and third["post"]["cards"] == first["pre"]["cards"], \
         "opening the chart reads the board's route and cards unchanged"
 
