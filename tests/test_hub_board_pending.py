@@ -87,6 +87,20 @@ def now():
     return time.time()
 
 
+class _Clock:
+    """The hub's own clock, held at one instant: a pass reads as if it began then, so a case about whole seconds never
+    waits on the wall clock. Every other name of `time` is the module's own."""
+
+    def __init__(self, instant):
+        self.instant = instant
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self):
+        return self.instant
+
+
 def at(epoch):
     """The instant a record entry carries, in the door's own form: whole seconds, UTC."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
@@ -555,15 +569,24 @@ def test_every_column_of_the_shipped_vocabulary_takes_the_same_path(served, colu
 
 def test_a_page_reload_keeps_the_pending_mark(served, monkeypatch):
     """The page renders the row it is served: two real passes over a lagging fetch both keep the mark, and the second
-    pass's snapshot is its own -- the reload never reuses the first pass's list read."""
+    pass's snapshot is its own -- the reload never reuses the first pass's list read. The move is the owner's arrow, which
+    always records its dispatch context, so a reload in a later whole second keeps the mark; each pass reads on a pinned
+    clock, so the case never waits on the wall clock and the second is exact. Reading the wall clock lost the mark on a
+    slow runner: the reload crossed a whole second, and a move with no dispatch context stands aside for a read that began
+    after it (#2086)."""
     mod, state, port = served
     lagging_fetch(mod, monkeypatch, [card(7, "Todo")])
-    record(state, {"ITEM7": {"column": "Doing", "at": at(now())}})
-    mod.board_pass(repos=[])
+    second = int(now())
+    record(state, {"ITEM7": {"column": "Doing", "at": at(second), "by": "owner"}})
+    with monkeypatch.context() as m:   # the first pass reads in the move's own whole second
+        m.setattr(mod, "time", _Clock(second + 0.5))
+        mod.board_pass(repos=[])
     first_board = get_board(port)
     first = where(first_board, 7)
     assert first and first[0][1].get("pd") is True, f"the first pass lost the mark: {first}"
-    mod.board_pass(repos=[])   # the page reloads: the hub runs another pass over the same lagging fetch
+    with monkeypatch.context() as m:   # the page reloads: a later whole second, over the same lagging fetch
+        m.setattr(mod, "time", _Clock(second + 2.5))
+        mod.board_pass(repos=[])
     again_board = get_board(port)
     again = where(again_board, 7)
     assert again and again[0][1].get("pd") is True, f"a reload lost the pending mark: {again}"

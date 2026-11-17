@@ -949,7 +949,10 @@ case "$r" in *"WAVE HOLD #301"*"gate lock"*) ok "Q: the entry names the held gat
 case "$r" in *"WAVE REQUEUE"*) ko "Q: a held gate lock requeued the child: '$r'";; *) ok "Q: a held gate lock requeues nothing";; esac
 /usr/bin/grep -q " 301$" "$T/board.log" && ko "Q: the card moved: $(cat "$T/board.log")" || ok "Q: the card does not move"
 # Q2 (#567): a full gate-slot budget (caps.gates) holds like a held lock: the entry holds the child out, with no requeue and no card move.
-rm -rf "$T/st/locks/gate"; sleep 60 & hs=$!; PYTHONPATH="$SG_SQUAD" python3 -m squad.caps take gates other --count 12 --pid "$hs" >/dev/null; : > "$T/board.log"
+# The budget the entry reads is the one its own tree resolves (gate.sh takes slots with --target "$PWD"), so the case fills
+# the leaves from the same tree the entry runs in. A take from the caller's directory resolves this repository's project file,
+# and the entry's tree resolves another ceiling: the slots it fills are never the slots the entry counts (#2030 follow-up).
+rm -rf "$T/st/locks/gate"; sleep 60 & hs=$!; PYTHONPATH="$SG_SQUAD" python3 -m squad.caps take gates other --count 12 --pid "$hs" --target "$T/c301" >/dev/null; : > "$T/board.log"
 t0=$(date +%s); r=$(REV_BASE=$W30 rev 301; cd "$T/c301" && SERIAL_WAIT_SECONDS=8 SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-30 301 2>&1); rc=$?; t1=$(date +%s)
 [ $rc != 0 ] && [ $((t1 - t0)) -lt 6 ] && ok "Q2: an entry under full gate slots returns at once" || ko "Q2: entry exit $rc after $((t1 - t0)) s: '$r'"
 case "$r" in *"WAVE HOLD #301"*"gate slots"*"other"*) ok "Q2: the entry names the full gate slots and their holder";; *) ko "Q2: no hold line: '$r'";; esac
