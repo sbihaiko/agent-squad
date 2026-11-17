@@ -53,8 +53,9 @@ def appended_at_the_first_gh_call(tmp_path: pathlib.Path) -> pathlib.Path:
 @pytest.mark.heavy
 def test_a_line_appended_during_the_pass_survives_its_rewrite(tmp_path):
     """`run-stacked` ended with a verdict, so the pass reads its issue through `gh` inside the run loop: the first such call
-    is after the pass read the list and before it rewrites it. `run-zombie` is the run the pass drops, which is what makes
-    it rewrite the list at all."""
+    is after the pass read the list and before it rewrites it. Both `run-stacked` and `run-zombie` are runs the pass
+    drops (FINISHED-RUN, rule #2138), so the only line the rewrite writes is the one the launch appended (#2144 re-reads
+    the finished run for its card and still leaves its line out)."""
     sandbox(tmp_path, "echo 0")
     zombie = tmp_path / "co/runs/run-zombie"
     zombie.mkdir(parents=True)
@@ -70,7 +71,7 @@ def test_a_line_appended_during_the_pass_survives_its_rewrite(tmp_path):
     seen = (tmp_path / "st/race.seen").read_text()
     assert seen.split() == [RUN, "run-zombie"], f"the append did not land after the pass read the list: {seen!r}"
     got = listed(act)
-    assert got == [RUN, RACE], f"the pass rewrote the list from its own stale read and lost the launched run: {got}"
+    assert got == [RACE], f"the pass rewrote the list from its own stale read and lost the launched run: {got}"
 
 
 @pytest.mark.heavy
