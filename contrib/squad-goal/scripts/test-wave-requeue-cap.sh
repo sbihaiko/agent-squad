@@ -13,6 +13,8 @@ mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledg
 /usr/bin/git init -q "$T/sgco"; /usr/bin/git -C "$T/sgco" -c user.name=t -c user.email=t@t commit -q --allow-empty -m start
 /usr/bin/git -C "$T/sgco" update-ref refs/remotes/origin/dev HEAD
 export SG_CHECKOUT="$T/sgco"
+# The cases above #2053 read the stop path alone: the hand route is off for them, and on for its own cases below.
+export SG_HAND_AT=off
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "${SG_MOVE_REASON:-none} $*" >> "%s/board-reason.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 # The stub gh logs every argv. A single-issue read is one GraphQL query: it answers state OPEN, so every case reads the
@@ -163,6 +165,32 @@ echo req > "$T/st/auto/disp-78"; o78=$(w requeue 78 "the local gates failed: y")
 [ ! -e "$T/st/auto/disp-78" ] && /usr/bin/grep -q ' Todo 78$' "$T/board.log" && case "$o78" in *"WAVE REQUEUE #78"*) true;; *) false;; esac \
   && ok "an issue whose state cannot be read is requeued as before" || ko "unread #78: '$o78', board '$(/usr/bin/grep ' 78$' "$T/board.log")'"
 case "$o78" in *"state could not be read"*) ok "the unread state is named";; *) ko "no note that #78's state was not read: '$o78'";; esac
+# #2053: the issue's own second failed dispatch hands it to HAL9K. The hand hold (squad.handhold) writes ready-for-HAL9K,
+# one SQUAD-HAND comment lists the runs counted, and one WAVE HAND line is logged. A loop-caused requeue counts nothing
+# toward it, the route is off by SG_HAND_AT=off, two open hal9k holds fill it, and the next failure after it reaches the stop.
+hw() { SG_HAND_AT=${HA:-2} SG_SQUAD="$(cd "$d/../../.." && pwd)" PATH="$T/bin:$PATH" bash "$T/s/wave.sh" "$@"; }
+held() { [ -e "$T/st/auto/hold-$1" ] && /usr/bin/grep -q '^by hal9k' "$T/st/auto/hold-$1"; }
+hlabel() { /usr/bin/grep -Fq -- "repos/x/y/issues/$1/labels -f labels[]=ready-for-HAL9K" "$T/gh.log"; }
+o1=$(hw requeue 61 "the review asked for changes: a"); o2=$(hw requeue 61 "the review asked for changes: b")
+case "$o1" in *"WAVE HAND #61"*) ko "the first failure handed #61 over: '$o1'";; *) ok "the first failure does not hand the issue over";; esac
+case "$o2" in *"WAVE HAND #61: 2 failed dispatches"*) ok "the second failure logs one WAVE HAND line";; *) ko "no hand line for #61: '$o2'";; esac
+held 61 && hlabel 61 && ok "the second failure takes a hal9k hold and writes ready-for-HAL9K" || ko "no hal9k hold on #61: $(cat "$T/st/auto/hold-61" 2>/dev/null)"
+hc=$(/usr/bin/grep -l '^SQUAD-HAND:' "$T"/st/cq/*#61-wavehand* 2>/dev/null | head -1)
+[ -n "$hc" ] && [ "$(/usr/bin/grep -c '^- ' "$hc")" = 2 ] && /usr/bin/grep -q 'changes: a' "$hc" && ok "one SQUAD-HAND comment lists both runs and their reasons" || ko "hand comment: '$(cat "$hc" 2>/dev/null)'"
+o3=$(hw requeue 61 "the review asked for changes: c")
+case "$o3" in *"WAVE STOP #61"*) ok "a failure after the hand route reaches the stop at the cap";; *) ko "#61 past the hand route: '$o3'";; esac
+hh() { SG_STATE="$T/st" SG_REPO=x/y PYTHONPATH="$(cd "$d/../../.." && pwd)" PATH="$T/bin:$PATH" python3 -m squad.handhold "$@" >/dev/null 2>&1; }
+hh release --by hal9k --to Todo 61 && ! held 61 && ok "the hand hold releases (the expiry path frees the issue the same way)" || ko "#61 is still held after its release"
+for i in 1 2; do o=$(hw requeue 62 "caps.gates is full (3 slots), held by x"); done
+case "$o" in *"WAVE HAND #62"*) ko "a loop-caused requeue handed #62 over";; *) ! held 62 && ok "a loop-caused requeue never counts toward the hand route" || ko "#62 is held";; esac
+for i in 1 2; do o=$(HA=off hw requeue 63 "the local gates failed: z"); done
+case "$o" in *"WAVE HAND"*) ko "SG_HAND_AT=off handed #63 over";; *) ! held 63 && ok "SG_HAND_AT=off turns the hand route off" || ko "#63 is held with the route off";; esac
+o1=$(hw fail 64 run-64a "the review asked for changes: f"); o2=$(hw fail 64 run-64b "the review asked for changes: g")
+case "$o2" in *"WAVE HAND #64"*) held 64 && ok "the janitor's fail path hands the issue over at two" || ko "#64 logged a hand line with no hold";; *) ko "fail path: '$o2'";; esac
+hh hold --by hal9k 66; held 64 && held 66 || ko "the fixture needs two open hal9k holds (64, 66)"
+hw requeue 65 "the local gates failed: p" >/dev/null; o=$(hw requeue 65 "the local gates failed: q")
+case "$o" in *"WAVE HAND-FULL #65"*) ! held 65 && ok "two open hal9k holds fill the hand route, and the issue stays in the queue" || ko "#65 was held past the bound";; *) ko "full hand route: '$o'";; esac
+hw requeue 65 "the local gates failed: r" | /usr/bin/grep -q "WAVE STOP #65" && ok "with the hand route full, the cap still stops the issue" || ko "#65 did not stop at the cap"
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail
