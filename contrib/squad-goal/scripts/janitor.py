@@ -27,6 +27,12 @@
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  U  an auto/disp-<n> marker whose named run or request is no longer live (no active-runs.txt entry and no run folder under the run root names it) and whose issue's ledger records the owner's rearm newer than the marker's mtime, with no pending card write: the marker is dropped (#1586), so the frontier answers the issue startable again. The card is rule R's and the dispatch count is rule O's, so U writes one line and nothing else; a live run, an older rearm and a pending card write (ADR-0165) each hold the marker. `auto/taken-*` is rule T's own case (ADR-0166) and is never read.
+ V  an auto/disp-<n> or auto/bug-<n> marker whose issue reads closed is dropped (#2142): the loop dispatched the issue,
+    the issue closed, and the marker stayed, so sg_dispatch_claimed read a reopened issue as already claimed and the
+    frontier skipped it with no line. A marker of an open issue stays. A live run that works the issue, a taken-over
+    run's marker (ADR-0166) and a pending card write (ADR-0165) each hold it, and a state read that did not answer
+    holds it too. The read costs one call per marker, so a bounded number of markers per pass
+    (JANITOR_CLOSED_MARKER_MAX, default 50) drains a backlog over a few passes instead of spending the shared GitHub budget in one burst.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
@@ -471,7 +477,7 @@ def issue_read(x, fresh=False):   # one read answers every fact the passes ask o
 def issue_is_gone(x):   # a missing issue is not a transient read failure. The pass's one cached read of the issue says it: `gh api`
     # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
     return gone_msg("\t".join(issue_read(x)))
-live = {}; livef = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
+live = {}; livef = {}; keep = []; settled = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed; settled: a finished run whose line left active-runs this pass, which the card pass still reads
 def marker_mtime(p):   # #794: a marker can vanish between the glob, its test and its stat; a gone marker is no live marker: None
     try: return p.stat().st_mtime
     except FileNotFoundError: return None
@@ -577,6 +583,7 @@ for r in names:
         if i["idle"] > 300 and not open_wave(n, i["run_id"]) \
                 and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
+            settled.append(r)   # the line leaves the list, but the card pass still reads the run's record (#2138)
             continue
         if i["idle"] > 180:
             for q in inside(f):
@@ -1228,7 +1235,7 @@ def reconcile_board():
     # undoes the loop's own claim, the dispatch that moved the card out of Todo (ADR-0143, #550). No other rule moves a card
     # back into Todo or Backlog: only the owner does.
     runs = []; newest = {}   # a card follows the newest run that holds its issue: an older run's column never overrides it, whatever its rank (#619)
-    for r in keep:
+    for r in [*keep, *settled]:   # a run whose line this pass dropped from active-runs still settles its card: none of its issues is closed, so the closed-issue Done rule never answered for it (#2138)
         f = folder(r); i = read(f); nums = req_issues(f)
         if i: nums |= i["acc"]
         age = (1, "") if i is None else (0, str(i["run_ts"]))   # a run with no record yet (a dispatch marker) is the newest
@@ -1630,6 +1637,27 @@ if repo0:
         if not (isinstance(rm.get("ts"), (int, float)) and rm["ts"] > mt): continue
         if (rec.get("board") or {}).get("state") == "pending": continue
         say(f"DISP MARKER DROPPED #{n}: the owner's rearm is newer than run {held_by}")
+        if not dry: m.unlink(missing_ok=True)
+# V (#2142): a constant stream of the loop's own history was not read by the loop: the auto/ directory held markers of
+# issues the loop dispatched and closed, and a marker is a claim no pass released. sg_dispatch_claimed reads only the
+# marker's existence (autofrontier.sh), so a reopened issue read as already claimed and the frontier skipped it with no
+# line that explains why. The janitor drops the marker of an issue that reads closed; a marker of an open issue stays.
+# A live run that works the issue, a taken-over run's marker (ADR-0166) and a pending card write (ADR-0165) each hold it,
+# and a state read that did not answer holds it (fail closed). The read is one call per marker, so the drop is bounded
+# per pass (JANITOR_CLOSED_MARKER_MAX, default 50): a long backlog drains over a few passes and never spends the shared
+# GitHub budget in one burst.
+if repo0:
+    budget = int(os.environ.get("JANITOR_CLOSED_MARKER_MAX", "50") or 0)
+    for m in sorted([*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")], key=lambda p: p.name):
+        if budget <= 0: break
+        n = m.name.split("-", 1)[1]
+        if not n.isdigit() or holding(n) or n in held: continue   # a live run works it, or a taken-over run holds it (ADR-0166)
+        try: rec = ledger().read(f"{repo0}#{n}")
+        except (OSError, ImportError, ValueError, KeyError): continue   # a ledger that cannot be read holds the marker
+        if rec.get("state") == "held" or (rec.get("board") or {}).get("state") == "pending": continue   # ADR-0149 rule 4, ADR-0165
+        budget -= 1
+        if issue_read(n, fresh=True)[0] != "closed": continue   # open, gone, or no answer: the marker stands. A read that decides a write asks GitHub itself (#1999)
+        say(f"DISP MARKER DROPPED #{n}: its issue is closed, so auto/{m.name} released (a reopen dispatches again)")
         if not dry: m.unlink(missing_ok=True)
 def stop_of(n):   # why the issue is stopped, or "": its ledger stopped it (WAVE STOP, needs-human, a held file) or the owner froze it (#1958). wave.sh held_out reads the same facts
     try:
