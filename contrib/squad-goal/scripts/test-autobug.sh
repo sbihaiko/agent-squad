@@ -1511,4 +1511,17 @@ r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "13b a board rule's refusal files no bug" || ko "13b filed: $(cat "$T/filed")"
 [ "$($G -c 'BOARD-REFUSED .*#1228' "$T/st/cycle.log")" = 1 ] && ok "13b the refused card is named once in the cycle log" || ko "13b no BOARD-REFUSED line: $(cat "$T/st/cycle.log")"
 
+# 13d) (#2129) a pending Todo write the board refuses by its rule is refused once: no later pass writes the card again, and the
+# refusal is named once. The card sits in Closed, so the backward move to Todo never lands.
+rm -rf "$T/st/auto" "$T/st/state" "$T/st/gh-cache" "$T/launched"; rm -f "$T"/st/gh-*.json; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+: > "$T/board.calls"; : > "$T/st/cycle.log"; printf '1228\tClosed\n' > "$T/cards.tsv"; touch "$T/req-closed.json"
+SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" board x/y#1228 run-closed Todo "$T/req-closed.json" >/dev/null
+bash "$T/s/autobug.sh" >/dev/null 2>&1; bash "$T/s/autobug.sh" >/dev/null 2>&1
+[ "$($G -c -- '--add o 4 Todo 1228' "$T/board.calls")" = 1 ] && ok "13d two passes send one card write for the refused move" \
+  || ko "13d card writes: $(cat "$T/board.calls")"
+[ "$($G -c 'BOARD-REFUSED .*#1228' "$T/st/cycle.log")" = 1 ] && ok "13d the refusal is named once across two passes" \
+  || ko "13d BOARD-REFUSED lines: $($G -c 'BOARD-REFUSED' "$T/st/cycle.log")"
+[ -z "$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)" ] && ok "13d the refused event is dropped, not left pending" \
+  || ko "13d pending kept: $(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)"
+
 rm -rf "$T"; exit $fail
