@@ -57,3 +57,15 @@ def test_a_live_run_with_an_unread_record_names_the_missing_input_and_keeps_the_
     answer = hub.card_wait(card(run_live=True, record=False, run="run-abc"))
 
     assert answer == {"wait": "unknown", "missing": "record", "run": "run-abc"}
+
+
+def test_the_hub_shows_the_carried_wait_value_the_loop_wrote(hub):
+    answer = hub.card_wait(card(queued="gate slot"), carried="review slot")
+
+    assert answer["wait"] == "review slot"
+
+
+def test_an_unread_record_keeps_unknown_even_when_the_field_carries_a_value(hub):
+    answer = hub.card_wait(card(record=False), carried="gate slot")
+
+    assert answer == {"wait": "unknown", "missing": "record", "run": None}

@@ -60,9 +60,11 @@ def _scripts(tmp_path, cluster_sleep):
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
     for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py",
-                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py", "loopbug.sh", "basered.sh"):
+                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py", "loopbug.sh", "basered.sh",
+                 "skiplabels.sh"):
         (d / name).write_text((SCRIPTS / name).read_text())
-    (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
+    # The test sets every SG_* it needs, and the dispatchers read the lane skip set from the helper their env.sh sources (#1593).
+    (d / "env.sh").write_text('. "$(dirname "$0")/skiplabels.sh"\n')
     (d / "startability.sh").write_text(STARTABILITY)
     (d / "cluster.py").write_text(f"import time\ntime.sleep({cluster_sleep})\nprint('42')\n")
     (d / "stack.sh").write_text(STACK)
@@ -102,6 +104,7 @@ def _state(tmp_path, script):
         "SG_FRONTIER_PREAMBLE": "", "BOARD": "true", "LABELS": labels,
         "SG_SQUAD": str(SCRIPTS.parents[2]), "SQUAD_CAPS_DIR": str(tmp_path / "caps"),   # the free slots come from squad/caps.py
         "SG_MIN_FREE_GB": "0",   # the disk floor reads the real volume (#615): a fixture pass must not stop on this machine's free space (#792)
+        "SG_NIGHTLY_OFF": "1",   # the nightly window is one wall-clock hour (#1533): a fixture pass never waits on the hour this suite runs
     }
 
 

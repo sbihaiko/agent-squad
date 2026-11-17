@@ -135,13 +135,18 @@ rm -f "$T/ccinc"; run_cycle 2
 [ "$(/usr/bin/grep -cxE 'wave land run-7 /.*/run-7' "$STEPS")" = 1 ] && ok "the pass that completes lands the wave" || ko "run-7 not landed after a complete pass: '$(cat "$STEPS")'"
 /usr/bin/grep -q "run-7" "$ST/watch-seen.txt" 2>/dev/null && ok "and the run is read" || ko "run-7 not in watch-seen.txt"
 
-# 8) (#641, ADR-0146 decision 3) an open `loop-bug` stops intake, never the landing of an approved wave: the childcc pass
-# exits 0 when every child of the run is in its wave, and the wave lands. A `loop-bug:landing` issue names the landing path,
-# so no wave lands while it is open; the run stays unread, the log names the issue, and closing it lands the wave.
+# 8) (#1980, ADR-0146) the drain policy maps a loop-bug's label class to what it holds: a bare `loop-bug` holds every path,
+# the landing included, and a `loop-bug:publish` holds only the publish, so an approved wave still lands. A
+# `loop-bug:landing` issue names the landing path alone: no wave lands while it is open, the run stays unread, the log names
+# the issue, and closing it lands the wave.
 oi() { printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":641,"title":"t","body":"","state":"OPEN","labels":{"nodes":[{"name":"%s"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}' "$1" > "$T/openissues"; }
 oi loop-bug; run run-8 pass; printf 'wave/run-8\n' > "$ST/auto/wave-run-8"; printf '%s\n' "$T/run-8" > "$ST/active-runs.txt"
 run_cycle 1
-[ "$(/usr/bin/grep -cxE 'wave land run-8 /.*/run-8' "$STEPS")" = 1 ] && ok "an open loop-bug still lands an approved wave" || ko "loop-bug held the landing: '$(cat "$STEPS")'"
+/usr/bin/grep -q 'wave land run-8' "$STEPS" && ko "a bare loop-bug let the wave land" || ok "a bare loop-bug holds the landing too (#1980)"
+rm -f "$T/openissues"
+oi loop-bug:publish; run run-20 pass; printf 'wave/run-20\n' > "$ST/auto/wave-run-20"; printf '%s\n' "$T/run-20" > "$ST/active-runs.txt"
+run_cycle 1
+[ "$(/usr/bin/grep -cxE 'wave land run-20 /.*/run-20' "$STEPS")" = 1 ] && ok "a loop-bug:publish leaves the landing alone" || ko "a publish-only class held the landing: '$(cat "$STEPS")'"
 oi loop-bug:landing; run run-9 pass; printf 'wave/run-9\n' > "$ST/auto/wave-run-9"; printf '%s\n' "$T/run-9" > "$ST/active-runs.txt"
 run_cycle 1
 /usr/bin/grep -q 'wave land run-9' "$STEPS" && ko "a loop-bug:landing issue let the wave land" || ok "a loop-bug:landing issue stops the landing"

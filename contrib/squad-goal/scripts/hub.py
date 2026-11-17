@@ -2761,10 +2761,12 @@ def card_waits(store, numbers):
         if todo is not None or closed is not None: out[n] = {"todo": todo, "closed": closed}
     return out
 
-def card_wait(card):
-    """The card's Wait by the loop's rule (board_wait.wait_of), with the live run's name kept beside it."""
+def card_wait(card, carried=None):
+    """The card's Wait: the value the loop wrote to the field when there is one, else the loop's rule (board_wait.wait_of).
+    An unread input stays unknown and names what is missing; a live run keeps its name beside the Wait."""
     answer = board_wait.wait_of(card)
-    return {"wait": answer.name, "missing": answer.missing, "run": card.get("run") if card.get("run_live") else None}
+    wait, missing = (answer.name, answer.missing) if answer.name == "unknown" else (carried or answer.name, None)
+    return {"wait": wait, "missing": missing, "run": card.get("run") if card.get("run_live") else None}
 
 def trip_issues(path):
     """The issues one run names, from the request beside its record: the run's own request, never a second reader."""
