@@ -39,15 +39,16 @@ cat > "$S/vendor-guard.sh" <<EOF
 #!/bin/bash
 echo guard >> "$STEPS"
 c=\$(( \$(cat "$T/cyc" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$T/cyc"
-[ "\$c" -ge "\${SG_TEST_CYCLES:-1}" ] && kill -TERM "\$(/bin/ps -o ppid= -p "\$PPID" | tr -d ' ')" 2>/dev/null
+[ "\$c" -ge "\${SG_TEST_CYCLES:-1}" ] && { i=0; while [ ! -s "$T/watchpid" ] && [ "\$i" -lt 50 ]; do /bin/sleep 0.1; i=\$((i+1)); done; kill -TERM "\$(cat "$T/watchpid" 2>/dev/null)" 2>/dev/null; }
 exit 0
 EOF
 chmod +x "$S/vendor-guard.sh"
 # landing_busy: a landing of some run is still in its own detached pass (#955): its busy marker is there.
 landing_busy() { local f; for f in "$ST"/auto/wland-*.busy; do [ -e "$f" ] && return 0; done; return 1; }
 run_cycle() {   # run_cycle [n]: one supervisor over the fixture, ended by the cycle's last step
-  : > "$STEPS"; echo 0 > "$T/cyc"
+  : > "$STEPS"; echo 0 > "$T/cyc"; rm -f "$T/watchpid"
   env SG_TEST_CYCLES="${1:-1}" bash "$S/watch.sh" > "$T/watch.out" 2>&1 & local p=$! i=0
+  echo "$p" > "$T/watchpid"
   while kill -0 "$p" 2>/dev/null && [ $i -lt 400 ]; do /bin/sleep 0.1; i=$((i+1)); done
   kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$ST/fastloop.pid" 2>/dev/null
   while [ ! -e "$T/nosettle" ] && landing_busy; do /bin/sleep 0.05; done; return 0
