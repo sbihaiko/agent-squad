@@ -246,3 +246,73 @@ def test_contract_drops_the_old_options_and_keeps_each_named_option_id(monkeypat
     kept = body["variables"]["input"]["singleSelectOptions"]
     assert args[0] == "graphql" and body["variables"]["input"]["fieldId"] == "F_S"
     assert [(o["id"], o["name"]) for o in kept] == [("t", "Todo"), ("d", "Doing"), ("c", "Closed")]
+
+
+# #2154: the live board carries the version 1 names. A card holds an option id, so the field's option id is the card's
+# column: the rename changes the option's name in place and the card answers the new name, without a move.
+RENAME_STATUS = [{"id": 9, "node_id": "F_S", "name": "Status", "data_type": "single_select", "options": [
+    {"id": "bl", "name": {"raw": "Backlog"}, "color": "GRAY", "description": {"raw": ""}},
+    {"id": "cr", "name": {"raw": "Code Review"}, "color": "ORANGE", "description": {"raw": ""}},
+    {"id": "cc", "name": {"raw": "Code Complete"}, "color": "ORANGE", "description": {"raw": ""}},
+    {"id": "cl", "name": {"raw": "Closed"}, "color": "GREEN", "description": {"raw": ""}}]}]
+
+
+class RenameBoard:
+    """A board whose cards carry an option id: a field call renames the option, and the card's column is the option's name.
+
+    `lost` drops that many cards from every read after the first, so a count that falls is measured, never assumed."""
+
+    base = "/users/o/projectsV2/4"
+
+    def __init__(self, cards, lost=0):
+        self.cards = [dict(iid=i, repo=r, number=n, oid=o) for i, r, n, o in cards]
+        self.fields = json.loads(json.dumps(RENAME_STATUS))
+        self.names = {o["id"]: o["name"]["raw"] for o in self.fields[0]["options"]}
+        self.writes, self.lost, self.reads = [], lost, 0
+
+    def api(self, *a, inp=None, timeout=None):
+        if a[0].endswith("/fields?per_page=100"):
+            return json.dumps(self.fields)
+        if a[0] == "--paginate":
+            self.reads += 1
+            shown = self.cards[:-self.lost] if self.lost and self.reads > 1 else self.cards
+            return "\n".join(json.dumps({"iid": c["iid"], "repo": c["repo"], "number": c["number"],
+                                         "st": self.names[c["oid"]], "s": "open", "l": []}) for c in shown)
+        body = json.loads(inp)
+        self.writes.append(body)
+        if "updateProjectV2Field" in body["query"]:
+            for o in body["variables"]["input"]["singleSelectOptions"]:
+                self.names[o["id"]] = o["name"]
+        return "{}"
+
+
+def test_rename_carries_every_option_id_and_every_card_keeps_its_column(monkeypatch, tmp_path, capsys):
+    board = RenameBoard([("1", "a/x", 5, "cr"), ("2", "a/x", 6, "cc"), ("3", "b/y", 7, "cl")])
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+
+    (body,) = board.writes
+    sent = body["variables"]["input"]["singleSelectOptions"]
+    assert body["variables"]["input"]["fieldId"] == "F_S" and "updateProjectV2Field" in body["query"]
+    assert [(o["id"], o["name"]) for o in sent] == [
+        ("bl", "Backlog"), ("cr", "Review"), ("cc", "Landing"), ("cl", "Closed")]
+    names = [board.names[c["oid"]] for c in board.cards]
+    assert names == ["Review", "Landing", "Closed"]
+    assert "Code Review" not in names and "Code Complete" not in names
+    out = capsys.readouterr().out
+    assert "done: 3 card(s), 3 before the call; every card kept its column" in out, out
+
+
+def test_a_second_rename_call_sends_the_names_the_board_already_carries(monkeypatch, tmp_path):
+    board = RenameBoard([("1", "a/x", 5, "cr"), ("2", "a/x", 6, "cc")])
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+    first = json.dumps(board.writes[0], sort_keys=True)
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+    assert json.dumps(board.writes[1], sort_keys=True) == first
+    assert board.names == {"bl": "Backlog", "cr": "Review", "cc": "Landing", "cl": "Closed"}
+
+
+def test_rename_fails_the_proof_when_the_card_count_falls(monkeypatch, tmp_path, capsys):
+    board = RenameBoard([("1", "a/x", 5, "cr"), ("2", "a/x", 6, "cc")], lost=1)
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 1
+    err = capsys.readouterr().err
+    assert "count" in err.lower(), err
