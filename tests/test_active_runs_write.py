@@ -83,7 +83,31 @@ def test_a_line_appended_during_the_pass_survives_its_rewrite(tmp_path):
     seen = (tmp_path / "st/race.seen").read_text()
     assert seen.split() == [RUN, "run-zombie"], f"the append did not land after the pass read the list: {seen!r}"
     got = listed(act)
-    assert got == [RUN, RACE], f"the pass rewrote the list from its own stale read and lost the launched run: {got}"
+    assert got == [RACE], f"the pass rewrote the list from its own stale read and lost the launched run: {got}"
+
+
+@pytest.mark.heavy
+def test_a_kept_line_is_retained_beside_the_appended_one(tmp_path):
+    """A run whose wave still stands for it keeps its line, and the rewrite writes it beside the line the launch appended.
+
+    The reader that keeps every line it did not name is what carries `run-race` over; this case proves it never trades a
+    line it read for the appended one. Both lines answer, so the pass kept a line it read and lost nothing else."""
+    sandbox(tmp_path, "echo 0", wave="open")
+    zombie = tmp_path / "co/runs/run-zombie"
+    zombie.mkdir(parents=True)
+    (zombie / "request.txt").write_text("plain request of run-zombie\n")
+    dead_zombie(zombie, dead_pid())
+    act = tmp_path / "st/active-runs.txt"
+    act.write_text(f"{RUN}\nrun-zombie\n")
+    appended_at_the_first_gh_call(tmp_path)
+
+    janitor(tmp_path, SG_SQUAD=str(pathlib.Path(__file__).resolve().parents[1]),
+            SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
+
+    seen = (tmp_path / "st/race.seen").read_text()
+    assert seen.split() == [RUN, "run-zombie"], f"the append did not land after the pass read the list: {seen!r}"
+    got = listed(act)
+    assert got == [RUN, RACE], f"the kept line or the appended one left the rewrite: {got}"
 
 
 @pytest.mark.heavy
@@ -92,10 +116,47 @@ def test_a_finished_run_line_leaves_the_list_on_the_pass_that_reads_it(tmp_path)
     active-runs on the pass that reads it. The line is gone from the rewrite, never merely from the pass's own listing."""
     sandbox(tmp_path, "echo 0")
     act = tmp_path / "st/active-runs.txt"
+    assert listed(act) == [RUN], f"the sandbox wrote no line for the finished run: {listed(act)}"
     janitor(tmp_path, SG_SQUAD=str(pathlib.Path(__file__).resolve().parents[1]),
             SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(tmp_path / "caps"))
+    journal = (tmp_path / "st/cycle.log").read_text()
+    assert f"FINISHED-RUN {RUN}" in journal, f"the pass never named the finished-run drop: {journal}"
     got = listed(act)
     assert got == [], f"a finished run kept its active-runs line, so it still holds a child room (#2138): {got}"
+
+
+@pytest.mark.heavy
+def test_the_run_loop_drop_paths_each_leave_their_line_out_of_the_rewrite(tmp_path):
+    """#2144, the drop paths: a run the run loop leaves out of active-runs leaves it under every rule that drops a line.
+
+    The pass names each drop, and the rewrite writes no line for the run: NEVER-STARTED (no record after its bound) and
+    CLOSED-RUN (every issue it names is closed) meet here; the zombie, the killed run and FINISHED-RUN have their own
+    cases in the zombie-line suite and this file."""
+    never = tmp_path / "never"
+    never.mkdir()
+    sandbox(never, "echo 0")
+    orphan = never / "co/runs/run-never-started"
+    orphan.mkdir(parents=True)
+    (orphan / "request.txt").write_text("plain request of run-never-started\n")
+    old = time.time() - 3600
+    os.utime(orphan / "request.txt", (old, old))
+    os.utime(orphan, (old, old))
+    (never / "st/active-runs.txt").write_text("run-never-started\n")
+
+    janitor(never, SG_SQUAD=str(pathlib.Path(__file__).resolve().parents[1]),
+            SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(never / "caps"))
+    journal = (never / "st/cycle.log").read_text()
+    assert "NEVER-STARTED run run-never-started" in journal, f"the pass never named the never-started drop: {journal}"
+    assert listed(never / "st/active-runs.txt") == [], listed(never / "st/active-runs.txt")
+
+    closed = tmp_path / "closed"
+    closed.mkdir()
+    sandbox(closed, "echo 0", closed=True)
+    janitor(closed, SG_SQUAD=str(pathlib.Path(__file__).resolve().parents[1]),
+            SG_TAKEOVER_SECONDS="1000000000000", SQUAD_CAPS_DIR=str(closed / "caps"))
+    journal = (closed / "st/cycle.log").read_text()
+    assert f"CLOSED-RUN {RUN}" in journal, f"the pass never named the closed-run drop: {journal}"
+    assert listed(closed / "st/active-runs.txt") == [], listed(closed / "st/active-runs.txt")
 
 
 @pytest.mark.heavy
