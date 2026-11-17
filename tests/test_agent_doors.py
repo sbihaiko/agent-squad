@@ -84,7 +84,7 @@ def test_the_agent_to_tickets_door_reads_the_premise_check_before_it_drafts():
         "<!-- premise-check: spec=<n> -->",
         "no premise-check comment on spec",
         "Refuse a check with an open question",
-        "exactly one wave-01 probe ticket",
+        "exactly one probe ticket",
         "List the proxy answers before the owner approves",
         "Only the owner approves",
     )
@@ -93,7 +93,7 @@ def test_the_agent_to_tickets_door_reads_the_premise_check_before_it_drafts():
     where = [text.index(m) for m in order]
     assert where == sorted(where), "the agent-to-tickets premise-check rules are out of order"
     assert "before its step 3" in text
-    assert "`needs a probe`" in text and "`wave:01`" in text and "`decided`" in text and "not the owner" in text
+    assert "`needs a probe`" in text and "native blocking edge" in text and "`decided`" in text and "not the owner" in text
 
 
 def test_the_squad_skill_update_command_is_symlinked_named_and_names_each_command_it_runs():
@@ -116,5 +116,5 @@ def test_the_agent_to_tickets_door_refuses_a_refuted_premise():
 def test_the_agent_to_tickets_door_writes_the_premise_line_the_close_path_reads():
     """#888: a probe ticket names its spec and its premise, so the loop's close path can refute that premise."""
     text = (SKILLS / "agent-to-tickets" / "SKILL.md").read_text()
-    for m in ("labels `probe` and `wave:01`", "`## Parent`", "`Premise: <premise>`", "squad premise-check <spec> --refute <premise>"):
+    for m in ("label `probe`", "`## Parent`", "`Premise: <premise>`", "squad premise-check <spec> --refute <premise>"):
         assert m in text, f"agent-to-tickets does not state: {m}"
