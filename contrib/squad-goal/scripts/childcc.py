@@ -68,7 +68,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam mo
 import child_issues   # the issues a child's spawn text names (#555)
 import issue_ledger   # the issue's loop facts: the head a run requeued its child on is a fact there, never a marker (ADR-0149)
 from issue_state import board_state
-from board_columns import claimed_names   # the claimed card names: "Doing" on this board, "In Progress" on the default (#1342)
+from board_columns import claimed_names, CODE_REVIEW   # the claimed card names: "Doing" on this board, "In Progress" on the default (#1342); the review column's canonical name (#2155)
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -155,7 +155,7 @@ def code_review(name, child, n, why):
     if not have: return
     mk.touch()
     if have not in ("Doing", "In Progress"): return
-    e = subprocess.run([board, owner, proj, "Code Review", str(n)], capture_output=True, text=True)
+    e = subprocess.run([board, owner, proj, CODE_REVIEW, str(n)], capture_output=True, text=True)
     if e.returncode: print(f"CHILDCC-BOARD #{n} Code Review refused: {(e.stdout + e.stderr).strip()[:300]}", flush=True)
     else: print(f"CODE REVIEW #{n} ({name} {child}): {why}", flush=True)
 def caps_cmd(*argv):   # `python3 -m squad.caps <argv>`: the machine-wide budget's one command (SG_SQUAD names the repository, else the one this script lives in)
@@ -498,7 +498,7 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     mk.touch()
     if entered is None:   # no wave: the pass moves the cards itself, one per issue the child works (#954)
         for sib in every_issue(d, n):
-            subprocess.run([board, owner, proj, "Code Complete", str(sib)], capture_output=True)
+            subprocess.run([board, owner, proj, "Landing", str(sib)], capture_output=True)
             print(f"CODE COMPLETE #{sib} ({name} {child})", flush=True)
     ow = word.get(child, "pass")   # the outcome the child ended on: `unproven` is no pass, so the record never claims one
     (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: {ow}. "

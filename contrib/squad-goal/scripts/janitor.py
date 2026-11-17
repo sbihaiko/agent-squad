@@ -1281,7 +1281,7 @@ def reconcile_board():
         elif e == "open": set_expected(n, "In Progress", f"{why}; its child has not entered the open wave of run {i['run_id']} yet", i["run_id"], i["run_ts"], 30)
         elif e == "out": set_expected(n, os.environ.get("SG_TODO", "Todo"), f"{why}, but the wave of run {i['run_id']} landed without its child", i["run_id"], i["run_ts"], 20)
         else:
-            set_expected(n, "Code Complete", why, i["run_id"], i["run_ts"], 60)
+            set_expected(n, "Landing", why, i["run_id"], i["run_ts"], 60)
             wave_column(n, f, i)
     def stopped_run(n, f, i, evidence):   # a run that stopped needs-human never moves its issue's card forward: its Blocked stands, whatever local landing it left (ADR-0029, #660)
         stopped.add(n)   # the "nothing landed" stop stands even when the owner's rearm lifts the freeze (#1562): a stale branch never reads as delivered work
@@ -1488,7 +1488,7 @@ def reconcile_board():
         if term: set_expected(n, term if shipped else "Done", "issue is closed" if term == ROLE["abandoned"] else f"issue is closed as {reason}", "", "", 95 if term == ROLE["abandoned"] else 90)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
-        if n not in specs and named_landing(n): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665). A newer no-landing requeue or run end wins over it (#1958)
+        if n not in specs and named_landing(n): set_expected(n, "Landing", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665). A newer no-landing requeue or run end wins over it (#1958)
         if n not in specs and n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set, and a branch that names a spec is its children's (#665)
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)

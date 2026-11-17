@@ -796,7 +796,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     sha=$($G rev-parse HEAD)
     # The push's stderr is kept: it tells a rejection git names from a failure of the network, auth or server (#1348).
     if perr=$($G push -q origin "HEAD:refs/heads/$w" 2>&1); then
-      board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
+      board_write "Landing" "$iss"   # a refused write is named, never dropped (#593); the definition's column name (#2155)
       proof_card "$iss" "$obl"   # an unproven entry carries its fact on the card until the settlement answers it (#1176)
       # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Code Complete reads it, never the
       # run's own land. An unproven entry carries its obligation there, so the job that settles it is attached to the run that
