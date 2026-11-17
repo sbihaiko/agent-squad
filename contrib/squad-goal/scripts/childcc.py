@@ -399,7 +399,10 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     if (A / f"ccfixrun-{name}").exists(): continue   # a fix run this pass started: its child commits in another child's worktree, and delivers nothing itself (#636)
     for child, why in done.items():
         if not finished and child in owned and child not in landed: continue   # its live run still reviews, fixes or lands it (#696)
-        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve", child in owned, rounds.get(child)))
+        # The run's approval is the verdict its landing recorded, or the verdict of the review round it wrote when it ended
+        # before landing the child: both bind to the head the review read, and the second is the only evidence a run that
+        # stopped at the landing leaves (#2089, ADR-0151 rule 4).
+        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve" or str((rounds.get(child) or {}).get("verdict") or "") == "approve", child in owned, rounds.get(child)))
     for child in unmapped:
         mk = A / f"unmap-{name}-{child}"
         if mk.exists(): continue
