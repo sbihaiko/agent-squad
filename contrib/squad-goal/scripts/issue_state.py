@@ -136,6 +136,30 @@ FALLBACK_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(o
                   "fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name optionId}}}}}}}")
 
 
+# The next page a REST read names: `<url>; rel="next"` in the `Link` header (#2170).
+_NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*[^,]*\brel="?next\b"?')
+_API_HOST = "https://api.github.com"
+
+
+def _split_answer(body):
+    """`gh api --include` puts a header block in front of the body; a stub may hand back the body alone.
+    Returns (body, headers), the header names lowercased."""
+    if not body.startswith("HTTP/"): return body, {}
+    head, sep, rest = body.partition("\r\n\r\n")
+    if not sep: head, sep, rest = body.partition("\n\n")
+    if not sep: return body, {}
+    h = {}
+    for line in head.splitlines()[1:]:
+        name, _, value = line.partition(":")
+        if name.strip(): h[name.strip().lower()] = value.strip()
+    return rest, h
+
+
+def _route(url):
+    """The route `gh api` is asked for, off the URL a `Link` header names."""
+    return url[len(_API_HOST):] if url.startswith(_API_HOST + "/") else url
+
+
 def _utc(stamp):
     import datetime
     return datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
@@ -451,7 +475,14 @@ class BoardBinding:
     def api(self, *a, inp=None, timeout=None):
         """One gh api call, the binding's only call site. A server error (HTTP 5xx) is GitHub failing to
         answer, not a verdict on the request: it is asked again with the same bounded backoff, and only an
-        error that outlasts the attempts is raised (#226). Any other error is GitHub's verdict, raised at once."""
+        error that outlasts the attempts is raised (#226). Any other error is GitHub's verdict, raised at once.
+        A call that asks to paginate follows the `Link` header itself (#2170)."""
+        if "--paginate" in a:
+            return self._pages([x for x in a if x != "--paginate"], inp=inp, timeout=timeout)
+        return self._call(a, inp=inp, timeout=timeout)
+
+    def _call(self, a, inp=None, timeout=None):
+        """One gh api call, with the server-error retry: the argv as the caller built it."""
         err = ""
         for k in range(self.attempts):
             if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
@@ -461,6 +492,22 @@ class BoardBinding:
             err = r.stderr.strip()[:200]
             if not self.server_error.search(err): break
         raise RuntimeError(err)
+
+    def _pages(self, a, inp=None, timeout=None):
+        """Every page of a paginated read: the route, then each page whose `Link` header names `rel="next"`,
+        until a page names none (#2170). The projectsV2 items route answers a bare array with no total, so a
+        reader that stops at the first page reports every later card as absent; `gh api --include` puts the
+        header block in front of the body, and the pages are joined in the order the links name them."""
+        i = next((k for k, x in enumerate(a) if not x.startswith("-")), 0)
+        route, rest = (a[i] if a else ""), a[:i] + a[i + 1:]
+        out, seen = [], set()
+        while route and route not in seen:
+            seen.add(route)
+            text, head = _split_answer(self._call(["--include", route, *rest], inp=inp, timeout=timeout))
+            if text: out.append(text if text.endswith("\n") else text + "\n")
+            nxt = _NEXT_LINK.search(head.get("link", ""))
+            route = _route(nxt.group(1)) if nxt else ""
+        return "".join(out)
 
     def _cached(self, name, ttl, fn):
         f = self.st / name

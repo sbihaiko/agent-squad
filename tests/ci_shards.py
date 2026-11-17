@@ -92,7 +92,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_model_labels.py", "tests/test_hub_model_rows_routes.py", "tests/test_hub_models_save.py", "tests/test_hub_plans_save.py", "tests/test_hub_pr_gate_reason.py",
         "tests/test_hub_runs_ended.py", "tests/test_hub_runs_tab.py", "tests/test_hub_settings_clutter.py", "tests/test_hub_settings_shape.py", "tests/test_hub_stream.py",
         "tests/test_hub_swimlane_specs_closed.py", "tests/test_hub_tab_hashes.py", "tests/test_hub_terminal_e2e.py", "tests/test_issue_state_binding.py", "tests/test_issue_state_graphql_fallback.py",
-        "tests/test_issue_state_holder.py", "tests/test_board_snapshot.py", "tests/test_janitor_wave_gating.py", "tests/test_jev_shadow.py", "tests/test_model_contract_live.py", "tests/test_model_label_scheme.py",
+        "tests/test_issue_state_holder.py", "tests/test_board_items_pagination.py", "tests/test_board_snapshot.py", "tests/test_janitor_wave_gating.py", "tests/test_jev_shadow.py", "tests/test_model_contract_live.py", "tests/test_model_label_scheme.py",
         "tests/test_modelreg.py", "tests/test_probe_gateway_cache.py", "tests/test_process_bound.py", "tests/test_profile_comment.py", "tests/test_real_app_guard.py",
         "tests/test_review_gate.py", "tests/test_review_retry.py", "tests/test_review_shadow.py", "tests/test_run_caps.py", "tests/test_run_router.py",
         "tests/test_sessions.py", "tests/test_setup.py", "tests/test_skills.py", "tests/test_squad_full_gate_machine_lock.py", "tests/test_squad_goal_state_split.py",
