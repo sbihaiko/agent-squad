@@ -257,8 +257,7 @@ def test_the_legend_carries_the_km_median_its_interval_the_cohort_wip_and_the_ex
     # Re-anchored (#1334): the one exclusion total moved from the percentile line to the header's summary row, so the
     # whole lead view is drawn, not the chart alone.
     out = _render(hub, tmp_path, "lt-km.js", f'(LT.tf="2",flowLead({json.dumps(lead)}))')
-    legend = "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out))
-    assert "not estimable" in legend, "a curve that never reaches one half reads not estimable"
+    assert "not estimable" in out, "a curve that never reaches one half reads not estimable"   # #2171: the reading sits behind More
     assert chart["survival"]["text"] in out and chart["wip"]["text"] in out
     assert out.count("excluded") == 1 and re.search(r'title="1 never entered the start column: #4"[^>]*>excluded 1: 1 never entered the start column<', out), \
         "the excluded count sits beside the percentile and names the card"
