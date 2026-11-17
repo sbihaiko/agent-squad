@@ -65,7 +65,7 @@ alert_once() {  # <key> <text>: one alerts.log line per key
 held() {  # [<sha>]: the hold time, and the sha a red measured; an unproven or refused-move hold names no sha
   local t; t=$(date +%s)
   if [ -n "${1:-}" ]; then put "$hold" "$(printf '%s\t%s' "$t" "$1")"; else put "$hold" "$t"; fi; }
-. "$d/ghcall.sh"; . "$d/basecheck.sh"
+. "$d/ghcall.sh"; . "$d/basecheck.sh"; . "$d/mainproof.sh"
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$main:refs/remotes/origin/$main" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) \
@@ -211,19 +211,14 @@ fi
 # 3. No request is open: the rule decides, on the first-parent chain of stg alone. A work commit a merge brought in is not
 # on that chain, so an old work commit never fires the ceiling by itself.
 [ "$names" = "[]" ] && exit 0
-# tier_green <sha>: true when every complete-tier job of the sha has a completed, non-skipped, green run. It reads one row
-# per name the way the dev pass does (promote-pass.sh ci_tier_green, one rule for the same check runs): the newest completed
-# run that is not a skip answers for the name, and a name with no such run, or a last one that is not success, is no proof.
+# tier_green <sha>: true when every complete-tier job of the sha has a completed, non-skipped, green run. It reads the rows
+# through mainproof.sh (#2039), the same reader promote-main.sh proves a named sha with, so the pass and the script that
+# pushes cannot disagree: the newest completed run that is not a skip answers for the name, and a name with no such run, or a
+# last one that is not success, is no proof.
 tier_green() {
-  local cr
-  cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=all" 2>/dev/null) || return 1
-  printf '%s' "$cr" | jq -e --argjson names "$names" '
-    .check_runs as $r
-    | [ $names[] as $n
-        | ([$r[] | select(.name == $n) | select(.status == "completed") | select(.conclusion != "skipped")] | sort_by(.id) | last) as $l
-        | select(($l == null) or ($l.conclusion != "success"))
-        | $n ] | length == 0
-  ' >/dev/null 2>&1
+  local rows
+  rows=$(sg_complete_proof "$1" "$ci_file" 2>/dev/null) || return 1
+  printf '%s\n' "$rows" | awk -F'\t' 'NF && $2 != "green" { bad = 1 } END { exit bad ? 1 : 0 }'
 }
 oldest=$(g rev-list --first-parent "origin/$main..origin/$stg" | tail -n 1); [ -n "$oldest" ] || exit 0
 tage=$(( now - $(g show -s --format=%ct "$stip") )); oage=$(( now - $(g show -s --format=%ct "$oldest") ))

@@ -201,6 +201,7 @@ out=$(bash "$d/promote-main.sh" 2>&1); rc=$?
 # the stg tip. The sha must be on the first-parent chain of stg, and main must be an ancestor of it.
 keep=$(tip stg); git -C "$R" update-ref refs/heads/stg "$(tip main)"   # fixture: stg takes main again
 adv stg sha-a; sa=$(tip stg); adv stg sha-b
+checks success success   # (#2039) the sha form proves the complete tier before it pushes; test-promote-main-proof.sh owns that rule
 out=$(bash "$d/promote-main.sh" "$sa" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(tip main)" = "$sa" ] && [ "$(tip stg)" != "$sa" ] && ok "promote-main.sh <sha> moves main to that sha, not to the stg tip" || ko "sha: rc $rc, main $(tip main), want $sa, out '$out'"
 $W fetch -q origin; $W checkout -q -B side origin/stg; $W commit -q --allow-empty -m side-work; sp=$($W rev-parse HEAD)

@@ -3,6 +3,10 @@
 #   no argument: the owner command. main moves to the stg tip.
 #   <sha>: the stg-to-main pass (promote-main-pass.sh) names the sha whose complete tier is green. The sha must be on the
 #     first-parent chain of stg, so main only ever takes a commit stg itself stood at, and stg may already be ahead of it.
+#     The script proves the sha itself before it pushes (#2039): it reads the sha's complete-tier check runs through
+#     mainproof.sh, the same reader promote-main-pass.sh uses, and refuses the move unless every job is green, naming the
+#     missing, red or unproven job. The pass's verdict is no substitute: a hand run trusts no caller. SG_PROMOTE_UNPROVEN=owner
+#     is the only override, and the script prints the line that says it used it. The no-argument owner command reads no tier.
 # Refuses, and changes nothing, when main is not an ancestor of the target: main then holds work the target lacks, and a
 # fast-forward would lose it. The push is plain, never forced. Exit 0: main is at the target. Exit 1: refused, with the reason
 # on stderr. Exit 3: this process cannot reach the credential the push needs, and the one line on stderr names it.
@@ -46,14 +50,34 @@ g init -q . 2>/dev/null; g remote add origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$main:refs/remotes/origin/$main" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) \
   || { auth_failure "$o" && no_credential "$o"; no "fetch failed: $(printf '%s' "$o" | tail -1)"; }
 tip=$(g rev-parse "origin/$stg") || no "no $stg branch"
-what=$stg
+what=$stg; named=
 if [ -n "${1:-}" ]; then
   sha=$(g rev-parse --verify -q "$1^{commit}") || no "refused: $1 is not a commit of $stg"
   g rev-list --first-parent "origin/$stg" | /usr/bin/grep -qxF "$sha" || no "refused: $sha is not on the first-parent chain of $stg"
-  tip=$sha; what=$sha
+  tip=$sha; what=$sha; named=1
 fi
 [ "$(g rev-parse "origin/$main")" = "$tip" ] && { echo "$main is already at $what $tip"; exit 0; }
 g merge-base --is-ancestor "origin/$main" "$tip" || no "refused: $main is not an ancestor of $what, so $main holds work $what lacks"
+# The complete tier of the named sha (#2039, ADR-0173). The sha form is the pass's call, but a hand run is the same call,
+# so the script proves the sha itself and trusts no caller: one reader, mainproof.sh, the one promote-main-pass.sh uses.
+# A job that is missing, red or unproven holds main; the refusal names it. A read that fails proves nothing and holds main the
+# same way. SG_PROMOTE_UNPROVEN=owner is the only override, and the script says on its own line that it used it.
+if [ -n "$named" ]; then
+  . "$d/ghcall.sh"; . "$d/mainproof.sh"
+  rows=$(sg_complete_proof "$tip" 2>/dev/null); prc=$?
+  bad=
+  if [ "$prc" = 3 ]; then bad="the workflow names no complete tier job, so nothing proves $tip"
+  elif [ "$prc" != 0 ]; then bad="the complete tier of $tip is unproven: its check runs could not be read"
+  else bad=$(printf '%s\n' "$rows" | awk -F'\t' 'NF && $2 != "green" { printf "%s%s (%s %s)", sep, $1, $2, ($3 != "" ? $3 : "no run"); sep = ", " }')
+  fi
+  if [ -n "$bad" ]; then
+    if [ "${SG_PROMOTE_UNPROVEN:-}" = owner ]; then
+      echo "promote-main: SG_PROMOTE_UNPROVEN=owner overrides the complete-tier proof of $tip: $bad"
+    else
+      no "refused: the complete tier of $tip is not green: $bad; $main stays where it is"
+    fi
+  fi
+fi
 o=$(g push -q origin "$tip:refs/heads/$main" 2>&1) \
   || { auth_failure "$o" && no_credential "$o"; no "the push to $main was rejected: $(printf '%s' "$o" | tail -1)"; }
 echo "PROMOTED $main $tip"
