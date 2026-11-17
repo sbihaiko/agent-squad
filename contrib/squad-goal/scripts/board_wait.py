@@ -15,6 +15,17 @@ BATCH = 25
 Wait = namedtuple("Wait", "name missing")
 
 
+def dispatch_state(board, stood, called):
+    """(column, Wait) of one card a dispatch asked for (#1903, ADR-0165).
+
+    A settled card write reaches its column with the reason `run start`; the run's first call clears the reason and
+    moves no column. A pending or dropped write holds the card where it stood, and the Wait names that refusal."""
+    if not board: return stood, Wait("unknown", "no board fact")
+    state = board.get("state")
+    if state != "written": return stood, Wait("unknown", f"the card write is {state}")
+    return board.get("column"), Wait("none" if called else "run start", None)
+
+
 def wait_of(card):
     if not card.get("record"): return Wait("unknown", "record")
     labels = card.get("labels", [])
