@@ -84,6 +84,12 @@ sg_write() {   # <refusal name> <address> <concerns> <guard> -- <command…>: th
     echo "$(date +%T) ${SG_GH_PASS:-autobug} BOARD-READ-FAILED $name $addr: $(printf '%s' "$out" | tr '\n' ' ')" >> "$SG_STATE/cycle.log"
     return "$rc"
   fi
+  # A deleted issue (HTTP 410, or GitHub's stable message) has no card to write, so no bug about it can be fixed. Named in
+  # the log and filed as no bug: the terminal refusal the janitor reports as GONE-ISSUE.
+  if printf '%s' "$out" | /usr/bin/grep -qiE 'HTTP(/[0-9.]+)? 410\b|could not resolve to an issue|this issue was deleted'; then
+    echo "$(date +%T) ${SG_GH_PASS:-autobug} GONE-ISSUE $name $addr: $(printf '%s' "$out" | tr '\n' ' ')" >> "$SG_STATE/cycle.log"
+    return "$rc"
+  fi
   sg_refused "$name" "$addr" "$rc" "$out" "$concerns" "$guard"
   return "$rc"
 }
