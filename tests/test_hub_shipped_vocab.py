@@ -117,15 +117,14 @@ def test_the_open_lane_is_drawn_beside_the_axis_with_its_badge(table, hub, board
     assert re.search(r"isPR\(g\.name\)\?\" prs lane\"", page), "the lane does not wear its own look"
 
 
-def test_the_specs_filter_asks_the_items_and_no_column_holds_them(table, hub, board):
+def test_the_specs_come_from_the_items_and_no_column_holds_them(table, hub, board):
     rows = {x["n"]: x for g in board["groups"] for x in g["items"]}
     assert [n for n, x in rows.items() if x.get("sp")] == [3], "only the spec-labelled item is a spec"
     assert "Open Specs" not in hub.ORDER and "Open Specs" not in [g["name"] for g in board["groups"]]
     page = hub.PAGE
-    assert '<details id=fs' in page, "the board has no Specs filter"
-    assert 'isPR(g.name)?boardOk({...x,kind:"pr"},[],fk):boardOk(x,fs,fk)' in page, \
-        "the Specs filter is not a filter over the same items; the PR lane answers the Kinds filter only (#904)"
-    assert "boardOk=" in page, "the filter rule is not the page's own"
+    assert '<details id=fs' not in page, "the removed Specs filter is still on the page (SPEC 1965)"
+    assert "specOptions(boardGroups" in page, "the spec reading is not built from the items"
+    assert "boardOk=" in page, "the filter rule left the shared board code"
 
 
 def test_the_hub_holds_no_column_name_of_its_own(table):

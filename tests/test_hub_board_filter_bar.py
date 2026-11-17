@@ -52,6 +52,14 @@ def test_the_removed_controls_are_not_on_the_page(hub, marker):
     assert marker not in hub.PAGE, f"{marker!r} is still on the page"
 
 
+def test_the_board_reads_no_filter_state_the_page_no_longer_sets(hub):
+    """A control that left the page must leave no reader: an undeclared name throws inside the board poll and the whole
+    board stays blank, because the poll swallows the error (SPEC 1965)."""
+    page = hub.PAGE
+    for name in ("bo.fk", "bo.fs", "f||fs.length||fk.length", "boardOk({...x,kind:\"pr\"}", "specTitle"):
+        assert name not in page, f"the board still reads {name!r}, which the page no longer sets"
+
+
 def test_a_saved_state_from_a_removed_control_is_dropped_on_load(hub):
     page = hub.PAGE
     assert "dropRemoved(bo)" in page, "the page does not drop the removed controls' state on load"

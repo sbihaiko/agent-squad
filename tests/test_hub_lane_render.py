@@ -32,8 +32,8 @@ def test_the_lane_renderer_is_wired_into_the_board_body():
     """A renderer no one calls is the same empty board: the body takes the lanes when there is a model."""
     src = page()
     assert "const laneHtml=m=>{" in src, "the lane renderer is gone from the page"
-    assert re.search(r'lanesHtml!==null.*?#bbody.*?innerHTML=lanesHtml', src, re.S), \
-        "the board body never takes the lane markup"
+    assert "const lanesHtml=laneHtml(model)" in src, "the board draws no lane model"
+    assert '$("#bbody").innerHTML=lanesHtml' in src, "the board body never takes the lane markup"
 
 
 def test_the_served_page_carries_the_renderer(tmp_path, monkeypatch):
