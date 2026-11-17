@@ -728,8 +728,10 @@ rm -rf "$T/caps"; mkdir -p "$T/caps"
 sleep 120 >/dev/null 2>&1 & capslive=$!
 # (#1865) The budget is filled to its ceiling, never to a count that happens to leave a slot free: the cap is the plugin's here,
 # and a child asks for one slot, so a take that left one free would leave this gate passing.
-PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps take gates other --count 999 --pid "$capslive" >/dev/null 2>&1
-out=$(SG_CALL_DEADLINE_SECONDS=2 fg); rc=$?
+PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.caps take gates other --count 999 --pid "$capslive" --target "$R" >/dev/null 2>&1
+# (#2042) The memo is off: a pass kept from the case above answers the same tree with no lock and no slot (ADR-0168), so the
+# call below took no slot, read a free budget and passed. This case measures the capacity path, never the reuse.
+out=$(SG_FAST_MEMO=0 SG_CALL_DEADLINE_SECONDS=2 fg); rc=$?
 [ $rc = 4 ] && ok "a gate with no slot to take answers unproven (exit 4), never 73" || ko "capacity answer: rc $rc, '$(last "$out")'"
 case "$(last "$out")" in *"budget is full"*) ok "the capacity answer names the machine's budget on its last line";; *) ko "capacity line: '$(last "$out")'";; esac
 # (#1715) The line is the one thing the child reads: it carries the word the request names and what the child does next, and it
