@@ -6884,10 +6884,10 @@ const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&sh
 // keeps its `data-id`, so the card's own handler still opens the run sheet. Its liveness slot says whether the run is moving.
 const LIVE_ROWS=4;
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
-function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0),total=live.reduce((s,r)=>s+(+r.spend||0),0);   // a reduce, never a spread: the live list is unbounded
+function liveCard(live,shown){const runs=live.filter(r=>r.kind!=="hold"),n=runs.length,held=live.length-n,oldest=runs.reduce((m,r)=>r.age>m?r.age:m,0),total=runs.reduce((s,r)=>s+(+r.spend||0),0);   // a hold is work by hand, never a live run: the count names the two apart (#2168)
  const drawn=live.slice().sort((a,b)=>b.age-a.age).filter(r=>r.kind!=="hold").slice(0,LIVE_ROWS);   // a hand hold is its own line below, never also a row (#1713)
- const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
- const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
+ const head=(n||held)?`${n} live${held?` · ${held} held`:""} · $${total.toFixed(2)}${n?` · oldest ${age(oldest)}`:""}`:"none";   // the count and the spend are every live run, never the rows drawn, and a hand hold is no run
+ const more=(n||held)?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live work to show
  const rows=(liveWork&&liveWork.lines)||[],line=t=>`<div class=m>${esc(t.text)}</div>`;   // the tagged rows the hub answers, or none before the first read
  const own=r=>rows.filter(t=>t.kind==="gate"&&t.run===r.id).map(line).join("");   // a gate is drawn beside the row of the run it checks (#1713): by the run id its row carries, never a substring of its text (#1697)
  const extra=rows.filter(t=>!(t.kind==="run"&&live.some(r=>r.id===t.id))&&!(t.kind==="gate"&&drawn.some(r=>r.id===t.run))).map(line).join("");   // every other row is drawn once: a run row already drawn is not drawn twice, by identity (#1697)

@@ -166,6 +166,17 @@ def test_the_card_says_none_and_draws_no_control_when_nothing_is_live(page):
     assert "id=lrmore" not in out["html"]
 
 
+def test_a_hand_hold_is_counted_apart_from_a_live_run(page):
+    """#2168: a hold is work by hand, never a run. One run and one hold read `1 live · 1 held`, never `2 live`, and the
+    hold's age never becomes the oldest run's age."""
+    hold = {"id": "hold-2149", "label": "Manual · #2149", "kind": "hold", "age": 9999, "rank": 0, "spend": 0.0,
+            "issues": ["2149"], "titles": {"2149": "An unproven wave tip holds its issue past the age cap"}}
+    out = _card(page, [_run(60, "b", 0.25), hold])
+    assert out["head"] == "1 live · 1 held · $0.25 · oldest 60s", f"the hold inflated the run count: {out['head']}"
+    assert [h for h in re.findall(r'data-id="([^"]+)"', out["html"])] == ["run-20261103-1010b0-aaaa"], \
+        "the hold is drawn as its own line, never as a run row"
+
+
 def test_a_card_row_opens_the_run_sheet(page):
     if NODE is None:
         pytest.skip("node is required")
