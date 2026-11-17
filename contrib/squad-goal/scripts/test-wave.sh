@@ -544,6 +544,7 @@ case "$kr1" in *"WAVE REQUEUE #74"*) ok "KR: the first conflict of #74 re-dispat
 case "$kr2" in *"WAVE REQUEUE #74"*) ko "KR: the second conflict on the same path at a new base requeued #74: '$kr2'";; *) ok "KR: the second conflict on the same path at a new base does not requeue #74";; esac
 case "$kr2" in *"WAVE-BUG #74"*) ok "KR: the second conflict on the same path files one loop bug";; *) ko "KR: no loop bug for #74: '$kr2'";; esac
 [ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && ok "KR: one bug issue is filed" || ko "KR: $(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log") bugs filed"
+/usr/bin/grep 'labels\[\]=bug' "$T/gh.log" | /usr/bin/grep -q 'labels\[\]=frozen:not-startable.*labels\[\]=loop-bug' && ok "KR: the loop bug goes through the one filer, held until its birth Priority reads back (#1978)" || ko "KR: the loop bug skips the filer: $(/usr/bin/grep 'labels\[\]=bug' "$T/gh.log")"
 # KR (#1343): the repeat also stops the issue, so no frozen dispatch picks it again: frozen:owner on its card and the stop marker.
 /usr/bin/grep -q 'issues/74/labels.*labels\[\]=frozen:owner' "$T/gh.log" && ok "KR: the repeated conflict freezes #74 (frozen:owner)" || ko "KR: no frozen:owner on #74 after the repeat"
 ls "$T"/st/cq/*74-wavestop* >/dev/null 2>&1 && ok "KR: the repeated conflict writes the stop marker of #74" || ko "KR: no stop marker for #74 after the repeat"

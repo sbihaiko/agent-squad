@@ -368,7 +368,7 @@ FP=$(printf '%s' "$TITLE" | $G -oE '\[[0-9a-f]{12}\]$')
 $G -qF "Filed by autobug" "$T/filed" && ok "8 the bug carries the Filed by line of the pass that hit the refusal" || ko "8 no Filed by line: $(cat "$T/filed")"
 $G -qF 'labels[]=bug' "$T/filed" && $G -qF 'labels[]=ready-for-agent' "$T/filed" \
   && ok "8 the bug arrives with the bug kind and the startable label" || ko "8 labels: $(cat "$T/filed")"
-extra=$($G -oE '^labels\[\]=[^ ]+' "$T/filed" | $G -cv -e 'labels\[\]=bug' -e 'labels\[\]=ready-for-agent' || true)
+extra=$($G -oE '^labels\[\]=[^ ]+' "$T/filed" | $G -cv -e 'labels\[\]=bug' -e 'labels\[\]=ready-for-agent' -e 'labels\[\]=frozen:not-startable' || true)   # the publish hold (#1978)
 [ "$filed" = 1 ] && [ "${extra:-0}" -eq 0 ] && ok "8 no other label rides along" || ko "8 $extra other label(s): $(cat "$T/filed")"
 [ "$($G -c '^```$' "$T/filed")" = 2 ] && ok "8 the evidence sits inside one fence" || ko "8 fence lines: $($G -c '^```$' "$T/filed"): $(cat "$T/filed")"
 f=1
