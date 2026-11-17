@@ -86,7 +86,7 @@ E
   printf '{"number":0,"title":"t","body":"","created_at":"2026-01-01T00:00:00Z"}' > "$GH_ISSUE1"
 }
 five() { issues '[{"number":11,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":12,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":13,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":14,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":15,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'; }
-issues() { printf '%s' "$1" | jq -c '[.[]|if .unready then . else .labels=((.labels//[])+[{"name":"frontier"}]) end]' > "$GH_ISSUES"; }   # a fixture issue carries the frontier label (#485) unless it says "unready"
+issues() { printf '%s' "$1" | jq -c '[.[]|(.repo //= "o/r")|(.blocked_by_complete //= true)|if .unready then . else .labels=((.labels//[])+[{"name":"frontier"}]) end]' > "$GH_ISSUES"; }   # a fixture issue carries the frontier label (#485) unless it says "unready"; the repo and the complete edge page are the snapshot's (#1984)
 issuebody() { printf '{"number":%s,"title":"t","body":"%s","created_at":"2026-01-01T00:00:00Z"}' "$1" "$2" > "$GH_ISSUEDIR/$1.json"; }   # <n> <body>: what the pass pastes into the request for that issue
 real() { MK_REAL=1 SG_FORK_DIR=$FK SG_FORK_BASE=main "$@"; }   # the real slice guard over the throwaway fork
 run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1 | /usr/bin/tee -a "$T/pass.out"; /bin/sleep 0.6; }   # the launch is detached: give it time to count itself; pass.out keeps every pass for the fixture check below

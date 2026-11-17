@@ -132,22 +132,22 @@ def validate(graph, proposed=()):
     return _verdict(_findings(graph, explicit, comp))
 
 
-def graph_of(issues):
+def graph_of(issues, repo=None):
     """The graph of the reads a pass holds: one node per listed issue, one per edge target it cannot list."""
     graph = {}
     for i in issues:
         labels = {label.get("name") for label in i.get("labels") or [] if isinstance(label, dict)}
         kind = "loop-bug" if any(str(name).startswith("loop-bug") for name in labels) else "bug" if "bug" in labels else "spec" if "spec" in labels else "task"
-        k = key(i["repo"], i["number"])
+        k = key(i.get("repo", repo), i["number"])
         graph[k] = node(
             kind=kind, open=i.get("state") == "open", delivered=i.get("state") != "open",
-            parent=key(i["repo"], i["parent"]) if i.get("parent") else None,
-            blockers=[key(e["repo"], e["number"]) for e in i.get("blocked_by_edges") or []],
+            parent=key(i.get("repo", repo), i["parent"]) if i.get("parent") else None,
+            blockers=[key(e.get("repo", repo), e["number"]) for e in i.get("blocked_by_edges") or []],
             complete=i.get("blocked_by_complete") is True, hold="owner" if "frozen:owner" in labels else None,
         )
     for i in issues:
         for e in i.get("blocked_by_edges") or []:
-            k = key(e["repo"], e["number"])
+            k = key(e.get("repo", repo), e["number"])
             if k not in graph:
                 closed = e.get("state") != "open"
                 graph[k] = node(open=not closed, delivered=closed, read=closed)
@@ -170,7 +170,7 @@ def audit(issues):
 
 def verdict_of(issues, repo, number):
     """The verdict for the component that holds one issue, read from the pass's own issue list."""
-    graph = graph_of(issues)
+    graph = graph_of(issues, repo)
     explicit = _explicit(graph)
     comp = _component(explicit + _implicit(graph), {key(repo, number)})
     return _verdict(_findings(graph, [e for e in explicit if e[0] in comp], comp))
