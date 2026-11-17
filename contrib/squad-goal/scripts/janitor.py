@@ -1052,7 +1052,8 @@ def board_write(args, n, why, reason=None, event=None):   # the one writer of a 
     if gone.exists(): return False
     col, pending = status_column(args), False
     if col and not dry: pending = predict_write(n, col, why)   # a dry run writes nothing, and predicts nothing
-    env = {**os.environ, "SG_MOVE_REASON": reason or "", "SG_MOVE_EVENT": event or ""}   # names why a card returns to Todo (#1059) and the event a reset names on its issue (#1904)
+    head = subprocess.run(["git", "-C", os.environ.get("SG_CHECKOUT") or ".", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() if reason else ""
+    env = {**os.environ, "SG_MOVE_REASON": reason or "", "SG_MOVE_EVENT": event or "", "SG_MOVE_SHA": head}   # names why a card returns to Todo (#1059) and the event and sha a reset names on its issue (#1904)
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True, env=env)
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()

@@ -148,7 +148,7 @@ ab_free_refused() {   # <run> <request> <issue>...: a refused launch frees its c
   local run=$1 req=$2 why cards n; shift 2
   for n in "$@"; do rm -f "$A/bug-$n" "$A/disp-$n"; done
   why=$(/usr/bin/grep -m1 -E '^refused' "$SG_STATE/$run.log" 2>/dev/null || tail -1 "$SG_STATE/$run.log" 2>/dev/null)
-  ab_board_event "$run" Todo "$req" "$@" && SG_MOVE_REASON=launch-refused SG_MOVE_EVENT="$run" ab_board_write "$run" Todo "$@"
+  ab_board_event "$run" Todo "$req" "$@" && SG_MOVE_REASON=launch-refused SG_MOVE_EVENT="$run" SG_MOVE_SHA="$(git -C "$SG_CHECKOUT" rev-parse HEAD 2>/dev/null)" ab_board_write "$run" Todo "$@"
   cards=$(printf '#%s ' "$@")
   printf '%s AUTOBUG refused: %s launch refused by launch.py (request %s): %s; claim freed, card back to Todo\n' "$(date '+%F %T')" "${cards% }" "$run" "$why" >> "$SG_STATE/alerts.log"
   echo "AUTOBUG $run refused by launch.py: $why; freed its claim, card back to Todo, next pass retries" >&2

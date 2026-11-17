@@ -6,7 +6,7 @@
 # Stubbed gh and a temp checkout for the sha; a temp state dir, so the live board and the loop's cache are never touched.
 # usage: bash test-board-reset.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-unset SG_MOVE_BY SG_MOVE_REASON SG_MOVE_EVENT
+unset SG_MOVE_BY SG_MOVE_REASON SG_MOVE_EVENT SG_MOVE_SHA
 mkdir -p "$T/bin" "$T/st" "$T/co"; cp "$src" "$T/s-board.py"; d=$(dirname "$src"); cp "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$T/"
 echo x/y > "$T/urlrepo"
 git -C "$T/co" init -q && git -C "$T/co" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
@@ -16,7 +16,7 @@ a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in *"/comments"*) cat > "TMPDIR/comment.in";; *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
   *"/comments"*) echo '{"id":1}';;
-  *"/labels"*) if [ -f "TMPDIR/fail-label" ] && [[ "$a" == *"-X POST"* && "$a" == *"issues/"* ]]; then rm -f "TMPDIR/fail-label"; echo "label refused" >&2; exit 1; fi; echo '[]';;
+  *"/labels"*) if [ -f "TMPDIR/fail-label" ] && [[ "$a" == *"-X POST"* && "$a" == *"issues/"* ]]; then rm -f "TMPDIR/fail-label"; sed -i.bak '$d' "TMPDIR/gh.calls"; rm -f "TMPDIR/gh.calls.bak"; echo "label refused" >&2; exit 1; fi; echo '[]';;
   *"-X PATCH"*items/*)
     n=${a#*items/}; n=${n%% *}; n=${n#ITEM}
     opt=$(python3 -c 'import json;print(json.load(open("TMPDIR/patch.in"))["fields"][0]["value"])')
@@ -32,7 +32,7 @@ esac
 J
 sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 seed() { printf '2001\tTodo\n2002\tDoing\n2003\tCode Review\n2004\tCode Complete\n2005\tClosed\n2007\tAbandoned\n' > "$T/cards.tsv"; : > "$T/gh.calls"; rm -f "$T/st/board-rejections.jsonl" "$T/st/board-resets.json" "$T/comment.in" "$T/patch.in" "$T/fail-label"; }
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" python3 "$T/s-board.py" "$@"; }
+run() { SG_MOVE_SHA="${SG_MOVE_SHA-$sha}" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" python3 "$T/s-board.py" "$@"; }
 col() { awk -F'\t' -v n="$1" '$1 == n {print $2}' "$T/cards.tsv"; }
 comments() { /usr/bin/grep -c "issues/$1/comments" "$T/gh.calls"; }
 labeled() { /usr/bin/grep -F "labels[]=$2" "$T/gh.calls" | /usr/bin/grep -cF "issues/$1/labels"; }
@@ -76,10 +76,22 @@ SG_MOVE_BY=loop SG_MOVE_REASON=reopened SG_MOVE_EVENT=reopen-f run o 4 Doing 200
 [ "$(dropped 2004 'board-reset%3Ano-delivery')" = 1 ] && [ "$(labeled 2004 'board-reset:reopened')" = 0 ] && [ "$(comments 2004)" = 1 ] \
   && ok "a forward move with a reset reason drops the reset label it answers and adds none" || ko "forward reset: dropped $(dropped 2004 'board-reset%3Ano-delivery'), reopened $(labeled 2004 'board-reset:reopened'), comments $(comments 2004): $(cat "$T/gh.calls")"
 
+seed; SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-h run o 4 Todo 2004 >/dev/null 2>&1
+awk -F'\t' -v OFS='\t' '$1 == 2004 {$2 = "Code Complete"} 1' "$T/cards.tsv" > "$T/cards.new" && mv "$T/cards.new" "$T/cards.tsv"
+git -C "$T/co" -c user.name=t -c user.email=t@t commit -q --allow-empty -m next
+SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-h run o 4 Todo 2004 >/dev/null 2>&1
+[ "$(comments 2004)" = 1 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 1 ] \
+  && ok "a repeat of the same event after a new commit keeps the sha the event named" || ko "repeat after commit: comments $(comments 2004), labels $(labeled 2004 'board-reset:no-delivery'): $(cat "$T/gh.calls")"
+
+seed; SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-i run o 4 Todo 2004 >/dev/null 2>&1
+SG_MOVE_BY=owner run o 4 Backlog 2004 >/dev/null 2>&1
+[ "$(col 2004)" = "Backlog" ] && [ "$(dropped 2004 'board-reset%3Ano-delivery')" = 0 ] \
+  && ok "a backward move keeps the reset label, since it does not answer the reset" || ko "backward move: column $(col 2004), dropped $(dropped 2004 'board-reset%3Ano-delivery'): $(cat "$T/gh.calls")"
+
 seed; touch "$T/fail-label"; SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-e run o 4 Todo 2004 >/dev/null 2>&1
 awk -F'\t' -v OFS='\t' '$1 == 2004 {$2 = "Code Complete"} 1' "$T/cards.tsv" > "$T/cards.new" && mv "$T/cards.new" "$T/cards.tsv"
 SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-e run o 4 Todo 2004 >/dev/null 2>&1
-[ "$(comments 2004)" = 1 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 2 ] \
+[ "$(comments 2004)" = 1 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 1 ] \
   && ok "a label that fails once is applied on the next move without a second comment" || ko "partial failure: comments $(comments 2004), labels $(labeled 2004 'board-reset:no-delivery'): $(cat "$T/gh.calls")"
 
 seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing run o 4 Todo 2004 2>&1); rc=$?
@@ -89,7 +101,7 @@ seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing run o 4 Todo 2004 2>&1); rc=
 
 seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-g SG_STATE="$T/st" SG_CHECKOUT="$T/nogit" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" python3 "$T/s-board.py" o 4 Todo 2004 2>&1); rc=$?
 [ "$(comments 2004)" = 0 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 0 ] \
-  && case "$o" in *sha*) true;; *) false;; esac \
-  && ok "a reset without a checkout sha writes no comment and names the missing sha" || ko "no sha: exit $rc, comments $(comments 2004): $o"
+  && case "$o" in *SG_MOVE_SHA*) true;; *) false;; esac \
+  && ok "a reset without SG_MOVE_SHA writes no comment and names the missing sha" || ko "no sha: exit $rc, comments $(comments 2004): $o"
 
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "all reset checks passed" || { echo "reset checks failed"; exit 1; }
