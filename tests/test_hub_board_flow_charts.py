@@ -1332,15 +1332,33 @@ def test_the_plot_height_is_computed_beside_the_width_from_the_window(hub):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_lead_plot_owns_most_of_the_card_at_the_owner_window(hub, tmp_path):
-    """#2171: at 1700x1000 the plot owns at least 70 percent of the lead card, and the card fits the window.
+def test_the_lead_plot_owns_most_of_the_card_at_the_owner_window(hub, board, tmp_path):
+    """#2171: at 1700x1000 the lead view renders its card at ltCardH(1000) = 680 px, and that card gives every pixel
+    below one text line and one control row to the plot box, so the plot owns (680 - 130) / 680 = 81 percent.
 
-    A unit test cannot measure a real browser layout; it reads the page's own layout rule, the one the view applies."""
-    out = _render(hub, tmp_path, "lt-card-share.js",
-                  "JSON.stringify({card:ltCardH(1000),plot:flowHeight(1000),win:1000})")
-    lay = json.loads(out)
-    assert lay["card"] <= lay["win"], "the lead card stands taller than the 1000 px window"
-    assert lay["plot"] / lay["card"] >= 0.70, "the plot owns less than 70 percent of the lead card"
+    A unit test cannot measure a browser layout. It reads the height the page's own renderer emits on the card, and the
+    rule that hands the card's remainder to the plot box; the browser measurement is named in the issue, not here."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = _flow(hub)["lead"]
+    out = _render(hub, tmp_path, "lt-card-share.js", f"flowLead({json.dumps(lead)})")
+    card = re.search(r'<div class=ltcard style="height:(\d+)px">', out)
+    assert card, "the lead view applies no card height from the window"
+    card_h = int(card.group(1))
+    assert card_h == 680, f"the card is not the 550 px plot plus the 130 px text at a 1000 px window: {card_h}"
+    assert card_h <= 1000, "the lead card stands taller than the 1000 px window"
+    plot_h = card_h - 130
+    assert plot_h / card_h >= 0.70, f"the plot owns {plot_h / card_h:.2f} of the lead card, under 70 percent"
+    css = hub.PAGE
+    assert re.search(r"#flowb \.ltcard\{[^}]*display:flex[^}]*flex-direction:column", css), \
+        "the card is not a column that can hand its remainder to the plot"
+    box = re.search(r"#flowb \.ltcard \.ltplot\{([^}]*)\}", css)
+    assert box and "flex:1" in box.group(1) and "min-height:0" in box.group(1), \
+        "the plot box does not take the card's remainder"
+    fill = re.search(r"#flowb \.ltcard \.ltplot>svg\{([^}]*)\}", css)
+    assert fill and "height:100%" in fill.group(1), "the plot does not fill its box"
+    assert re.search(r"<div class=ltcard[^>]*>.*<div class=ltplot>", out, re.S), "the emitted card holds no plot box"
+    # The review's own check: the helper is applied by the view, never a second, unused layout rule (#2171).
+    assert "ltCardH(" in css.split("const ltCardH", 1)[1], "ltCardH is defined and never applied"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -1387,6 +1405,9 @@ def test_the_lead_chart_reads_its_plot_frame_from_the_window(hub):
     assert "pw=${flowW}&ph=${flowH}" in resize, "a resize still measures the stale frame instead of the window's"
     opened = next(line for line in hub.PAGE.splitlines() if line.startswith("const flowOpen="))
     assert "ltGet()" in opened and "ltOwn()" not in opened, "opening the lead chart skips the window-sized read"
+    block = _flow_block(hub)
+    draw = block[block.index("const drawFlow="):block.index("const flowOpen=")]
+    assert "!LT.zc" in draw, "the lead paints the payload's fixed frame before the window-sized read lands"
 
 
 def test_the_refresh_time_is_a_quiet_status_line(hub):
@@ -1785,6 +1806,7 @@ def _render(hub, tmp_path, name, expression, block=None, storage=None):
     # Re-anchored (#1247): the page no longer restores a stored choice, so the harness sets the visit's choice itself: the
     # All timeframe on the log axis, the view these drawings were written against.
     drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", storage or STORAGE,
+                         "const window={innerHeight:1000};",   # the owner window the lead card is sized from (#2171)
                          block or _flow_block(hub).split("const drawFlow")[0], 'LT.tf="all";',
                          f"process.stdout.write({expression});"])
     path = tmp_path / name
