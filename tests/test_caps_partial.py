@@ -205,3 +205,21 @@ def test_the_take_command_writes_the_priority_marker_and_a_child_take_names_it(t
         assert r.returncode == 73 and "gate-tip" in r.stderr, r.stderr
     finally:
         holder.kill()
+
+
+def test_a_priority_check_takes_the_whole_count_or_none(tmp_path):
+    """(#2060) A tip or landing check never starts on part of its slots: two free of three is no take, and it keeps its
+    marker, so no child takes the third slot; the take succeeds when all three are free."""
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        kids = [c.try_take_many("gates", f"child-gate-{i}", 1, pid=pid) for i in (1, 2, 3)]
+        c.release_many(kids[0])
+        c.release_many(kids[1])
+        assert c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip") is None      # two free: no part take
+        assert c.try_take_many("gates", "child-gate-4", 1, pid=pid) is None                  # the marker keeps them
+        c.release_many(kids[2])
+        tip = c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")
+        assert tip is not None and len(tip) == 3 and c.waiting() == []
+    finally:
+        holder.kill()
