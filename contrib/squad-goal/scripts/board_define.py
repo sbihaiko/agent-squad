@@ -13,7 +13,9 @@ With no --apply the run is a dry run: one read, no write. --check exits 1 when t
 on the board and waits for the owner's grant (ADR-0024). The definition is read from its path, never kept here (ADR-0141).
 --migrate moves each card on an old Status option to the column board_migrate plans (ADR-0143), and proves every move by
 one items read after the writes. --contract drops each Status option the definition does not name, and refuses while a
-card still carries one: no card ever loses the value it carries. Both are dry runs without --apply."""
+card still carries one: no card ever loses the value it carries. --rename renames the two old options in place (#2154):
+one field call carries every option with its own id, so each card keeps its column, and one items read proves every card
+moved with its option and the count is the same. All three are dry runs without --apply."""
 import argparse, json, sys
 from issue_state import HOLDER_FIELDS, board_state
 import board_migrate
@@ -167,6 +169,38 @@ def contract(binding, status, definition, apply):
     return 0
 
 
+def rename(binding, status, apply):
+    """Rename each option of the Status field in place: one field call carries every option with its own id, so no card
+    moves. One items read before the call counts the cards, and one after it proves every card kept its column and the
+    count is the same (#2154). A board already renamed takes no write and no read."""
+    sent, changed = board_migrate.renamed(status["options"])
+    for o in status["options"]:
+        if o["name"] in board_migrate.RENAMES:
+            print(f"RENAME {o['name']} -> {board_migrate.RENAMES[o['name']]}")
+    if not changed:   # a board already renamed: no write, no items read, so a second call changes nothing
+        print("no old name: the field already carries the shipped vocabulary; nothing written")
+        return 0
+    if not apply: print(f"dry run: {len(sent)} option(s) in one field call, nothing written"); return 0
+    before = cards(binding, status)
+    out = json.loads(binding.api("graphql", "--input", "-", inp=json.dumps({"query":
+        "mutation($input: UpdateProjectV2FieldInput!) { updateProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2SingleSelectField { id } } } }",
+        "variables": {"input": {"fieldId": status["node"], "singleSelectOptions": sent}}})) or "{}")
+    if out.get("errors"): raise RuntimeError(json.dumps(out["errors"])[:300])
+    after = cards(binding, status)   # the read is the proof, never the write's answer
+    was = {i["n"]: i["st"] for i in before}
+    now = {i["n"]: i["st"] for i in after}
+    not_renamed = [(n, board_migrate.RENAMES[s], now.get(n)) for n, s in was.items()
+                   if s in board_migrate.RENAMES and now.get(n) != board_migrate.RENAMES[s]]
+    stale = [(n, s) for n, s in now.items() if s in board_migrate.RENAMES]
+    for n, want, got in not_renamed: print(f"NOT-RENAMED {n}: wanted {want}, reads {got!r}", file=sys.stderr)
+    for n, s in stale: print(f"OLD-NAME {n}: still reads {s!r}", file=sys.stderr)
+    if len(before) != len(after): print(f"COUNT {len(before)} before the call, {len(after)} after it", file=sys.stderr)
+    ok = len(before) == len(after) and not not_renamed and not stale
+    print(f"done: {len(after)} card(s), {len(before)} before the call; "
+          + ("every card kept its column" if ok else "the proof failed"))
+    return 0 if ok else 1
+
+
 def main(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--definition", required=True, help="the board definition's board.json")
@@ -175,6 +209,7 @@ def main(argv):
     step = p.add_mutually_exclusive_group()
     step.add_argument("--migrate", action="store_true", help="move each card off an old Status option (ADR-0143)")
     step.add_argument("--contract", action="store_true", help="drop the Status options the definition does not name; refused while a card carries one")
+    step.add_argument("--rename", action="store_true", help="rename the Status options in place, keeping every option id (#2154)")
     p.add_argument("owner"); p.add_argument("project")
     a = p.parse_args(argv)
     definition = json.load(open(a.definition))
@@ -192,6 +227,7 @@ def main(argv):
         return 2
     if a.migrate: return migrate(binding, status_field(fields), a.apply)
     if a.contract: return contract(binding, status_field(fields), definition, a.apply)
+    if a.rename: return rename(binding, status_field(fields), a.apply)
     rows = diff(definition, snapshot(fields))
     lines = report(rows)
     print(f"read: {len(fields)} field(s) from {binding.base}/fields")

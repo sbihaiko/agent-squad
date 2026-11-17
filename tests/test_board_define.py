@@ -246,3 +246,88 @@ def test_contract_drops_the_old_options_and_keeps_each_named_option_id(monkeypat
     kept = body["variables"]["input"]["singleSelectOptions"]
     assert args[0] == "graphql" and body["variables"]["input"]["fieldId"] == "F_S"
     assert [(o["id"], o["name"]) for o in kept] == [("t", "Todo"), ("d", "Doing"), ("c", "Closed")]
+
+
+# #2154: the live board carries the version 1 names. A card holds an option id, so the field's option id is the card's
+# column: the rename changes the option's name in place and the card answers the new name, without a move.
+RENAME_STATUS = [{"id": 9, "node_id": "F_S", "name": "Status", "data_type": "single_select", "options": [
+    {"id": "bl", "name": {"raw": "Backlog"}, "color": "GRAY", "description": {"raw": ""}},
+    {"id": "cr", "name": {"raw": "Code Review"}, "color": "ORANGE", "description": {"raw": ""}},
+    {"id": "cc", "name": {"raw": "Code Complete"}, "color": "ORANGE", "description": {"raw": ""}},
+    {"id": "cl", "name": {"raw": "Closed"}, "color": "GREEN", "description": {"raw": ""}}]}]
+
+
+class RenameBoard:
+    """A board whose cards carry an option id: a field call renames the option, and the card's column is the option's name.
+
+    `lost` drops that many cards when the field call runs, so a count that the call itself changes is measured. `log`
+    records every call in order, so the test proves the count read comes before the field call."""
+
+    base = "/users/o/projectsV2/4"
+
+    def __init__(self, cards, lost=0):
+        self.cards = [dict(iid=i, repo=r, number=n, oid=o) for i, r, n, o in cards]
+        self.fields = json.loads(json.dumps(RENAME_STATUS))
+        self.names = {o["id"]: o["name"]["raw"] for o in self.fields[0]["options"]}
+        self.writes, self.lost, self.log = [], lost, []
+
+    def api(self, *a, inp=None, timeout=None):
+        if a[0].endswith("/fields?per_page=100"):
+            self.log.append("fields")
+            return json.dumps(self.fields)
+        if a[0] == "--paginate":
+            self.log.append("read")
+            return "\n".join(json.dumps({"iid": c["iid"], "repo": c["repo"], "number": c["number"],
+                                         "st": self.names[c["oid"]], "s": "open", "l": []}) for c in self.cards)
+        body = json.loads(inp)
+        self.log.append("write")
+        self.writes.append(body)
+        if "updateProjectV2Field" in body["query"]:
+            by = {o["id"]: o["name"] for o in body["variables"]["input"]["singleSelectOptions"]}
+            self.names.update(by)
+            for o in self.fields[0]["options"]:   # the next fields read answers the new name, as the live board does
+                if o["id"] in by:
+                    o["name"] = {"raw": by[o["id"]]}
+            del self.cards[len(self.cards) - self.lost:]   # a card the call itself drops
+        return "{}"
+
+
+def test_rename_carries_every_option_id_and_every_card_keeps_its_column(monkeypatch, tmp_path, capsys):
+    board = RenameBoard([("1", "a/x", 5, "cr"), ("2", "a/x", 6, "cc"), ("3", "b/y", 7, "cl")])
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+
+    (body,) = board.writes
+    sent = body["variables"]["input"]["singleSelectOptions"]
+    assert body["variables"]["input"]["fieldId"] == "F_S" and "updateProjectV2Field" in body["query"]
+    assert [(o["id"], o["name"]) for o in sent] == [
+        ("bl", "Backlog"), ("cr", "Review"), ("cc", "Landing"), ("cl", "Closed")]
+    names = [board.names[c["oid"]] for c in board.cards]
+    assert names == ["Review", "Landing", "Closed"]
+    assert "Code Review" not in names and "Code Complete" not in names
+    out = capsys.readouterr().out
+    assert "done: 3 card(s), 3 before the call; every card kept its column" in out, out
+
+
+def test_a_second_rename_call_writes_nothing(monkeypatch, tmp_path, capsys):
+    """The board already carries the shipped vocabulary: the second call sends no field write and still exits 0."""
+    board = RenameBoard([("1", "a/x", 5, "cr"), ("2", "a/x", 6, "cc")])
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+    assert len(board.writes) == 1
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+    assert len(board.writes) == 1, board.writes
+    assert "no old name" in capsys.readouterr().out
+    assert board.names == {"bl": "Backlog", "cr": "Review", "cc": "Landing", "cl": "Closed"}
+
+
+def test_the_rename_counts_the_cards_before_the_field_call(monkeypatch, tmp_path):
+    """The before count is a real read before the call: the field read, one items read, the field call, one items read."""
+    board = RenameBoard([("1", "a/x", 5, "cr"), ("2", "a/x", 6, "cc")])
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+    assert board.log == ["fields", "read", "write", "read"], board.log
+
+
+def test_rename_fails_the_proof_when_the_call_drops_a_card(monkeypatch, tmp_path, capsys):
+    board = RenameBoard([("1", "a/x", 5, "cr"), ("2", "a/x", 6, "cc")], lost=1)
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 1
+    err = capsys.readouterr().err
+    assert "COUNT 2 before the call, 1 after it" in err, err

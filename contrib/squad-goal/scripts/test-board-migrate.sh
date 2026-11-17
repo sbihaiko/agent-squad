@@ -33,4 +33,21 @@ echo "$out" | grep -q '^REFUSE option Testing: 1 card(s) left' && ok "the plan r
 echo "$out" | grep -q '^REFUSE option Pushing: 1 card(s) left' && ok "the plan refuses the Pushing removal, naming the count" || ko "Pushing refusal: $out"
 err=$(python3 "$T/s/board_migrate.py" --check "$T/retired.json" 2>&1 >/dev/null); rc=$?
 [ $rc = 3 ] && echo "$err" | grep -q 'Testing: 1' && echo "$err" | grep -q 'Pushing: 1' && ok "the check refuses a retired option with its count" || ko "retired check exit $rc: $err"
+# #2154: the in-place rename. One call carries every option with its own id, the two old names come from the one alias map,
+# and a second call over the canonical names changes nothing.
+python3 - "$T/s/board_migrate.py" <<'P' && ok "the rename carries every option id and maps Code Review/Code Complete" || ko "rename plan"
+import importlib.util, os, sys
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+spec = importlib.util.spec_from_file_location("bm", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+opts = [{"id": "a", "name": "Todo", "color": "GRAY", "description": ""},
+        {"id": "b", "name": "Code Review", "color": "ORANGE", "description": ""},
+        {"id": "c", "name": "Code Complete", "color": "ORANGE", "description": ""}]
+out, changed = m.renamed(opts)
+assert m.RENAMES == {"Code Review": "Review", "Code Complete": "Landing"}, m.RENAMES
+assert [(o["id"], o["name"]) for o in out] == [("a", "Todo"), ("b", "Review"), ("c", "Landing")], out
+assert changed
+again, changed2 = m.renamed(out)
+assert changed2 is False and again == out
+P
 rm -rf "$T"; exit $fail

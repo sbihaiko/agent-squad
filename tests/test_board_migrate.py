@@ -158,6 +158,31 @@ def test_the_check_passes_when_no_card_carries_an_old_option(tmp_path):
     assert r.returncode == 0
 
 
+def test_the_rename_carries_every_option_id_and_maps_the_two_old_names(mig):
+    """#2154: one field call carries every option with its own id, so each card keeps the column it stands in.
+    The two old names come from the one alias map, never a second table."""
+    options = [{"id": "a", "name": "Todo", "color": "GRAY", "description": ""},
+               {"id": "b", "name": "Code Review", "color": "ORANGE", "description": ""},
+               {"id": "c", "name": "Code Complete", "color": "ORANGE", "description": ""}]
+
+    out, changed = mig.renamed(options)
+
+    assert mig.RENAMES == {"Code Review": "Review", "Code Complete": "Landing"}
+    assert [(o["id"], o["name"]) for o in out] == [("a", "Todo"), ("b", "Review"), ("c", "Landing")]
+    assert changed
+
+
+def test_the_rename_changes_nothing_on_a_board_that_already_holds_the_names(mig):
+    """The second call sends the names the board already carries, so it changes nothing."""
+    options = [{"id": "b", "name": "Review", "color": "ORANGE", "description": ""},
+               {"id": "c", "name": "Landing", "color": "ORANGE", "description": ""}]
+
+    out, changed = mig.renamed(options)
+
+    assert changed is False
+    assert out == options
+
+
 def test_a_card_on_a_terminal_column_stays_and_a_closed_old_card_lands_in_closed(mig):
     items = [{"n": 20, "st": "Closed", "s": "CLOSED", "l": []}, {"n": 21, "st": "Abandoned", "s": "CLOSED", "l": []},
              {"n": 22, "st": "Blocked", "s": "CLOSED", "l": [], "facts": {"pr_open": True}}]

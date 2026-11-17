@@ -14,12 +14,28 @@ board_columns, never from a table here. This script has no write mode: the appli
 import json
 import sys
 
-from board_columns import FREEZE_LABEL, SHIPPED_NAME, SPEC_LABEL, column_for, view_column
+from board_columns import ALIAS_COLUMNS, FREEZE_LABEL, SHIPPED_NAME, SPEC_LABEL, column_for, view_column
 
 MOVED_OPTIONS = tuple(SHIPPED_NAME)   # an old option with a shipped column to take its cards
 RETIRED_OPTIONS = ("Testing", "Pushing")   # the definition no longer names them, and no column takes their cards
 OLD_OPTIONS = MOVED_OPTIONS + RETIRED_OPTIONS
 REFUSED = 3
+# The options the shipped definition renames in place (#2154): the old spelling and the canonical one. The map is read
+# from the one alias table, never written a second time.
+RENAMES = {old: entry["name"] for entry in ALIAS_COLUMNS for old in entry["old"]}
+
+
+def renamed(options):
+    """(every option of the field with its own id under its canonical name, True when one name changed).
+
+    One call carries every option, so an option sent with its id keeps that id and every card keeps its column. A board
+    that already carries the canonical names comes back unchanged, so a second call changes nothing."""
+    out, changed = [], False
+    for o in options:
+        name = RENAMES.get(o["name"], o["name"])
+        changed = changed or name != o["name"]
+        out.append({**o, "name": name})
+    return out, changed
 
 
 def _target(item):
