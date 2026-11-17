@@ -5,6 +5,7 @@ does `needs-info` with a startable label. A writer that would leave one of these
 pair it refused. One repair pass corrects every existing contradictory card, and the hold wins there: the card keeps its
 hold and loses the startable label.
 """
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -12,13 +13,20 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).parents[1] / "contrib" / "squad-goal" / "scripts"
-DEFINITION = SCRIPTS / "board-labels.json"
+DEFINITION = SCRIPTS / "board-definition.json"
 
 HOLDS = ("frozen:owner", "frozen:dependency", "frozen:not-startable")
 
 
 def _load():
     spec = importlib.util.spec_from_file_location("board_labels_under_test", SCRIPTS / "board_labels.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_columns():
+    spec = importlib.util.spec_from_file_location("board_columns_under_test", SCRIPTS / "board_columns.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -37,6 +45,24 @@ def test_the_definition_lists_every_contradictory_pair(labels):
     assert listed["waits"] == ["needs-info"]
     expected = [["ready-for-agent", hold] for hold in HOLDS] + [["ready-for-agent", "needs-info"]]
     assert [list(p) for p in listed["contradictory"]] == expected
+
+
+def test_the_label_pairs_are_a_section_of_the_pinned_board_definition(labels):
+    """ADR-0141: one artifact names the board's vocabulary, and its pin names every byte of it. The label pairs are a
+    section of that artifact, read under its pin, so a hand edit is refused and the loop keeps no second definition."""
+    text = DEFINITION.read_text()
+
+    assert hashlib.sha256(text.encode()).hexdigest() == _load_columns().PIN_SHA256
+    assert "labels" in json.loads(text)
+    assert not (SCRIPTS / "board-labels.json").exists()
+
+
+def test_a_label_definition_that_differs_from_the_pin_is_refused(labels, tmp_path):
+    edited = tmp_path / "board-definition.json"
+    edited.write_text(DEFINITION.read_text().replace('"ready-for-agent"', '"ready-for-human"'))
+
+    with pytest.raises(ValueError, match="pinned hash"):
+        labels.definition(edited)
 
 
 def test_the_definition_names_the_pairs_the_rule_refuses(labels):

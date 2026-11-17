@@ -1,9 +1,11 @@
 """The loop's label definition and the contradictory pairs one writer refuses (#1905).
 
 Two labels on one card state opposite things when one says the card is work an agent may take and the other says it is
-held or waiting. The label definition (board-labels.json) lists each startable label, each hold, each waiting label and
-every contradictory pair, so one file answers what a card may carry. It is its own definition, not a section of the
-pinned board definition (ADR-0141): that file names the board's columns and kinds, and the pin refuses an edit to it.
+held or waiting. The labels section of the shipped board definition lists each startable label, each hold, each waiting
+label and every contradictory pair, so one file answers what a card may carry (ADR-0141).
+
+The section is read under the definition's pin: a copy that differs from the pinned hash is refused, and the loop keeps
+no second definition of the board's vocabulary.
 
 A writer that would leave one of these pairs writes neither label, and names the pair it refused. A repair pass corrects
 every existing contradictory card, and the hold wins there: the card keeps the label that is not startable and loses the
@@ -12,18 +14,27 @@ startable one, because a hold is the owner's statement about the card.
 This module reads no host and calls no client: the caller passes the card's labels and the write seam, so the rule is
 proven without a carrier.
 """
+import hashlib
 import json
 import pathlib
+import sys
 
-DEFINITION = pathlib.Path(__file__).resolve().parent / "board-labels.json"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from board_columns import PIN_SHA256
+
+DEFINITION = pathlib.Path(__file__).resolve().parent / "board-definition.json"
 
 
 def definition(path=None):
-    """The definition's label section: the startable labels, the holds, the waits and the contradictory pairs."""
-    data = json.loads(pathlib.Path(path or DEFINITION).read_text())
-    labels = data.get("labels")
+    """The definition's label section: the startable labels, the holds, the waits and the contradictory pairs. A copy
+    that differs from the pin is refused, named with the file it names."""
+    target = pathlib.Path(path or DEFINITION)
+    text = target.read_text()
+    if hashlib.sha256(text.encode()).hexdigest() != PIN_SHA256:
+        raise ValueError(f"the definition {target.name} does not match the pinned hash; restore it from the published definition")
+    labels = json.loads(text).get("labels")
     if not isinstance(labels, dict):
-        raise ValueError(f"the definition {pathlib.Path(path or DEFINITION).name} lists no label section")
+        raise ValueError(f"the definition {target.name} lists no label section")
     return labels
 
 
