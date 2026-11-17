@@ -46,17 +46,10 @@ def _node(script, *files):
 # ---- the removed controls are gone from the page ----
 
 @pytest.mark.parametrize("marker", ['id=lf>', 'id=lf ', 'id=bsp', 'id=bz', 'id=bx', 'id="pip"', 'id=pip', 'id=pipf',
-                                    'id=lfl', 'id="pipf"', 'maximize the board'])   # 'Specs: all' left the list (#889): the mock's filter summaries read `Waves: all` and `Specs: all`
+                                    'id=lfl', 'id="pipf"', 'maximize the board', 'id=fs', 'id=fk', 'id=lmode',
+                                    'id=flowchips', 'ffchip'])   # the Specs, Kinds and Swimlanes controls left the page (owner ask, SPEC 1965)   # 'Specs: all' left the list (#889): the mock's filter summaries read `Waves: all` and `Specs: all`
 def test_the_removed_controls_are_not_on_the_page(hub, marker):
     assert marker not in hub.PAGE, f"{marker!r} is still on the page"
-
-
-def test_the_filter_bar_has_a_specs_and_a_kinds_multi_select(hub):
-    page = hub.PAGE
-    assert '<details id=fw' not in page and "Waves: all" not in page, "the wave filter survives"
-    assert '<details id=fs' in page and '<details id=fk' in page
-    assert 'bo.fs' in page and 'bo.fk' in page, "the selections are not kept in bo"
-    assert "<summary>Specs: all</summary>" in page and "<summary>Kinds: all</summary>" in page, "the mock's filter summaries (#889)"
 
 
 def test_a_saved_state_from_a_removed_control_is_dropped_on_load(hub):
@@ -183,8 +176,8 @@ def test_the_page_offers_the_specs_and_kinds_of_open_cards_only(hub):
 
 def test_drop_removed_clears_the_old_keys_and_keeps_the_kept_ones(hub):
     bo = {"labels": ["x"], "label": "y", "lmode": "all", "specs": 2, "max": True, "off": False, "pip": {"x": 1},
-          "fw": ["889/2"], "fs": [], "lc": {"s1": True}, "lmode_kept": 1}
+          "fw": ["889/2"], "fs": ["889"], "fk": ["bug"], "lc": {"s1": True}}
     out = _node(f"let bo={json.dumps(bo)};dropRemoved(bo);console.log(JSON.stringify(bo));", LANES_JS)
-    for gone in ("labels", "label", "specs", "max", "off", "pip", "fw"):
+    for gone in ("labels", "label", "specs", "max", "off", "pip", "fw", "lmode", "fs", "fk"):
         assert gone not in out, f"{gone} survived"
-    assert out["fs"] == [] and out["lc"] == {"s1": True}, "a kept filter or collapse state was dropped"
+    assert out["lc"] == {"s1": True}, "the collapse state a kept control writes was dropped"

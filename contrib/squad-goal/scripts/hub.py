@@ -1490,7 +1490,6 @@ def _fact(key, text, bad=False, parts=None, tip=None, detail=None):
     return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key], "tip": tip, "detail": detail,
             "parts": parts if parts is not None else [{"text": text, "tone": ""}]}
 
-
 # --- who is eating the tokens. `tokens.py burners` holds every rule (the window, the threshold, `over`, the order); the
 # hub runs it, caches the answer, and draws the burners it names. No script, a nonzero exit or unreadable output is no data.
 TOKENS_PY = pathlib.Path(__file__).resolve().parent / "tokens.py"
@@ -1516,7 +1515,6 @@ def burn_cached(now=None):
     now = time.time() if now is None else now
     if now - _BURN["t"] >= BURN_TTL: _BURN.update(t=now, v=burn_read())
     return _BURN["v"]
-
 
 # --- Spend & limits (#926). The token guard reads its on/off switch, its daily cap and its pause factor from the profile,
 # and env.sh sources that profile on every pass, so a value this section writes is read on the guard's next pass with no
@@ -2416,7 +2414,6 @@ def loop_view(a):
             "changes": loop_changes(rows),   # one project list, so the strip and the change log never disagree in one answer
             "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # kept for every client that already reads the loop answer
 
-
 def access_view(a):
     """Settings > Access reads the reach and the two tailnet rules on their own route (#1285), an additive answer beside the
     loop route so the theme never waits on the loop answer. `reach` is this request's own access result; each rule says
@@ -2832,7 +2829,6 @@ def trip_view(window_s, now=None):
             **hub_profiler.trip([trip_stages(p, next((waits[n] for n in issues[p] if n in waits), None))
                                  for p in files], trip_gates(since), since)}
 
-
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
 PROMOTED_MAIN = re.compile(r"promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
 PROMOTE_ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")   # the date the writer puts before its marker
@@ -3197,7 +3193,6 @@ def cache_row_column(i, moves, window):
     return drawn_column({"s": i.get("s"), "st": i.get("st"), "l": i.get("l"), "cr": i.get("cr"),
                          "i": i.get("i"), "ot": i.get("ot")}, moves, window)["st"]
 
-
 def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
     """The two window rows the card draws under the hero figure (#1424). Both cover the same rows, over the same window
     and the same kinds: Bugs counts every card carrying `bug` or any label beginning with `loop-bug` (the prefix rule the
@@ -3441,14 +3436,12 @@ def active_entries():
     except OSError: return []
     return list(dict.fromkeys(rows))
 
-
 def active_folder(entry):
     """The folder of one active-runs entry: an absolute run folder, or a name under the checkout's runs (the one reader's
     rule, squad/run_liveness.py record_path). None when the entry does not resolve to a record."""
     try: folder = pathlib.Path(liveness().record_path(entry, CHECKOUT).parent)
     except Exception: return None
     return str(folder) if (folder / "record.jsonl").is_file() else None
-
 
 def held_runs():
     """The run names the childcc pass holds, in the file's order, each once."""
@@ -4191,7 +4184,6 @@ LIVE_CLOCK = time.monotonic   # the age reader; a test injects its own, so fresh
 _LIVE_KEPT = {"at": None, "answer": None}   # the kept Live work answer: one entry per loaded module, so one per profile
 _LIVE_LOCK = threading.Lock()
 
-
 def live_served(now=None):
     """The Live work answer, computed at most once per the page's own poll window (#1933).
 
@@ -4209,12 +4201,10 @@ def live_served(now=None):
         _LIVE_KEPT.update(at=now, answer=answer)
         return answer
 
-
 def live_recompute():
     """Clear the kept Live work answer: a loop write changes what the panel draws, so the page that acted reads its own
     change at once instead of waiting out the window."""
     with _LIVE_LOCK: _LIVE_KEPT.update(at=None, answer=None)
-
 
 def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
     """The Live work panel's answer, all from local state and the board read the hub already holds:
@@ -4459,21 +4449,17 @@ def merge_items(held, fresh, observed):
         out.append(merged)
     return out
 
-
 class SyncMissing(Exception):
     """The card GitHub no longer carries: a press keeps the row it held and names the absence (#1668)."""
-
 
 def sync_instant(now=None):
     """The instant of one press's read, in the same ISO shape the board's rows carry (#1668)."""
     return dt.datetime.fromtimestamp(time.time() if now is None else now, dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-
 def label_names(labels):
     """One read's labels as the names the board carries: `ghread` answers REST-shaped `[{"name": ...}]`, and the cache
     holds strings, as every other reader of the same answer (#1682)."""
     return [x.get("name") if isinstance(x, dict) else x for x in (labels or []) if (x.get("name") if isinstance(x, dict) else x)]
-
 
 def read_one_card(n):
     """One card re-read from GitHub now, as a cache item (#1668).
@@ -4505,7 +4491,6 @@ def read_one_card(n):
         else: item.pop("h", None)
     return item
 
-
 def synced_rows(n, at):
     """The board rows for one card, each naming the column it draws as `st` and this read's instant as `ri` (#1668)."""
     out = []
@@ -4514,16 +4499,13 @@ def synced_rows(n, at):
             if r.get("n") == n: out.append({**r, "st": g.get("name"), "ri": at})
     return out
 
-
 SYNC_TREE_DEPTH = 3          # the levels below a spec one press descends into (#1670)
 SYNC_TREE_NODES = 50         # the cards one press reads, the spec included (#1670)
 SYNC_TREE_SECONDS = 20.0     # one press's deadline: a read already begun finishes, none begins past it (#1670)
 _sync_frontier = {}          # a capped spec's unread numbers, which its next press continues from (#1670)
 
-
 def _has_subs(item):
     return bool((item.get("si") or {}).get("total"))
-
 
 def sync_tree(root):
     """The root and, when it is a spec, every sub-issue under it, read to the depth, node and time bounds (#1670).
@@ -4567,7 +4549,6 @@ def sync_tree(root):
     note = f"{failed} sub-issue read(s) did not answer" if failed else ""
     return items, capped, note
 
-
 def sync_card(n):
     """POST /api/sync: re-read one card from GitHub now, and a spec's sub-issues with it, and answer the rows refreshed (#1668, #1670).
 
@@ -4595,7 +4576,6 @@ def sync_card(n):
         closed = str(root.get("s") or "").lower() == "closed"
         note = note or (f"#{n} is closed: it is no longer an open card" if closed else f"#{n} has no open column")
     return {"n": n, "rows": rows, "count": len(rows), "at": at, "err": None, "capped": capped, "note": note}
-
 
 def set_part(name, err):
     """Stamp one part of the cache (status, structure, prs) with its read's instant and error: a failed read keeps the
@@ -5267,18 +5247,15 @@ def _band_extents(bands):
         run += bands[name]
     return extents
 
-
 def _y_ticks(top):
     """The numbered ticks of the y axis: from zero to the first step of 1, 2 or 5 times a power of ten that covers the
     tallest stack in at most four steps."""
     step = next(s for e in range(7) for s in (10 ** e, 2 * 10 ** e, 5 * 10 ** e) if -(-top // s) <= 4)
     return [k * step for k in range(-(-top // step) + 1)]
 
-
 def _x_ticks(days):
     """Up to five date ticks, evenly spaced over the history's calendar days."""
     return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
-
 
 BUG_ROW_SECONDS = 7 * 86400   # the Bugs and Loop-bugs rows count the cards opened in the past week (owner, 2026-11-13)
 FLOW_MOVED = "moved"   # the label a card carries once it left for another board: no band of this board counts it (#1663)
@@ -5286,12 +5263,10 @@ CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulativ
 LEAD_TIMEFRAMES = [("12h", 0.5), ("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the four short ones count hours on the page (owner, 2026-11-01); 12h is the default (#2029)
 LEAD_START = COLUMN["issue_todo"]   # the Lead Time view opens measured from Todo (#1247): the payload the page reads carries it
 
-
 def bar_keys(i):
     """The values the board's bar filters one item by: its spec, its Waves key `spec/wave` (#980), its kind and its type (#904, #985)."""
     return {"spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i),
             "type": _flow.type_key(i)}
-
 
 def lead_rows(a=None, b=None, now=None):
     """The rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held time of its
@@ -5349,7 +5324,6 @@ def lead_rows(a=None, b=None, now=None):
         rows.append(row)
     return rows
 
-
 def board_filters(query):
     """The bar's Waves, Specs and Kinds values and the chart's Type from a query string, `fw=5/4,none/none&fs=5&fk=bug&ty=bug`
     (#904, #985): (fw, fs, fk, ty). An absent value is an empty list: all. An absent or unknown type is the default, tasks."""
@@ -5358,7 +5332,6 @@ def board_filters(query):
     ty = q.get("ty", [""])[0]
     return values("fw"), values("fs"), values("fk"), ty if ty in _flow.TYPES else _flow.DEFAULT_TYPE
 
-
 def cfd_filters(query):
     """The cumulative flow's route values (#1356): the bar's (fw, fs, fk, ty), and no type at all when the extra `every=1`
     says every card. The `ty` parameter keeps its accepted values and its tasks default, so a reader that knows only the old
@@ -5366,13 +5339,11 @@ def cfd_filters(query):
     fw, fs, fk, ty = board_filters(query)
     return fw, fs, fk, None if urllib.parse.parse_qs(query or "").get("every", [""])[0] == "1" else ty
 
-
 def _in_bar(row, fw, fs, fk=(), ty=None):
     """A row the bar keeps: its Waves key is among the waves named, its spec among the specs named, its kind among the kinds
     named, and its type is the chart's Type (#985). Empty lists keep all; no type keeps all."""
     return ((not fw or row["wave"] in fw) and (not fs or row["spec"] in fs) and (not fk or row["kind"] in fk)
             and (ty is None or row["type"] == ty))
-
 
 def _lead_plot(query=None):
     """The plot frame the lead chart clusters in: the page names its rendered plot size in pixels (`pw` x `ph`) on a
@@ -5382,7 +5353,6 @@ def _lead_plot(query=None):
     try: width, height = round(float(query["pw"][0])), round(float(query["ph"][0]))
     except (ValueError, OverflowError): return default
     return {"width": width, "height": height} if 100 <= width <= 4000 and 60 <= height <= 4000 else default
-
 
 def lead_zoom(query):
     """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), measured
@@ -5413,7 +5383,6 @@ def lead_zoom(query):
     if end <= start: return {"error": "bad range: to is not after from"}
     return _leadtime.control_chart(rows, now=now, start=start, end=end, measure=measure, plot=_lead_plot(q))
 
-
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
 
 def chart(name, key, build):
@@ -5441,7 +5410,6 @@ def _coverage_payload(store):
     c = _hist.coverage({n: r for n, r in store.items() if n in numbers})
     return {"read": c["read"], "complete": c["complete"], "total": len(board_cache["items"]),
             "last": _hist._iso(c["last"]) if c["last"] is not None else None}
-
 
 def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, counted per day by board_cfd from the history store's column intervals; the page draws
@@ -5480,7 +5448,6 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
                 "bands": [band(n) for n in FLOW_BANDS]}
     return {"cfd": {**view(None), "zone": zone, "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
-
 def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The lead-time numbers of the board read, measured from LEAD_START, the view's default start (#1247), computed here;
     the page draws them and computes none. The bar's values `fw`, `fs` and `fk` filter the rows (#904)."""
@@ -5500,7 +5467,6 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
                      "excluded_reasons": _leadtime.exclusion_words(lead["excluded"]),
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
                      "control": control, "columns": ORDER, "coverage": coverage}}
-
 
 def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow for the bar's values and the Type; the cache key holds them, so a change reads anew (#904, #985)."""
@@ -5522,18 +5488,15 @@ HISTORY_TIMELINE = ("query($owner:String!,$name:String!,$number:Int!,$after:Stri
 HISTORY_SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){issueCount "
                   "pageInfo{hasNextPage endCursor} nodes{... on Issue{number}}}}")
 
-
 def day_zone():
     """The zone a chart day ends in: the TZ the hub runs under, else the machine's zone, else UTC (#1024)."""
     name = os.environ.get("TZ") or os.path.realpath("/etc/localtime").partition("zoneinfo/")[2] or "UTC"
     try: return zoneinfo.ZoneInfo(name).key
     except (zoneinfo.ZoneInfoNotFoundError, ValueError): return "UTC"
 
-
 def _history_timeline(n, cursor):
     owner, _, name = REPO.partition("/")
     return gh_graphql(HISTORY_TIMELINE, owner=owner, name=name, number=int(n), **({"after": cursor} if cursor else {}))
-
 
 def _history_search():
     """Every issue number the repository holds, page by page. None when a page answered nothing, or when the pages fall short
@@ -5548,13 +5511,11 @@ def _history_search():
             return found if len(found) == search["issueCount"] else None
         after = search["pageInfo"]["endCursor"]
 
-
 def _history_due(store, items):
     """The cards a pass reads: no timeline yet, a partial one, one whose Status moved past its record, or one whose
     closed state disagrees with its record (#1024, #1419). The rows carry the issue's own state (`s`), never the card's
     Status (`st`), so a close through the API is a read reason even when the card never moved."""
     return _hist.due_items(items, store)
-
 
 def _read_timeline(n, prior, keys, read_issue, path, recs, now):
     """Read one card's timeline into the store. A partial timeline resumes from its cursor; a complete one is read from the
@@ -5582,7 +5543,6 @@ def _read_timeline(n, prior, keys, read_issue, path, recs, now):
         recs.append(_hist.record_issue(path, n, rec["issue_updated"], rec["status_updated"], rec["events"], rec["complete"], now,
                                        rec["cursor"], keys))
     return ok
-
 
 def history_pass(read_issue=None, read_search=None, now=None):
     """Read the timelines due and the hourly search into the history store. A read the budget refuses ends the pass; the next
@@ -5612,7 +5572,6 @@ def history_pass(read_issue=None, read_search=None, now=None):
     finally:
         _hist.compact(path, now)
 
-
 def refresh_history():
     """history_pass() every HISTORY_EVERY seconds while a page reads this profile (#1024, #1790); one failed pass never
     ends the loop."""
@@ -5621,7 +5580,6 @@ def refresh_history():
             try: history_pass()
             except Exception as e: print(f"history pass failed: {e}", file=sys.stderr)
         read_pause(HISTORY_EVERY)
-
 
 PREDICT_DEFECT = "BOARD-PENDING-OLD"   # the name a prediction past its bound is reported as (#1841)
 PREDICTED_SEEN = STATE / "board-predictions.json"   # issue -> the instant of the prediction the loop's log already named
@@ -5635,7 +5593,6 @@ def predictions():
         print(f"hub: the ledger's predictions do not read ({e}): the board is the list read alone", file=sys.stderr)
         return {}
     return {int(r["n"]): r for r in rows}
-
 
 def predicted_draw(pred, read_column, read_at, window, closed, labels, cr):
     """The draw of one prediction (#1841): the column the writer named, the freeze that column carries, the pending mark,
@@ -5652,7 +5609,6 @@ def predicted_draw(pred, read_column, read_at, window, closed, labels, cr):
     defect = PREDICT_DEFECT if carried and read_at - at >= window else None
     return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, labels, cr)[1], "state": "pending",
             "recorded": recorded, "entry": None, "defect": defect, "at": at}
-
 
 def report_predictions(defects):
     """One line in the loop's log for each prediction that outlived its bound (#1841): the issue, the writer, the column
@@ -5680,7 +5636,6 @@ def report_predictions(defects):
                         f"and no read carried it within {d['window']:g} s; the card stays drawn pending\n")
     except OSError:
         pass   # the report is bookkeeping: the served board never fails for it
-
 
 def drawn_column(i, moves, window):
     """The column the served board draws for one row, the freeze that column carries, and what the serve acts on:
@@ -5718,14 +5673,12 @@ def drawn_column(i, moves, window):
     return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"), i.get("cr"))[1], "state": state,
             "recorded": recorded, "entry": entry}
 
-
 def flight_draw(i):
     """The draw of a card whose write is in flight: the column the write goes to, marked pending until the writer answers
     (#1300). The freeze is the column's, as a pending move's is (ADR-0144)."""
     closed = str(i["s"]).lower() == "closed"
     return {"st": PROMOTE_TO, "fz": _columns_module.view_column(PROMOTE_TO, closed, i.get("l"), i.get("cr"))[1], "state": "pending",
             "recorded": PROMOTE_TO, "entry": None}
-
 
 def spec_plan_parents(items):
     """The spec numbers whose batch plan holds a ticket: an open sub-issue the board cache holds that is no spec and no held
@@ -6476,7 +6429,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);display:flex;flex-direction:column}#flowov[hidden]{display:none}
 /*PROFILER_CSS*/
 #flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
-#flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
+.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
 #flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}.ltlg b{font-weight:600}.ltlg em{font-style:normal;color:var(--mute)}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:var(--radius-sm)}.ltlg i.lthollow{width:10px;height:10px;border-radius:var(--radius-full);background:var(--chart-bg);border:1px solid var(--chart-ink)}.ltlg i.ltfilled{width:10px;height:10px;border-radius:var(--radius-full);background:var(--chart-ink)}.ltlg i.ltroll{height:3px;background:var(--chart-bar)}.ltlg i.ltband{background:var(--chart-series-3);opacity:.28}.ltlg i.ltsolid{height:2px;border-radius:0;background:var(--chart-series-8)}.ltlg i.ltdash{height:2px;border-radius:0;background:repeating-linear-gradient(90deg,var(--chart-ok) 0 6px,transparent 6px 9px)}.ltlg i.ltdot{height:2px;border-radius:0;background:repeating-linear-gradient(90deg,var(--chart-series-5) 0 2px,transparent 2px 6px)}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:var(--radius-sm)}#flowb .ltmore>summary{cursor:pointer;color:var(--mute);margin:2px 0 6px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:var(--card);z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
@@ -6561,7 +6514,6 @@ body.tkopen #win{margin-right:420px}
 #tkb .prbar{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}#tkb .pill{font-size:var(--fs-caption);border:1px solid var(--line);background:var(--card);border-radius:var(--radius-lg);padding:1px 9px}#tkb .pill.ok{border-color:var(--tint-ok-line);color:var(--ok)}#tkb .pill.bad{border-color:var(--tint-err-line);color:var(--err)}
 #tkb h3.sec{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:20px 0 4px}
 body.dockb #bbody{display:flex;overflow-x:auto;min-height:320px}
-
 
 body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:var(--card);flex:none}   /* the gap is stated: without it a header that is asked to pack its spans reads `Todo0` (#1809) */
@@ -6771,12 +6723,11 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 </div></aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
-<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=none>None</option></select></label> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span><span id=bsync class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=bhead><button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span><span id=bsync class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-runs class=pane aria-label=Runs><div id=main></div></section>
 <section id=tab-flow class=pane aria-label="Flow charts">
 <div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
-<div id=flowchips></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
 <section id=tab-prof class=pane aria-label=Loop><div id=profb></div></section>
@@ -7337,7 +7288,6 @@ pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
-if(!["spec","none"].includes(bo.lmode))bo.lmode="spec";   // an older page saved a mode no option names, wave included (#978, #1988)
 bo.dock="bottom";   // the board always docks at the bottom
 dropRemoved(bo);   // a saved state from a control the board no longer has is dropped (#899)
 const sizeBoard=()=>{$("#board").style.height=""};   // the board is one pane of the Board tab: its height is the page's, never a dragged one (#889)
@@ -7537,10 +7487,6 @@ const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,coun
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
 let LT={tf:"12h",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:true,p85:true,win:"full"};   // a fresh page opens on the past 12 hours (#2029), Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); the average, the median and p85 all show at first, and each is a toggle (#1332)
-let FLOWFF={};   // the charts that stopped following the Board tab's Specs and Kinds; the Board tab keeps its own filter (#1147)
-const flowFilterNames=(fs,fk)=>[["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
-const flowFilterChip=(fs,fk,stopped)=>{const names=flowFilterNames(fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
-const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["12h","Past 12 hours"],["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Last week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the End only: the Start opens on Todo every visit, and a reader's own start holds for that visit (owner ask)
@@ -7644,12 +7590,12 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltfull"){LT.win="full";drawFlow();return}   // the range control redraws the held payload, never a second read (#1334)
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 const flowPick=k=>{ls.flowk=k;save();flowOpen(k)};
-$("#bflow").onclick=()=>flowPick("cfd");$("#blead").onclick=()=>flowPick("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden){drawFlow();if(FLOWK==="lead")ltResize()}});
+$("#bflow").onclick=()=>flowPick("cfd");$("#blead").onclick=()=>flowPick("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden){drawFlow();if(FLOWK==="lead")ltResize()}});
 function squadChart(k){if(FLOWK===k&&!$("#flowov").hidden)flowOpen(k)}   // a pushed version redraws only the chart it names
 function squadStreamLost(){$("#sse").hidden=false;$("#sse").textContent="live stream lost: retrying; the page keeps what it drew"}
 function squadStreamBack(){$("#sse").hidden=true;poll();pollBoard();if(FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // one read each of the runs, the board and the open chart
 // flow-charts:end
-const barQuery=k=>{const ty=k==="cfd"?CF.ty:LT.ty,every=k==="cfd"&&ty==="all";return ["fs","fk"].map(n=>`${n}=${encodeURIComponent((FLOWFF[k]?[]:(bo[n]||[])).join(","))}`).join("&")+`&ty=${every?"task":ty}`+(every?"&every=1":"");};   // the bar's Specs and Kinds and the chart's own Type; the cumulative flow opens on the tasks default and sends All as the extra every=1, so the fixed ty values stand; a chart that stopped following the Board filter sends no bar value (#904, #985, #1147, #1356)
+const barQuery=k=>{const ty=k==="cfd"?CF.ty:LT.ty,every=k==="cfd"&&ty==="all";return `ty=${every?"task":ty}`+(every?"&every=1":"");};   // the chart's own Type; the cumulative flow opens on the tasks default and sends All as the extra every=1, so the fixed ty values stand (#1356); the Board filter left the page, so no chart sends one (owner ask, SPEC 1965)
 let boardTag=null,boardBody=null;   // the board the page holds and its ETag: a 304 keeps it (#973)
 async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",boardTag?{headers:{"If-None-Match":boardTag}}:{});let b;if(r.status===304&&boardBody)b=boardBody;else{b=await r.json();if(b.groups){boardTag=r.headers.get("ETag");boardBody=b}}const FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
@@ -7659,16 +7605,8 @@ lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pe
 const fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the specs and kinds the open cards hold (#899, #904, #969, #1988)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
-const fs=keptSpecs(bo.fs||[],boardGroups,b.sum);
-if(!b.err&&fs.length!==(bo.fs||[]).length){bo.fs=fs;saveB()}   // a saved key whose spec finished is dropped (#981)
 const hidKept=keptHidden(bo.hidden||[],all);
 if(!b.err&&hidKept.length!==(bo.hidden||[]).length){bo.hidden=hidKept;saveB()}   // a saved hidden set drops a closed status on load (#969)
-const fillBar=(id,opts,label,sel,name,col)=>{const box=$("#"+id),k=opts.join("|");
- if(box.dataset.k!==k){box.dataset.k=k;box.innerHTML=`<div class=fpopb><button type=button data-clear>clear</button></div>`+opts.map(v=>`<label><input type=checkbox value="${esc(v)}"> ${col?`<i class=sw style="background:${col(v)}"></i>`:""}${esc(label(v))}</label>`).join("")}
- box.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));
- box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:`${name}: all`;box.parentElement.classList.toggle("set",sel.length>0)};
-fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs",s=>specColor(SLOTS,s==="none"?null:s));   // the spec filter is the legend (#917)
-fillBar("fkl",KIND_OPTIONS.map(o=>o[0]),k=>KIND_OPTIONS.find(o=>o[0]===k)[1],fk,"Kinds");
 const hid=new Set(hidCols()),bottom=true,eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:color-mix(in srgb,var(--card) 90%,rgb(${avg}));--bgh:color-mix(in srgb,var(--card) 84%,rgb(${avg}))`},
@@ -7721,11 +7659,11 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const endLines=all.filter(g=>g.end).map(g=>`<span class=hidline><span>${esc(g.name)}</span><b>${fmtN(g.n)}</b></span>`).join("");   // a closed status is a text total: no eye, no show action (#969)
 const html=vis.map(one).join("")+(bottom&&(hid.size||autos.length||endLines)?`<div class=hidbar>${all.filter(g=>!g.end&&hid.has(g.name)).map(hidchip).join("")}${hid.size&&autos.length?'<div class=hidsep></div>':""}${autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join("")}${endLines}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,doing:BOARD_VOCAB.doing,review:BOARD_VOCAB.review,sum:b.sum,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
-const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
-$("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
-$("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
-if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
+const model=buildBoard(all.filter(g=>!isPR(g.name)),{closed:COLNAME.issue_closed,doing:BOARD_VOCAB.doing,review:BOARD_VOCAB.review,sum:b.sum,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const lanesHtml=laneHtml(model);lanesNow=model;$("#lhd").checked=!!bo.hideDone;
+$("#bbody").classList.add("lanes");
+$("#lhc").innerHTML=model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
+if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 boardRows=all.flatMap(g=>g.items);paintHL();
 }catch(e){}finally{lim.busy=0}}
@@ -7775,7 +7713,7 @@ document.querySelector(".tabs").addEventListener("keydown",tabKey);   // the bar
 $("#lrun").addEventListener("click",tabClick);   // the live-runs card's control opens the Runs tab (#1276)
 $("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(!r)return;const id=r.dataset.id;hl={run:id};paintHL();openRun(id)});   // a card row opens the run sheet, exactly as the list's row does (#1276)
 $("#lrun").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-id]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();const id=r.dataset.id;hl={run:id};paintHL();openRun(id)}});   // the card row answers the keyboard too (#1276)
-function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead");const c=h?"":flowFilterChip(bo.fs||[],bo.fk||[],!!FLOWFF[k]),x=$("#flowchips");if(x&&x.dataset.h!==c){x.dataset.h=c;x.innerHTML=c}}   // the one Board filter chip, drawn with the chart tabs for both charts (#1147)
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead")}   // the two chart tabs mark the open chart
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(!r)return;const id=r.dataset.rid;hl={run:id};paintHL();openRun(id)});   // a run row on the Runs tab opens the sheet (#984) and marks its cards, as the old list row did (#1770)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
@@ -7882,7 +7820,6 @@ profMount("desktop");
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
 /*BOARD_LANES*/
-$("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
 async function laneToggle(id,open){
  if(!open){bo.lc[id]=true;saveB();await pollBoard();return}
@@ -7897,9 +7834,8 @@ document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const h
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
-const barMoved=()=>{LT.tok++;LT.zc=null;LT.zr=null;FLOWD={};FLOWFF={};if(!$("#flowov").hidden&&FLOWK){flowOpen(FLOWK);if(FLOWK==="lead"&&ltOwn())ltGet()}};   // a bar value changes both charts: each reads its route anew, and a chosen span its own chart (#904, #905); a new filter is a new instruction, so both charts follow it again (#1147)
-const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];barMoved();saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];barMoved();saveB();pollBoard()})};
-pickFilter("fsl","fs");pickFilter("fkl","fk");
+const barMoved=()=>{LT.tok++;LT.zc=null;LT.zr=null;FLOWD={};if(!$("#flowov").hidden&&FLOWK){flowOpen(FLOWK);if(FLOWK==="lead"&&ltOwn())ltGet()}};   // a chart value changes the open chart: it reads its route anew, and a chosen span its own chart (#904, #905)
+
 // The owner's one move (#560): the arrow a Backlog card carries delegates to the hub, and the card shows the reason a
 // refusal gives. Which cards carry the arrow is the row's own fact (`x.pm`), never the page's rule.
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b||b.disabled)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it"),label=b.textContent;b.disabled=true;b.textContent="sending…";
@@ -7955,7 +7891,7 @@ document.addEventListener("click",async e=>{const g=e.target.closest("#spdlg .sp
   dlg.remove();specNote(`Started spec #${n}: ${d.pending.length} card${d.pending.length===1?"":"s"} sent to Todo; the writer confirms in the background.`);pollBoard()
  }catch(x){dlg.innerHTML="<div class=perr>the hub did not answer</div><button class=spx type=button>Close</button>"}});
 document.addEventListener("click",e=>{if(e.target.closest("#spdlg .spx"))$("#spdlg").remove()});
-document.addEventListener("click",e=>{for(const d of["#fs","#fk"])if($(d)&&!e.target.closest(d))$(d).open=false});
+
 pollBoard();setInterval(pollBoard,5000);
 function squadChartTick(){if(!window.squadStreamLive&&FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // with no live stream the open chart is re-read on the board tick
 setInterval(squadChartTick,5000);
@@ -7988,7 +7924,6 @@ PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW
 PAGE = PAGE.replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
 # The lead chart's clusters take their fixed radius from the payload; the page draws one dot per cluster and no count (#1331).
 PAGE = PAGE.replace("/*LT_START*/", LEAD_START)
-
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
 SUBS = ("claude", "grok", "gpt", "gemini")
@@ -8458,7 +8393,6 @@ def router_known():
     anthropic = {m for m, e in reg.entries.items() if ANTHROPIC_ID.match(m) and not e.retired}
     return sorted({m for m in set(gateway_models()) | anthropic if MODEL_ID.match(m) and not provkey.closed(m)})   # no key, never offered (#482)
 
-
 def model_labels(ids):
     """{id: registry label} for the ids the one registry knows (ADR-0147); an unknown id has no row (#672).
 
@@ -8468,7 +8402,6 @@ def model_labels(ids):
         e = modelreg.model(m)
         if e is not None and e.label: out[m] = e.label
     return out
-
 
 def model_suggestions(ids):
     """The add dropdown's options (#687): [{id, text}], the registry label as the text and the id beside it.
@@ -8491,9 +8424,7 @@ def model_suggestions(ids):
             if counts[r["text"]] > 1: r["text"] = key(r)
     return sorted(rows, key=lambda r: (r["text"], r["id"]))
 
-
 ROUTE_TEXT = {"gateway": "gateway", "direct": "direct API"}   # a cli route reads as its own CLI, named by the registry's argv
-
 
 def model_box(raw, chain=None):
     """What one hub box that stands for a model shows (#677): the registry label beside the route, or "unregistered".
@@ -8510,9 +8441,7 @@ def model_box(raw, chain=None):
     route = f"{pathlib.Path(argv[0]).name} CLI" if argv[0] else ROUTE_TEXT.get(ref.route or "", ref.route)
     return {"id": raw, "llm": e.label, "route": route, "registered": True, "text": f"{e.label} · {route}" if route else e.label}
 
-
 ANTHROPIC_ID = re.compile(r"^claude-(opus|sonnet|haiku|fable)-[0-9][0-9a-z.\-]*$")
-
 
 def known_models(d):
     """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
@@ -8583,7 +8512,6 @@ def router_get(doc=None):
     models.json's `chains.router` like the three role chains. The panel shows the entries the chain can run (usable)."""
     d = models_doc() if doc is None else v1_view(doc)
     return [bare_id(m) for m in d.get(ROUTER_CHAIN, [])]
-
 
 def subscription_states():
     """Each subscription's quota now, read once per page (#545): its marker, its quota cache, or neither."""
@@ -8679,7 +8607,6 @@ def models_version():
         except OSError: m = None
     return hashlib.sha256(json.dumps(m, sort_keys=True).encode()).hexdigest()
 
-
 def models_record(changes):
     """One line per model-level flip in the state directory's models switch ledger (SPEC 889 #920): the model, its new
     state, who and when. Whole lines, appended; a Save that flips nothing writes nothing."""
@@ -8691,7 +8618,6 @@ def models_record(changes):
 
 _SAVE = threading.Lock()   # one Save at a time, so the version check and the write see the same files
 
-
 def models_set(new):
     """Replace the four chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file.
 
@@ -8700,7 +8626,6 @@ def models_set(new):
     with _SAVE:
         if not isinstance(new, dict) or new.get("version") != models_version(): return {"err": "stale: reload the page"}
         return _models_set(new)
-
 
 def _new_raw(k, mid, reg):
     """The spelling a new row takes in the file: the one the route its chain prefers serves, through chain_id's rule.
@@ -8720,7 +8645,6 @@ def _new_raw(k, mid, reg):
     return chain_id(k, same or plain or mid)
 
 _ABSENT = object()   # a setting section the Save body leaves out: the file's own value stays, never cleared
-
 
 def _entry(k, mid, prev, effort, window):
     """One v2 chain entry for a panel row, in the shape `modelreg.migrate` writes: `id`, `raw` when the spelling
@@ -8758,7 +8682,6 @@ def _entry(k, mid, prev, effort, window):
     if prev is not None and not prev.on: out["on"] = False   # honored, never written: a row the file already holds off
     return out
 
-
 def _setting(sec, k, raw):
     """One row's setting from a posted section: `_ABSENT` when the body left the chain (or the whole section) out, so
     the file's value stays; the row's own value otherwise, `None` when the section names the chain but not this row.
@@ -8770,7 +8693,6 @@ def _setting(sec, k, raw):
     for name, value in rows.items():
         if name in (raw, bare_id(raw)) or modelreg.normalize(name).id == want: return value
     return None
-
 
 def _v2_chain(k, posted, doc, eff, hrs):
     """One v2 chain for the Save, from the panel's list in rank order (or the file's own list when the body omits it).
@@ -8804,7 +8726,6 @@ def _v2_chain(k, posted, doc, eff, hrs):
         if spelling in written: continue
         written.add(spelling); unique.append(e)
     return unique
-
 
 def _models_set(new):
     # The panel posts back whatever models_get() handed it, so every read-only field it carries comes back here: `known`
@@ -9285,7 +9206,6 @@ def test_log_page(d, lg):
     ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
     return (f'<!doctype html><meta charset=utf-8><style>{WEB_TOKENS}</style>{ref}<body style="background:var(--well);color:var(--ink-body);font:var(--fs-body) var(--font-mono);margin:12px"><div style="color:var(--acc)">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:var(--ink-muted)">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>').encode()
 
-
 def mobile_refusal(reason):
     return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
             f'<style>{WEB_TOKENS}</style><body style="font:var(--fs-body) system-ui;margin:24px"><h1>The hub refused this login</h1><p>{html.escape(reason)}</p>').encode()
@@ -9315,11 +9235,9 @@ def served_page(login="", allowed=True):
             .replace("__READONLY__", "false" if allowed else "true").replace("__ROWHY__", "" if allowed else RO_TAILNET)
             .replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else "")))
 
-
 def own_host(h):
     """The one Host rule for GET and POST: the hub's own loopback name and port, so a page that rebinds its name to 127.0.0.1 is refused. `h` is any handler, the mux's too, which runs these routes."""
     return (h.headers.get("Host") or "") in (f"127.0.0.1:{h.server.server_port}", f"localhost:{h.server.server_port}")
-
 
 PLUGIN_ID = "agent-squad@agent-squad"
 def plugin_squad():

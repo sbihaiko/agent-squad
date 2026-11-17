@@ -119,7 +119,7 @@ def _flow(hub):
 
 def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub):
     # Re-anchored to the owner-approved mock (#889): Flow and Lead time sit on the Flow charts tab, not in the board's toolbar.
-    tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=flowchips>")]
+    tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=flowov")]
     # Re-anchored by the owner (2026-11-02): the burn-down tab is gone, so the charts are the two the owner keeps; Runs is a top tab (#1272).
     assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Cumulative Flow", "Lead Time"]
     assert "id=flowv" not in hub.PAGE, "the View selector is gone: a chart is a tab"
@@ -127,7 +127,8 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
     assert "<span id=bt class=m></span>" in head
     assert "id=bflow" not in head and "id=blead" not in head
-    assert '<details id=fs' in head and '<details id=fk' in head, "the header lost the filter bar"
+    assert '<details id=fs' not in head and '<details id=fk' not in head, "the header still carries the filter bar the owner removed"
+    assert ">Swimlanes " not in head, "the header still carries the lane-mode control"
     assert 'id=bsp' not in head and 'id=bz' not in head and 'id=bx' not in head, "a removed control is still in the header"
 
 
