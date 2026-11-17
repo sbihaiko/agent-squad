@@ -32,10 +32,10 @@ def _effective(cards):
     stored = {_key(card): _stored(card) for card in cards}
     blocks = {}
     for card in cards:
-        if card["state"] != "open": continue
+        if card.get("state", "open") != "open": continue
         for edge in card.get("blocked_by_edges") or []:
             blocker = (edge["repo"], int(edge["number"]))
-            if edge["state"] == "open" and blocker in stored: blocks.setdefault(blocker, []).append(_key(card))
+            if edge.get("state", "open") == "open" and blocker in stored: blocks.setdefault(blocker, []).append(_key(card))
 
     def reachable(key):
         seen, todo = {key}, [key]
