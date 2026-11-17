@@ -458,7 +458,7 @@ case "$r" in *"board"*) ok "X: the pass says the board did not answer";; *) ko "
 # a spec whose card sits in Backlog holds its ticket, whatever the ticket's card reads, and the pass names the parent spec.
 # No card moves. The blocker gate here is the real stack.sh, because that WAIT is the fact the case reads.
 scene specbacklog 24
-cp "$(dirname "$src")/stack.sh" "$T/scripts/stack.sh"
+cp "$(dirname "$src")/stack.sh" "$(dirname "$src")/deadlock.py" "$T/scripts/"
 issues '[{"number":700,"title":"SPEC","body":"b","card":"Backlog","sub_issues":[801],"labels":[{"name":"spec"}]},{"number":801,"title":"a","body":"b","parent":700,"labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 801)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 0 ] && ok "X2: a ticket whose spec card sits in Backlog is not dispatched" || ko "X2: #801 went out beside a spec in Backlog: '$r'"
