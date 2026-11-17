@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 HUB_PY = SCRIPTS / "hub.py"
 OPENED = "2026-10-01T09:00:00Z"
-BAR = "fw=&fs=&fk=&ty=task"   # the cumulative flow's route, at the tasks default it always sent (#1356)
+BAR = "fs=&fk=&ty=task"   # the cumulative flow's route, at the tasks default it always sent (#1356); no wave key (SPEC 1965, #1988)
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 

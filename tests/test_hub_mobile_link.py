@@ -222,12 +222,12 @@ def test_a_card_in_a_folded_lane_names_its_result_and_opens_the_lane(hub):
     """AC2: a collapsed card is a named result, never a blank board: its lane opens and the card is drawn."""
     out = run_page(hub.MOBILE_PAGE, """
         await __tick(20);
-        bo = { mlc: { "none|none": true } };
+        bo = { mlc: { "none": true } };
         show("board"); await __tick(20);
         const drawnBefore = !!$("cards").querySelector('[data-role="card"][data-n="3"]');
         location.hash = "#issue=3"; __dispatch("hashchange", {});
         await __tick(10);
-        return { drawnBefore, folded: bo.mlc["none|none"], sheet: view.sheet, off: !!offBoard,
+        return { drawnBefore, folded: bo.mlc["none"], sheet: view.sheet, off: !!offBoard,
                  n: (offBoard || shown[view.card] || {}).n, said: $("bmsg").textContent,
                  drawn: !!$("cards").querySelector('[data-role="card"][data-n="3"]') };
     """, board=[BOARD])
