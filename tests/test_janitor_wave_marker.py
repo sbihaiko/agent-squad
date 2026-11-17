@@ -10,7 +10,9 @@ The janitor runs end to end in the sandbox of test_janitor_card_done_base: a stu
 
 from __future__ import annotations
 
+import os
 import subprocess
+import time
 
 import pytest
 
@@ -45,6 +47,51 @@ def test_a_live_runs_wave_marker_stays(tmp_path):
     janitor(tmp_path)
 
     assert marker.exists(), f"the wave of a listed run went: {log_of(tmp_path)}"
+
+
+@pytest.mark.heavy
+def test_the_janitor_drops_the_landing_marker_of_an_ended_run(tmp_path):
+    """The repro of #2185: `wland-run-old` stands, no line names it, no process works it, no queue waits; the pass drops it."""
+    sandbox(tmp_path, "echo 0")
+    (tmp_path / "st/active-runs.txt").write_text("")
+    marker = tmp_path / "st/auto/wland-run-old"
+    marker.write_text("")
+    old = time.time() - 7 * 3600
+    os.utime(marker, (old, old))
+
+    janitor(tmp_path)
+
+    assert not marker.exists(), f"the landing marker of an ended run stayed: {log_of(tmp_path)}"
+    assert "WLAND-DROPPED wland-run-old" in log_of(tmp_path), log_of(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_live_runs_landing_marker_stays(tmp_path):
+    """The half the drop must never reach: the listing names the run, so its landing marker still answers."""
+    sandbox(tmp_path, "echo 0", wave="open")
+    marker = tmp_path / "st/auto/wland-run-stacked"
+    marker.write_text("")
+    old = time.time() - 7 * 3600
+    os.utime(marker, (old, old))
+
+    janitor(tmp_path)
+
+    assert marker.exists(), f"the landing marker of a listed run went: {log_of(tmp_path)}"
+
+
+@pytest.mark.heavy
+def test_a_young_landing_marker_stays(tmp_path):
+    """A marker inside the grace window may belong to a landing in flight, so the pass leaves it."""
+    sandbox(tmp_path, "echo 0")
+    (tmp_path / "st/active-runs.txt").write_text("")
+    marker = tmp_path / "st/auto/wland-run-fresh"
+    marker.write_text("")
+    fresh = time.time() - 3600
+    os.utime(marker, (fresh, fresh))
+
+    janitor(tmp_path)
+
+    assert marker.exists(), f"a young landing marker went: {log_of(tmp_path)}"
 
 
 @pytest.mark.heavy

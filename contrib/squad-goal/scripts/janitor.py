@@ -726,6 +726,21 @@ if (st / "auto").is_dir():
         if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(co / "runs" / wrun)): continue
         say(f"WAVE-DROPPED {wp.name}: its run is not in active-runs and no process works its folder, so the wave can no longer land")
         if not dry: wp.unlink(missing_ok=True)
+    # V2 (#2185): a landing marker `auto/wland-<run>` answers whether a run already landed, and `wave.sh` reads it only for a
+    # run that still waits or lands. A run out of the listing lands no more, so the file stays for ever: one per landed run
+    # (803 of them on 2026-11-17). The pass drops the landing markers of a run no line names, no process works and no queue
+    # waits for, once they pass the grace window; a live run's marker, and a young one, stay.
+    cutoff = now - float(os.environ.get("SG_MARKER_GRACE_SECONDS", 6 * 3600))
+    for wp in sorted((st / "auto").glob("wland-*")):
+        wrun = wp.name[len("wland-"):].split(".")[0]
+        if wrun.startswith("tries-"): wrun = wrun[len("tries-"):]
+        if not wrun.startswith("run-") or wrun in live_names: continue
+        if (st / "auto" / f"wland-{wrun}.queued").exists(): continue
+        if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(co / "runs" / wrun)): continue
+        mt = marker_mtime(wp)
+        if mt is None or mt > cutoff: continue
+        say(f"WLAND-DROPPED {wp.name}: its run is not in active-runs, no process works its folder and no queue waits for it")
+        if not dry: wp.unlink(missing_ok=True)
 # S: the counted ceiling beside the per-run reap. B, J and C each kill the dashboard of one run the pass knows about, so when any of
 # them stops working for any other reason -- a run that left active-runs.txt, a record the pass cannot read -- nothing bounds the
 # count and the dashboards of finished runs accumulate (the freeze of 2026-10-13 left 41 alive). This reads the process table the
