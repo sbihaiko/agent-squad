@@ -471,7 +471,7 @@ def issue_read(x, fresh=False):   # one read answers every fact the passes ask o
 def issue_is_gone(x):   # a missing issue is not a transient read failure. The pass's one cached read of the issue says it: `gh api`
     # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
     return gone_msg("\t".join(issue_read(x)))
-live = {}; livef = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
+live = {}; livef = {}; keep = []; dropped = set(); held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed; dropped: runs this pass read for their cards and left out of the list (#2144)
 def marker_mtime(p):   # #794: a marker can vanish between the glob, its test and its stat; a gone marker is no live marker: None
     try: return p.stat().st_mtime
     except FileNotFoundError: return None
@@ -572,11 +572,16 @@ for r in names:
             say(f"CLOSED-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is closed; dropped from active-runs")
             continue
         # #2138: a run whose verdict is final is over. Its line stays only while a wave stands for it (that wave still lands
-        # its children) or a live process or lease names it. Nothing else reads the line, and a line the loop counts as live
-        # work holds the child room the frontier needs. The five-minute floor lets the pass that wrote the verdict settle it.
+        # its children) or a live process or lease names it. A line the loop counts as live work holds the child room the
+        # frontier needs. The five-minute floor lets the pass that wrote the verdict settle it.
+        # #2144: the line leaves now, but this pass still reads the run for its card and its markers. The card pass and rule
+        # Q read `keep`, so a run dropped before that read left its issue at no column, unfrozen and never requeued: the
+        # pass adds it to `keep` and to `dropped`, and the rewritten list leaves it out.
         if i["idle"] > 300 and not open_wave(n, i["run_id"]) \
                 and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
+            if i["landed"]: landed_n |= req_issues(f)
+            held |= req_issues(f) | i["acc"]; keep.append(r); dropped.add(r)
             continue
         if i["idle"] > 180:
             for q in inside(f):
@@ -672,7 +677,7 @@ for r in names:
         if wv: reaped.add(r)   # an open wave still lands this run: the line stays until the wave marker goes
         continue   # with no open wave the line leaves the list here; this pass's card rules still read the run's markers
     held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i; livef[n] = f
-lines = [r for r in names if r in reaped or r in keep]
+lines = [r for r in names if r in reaped or (r in keep and r not in dropped)]
 # #1862: the list is rewritten through its one writer protocol, under the lock the launcher's append takes. It re-reads the
 # list, keeps every line this pass's read did not name (a run a launch started while the pass ran), writes a temporary file
 # beside the list and renames it into place (ADR-0030). A rewrite with nothing to change writes nothing.

@@ -253,3 +253,15 @@ def test_the_wave_entry_still_moves_a_code_review_card_to_code_complete(tmp_path
     janitor(tmp_path, **SHIPPED)
     log = writes(tmp_path)
     assert f"STATUS o 4 Code Complete {N}" in log, f"the entry did not move the card to Code Complete: {log}"
+
+
+@pytest.mark.heavy
+def test_a_finished_run_still_reads_its_card_on_the_pass_that_drops_its_line(tmp_path):
+    """#2144: a run whose verdict is final leaves active-runs, and the same pass still reads it for its card.
+
+    The drop ran before the card pass read the run, so the issue sat at no column and nothing moved it again."""
+    sandbox(tmp_path, "echo 0", landed=True)
+    janitor(tmp_path)
+    log = writes(tmp_path)
+    assert f"ADD o 4 Code Complete {N}" in log, f"the card did not reach Code Complete: {log}"
+    assert (tmp_path / "st/active-runs.txt").read_text().split() == [], "the finished run kept its active-runs line"
