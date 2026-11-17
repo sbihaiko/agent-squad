@@ -119,7 +119,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
     (
         "tests/test_adapter_error_classes.py", "tests/test_adapter_refusals.py", "tests/test_adr_0145_waves.py", "tests/test_adr_index.py", "tests/test_board_fast_read.py",
         "tests/test_board_gate_record.py", "tests/test_board_pin.py", "tests/test_board_wait.py", "tests/test_board_wait_pass.py",
-        "tests/test_board_priority.py", "tests/test_priority_rank.py", "tests/test_board_transitions.py", "tests/test_caps_partial.py", "tests/test_contract_probe.py",
+        "tests/test_board_priority.py", "tests/test_priority_rank.py", "tests/test_board_transitions.py", "tests/test_caps_partial.py", "tests/test_contract_probe.py", "tests/test_hub_card_wait.py",
         "tests/test_dashboard_child_review.py", "tests/test_dashboard_failures.py", "tests/test_dashboard_layout.py", "tests/test_dashboard_live_call.py", "tests/test_dashboard_pause.py",
         "tests/test_dashboard_record.py", "tests/test_gate_counts.py", "tests/test_gate_load_report.py", "tests/test_gh_callers.py", "tests/test_gh_door_child_merge.py", "tests/test_hub_board_cases.py",
         "tests/test_hub_board_filter_bar.py", "tests/test_hub_board_observation.py", "tests/test_hub_board_outcomes.py", "tests/test_hub_cache_split.py", "tests/test_hub_childcc_row.py",

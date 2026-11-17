@@ -5,6 +5,7 @@ import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os,
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, board_lag, board_priority, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, procscan, provkey, session_card, session_send, sessions, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
+import board_wait, issue_state
 import http.client
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2755,6 +2756,11 @@ def card_waits(store, numbers):
         closed = next((_epoch(r["from"]) for r in runs if r["column"] == COLUMN["issue_closed"]), None)
         if todo is not None or closed is not None: out[n] = {"todo": todo, "closed": closed}
     return out
+
+def card_wait(card):
+    """The card's Wait by the loop's rule (board_wait.wait_of), with the live run's name kept beside it."""
+    answer = board_wait.wait_of(card)
+    return {"wait": answer.name, "missing": answer.missing, "run": card.get("run") if card.get("run_live") else None}
 
 def trip_issues(path):
     """The issues one run names, from the request beside its record: the run's own request, never a second reader."""
