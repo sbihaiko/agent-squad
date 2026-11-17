@@ -117,6 +117,21 @@ def test_an_edited_pinned_copy_is_refused(tmp_path):
         _load(tmp_path).shipped_columns()
 
 
+def test_a_reader_that_started_before_a_publish_re_reads_the_pin(tmp_path):
+    """The hub loads its modules once at start, so a publish of board_columns.py and board-definition.json leaves a running
+    reader with the old pin and the new copy. The copy on disk matches the pin beside it, so the running reader follows the
+    publish and reports no stale pin for a file that matches (#2141)."""
+    for name in ("board_columns.py", "board-definition.json"):
+        shutil.copy(SCRIPTS / name, tmp_path / name)
+    running = _load(tmp_path)
+    published = (tmp_path / "board-definition.json").read_text().replace("Backlog", "Icebox")   # the publish moves the
+    (tmp_path / "board-definition.json").write_text(published)                                 # definition and its pin
+    py = tmp_path / "board_columns.py"
+    py.write_text(py.read_text().replace(PINNED, hashlib.sha256(published.encode()).hexdigest()))
+
+    assert [c["name"] for c in running.shipped_columns()] == ["Icebox" if n == "Backlog" else n for n in SHIPPED]
+
+
 def test_a_published_definition_that_differs_is_reported(columns):
     pinned = (SCRIPTS / "board-definition.json").read_text()
     assert columns.pin_drift(pinned) == []

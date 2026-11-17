@@ -6,6 +6,7 @@ order, flow position and colour. The tuple's own order is the colour map's order
 import functools
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -33,9 +34,24 @@ FREEZE_LABEL = {"owner": "frozen:owner", "gated": "frozen:dependency"}
 CODE_REVIEW = "Code Review"   # the child's code is done, and its review or a fix round holds it (#603)
 
 
+def _pin_beside_the_copy():
+    """The pin the board_columns.py on this disk declares, None when that file cannot be read.
+
+    A process loads the pin once at start, so a publish that moves the copy and its pin together leaves a running reader
+    holding the old pin and the new copy: the copy matches, and the reader must not report it stale (#2141). The pin beside
+    the copy is the answer, and a copy edited by hand alone still finds the unchanged pin and is refused (ADR-0170)."""
+    try:
+        source = Path(__file__).read_text()
+    except OSError:
+        return None
+    found = re.search(r'^PIN_SHA256 = "([0-9a-f]{64})"', source, re.M)
+    return found.group(1) if found else None
+
+
 def _pinned_text():
     text = PINNED_COPY.read_text()
-    if hashlib.sha256(text.encode()).hexdigest() != PIN_SHA256:
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    if digest != PIN_SHA256 and digest != _pin_beside_the_copy():
         raise ValueError(f"the pinned copy {PINNED_COPY.name} does not match its hash; restore it from the published definition")
     return text
 
