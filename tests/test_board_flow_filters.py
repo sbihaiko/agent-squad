@@ -573,7 +573,7 @@ def test_the_header_names_the_type_the_chart_holds(hub, board):
                         f"process.stdout.write(flowLead({json.dumps(lead)}));"])
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    assert "tasks · <b>Todo -> closed</b> · window 20 issues" in result.stdout, "the view measures from Todo (#1247)"
+    assert "tasks · <b>Todo -> closed</b> · 20 issues plotted" in result.stdout, "the view measures from Todo (#1247)"
 
 
 def test_the_type_control_sits_beside_the_timeframe(hub):
