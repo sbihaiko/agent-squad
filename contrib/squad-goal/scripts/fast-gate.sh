@@ -2,7 +2,9 @@
 # usage: fast-gate.sh      the fast gate of a work-branch tip or of a child that enters a wave (ADR-0145), run in that tip's worktree.
 #
 # It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD) at the `fast` stage, so the pytest runs the delta the
-# tip reaches in one pass: the parallel run records every unmarked call at or over the project's 2 s line (the line the CI
+# tip reaches in one pass; a child's own gate narrows a delta the selector cannot place instead of widening it (#2085, the
+# `narrow` battery argument below), while the wave entry, the wave tip and the landing check keep the full-battery fallback
+# (ADR-0169 rules 4 and 8): the parallel run records every unmarked call at or over the project's 2 s line (the line the CI
 # serial tier enforces), and only those calls run once more, serially, against it (#1726), then the shell suite test-<script>.sh of every .sh or .py
 # script under contrib/squad-goal/scripts that the tip changes, and every fixture suite whose `# mirrors:` line names a changed
 # file; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
@@ -36,18 +38,10 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 . "$here/base-battery.sh"
 . "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
 py=$(sg_gate_python)
-# (#1872) The scope decides the child's count. A delta takes one slot, which is the concurrency #1865 won; a full battery takes
-# the full count, because ~3000 tests at one worker pass the 900 s bounded proof (ADR-0163) and a gate that proves nothing is a
-# defect (ADR-0018). The selector is asked here, once, so the count is known before the slot take; the battery asks it again
-# over the same tree and answers the same. A full-battery gate waits for its slots inside the gate lock, so a run of one-slot
-# gates cannot starve it, and the wait is gate wait, never run time (ADR-0166): the gate starts its clock when it holds both.
+# (#1872, #2085) A child's count is one, whatever the selector answers: its battery is a delta, and a change the delta cannot
+# place runs no pytest at all (the `narrow` battery below), so no child gate is ever a full battery that would need the whole
+# count to fit its bound (ADR-0163, ADR-0018). The full-battery wait belongs to the delivery's own gates, which hold the lock.
 child_count=${SG_GATE_WORKERS_CHILD:-1}
-if [ -z "${SG_FAST_CMD:-}" ] && [ "${SG_TEST_SELECT:-yes}" != no ] && [ "${SG_GATE_CALLER:-child}" = child ] && [ -z "${SG_SERIAL_HELD:-}" ]; then
-  selans=$("$py" -m squad.testselect --stage fast --base "$base" 2>/dev/null) || selans=
-  case "$selans" in
-    all:*) child_count=${SG_GATE_WORKERS_CHILD_ALL:-3}; export SG_GATE_SLOT_WAIT=${SG_GATE_SLOT_WAIT:-1};;
-  esac
-fi
 # (#1436, #1865, #1527) A child's own gate takes one gate slot, so three children land at once on a three-slot budget; an entry
 # or a tip gate keeps the full count. The count never rides on SG_GATE_WORKERS: env.sh exports it for the whole loop, so a child
 # would inherit six and hold the whole budget, and `:-` substitutes only an unset name. A caller that wants another count names
@@ -55,7 +49,14 @@ fi
 # count as the key stored inside it.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
   *) [ "${SG_GATE_CALLER:-child}" = child ] && export SG_GATE_WORKERS=$child_count;; esac
-fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
+# (#2085, ADR-0169 rule 4) Only the child's own gate narrows: it is bounded (ADR-0163) and waits behind its siblings' gates, so
+# a change its delta cannot place runs no pytest there and the gate ends unproven with that reason, while the landing gate runs
+# the full battery over the branch. A caller that brings its own battery names its scope (the wave tip and the landing check),
+# and the wave entry keeps the fallback that proves the tree before it enters (rule 8). The narrowed and the widened batteries
+# carry different text, so a pass won by one never answers the other (ADR-0168 rule 1).
+narrow=no
+if [ -z "${SG_FAST_CMD:-}" ] && [ "${SG_TEST_SELECT:-yes}" != no ] && [ "${SG_GATE_CALLER:-child}" = child ]; then narrow=yes; fi
+fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast "$narrow")"}
 # (#1557) The retry keeps the serial 2 s line: it lifts no cap, so it cannot clear the slow unmarked call the serial pass found.
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist"}
 # The memo key names what the suite reads: the tree's content (HEAD's tree object, never its commit), its uncommitted state,

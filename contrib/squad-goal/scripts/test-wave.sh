@@ -15,6 +15,11 @@ unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from
 # SERIAL_HOLD_SECONDS; serial.sh exports SG_SERIAL_HELD and reads SERIAL_POLL_SECONDS; a gate caller sets SG_GATE_KIND and
 # SG_GATE_STATUS. All of them go, beside REV.
 unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
+# The loop's own profile reaches a child session, and env.sh below reads its wave settings with `:=`, so a name that is
+# already set wins over the case's default: an inherited SG_WAVE_ENTRY_GATE=off enters every child ungated (case B reads a
+# gate-status that is never written, case C's failing gates are skipped) and an inherited SG_WAVE_TIP_GATES decides a tip
+# check the case asked for. Each case names its own, so neither ambient value may reach it.
+unset SG_WAVE_ENTRY_GATE SG_WAVE_TIP_GATES
 # gate.sh exports GATE_REUSE_FILE to the command it runs (its --run), so this suite run under a gate inherits it: a memo hit of
 # an entry then marks the outer gate's row instead of writing its own reuse row, and the row this suite reads is missing (#1798).
 unset GATE_REUSE_FILE
