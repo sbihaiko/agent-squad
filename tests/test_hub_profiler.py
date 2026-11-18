@@ -4157,12 +4157,13 @@ def trip_consts():
     def num(name):
         return float(re.search(name + r"=([\d.]+)", src).group(1))
     return {"gutter": num("PROF_TRIP_GUTTER"), "lane": num("PROF_TRIP_LANE"), "top": num("PROF_TRIP_TOP"),
-            "gap": num("PROF_TRIP_GAP")}
+            "gap": num("PROF_TRIP_GAP"), "row": num("PROF_TRIP_ROW")}
 
 
 def test_the_blocks_follow_the_mock_from_the_heading_to_the_table():
     """AC1 (#2255): heading, subtitle, Tokens lane, Machine lane, trip bar, labels, table. One subtitle carries every
-    sentence the page states above the chart."""
+    sentence the page states above the chart, and the label row stands below the bar's foot, never over it."""
+    c = trip_consts()
     out = chart_js()
     order = [out.index("<h3>"), out.index("<p class=tpn>"), out.index("<svg id=proftc"), out.index("<table id=proftt")]
     assert order == sorted(order), "heading, subtitle, the chart, the table"
@@ -4170,6 +4171,11 @@ def test_the_blocks_follow_the_mock_from_the_heading_to_the_table():
     svg = chart_svg(out)
     assert svg.index(">Tokens<") < svg.index(">Machine<") < svg.index('class="ptb-seg') < svg.index('class="ptlb'), \
         "the lanes come first, then the bar, then the labels"
+    bar = re.search(r'<rect class=ptbbar x="[\d.]+" y="([\d.]+)" width="[\d.]+" height="([\d.]+)"', svg)
+    bar_bottom = float(bar.group(1)) + float(bar.group(2))
+    label_ys = [float(y) for y in re.findall(r'<text class="ptl[bs] pts-\w+"[^>]*y="([\d.]+)"', svg)]
+    assert label_ys and min(label_ys) == pytest.approx(bar_bottom + c["row"]), \
+        "the first label row opens one row under the bar's foot"
 
 
 def test_each_lane_names_its_unit_and_legend_in_the_left_gutter():
@@ -4202,6 +4208,49 @@ def test_each_lane_prints_at_most_three_short_ticks_and_a_gap_separates_the_lane
     assert "dasharray" in re.search(r"#proftrip \.ptg0\{([^}]*)\}", chart_css()).group(1), "the grid is dashed"
 
 
+def test_a_sub_thousand_tokens_axis_keeps_three_distinct_short_ticks():
+    """AC3 (#2255): a Tokens lane whose top tick is below a thousand keeps three ticks that read apart, each a short
+    value, never three labels that round to the same text."""
+    v = json.loads(json.dumps(CHART))
+    v["tokens_ticks"] = [0, 20, 40]
+    ticks = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", chart_svg(chart_js(v)))[:3]
+    assert len(ticks) == 3 and len(set(ticks)) == 3, f"three distinct Tokens ticks, got {ticks}"
+    assert all(len(t) <= 6 for t in ticks), f"each tick stays short, got {ticks}"
+
+
+def test_the_subtitle_joins_its_sentences_with_single_spaces():
+    """AC1 (#2255): one subtitle joins its sentences with one space each, and it never restates a layout rule the
+    caption already carries."""
+    v = json.loads(json.dumps(CHART))
+    v.update(invalid_loads=2, ram_minutes=0)
+    sub = re.search(r"<p class=tpn>(.*?)</p>", chart_js(v), re.S).group(1)
+    assert "  " not in sub, "one space joins two sentences"
+    assert sub == sub.strip(), "the subtitle opens and ends on a word"
+    assert "Width follows" not in sub, "the caption carries no second copy of the layout rule"
+
+
+def test_no_two_means_share_a_box_in_a_lane():
+    """AC5/AC7 (#2255): a run of narrow columns pushes many mean texts into one lane, and every text still keeps its
+    own box, so one mean never prints over another."""
+    char = chart_metrics()[0]
+    v = json.loads(json.dumps(CHART))
+    base = CHART["columns"]
+    v["columns"] = []
+    for i, share in enumerate([0.8] + [0.02] * 5):
+        col = json.loads(json.dumps(base[i % len(base)]))
+        col.update(column=f"c{i}", label=f"Col{i}", share=share)
+        v["columns"].append(col)
+    means = [(line, float(x), float(y), text) for line, x, y, text in re.findall(
+        r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="([\d.]+)" y="([\d.]+)" text-anchor=end>([^<]*)</text>',
+        chart_svg(chart_js(v)))]
+    assert len(means) == 18, "six columns, three lines"
+    boxes = [(line, y, x - len(text) * char, x, text) for line, x, y, text in means]
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1:]:
+            assert not (abs(a[1] - b[1]) < 13 and a[2] < b[3] and b[2] < a[3]), \
+                f"{a[4]!r} and {b[4]!r} share a box in the {a[0]} lane"
+
+
 def test_each_band_is_tinted_and_a_vertical_rule_separates_two_columns():
     """AC4 (#2255): each column band is clearly tinted, and a vertical rule between two columns runs through both lanes."""
     c = trip_consts()
@@ -4216,6 +4265,19 @@ def test_each_band_is_tinted_and_a_vertical_rule_separates_two_columns():
         "a rule stands at each seam between two drawn columns, never before the first"
     assert [r[1] for r in rules] == [c["top"]] * len(rules) and \
         [r[2] for r in rules] == [c["top"] + 2 * c["lane"] + c["gap"]] * len(rules), "the rule crosses both lanes"
+
+
+def test_a_zero_width_column_keeps_the_rule_between_the_columns_around_it():
+    """AC4 (#2255): a board column that drew no delivery paints no band, and the rule still stands at the seam
+    between the two drawn columns on either side of it."""
+    c = trip_consts()
+    v = json.loads(json.dumps(CHART))
+    v["columns"][1]["share"] = 0.0
+    span = 1000 - c["gutter"]
+    rules = [float(x) for x in re.findall(r'<line class=ptr x1="([\d.]+)"', chart_svg(chart_js(v)))]
+    starts = [c["gutter"] + span * sum(col["share"] for col in v["columns"][:i])
+              for i in range(len(v["columns"])) if span * v["columns"][i]["share"] > 0]
+    assert rules == pytest.approx(starts[1:], abs=0.2), "a rule stands at each seam between two drawn columns"
 
 
 def test_each_column_mean_prints_in_its_lane_top_right_in_its_lines_colour():
