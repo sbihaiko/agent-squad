@@ -3666,8 +3666,8 @@ def test_the_machine_lane_scales_each_series_from_its_own_lowest_to_its_own_high
     assert re.search(r'<circle class=ptph[^>]*><title>Doing: RAM 30\.0% of the whole machine</title></circle>', svg), \
         "a hover on the RAM point shows the real percent"
     rows = {col: trip_row(out, col) for col in ("todo", "doing")}
-    assert (rows["todo"][3], rows["doing"][3]) == ("40%", "60%"), "the table keeps the real CPU mean"
-    assert (rows["todo"][4], rows["doing"][4]) == ("20%", "30%"), "the table keeps the real RAM mean"
+    assert (rows["todo"][5], rows["doing"][5]) == ("40%", "60%"), "the table keeps the real CPU mean"
+    assert (rows["todo"][6], rows["doing"][6]) == ("20%", "30%"), "the table keeps the real RAM mean"
 
 
 def test_a_machine_series_with_one_reading_draws_a_flat_line_at_mid_height():
