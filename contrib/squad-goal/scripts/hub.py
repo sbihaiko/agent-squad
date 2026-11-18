@@ -6906,7 +6906,9 @@ function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
 function instSum(facts){const n=instTiles(facts).filter(x=>x.tone==="err").length;return n?n+" fail":""}   // no tile, so no count; a red gate stays in the footer (#1260)
 function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
- const spec=(()=>{const v=esc(spc.value);
+ // A row with nothing to count is not drawn: no label, no text, no bar (#2285). The hero line and its bar always are.
+ const spec=(()=>{if(!(spc.open>0))return "";
+  const v=esc(spc.value);
   const pb=spc.bar?`<span class=spwt><i style="width:${100*Math.max(0,Math.min(1,Number(spc.frac)||0))}%"></i></span>`:"";
   const tip=spc.tip?esc(spc.tip).replace(/"/g,"&quot;"):"";
   return `<div class="spw spec" role=img aria-label="Specs: ${v}"${tip?` title="${tip}"`:""}><span class=spwl>Specs</span><span class=spwv>${v}</span>`+pb+`</div>`})();
@@ -6918,9 +6920,10 @@ function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
   +(sp.median==null?"":`<i class=spmed style="left:${at(sp.median)}%" title="median ${sp.median}"></i>`)+`<i class="spt ${tag[2]}" style="width:${at(sp.window)}%"></i></div>`
   +`<div class=spl><span>median ${med}</span><span>max ${sp.max}</span></div>`;
  const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
- const row=(cls,name,r)=>{const of=r.total,v=esc(r.value),w=Math.max(0,Math.min(100,100*r.frac)),
-  pb=of?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
-  return `<div class="spw ${of?cls:"mute"}" role=img aria-label="${name}: ${v}"><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
+ const row=(cls,name,r)=>{r=r||{};const of=r.total;
+  if(!of)return "";   // nothing to count, so nothing is drawn (#2285)
+  const v=esc(r.value),w=Math.max(0,Math.min(100,100*r.frac));
+  return `<div class="spw ${cls}" role=img aria-label="${name}: ${v}"><span class=spwl>${name}</span><span class=spwv>${v}</span><span class=spwt><i style="width:${w}%"></i></span></div>`};
  const arr=sp.arrivals||{}, bd=sp.board||{}, hst=sp.history||{};   // each age names its read (#1661): the board item read, the history read, the labels off the item read
  const stale=bd.stale?`<div class=spage>\u00b7 board items read ${Math.floor(bd.age_secs/60)} m ago${bd.overdue?" (overdue)":""}</div>`:"";
  const hist=hst.stale?`<div class=spage>\u00b7 history read ${Math.floor(hst.age_secs/60)} m ago</div>`:"";
