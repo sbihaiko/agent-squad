@@ -75,7 +75,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_spend_hourly.py", "tests/test_hub_test_pass_lost.py", "tests/test_hub_token_ledger.py", "tests/test_issue_state_kind.py", "tests/test_issue_state_log_dir.py",
         "tests/test_issue_state_unread.py", "tests/test_janitor_card_done_base.py", "tests/test_janitor_local_only_landing.py", "tests/test_janitor_rearm_freeze.py", "tests/test_janitor_zombie_line.py", "tests/test_loop_review_gate.py", "tests/test_models_v2.py",
         "tests/test_janitor_wave_marker.py",
-        "tests/test_proc_reader.py", "tests/test_profiler.py", "tests/test_promote_dead_code.py", "tests/test_promote_gate_runner.py", "tests/test_report.py", "tests/test_review_route.py",
+        "tests/test_end_class.py", "tests/test_proc_reader.py", "tests/test_profiler.py", "tests/test_promote_dead_code.py", "tests/test_promote_gate_runner.py", "tests/test_report.py", "tests/test_review_route.py",
         "tests/test_review_stream.py", "tests/test_runners.py", "tests/test_runs.py", "tests/test_scaffold.py", "tests/test_sdk_adapter.py", "tests/test_shell_suite_runner.py",
         "tests/test_shell_suite_seam.py", "tests/test_spec_fold.py", "tests/test_spend.py", "tests/test_state_seam_callers.py", "tests/test_to_test_scenario_skill_doc.py",
         "tests/test_to_test_scenario_type_labels.py", "tests/test_token_burners.py", "tests/test_verdict.py", "tests/test_wave_land.py",

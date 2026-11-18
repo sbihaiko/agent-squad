@@ -364,6 +364,21 @@ stop() {
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }
 
+# freeze_class <issue> <run> <why> <class>: a failed run whose artifact named its end class freezes its issue in one comment that
+# quotes the reason (#2217). owner-only takes frozen:owner and needs-ratification, held until the owner frees it. does-not-reproduce
+# writes the not-startable marker at this build, so a later build dispatches the issue again.
+freeze_class() {
+  local n=$1 run=$2 why=$3 cls=$4 f out
+  if [ "$cls" = owner-only ]; then
+    freeze_owner "$n"
+    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=needs-ratification" 2>&1) || printf 'WAVE-FREEZE #%s needs-ratification refused: %s\n' "$n" "$out"
+    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) && printf 'Loop freeze: run %s ended failed with an owner-only reason. The loop does not dispatch this issue again; the owner decides it.\n\nReason: %s\n' "$run" "$why" > "$f"
+  else
+    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" 2>&1) || printf 'WAVE-FREEZE #%s frozen:not-startable refused: %s\n' "$n" "$out"
+    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) && printf 'SQUAD-NOT-STARTABLE: build=%s run %s ended failed: the defect does not reproduce at the base tip. A later build dispatches it again.\n\nReason: %s\n' "$(sg_loop_build)" "$run" "$why" > "$f"
+  fi
+}
+
 # hand <issue> <why>: the issue's own count reached SG_HAND_AT (2 by default) below SG_REQUEUE_CAP, so the loop hands it to
 # HAL9K, the hand agent, instead of a third dispatch (#2053). The hand hold (squad.handhold) writes ready-for-HAL9K, which no
 # dispatch pass takes, and one comment lists the runs counted. The route is bounded: with SG_HAND_MAX (2) hal9k holds open,
@@ -597,6 +612,12 @@ fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivere
   local n=$1 run=$2 why=$3
   { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
   probe_refuted "$n" "$run" && return 0   # a probe whose acceptance command is unmet refutes its premise (#888)
+  if [ -n "${5:-}" ]; then   # the artifact named its end class (#2217): the issue freezes once, and no count reaches the cap
+    count "$n" "$run" "$why" "${4:-own}"
+    [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
+    freeze_class "$n" "$run" "$why" "$5"
+    echo "WAVE FROZEN #$n: run $run ended $5, so it is not dispatched again: $why"; return 0
+  fi
   if loop_caused "$why" "${4:-}"; then   # the loop's failure, not the issue's (#621): its own ledger and bound
     count "$n" "$run" "$why" loop
     [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
