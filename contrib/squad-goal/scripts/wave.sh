@@ -907,6 +907,8 @@ child_gate() {
 # (wave, tip). A second red on that same tip takes the red path. 7 (#1961): the tip is red, no child names the cause, and the
 # red is held: it was red twice on the same tree with the same failing tests, or the rerun named another set; a first red
 # runs once more on the same tree in the same pass, and a green rerun of the same suite releases it (flake_release).
+# 8 (#2209): the check evicted every child, so nothing is ahead of the base and no check runs on that tip: the landing
+# closes the wave as an empty landing.
 # passed_before <sha> <kind> <selection> <scope>: the gate history holds a pass for this tree and this suite (#1687, #1700):
 # a full battery (scope full, an `all: <reason>` selection) whatever its kind, or a delta of the tip check's own kind over
 # the tip check's own selection. A row that named no selection ran no battery, so it covers nothing.
@@ -967,6 +969,16 @@ flake_release() {
   case "$out" in *"HUNT filed"*|*"HUNT dup"*) : > "$SG_STATE/auto/flake-filed-$fp" 2>/dev/null; echo "WAVE-FLAKE $w: the flaky check is filed as a bug: $out";;
     *) echo "WAVE-FLAKE $w: the bug for the flaky check was not filed: $out";; esac
   return 0
+}
+# evicted_before <issue> <run> <sha>: the run already requeued the issue for this same commit (its requeue fact names the
+# head, #2209). A child that entered again after a fix carries another commit, whatever its wave fact reads since (a later
+# pass may have written `stuck` over `entered`), so its eviction is written. A ledger that does not answer is no proof,
+# so the eviction is written.
+evicted_before() {
+  ledger read "$1" 2>/dev/null | python3 -c 'import json, sys
+d = json.load(sys.stdin); run, sha = sys.argv[1], sys.argv[2]
+q = (d.get("requeued") or {}).get(run) or {}
+sys.exit(0 if sha and q.get("head") == sha else 1)' "$2" "$3" 2>/dev/null
 }
 wave_check() {
   local S=$1 w=$2 rc crc found cx clog oc of hsha mk look=1 tk tsel tsc hb hid known rset rkey
@@ -1076,10 +1088,23 @@ wave_check() {
     cx=$(child_of "$S" "$found")
     $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1; rm -f "$of"
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
-    wave_fact "$run" "$cx" refused "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
-    requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
+    # (#2209) One eviction of a child is one refused fact and one requeue per run. The eviction lives in the scratch clone
+    # only, so a pass that pushes nothing leaves the commit on the remote wave and the next pass evicts it again: the
+    # requeue fact of the issue's ledger, the read the empty landing uses, says the run already sent it back. The commit
+    # is dropped and named each time; the fact, the card move and the comment are written once. A child that entered the
+    # wave again carries another commit, so it is another eviction, and it is requeued.
+    if evicted_before "$cx" "$run" "$found"; then
+      echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave, and this run already put its issue back in the queue"
+    else
+      wave_fact "$run" "$cx" refused "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
+      requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
+      ledger requeue "$cx" "$run" "$found" >/dev/null 2>&1
+      echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
+    fi
     dropped="${dropped:+$dropped }$cx"; look=0   # land keeps the set: the tree it pushes lacks this child's commits (#1416)
-    echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
+    # (#2209) Nothing is left ahead of the base: no gate runs on a tip that equals the base. 8 sends the landing back to
+    # its empty-landing close, which deletes the wave branch, so the evicted commit does not return on the next pass.
+    [ "$($G -C "$S" rev-list --count "origin/$base..HEAD" 2>/dev/null)" != 0 ] || { rm -f "$of"; return 8; }
   done
 }
 
@@ -1539,7 +1564,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # (#1106) An issue this run requeued is no orphan. Its child commit stays on the run's branch by design: the loop builds the
       # issue again on a new branch. Without this the wave refused on every later cycle, so the run never landed and the commits
       # of its other children stayed on their branches too.
-      requeued_here() { [ -n "$(python3 "$here/issue_ledger.py" requeued "$SG_REPO#$1" "$run" 2>/dev/null)" ]; }
+      # (#2209) A child the tip check dropped in this pass was requeued by it, whatever its ledger could record.
+      requeued_here() { case " $dropped " in *" $1 "*) return 0;; esac; [ -n "$(python3 "$here/issue_ledger.py" requeued "$SG_REPO#$1" "$run" 2>/dev/null)" ]; }
       for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) requeued_here "$n" || undel="${undel:+$undel }$n";; esac; done
       # (#1833) A wave whose tip the base already carries has landed: its children's work reached the base in an earlier landing,
       # and only the wave branch stayed behind (its deletion did not reach it). A child that never entered such a wave is no
@@ -1591,6 +1617,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # The base's own check (#786): a red completed check on $base holds the landing until its head is green.
     red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     wave_check "$S" "$w"; rc=$?
+    # 8 (#2209): the check evicted every child. The loop repeats, and the empty-landing block above closes the wave.
+    [ $rc = 8 ] && continue
     # The check ran no verdict: the one cause it met is named, with the check's own log, so the next pass reads the trace (#1700).
     [ $rc = 3 ] && { wwhy=${waitwhy:-the tip check ran no verdict}; echo "WAVE WAIT $w: $wwhy; the wave lands on a later pass (the check's own output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
     [ $rc = 6 ] && { echo "WAVE WAIT $w: the tip's check is red on a tree a gate passed before, so no child is blamed on this red; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
