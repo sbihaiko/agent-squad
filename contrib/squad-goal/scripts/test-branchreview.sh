@@ -14,7 +14,7 @@ mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$d/review.sh" "$d/loopbug.sh" "$d/revfo
 cp "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/branchreview.sh" "$d/branchfix.sh" "$d/childreview.sh" "$T/s/" 2>/dev/null
 printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}\n' > "$T/s/models.json"
 cat > "$T/s/env.sh" <<J
-SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_LAND_BRANCH=dev; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUDE.md; SG_CODING_RULES=CLAUDE.md
+SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_LAND_BRANCH=dev; SG_CHECKOUT=${SG_CHECKOUT:-$T}; SG_REVIEW_RULES=CLAUDE.md; SG_CODING_RULES=CLAUDE.md
 . "$T/s/address.sh"
 J
 cat > "$T/bin/gh" <<'J'
@@ -22,6 +22,7 @@ cat > "$T/bin/gh" <<'J'
 printf '%s\n' "gh $*" >> "$GHLOG"
 case "$*" in
   *commits/gui/7-x*) echo "{\"sha\":\"$(cat "$GHHEAD")\"}";;   # the door reads JSON and applies -q itself
+  *commits/gui/8-x*) echo "{\"sha\":\"$(cat "$GHHEAD")\"}";;
   *Accept*compare/wave/run-1...gui/7-x*) printf 'diff --git a/f b/f\n+wave-only-child-diff\n';;
   *compare/wave/run-1...gui/7-x*) echo '{"files":[{"filename":"W/a.cs"}]}';;
   *Accept*compare/dev...gui/7-x*) printf 'diff --git a/f b/f\n+branch-diff-line\n';;
@@ -29,6 +30,7 @@ case "$*" in
   *Accept*compare*) printf 'diff --git a/f b/f\n+delta-line\n';;
   *compare*) echo '{"status":"ahead"}';;
   *issues/7*) echo '{"number":7,"title":"title","body":""}';;
+  *issues/8*) echo '{"number":8,"title":"title","body":""}';;
   *) echo stub;;
 esac
 J
@@ -153,4 +155,21 @@ for kind in tip rebased; do
   [ ! -e "$T/prompt" ] && ok "nochange $kind: no model call" || ko "nochange $kind: a model was called"
   ! ls "$T/st/review-$k".* >/dev/null 2>&1 && ok "nochange $kind: no review record" || ko "nochange $kind: $(ls "$T/st" | /usr/bin/grep "review-$k")"
 done
+# 13) #2310: a pushed branch whose commits the base already holds by patch has no work of its own. The review refuses it,
+#     names the reason on the issue and calls no model: a model would approve an empty branch, and the frontier would skip
+#     the issue while that branch stayed open.
+$G init -q --bare "$T/rev-remote.git"
+$G clone -q "$T/rev-remote.git" "$T/rev-work" 2>/dev/null
+(cd "$T/rev-work" && echo b > bb && $G add bb && $G -c user.email=a@b -c user.name=t commit -q -m base && $G push -q origin HEAD:dev \
+  && $G checkout -q -b gui/8-x && echo y > y8 && $G add y8 && $G -c user.email=a@b -c user.name=t commit -q -m "work 8" -m "Refs #8" && $G push -q origin gui/8-x)
+s8=$($G -C "$T/rev-work" rev-parse gui/8-x)
+(cd "$T/rev-work" && $G checkout -q dev && $G -c user.email=a@b -c user.name=t cherry-pick "$s8" >/dev/null 2>&1 && $G push -q origin dev)
+$G clone -q "$T/rev-remote.git" "$T/rev-checkout" 2>/dev/null
+echo "$s8" > "$T/head"; rm -f "$T/st/review-gui_8-x".* "$T/st/cq/"* "$T/prompt"
+out=$(SG_CHECKOUT="$T/rev-checkout" SG_LAND_REMOTE="$T/rev-remote.git" bash "$T/s/branchreview.sh" gui/8-x 8 2>&1)
+case "$out" in *"VERDICT: BLOCKED"*"by patch"*) ok "by-patch: the review refuses a branch with no work of its own";; *) ko "by-patch: '$out'";; esac
+/usr/bin/head -1 "$T/st/review-gui_8-x.md" 2>/dev/null | /usr/bin/grep -q '^VERDICT: BLOCKED' && ok "by-patch: the verdict is BLOCKED" || ko "by-patch: verdict '$(/usr/bin/head -1 "$T/st/review-gui_8-x.md" 2>/dev/null)'"
+/usr/bin/grep -q "by patch" "$T/st/cq/"x__y#8-status~* 2>/dev/null && ok "by-patch: the issue reads why the branch is refused" || ko "by-patch: no reason on the issue: $(cat "$T/st/cq/"* 2>/dev/null)"
+[ ! -e "$T/prompt" ] && ok "by-patch: no model call" || ko "by-patch: a model was called"
+[ "$(cat "$T/st/review-gui_8-x.sha" 2>/dev/null)" = "$s8" ] && ok "by-patch: the refused tip is the tip kept beside the verdict" || ko "by-patch: no sha kept"
 rm -rf "$T"; exit $fail

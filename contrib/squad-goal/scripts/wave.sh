@@ -1614,7 +1614,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
   # `dropped`: the issues whose child the tip check removed from the tree this landing pushes (#1416). Only this pass sets it,
   # so a refusal an earlier pass wrote never excludes an issue. wave_check adds to it; a repeat after a refused push keeps it.
-  local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped="" rfs="" nontest=""
+  local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped="" rfs="" nontest="" br note
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
@@ -1714,8 +1714,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       elif [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
           why="the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue"
-          br=$(salvage "$run" "$n")   # the child's commits reach a work branch before the queue sends the issue back (#2030, #2231)
-          [ -n "$br" ] && why="$why; its commits are on $br, for a review and a landing"
+          note=$(salvage_note "$run" "$n")   # the child's commits reach a work branch before the queue sends the issue back (#2030, #2231)
+          [ -n "$note" ] && why="$why; $note"
           wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child" keep
           cap_hold "$run" "$rd" "$n" "$why";; esac; done
         retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
@@ -1745,8 +1745,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     [ $rc = 5 ] && { if [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
           why="the tip's check stayed unproven through the wave's age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): it is back in the queue"
-          br=$(salvage "$run" "$n")   # the child's commits reach a work branch before the queue sends the issue back (#2030, #2231)
-          [ -n "$br" ] && why="$why; its commits are on $br, for a review and a landing"
+          note=$(salvage_note "$run" "$n")   # the child's commits reach a work branch before the queue sends the issue back (#2030, #2231)
+          [ -n "$note" ] && why="$why; $note"
           wave_fact "$run" "$n" refused "the tip's check stayed unproven through the wave's age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s), so the wave never landed with this child" keep
           cap_hold "$run" "$rd" "$n" "$why";; esac; done
         retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
@@ -1811,14 +1811,14 @@ land_books() {
   # A wave that reached its age cap landed as it is (#378, ADR-0145 rule 13): the children the run dispatched that never
   # entered it go back to the queue, so the loop builds them into a later wave. They are read from the run's own record
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
-  local rq=""   # the issues the capped block below sends back to the queue: the no-Refs fallback never closes one (#1003)
+  local rq="" note   # the issues the capped block below sends back to the queue: the no-Refs fallback never closes one (#1003)
   if [ "$capped" = 1 ]; then
     # (#869) A child that entered the wave is not missing from it, even when its commit is not ahead of the base any more (the
     # rebase dropped it), and an issue a multi-issue commit named was requeued above with its own reason.
     for n in $(run_issues "$rd"); do case " $issues $amb $ent " in *" $n "*) ;; *)
       why="the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue"
-      br=$(salvage "$run" "$n")   # the child's commits reach a branch before the queue sends the issue back (#2030)
-      [ -n "$br" ] && why="$why; its commits are on $br, for a review and a landing"
+      note=$(salvage_note "$run" "$n")   # the child's commits reach a branch before the queue sends the issue back (#2030)
+      [ -n "$note" ] && why="$why; $note"
       wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
       rq="$rq $n"
       cap_hold "$run" "$rd" "$n" "$why";; esac; done
@@ -2042,8 +2042,12 @@ land_batch() {
 # the record names no child of that issue, the child's worktree is gone, or the child stands on the base. A push it cannot
 # make names its reason on stderr and prints nothing on stdout, so the caller adds no branch to its comment and the requeue
 # goes on: a saved branch is a help, never a condition of the requeue.
+# (#2310) A commit the base already holds by patch is no work of the child's own: `git cherry` marks it `-`, and a head with no
+# `+` line would open a branch that the review approves and the landing can never fill. The head is read by patch, never by
+# `rev-list --count`: a rebase or a cherry-pick gives the base's copy another sha, and the count reads it as the child's work.
+# Such a head pushes nothing and prints `WHY: <reason>` on stdout, so the requeue names why no branch carries the work.
 salvage() {
-  local run=${1:?} n=${2:?} rd child ws wt head cnt br err
+  local run=${1:?} n=${2:?} rd child ws wt head ahead br err
   rd=$(run_dir "$run")
   read -r child ws < <(python3 - "$rd/record.jsonl" "$n" <<'PY'
 import json,re,sys
@@ -2066,11 +2070,24 @@ PY
   wt="$rd/ws/${ws:-target}-$child"
   [ -d "$wt" ] || { echo "salvage: the worktree of $child is not there: $wt" >&2; return 0; }
   head=$($G -C "$wt" rev-parse -q --verify HEAD 2>/dev/null) || return 0
-  cnt=$($G -C "$wt" rev-list --count "origin/$base..$head" 2>/dev/null) || return 0
-  [ "${cnt:-0}" -gt 0 ] 2>/dev/null || return 0
+  $G -C "$wt" rev-parse -q --verify "origin/$base" >/dev/null 2>&1 || return 0
+  ahead=$($G -C "$wt" cherry "origin/$base" "$head" 2>/dev/null | /usr/bin/grep -c '^+' || :)
+  [ "${ahead:-0}" -gt 0 ] 2>/dev/null || { printf 'WHY: its head carries no commit that is not on %s by patch\n' "$base"; return 0; }
   br="fix/$n-salvage-$run"; err="$SG_STATE/salvage-$n.err"
   $G -C "$wt" push -q origin "HEAD:refs/heads/$br" >/dev/null 2>"$err" || { echo "salvage: the push of ${head:0:9} to $br failed: $(tail -1 "$err" 2>/dev/null)" >&2; return 0; }
   printf '%s\n' "$br"
+}
+
+# salvage_note <run> <issue>: the clause the requeue adds about the salvage: the branch the child's work is on, or the reason
+# no branch carries it (#2310). Prints nothing when the salvage names neither. It reads salvage's stdout, so the cap's caller
+# never parses the branch and the reason apart.
+salvage_note() {
+  local out; out=$(salvage "$1" "$2")
+  case "$out" in
+    '') ;;
+    WHY:*) printf '%s' "${out#WHY: }";;
+    *) printf 'its commits are on %s, for a review and a landing' "$out";;
+  esac
 }
 
 case "${1:-}" in

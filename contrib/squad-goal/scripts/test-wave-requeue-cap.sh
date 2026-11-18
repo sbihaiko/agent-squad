@@ -246,6 +246,18 @@ out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run20
 /usr/bin/git -C "$wt" -c user.name=t -c user.email=t@t commit -q --allow-empty --amend -m "Refs #2030 base"
 out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run2031 2031 2>&1)
 [ -z "$out" ] && ok "a run that names no child of the issue salvages nothing (#2030)" || ko "a child of another issue: '$out'"
+# A child whose head carries no commit the base does not already hold by patch has no work of its own (#2310): the push
+# opens a branch the review and the landing can do nothing with, and the frontier skips the issue while that empty branch
+# stays open. The salvage pushes nothing and names the reason, so the requeue says why no branch carries the work.
+wt2="$r/ws/target-d"; /usr/bin/git -C "$r" worktree add -q -b child/2032 "$wt2" dev
+echo w > "$wt2/w2032"; /usr/bin/git -C "$wt2" add w2032; /usr/bin/git -C "$wt2" -c user.name=t -c user.email=t@t commit -q -m "Refs #2032 the child's work"
+/usr/bin/git -C "$r" checkout -q dev && echo w > "$r/w2032" && /usr/bin/git -C "$r" add w2032 \
+  && /usr/bin/git -C "$r" -c user.name=t -c user.email=t@t commit -q -m "Refs #2032 the child's work, landed"
+/usr/bin/git -C "$r" push -q origin dev && /usr/bin/git -C "$r" fetch -q origin dev
+printf '%s\n' '{"event": "spawn_accepted", "child": "d", "definition": "GitHub issue #2032"}' >> "$r/record.jsonl"
+out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run2030 2032 2>&1)
+[ -z "$(/usr/bin/git -C "$o" rev-parse -q --verify refs/heads/fix/2032-salvage-run2030 2>/dev/null)" ] && ok "a head the base already holds by patch is pushed to no salvage branch (#2310)" || ko "a by-patch head was salvaged: '$out'"
+case "$out" in *"not on dev by patch"*) ok "the salvage names why it pushed no branch (#2310)";; *) ko "the salvage names no reason: '$out'";; esac
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail

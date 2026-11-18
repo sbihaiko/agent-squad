@@ -152,6 +152,25 @@ case "$r" in *"WAVE REQUEUE #211"*) ko "S: the issue dev holds was requeued: '$r
 [ -e "$T/st/auto/disp-211" ] && ok "S: the issue dev holds keeps its dispatch marker" || ko "S: #211 lost its dispatch marker"
 /usr/bin/grep -q 'issues/211 -f state=closed' "$T/gh.log" && ok "S: the issue dev holds is delivered, not requeued" || ko "S: #211 is not closed: $(cat "$T/gh.log")"
 
+# V (#2310): a child whose head carries no commit the base does not already hold by patch has no work of its own to salvage.
+# The cap pushed that head to fix/<n>-salvage-<run>, the review approved the branch, and the frontier skipped the issue while
+# the empty branch stayed open. The cap now pushes no branch, and the requeue says why, so the issue returns to the queue.
+rm -rf "$T/out16"; $G clone -q "$T/origin.git" "$T/out16" 2>/dev/null
+(cd "$T/out16" && $G checkout -q dev && echo v > o231 && $G add o231 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 231" -m "Refs #231" && $G push -q origin HEAD:dev)
+W16=wave/run-16; start2 run-16 >/dev/null
+# the child's own worktree holds the same patch at a sha of its own, under another message, and nothing else
+$G clone -q "$T/origin.git" "$T/co/runs/run-16/ws/target-b" 2>/dev/null
+(cd "$T/co/runs/run-16/ws/target-b" && $G checkout -q -b gui/231 "origin/dev~1" && echo v > o231 && $G add o231 \
+  && $G -c user.email=a@b -c user.name=t commit -q -m "Refs #231 the child's work")
+printf 'run-16\n' > "$T/st/auto/disp-231"
+printf '%s\n' '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #231 work"}}' > "$T/co/runs/run-16/record.jsonl"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-16"
+: > "$T/gh.log"; : > "$T/board.log"; : > "$T/pushes.log"
+r=$(land2 run-16); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "V: the empty capped wave lands empty (exit 0)";; *) ko "V: not an empty landing: '$r'";; esac || ko "V: exit $rc: '$r'"
+[ -z "$($O rev-parse -q --verify refs/heads/fix/231-salvage-run-16 2>/dev/null)" ] && ok "V: a by-patch head opens no salvage branch (#2310)" || ko "V: an empty salvage branch was pushed: $(pushes)"
+case "$r" in *"WAVE REQUEUE #231"*"not on dev by patch"*) ok "V: the requeue names why no branch carries the child's work (#2310)";; *) ko "V: the requeue names no reason: '$r'";; esac
+
 # T (#593): a refused Code Complete board write on entry is named, in the shape the landing names its refused write.
 # Before, the entry discarded the write's output, so a refused card move was never named and the card looked moved.
 W14=wave/run-14; start2 run-14 >/dev/null; child 310 g310 "origin/$W14"
