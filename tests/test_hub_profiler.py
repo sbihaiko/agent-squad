@@ -4,6 +4,7 @@ The fold from process-table readings to the tree is a pure module beside the hub
 and read no real process table. The route is tested over HTTP: off is the default and reads nothing, a switch write is
 audited, and a tailnet write is refused without its own grant, `profiler_write`. The page's renderer runs in node.
 """
+import datetime as dt
 import http.client
 import importlib.util
 import inspect
@@ -1429,6 +1430,166 @@ def test_fewer_than_three_deliveries_draw_no_bar(prof):
 def test_a_delivery_that_ended_before_the_window_is_not_folded(prof):
     old = {"wait": 10.0, "coding": 10.0, "review": 10.0, "gates": 10.0, "landing": 10.0, "end": NOW - 7200}
     assert prof.trip([*TRIP_SPANS, old], [], since=NOW - 3600)["deliveries"] == 3
+
+
+# ---------------------------------------------------------------- what each column consumes (#2227)
+# Three lines stand beside the bar: Tokens, CPU and RAM. A sample goes to the column the card stood in at the sample's
+# time: a column run covers [start, end), and the sample's position is (t - start) / (end - start). The column is cut into
+# TRIP_SERIES_POINTS bins and each bin's point is the mean of what it holds, so two deliveries of different lengths fold by
+# position. Tokens are tokens per minute of the column, and the table's own number is tokens per issue. CPU and RAM are
+# shares of the whole machine, read from the minute record; a share of 50% is 0.5.
+CS = 1_800_000_000.0            # the window these fixtures fold: one hour, CS to CS + 3600
+
+
+def card(*runs):
+    return [{"column": c, "start": CS + a, "end": CS + b} for c, a, b in runs]
+
+
+def span_at(end):
+    return {"queue": 60.0, "wait": 10.0, "coding": 60.0, "between": 0.0, "review": 10.0, "gates": None,
+            "landing": 10.0, "after": 0.0, "end": CS + end}
+
+
+def every_minute(upto, load=4.0, cpu=50.0, ram=40.0):
+    return [{"at": CS + t, "load": load, "cpu": cpu, "ram": ram} for t in range(60, int(upto), 60)]
+
+
+def test_the_trip_payload_carries_tokens_cpu_and_ram_for_each_column(prof):
+    out = prof.trip([span_at(2400.0)], [], since=CS,
+                    cards=[card(("Todo", 0.0, 600.0), ("Doing", 600.0, 1800.0), ("Review", 1800.0, 2400.0))],
+                    calls=[[{"at": CS + 300.0, "tokens": 600}, {"at": CS + 1200.0, "tokens": 2400}]],
+                    loads=every_minute(3600.0), now=CS + 3600.0, cores=8, mem_gb=32.0)
+    todo = {r["column"]: r for r in out["columns"]}["todo"]
+    assert {"tokens", "tokens_per_issue", "cpu", "ram"} <= set(todo), "each column carries the three lines and its rate"
+    # 600 tokens at 300 s of a 600 s run: the 0.5 position is bin 4, whose 75 s hold 1.25 min, so 600 / 1.25 = 480 a
+    # minute; the column's mean is 600 tokens over its 10 minutes, and the issue cost 600.
+    assert todo["tokens"] == {"points": [[0.5625, 480.0]], "mean": 60.0}
+    assert todo["tokens_per_issue"] == 600.0
+    assert todo["cpu"] == {"points": todo["cpu"]["points"], "mean": 0.5}, "50% of the machine is a 0.5 share"
+    assert todo["cpu"]["mean"] == 0.5 and todo["ram"]["mean"] == 0.4
+    doing = {r["column"]: r for r in out["columns"]}["doing"]
+    assert doing["tokens"]["mean"] == 120.0, "2400 tokens over the 20 minutes of Doing"
+    assert (out["peak_load"], out["cores"], out["mem_gb"]) == (4.0, 8, 32.0)
+
+
+def test_a_call_counts_in_the_column_of_its_end_time(prof):
+    evs = [ev("run_start", CS + 100.0),
+           ev("call_start", CS + 150.0, node="code.1", entry=1),
+           ev("outcome", CS + 250.0, node="code.1", entry=1, outcome="pass", tokens_in=10, tokens_out=5, cache_read=2),
+           ev("land", CS + 300.0, node="code.1", outcome="pass"),
+           ev("verdict", CS + 300.0, verdict="completed", exit_code=0, reasons=[])]
+    assert prof.trip_calls(evs) == [{"at": CS + 250.0, "tokens": 17}], \
+        "the call is read at its end, with input, output and cache reads; its start is no time of its tokens"
+
+
+def test_two_deliveries_of_different_lengths_fold_by_position(prof):
+    out = prof.trip([span_at(600.0), span_at(1200.0)], [], since=CS,
+                    cards=[card(("Doing", 0.0, 600.0)), card(("Doing", 0.0, 1200.0))],
+                    calls=[[{"at": CS + 150.0, "tokens": 300}], [{"at": CS + 300.0, "tokens": 600}]],
+                    loads=[], now=CS + 3600.0)
+    doing = {r["column"]: r for r in out["columns"]}["doing"]
+    assert doing["tokens"]["points"] == [[0.3125, 240.0]], \
+        "a quarter into either run is one bin: 900 tokens over its 3.75 minutes"
+    assert doing["tokens"]["mean"] == 30.0 and doing["tokens_per_issue"] == 450.0, "900 tokens over 30 minutes, for 2 issues"
+
+
+def test_cpu_and_ram_are_shares_and_the_payload_carries_the_memory(prof):
+    out = prof.trip([span_at(600.0)], [], since=CS, cards=[card(("Doing", 0.0, 600.0))], calls=[[]],
+                    loads=every_minute(660.0, cpu=80.0, ram=20.0), now=CS + 3600.0, mem_gb=64.0)
+    doing = {r["column"]: r for r in out["columns"]}["doing"]
+    assert doing["cpu"]["mean"] == 0.8 and doing["ram"]["mean"] == 0.2, "each reading is a share from 0 to 1"
+    assert all(0.0 <= v <= 1.0 for _, v in doing["cpu"]["points"] + doing["ram"]["points"])
+    assert out["mem_gb"] == 64.0, "the page reads the machine's memory for the RAM hover"
+
+
+def test_a_column_with_no_sample_carries_no_point_and_no_mean(prof):
+    out = prof.trip([span_at(600.0)], [], since=CS, cards=[card(("Todo", 0.0, 600.0))], calls=[[]],
+                    loads=[{"at": CS + 900.0, "load": 4.0, "cpu": 50.0, "ram": 40.0}],
+                    now=CS + 3600.0)
+    todo = {r["column"]: r for r in out["columns"]}["todo"]
+    assert todo["cpu"] == {"points": [], "mean": None} and todo["ram"] == {"points": [], "mean": None}, \
+        "the only record stands outside Todo, so the column holds no point and no mean, never a zero"
+    assert todo["tokens"] == {"points": [], "mean": None}, "no model call is no reading of a rate"
+
+
+def test_a_column_with_no_model_call_carries_zero_tokens_per_issue(prof):
+    out = prof.trip([span_at(600.0)], [], since=CS, cards=[card(("Todo", 0.0, 600.0))], calls=[[]],
+                    loads=[], now=CS + 3600.0)
+    rows = {r["column"]: r for r in out["columns"]}
+    assert rows["todo"]["tokens_per_issue"] == 0.0, "a column with no model call spends a true zero"
+    assert rows["doing"]["tokens_per_issue"] == 0.0, "a column no delivery stood in spends a zero too"
+
+
+def test_the_payload_carries_the_peak_the_cores_and_the_minutes_with_no_record(prof):
+    rows = every_minute(3001.0)
+    rows[0]["load"] = 14.0
+    out = prof.trip([span_at(600.0)], [], since=CS, cards=[card(("Doing", 0.0, 600.0))], calls=[[]],
+                    loads=rows, now=CS + 3600.0, cores=10)
+    assert out["peak_load"] == 14.0, "the window's highest reading"
+    assert out["cores"] == 10
+    assert out["no_record_minutes"] == 10, "50 of the window's 60 minutes hold a record"
+
+
+def trip_iso(t):
+    return dt.datetime.fromtimestamp(t, dt.UTC).isoformat()
+
+
+def test_the_cards_column_runs_come_from_the_board_transitions(hub):
+    """The sample's column is the card's own move, read from the board's transition record: each run is one entry of the
+    card into a column, from that move to the next, and the last run is open to the window's end."""
+    mod, *_ = hub
+    base = 1_800_000_000.0
+    store = {7: {"events": [{"t": trip_iso(base), "type": "added", "project": 4},
+                            {"t": trip_iso(base + 60), "type": "status", "status": "Todo"},
+                            {"t": trip_iso(base + 660), "type": "status", "status": "Doing"},
+                            {"t": trip_iso(base + 1860), "type": "status", "status": "Review"}]}}
+    runs = mod.card_column_runs(store, {7}, since=base, now=base + 3660)
+    assert runs[7] == [{"column": "Todo", "start": base + 60, "end": base + 660},
+                       {"column": "Doing", "start": base + 660, "end": base + 1860},
+                       {"column": "Review", "start": base + 1860, "end": base + 3660}], \
+        "each run ends where the next column opens, and the open one ends at the window's own end"
+    assert runs.get(8) is None, "a card the record never saw answers no runs"
+
+
+def test_the_route_carries_the_tokens_cpu_and_ram_of_each_column(hub):
+    """The whole seam: a run record, a load record and a transition record in the fixture state folder give the trip's
+    three lines, folded by the rule layer and carried on /api/profiler."""
+    mod, port, _, state, _ = hub
+    now = time.time()
+    runs = pathlib.Path(mod.CHECKOUT) / "runs"
+    d = runs / "run-t2227"
+    d.mkdir(parents=True, exist_ok=True)
+    hist = state.parent / "hub-history.x_y.jsonl"
+    try:
+        (d / "request.txt").write_text("Refs #7\n")
+        (d / "record.jsonl").write_text("\n".join(json.dumps(e) for e in (
+            {"event": "run_start", "pos": 1, "ts": now - 1400.0},
+            {"event": "call_start", "pos": 2, "ts": now - 1350.0, "node": "code.1", "entry": 1},
+            {"event": "outcome", "pos": 3, "ts": now - 1200.0, "node": "code.1", "entry": 1, "outcome": "pass",
+             "tokens_in": 300, "tokens_out": 150, "cache_read": 50},
+            {"event": "land", "pos": 4, "ts": now - 1100.0, "node": "code.1", "outcome": "pass"},
+            {"event": "verdict", "pos": 5, "ts": now - 1000.0, "verdict": "completed", "exit_code": 0, "reasons": []})) + "\n")
+        hist.write_text(json.dumps({"k": "issue", "n": 7, "events": [
+            {"t": trip_iso(now - 2000.0), "type": "added", "project": 4},
+            {"t": trip_iso(now - 1900.0), "type": "status", "status": "Todo"},
+            {"t": trip_iso(now - 1500.0), "type": "status", "status": "Doing"}], "complete": True}) + "\n")
+        rows = [f"{now - 1800.0 + 60 * k:.3f}\t4.00\t50.0\t40.0" for k in range(31)]
+        (state / "load-record.tsv").write_text("\n".join(rows) + "\n")
+        code, v = ask(port, "GET")
+        assert code == 200
+        trip = v["trip"]
+        cols = {r["column"]: r for r in trip["columns"]}
+        todo, doing = cols["todo"], cols["doing"]
+        assert todo["tokens_per_issue"] == 0.0 and todo["tokens"]["mean"] is None, "no call ended in Todo"
+        assert doing["tokens_per_issue"] == 500.0, "the call's 300 in, 150 out and 50 cache reads land in Doing"
+        assert doing["tokens"]["mean"] > 0 and doing["tokens"]["points"], "a rate over the minutes spent in Doing"
+        assert doing["cpu"]["mean"] == 0.5 and doing["ram"]["mean"] == 0.4, "the minute record, as shares of the machine"
+        assert trip["cores"] >= 1 and trip["mem_gb"] > 0, "the payload names the machine it reads"
+        assert trip["peak_load"] == 4.0 and trip["no_record_minutes"] > 0, "the load facts the page keeps in one sentence"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        hist.unlink(missing_ok=True)
+        (state / "load-record.tsv").unlink(missing_ok=True)
 
 
 # The view fixture is the fold's own answer over four worked deliveries and one wave gate, never a hand-written share,
