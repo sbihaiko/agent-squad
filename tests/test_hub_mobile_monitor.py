@@ -34,7 +34,7 @@ def _load(hub):
     src = {"landing": {"issue": 73, "ts": NOW - 7200}, "quota": {"codex": None, "agy": None}, "loop": True,
            "gate": {"kind": "fast", "result": "fail", "sha": SHA, "ts": NOW - 300, "took": 127, "avg": 169}}
     return {"cpu": 12, "ram": 97, "gpu": None, "warn": False, "facts": hub.foot_items(src, NOW),
-            "speed": {"specs": hub.spec_progress(BOARD, moves={})}}
+            "speed": None, "specs": hub.spec_progress(BOARD, moves={})}
 
 
 def _routes(hub, loop=None):
@@ -84,7 +84,7 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     assert out["ian"] == "", "the owner removed the Gate tile (#1260)"
     assert "Landed" not in out["ian"], "the owner removed the Landed tile (2026-11-01)"
     assert "Loop" not in out["ian"], "the loop state lives in its own panel (#1071)"
-    assert "Specs" in out["ispeed"] and "5/9 tickets · 55%" in out["ispeed"]
+    assert "Specs" in out["ispeed"] and "5 of 9 closed - 55%" in out["ispeed"]
     assert out["sum"] == "", "the summary no longer counts the gate; a red gate stays in the footer (#1260)"
 
 
@@ -100,7 +100,7 @@ def test_the_cut_carries_every_name_the_monitor_draws_with(hub):
     variable: fpct" and drew no quota (#1632)."""
     body = {"cpu": 12, "ram": 97, "gpu": None, "warn": False, "facts": [],
             "subs": [{"label": "Claude", "pct": 42.5, "resets": NOW + 86400}],
-            "speed": {"specs": {"value": "no open spec"}}}
+            "speed": None, "specs": {"value": "no open spec"}}
     src = (CUT_SCOPE + hub.INST_JS + "\nlet drewError = null;\ntry { instDraw(" + json.dumps(body)
            + "); } catch (e) { drewError = String((e && e.message) || e); }\n")
     err = run_js(src, "drewError")
