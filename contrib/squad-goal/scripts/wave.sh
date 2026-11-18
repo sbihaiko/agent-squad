@@ -2045,9 +2045,12 @@ land_batch() {
 # (#2310) A commit the base already holds by patch is no work of the child's own: `git cherry` marks it `-`, and a head with no
 # `+` line would open a branch that the review approves and the landing can never fill. The head is read by patch, never by
 # `rev-list --count`: a rebase or a cherry-pick gives the base's copy another sha, and the count reads it as the child's work.
-# Such a head pushes nothing and prints `WHY: <reason>` on stdout, so the requeue names why no branch carries the work.
+# Such a head pushes nothing, names the reason on stderr, and sets SALVAGE_WHY, so the requeue names why no branch carries
+# the work. The stdout contract never changes: it is the branch name or nothing, and SALVAGE_BR carries it for a caller that
+# must read both answers without parsing (salvage_note). A `git cherry` that cannot run proves nothing: no reason, no branch.
 salvage() {
   local run=${1:?} n=${2:?} rd child ws wt head ahead br err
+  SALVAGE_BR=""; SALVAGE_WHY=""   # the two answers of this call: the branch, and why no branch carries the work
   rd=$(run_dir "$run")
   read -r child ws < <(python3 - "$rd/record.jsonl" "$n" <<'PY'
 import json,re,sys
@@ -2071,22 +2074,23 @@ PY
   [ -d "$wt" ] || { echo "salvage: the worktree of $child is not there: $wt" >&2; return 0; }
   head=$($G -C "$wt" rev-parse -q --verify HEAD 2>/dev/null) || return 0
   $G -C "$wt" rev-parse -q --verify "origin/$base" >/dev/null 2>&1 || return 0
-  ahead=$($G -C "$wt" cherry "origin/$base" "$head" 2>/dev/null | /usr/bin/grep -c '^+' || :)
-  [ "${ahead:-0}" -gt 0 ] 2>/dev/null || { printf 'WHY: its head carries no commit that is not on %s by patch\n' "$base"; return 0; }
+  ahead=$($G -C "$wt" cherry "origin/$base" "$head" 2>/dev/null) || return 0   # a read that fails proves nothing
+  case "$ahead" in *'+ '*) ;; *)
+    SALVAGE_WHY="its head carries no commit that is not on $base by patch"; echo "salvage: $SALVAGE_WHY" >&2; return 0;; esac
   br="fix/$n-salvage-$run"; err="$SG_STATE/salvage-$n.err"
   $G -C "$wt" push -q origin "HEAD:refs/heads/$br" >/dev/null 2>"$err" || { echo "salvage: the push of ${head:0:9} to $br failed: $(tail -1 "$err" 2>/dev/null)" >&2; return 0; }
-  printf '%s\n' "$br"
+  SALVAGE_BR=$br; printf '%s\n' "$br"
 }
 
 # salvage_note <run> <issue>: the clause the requeue adds about the salvage: the branch the child's work is on, or the reason
-# no branch carries it (#2310). Prints nothing when the salvage names neither. It reads salvage's stdout, so the cap's caller
-# never parses the branch and the reason apart.
+# no branch carries it (#2310). Prints nothing when the salvage names neither. It calls salvage in this shell and reads its two
+# answer variables, so no caller parses `WHY:` out of a branch name: salvage's stdout stays the branch or nothing.
 salvage_note() {
-  local out; out=$(salvage "$1" "$2")
-  case "$out" in
-    '') ;;
-    WHY:*) printf '%s' "${out#WHY: }";;
-    *) printf 'its commits are on %s, for a review and a landing' "$out";;
+  SALVAGE_BR=""; SALVAGE_WHY=""
+  salvage "$1" "$2" >/dev/null
+  case "$SALVAGE_WHY" in
+    ?*) printf '%s' "$SALVAGE_WHY";;
+    *) [ -n "$SALVAGE_BR" ] && printf 'its commits are on %s, for a review and a landing' "$SALVAGE_BR";;
   esac
 }
 

@@ -155,9 +155,10 @@ for kind in tip rebased; do
   [ ! -e "$T/prompt" ] && ok "nochange $kind: no model call" || ko "nochange $kind: a model was called"
   ! ls "$T/st/review-$k".* >/dev/null 2>&1 && ok "nochange $kind: no review record" || ko "nochange $kind: $(ls "$T/st" | /usr/bin/grep "review-$k")"
 done
-# 13) #2310: a pushed branch whose commits the base already holds by patch has no work of its own. The review refuses it,
-#     names the reason on the issue and calls no model: a model would approve an empty branch, and the frontier would skip
-#     the issue while that branch stayed open.
+# 13) #2310: a pushed branch whose commits the base already holds by patch has no work of its own. The review refuses it
+#     in the shape every reader of review-<key>.md already reads -- VERDICT: CHANGES with a Blocking finding, never a third
+#     verdict token -- names the reason on the issue and calls no model: a model would approve an empty branch, and the
+#     frontier would skip the issue while that branch stayed open.
 $G init -q --bare "$T/rev-remote.git"
 $G clone -q "$T/rev-remote.git" "$T/rev-work" 2>/dev/null
 (cd "$T/rev-work" && echo b > bb && $G add bb && $G -c user.email=a@b -c user.name=t commit -q -m base && $G push -q origin HEAD:dev \
@@ -167,9 +168,21 @@ s8=$($G -C "$T/rev-work" rev-parse gui/8-x)
 $G clone -q "$T/rev-remote.git" "$T/rev-checkout" 2>/dev/null
 echo "$s8" > "$T/head"; rm -f "$T/st/review-gui_8-x".* "$T/st/cq/"* "$T/prompt"
 out=$(SG_CHECKOUT="$T/rev-checkout" SG_LAND_REMOTE="$T/rev-remote.git" bash "$T/s/branchreview.sh" gui/8-x 8 2>&1)
-case "$out" in *"VERDICT: BLOCKED"*"by patch"*) ok "by-patch: the review refuses a branch with no work of its own";; *) ko "by-patch: '$out'";; esac
-/usr/bin/head -1 "$T/st/review-gui_8-x.md" 2>/dev/null | /usr/bin/grep -q '^VERDICT: BLOCKED' && ok "by-patch: the verdict is BLOCKED" || ko "by-patch: verdict '$(/usr/bin/head -1 "$T/st/review-gui_8-x.md" 2>/dev/null)'"
+case "$out" in "gui/8-x ${s8:0:9} VERDICT: CHANGES") ok "by-patch: the review refuses a branch with no work of its own";; *) ko "by-patch: '$out'";; esac
+/usr/bin/grep -q "by patch" "$T/st/review-gui_8-x.md" 2>/dev/null && ok "by-patch: the saved review names why the branch is refused" || ko "by-patch: no reason in the review: $(cat "$T/st/review-gui_8-x.md" 2>/dev/null)"
+[ "$(/usr/bin/head -1 "$T/st/review-gui_8-x.md" 2>/dev/null)" = "VERDICT: CHANGES" ] && ok "by-patch: the refusal is the verdict every reader already knows" || ko "by-patch: verdict '$(/usr/bin/head -1 "$T/st/review-gui_8-x.md" 2>/dev/null)'"
+# the landing pass reads the saved file through one parser: a refusal must land there as `changes`, never as a malformed
+# file (a third verdict token) or an approval (a Blocking finding demoted to Debt).
+[ "$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_8-x.md" "$T/st/review-gui_8-x.sha" "$s8" 2>/dev/null)" = changes ] \
+  && ok "by-patch: the parser the landing pass reads classifies the refusal as changes" || ko "by-patch: classify '$(python3 "$T/s/revformat.py" --classify "$T/st/review-gui_8-x.md" "$T/st/review-gui_8-x.sha" "$s8" 2>&1)'"
 /usr/bin/grep -q "by patch" "$T/st/cq/"x__y#8-status~* 2>/dev/null && ok "by-patch: the issue reads why the branch is refused" || ko "by-patch: no reason on the issue: $(cat "$T/st/cq/"* 2>/dev/null)"
 [ ! -e "$T/prompt" ] && ok "by-patch: no model call" || ko "by-patch: a model was called"
 [ "$(cat "$T/st/review-gui_8-x.sha" 2>/dev/null)" = "$s8" ] && ok "by-patch: the refused tip is the tip kept beside the verdict" || ko "by-patch: no sha kept"
+# 14) #2310: a read that fails proves nothing. When the by-patch read cannot reach its remote, the review runs as it did
+#     before and keeps its own verdict: a transient failure is no accusation that the branch carries no work.
+echo aaa111 > "$T/head"; rm -f "$T/st/review-gui_7-x".* "$T/st/cq/"* "$T/prompt"; : > "$T/gh.log"
+out=$(SG_CHECKOUT="$T/no-such-checkout" SG_LAND_REMOTE="$T/rev-remote.git" bash "$T/s/branchreview.sh" gui/7-x 7 2>&1); rc=$?
+[ $rc = 0 ] && case "$out" in *"VERDICT: APPROVE"*) ok "unreadable: a by-patch read that cannot run leaves the normal review in charge";; *) ko "unreadable: '$out'";; esac \
+  || ko "unreadable: exit $rc: '$out'"
+[ -e "$T/prompt" ] && ok "unreadable: the model still reviews the branch" || ko "unreadable: no model call"
 rm -rf "$T"; exit $fail
