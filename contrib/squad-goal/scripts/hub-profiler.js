@@ -244,9 +244,11 @@ function profTrip(t,phone){
   +`<td>${profTripPar(c.parallelism)}</td><td>${profTripNum(c.effective_s)}</td>`
   +`<td>${profTokUnit(c.tokens_per_issue)}</td>`
   +`<td>${(c.cpu||{}).mean!=null?profTripPct(c.cpu.mean):dash}</td><td>${(c.ram||{}).mean!=null?profTripPct(c.ram.mean):dash}</td></tr>`).join("")}</tbody></table>`;
+ // The rework line (#2292): a stint that went back to work counts in no column; the rule layer words the line.
+ const rw=t.rework&&t.rework.text?`<p class=tprw>${esc(t.rework.text)}</p>`:"";
  // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them.
  if(phone)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below. Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.</p>`
-  +profTripFacts(t)+profTripLanes(t)+table+`</section>`;
+  +profTripFacts(t)+profTripLanes(t)+table+rw+`</section>`;
  // A RAM field the record never carried is named, so a dash never reads as zero memory use (#2253).
  const ramReason=t.ram_minutes===0?"No RAM reading in this window: the load record has no memory field there.":"";
  // A reading over ten times the core count is a burst of runnable threads, not a saturation reading; the page says so
@@ -262,7 +264,7 @@ function profTrip(t,phone){
   "CPU and RAM are readings of the whole machine, on one scale, in percent of it."].join(" ");
  const foot=[sentence, badLoad, ramReason].filter(Boolean).join(" ");
  return `<section id=proftrip>${head}<p class=tpn>${sub}</p>`
-  +profTripChart(t,cols)+table+`<p class=ptfoot>${foot}</p></section>`}
+  +profTripChart(t,cols)+table+`<p class=ptfoot>${foot}</p>`+rw+`</section>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
