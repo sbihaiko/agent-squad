@@ -74,7 +74,7 @@ o=$(g fetch -q origin "+refs/heads/$main:refs/remotes/origin/$main" "+refs/heads
   || { echo "promote-main-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 stip=$(g rev-parse "origin/$stg") || exit 1; mtip=$(g rev-parse "origin/$main") || exit 1
 # 1. main holds the stg tip: nothing to prove, and a request for a tip main already holds asks for nothing.
-if g merge-base --is-ancestor "$stip" "$mtip"; then rm -f "$rec"; exit 0; fi
+if g merge-base --is-ancestor "$stip" "$mtip"; then rm -f "$rec"; bash "$d/red-tier.sh" clear "$state"; exit 0; fi
 # The complete tier's names, from the workflow of the checkout the profile names (as promote-pass.sh reads it).
 case "${SG_CI_WORKFLOW:-}" in
   "") ci_file=${SG_CHECKOUT:-$SG_SQUAD}/.github/workflows/ci.yml;;
@@ -194,6 +194,7 @@ if [ -n "${R:-}" ]; then
     red)
       # One bug at a time. The record is written before the request is cleared, and a filing GitHub did not take leaves the
       # request in place, so the next pass files it: a red is never dropped in silence.
+      printf '%s\n' "$rows" | awk -F'\t' '$2 == "red" { print $1 }' | bash "$d/red-tier.sh" record "$state" "$tree" "$R" "$ci_file"
       n=$(cat "$bugrec" 2>/dev/null); n=$(secs "$n" "")
       if [ -n "$n" ]; then
         st=$(gh_api "repos/$SG_REPO/issues/$n" -q '.state // empty' 2>/dev/null | tr 'A-Z' 'a-z') || st=

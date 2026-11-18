@@ -316,3 +316,26 @@ def test_the_header_chips_shrink_so_the_close_button_stays_on_their_row():
     assert chips, "the run sheet has no #rkchips rule"
     assert "flex-wrap:wrap" not in chips.group(1), "the chips wrap, so the close button drops to a second row"
     assert "min-width:0" in chips.group(1), "the chips row cannot shrink below its content"
+
+
+def test_overview_shows_the_wall_time_split_and_a_suite_run_again_on_one_tree():
+    rec = [
+        {"event": "run_start", "graph_name": "router-dynamic", "plan": ["router"], "pos": 1, "ts": T0},
+        {"event": "call_start", "node": "route.router.1", "entry": 1, "session": "s", "pid": 1, "limit": None, "started_at": T0, "pos": 2, "ts": T0 + 1},
+        {"event": "progress", "node": "route.router.1", "entry": 1, "messages": 2, "context_tokens": 1, "tool": "Bash",
+         "command_class": "suite", "phase": "end", "elapsed": 1800.0, "pos": 3, "ts": T0 + 60},
+        {"event": "progress", "node": "route.router.1", "entry": 1, "messages": 3, "context_tokens": 1, "tool": "Bash",
+         "command_class": "gate", "phase": "end", "elapsed": 600.0, "pos": 4, "ts": T0 + 70},
+        {"event": "gate_start", "node": "test_gate", "entry": 1, "pid": 1, "limit": None, "started_at": T0 + 100, "pos": 5, "ts": T0 + 100},
+        {"event": "gate_result", "node": "test_gate", "entry": 1, "item": None, "sha": "abc", "dirt": "d1", "suite": "fast",
+         "outcome": "fail", "source": "test_gate.1", "pos": 6, "ts": T0 + 400},
+        {"event": "gate_start", "node": "test_gate", "entry": 1, "pid": 1, "limit": None, "started_at": T0 + 500, "pos": 7, "ts": T0 + 500},
+        {"event": "gate_result", "node": "test_gate", "entry": 1, "item": None, "sha": "abc", "dirt": "d1", "suite": "fast",
+         "outcome": "fail", "source": "test_gate.1", "pos": 8, "ts": T0 + 800},
+        {"event": "outcome", "node": "test_gate", "entry": 1, "outcome": "fail", "elapsed": 700.0, "pos": 9, "ts": T0 + 800},
+        {"event": "outcome", "node": "route.router.1", "entry": 1, "outcome": "pass", "elapsed": 3000.0, "pos": 10, "ts": T0 + 3000},
+        {"event": "verdict", "verdict": "completed", "pos": 11, "ts": T0 + 4000},
+    ]
+    out = _node(f"const m=rkModel({json.dumps(ROW_ENDED)},{json.dumps(rec)});console.log(JSON.stringify({{split:m.split,html:rkOverview(m)}}));")
+    assert out["split"] == {"wall": 4000, "suite": 2500, "gate_wait": 600, "model": 600, "idle": 300}
+    assert "42 min" in out["html"] and "fast ×2, 10 min" in out["html"]

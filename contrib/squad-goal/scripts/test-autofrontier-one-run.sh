@@ -335,6 +335,15 @@ r=$(run)
 [ "$(marked 55)" = 0 ] && ok "needs-triage alone holds a card that also carries ready-for-agent, under the profile's own list" || ko "the frontier dispatched a needs-triage card: $(marked 55) marker(s): '$r'"
 [ "$(marked 58)" = 1 ] && ok "the plain card beside a needs-triage hold is dispatched" || ko "the plain card beside a needs-triage hold was not dispatched: '$r'"
 
+# 9f) (#2206) a card that carries ready-for-HAL9K or ready-for-human is never dispatched, and no hold file is needed for that.
+#     The why line names the holder label, and a card with ready-for-agent beside ready-for-HAL9K stays out.
+scene handlabel 24
+issues '[{"number":61,"title":"a","body":"b","labels":[{"name":"ready-for-HAL9K"},{"name":"wave:01"}]},{"number":62,"title":"a","body":"b","labels":[{"name":"ready-for-human"},{"name":"wave:01"}]},{"number":63,"title":"a","body":"b","labels":[{"name":"ready-for-agent"},{"name":"ready-for-HAL9K"},{"name":"wave:01"}]}]'
+r=$(run)
+[ ! -e "$T/handlabel/st/auto/hold-61" ] && [ ! -e "$T/handlabel/st/auto/hold-62" ] && [ ! -e "$T/handlabel/st/auto/hold-63" ] && ok "no hold file exists for the holder cards" || ko "a hold file exists for a holder card"
+[ "$(marked 61 62 63)" = 0 ] && ok "a card that carries ready-for-HAL9K or ready-for-human is never dispatched, with or without ready-for-agent" || ko "a holder card was dispatched: $(marked 61 62 63) marker(s): '$r'"
+$G -q '^FRONTIER why #61: skip label (ready-for-HAL9K)' <<<"$r" && $G -q '^FRONTIER why #62: skip label (ready-for-human)' <<<"$r" && $G -q '^FRONTIER why #63: skip label (ready-for-HAL9K)' <<<"$r" && ok "the why line names the holder label" || ko "the why line does not name the holder label: '$r'"
+
 # 10) #340: a run parent issue is a roll-up of a run's children, never work. It carries the run-parent label, and the pass
 #     skips it whatever SG_FRONTIER_SKIP_LABELS says.
 scene parent
