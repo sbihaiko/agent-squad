@@ -1,5 +1,8 @@
 """Write one native blocking edge only after the deadlock validator passes it (#1985).
 
+An edge that adds no order is refused as `redundant` (#2259): the blocked ticket already waits for the blocker through
+a chain of open tickets. A written edge names in `now_redundant` each older direct edge that it makes redundant.
+
 Every read and write goes through the GitHub door (ghread.py). The strict read is a direct GraphQL read, never the
 throttle's snapshot, so the check sees GitHub as it is now. A rerun finds the edges already written and writes only the
 missing ones.
@@ -78,6 +81,24 @@ def _closure(repo, seeds):
     return nodes
 
 
+def _chain(nodes, repo, start, goal, skip=None):
+    """The shortest chain of waits from `start` to `goal` over open tickets, or []; `skip` is one direct edge to ignore."""
+    paths = [[start]]
+    seen = {start}
+    while paths:
+        path = paths.pop(0)
+        for edge in nodes[path[-1]]["blocked_by_edges"]:
+            number = edge["number"]
+            if edge["repo"] != repo or number in seen or (path[-1], number) == skip:
+                continue
+            if number == goal:
+                return path + [number]
+            if edge["state"] == "open" and number in nodes:   # a closed ticket holds no one, so no chain goes through it
+                seen.add(number)
+                paths.append(path + [number])
+    return []
+
+
 def _post(repo, blocked, blocker_id):
     res = ghread.write(f"repos/{repo}/issues/{blocked}/dependencies/blocked_by", "POST", {"issue_id": blocker_id})
     if res.kind != ghread.DONE:
@@ -96,10 +117,18 @@ def add_edge(repo, blocked, blocker):
                                 [(deadlock.key(repo, blocked), deadlock.key(repo, blocker))])
     if verdict["status"] in REFUSED:
         return {"status": "refused", "verdict": verdict["status"], "reasons": verdict["reasons"], "path": verdict["witness"]}
+    chain = _chain(nodes, repo, blocked, blocker)
+    if chain:
+        said = " > ".join(deadlock.key(repo, n) for n in chain)
+        return {"status": "refused", "verdict": "redundant", "path": [deadlock.key(repo, n) for n in chain],
+                "reasons": [f"{deadlock.key(repo, blocked)} already waits for {deadlock.key(repo, blocker)}: {said}"]}
+    shadowed = [e["number"] for e in nodes[blocked]["blocked_by_edges"]
+                if e["repo"] == repo and e["state"] == "open" and nodes[blocker]["state"] == "open"
+                and _chain(nodes, repo, blocker, e["number"])]
     _post(repo, blocked, nodes[blocker]["id"])
     if not any(e["number"] == blocker and e["repo"] == repo for e in _node(repo, blocked)["blocked_by_edges"]):
         raise WriteUnconfirmed(f"the edge {repo}#{blocked} blocked by {repo}#{blocker} does not read back")
-    return {"status": "written", "blocked": blocked, "blocker": blocker}
+    return {"status": "written", "blocked": blocked, "blocker": blocker, "now_redundant": shadowed}
 
 
 def publish_edges(repo, pairs):
