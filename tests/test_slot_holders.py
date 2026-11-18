@@ -27,7 +27,7 @@ def test_a_pass_records_the_kind_of_every_slot_it_holds(tmp_path, monkeypatch):
     (co / "runs" / "run-a" / "record.jsonl").write_text('{"event": "run_start"}\n')
     (co / "runs" / "run-b").mkdir(parents=True)
     (co / "runs" / "run-b" / "record.jsonl").write_text('{"event": "run_start"}\n')
-    (co / "runs" / "run-b" / "request.txt").write_text("CHILD - GitHub issue #77\n")
+    (co / "runs" / "run-b" / "request.txt").write_text("CHILD — GitHub issue(s) 77 (bug; one root cause, one branch):\n")
     (co / "runs" / "run-c").mkdir(parents=True)
     (co / "runs" / "run-c" / "record.jsonl").write_text('{"event": "run_start"}\n')
     st = tmp_path / "st"
@@ -69,14 +69,43 @@ def test_an_autobug_marker_the_request_does_not_name_is_another_runs(tmp_path):
     run, and a request that names the issue names it whatever the text around the number."""
     co = tmp_path / "co"
     (co / "runs" / "run-a").mkdir(parents=True)
-    (co / "runs" / "run-a" / "request.txt").write_text("CHILD - GitHub issue #77\n")
+    (co / "runs" / "run-a" / "request.txt").write_text("CHILD — GitHub issue(s) 77 (bug; one root cause, one branch):\n")
     (co / "runs" / "run-b").mkdir(parents=True)
-    (co / "runs" / "run-b" / "request.txt").write_text("CHILD - GitHub issue #777\n")
+    (co / "runs" / "run-b" / "request.txt").write_text("CHILD — GitHub issue(s) 777 (bug; one root cause, one branch):\n")
     st = tmp_path / "st"
     (st / "auto").mkdir(parents=True)
     (st / "auto" / "bug-77").write_text("a\n")
     assert SH._autobug_holders(st, co, ["run-a", "run-b"]) == {"run-a"}, \
         "the digits of issue 777 are no match for the marker of issue 77"
+
+
+def test_a_request_that_cites_an_issue_in_passing_is_no_autobug_holder(tmp_path):
+    """#2286: only the claim line the dispatch writes names the issue a run works, so a request that cites issue 77 as
+    a reference in passing is no proof that this run is the autobug run of issue 77."""
+    co = tmp_path / "co"
+    (co / "runs" / "run-a").mkdir(parents=True)
+    (co / "runs" / "run-a" / "request.txt").write_text(
+        "CHILD — GitHub issue(s) 501 (bug; one root cause, one branch):\n"
+        "see GitHub issue #77 as a reference\n")
+    st = tmp_path / "st"
+    (st / "auto").mkdir(parents=True)
+    (st / "auto" / "bug-77").write_text("a\n")
+    assert SH._autobug_holders(st, co, ["run-a"]) == set(), \
+        "a cited issue in the prose is no claim of the dispatch"
+
+
+def test_a_claim_line_names_every_issue_of_its_child(tmp_path):
+    """#2286: the dispatch line names a cluster's whole issue list, so each number of that line is the run's own."""
+    co = tmp_path / "co"
+    (co / "runs" / "run-a").mkdir(parents=True)
+    (co / "runs" / "run-a" / "request.txt").write_text(
+        "CHILD — GitHub issue(s) 77, 78 (bug; one root cause, one branch):\n--- issue #77\n")
+    st = tmp_path / "st"
+    (st / "auto").mkdir(parents=True)
+    (st / "auto" / "bug-77").write_text("a\n")
+    (st / "auto" / "bug-78").write_text("a\n")
+    assert SH._autobug_holders(st, co, ["run-a"]) == {"run-a"}, \
+        "both issues of the claim line are the run's own"
 
 
 def test_a_holder_is_classified_by_the_slot_it_holds():
@@ -121,6 +150,22 @@ def test_the_file_keeps_its_newest_records_only(tmp_path, monkeypatch):
         SH.write(path, at=1000.0 + i, free=0, cap=3, todo=1, holders=[])
     recs = lines(path)
     assert [r["at"] for r in recs] == [1003.0, 1004.0, 1005.0, 1006.0, 1007.0]
+
+
+def test_a_write_appends_its_line_instead_of_rewriting_the_file(tmp_path):
+    """#2286: two overlapping passes write one record each. A write that reads the whole file and rewrites it drops the
+    line another pass appended in that window, so the write appends its own line (`O_APPEND`) and only the tail prune
+    replaces the file. The test proves it through the file: the inode the writer opens stays the same, and a line
+    another pass wrote stays whole."""
+    path = tmp_path / SH.FILE
+    SH.write(path, at=1.0, free=0, cap=3, todo=2, holders=[])
+    ino = path.stat().st_ino
+    with open(path, "a", encoding="utf-8") as other:   # a second pass's line, appended while the file stands
+        other.write(json.dumps({"at": 2.0, "free": 1, "cap": 3, "todo": 1, "holders": []}) + "\n")
+    SH.write(path, at=3.0, free=0, cap=3, todo=2, holders=[])
+    assert [r["at"] for r in lines(path)] == [1.0, 2.0, 3.0], "every line the file held stands, in its order"
+    assert path.stat().st_ino == ino, \
+        "the write appends its line to the file; it never replaces the file another pass holds open"
 
 
 def test_a_write_leaves_no_partial_file_behind(tmp_path):

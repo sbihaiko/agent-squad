@@ -2194,9 +2194,18 @@ def test_the_route_carries_the_slot_wait_split_of_the_records_it_reads(hub):
              "holders": [{"name": "run-c", "kind": "landing"}]}]
     path.write_text("".join(json.dumps(r) + "\n" for r in recs))
     try:
+        t0 = time.time()
         code, v = ask(port, "GET")
+        t1 = time.time()
         assert code == 200 and v["slot_wait"]["refusals"] == 2
         assert {line["kind"] for line in v["slot_wait"]["lines"]} == {"gates", "landing"}
+        # The route reads its own `now` inside the call, so the minutes it carries are pinned to the clock the call ran
+        # between: the first record speaks 300 s to the second, and the second speaks the stretch that ended at that
+        # `now` (at most the gap cap).
+        route = {line["kind"]: line["minutes"] for line in v["slot_wait"]["lines"]}
+        assert route["gates"] == 5.0, "the first refusal's 300 s to the second are 5 minutes of gate wait"
+        assert 5.0 <= route["landing"] <= (t1 - (now - 300)) / 60 + 1e-6, \
+            f"the last refusal speaks from its instant to the route's own now, never to another clock: {route}"
         # The fold on a frozen clock: the first record speaks its five minutes to the second record, and the second
         # record speaks to the `now` handed in, one gap cap at most.
         out = mod.slot_wait_view(86400, now, [], allowed=True)

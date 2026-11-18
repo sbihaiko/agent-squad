@@ -78,16 +78,17 @@ open_cards() {
 }
 slot_record() {   # <todo cards>: who holds each run slot now (#2286). The pass writes it from the counters it already
                   # reads, so no measure of its own starts; a failure is named with its own reason and never fails the pass,
-                  # because a measure is no gate.
+                  # because a measure is no gate. The record names the state directory and the checkout as arguments, never
+                  # through the process's own cwd: the holder's record and the project's caps block both resolve there.
   [ -n "${AF_DRY:-}" ] && return 0
-  local out
-  out=$( { cd "${SG_CHECKOUT:?the pass names no checkout for its slot record}" && python3 - "$SG_STATE" "${1:-0}" "${SG_SQUAD:-}" <<'PY'
+  local out co=${SG_CHECKOUT:?the pass names no checkout for its slot record}
+  out=$(python3 - "$SG_STATE" "${1:-0}" "${SG_SQUAD:-$co}" "$co" 2>&1 <<'PY'
 import sys
-sys.path.insert(0, sys.argv[3] or ".")
+sys.path.insert(0, sys.argv[3])
 from squad import slot_holders as S
-S.record_pass(sys.argv[1], int(sys.argv[2]))
+S.record_pass(sys.argv[1], int(sys.argv[2]), checkout=sys.argv[4])
 PY
-  } 2>&1 )
+  )
   [ -z "$out" ] || printf 'FRONTIER: the slot-holder record was not written: %s\n' "$(printf '%s\n' "$out" | head -n 1)" >&2
   return 0
 }
