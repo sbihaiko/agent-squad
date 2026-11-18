@@ -2747,9 +2747,11 @@ def trip_events(path):
     return out
 
 def card_waits(store, numbers):
-    """issue number -> `{"todo", "closed"}`, the epoch of the card's first entry into Todo and into Closed, as the board's
-    transitions record them (#1894). Only the issues a run of the window names are folded: the store holds every card of
-    the board. A card the record never saw in a column answers None for it."""
+    """issue number -> `{"todo", "closed", "landing", "rework"}` from the board's transitions (#1894, #2292): the epoch of
+    the card's first entry into Todo, the card's Landing stint that went on to Closed in seconds (`landing`) with its
+    start (`landing_from`) and that Closed move (`closed`), and the stints that went back to work (`rework`). A card with no delivered stint answers its
+    first Closed move. Only the issues a run of the window names are folded: the store holds every card of the board. A
+    card the record never saw in a column answers None for it."""
     out = {}
     for n in numbers:
         rec = store.get(n)
@@ -2757,7 +2759,12 @@ def card_waits(store, numbers):
         runs = _hist.intervals(rec.get("events") or [])
         todo = next((_epoch(r["from"]) for r in runs if r["column"] == LEAD_START), None)
         closed = next((_epoch(r["from"]) for r in runs if r["column"] == COLUMN["issue_closed"]), None)
-        if todo is not None or closed is not None: out[n] = {"todo": todo, "closed": closed}
+        stints = hub_profiler.landing_stints([{"column": r["column"], "start": _epoch(r["from"]),
+                                               "end": _epoch(r["to"]) if r.get("to") else None} for r in runs])
+        if stints["closed"] is not None: closed = stints["closed"]
+        if todo is not None or closed is not None or stints["rework"]:
+            out[n] = {"todo": todo, "closed": closed, "landing": stints["delivered"],
+                      "landing_from": stints["delivered_from"], "rework": stints["rework"]}
     return out
 
 def card_column_runs(store, numbers, since, now):
@@ -2798,14 +2805,14 @@ def trip_issues(path):
 
 def trip_stages(path, card=None):
     """The rule layer's stages of one record, or None when it is no delivery, cached by the file's own signature and the
-    card's two moves: a transition alone changes the answer, so it is part of the key."""
+    card's moves and Landing stint: a transition alone changes the answer, so it is part of the key."""
     try: st = path.stat()
     except OSError: return None
     key = str(path)
     card = card or {}
-    sig = (st.st_mtime, st.st_size, card.get("todo"), card.get("closed"))
+    sig = (st.st_mtime, st.st_size, card.get("todo"), card.get("closed"), card.get("landing"))
     hit = TRIP_SPANS.get(key)
-    if hit and hit[:4] == sig: return hit[4]
+    if hit and hit[:5] == sig: return hit[5]
     spans = hub_profiler.trip_spans(trip_events(path), card)
     if len(TRIP_SPANS) >= TRIP_SPANS_MAX: TRIP_SPANS.clear()
     TRIP_SPANS[key] = (*sig, spans)
@@ -2819,20 +2826,38 @@ def gate_row(line):
     free text and may hold a tab, so on a whole row the field is rejoined; the fold itself lives in the rule layer."""
     return hub_profiler.gate_row(line)
 
-def trip_gates(since):
-    """The gate-history rows of the window, `start` and `finish` in seconds beside their kind, outcome and caller. A row
+def gate_attempt_links():
+    """The gate-attempt journal's links (#1255), `(tip sha, finish) -> {"wave", "card"}`: the one record that names the
+    wave or the card a gate-history row ran for. An unread journal links no row."""
+    try: text = _flow.history_path(BOARD, REPO).read_text(errors="replace")
+    except OSError: return {}
+    recs = []
+    for line in text.splitlines():
+        if '"gate_attempt"' not in line: continue
+        try: rec = json.loads(line)
+        except ValueError: continue
+        if isinstance(rec, dict): recs.append(rec)
+    return hub_profiler.gate_links(recs)
+
+def trip_gates(since, links=None):
+    """The gate-history rows of the window, `start` and `finish` in seconds beside their kind, outcome, caller, slot
+    wait and wave link (`hub_profiler.gate_row_link`, None when the journal names no wave or card for the row). A row
     that ran no battery (#1798, mode `reused` or `skipped`) is no gate observation: its start is its finish."""
     out = []
     try: lines = (STATE / "gate-history").read_text(errors="replace").splitlines()
     except OSError: return out
+    links = gate_attempt_links() if links is None else links
     for line in lines:
         row = gate_row(line)
         if row is None or row.get("mode") in hub_profiler.NO_BATTERY_MODES: continue
         try: finish, start = float(row["finish"]), float(row["start"])
         except (KeyError, TypeError, ValueError): continue
         if finish < since: continue
+        try: wait = float(row.get("wait"))
+        except (TypeError, ValueError): wait = None
         out.append({"finish": finish, "start": start, "kind": row.get("kind", ""),
-                    "outcome": row.get("outcome", ""), "caller": row.get("caller", "")})
+                    "outcome": row.get("outcome", ""), "caller": row.get("caller", ""), "wait": wait,
+                    "link": hub_profiler.gate_row_link(row, links)})
     return out
 
 def trip_calls_of(path):
@@ -2898,13 +2923,19 @@ def trip_view(window_s, now=None, allowed=True):
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     waits = card_waits(store, numbers)
     columns = card_column_runs(store, numbers, since, now)
+    spans = [trip_stages(p, next((waits[n] for n in issues[p] if n in waits), None)) for p in files]
+    # #2292: a run whose issue another run delivered is not a delivery of that issue.
+    keep = hub_profiler.trip_deliveries([s["end"] if s else None for s in spans], [issues[p] for p in files],
+                                        {n: w["closed"] for n, w in waits.items() if w.get("closed") is not None})
+    spans = [s if k else None for s, k in zip(spans, keep, strict=True)]
+    rework = [r for w in waits.values() for r in w.get("rework") or ()]
     return {"window_s": window_s, "since": since,
-            **hub_profiler.trip([trip_stages(p, next((waits[n] for n in issues[p] if n in waits), None))
-                                 for p in files], trip_gates(since), since,
+            **hub_profiler.trip(spans, trip_gates(since), since,
                                 cards=[next((columns[n] for n in issues[p] if n in columns), None) for p in files],
                                 calls=[trip_calls_of(p) for p in files], review_calls=trip_review_calls(since),
                                 loads=load_rows_now() if allowed else None, now=now, cores=os.cpu_count(),
-                                mem_gb=mem_total_gb())}
+                                mem_gb=mem_total_gb(), rework=rework,
+                                waves=[{"wave": p.parent.name, "issues": issues[p]} for p in files])}
 
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
 PROMOTED_MAIN = re.compile(r"promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
