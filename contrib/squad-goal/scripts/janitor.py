@@ -75,7 +75,7 @@
     notice. It repeats at most once per bound, it never dispatches, and a pass that dispatches drops the file, so the next idle
     starts the clock again. A dry pass raises no alert and writes no bound.
 Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
-import calendar, importlib.util, json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
+import calendar, contextlib, importlib.util, io, json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 acts = []
@@ -1512,6 +1512,13 @@ def reconcile_board():
         want = col if shipped else {"Closed": "Done", "Landing": landing}.get(col, col)   # a release names the shipped column; the legacy board reads its own (#2190)
         set_expected(n, want, f"a hand hold was released to {col}", rank=120)
         released[n] = want
+    for r in HH.holds(state=st, closed=[n for n in HH.holders(state=st) if issue_info(n)[0] == "closed"]):   # a stale hold on a closed issue is released here, once (#2220)
+        n = r["issue"]
+        if not (r["stale"] and r["orphan"]) or dry: continue
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = HH.release([n], by=r["carrier"], to="Closed", state=st)
+        HH.clear_release(n, state=st)
+        if rc == 0: say(f"HOLD-RELEASED #{n}: the hold by {r['carrier']} is stale and the issue is closed, so it is released to Closed")
     for n, c in sorted(HH.holders(state=st).items(), key=lambda kv: int(kv[0])):
         if n in released: continue
         have = have_all.get(n)

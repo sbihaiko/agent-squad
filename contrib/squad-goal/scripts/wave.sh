@@ -366,15 +366,18 @@ stop() {
 
 # hand <issue> <why>: the issue's own count reached SG_HAND_AT (2 by default) below SG_REQUEUE_CAP, so the loop hands it to
 # HAL9K, the hand agent, instead of a third dispatch (#2053). The hand hold (squad.handhold) writes ready-for-HAL9K, which no
-# dispatch pass takes, and one comment lists the runs counted. The route is bounded: with SG_HAND_MAX (2) hal9k holds open,
+# dispatch pass takes, and one comment lists the runs counted. The route is bounded: with SG_HAND_MAX (2) live hal9k holds open,
 # the issue stays in the queue and reaches the stop at the cap. A hold that expires frees the issue, and its next failure
 # reaches the cap. SG_HAND_AT=off turns the route off. Returns 0 when it handed the issue over, else 1.
 hand() {
-  local n=$1 why=$2 at=${SG_HAND_AT:-2} py open out f runs
+  local n=$1 why=$2 at=${SG_HAND_AT:-2} py open out f runs hold_nums closed h
   [ "$at" = off ] && return 1
   [ "$c" -ge "$at" ] && [ "$c" -lt "${SG_REQUEUE_CAP:-3}" ] || return 1
   py=${SG_SQUAD:+$SG_SQUAD/.venv/bin/python}; [ -n "$py" ] && [ -x "$py" ] || py=python3
-  open=$(PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.handhold holds 2>/dev/null | /usr/bin/grep -c ' hal9k ')
+  hold_nums=$(PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.handhold holds 2>/dev/null | /usr/bin/grep ' hal9k ' | /usr/bin/sed 's/^#\([0-9]*\) .*/\1/')
+  closed=""
+  for h in $hold_nums; do [ "$(gh_api "repos/$SG_REPO/issues/$h" -q '.state' 2>/dev/null)" = closed ] && closed="$closed $h"; done
+  open=$(PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.handhold holds --live --closed $closed 2>/dev/null | /usr/bin/grep -c ' hal9k ')
   [ "${open:-0}" -lt "${SG_HAND_MAX:-2}" ] || { echo "WAVE HAND-FULL #$n: $open hal9k holds are open, so it stays in the queue"; return 1; }
   out=$(PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.handhold hold --by hal9k "$n" 2>&1) \
     || { echo "WAVE HAND-REFUSED #$n: $(printf '%s' "$out" | tail -1)"; return 1; }

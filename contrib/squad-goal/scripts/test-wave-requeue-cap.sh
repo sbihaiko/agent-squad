@@ -191,6 +191,20 @@ hh hold --by hal9k 66; held 64 && held 66 || ko "the fixture needs two open hal9
 hw requeue 65 "the local gates failed: p" >/dev/null; o=$(hw requeue 65 "the local gates failed: q")
 case "$o" in *"WAVE HAND-FULL #65"*) ! held 65 && ok "two open hal9k holds fill the hand route, and the issue stays in the queue" || ko "#65 was held past the bound";; *) ko "full hand route: '$o'";; esac
 hw requeue 65 "the local gates failed: r" | /usr/bin/grep -q "WAVE STOP #65" && ok "with the hand route full, the cap still stops the issue" || ko "#65 did not stop at the cap"
+# #2220: a stale hold or a hold on a closed issue never fills the hand route; only a live hold counts.
+hh release --by hal9k --to Todo 64 66
+for s in 70 71; do printf 'by hal9k\nsince 2020-01-01T00:00:00Z\nuntil 2020-01-01T01:00:00Z\n' > "$T/st/auto/hold-$s"; done
+hw requeue 72 "the local gates failed: s" >/dev/null; o72=$(hw requeue 72 "the local gates failed: t")
+case "$o72" in *"WAVE HAND #72"*) held 72 && ok "two stale hal9k holds leave the hand route open, and the issue is handed over" || ko "#72 logged a hand line with no hold";; *) ko "two stale holds filled the hand route: '$o72'";; esac
+rm -f "$T/st/auto/hold-70" "$T/st/auto/hold-71"; hh release --by hal9k --to Todo 72
+hh hold --by hal9k 73 77
+hw requeue 79 "the local gates failed: u" >/dev/null; o79=$(hw requeue 79 "the local gates failed: v")
+case "$o79" in *"WAVE HAND #79"*) held 79 && ok "a hold on a closed issue does not fill the hand route" || ko "#79 logged a hand line with no hold";; *) ko "a closed hold filled the hand route: '$o79'";; esac
+hh release --by hal9k --to Todo 73 77 79
+hh hold --by hal9k 73 74
+hw requeue 75 "the local gates failed: w" >/dev/null; o75=$(hw requeue 75 "the local gates failed: x")
+case "$o75" in *"WAVE HAND-FULL #75"*) ! held 75 && ok "two live hal9k holds print HAND-FULL and the issue stays in the queue" || ko "#75 was held past the bound";; *) ko "two live holds did not fill the route: '$o75'";; esac
+hh release --by hal9k --to Todo 73 74
 # The wave's age cap sends a child's issue back to the queue, and the loop then builds it again from the base: the commits
 # the child made reach no branch, so the cap pushes the child's head to salvage/<n> first and names that branch (#2030).
 o="$T/orig2030.git"; /usr/bin/git init -q --bare "$o"

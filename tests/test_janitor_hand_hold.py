@@ -228,3 +228,16 @@ def test_the_release_cli_clears_the_holder_label_and_the_file(tmp_path):
     log = writes(tmp_path)
     assert f"DELETE repos/x/y/issues/{N}/labels/ready-for-human" in log, log
     assert not (st / f"auto/hold-{N}").exists()
+
+
+@pytest.mark.heavy
+def test_a_stale_hold_on_a_closed_issue_is_released_to_closed_by_the_pass_with_one_log_line(tmp_path):
+    st = bare(tmp_path, "Closed", closed=True)
+    (st / f"auto/hold-{N}").write_text("by hal9k\nsince 2020-01-01T00:00:00Z\nuntil 2020-01-01T01:00:00Z\n")
+    janitor(tmp_path, **SHIPPED)
+    janitor(tmp_path, **SHIPPED)
+    assert not (st / f"auto/hold-{N}").exists(), "the stale hold stayed on a closed issue"
+    assert not (st / f"auto/release-{N}").exists(), "the release record stayed: the pass would name it twice"
+    log = (st / "cycle.log").read_text()
+    assert log.count(f"HOLD-RELEASED #{N}:") == 1, log
+    assert f"DELETE repos/x/y/issues/{N}/labels/ready-for-HAL9K" in writes(tmp_path)

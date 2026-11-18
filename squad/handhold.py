@@ -20,15 +20,15 @@ failure. A clear that GitHub answers 'Label does not exist' is already clear.
 
 The verbs are hold, renew and release. A release names the next column and records that decision in
 `$SG_STATE/auto/release-<n>`, so the board pass is the one writer of the column fact (ADR-0149) and applies it once.
-There is no release without a column: a card is never left in a ghost state. There is no automatic release: a stale
-`ready-for-HAL9K` is cleared by the release verb, never by a pass.
+There is no release without a column: a card is never left in a ghost state. A pass releases a stale hold on a closed
+issue to Closed; a stale hold on an open issue is cleared by the release verb only.
 
 Every write verb touches `$SG_STATE/board-dirty`, so the board pass re-reads at once.
 
 usage: python3 -m squad.handhold hold <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold renew <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold release <n>... --to Todo|Landing|Closed [--by manual|hal9k]
-       python3 -m squad.handhold holds
+       python3 -m squad.handhold holds [--live] [--closed n...]
 
 The bound defaults to `SG_HAND_HOLD_MINUTES` (240). The label writes name the repository `SG_REPO` names (owner/name).
 Exit 0 when every write lands, 1 on a refusal (one stderr line each).
@@ -473,14 +473,18 @@ def main(argv=None, **kw):
             s.add_argument("--to", choices=COLUMNS, required=True)
         else:
             s.add_argument("--minutes", type=int)
-    sub.add_parser("holds")
+    h = sub.add_parser("holds")
+    h.add_argument("--live", action="store_true")
+    h.add_argument("--closed", nargs="*", default=[], metavar="n")
     try:
         a = ap.parse_args(argv)
     except SystemExit as e:   # argparse refuses a missing --to with its own exit 2; a caller gets the code, not an exit
         return int(e.code or 0)
     try:
         if a.verb == "holds":
-            rows = holds(state=kw.get("state"), now=kw.get("now"))
+            rows = holds(state=kw.get("state"), closed=a.closed, now=kw.get("now"))
+            if a.live:
+                rows = [r for r in rows if r["live"]]
             for r in rows:
                 print(f"#{r['issue']} {r['carrier']} since {r['since']} until {r['until']}"
                       f"{'  stale' if r['stale'] else ''}{'  orphan' if r['orphan'] else ''}")
