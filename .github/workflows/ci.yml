@@ -166,9 +166,9 @@ jobs:
           done
           want=$(printf '%s\n' $names | jq -Rnc '[inputs | select(. != "")]')
           # The tip-carried cause is terminal: it waits on no run, so the in-flight read never replaces it.
+          pulls=$(gh api "repos/$REPO/actions/runs?event=pull_request&branch=$HEAD_REF&per_page=50" 2>/dev/null || true)
           if [ "$run" = true ]; then
-            for f in $(gh api "repos/$REPO/actions/runs?event=pull_request&branch=$HEAD_REF&per_page=50" 2>/dev/null \
-              | jq -r --arg me "${GITHUB_RUN_ID:-}" '.workflow_runs[]? | select(.status != "completed") | select((.id | tostring) != $me) | "\(.id):\(.head_sha)"' 2>/dev/null); do
+            for f in $(printf '%s' "$pulls" | jq -r --arg me "${GITHUB_RUN_ID:-}" '.workflow_runs[]? | select(.status != "completed") | select((.id | tostring) != $me) | "\(.id):\(.head_sha)"' 2>/dev/null || true); do
               if gh api "repos/$REPO/actions/runs/${f%%:*}/jobs?per_page=100" 2>/dev/null \
                 | jq -e --argjson n "$want" '[.jobs[]? | select(.status != "completed") | select(.name as $x | $n | index($x))] | length > 0' >/dev/null 2>&1; then
                 s=${f#*:}; echo "a complete tier is in flight: run ${f%%:*} on ${s:0:9}; this label starts nothing"; run=false
@@ -176,6 +176,33 @@ jobs:
                 wait=" Run ${f%%:*} holds it, the tip it waits on is $s, and the tier starts on a label after that run ends."
               fi
             done
+          fi
+          # A red last tier holds a tip that changes none of its red files (#2204): the tier could not fix what it found.
+          if [ "$run" = true ]; then
+            redsha=""
+            for f in $(printf '%s' "$pulls" | jq -r --arg me "${GITHUB_RUN_ID:-}" '[.workflow_runs[]? | select(.status == "completed") | select((.id | tostring) != $me)][:10][] | "\(.id):\(.head_sha)"' 2>/dev/null || true); do
+              jobs=$(gh api "repos/$REPO/actions/runs/${f%%:*}/jobs?per_page=100" 2>/dev/null || true)
+              tier=$(printf '%s' "$jobs" | jq -r --argjson n "$want" '[.jobs[]? | select(.name as $x | $n | index($x)) | select(.conclusion != null and .conclusion != "skipped")] | if length == 0 then "none" elif any(.conclusion == "failure") then "red" else "done" end' 2>/dev/null || echo none)
+              [ "$tier" = none ] && continue
+              if [ "$tier" = red ]; then redsha=${f#*:}; fi
+              break
+            done
+            if [ -n "$redsha" ]; then
+              logs=""
+              for j in $(printf '%s' "$jobs" | jq -r '.jobs[]? | select(.conclusion == "failure") | .id' 2>/dev/null || true); do
+                logs="$logs$(gh api "repos/$REPO/actions/jobs/$j/logs" 2>/dev/null || true)"$'\n'
+              done
+              rfiles=$(printf '%s' "$logs" | grep -oE '(FAILED|ERROR) tests/[A-Za-z0-9_./-]+\.py|(squad|contrib|tests)/[A-Za-z0-9_./-]+\.py:[0-9]+:' | sed -E 's/^(FAILED|ERROR) //; s/:[0-9]+:$//' | sort -u || true)
+              if [ -n "$rfiles" ] && changed=$(gh api "repos/$REPO/compare/$redsha...$SHA" --jq '.files[].filename' 2>/dev/null); then
+                hit=$(printf '%s\n' "$changed" | grep -xF -f <(printf '%s\n' "$rfiles") || true)
+                if [ -z "$hit" ]; then
+                  rlist=$(printf '%s' "$rfiles" | paste -sd' ' -)
+                  echo "the last complete tier on stg is red at ${redsha:0:9}; this tip changes none of its red files: $rlist"; run=false
+                  why="the last complete tier on stg is red"
+                  wait=" The red sha is $redsha, and this tip changes none of its red files: $rlist. A tip that changes one of them starts the tier."
+                fi
+              fi
+            fi
           fi
           echo "complete tier: $names"
           if [ "$run" = false ] && [ -n "${PR:-}" ]; then
