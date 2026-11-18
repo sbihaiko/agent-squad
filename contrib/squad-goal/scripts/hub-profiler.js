@@ -84,7 +84,42 @@ function profTripChart(t,cols){
   +axis(t.tokens_ticks||[],ty," tok/min")+axis(t.machine_ticks||[],my,"%")
   +`<text class=ptn x="4" y="${(tokTop-4).toFixed(1)}">Tokens</text><text class=ptn x="4" y="${(macTop-4).toFixed(1)}">Machine</text>`
   +drawn+labels+`</svg>`}
-function profTrip(t){
+// The phone's lanes (#2229): the same payload, drawn for a narrow screen. Each column keeps its own width in the lane, so
+// a point sits at its position inside the column; a column with no point draws no line there, never a zero. The Tokens
+// lane holds one line on its own scale, the Machine lane holds CPU solid and RAM dashed on one 0 to 100% scale. The page
+// scales what the payload holds and invents no reading.
+const PROF_LANE_W=1000,PROF_TOK_H=64,PROF_MACH_H=96;
+const profTripPct=v=>v==null?"&#8212;":(100*v).toFixed(0)+"%";
+const profTripIssue=v=>v==null?"&#8212;":String(Math.round(v));
+function profTripShares(cols){const sum=cols.reduce((a,c)=>a+Math.max(0,c.share||0),0)||1;
+ return cols.map(c=>({c,w:Math.max(0,c.share||0)/sum*PROF_LANE_W}))}
+function profTripBands(parts,h){let x=0,out="";
+ for(const {w} of parts){out+=`<rect class=ptlbg x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${h}"></rect>`;x+=w}
+ return out}
+function profTripLine(parts,lane,h,max,cls,title){
+ let x=0,out="";
+ for(const {c,w} of parts){
+  const pts=((c[lane]||{}).points)||[];
+  if(pts.length){const xy=pts.map(([p,v])=>`${(x+Math.min(1,Math.max(0,p))*w).toFixed(1)},${(h*(1-Math.min(1,Math.max(0,(v||0)/max)))).toFixed(1)}`);
+   out+=`<polyline class="ptl ${cls}" points="${xy.join(" ")}"></polyline>`;
+   out+=pts.map(([p,v],i)=>`<circle class="ptld ${cls}-dot" cx="${(x+Math.min(1,Math.max(0,p))*w).toFixed(1)}" cy="${(h*(1-Math.min(1,Math.max(0,(v||0)/max)))).toFixed(1)}" r="3">${title?`<title>${esc(title(c,v))}</title>`:""}</circle>`).join("")}
+  x+=w}
+ return out}
+function profTripLanes(t){
+ const cols=t.columns||[],parts=profTripShares(cols);
+ const tokMax=Math.max(1,...cols.flatMap(c=>(((c.tokens||{}).points)||[]).map(p=>p[1]||0)));
+ const gb=t.mem_gb;
+ const tok=`<div class=ptlh>Tokens &middot; tokens/min</div><svg class="ptlane ptlane-tok" viewBox="0 0 ${PROF_LANE_W} ${PROF_TOK_H}" role=img aria-label="${esc(`Tokens per minute over the trip's columns, zero to ${Math.round(tokMax)}`)}" preserveAspectRatio=none>${profTripBands(parts,PROF_TOK_H)}${profTripLine(parts,"tokens",PROF_TOK_H,tokMax,"ptl-tok")}</svg>`;
+ const mach=`<div class=ptlh>Machine &middot; percent of the whole machine <span class=ptlkey><i class="ptkey ptkey-cpu"></i>CPU <i class="ptkey ptkey-ram"></i>RAM</span></div>`
+  +`<svg class="ptlane ptlane-mach" viewBox="0 0 ${PROF_LANE_W} ${PROF_MACH_H}" role=img aria-label="CPU and RAM as a percent of the whole machine over the trip's columns" preserveAspectRatio=none>`
+  +`${profTripBands(parts,PROF_MACH_H)}${profTripLine(parts,"cpu",PROF_MACH_H,1,"ptl-cpu")}${profTripLine(parts,"ram",PROF_MACH_H,1,"ptl-ram",(c,v)=>`RAM ${profTripPct(v).replace("&#8212;","")} of ${gb==null?"the machine":Number(gb).toFixed(0)+" GB"}`)}</svg>`;
+ const strip=`<div class=ptstrip>${parts.map(({c,w})=>`<i class="ptseg pts-${esc(c.column)}${c.median_s>0?"":" ptb-none"}" style="flex:${Math.max(0,c.share||0)} 1 0"></i>`).join("")}</div>`;
+ const labels=`<div class=ptlabels>${cols.map(c=>`<span class=ptlab><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i>${esc(c.label)} ${profTripNum(c.median_s)}</span>`).join("")}</div>`;
+ return tok+mach+strip+labels}
+function profTripFacts(t){
+ const peak=t.peak_load==null?"No load reading":`Peak load ${Number(t.peak_load).toFixed(2)}`;
+ return `<p class=tpn>${peak}; saturation at ${t.cores||1} cores; ${t.no_record_minutes||0} minutes with no load record.</p>`}
+function profTrip(t,phone){
  if(!t)return "";
  const n=t.deliveries||0,span=profTime(t.window_s||0),head=`<h3>${esc(t.label||"The trip of an issue")}</h3>`;
  if(!t.bar)return `<section id=proftrip>${head}<p class=tpn>${n} deliver${n===1?"y":"ies"} in the last ${span}: fewer than three, so no bar is drawn.</p></section>`;
@@ -94,6 +129,10 @@ function profTrip(t){
  const seg=c=>{const pct=100*Math.max(0,c.share||0),painted=c.median_s>0;   // the fold's own share: the page never derives a second width
   return `<i class="ptb-seg${painted?` pts-${esc(c.column)}`:" ptb-none"}" style="width:${pct.toFixed(2)}%" title="${esc(profTripTitle(c))}"></i>`};
  const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each board column`)}">${cols.map(seg).join("")}</div>`;
+ // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them.
+ if(phone)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below.</p>`
+  +profTripFacts(t)+profTripLanes(t)
+  +`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Column</th><th>Median</th><th>p90</th><th>Observations</th><th>Tokens/issue</th><th>CPU</th><th>RAM</th></tr></thead><tbody>${cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td><td>${profTripCell(c)}</td><td>${profTripNum(c.p90_s)}</td><td>${c.observations||0}</td><td>${profTripIssue(c.tokens_per_issue)}</td><td>${profTripPct((c.cpu||{}).mean)}</td><td>${profTripPct((c.ram||{}).mean)}</td></tr>`).join("")}</tbody></table></section>`;
  const dash="&#8212;";
  const rows=cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td>`
   +`<td>${c.tokens_per_issue==null?dash:profTokens(c.tokens_per_issue)}</td>`
@@ -114,8 +153,8 @@ function profNote(v){
   +(f?`<b class=lerr>${f} reading${f===1?"":"s"} failed.</b>`:"No reading failed.")
   +(v.coverage==null?"":v.coverage>=1?"Read every process.":`Read ${(100*v.coverage).toFixed(1)}% of the processes.`)
   +" A process that lives between two readings is not counted."}
-function profHtml(v,open){
- const head=`<div class=lph><h2>Loop</h2></div>`,trip=profTrip(v.trip);
+function profHtml(v,open,phone){
+ const head=`<div class=lph><h2>Loop</h2></div>`,trip=profTrip(v.trip,phone);
  // The switch ends the page: the readings stand above it, and the switch that turns them on or off follows them (owner ask).
  const foot=`<div class=lph id=proffoot>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>${!v.write&&v.reason?`<p class=lpr>${esc(v.reason)}</p>`:""}`;
  if(!v.on||!v.tree)return head+trip+foot;   // the file views read files only, so the switch does not gate them
@@ -123,12 +162,12 @@ function profHtml(v,open){
  return head+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")+foot}
 // profiler:end
-let profV=null,profErr="";const profOpen=new Set();
+let profV=null,profErr="",profPhone=false;const profOpen=new Set();   // profPhone: the page the render draws for (the phone drops the load chart, #2229)
 function profDraw(){if(!profV)return;const b=document.getElementById("profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
- b.innerHTML=profHtml(profV,profOpen)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
+ b.innerHTML=profHtml(profV,profOpen,profPhone)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
  const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
 async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
 async function profPost(on,client){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
-function profMount(client){document.getElementById("profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on,client);return}
+function profMount(client){profPhone=client==="phone";document.getElementById("profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on,client);return}
  const r=e.target.closest("tr[aria-expanded]");if(!r)return;const p=r.dataset.p;if(profOpen.has(p))profOpen.delete(p);else profOpen.add(p);profDraw()});}
