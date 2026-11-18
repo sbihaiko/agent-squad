@@ -3210,17 +3210,12 @@ def spec_progress(items, moves=None, window=None, now=None):
             rows.append((0.0, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — no sub-issue{age}"))
     rows.sort(key=lambda r: (r[0], r[1]))
     tips = [r[2] for r in rows[:SPEC_TIP_LINES]] + ([f"+{len(rows) - SPEC_TIP_LINES} more"] if len(rows) > SPEC_TIP_LINES else [])
-    none = nospec_count(items, moves, window, now)   # the No spec lane's own count: one more group in the total (owner)
-    if none["total"]:
-        done, total = done + none["closed"], total + none["total"]
-        tips.append(f"No spec — {none['closed']}/{none['total']}")
     n = len(rows)
-    so = " + ".join(x for x in (f"{n} open" if n else "", "no spec" if none["total"] else "") if x)
-    out = {"open": n, "so": so, "done": done, "total": total, "tip": "\n".join(tips), "none": none}
-    if not n and not none["total"]: return dict(out, pct=0, frac=0, value="no open spec", state="none", bar=False)
-    if not total: return dict(out, pct=0, frac=0, value=f"{n} open · no sub-issue yet", state="info", bar=True)
+    out = {"open": n, "done": done, "total": total, "tip": "\n".join(tips)}
+    if not n: return dict(out, pct=0, frac=0, value="no open spec", state="none", bar=False)
+    if not total: return dict(out, pct=0, frac=0, value="0 of 0 closed", state="info", bar=True)
     pct = done * 100 // total
-    return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} tickets · {pct}%",   # `tickets`, never a window count
+    return dict(out, pct=pct, frac=done / total, value=f"{done} of {total} closed - {pct}%",
                 state="ok" if done == total else "info", bar=True)
 
 SPEED_SLOTS = 6                 # the rolling slots the window is compared with, the window itself being the newest
@@ -3270,73 +3265,53 @@ def cache_row_column(i, moves, window):
     return drawn_column({"s": i.get("s"), "st": i.get("st"), "l": i.get("l"), "cr": i.get("cr"),
                          "i": i.get("i"), "ot": i.get("ot")}, moves, window)["st"]
 
-def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
-    """The two window rows the card draws under the hero figure (#1424). Both cover the same rows, over the same window
-    and the same kinds: Bugs counts every card carrying `bug` or any label beginning with `loop-bug` (the prefix rule the
-    loop itself dispatches by, ADR-0146, so a loop defect is never missed), and Loop-bugs counts the prefix alone, always
-    a subset of Bugs and never subtracted from it. Each row carries three counts so the card reads `7 in · 4 out · 3 open`:
+def _loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
 
-    `in` is every card created in the window (`o`), a card closed inside it included; `out` is every card closed in the
-    window (`c`, the close stamp the board cache already carries, #1361), read from the stamp alone; `open` is every card
-    the board draws open now, the same `drawn_column` rule the kanban serves, so a closed card and a card in the Abandoned
-    column are no open card. The two rules never override each other, so a row agrees with the kanban it sits beside.
-    The row covers the past week: a card the row can prove opened before it is in no row at all, while a card with no
-    readable stamp is kept, because an unreadable stamp is not a proof of age. Such a card is still never invented as an
-    arrival or a close."""
+def _defect(i): return "bug" in (i.get("l") or []) or _loop_defect(i)
+
+def _task(i):
+    labels = [str(x) for x in (i.get("l") or [])]
+    return "spec" not in labels and "bug" not in labels and not any(x.startswith("loop-bug") for x in labels)
+
+def window_row(items, now_ts, window_secs, moves, window, kind):
+    """One window row (#2264): `closed` counts the cards of the kind closed inside the window, by their close stamp; `total`
+    is `closed` plus the cards of the kind the board draws open now, whatever their age. An abandoned card is in neither
+    count, and a card closed before the window is in no count. The column is the kanban's own (ADR-0137)."""
+    since, closed, total = now_ts - window_secs, 0, 0
+    for i in items or []:
+        if not kind(i): continue
+        column = cache_row_column(i, moves, window)
+        if column == COLUMN["abandoned"]: continue
+        if column == COLUMN["issue_closed"]:
+            at = _close_instant(i.get("c"))
+            if at is None or not since <= at <= now_ts: continue
+            closed += 1
+        total += 1
+    return {"closed": closed, "total": total, "value": f"{closed} of {total} closed" if total else "none",
+            "frac": closed / total if total else 0}
+
+def arrivals_fact(items, now_ts, window_secs, moves=None, window=None):
+    """The Bugs and Loop-bugs rows under the hero figure, over the hero's window (#1424, #2264). Bugs counts `bug` or any
+    label beginning with `loop-bug` (the prefix rule the loop dispatches by, ADR-0146); Loop-bugs counts the prefix alone,
+    always a subset of Bugs."""
     if moves is None: moves = read_moves() if overlay_on() else {}
     if window is None: window = pending_window()
-    since, ends = now_ts - window_secs, (COLUMN["issue_closed"], COLUMN["abandoned"])
-    rows = {"bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0},
-            "loop_bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0}}
-    def loop_defect(i): return any(str(x).startswith("loop-bug") for x in (i.get("l") or []))
-    def open_now(i): return cache_row_column(i, moves, window) not in ends   # the kanban's own column, never a second rule
-    for i in items or []:
-        labels = i.get("l") or []
-        kinds = [k for k, hit in (("bugs", "bug" in labels or loop_defect(i)), ("loop_bugs", loop_defect(i))) if hit]
-        if not kinds: continue
-        o, c = _close_instant(i.get("o")), _close_instant(i.get("c"))
-        if o is not None and o < now_ts - BUG_ROW_SECONDS: continue   # the past week, never the whole backlog; a card with no
-        # readable stamp cannot be proved old, so it stays, and it is still never invented as an arrival
-        came = o is not None and since <= o <= now_ts
-        went = c is not None and since <= c <= now_ts   # the close stamp alone, so a lagging state never hides a close
-        still = open_now(i)
-        closed_now = cache_row_column(i, moves, window) == COLUMN["issue_closed"]
-        for k in kinds:
-            rows[k]["in"] += 1 if came else 0
-            rows[k]["out"] += 1 if went else 0
-            rows[k]["open"] += 1 if still else 0
-            rows[k]["total"] += 1
-            rows[k]["closed"] += 1 if closed_now else 0
-    return rows
+    return {"bugs": window_row(items, now_ts, window_secs, moves, window, _defect),
+            "loop_bugs": window_row(items, now_ts, window_secs, moves, window, _loop_defect)}
 
-def tasks_fact(items, now_ts):
-    """The Tasks row under the hero figure: the week's planned delivery (#1362). The row covers the past week, like the two
-    bug rows, and counts a card opened inside it by its creation stamp: a spec is a document and never work, and a defect is
-    a fix, so a card carrying `spec`, `bug` or a label beginning with `loop-bug` is in neither count. The share runs over
-    every task opened in the week whatever became of it, so an abandoned task sits in the denominator and never in the
-    numerator, and a task not yet closed does the same.
-
-    A task counts closed when it carries the closed state and a close reason that is not the carrier's not-delivered one
-    (#921, one copy of the vocabulary in board_columns). The store's `closed` events carry no label and no creation stamp,
-    so a closure read from them enters no count. A share over a zero denominator is None, as on the arrival rows."""
-    n, of = 0, 0
-    for i in items or []:   # the owner, 2026-11-13: the row covers the past week, like the two bug rows
-        opened = _close_instant(i.get("o"))
-        if opened is not None and opened < now_ts - BUG_ROW_SECONDS: continue   # the past week, like the two bug rows
-        labels = [str(x) for x in (i.get("l") or [])]
-        if "spec" in labels or "bug" in labels or any(x.startswith("loop-bug") for x in labels): continue
-        of += 1
-        if i.get("s") != "closed": continue
-        if _columns_module.not_planned(i.get("cr")): continue
-        n += 1
-    return {"n": n, "of": of, "share": round(n / of, 3) if of else None}
+def tasks_fact(items, now_ts, window_secs, moves=None, window=None):
+    """The Tasks row under the hero figure, over the hero's window (#1362, #2264): a closed card with no spec, bug or
+    loop-bug label. A spec is a document and never work, and a defect is a fix."""
+    if moves is None: moves = read_moves() if overlay_on() else {}
+    if window is None: window = pending_window()
+    return window_row(items, now_ts, window_secs, moves, window, _task)
 
 def throughput_fact(now=None):
     """How fast the board is closing cards over the last window: its close count, the six rolling slots it is compared
     with (the newest is the window), which finished slots are available, one median and the bar maximum over those, the
     trend word and the age of the oldest source read. The window is the last four hours back from the sampler's clock,
-    never a calendar day. Under the hero figure the fact carries the two arrival rows — Bugs and Loop-bugs — counting
-    cards opened in the same window by the creation stamps the board cache already carries (#1361).
+    never a calendar day. Under the hero figure the fact carries the Tasks, Bugs and Loop-bugs rows, each counting the
+    cards closed in the same window over the cards open now plus those closed in it (#2264).
 
     A finished slot is unavailable when it ends before the earliest close stamp of the two sources; it enters neither the
     median nor the maximum. A slot with no close inside an available span is a measured zero. The window's own figure
@@ -3373,8 +3348,8 @@ def throughput_fact(now=None):
     moves = read_moves() if overlay_on() else {}
     window = pending_window()
     return {"window_secs": w, "window": window_n, "day": sum(s["n"] for s in slots),   # closes in the whole day: none means no history
-            "arrivals": arrivals_fact(items, now_ts, w, moves, window),   # the Bugs and Loop-bugs rows, off the cache's stamps
-            "tasks": tasks_fact(items, now_ts),   # planned delivery over the past week, like the two bug rows
+            "arrivals": arrivals_fact(items, now_ts, w, moves, window),   # the Bugs and Loop-bugs rows, over the hero's window
+            "tasks": tasks_fact(items, now_ts, w, moves, window),   # the Tasks row, over the hero's window
             "labels": {"age_secs": board_age, "stale": board_age is not None and board_age > LABELS_STALE_SECS},   # the card labels ride the item read
             "board": {"as_of": board_t or None, "age_secs": board_age, "stale": board_age is not None and board_age > bound,
                       "overdue": board_read_overdue(board_t, now_ts)},
@@ -5352,7 +5327,6 @@ def _x_ticks(days):
     """Up to five date ticks, evenly spaced over the history's calendar days."""
     return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
 
-BUG_ROW_SECONDS = 7 * 86400   # the Bugs and Loop-bugs rows count the cards opened in the past week (owner, 2026-11-13)
 FLOW_MOVED = "moved"   # the label a card carries once it left for another board: no band of this board counts it (#1663)
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
 LEAD_TIMEFRAMES = [("12h", 0.5), ("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the four short ones count hours on the page (owner, 2026-11-01); 12h is the default (#2029)
@@ -6932,12 +6906,11 @@ function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
 function instSum(facts){const n=instTiles(facts).filter(x=>x.tone==="err").length;return n?n+" fail":""}   // no tile, so no count; a red gate stays in the footer (#1260)
 function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
- const spec=(()=>{const v=esc(spc.value||"no open spec"),sub=spc.so?esc(spc.so):"";
+ const spec=(()=>{const v=esc(spc.value);
   const pb=spc.bar?`<span class=spwt><i style="width:${100*Math.max(0,Math.min(1,Number(spc.frac)||0))}%"></i></span>`:"";
   const tip=spc.tip?esc(spc.tip).replace(/"/g,"&quot;"):"";
-  return `<div class="spw spec" role=img aria-label="Specs: ${v}${sub?", "+sub:""}"${tip?` title="${tip}"`:""}><span class=spwl>Specs</span><span class=spwv>${v}</span>`+(sub?`<span class=spws>${sub}</span>`:"")+pb+`</div>`})();
- if(!sp){if(!(spc.open||(spc.none||{}).total))return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
-  return `<div class=spd><div class=spdh><b>Throughput</b></div><div class=spn>no history yet</div>`+spec+`</div>`}
+  return `<div class="spw spec" role=img aria-label="Specs: ${v}"${tip?` title="${tip}"`:""}><span class=spwl>Specs</span><span class=spwv>${v}</span>`+pb+`</div>`})();
+ if(!sp){return `<div class=spd><div class=spdh><b>Throughput</b></div><div class=spn>no history yet</div>`+spec+`</div>`}
  const hi=Math.max(sp.max||0,sp.window||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi)),hrs=+(sp.window_secs/3600).toFixed(2);
  const tag=sp.trend==="up"?["\u25B2","accelerating","up"]:sp.trend==="down"?["\u25BC","slowing","down"]:sp.trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
  const none=!sp.day,med=sp.median==null?"unknown":sp.median;
@@ -6945,18 +6918,15 @@ function speedRow(sp,specs){const spc=specs||(sp||{}).specs||{};
   +(sp.median==null?"":`<i class=spmed style="left:${at(sp.median)}%" title="median ${sp.median}"></i>`)+`<i class="spt ${tag[2]}" style="width:${at(sp.window)}%"></i></div>`
   +`<div class=spl><span>median ${med}</span><span>max ${sp.max}</span></div>`;
  const hero=none?`<div class=spn>no history yet</div>`:`<div class=spn><b>${sp.window}</b> cards closed in the last ${hrs} h</div>`;
- const row=(cls,name,r)=>{const n=(r||{}).closed||0,of=(r||{}).total||0,t=of?cls:"mute",   // the Tasks rule: how many of the kind are closed, never arrivals (#1424)
-  v=of?`${n} of ${of} closed`:"none", w=of?Math.max(0,Math.min(100,100*n/of)):0,
+ const row=(cls,name,r)=>{const of=r.total,v=esc(r.value),w=Math.max(0,Math.min(100,100*r.frac)),
   pb=of?`<span class=spwt><i style="width:${w}%"></i></span>`:"";
-  return `<div class="spw ${t}" role=img aria-label="${name}: ${v}"><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
- const tasks=(()=>{const n=(sp.tasks||{}).n||0,of=(sp.tasks||{}).of||0,t=of?"ok":"mute";
-  return `<div class="spw ${t}" role=img aria-label="Tasks: ${n} of ${of} closed"><span class=spwl>Tasks</span><span class=spwv>${n} of ${of} closed</span><span class=spwt><i style="width:${of?100*n/of:0}%"></i></span></div>`})();
+  return `<div class="spw ${of?cls:"mute"}" role=img aria-label="${name}: ${v}"><span class=spwl>${name}</span><span class=spwv>${v}</span>${pb}</div>`};
  const arr=sp.arrivals||{}, bd=sp.board||{}, hst=sp.history||{};   // each age names its read (#1661): the board item read, the history read, the labels off the item read
  const stale=bd.stale?`<div class=spage>\u00b7 board items read ${Math.floor(bd.age_secs/60)} m ago${bd.overdue?" (overdue)":""}</div>`:"";
  const hist=hst.stale?`<div class=spage>\u00b7 history read ${Math.floor(hst.age_secs/60)} m ago</div>`:"";
  const lab=sp.labels||{}, lnote=lab.stale?`<div class=spage>\u00b7 labels from the board read ${Math.floor(lab.age_secs/60)} min old</div>`:"";
  return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`+hero+bar
-  +tasks+row("warn","Bugs",arr.bugs)+row("err","Loop-bugs",arr.loop_bugs)+spec+stale+hist+lnote+`</div>`}
+  +row("ok","Tasks",sp.tasks)+row("warn","Bugs",arr.bugs)+row("err","Loop-bugs",arr.loop_bugs)+spec+stale+hist+lnote+`</div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
 let instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}

@@ -61,11 +61,11 @@ def _section(page, sid):
 
 SPEED = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
          "stale": False, "age_secs": 60, "labels": {"age_secs": 60, "stale": False},
-         "tasks": {"n": 4, "of": 10, "share": 0.4},
-         "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3, "closed": 3, "total": 7},
-                      "loop_bugs": {"in": 4, "out": 2, "open": 2, "closed": 2, "total": 4}},
-         "specs": {"open": 3, "so": "3 open", "done": 5, "total": 9, "pct": 55, "frac": 5 / 9,
-                   "value": "5/9 tickets · 55%", "state": "info", "bar": True, "tip": "", "none": {"closed": 0, "total": 0}}}
+         "tasks": {"closed": 4, "total": 10, "value": "4 of 10 closed", "frac": 0.4},
+         "arrivals": {"bugs": {"closed": 3, "total": 7, "value": "3 of 7 closed", "frac": 3 / 7},
+                      "loop_bugs": {"closed": 2, "total": 4, "value": "2 of 4 closed", "frac": 0.5}},
+         "specs": {"open": 3, "done": 5, "total": 9, "pct": 55, "frac": 5 / 9,
+                   "value": "5 of 9 closed - 55%", "state": "info", "bar": True, "tip": ""}}
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "write": True, "reason": "", "tailnet": False,
              "access": {"loop_write": False, "terminals_send": False},
              "live": {"runs": ["/x/runs/run-20261102-1"], "gates": []}, "log": []}
@@ -128,7 +128,7 @@ def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
     assert monitor.index("id=igs") < monitor.index("id=ispeed")
     card = _run(page, f"speedRow({json.dumps(SPEED)})", _monitor_blocks(page))
     sentences = ["Tasks: 4 of 10 closed", "Bugs: 3 of 7 closed", "Loop-bugs: 2 of 4 closed",
-                 "Specs: 5/9 tickets · 55%, 3 open"]
+                 "Specs: 5 of 9 closed - 55%"]
     positions = [card.index(f'aria-label="{s}"') for s in sentences]
     assert positions == sorted(positions), "the three rows are out of order"
 

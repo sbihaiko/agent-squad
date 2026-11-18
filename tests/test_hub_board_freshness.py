@@ -179,7 +179,8 @@ def test_the_sidebar_count_and_the_lane_count_agree_after_a_closure(hub, monkeyp
              card(892, l=["bug"], ot=int(NOW) - 100, i="ITEM892")]
     moves = {"ITEM837": {"column": "Todo", "at": iso(NOW - 500), "by": "loop"}}
     _cache(hub, monkeypatch, items, moves=moves)
-    sidebar_open = hub.arrivals_fact(items, NOW, 4 * 3600, dict(moves))["bugs"]["open"]
+    bugs = hub.arrivals_fact(items, NOW, 4 * 3600, dict(moves))["bugs"]
+    sidebar_open = bugs["total"] - bugs["closed"]
     data = hub.board(dict(moves))
     lane_open = sum(1 for g in data["groups"] if not g["end"] for x in g["items"] if "bug" in x["l"])
     assert sidebar_open == lane_open == 1

@@ -65,8 +65,8 @@ def test_the_repo_that_wrote_the_cache_keeps_its_rows(shared_board):
     apps, _ = shared_board
     beta = apps["beta"]["mod"].load_payload()["specs"]
     assert "Beta spec" in beta["tip"]
-    assert (beta["open"], beta["done"], beta["total"]) == (1, 4, 11)   # the row sums the open spec and the No spec group
-    assert beta["none"]["total"] == 1
+    assert (beta["open"], beta["done"], beta["total"]) == (1, 4, 10)   # the row sums the open spec alone, never the No spec group
+    assert beta["value"] == "4 of 10 closed - 40%"
 
 
 def test_each_profile_counts_its_own_specs_after_both_passes_write_the_one_file(shared_board):

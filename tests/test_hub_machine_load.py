@@ -1038,11 +1038,16 @@ def _speed_text(hub, sp):
     return re.sub(r"<[^>]+>", " ", _speed_html(hub, sp))
 
 
-def _specs(done=5, total=9, open_n=3, so="3 open", bar=True, state="info", value="5/9 tickets · 55%"):
+def _specs(done=5, total=9, open_n=3, bar=True, state="info", value="5 of 9 closed - 55%"):
     """A spec progress fact as the hub returns it: the counts the Specs row draws."""
-    return {"open": open_n, "so": so, "done": done, "total": total, "pct": done * 100 // total if total else 0,
-            "frac": done / total if total else 0, "value": value, "state": state, "bar": bar, "tip": "",
-            "none": {"closed": 0, "total": 0}}
+    return {"open": open_n, "done": done, "total": total, "pct": done * 100 // total if total else 0,
+            "frac": done / total if total else 0, "value": value, "state": state, "bar": bar, "tip": ""}
+
+
+def _row(closed, total):
+    """A Tasks, Bugs or Loop-bugs row as the hub returns it: the closed count, the total and the served text."""
+    value = "none" if not total else f"{closed} of {total} closed"
+    return {"closed": closed, "total": total, "value": value, "frac": closed / total if total else 0}
 
 
 def _speed(**kw):
@@ -1050,9 +1055,8 @@ def _speed(**kw):
     fact = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4, "max": 21, "trend": "up",
             "board": {"age_secs": 60, "stale": False, "as_of": 0},
             "history": {"age_secs": 60, "stale": False}, "labels": {"age_secs": 60, "stale": False},
-            "tasks": {"n": 4, "of": 10, "share": 0.4},
-            "arrivals": {"bugs": {"in": 7, "out": 4, "open": 3, "closed": 3, "total": 7},
-                         "loop_bugs": {"in": 4, "out": 2, "open": 2, "closed": 2, "total": 4}},
+            "tasks": _row(4, 10),
+            "arrivals": {"bugs": _row(3, 7), "loop_bugs": _row(2, 4)},
             "specs": _specs()}
     fact.update(kw)
     return fact
@@ -1080,7 +1084,7 @@ def test_the_card_reads_the_rows_in_their_tones(hub):
     assert 'class="spw ok" role=img aria-label="Tasks: 4 of 10 closed"' in html, html
     assert 'class="spw warn" role=img aria-label="Bugs: 3 of 7 closed"' in html, html
     assert 'class="spw err" role=img aria-label="Loop-bugs: 2 of 4 closed"' in html, html
-    assert 'class="spw spec" role=img aria-label="Specs: 5/9 tickets · 55%, 3 open"' in html, html
+    assert 'class="spw spec" role=img aria-label="Specs: 5 of 9 closed - 55%"' in html, html
 
 
 def test_the_bug_rows_read_the_tasks_rule_of_closed_over_total(hub):
@@ -1091,13 +1095,12 @@ def test_the_bug_rows_read_the_tasks_rule_of_closed_over_total(hub):
     assert re.search(r"Loop-bugs\s+2 of 4 closed", text), text
 
 
-def test_the_row_bar_draws_out_over_in(hub):
+def test_the_row_bar_draws_closed_over_total(hub):
     html = _speed_html(hub, _speed())
     row = re.search(r'class="spw warn".*?</div>', html, re.S).group(0)
     assert '<span class=spwv>3 of 7 closed</span>' in row, row
     assert re.search(r'<i style="width:42\.85\d*%"></i>', row), row
-    zero = _speed_html(hub, _speed(arrivals={"bugs": {"in": 0, "out": 0, "open": 3, "closed": 0, "total": 0},
-                                            "loop_bugs": {"in": 0, "out": 0, "open": 1, "closed": 0, "total": 0}}))
+    zero = _speed_html(hub, _speed(arrivals={"bugs": _row(0, 0), "loop_bugs": _row(0, 0)}))
     start = zero.index('class="spw mute"')
     end = zero.find('class="spw ', start + 1)
     zero_row = zero[start:end if end != -1 else len(zero)]   # the row's own markup, up to the next row
@@ -1107,8 +1110,7 @@ def test_the_row_bar_draws_out_over_in(hub):
 
 def test_a_row_of_every_card_closed_fills_its_track(hub):
     """The track is closed over the kind's whole count, so every card closed fills it and nothing overflows."""
-    html = _speed_html(hub, _speed(arrivals={"bugs": {"in": 2, "out": 5, "open": 0, "closed": 5, "total": 5},
-                                            "loop_bugs": {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0}}))
+    html = _speed_html(hub, _speed(arrivals={"bugs": _row(5, 5), "loop_bugs": _row(0, 0)}))
     row = re.search(r'class="spw warn".*?</div>', html, re.S).group(0)
     assert '<i style="width:100%"></i>' in row, row
 
@@ -1116,9 +1118,9 @@ def test_a_row_of_every_card_closed_fills_its_track(hub):
 def test_the_specs_row_carries_the_per_spec_tip(hub):
     """The old Specs tile's drill-down stays reachable on the row: a wrong count says which spec it came from."""
     sp = _speed()
-    sp["specs"]["tip"] = "#1 Spec 1 — 2/5\nNo spec — 1/2"
+    sp["specs"]["tip"] = "#1 Spec 1 — 2/5\n#2 Spec 2 — 3/4"
     html = _speed_html(hub, sp)
-    assert 'title="#1 Spec 1 — 2/5\nNo spec — 1/2"' in html, html
+    assert 'title="#1 Spec 1 — 2/5\n#2 Spec 2 — 3/4"' in html, html
 
 
 def test_the_bug_rows_carry_no_window(hub):
@@ -1127,13 +1129,13 @@ def test_the_bug_rows_carry_no_window(hub):
     assert 'title="last 4 h' not in html, html
 
 
-def test_the_specs_row_reads_the_cumulative_counts_with_its_second_line(hub):
-    """The owner moved the Specs card into the Throughput card: the row is cumulative and says `tickets`, never a window."""
+def test_the_specs_row_reads_the_open_specs_with_no_second_line(hub):
+    """Owner, 2026-11-18: the Specs row reads 'N of M closed - P%' over open specs, with no second line."""
     text = _speed_text(hub, _speed())
-    assert re.search(r"Specs\s+5/9 tickets · 55%", text), text
-    assert re.search(r"3 open", text), text
+    assert re.search(r"Specs\s+5 of 9 closed - 55%", text), text
+    assert "open" not in re.search(r"Specs.*", text).group(0), text
     html = _speed_html(hub, _speed())
-    assert '<span class=spws>3 open</span>' in html, html
+    assert "spws" not in html and "no spec" not in html, html
     assert re.search(r'class="spw spec".*<i style="width:55\.55\d*%"></i>', html), html
 
 
@@ -1145,9 +1147,8 @@ def test_the_bar_draws_the_median_tick_and_the_window_fill(hub):
 
 def test_no_close_in_the_day_reads_no_history_with_no_bar(hub):
     html = _speed_html(hub, _speed(window=0, day=0, median=None, min=None, max=None, trend=None,
-                                   tasks={"n": 0, "of": 0, "share": None},
-                                   arrivals={"bugs": {"in": 0, "out": 0, "open": 0},
-                                             "loop_bugs": {"in": 0, "out": 0, "open": 0}}))
+                                   tasks=_row(0, 0),
+                                   arrivals={"bugs": _row(0, 0), "loop_bugs": _row(0, 0)}))
     assert "no history yet" in html and "spr role=img" not in html, html
 
 
@@ -1156,8 +1157,8 @@ def test_closes_before_the_window_draw_the_bar_at_zero_fill(hub):
     assert 'style="width:0%"' in html and "spr role=img" in html, html
 
 
-def test_nothing_opened_in_the_window_reads_zero_in_in_the_muted_tone(hub):
-    empty = {"in": 0, "out": 0, "open": 0, "closed": 0, "total": 0}
+def test_nothing_closed_or_open_reads_none_in_the_muted_tone(hub):
+    empty = _row(0, 0)
     html = _speed_html(hub, _speed(window=0, day=6, trend="down",
                                    arrivals={"bugs": empty, "loop_bugs": empty}))
     assert 'class="spw mute" role=img aria-label="Bugs: none"' in html, html
@@ -1207,10 +1208,10 @@ def test_the_window_count_follows_the_board_cache_not_a_quiet_history_store(hub)
     assert hub.closed_since([], now, 4 * 3600) is None
 
 
-# ---------------------------------------------------------------- the arrival rows (owner, 2026-11-04, #1361)
+# ---------------------------------------------------------------- the window rows (owner, 2026-11-18, #2264)
 
 def _arrival_items(hub, tmp_path, monkeypatch, items, now=THROUGHPUT_NOW):
-    """The fact's two inputs for an arrival test: an empty history store and a board cache holding the given items,
+    """The fact's two inputs for a window-row test: an empty history store and a board cache holding the given items,
     stamped at the read instant the cache carries."""
     monkeypatch.setenv("TZ", "UTC")
     monkeypatch.delenv("SG_SPEED_WINDOW_SECS", raising=False)
@@ -1226,141 +1227,103 @@ def _arrival_card(n, labels, opened, closed=None):
     """One cache row as the items read writes it: `o` the creation stamp, `c` the close stamp, `l` the labels."""
     row = {"n": n, "t": f"card {n}", "s": "open", "c": None, "st": "Todo", "l": list(labels), "o": _stamp(opened)}
     if closed is not None:
-        row.update(s="closed", c=_stamp(closed))
+        row.update(s="closed", st="Done", c=_stamp(closed))
     return row
 
 
-def test_the_arrival_rows_count_in_out_and_open_over_one_window(hub, tmp_path, monkeypatch):
-    """#1424: each row names what came in (created in the window), what went out (closed in the window, the close stamp
-    `c`) and what is open now. The Bugs row counts `bug` or any `loop-bug` prefix; the Loop-bugs row counts the prefix
-    alone and stays its subset. A card closed inside the window is still an arrival."""
+def test_the_bug_rows_count_closed_in_the_window_over_open_now_and_closed(hub, tmp_path, monkeypatch):
+    """Owner, 2026-11-18: `closed` counts the kind closed in the window; `total` is `closed` plus the kind open now."""
     now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["bug"], now_ts - 3 * 3600),                                       # in, open
-             _arrival_card(2, ["bug", "loop-bug:landing"], now_ts - 2 * 3600,
-                           closed=now_ts - 1 * 3600),                                       # in, out
-             _arrival_card(3, ["bug"], now_ts - 6 * 3600, closed=now_ts - 30 * 60),             # out, opened before
-             _arrival_card(4, ["bug"], now_ts - 8 * 3600, closed=now_ts - 7 * 3600),            # neither: outside
-             _arrival_card(5, ["bug"], now_ts - 5 * 3600),                                       # open, opened before
-             _arrival_card(6, ["enhancement"], now_ts - 30 * 60),                                # in, not a bug
-             _arrival_card(7, ["loop-bug:dispatch"], now_ts - 8 * 3600)]                         # open, opened before
+    items = [_arrival_card(1, ["bug"], now_ts - 3 * 3600),                                          # open now
+             _arrival_card(2, ["bug", "loop-bug:landing"], now_ts - 2 * 3600, closed=now_ts - 1 * 3600),   # closed in window
+             _arrival_card(3, ["bug"], now_ts - 6 * 3600, closed=now_ts - 30 * 60),                  # closed in window
+             _arrival_card(4, ["bug"], now_ts - 8 * 3600, closed=now_ts - 7 * 3600),                 # closed before window
+             _arrival_card(5, ["bug"], now_ts - 5 * 3600),                                           # open now
+             _arrival_card(6, ["enhancement"], now_ts - 30 * 60),                                    # not a defect
+             _arrival_card(7, ["loop-bug:dispatch"], now_ts - 8 * 3600)]                             # open now, a loop defect
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 2, "out": 2, "open": 3}, arrivals
-    assert {k: arrivals["loop_bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 1, "open": 1}, arrivals
-    assert arrivals["loop_bugs"]["in"] <= arrivals["bugs"]["in"] and arrivals["loop_bugs"]["total"] <= arrivals["bugs"]["total"], "the loop-bugs row is never above its Bugs superset"
+    assert {k: arrivals["bugs"][k] for k in ("closed", "total", "value")} == {"closed": 2, "total": 5, "value": "2 of 5 closed"}, arrivals
+    assert {k: arrivals["loop_bugs"][k] for k in ("closed", "total", "value")} == {"closed": 1, "total": 2, "value": "1 of 2 closed"}, arrivals
 
 
-def test_the_open_count_matches_the_kanban_for_the_same_fixture(hub, tmp_path, monkeypatch):
-    """#1424: `open` is the kanban's own count of open cards of that kind, read off one snapshot: a closed card and a
-    card in the Abandoned column are no open card, and the served board never draws them."""
+def test_the_loop_bugs_row_is_never_above_its_bugs_superset(hub, tmp_path, monkeypatch):
     now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["bug"], now_ts - 3 * 3600),
-             _arrival_card(2, ["bug", "loop-bug:landing"], now_ts - 3 * 3600),
-             _arrival_card(3, ["loop-bug:dispatch"], now_ts - 3 * 3600),
-             _arrival_card(4, ["bug", "enhancement"], now_ts - 3 * 3600),
-             _arrival_card(5, ["bug"], now_ts - 2 * 3600, closed=now_ts - 1 * 3600),
-             _arrival_card(6, ["bug"], now_ts - 2 * 3600),
-             _arrival_card(7, ["bug"], now_ts - 2 * 3600)]
-    items[6].update(st="Abandoned")
-    _arrival_items(hub, tmp_path, monkeypatch, items)
-    rows = [r for g in hub.board(moves={})["groups"] for r in g["items"]]
-    kanban_bugs = sum(1 for r in rows if "bug" in (r.get("l") or []) or any(str(x).startswith("loop-bug") for x in (r.get("l") or [])))
-    kanban_loop = sum(1 for r in rows if any(str(x).startswith("loop-bug") for x in (r.get("l") or [])))
-    assert (kanban_bugs, kanban_loop) == (5, 2), "the fixture's kanban count is the literal the row must match"
-    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert arrivals["bugs"]["open"] == kanban_bugs, arrivals
-    assert arrivals["loop_bugs"]["open"] == kanban_loop, arrivals
-
-
-def test_a_defect_opened_and_closed_inside_the_window_counts_in_and_out(hub, tmp_path, monkeypatch):
-    """A quick fix opened and closed in the window is one in and one out, and no longer open."""
-    now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["bug"], now_ts - 2 * 3600, closed=now_ts - 1 * 3600)]
+    items = [_arrival_card(1, ["loop-bug:dispatch"], now_ts - 2 * 3600, closed=now_ts - 1800),
+             _arrival_card(2, ["bug"], now_ts - 2 * 3600)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 1, "open": 0}, arrivals
+    assert arrivals["loop_bugs"]["total"] <= arrivals["bugs"]["total"]
+    assert arrivals["loop_bugs"]["closed"] <= arrivals["bugs"]["closed"]
 
 
-def test_a_loop_defect_labelled_only_landing_counts_in_both_arrival_rows(hub, tmp_path, monkeypatch):
+def test_an_abandoned_card_is_in_no_window_row_count(hub, tmp_path, monkeypatch):
+    """Owner, 2026-11-18: an abandoned card is in no count, closed or open."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    items = [{**_arrival_card(1, ["bug"], now_ts - 2 * 3600, closed=now_ts - 1800), "cr": "not_planned"},
+             {**_arrival_card(2, ["bug"], now_ts - 2 * 3600), "st": "Abandoned"},
+             _arrival_card(3, ["bug"], now_ts - 2 * 3600, closed=now_ts - 900)]
+    _arrival_items(hub, tmp_path, monkeypatch, items)
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert (arrivals["bugs"]["closed"], arrivals["bugs"]["total"]) == (1, 1), arrivals
+
+
+def test_a_row_with_no_card_of_its_kind_reads_none(hub, tmp_path, monkeypatch):
+    now_ts = THROUGHPUT_NOW.timestamp()
+    _arrival_items(hub, tmp_path, monkeypatch, [_arrival_card(1, ["enhancement"], now_ts - 1800)])
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert arrivals["bugs"] == {"closed": 0, "total": 0, "value": "none", "frac": 0}, arrivals
+
+
+def test_an_open_card_counts_in_total_whatever_its_age(hub, tmp_path, monkeypatch):
+    """Owner, 2026-11-18: `total` takes every card the board draws open now; the window bounds only the closures."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    _arrival_items(hub, tmp_path, monkeypatch, [_arrival_card(1, ["bug"], now_ts - 30 * 86400)])
+    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
+    assert (arrivals["bugs"]["closed"], arrivals["bugs"]["total"], arrivals["bugs"]["value"]) == (0, 1, "0 of 1 closed"), arrivals
+
+
+def test_a_loop_defect_labelled_only_landing_counts_in_both_rows(hub, tmp_path, monkeypatch):
     """A card carrying no `bug` label still enters the Bugs row through the prefix rule, and the Loop-bugs row with it."""
     now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["loop-bug:landing"], now_ts - 2 * 3600)]
-    _arrival_items(hub, tmp_path, monkeypatch, items)
-    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 0, "open": 1}, arrivals
-    assert {k: arrivals["loop_bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 0, "open": 1}, arrivals
-
-
-def test_no_card_opened_in_the_window_reads_zero_in_both_arrival_rows(hub, tmp_path, monkeypatch):
-    """Nothing opened in the window reads `0 in` on both rows, even with a card open from before it."""
-    now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["bug"], now_ts - 8 * 3600)]
-    _arrival_items(hub, tmp_path, monkeypatch, items)
-    arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 0, "open": 1}, arrivals
-    assert {k: arrivals["loop_bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 0, "open": 0}, arrivals
-
-
-def test_the_bug_rows_cover_only_the_past_week(hub, tmp_path, monkeypatch):
-    """The owner, 2026-11-13: the Bugs and Loop-bugs rows count the cards opened in the past week, so an old backlog
-    no longer drowns the row: a defect opened eight days ago is in neither its closed nor its total count."""
-    now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["bug"], now_ts - 2 * 3600),
-             _arrival_card(2, ["bug"], now_ts - 9 * 86400, closed=now_ts - 8 * 86400),
-             _arrival_card(3, ["loop-bug:dispatch"], now_ts - 10 * 86400)]
-    _arrival_items(hub, tmp_path, monkeypatch, items)
+    _arrival_items(hub, tmp_path, monkeypatch, [_arrival_card(1, ["loop-bug:landing"], now_ts - 2 * 3600)])
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
     assert (arrivals["bugs"]["closed"], arrivals["bugs"]["total"]) == (0, 1), arrivals
-    assert (arrivals["loop_bugs"]["closed"], arrivals["loop_bugs"]["total"]) == (0, 0), arrivals
+    assert (arrivals["loop_bugs"]["closed"], arrivals["loop_bugs"]["total"]) == (0, 1), arrivals
 
 
-def test_the_arrival_rows_read_the_creation_stamp_never_the_close_stamp(hub, tmp_path, monkeypatch):
-    """#1361: `in` counts by `o`, the stamp the snapshot already carries. A card closed inside the window but opened
-    before it is no arrival, and a card with no readable creation stamp is never invented as one."""
+def test_a_closed_card_with_an_unreadable_creation_stamp_still_counts_when_closed_in_the_window(hub, tmp_path, monkeypatch):
     now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["bug"], now_ts - 6 * 3600, closed=now_ts - 1 * 3600),
-             {**_arrival_card(2, ["bug"], 0), "o": "not a stamp"}]
+    items = [{**_arrival_card(1, ["bug"], 0, closed=now_ts - 1800), "o": "not a stamp"}]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 0, "out": 1, "open": 1}, arrivals
+    assert (arrivals["bugs"]["closed"], arrivals["bugs"]["total"]) == (1, 1), arrivals
 
 
-def test_the_arrival_rows_follow_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
-    """SG_SPEED_WINDOW_SECS moves the arrival rows with the hero figure: one window, not two."""
+def test_the_window_rows_follow_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
+    """SG_SPEED_WINDOW_SECS moves the window rows with the hero figure: one window, not two."""
     now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_arrival_card(1, ["bug"], now_ts - 90 * 60),
-             _arrival_card(2, ["bug"], now_ts - 30 * 60)]
+    items = [_arrival_card(1, ["bug"], now_ts - 3 * 3600, closed=now_ts - 90 * 60),
+             _arrival_card(2, ["bug"], now_ts - 3 * 3600, closed=now_ts - 30 * 60)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
     arrivals = hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]
-    assert {k: arrivals["bugs"][k] for k in ("in", "out", "open")} == {"in": 1, "out": 0, "open": 2}, arrivals
+    assert (arrivals["bugs"]["closed"], arrivals["bugs"]["total"], arrivals["bugs"]["value"]) == (1, 1, "1 of 1 closed"), arrivals
 
 
-def test_a_closed_card_the_board_draws_open_counts_out_by_its_stamp_and_open_by_its_column(hub, tmp_path, monkeypatch):
-    """#1424: `out` reads the close stamp alone and `open` the drawn column alone, so one source never overrides the
-    other: a card closed in the window whose move the board still draws open is one out and one open."""
+def test_the_specs_row_is_cumulative_while_the_window_rows_keep_the_window(hub, tmp_path, monkeypatch):
+    """Owner, 2026-11-18: the Specs row counts every open spec whatever its age, while the window rows keep the window."""
     now_ts = THROUGHPUT_NOW.timestamp()
-    item = _arrival_card(1, ["bug"], now_ts - 3 * 3600, closed=now_ts - 1800)
-    item.update(i="PVTI_1", ot=now_ts - 3600)   # the read began an hour ago, as the cache writes it
-    moves = {"PVTI_1": {"column": "Todo", "at": "2099-01-01T00:00:00Z", "by": "owner"}}
-    _arrival_items(hub, tmp_path, monkeypatch, [item])
-    row = hub.arrivals_fact([item], now_ts, 4 * 3600, moves, 120.0)["bugs"]
-    assert {k: row[k] for k in ("in", "out", "open")} == {"in": 1, "out": 1, "open": 1}
-
-
-def test_the_specs_row_is_cumulative_while_the_bug_rows_keep_the_window(hub, tmp_path, monkeypatch):
-    """#1424: the Specs row counts every open spec whatever its age, while the window rows keep the 4 h window."""
-    now_ts = THROUGHPUT_NOW.timestamp()
-    bug = _arrival_card(1, ["bug"], now_ts - 8 * 3600, closed=now_ts - 7 * 3600)   # closed outside the No spec window
+    bug = _arrival_card(1, ["bug"], now_ts - 8 * 3600, closed=now_ts - 7 * 3600)
     spec = {"n": 2, "t": "Old spec", "s": "OPEN", "st": "Todo", "l": ["spec"],
             "si": {"completed": 3, "total": 4}, "o": _stamp(now_ts - 30 * 3600)}
     _arrival_items(hub, tmp_path, monkeypatch, [bug, spec])
-    assert hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]["bugs"]["in"] == 0
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["arrivals"]["bugs"]["value"] == "none"
     served = hub.load_payload()["specs"]
-    assert (served["done"], served["total"], served["value"]) == (3, 4, "3/4 tickets · 75%")
+    assert (served["done"], served["total"], served["value"]) == (3, 4, "3 of 4 closed - 75%")
 
 
-def test_the_arrival_rows_read_the_stamp_the_snapshot_already_carries(hub, tmp_path):
+def test_the_window_rows_read_the_stamp_the_snapshot_already_carries(hub, tmp_path):
     """The rows run on the rows the items read writes, with no added snapshot field: a REST card taken through the
     hub's own jq emits the creation stamp the fact counts, labels included."""
     jq = shutil.which("jq")
@@ -1375,97 +1338,77 @@ def test_the_arrival_rows_read_the_stamp_the_snapshot_already_carries(hub, tmp_p
     out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
     rows = [json.loads(line) for line in out.splitlines() if "_page" not in line]
     now_ts = THROUGHPUT_NOW.timestamp()
-    assert hub.arrivals_fact(rows, now_ts, 4 * 3600)["bugs"]["in"] == 1, "the snapshot's own row is not an arrival row input"
+    assert hub.arrivals_fact(rows, now_ts, 4 * 3600)["bugs"]["total"] == 1, "the snapshot's own row is not a window row input"
 
 
-
-# ---------------------------------------------------------------- the Tasks row (owner, 2026-11-05, #1362)
+# ---------------------------------------------------------------- the Tasks row (owner, 2026-11-18, #2264)
 
 def _task_card(n, closed, labels=(), reason=None, state="closed"):
     """One cache row as the items read writes it: the close stamp `c`, the labels `l`, the close reason `cr`, and a
-    creation stamp well before the window so no arrival row takes it."""
-    return {"n": n, "s": state, "c": _stamp(closed) if closed is not None else None, "st": "Done",
-            "l": list(labels), "cr": reason, "o": _stamp(THROUGHPUT_NOW.timestamp() - 6 * 3600)}
+    creation stamp well before the window so the Tasks row takes it only by its close."""
+    return {"n": n, "s": state, "c": _stamp(closed) if closed is not None else None,
+            "st": "Done" if state == "closed" else "Todo", "l": list(labels), "cr": reason,
+            "o": _stamp(THROUGHPUT_NOW.timestamp() - 6 * 3600)}
 
 
-def test_the_tasks_row_counts_planned_delivery_closed_in_the_window(hub, tmp_path, monkeypatch):
-    """A task is a closed card with no spec, bug or loop-bug label, closed as completed. The row's share runs over every
-    card closed in the window, whatever its kind, so a spec and an abandoned card sit in the denominator alone (#1362)."""
+def test_the_tasks_row_counts_closed_in_the_window_over_open_now_and_closed(hub, tmp_path, monkeypatch):
     now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_task_card(1, now_ts - 1 * 3600),                                    # a task
-             _task_card(2, now_ts - 2 * 3600, ["enhancement"]),                  # a task
-             _task_card(3, now_ts - 3 * 3600, ["spec"]),                         # a spec: never work
-             _task_card(4, now_ts - 90 * 60, ["bug"]),                           # a defect: a fix, never a task
+    items = [_task_card(1, now_ts - 1 * 3600),                                    # closed in window: a task
+             _task_card(2, now_ts - 2 * 3600, ["enhancement"]),                  # closed in window: a task
+             _task_card(3, now_ts - 3 * 3600, ["spec"]),                         # a spec: never a task
+             _task_card(4, now_ts - 90 * 60, ["bug"]),                           # a defect: never a task
              _task_card(5, now_ts - 60 * 60, ["loop-bug:dispatch"]),             # a loop defect: never a task
-             _task_card(6, now_ts - 30 * 60, reason="not_planned"),              # abandoned: a closure, not delivery
-             _task_card(7, now_ts - 6 * 3600),                                   # closed before the window
-             _task_card(8, None, state="open")]                                  # still open
+             _task_card(6, now_ts - 30 * 60, reason="not_planned"),              # abandoned: no count
+             _task_card(7, now_ts - 6 * 3600),                                   # closed before the window: no count
+             _task_card(8, None, state="open"),                                  # open now: a task
+             _task_card(9, None, ["spec"], state="open"),                        # an open spec: never a task
+             {**_task_card(10, None, state="open"), "o": _stamp(now_ts - 30 * 86400)}]   # open now, opened long ago
     _arrival_items(hub, tmp_path, monkeypatch, items)
     tasks = hub.throughput_fact(now=THROUGHPUT_NOW)["tasks"]
-    assert tasks == {"n": 3, "of": 5, "share": round(3 / 5, 3)}, tasks   # opened in the past week: the closed-before-window card counts too
+    assert tasks == {"closed": 2, "total": 4, "value": "2 of 4 closed", "frac": 0.5}, tasks
 
 
 def test_a_closed_spec_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_path, monkeypatch):
-    """A spec is a document and never work: it keeps its place in the hero figure, so the denominator holds it, and the
-    numerator never does (#1362)."""
     now_ts = THROUGHPUT_NOW.timestamp()
     items = [_task_card(1, now_ts - 1 * 3600, ["spec"]),
-             _task_card(2, now_ts - 2 * 3600, ["spec", "wave:02"])]   # a spec carries other labels too
+             _task_card(2, now_ts - 2 * 3600, ["spec", "wave:02"])]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 2, "the hero figure counts a closed spec"
-    assert got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]   # a spec is no task at all
+    assert got["tasks"] == {"closed": 0, "total": 0, "value": "none", "frac": 0}, got["tasks"]
 
 
-def test_a_card_closed_not_planned_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_path, monkeypatch):
-    """An abandoned card is a closure and not delivery: it counts in the hero figure and in the denominator, never in the
-    numerator (#1362)."""
+def test_an_abandoned_card_stays_in_the_hero_figure_and_is_never_a_task(hub, tmp_path, monkeypatch):
     now_ts = THROUGHPUT_NOW.timestamp()
     items = [_task_card(1, now_ts - 1 * 3600, reason="not_planned"),
              _task_card(2, now_ts - 2 * 3600, reason="completed")]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 2, "the hero figure counts a card closed as not planned"
-    assert got["tasks"] == {"n": 1, "of": 2, "share": 0.5}, got["tasks"]
+    assert got["tasks"] == {"closed": 1, "total": 1, "value": "1 of 1 closed", "frac": 1.0}, got["tasks"]
 
 
 def test_a_closed_defect_is_never_a_task_whatever_its_bug_spelling(hub, tmp_path, monkeypatch):
-    """A closed defect is a fix rather than planned delivery: `bug`, and every `loop-bug` prefix the loop dispatches by,
-    keep the card out of the Tasks row while it stays in the hero figure (ADR-0146, #1362)."""
     now_ts = THROUGHPUT_NOW.timestamp()
     items = [_task_card(i, now_ts - i * 60, labels) for i, labels in
              enumerate([["bug"], ["loop-bug"], ["loop-bug:landing"], ["loop-bug:dispatch"], ["bug", "loop-bug:infra"]], 1)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 5, "the hero figure counts closed defects"
-    assert got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]   # a defect is no task at all
-
-
-def test_the_tasks_share_denominator_is_every_card_closed_in_the_window(hub, tmp_path, monkeypatch):
-    """The share is taken against every closure of the window, whatever the kind: a mixed window of one task, one spec,
-    one defect and one abandoned card reads 1 of 4, never 1 of 1."""
-    now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_task_card(1, now_ts - 1 * 60),
-             _task_card(2, now_ts - 2 * 60, ["spec"]),
-             _task_card(3, now_ts - 3 * 60, ["bug"]),
-             _task_card(4, now_ts - 4 * 60, reason="not_planned")]
-    _arrival_items(hub, tmp_path, monkeypatch, items)
-    got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["tasks"] == {"n": 1, "of": 2, "share": 0.5}, got["tasks"]   # the task and the abandoned card are the week's
+    assert got["tasks"] == {"closed": 0, "total": 0, "value": "none", "frac": 0}, got["tasks"]
 
 
 def test_the_tasks_row_reads_the_close_stamps_the_hero_reads_from_the_store_too(hub, tmp_path, monkeypatch):
-    """The row follows the hero's two close-stamp sources: with no board cache the hero falls back to the store's `closed`
-    events, and the row's denominator is that same hero figure. A store event carries no label and no reason, so it is a
-    closure without a task (#1362)."""
+    """With no board cache the hero falls back to the store's `closed` events. A store event carries no label, so it
+    is a closure without a task."""
     _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 3])
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 3, "the hero figure's store fallback moved"
-    assert got["tasks"] == {"n": 0, "of": 0, "share": None}, got["tasks"]   # a store event carries no label
+    assert got["tasks"] == {"closed": 0, "total": 0, "value": "none", "frac": 0}, got["tasks"]
 
 
 def test_the_tasks_row_follows_the_same_window_override_as_the_hero(hub, tmp_path, monkeypatch):
-    """SG_SPEED_WINDOW_SECS moves the Tasks row with the hero figure and its denominator: one window, not two (#1362)."""
+    """SG_SPEED_WINDOW_SECS moves the Tasks row with the hero figure: one window, not two (#2264)."""
     now_ts = THROUGHPUT_NOW.timestamp()
     items = [_task_card(1, now_ts - 90 * 60),
              _task_card(2, now_ts - 30 * 60)]
@@ -1473,33 +1416,30 @@ def test_the_tasks_row_follows_the_same_window_override_as_the_hero(hub, tmp_pat
     monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
     assert got["window"] == 1, "the hero figure did not follow the override"
-    assert got["tasks"] == {"n": 2, "of": 2, "share": 1.0}, got["tasks"]   # the week, not the hero's window
+    assert got["tasks"] == {"closed": 1, "total": 1, "value": "1 of 1 closed", "frac": 1.0}, got["tasks"]
 
 
-def test_no_card_closed_in_the_window_reads_a_task_share_over_zero(hub, tmp_path, monkeypatch):
-    """Nothing closed in the window: the row reads 0 of 0 and leaves the share unworded rather than inventing a ratio
-    over nothing, as the arrival rows do (#1362)."""
+def test_no_card_closed_in_the_window_reads_the_tasks_row_none(hub, tmp_path, monkeypatch):
     now_ts = THROUGHPUT_NOW.timestamp()
-    items = [_task_card(1, now_ts - 8 * 3600)]
-    _arrival_items(hub, tmp_path, monkeypatch, items)
+    _arrival_items(hub, tmp_path, monkeypatch, [_task_card(1, now_ts - 8 * 3600)])
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["window"] == 0 and got["tasks"] == {"n": 1, "of": 1, "share": 1.0}, got["tasks"]
+    assert got["window"] == 0 and got["tasks"] == {"closed": 0, "total": 0, "value": "none", "frac": 0}, got["tasks"]
 
 
-def test_a_card_closed_as_a_duplicate_is_not_planned_delivery(hub, tmp_path, monkeypatch):
-    """The carrier's not-delivered vocabulary is board_columns' one copy (#921): a duplicate closure is an abandoned card
-    by the same rule that names Abandoned, so it is no task and still a closure of the window."""
+def test_a_card_closed_as_a_duplicate_is_not_a_task(hub, tmp_path, monkeypatch):
+    """The carrier's not-delivered vocabulary is board_columns' one copy (#921): a duplicate closure is Abandoned, so it
+    is in no Tasks count."""
     now_ts = THROUGHPUT_NOW.timestamp()
     items = [_task_card(1, now_ts - 1 * 60, reason="duplicate"),
              _task_card(2, now_ts - 2 * 60)]
     _arrival_items(hub, tmp_path, monkeypatch, items)
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["tasks"] == {"n": 1, "of": 2, "share": 0.5}, got["tasks"]
+    assert got["tasks"] == {"closed": 1, "total": 1, "value": "1 of 1 closed", "frac": 1.0}, got["tasks"]
 
 
 def test_the_tasks_row_reads_the_reason_and_labels_the_snapshot_already_carries(hub, tmp_path):
     """The row runs on the rows the items read writes, with no added snapshot field: a REST card taken through the hub's
-    own jq emits the close reason and the labels the fact counts (#1362)."""
+    own jq emits the close reason and the labels the fact counts (#2264)."""
     jq = shutil.which("jq")
     assert jq, "jq runs the items program the hub reads with"
     now_ts = THROUGHPUT_NOW.timestamp()
@@ -1515,7 +1455,8 @@ def test_the_tasks_row_reads_the_reason_and_labels_the_snapshot_already_carries(
     out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
     rows = [json.loads(line) for line in out.splitlines() if "_page" not in line]
     assert rows[0]["cr"] == "completed" and rows[2]["cr"] == "not_planned", "the snapshot drops the close reason"
-    assert hub.tasks_fact([dict(r, s="closed") for r in rows], now_ts) == {"n": 1, "of": 1, "share": 1.0}, \
+    assert hub.tasks_fact([dict(r, s="closed") for r in rows], now_ts, 4 * 3600) == \
+        {"closed": 1, "total": 1, "value": "1 of 1 closed", "frac": 1.0}, \
         "the snapshot's own row is not a Tasks row input, and a defect and a spec are no task either"
 
 
