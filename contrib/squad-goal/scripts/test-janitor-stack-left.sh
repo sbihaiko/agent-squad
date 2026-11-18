@@ -26,10 +26,13 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in
   *repos/x/y/branches*)
-    printf 'gui/2300-base sha2300\ngui/2301-base sha2301\ngui/2304-base sha2304\nmain shamain\n';;
+    printf 'gui/2300-base sha2300\ngui/2301-base sha2301\ngui/2304-base sha2304\ngui/2306-base sha2306\ngui/2307-base sha2307\ngui/2308-base sha2308\nmain shamain\n';;
   *compare/dev...sha2300*) echo ahead;;
   *compare/dev...sha2301*) echo ahead;;
   *compare/dev...sha2304*) echo behind;;
+  *compare/dev...sha2306*) echo "";;    # an unread compare holds the run: never stopped on a fact nobody read
+  *compare/dev...sha2307*) echo ahead;;
+  *compare/dev...sha2308*) echo ahead;;
   *compare/main...*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
@@ -37,10 +40,12 @@ case "$a" in
     printf '2301\tLanding\thttps://api.github.com/repos/x/y\n'
     printf '2302\tDoing\thttps://api.github.com/repos/x/y\n'
     printf '2303\tDoing\thttps://api.github.com/repos/x/y\n'
-    printf '2304\tClosed\thttps://api.github.com/repos/x/y\n';;
+    printf '2304\tClosed\thttps://api.github.com/repos/x/y\n'
+    printf '2306\tDoing\thttps://api.github.com/repos/x/y\n'
+    printf '2307\tDoing\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2300 2301 2302 2303 2304; do
+    sep=""; for n in 2300 2301 2302 2303 2304 2306 2307 2308; do
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}' "$sep" "$n" "$n"; sep=,; done
     printf ']}}}}';;
   *issues/23*/labels*) echo '[]';;
@@ -87,5 +92,25 @@ sleep 0.3
 o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" SG_SQUAD="$sq" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q 'STACK-BASE-LEFT-LANDING run-d' "$T/st/cycle.log" 2>/dev/null && ko "a blocker whose work reached dev stopped the run" || ok "a blocker whose work reached dev keeps the run"
 kill "$(cat "$T/pid-run-d" 2>/dev/null)" 2>/dev/null
+# #2306: the compare of the blocker's branch is unread. An unread fact never stops a run: the pass holds it and reads again.
+rm -f "$T/st/auto"/*; : > "$T/st/cycle.log"; : > "$T/st/active-runs.txt"
+mkr run-e 2306 eeee111122223333 2306
+sleep 0.3
+o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" SG_SQUAD="$sq" python3 -I "$T/s/janitor.py" 2>&1)
+/usr/bin/grep -q 'STACK-BASE-LEFT-LANDING run-e' "$T/st/cycle.log" 2>/dev/null && ko "an unread compare stopped the run" || ok "an unread compare holds the run"
+alive run-e && ok "the held run keeps its process" || ko "the held run lost its process"
+kill "$(cat "$T/pid-run-e" 2>/dev/null)" 2>/dev/null
+# A base-cut run has no STACK TIP line, so rule W owns nothing of it: its own state dir proves the exemption is the line's
+# absence and never another run's marker, while a blocker of its chain sits in Doing. A fresh pass alone decides.
+S2=$T/st2; mkdir -p "$S2/auto" "$S2/cq"; : > "$S2/active-runs.txt" "$S2/cycle.log"
+mkdir -p "$T/co/runs/run-f"; { echo "CHILD — GitHub issue(s) 2308"; echo "CUT FROM: gui/2307-base"; } > "$T/co/runs/run-f/request.txt"
+printf '%s\n' "$(rs run-f "$(ago)")" "$(snn "$(ago)" 2308)" > "$T/co/runs/run-f/record.jsonl"
+printf 'run-f\n' > "$S2/auto/disp-2308"; echo run-f >> "$S2/active-runs.txt"
+( cd "$T/co/runs/run-f" && exec sleep 60 ) & echo $! > "$T/pid-run-f"; disown
+sleep 0.3
+o=$(SG_BOARD_VOCAB=shipped SG_STATE="$S2" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$S2" SG_SQUAD="$sq" python3 -I "$T/s/janitor.py" 2>&1)
+/usr/bin/grep -q 'STACK-BASE-LEFT-LANDING run-f' "$S2/cycle.log" 2>/dev/null && ko "a run cut from the base was stopped while its blocker sat in Doing" || ok "a run cut from the base is untouched, with a blocker of its chain in Doing"
+[ -e "$S2/auto/disp-2308" ] && ok "the base-cut run keeps its dispatch marker" || ko "the base-cut run lost its marker"
+kill "$(cat "$T/pid-run-f" 2>/dev/null)" 2>/dev/null
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }
 rm -rf "$T"

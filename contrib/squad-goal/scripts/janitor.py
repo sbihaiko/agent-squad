@@ -28,7 +28,8 @@
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  U  an auto/disp-<n> marker whose named run or request is no longer live (no active-runs.txt entry and no run folder under the run root names it) and whose issue's ledger records the owner's rearm newer than the marker's mtime, with no pending card write: the marker is dropped (#1586), so the frontier answers the issue startable again. The card is rule R's and the dispatch count is rule O's, so U writes one line and nothing else; a live run, an older rearm and a pending card write (ADR-0165) each hold the marker. `auto/taken-*` is rule T's own case (ADR-0166) and is never read.
  V  a wave marker of a run that ended: `auto/wave-<run>`, `wave-start-<run>` and `wave-pause-<run>` stand for the run's landing pass, and the loop lands a wave only for a line of active-runs.txt. A run that left the listing can never land it again, and the marker stayed for ever (1325 of them, #2140). The pass drops the markers of a run no line names and no live process works, and names each one; a listed run's wave, and a folder a live process works, stay.
- W  a run whose child started on a blocker's approved tip (`STACK TIP:` in its request, #2260) and whose blocker left Landing without a landing: the blocker's card reads a column before Landing and its branch tip is not in the landing branch, so the child's commits sit on a branch the base may never hold.
+ W  a run whose child started on a blocker's approved tip (`STACK TIP:` in its request, #2260) and whose blocker left Landing without a landing: the blocker's card reads a column before Landing and no work branch of its stands in the landing branch, so the child's commits sit on a branch the base may never hold.
+    The one column set is the board definition's, read through `board_columns.from_landing`, so this rule and stack.sh never disagree. The landing is proven by remote ancestry (`git merge-base --is-ancestor`), and an unread compare holds the run: no run is stopped on a fact nobody read.
     The pass stops the run, writes the killed verdict `stack_base_left_landing:#<blocker>`, drops the dispatch markers of its issues and writes the reoffer marker of each, so the frontier builds them again once the blocker is startable. A blocker still in Landing or Gating, a blocker whose work reached the landing branch, and a run cut from the base keep the run.
  X  an auto/disp-<n> or auto/bug-<n> marker whose issue reads closed is dropped (#2142): the loop dispatched the issue,
     the issue closed, and the marker stayed, so sg_dispatch_claimed read a reopened issue as already claimed and the
@@ -1039,8 +1040,25 @@ def dev_ci_running():   # a check on the landing branch tip has not ended: one r
         ok, out = door_read(f"repos/{repo0}/commits/{os.environ.get('SG_LAND_BRANCH') or 'dev'}/check-runs", '[.check_runs[]|select(.status!="completed")]|length')
         _devci = ok and out not in ("", "0")
     return _devci
-LANDING_COLS = {"Landing", "Gating", "Code Complete", "Closed", "Done"}   # the columns from Landing on: the blocker's work is approved and on its way
 _TIP_LINE = re.compile(r"^STACK TIP: ([0-9a-fA-F]{7,64}) \(#(\d+), a blocker in Landing\)[ \t]*$", re.M)
+import board_columns
+def work_landed(blk):   # True, False, or None when no fact answers: one work branch of the blocker stands in the landing branch
+    """The blocker's work is in the landing branch, from the one fact that proves it: the remote ancestry of the branch tip.
+    A compare that is unread, and a branch that is not listed, hold the run: no evidence is never a stop (#2260)."""
+    wb = work_branches().get(str(blk), [])
+    if not wb: return None
+    co = os.environ.get("SG_CHECKOUT") or ""; base = os.environ.get("SG_BASE") or ""
+    seen = []
+    for b, g in wb:
+        if g in ("ahead", "diverged"): seen.append(False); continue
+        tip = _tips.get(b, "")
+        if not g or not tip or not co or not base: seen.append(None); continue
+        rc = subprocess.run(["/usr/bin/git", "-c", f"safe.directory={co}", "-C", co, "merge-base", "--is-ancestor", tip,
+                             f"refs/remotes/origin/{base}"], capture_output=True).returncode
+        seen.append(rc == 0 if rc in (0, 1) else None)
+    if any(v is True for v in seen): return True
+    if seen and all(v is False for v in seen): return False
+    return None
 # W (#2260) STACK-BASE-LEFT-LANDING: a run whose child started on a blocker's approved tip. A blocker that leaves Landing
 # without landing (its review asked for changes, an owner rearm, a failed gate) is no base: the child's commits sit on a
 # branch the base may never hold, and the landing would carry them into $SG_BASE with none of the blocker's approvals. The
@@ -1060,8 +1078,8 @@ for n, i in live.items():
     ok, cols, _h = board_read(proj)
     if not ok: continue   # a board that did not answer moves nothing and stops nothing
     col = cols.get(str(blk), "")
-    if not col or col in LANDING_COLS: continue
-    if any(g in ("behind", "identical") for _b, g in work_branches().get(str(blk), [])): continue   # the work reached the base
+    if not col or board_columns.from_landing(col): continue   # the one column set, shared with stack.sh (#2260)
+    if work_landed(blk) is not False: continue   # landed, or no readable fact: a run is never stopped on what nobody read
     say(f"STACK-BASE-LEFT-LANDING {n}: blocker #{blk} sits in {col} without a landing, so the branch of {n} is stacked on "
         + f"commits the base may never hold; stopping the run and freeing its issues")
     if dry: continue

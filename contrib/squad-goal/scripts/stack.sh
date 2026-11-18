@@ -8,8 +8,10 @@
 #                            Review, or in Landing with no approved tip, or a ticket of a spec the owner has not started
 #                            (below). The loop builds a child only on the line, so a blocker whose branch is not in $SG_BASE
 #                            yet waits unless its card reads Landing and its review approves the tip (#2260). The landing
-#                            pass rebases the child onto $SG_BASE before its own landing, and the janitor stops a run whose
-#                            stacked blocker leaves Landing without landing (janitor.py, rule W).
+#                            pass rebases the child onto $SG_BASE before its own landing (ffland.sh, proven by
+#                            test-ffland.sh case 3), and the janitor stops a run whose stacked blocker leaves Landing without
+#                            landing (janitor.py, rule W). The columns from Landing on come from the board definition
+#                            (board_columns.from_landing), one source shared with that rule.
 # A caller that already holds the facts hands them over and saves the reads (#383): SG_STACK_ISSUE names a file with the
 # issue's entry of the open-issue list (ghread.py's shape, each blocker's state beside it). Without it, or for a blocker whose
 # state the entry lacks, the issue and the state are read one each.
@@ -71,7 +73,10 @@ hb="${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json"   # hub's board cache
 # other live column (Doing, Review, Todo) still waits: its work is not approved yet. The review is the one parser's
 # (revformat.py --classify): an approval of THIS tip, never a first-line substring. A tip already in $SG_BASE is no stack:
 # the child builds on the base and the blocker's work is already there.
-land_cols=" Landing Code Complete Gating "
+# The columns from Landing on come from the board definition, one source shared with the janitor's rule W (#2260): a column
+# the definition puts after Landing never starts a child here and never stops a run there. An unreadable helper reads no
+# column as Landing, so the blocker waits.
+inland() { python3 "$here/board_columns.py" --from-landing "$1" >/dev/null 2>&1; }
 colof() { local c=""
   [ -n "${SG_STACK_BOARD:-}" ] && [ -s "$SG_STACK_BOARD" ] && c=$(awk -F '\t' -v n="$1" '$1 == n { print $2; exit }' "$SG_STACK_BOARD")
   [ -n "$c" ] || c=$(python3 "$here/issue_state.py" --state "$1" 2>/dev/null)
@@ -82,7 +87,7 @@ inbase() { [ -n "$1" ] && /usr/bin/git -C "${SG_CHECKOUT:-.}" merge-base --is-an
 landed_blocker() { local b=$1 c br tip rk cls
   c=$(colof "$b")
   [ -n "$c" ] || { printf ''; return 1; }   # an unread column is no Landing: the caller keeps its own wording for it
-  case "$land_cols" in *" $c "*) ;; *) printf 'its card sits in %s, not in Landing' "$c"; return 1;; esac
+  inland "$c" || { printf 'its card sits in %s, not in Landing' "$c"; return 1; }
   br=$(printf '%s' "${SG_FORK_BRANCH:-gui/%n}" | sed "s/%n/$b/")
   tip=$(gh_api "repos/$SG_REPO/commits/$br" -q .sha 2>/dev/null) || { printf 'its branch %s is not readable' "$br"; return 1; }
   case "$tip" in ''|*[!0-9a-fA-F]*) printf 'its branch %s names no tip' "$br"; return 1;; esac

@@ -195,6 +195,29 @@ def shipped_columns(text=None):
             for s in shipped_definition(text)]
 
 
+def landing_columns(text=None):
+    """The canonical columns from `Landing` on, in the definition's order: the blocker's work is approved and on its way.
+    One source for both readers (#2260): stack.sh asks this module for the set, and the janitor asks it per card."""
+    names = [s["name"] for s in shipped_definition(text)]
+    if LANDING not in names: return (LANDING,)
+    return tuple(n for n in names[names.index(LANDING):] if n != "Abandoned")
+
+
+def from_landing(name):
+    """True when one card column names `Landing` or a column after it, in either vocabulary: `Code Complete` is the version
+    1 spelling of Landing, and `Done` the legacy spelling of Closed (ADR-0141, #2260)."""
+    if not name: return False
+    n = recorded_column(name)
+    return (SHIPPED_NAME.get(n) or n) in landing_columns()
+
+
+if __name__ == "__main__":   # stack.sh asks this module: the one set, and the answer for one card column (#2260)
+    import sys as _sys
+    if len(_sys.argv) > 2 and _sys.argv[1] == "--from-landing":
+        raise SystemExit(0 if from_landing(_sys.argv[2]) else 1)
+    print(" ".join(landing_columns()))
+
+
 _NOTED = set()   # the unknowns already named on stderr: a reader that meets the same one every card says it once
 
 

@@ -322,12 +322,18 @@ if fix_run and not _names_option("fix_run"):
 # autofrontier.sh): the issue worktree starts on THAT branch, never the base, so the file one run lands is edited by one line
 # of commits. A branch this checkout does not hold leaves the base, and the note says so: the cut is never made up here.
 cut = re.search(r"^CUT FROM: *([^\s]+) *$", req_text, re.M)
-cut_ref = None
+cut_ref = None; cut_sha = ""
 if cut and len(issues) == 1:
     if subprocess.run(["git", "-C", checkout, "rev-parse", "--verify", "--quiet", f"refs/heads/{cut.group(1)}^{{commit}}"], capture_output=True).returncode == 0:
         cut_ref = cut.group(1)
+        cut_sha = subprocess.run(["git", "-C", checkout, "rev-parse", f"{cut.group(1)}^{{commit}}"],
+                                 capture_output=True, text=True).stdout.strip()
     else:
         print(f"note: CUT FROM {cut.group(1)} names no branch of {checkout}: the issue worktree starts from the base", file=sys.stderr)
+# (#2260 AC6) The record names the tip the child actually starts from: the head of the branch cut here, never the sha another
+# reader saw earlier. A STACK TIP line of a stacked child is rewritten to that head, so the record and the cut agree.
+if cut_sha and re.fullmatch(r"[0-9a-f]{40,64}", cut_sha):
+    req_text = re.sub(r"^STACK TIP: *\S+", f"STACK TIP: {cut_sha}", req_text, count=1, flags=re.M)
 salvage = _salvage_start(checkout, issues[0], land) if len(issues) == 1 and not named and not cut_ref else None
 target = _named_target(checkout, named) if named else _issue_worktree(issues[0], cut_ref or salvage or land) if len(issues) == 1 else None
 if len(issues) > 1 and not named: print(f"note: the request names {issues}: one run has one target, so this run gets {FALLBACK}", file=sys.stderr)
@@ -398,7 +404,7 @@ run = new[-1]
 # and returns the card to Todo (#852).
 def _gone(): sys.exit(f"launch refused: the run folder {runs / run} is gone; its workspace was removed while the dispatch started, so nothing started")
 if not (runs / run).is_dir(): _gone()
-(runs / run / "request.txt").write_text(req_file.read_text())   # consult.sh reads the request from the run folder
+(runs / run / "request.txt").write_text(req_text)   # consult.sh reads the request from the run folder; a stacked child's tip is the one cut here (#2260)
 # One branch per wave (#375, ADR-0145 rules 8 and 10): a run that dispatches children cuts its wave branch from the base
 # as it starts, so every child has a wave to enter and the run's completion has one to land. `wave.sh start` owns the cut
 # -- a throwaway clone, never this checkout -- and leaves the marker $SG_STATE/auto/wave-<run> that watch.sh reads when
