@@ -8,6 +8,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import uuid
 
 import pytest
 
@@ -17,6 +18,8 @@ from tests.test_hub_profiler import VIEW
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 PROFILER_JS = SCRIPTS / "hub-profiler.js"
+EGO = shutil.which("ego-browser")
+PHONE_WIDTH = 390
 READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 
 ESC = 'const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", \'"\': "&quot;"})[c]);\n'
@@ -134,3 +137,145 @@ def test_the_wall_time_tables_scroll_inside_their_section_on_a_phone(hub):
     """The wall-time view (#1748) draws eight columns of gates; on a 390 px screen they scroll inside their own section, so no
     row widens the page and every column stays reachable."""
     assert "#profwall" not in hub.MOBILE_PAGE, "the removed wall-time panel leaves no rule behind"
+
+
+# ---------------------------------------------------------------- the phone's trip lanes (#2229)
+# The phone draws the trip of an issue from the same payload as the desktop (#2222): a Tokens lane and a Machine lane
+# over the trip's columns, no Machine Load chart, and a table with tokens per issue, mean CPU and mean RAM. The lanes
+# and the table read only the payload's own series and means.
+TRIP = {"label": "The trip of an issue", "window_s": 3600, "deliveries": 4, "bar": True,
+        "cores": 8, "mem_gb": 32.0, "peak_load": 4.2, "no_record_minutes": 10,
+        "columns": [
+            {"column": "todo", "label": "Todo", "median_s": 60.0, "p90_s": 120.0, "observations": 2, "share": 0.1,
+             "tokens": {"points": [[0.5625, 480.0]], "mean": 60.0}, "tokens_per_issue": 600.0,
+             "cpu": {"points": [[0.5625, 0.5]], "mean": 0.5}, "ram": {"points": [[0.5625, 0.4]], "mean": 0.4},
+             "beside": None},
+            {"column": "doing", "label": "Doing", "median_s": 600.0, "p90_s": 900.0, "observations": 3, "share": 0.5,
+             "tokens": {"points": [[0.1875, 120.0], [0.8125, 240.0]], "mean": 120.0}, "tokens_per_issue": 2400.0,
+             "cpu": {"points": [[0.1875, 0.3], [0.8125, 0.6]], "mean": 0.3},
+             "ram": {"points": [[0.1875, 0.2], [0.8125, 0.3]], "mean": 0.25}, "beside": None},
+            {"column": "review", "label": "Review", "median_s": 300.0, "p90_s": 420.0, "observations": 2, "share": 0.3,
+             "tokens": {"points": [[0.5, 80.0]], "mean": 80.0}, "tokens_per_issue": 300.0,
+             "cpu": {"points": [[0.5, 0.2]], "mean": 0.2}, "ram": {"points": [[0.5, 0.1]], "mean": 0.1},
+             "beside": None},
+            {"column": "gating", "label": "Gating", "median_s": 30.0, "p90_s": 40.0, "observations": 1, "share": 0.1,
+             "tokens": {"points": [], "mean": None}, "tokens_per_issue": 0.0,
+             "cpu": {"points": [], "mean": None}, "ram": {"points": [], "mean": None}, "beside": None}]}
+LOAD = {"label": "Machine load", "start": 0, "end": 3600, "peak": 4.2, "cores": 8, "gap_s": 0,
+        "segments": [[{"at": 60, "load": 2.5}]], "gaps": []}
+PHONE_TRIP_VIEW = {**VIEW, "trip": TRIP, "load": LOAD}
+
+
+def phone_trip_html(view=PHONE_TRIP_VIEW):
+    return node_view(view, "await profPoll(); out.html = box.innerHTML;")["html"]
+
+
+@pytest.mark.node_bound
+def test_the_phone_draws_no_machine_load_chart():
+    html = phone_trip_html()
+    assert "id=profload" not in html, "the phone draws no Machine Load chart"
+    assert "Machine load" not in html
+
+
+@pytest.mark.node_bound
+def test_the_phone_draws_the_tokens_lane_and_the_machine_lane_from_the_payload():
+    html = phone_trip_html()
+    assert "ptlane-tok" in html and "tokens/min" in html, "the Tokens lane names its own unit"
+    assert "ptlane-mach" in html and "CPU" in html and "RAM" in html, "the Machine lane names its two lines"
+    assert re.search(r'class="ptl ptl-cpu"', html) and re.search(r'class="ptl ptl-ram"', html), \
+        "the machine lane draws the payload's CPU series solid and its RAM series dashed"
+    tok = re.findall(r'class="ptl ptl-tok"[^>]*points="([^"]+)"', html)
+    assert len(tok) == 3, "one Tokens line per column that holds a point, and none for the empty Gating column"
+
+
+@pytest.mark.node_bound
+def test_the_phone_labels_each_column_with_its_name_and_median_time():
+    html = phone_trip_html()
+    labels = html[html.index("ptlabels"):]
+    for name, median in (("Todo", "1.0 min"), ("Doing", "10.0 min"), ("Review", "5.0 min"), ("Gating", "30.0 s")):
+        assert name in labels and median in labels, f"{name} keeps its name and its median time"
+
+
+@pytest.mark.node_bound
+def test_the_phone_table_shows_tokens_per_issue_mean_cpu_and_mean_ram():
+    html = phone_trip_html()
+    table = html[html.index("id=proftt"):]
+    for head in ("Tokens/issue", "CPU", "RAM"):
+        assert head in table, f"the table names {head}"
+    assert re.search(r"<td>600</td>", table) and re.search(r"<td>50%</td>", table) and re.search(r"<td>40%</td>", table), \
+        "the Todo row carries the payload's tokens per issue and its mean CPU and RAM"
+    gating = html[html.index('data-p="trip/gating"'):]
+    assert "&#8212;" in gating, "a column with no reading prints a dash, never a zero"
+
+
+TRIP_EGO = """
+const task = await taskSpace(SPACE_NAME);
+try {
+  const page = task.page("p1");
+  await page.cdp("Emulation.setDeviceMetricsOverride",
+                 { width: WIDTH, height: HEIGHT, deviceScaleFactor: 2, mobile: true });
+  await page.goto(URL);
+  const seen = await page.evaluate(DRAW_TRIP, [TRIP_VIEW]);
+  console.log("EGO_TRIP:" + JSON.stringify(seen));
+} finally {
+  await task.finish({ keep: [] });
+}
+"""
+
+DRAW_TRIP = """
+(args) => {
+  const [view] = args;
+  const fit = el => { const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height, right: r.right, bottom: r.bottom,
+             sw: el.scrollWidth, cw: el.clientWidth, text: el.textContent.trim() }; };
+  openLayer("profiler");
+  profPhone = true;
+  profV = view;
+  profDraw();
+  const trip = document.getElementById("proftrip");
+  return { vw: window.innerWidth, docW: document.documentElement.scrollWidth, trip: fit(trip),
+           lanes: [...trip.querySelectorAll("svg.ptlane")].map(fit),
+           labels: [...trip.querySelectorAll(".ptlab")].map(fit),
+           cells: [...document.querySelectorAll("#proftt th, #proftt td")].map(fit),
+           table: fit(document.getElementById("proftt")) };
+}
+"""
+
+
+def _trip_frame(page_html, base):
+    page = base / "hub-mobile.html"
+    page.write_text(page_html)
+    head = (f"const SPACE_NAME = {json.dumps(f'agent-squad phone trip {uuid.uuid4().hex}')};\n"
+            f"const URL = {json.dumps(page.as_uri())};\n"
+            f"const WIDTH = {PHONE_WIDTH}; const HEIGHT = 844;\n"
+            f"const TRIP_VIEW = {json.dumps(PHONE_TRIP_VIEW)};\n"
+            f"const DRAW_TRIP = {DRAW_TRIP};\n")
+    run = subprocess.run([EGO, "nodejs"], input=head + TRIP_EGO, capture_output=True, text=True, timeout=180)
+    out = run.stdout + run.stderr
+    seen = [line for line in out.splitlines() if line.startswith("EGO_TRIP:")]
+    assert seen, f"ego-browser laid out no trip: {out[-2000:]}"
+    return json.loads(seen[-1][len("EGO_TRIP:"):])
+
+
+def _overlap(a, b):
+    return min(a["right"], b["right"]) - max(a["x"], b["x"]) > 0.5 and min(a["bottom"], b["bottom"]) - max(a["y"], b["y"]) > 0.5
+
+
+@pytest.mark.heavy
+@pytest.mark.skipif(EGO is None, reason="ego-browser is needed to lay out the phone page")
+def test_the_phone_trip_fits_390_px_with_no_overlap_and_no_overflow(hub, tmp_path):
+    seen = _trip_frame(hub.MOBILE_PAGE, tmp_path)
+    assert seen["vw"] == PHONE_WIDTH, f"the phone page rendered at {seen['vw']} px, not {PHONE_WIDTH}"
+    assert seen["docW"] <= PHONE_WIDTH + 0.5, f"the page scrolls sideways: {seen['docW']} px wide"
+    assert seen["trip"]["right"] <= PHONE_WIDTH + 0.5, f"the trip runs past the screen: {seen['trip']}"
+    for i, lane in enumerate(seen["lanes"]):
+        assert lane["right"] <= PHONE_WIDTH + 0.5 and lane["w"] > 0, f"lane {i} leaves the screen or draws nothing: {lane}"
+    assert len(seen["labels"]) == 4, f"the trip drew {len(seen['labels'])} labels, not four"
+    for i, label in enumerate(seen["labels"]):
+        assert label["sw"] <= label["cw"] + 0.5, f"label {label['text']!r} overflows its box: {label}"
+        assert label["right"] <= PHONE_WIDTH + 0.5, f"label {label['text']!r} runs past the screen: {label}"
+        for other in seen["labels"][i + 1:]:
+            assert not _overlap(label, other), f"labels {label['text']!r} and {other['text']!r} overlap"
+    assert seen["table"]["right"] <= PHONE_WIDTH + 0.5, f"the table runs past the screen: {seen['table']}"
+    for cell in seen["cells"]:
+        assert cell["sw"] <= cell["cw"] + 0.5, f"cell {cell['text']!r} overflows its column: {cell}"

@@ -2726,6 +2726,7 @@ def profile_run_table(window_s, now=None):
 # the event times the fold reads, never by a write time.
 TRIP_SPANS = {}       # record path -> (mtime, size, the rule layer's stages): a poll parses only a changed record
 TRIP_SPANS_MAX = 4096 # a bound, never a ledger: a cleared entry is read again on the next poll
+TRIP_CALLS = {}       # record path -> (mtime, size, the record's model calls): the trip's second read, cached the same way
 _TRIP_EVENTS = frozenset(("run_start", "resume", "call_start", "spawn_accepted", "outcome", "review_round", "gate_start",
                           "gate_result", "land", "verdict"))   # the events the trip's stages are read from
 _EVENT_NAME = re.compile(r'"event"\s*:\s*"([a-z_]+)"')
@@ -2757,6 +2758,26 @@ def card_waits(store, numbers):
         todo = next((_epoch(r["from"]) for r in runs if r["column"] == LEAD_START), None)
         closed = next((_epoch(r["from"]) for r in runs if r["column"] == COLUMN["issue_closed"]), None)
         if todo is not None or closed is not None: out[n] = {"todo": todo, "closed": closed}
+    return out
+
+def card_column_runs(store, numbers, since, now):
+    """issue number -> one `{"column", "start", "end"}` per column the card stood in over the window, from the board's
+    transitions record (#2227). A run opens at the card's move into the column and closes at the next move; the last
+    run is open to `now`. Runs outside the window are clipped to it and a run the clip empties is dropped. A card the
+    record never saw answers no entry, so its samples land in no column."""
+    out = {}
+    for n in numbers:
+        rec = store.get(n)
+        if rec is None: continue
+        runs = []
+        for r in _hist.intervals(rec.get("events") or []):
+            if not r.get("column"): continue
+            a = _epoch(r["from"])
+            b = _epoch(r["to"]) if r.get("to") else now
+            if a is None or b is None: continue
+            a, b = max(a, since), min(b, now)
+            if b > a: runs.append({"column": r["column"], "start": a, "end": b})
+        if runs: out[n] = runs
     return out
 
 def card_wait(card, carried=None):
@@ -2814,11 +2835,58 @@ def trip_gates(since):
                     "outcome": row.get("outcome", ""), "caller": row.get("caller", "")})
     return out
 
-def trip_view(window_s, now=None):
+def trip_calls_of(path):
+    """One record's model calls, cached by the file's own signature: the trip reads a record's events once a poll, as it
+    does for the stages."""
+    try: st = path.stat()
+    except OSError: return []
+    key = str(path)
+    sig = (st.st_mtime, st.st_size)
+    hit = TRIP_CALLS.get(key)
+    if hit and hit[:2] == sig: return hit[2]
+    calls = hub_profiler.trip_calls(trip_events(path))
+    if len(TRIP_CALLS) >= TRIP_SPANS_MAX: TRIP_CALLS.clear()
+    TRIP_CALLS[key] = (*sig, calls)
+    return calls
+
+def trip_review_calls(since):
+    """The review token ledger's calls of the window as `{at, tokens}` (#2227): review.sh writes one line per review call
+    at the time it writes it, and that instant is the call's end. A line with no usage count carries no tokens, so it is
+    no sample of the Tokens line."""
+    return [{"at": c["t0"], "tokens": c["in"] + c["out"]} for c in ledger_calls()
+            if c["t0"] >= since and not c.get("uncounted")]
+
+def mem_total_gb():
+    """The machine's memory in gibibytes, the size the reader's own system shows, and the number the RAM line's hover
+    reads: the kernel's own figure, else psutil, else the POSIX page count, else None. None is no guess: a machine that answers neither source
+    carries no memory figure, and the hover names no size."""
+    total = _sysctl_u64("hw.memsize")
+    if not total:
+        try:
+            import psutil; total = psutil.virtual_memory().total
+        except Exception: total = 0
+    if not total:   # #2240: a Linux runner has no Mach sysctl and may have no psutil; the POSIX page count needs neither
+        try: total = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+        except (ValueError, OSError, AttributeError): total = 0
+    return round(total / 1024 ** 3, 1) if total > 0 else None
+
+def load_rows_now():
+    """The minute record's rows, re-read only when the file's identity moved: the one cache `load_view` keeps, so the
+    load line and the trip's CPU and RAM read one copy of the record."""
+    stamp = load_record_stamp()
+    if LOAD_STATE.get("record_rows") is None or stamp != LOAD_STATE.get("record_stamp"):
+        LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), stamp
+    return LOAD_STATE["record_rows"] or []
+
+def trip_view(window_s, now=None, allowed=True):
     """The Loop tab's trip bar (#1769, #2152): the board's six columns of a delivery over the chosen window, folded by the
     rule layer from the run records under this profile's run roots, the gate history, and the board transitions of the
     card each run works (#1894). A run that names no card reads no column the card alone fills. It reads files only, so
-    it shows with the CPU sampling switch off."""
+    it shows with the CPU sampling switch off. Beside the bar it carries what each column consumes (#2227): the run
+    records' call outcomes and the review token ledger as Tokens, and the minute record's whole-machine CPU and RAM, each
+    sample placed in the column the card stood in at its time. `allowed` False is a caller the hub refused: then the
+    minute record is not stat, the CPU and RAM lines read no row, and the payload asserts neither a peak nor a count of
+    silent minutes, as the load chart reads none."""
     now = time.time() if now is None else now
     since = now - window_s
     files = []
@@ -2826,10 +2894,17 @@ def trip_view(window_s, now=None):
         try: files.extend(sorted(root.glob("run-*/record.jsonl")))
         except OSError: continue
     issues = {p: trip_issues(p) for p in files}
-    waits = card_waits(_hist.load_store(_hist.history_path(BOARD, REPO)), {n for ns in issues.values() for n in ns})
+    numbers = {n for ns in issues.values() for n in ns}
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    waits = card_waits(store, numbers)
+    columns = card_column_runs(store, numbers, since, now)
     return {"window_s": window_s, "since": since,
             **hub_profiler.trip([trip_stages(p, next((waits[n] for n in issues[p] if n in waits), None))
-                                 for p in files], trip_gates(since), since)}
+                                 for p in files], trip_gates(since), since,
+                                cards=[next((columns[n] for n in issues[p] if n in columns), None) for p in files],
+                                calls=[trip_calls_of(p) for p in files], review_calls=trip_review_calls(since),
+                                loads=load_rows_now() if allowed else None, now=now, cores=os.cpu_count(),
+                                mem_gb=mem_total_gb())}
 
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
 PROMOTED_MAIN = re.compile(r"promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
@@ -3027,7 +3102,7 @@ def profiler_view(a, w=None, sw=None, ww=None):
     out = {"on": profiler_on(), "since": None, "window_s": 0, "span_s": hub_profiler.SPAN_S, "secs": PROFILER_SECS, "tree": None,
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
            "processes_read": 0, "processes_seen": 0, "coverage": None,
-           "trip": trip_view(window_s), "runs": profile_run_table(window_s), "runs_window_s": window_s,
+           "trip": trip_view(window_s, now, allowed=a.allowed), "runs": profile_run_table(window_s), "runs_window_s": window_s,
            "strip": st, "slots": slot_view(sw, now, (loop_caps() or {}).get("runs")) if a.allowed else None, "load": load,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "wall": wall_view(ww, now) if a.allowed else None,

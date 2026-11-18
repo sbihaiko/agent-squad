@@ -1996,10 +1996,20 @@ def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts n
             else "the frontier holds this work and starts none; NEEDS OWNER")
     alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} ({tail})")
     mk.write_text(f"{now}\n")
-def _deadlock():   # the deadlock rules beside this script (#1983); -I keeps the script's directory off sys.path, so the import names it itself
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    import deadlock
-    return deadlock
+def _deadlock():   # the deadlock rules (#1983), loaded by path: beside this script first, then the repository tree (#2237).
+    # -I keeps the script's directory off sys.path, so the import names the file itself; a host install whose scripts dir
+    # carries no copy of every sibling still reads the rules from the tree that SG_SQUAD, SG_CHECKOUT or cwd names.
+    if hasattr(sys.modules.get("deadlock"), "audit"): return sys.modules["deadlock"]   # never a foreign stub another loader left
+    here = pathlib.Path(__file__).resolve().parent
+    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
+    dirs = [here, *(pathlib.Path(r) / "contrib" / "squad-goal" / "scripts" for r in roots)]
+    path = next((d / "deadlock.py" for d in dirs if (d / "deadlock.py").is_file()), here / "deadlock.py")
+    spec = importlib.util.spec_from_file_location("deadlock", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["deadlock"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 def deadlock_audit():   # #1983: the open issues' dependency graph, checked on the reads this pass already holds (no call); one alert per cause, and no dispatch is held
     answered, _ = open_issues()
     if not answered or dry: return

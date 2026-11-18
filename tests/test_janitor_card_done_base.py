@@ -33,7 +33,14 @@ N = 2030  # the issue a finished run delivered, whose pull request names it
 STUB = """#!/bin/bash
 a="$*"; echo "$a" >> "@CALLS@"
 case "$a" in
-  *graphql*) printf '%s' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}';;
+  *graphql*)   # the open-issue list (#2220 put the door beside the janitor, so this read answers): the issue is in it while it is open
+    nodes='[]'
+    if [ "@STATE@" = open ]; then
+      nodes='[{"number":@N@,"title":"Issue","body":"","state":"OPEN","stateReason":null,"createdAt":"2026-10-13T08:00:00Z",'
+      nodes=$nodes'"repository":{"nameWithOwner":"x/y"},"labels":{"nodes":[]},"blockedBy":{"pageInfo":{"hasNextPage":false},"nodes":[]},'
+      nodes=$nodes'"parent":null,"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}]'
+    fi
+    printf '%s' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":'"$nodes"'}}}}';;
   *search/issues*)
     case "$a" in *"-X GET"*|*"--method GET"*) ;; *) echo '{"message":"Not Found"}'; exit 1;; esac
     case "$a" in
@@ -287,3 +294,17 @@ def test_a_finished_run_still_reads_its_card_on_the_pass_that_drops_its_line(tmp
     assert f"ADD o 4 Landing {N}" in landing(log), f"the card did not reach Landing: {log}"
     assert (tmp_path / "st/active-runs.txt").read_text().split() == [], (
         "the finished run kept its active-runs line, so it still holds the child room rule #2138 won")
+
+
+@pytest.mark.heavy
+def test_the_pass_reads_the_deadlock_rules_from_the_repository_when_they_are_not_beside_the_script(tmp_path):
+    """#2237: the pass loads deadlock.py from the tree that SG_SQUAD names when the script's own directory carries no copy.
+
+    The janitor runs under `python3 -I`, which keeps its directory off sys.path, so it imports every sibling itself. A
+    sandbox copies janitor.py alone: before this fix the import raised ModuleNotFoundError and the pass ended before the
+    deadlock audit. The audit's own cause file proves the rules loaded and ran."""
+    sandbox(tmp_path, "echo 0")
+    assert not (tmp_path / "deadlock.py").exists(), "the sandbox copied the rules, so this case proves nothing"
+    p = janitor(tmp_path)
+    assert "ModuleNotFoundError" not in p.stderr, p.stderr
+    assert (tmp_path / "st/deadlock-causes.json").exists(), f"the deadlock audit never ran: {p.stderr}"

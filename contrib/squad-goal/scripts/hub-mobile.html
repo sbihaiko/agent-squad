@@ -71,6 +71,29 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #profb table .pnm{overflow-wrap:anywhere}
 #profb .lerr,#profb .lpr{overflow-wrap:anywhere}
 #profb .lpn{overflow-wrap:anywhere}
+/* The trip's lanes on the phone (#2229): the Tokens lane and the Machine lane over the trip's columns, the column strip
+   and one label per column. The chart takes the whole width, and every label is a flex item that may shrink and wrap, so
+   at 390 px one label never overlaps its neighbour and nothing runs past its box. */
+#proftrip .ptchart{width:100%;min-width:0}
+#proftrip .ptlh{color:var(--mute);font-size:var(--fs-caption);margin:6px 0 2px;min-width:0;overflow-wrap:anywhere}
+#proftrip .ptlkey{margin-left:6px;white-space:nowrap}
+#proftrip .ptkey{display:inline-block;width:12px;height:0;border-top:2px solid currentColor;vertical-align:middle}
+#proftrip .ptkey-cpu{color:var(--ok)}#proftrip .ptkey-ram{color:var(--warn)}
+#proftrip .ptlane{display:block;width:100%;height:64px;overflow:hidden}
+#proftrip .ptlane-mach{height:88px}
+#proftrip .ptlbg{fill:var(--edge);opacity:.45}
+#proftrip .ptl{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
+#proftrip .ptl-tok{stroke:var(--acc)}
+#proftrip .ptl-cpu{stroke:var(--ok)}
+#proftrip .ptl-ram{stroke:var(--warn);stroke-dasharray:4 3}
+#proftrip .ptld{stroke:none}#proftrip .ptl-tok-dot{fill:var(--acc)}#proftrip .ptl-cpu-dot{fill:var(--ok)}#proftrip .ptl-ram-dot{fill:var(--warn)}
+#proftrip .ptstrip{display:flex;gap:1px;width:100%;height:10px;overflow:hidden;border-radius:var(--radius-sm);background:var(--edge)}
+#proftrip .ptseg{display:block;height:100%;min-width:0}
+#proftrip .ptlabels{display:flex;flex-wrap:wrap;gap:4px 12px;width:100%;min-width:0;margin:6px 0 8px}
+#proftrip .ptlab{display:inline-flex;align-items:center;max-width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:var(--fs-caption)}
+#profb #proftt{table-layout:fixed;width:100%}
+#profb #proftt th,#profb #proftt td{white-space:normal;overflow-wrap:anywhere;padding-left:1px;padding-right:1px}
+#profb #proftt th:not(:first-child),#profb #proftt td:not(:first-child){width:3.2em}
 
 #prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}

@@ -1627,8 +1627,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
         done
       elif [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
+          why="the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue"
+          br=$(salvage "$run" "$n")   # the child's commits reach a work branch before the queue sends the issue back (#2030, #2231)
+          [ -n "$br" ] && why="$why; its commits are on $br, for a review and a landing"
           wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child" keep
-          cap_hold "$run" "$rd" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue";; esac; done
+          cap_hold "$run" "$rd" "$n" "$why";; esac; done
         retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
       fi
       if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
@@ -1655,8 +1658,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # the run, as the capped-empty landing does; an unproven tip still never lands.
     [ $rc = 5 ] && { if [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
+          why="the tip's check stayed unproven through the wave's age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): it is back in the queue"
+          br=$(salvage "$run" "$n")   # the child's commits reach a work branch before the queue sends the issue back (#2030, #2231)
+          [ -n "$br" ] && why="$why; its commits are on $br, for a review and a landing"
           wave_fact "$run" "$n" refused "the tip's check stayed unproven through the wave's age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s), so the wave never landed with this child" keep
-          cap_hold "$run" "$rd" "$n" "the tip's check stayed unproven through the wave's age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): it is back in the queue";; esac; done
+          cap_hold "$run" "$rd" "$n" "$why";; esac; done
         retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
       fi
       echo "WAVE WAIT $w: the tip's check is unproven, and an unproven tip never lands; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
@@ -1726,7 +1732,7 @@ land_books() {
     for n in $(run_issues "$rd"); do case " $issues $amb $ent " in *" $n "*) ;; *)
       why="the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue"
       br=$(salvage "$run" "$n")   # the child's commits reach a branch before the queue sends the issue back (#2030)
-      [ -n "$br" ] && why="$why; its commits are on $br"
+      [ -n "$br" ] && why="$why; its commits are on $br, for a review and a landing"
       wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
       rq="$rq $n"
       cap_hold "$run" "$rd" "$n" "$why";; esac; done
@@ -1932,8 +1938,10 @@ land_batch() {
   rm -rf "$S"; return $brc
 }
 
-# salvage <run> <issue>: push the head of the child that worked <issue> to salvage/<issue>, so the wave's age cap sends the
-# issue back to the queue only after its commits reach a remote branch (#2030). stdout is the branch name, or nothing when
+# salvage <run> <issue>: push the head of the child that worked <issue> to fix/<issue>-salvage-<run>, a work branch, so the wave's
+# age cap sends the issue back to the queue only after its commits reach a remote branch (#2030, #2231). The branch is the one a
+# finished run with no wave already pushes (childcc.py): branchreview reviews it and branchland lands it, and the frontier skips the
+# issue while it is open (workbranches.sh). stdout is the branch name, or nothing when
 # the record names no child of that issue, the child's worktree is gone, or the child stands on the base. A push it cannot
 # make names its reason on stderr and prints nothing on stdout, so the caller adds no branch to its comment and the requeue
 # goes on: a saved branch is a help, never a condition of the requeue.
@@ -1963,7 +1971,7 @@ PY
   head=$($G -C "$wt" rev-parse -q --verify HEAD 2>/dev/null) || return 0
   cnt=$($G -C "$wt" rev-list --count "origin/$base..$head" 2>/dev/null) || return 0
   [ "${cnt:-0}" -gt 0 ] 2>/dev/null || return 0
-  br="salvage/$n"; err="$SG_STATE/salvage-$n.err"
+  br="fix/$n-salvage-$run"; err="$SG_STATE/salvage-$n.err"
   $G -C "$wt" push -q origin "HEAD:refs/heads/$br" >/dev/null 2>"$err" || { echo "salvage: the push of ${head:0:9} to $br failed: $(tail -1 "$err" 2>/dev/null)" >&2; return 0; }
   printf '%s\n' "$br"
 }

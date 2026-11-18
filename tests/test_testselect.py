@@ -76,6 +76,31 @@ def test_a_test_that_imports_from_a_selected_test_selects_that_test_too(tmp_path
     assert select(repo) == ["tests/test_flow.py", "tests/test_gamma.py", "tests/test_survival.py"]
 
 
+def test_a_script_reached_through_an_imported_test_helper_selects_the_tests_that_import_it(tmp_path):
+    """#2239: the helper copies janitor.py from a tuple of script names, and the deadline test imports the helper."""
+    helper = (
+        "import shutil\n"
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parents[1]\n"
+        'SCRIPTS = ROOT / "contrib/squad-goal/scripts"\n'
+        "\n"
+        "def sandbox(tmp_path):\n"
+        '    for name in ("janitor.py", "ghcall.sh"):\n'
+        "        shutil.copy(SCRIPTS / name, tmp_path / name)\n"
+        "\n"
+        "def janitor(tmp_path):\n"
+        '    return tmp_path / "janitor.py"\n'
+    )
+    deadline = "from tests.test_janitor_card_done_base import janitor, sandbox\n\ndef test_deadline(tmp_path):\n    sandbox(tmp_path)\n"
+    repo = tip(tmp_path, {"contrib/squad-goal/scripts/janitor.py": "print('bye')\n"}, extra={
+        "contrib/squad-goal/scripts/janitor.py": "print('hi')\n",
+        "contrib/squad-goal/scripts/ghcall.sh": "echo\n",
+        "tests/test_janitor_card_done_base.py": helper,
+        "tests/test_janitor_pass_deadline.py": deadline,
+    })
+    assert select(repo) == ["tests/test_janitor_card_done_base.py", "tests/test_janitor_pass_deadline.py"]
+
+
 def test_a_changed_test_file_selects_itself(tmp_path):
     repo = tip(tmp_path, {"tests/test_gamma.py": "from squad.gamma import VALUE\nX = 1\n"})
     assert select(repo) == ["tests/test_gamma.py"]

@@ -114,7 +114,8 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_modelreg_migrate.py", "tests/test_models_chains.py", "tests/test_no_pr_path.py", "tests/test_node_commit.py", "tests/test_outcomes.py",
         "tests/test_redact.py", "tests/test_revci_notice_is_not_a_state.py", "tests/test_review_timeouts.py", "tests/test_sandbox_signals.py", "tests/test_session.py",
         "tests/test_session_card.py", "tests/test_shipped_graph_kinds.py", "tests/test_spec_forecast.py", "tests/test_spec_shape.py", "tests/test_squad_child_request_suites.py",
-        "tests/test_subject_run.py", "tests/test_supervisor.py", "tests/test_to_test_scenario.py", "tests/test_wave_limits.py", "tests/test_waves.py",
+        "tests/test_subject_run.py", "tests/test_supervisor.py", "tests/test_to_test_scenario.py", "tests/test_wave_age_cap_salvage.py",
+        "tests/test_wave_limits.py", "tests/test_waves.py",
         "tests/test_web_tokens.py",
     ),
     (

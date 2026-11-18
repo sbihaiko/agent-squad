@@ -751,7 +751,199 @@ def _row_stage(keys, readings):
     return max(keys, key=lambda k: (readings[k][0] is not None, readings[k][0] if readings[k][0] is not None else 0.0))
 
 
-def trip(spans, gates, since):
+# What a column consumes (#2227): three lines beside the bar, Tokens, CPU and RAM. A sample goes to the column the card
+# stood in at the sample's time, from the card's column runs: a run covers `[start, end)`, and the sample's position is
+# `(t - start) / (end - start)`. Each column is cut into TRIP_SERIES_POINTS bins, and a bin's point is the mean of what it
+# holds, so two deliveries of different lengths fold by position. Tokens are the record's call outcomes and the review
+# token ledger, counted at the call's end time. CPU and RAM are the minute record's readings of the WHOLE machine, so
+# they say what the machine did while the card waited, never the cost of one issue alone. A line with no sample in a
+# column holds no point and no mean, never a zero; a column with no model call spends a true zero, and its
+# `tokens_per_issue` says so.
+TRIP_SERIES_POINTS = 8
+TRIP_LINES = ("tokens", "cpu", "ram")
+
+
+def trip_calls(events):
+    """Each model call of the last invocation as `{at, tokens}`, `at` the call's END: an outcome's own time, never its
+    `call_start`, so a call that began in one column counts in the one it ended in. `tokens` is the outcome's input and
+    output plus its cache reads; a field the record does not hold adds nothing. An outcome with no time is no sample.
+    """
+    out = []
+    for e in _invocation(events):
+        if e.get("event") != "outcome" or _ts(e) is None:
+            continue
+        out.append({"at": _ts(e), "tokens": sum(v for v in (e.get("tokens_in"), e.get("tokens_out"), e.get("cache_read"))
+                                                if _num(v))})
+    return out
+
+
+def _num(v):
+    """A reading the fold can use: a finite number, never a bool and never a string."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _run_at(runs, t, column=None):
+    """`(column, bin)` of the first run that holds the time `t`, or None. A run covers `[start, end)`, so a sample on the
+    boundary belongs to the run it opens. A run of no width holds no instant."""
+    for r in runs or ():
+        k = str(r.get("column") or "").lower()
+        if column is not None and k != column:
+            continue
+        a, b = r.get("start"), r.get("end")
+        if not (_num(a) and _num(b)) or b <= a or not (a <= t < b):
+            continue
+        p = min(1.0, max(0.0, (t - a) / (b - a)))
+        return k, min(int(p * TRIP_SERIES_POINTS), TRIP_SERIES_POINTS - 1)
+    return None
+
+
+def _series(bins, mean):
+    """One line of a column: a point at the centre of each bin that holds a sample, and one mean over the column."""
+    pts = [[round((j + 0.5) / TRIP_SERIES_POINTS, 4), round(v, 4)] for j, v in enumerate(bins) if v is not None]
+    return {"points": pts, "mean": round(mean, 4) if mean is not None else None}
+
+
+def _tokens_top(v):
+    """The Tokens lane's top tick: the first round 1, 2, 2.5 or 5 times a power of ten above `v`, so the lane's top
+    stands above every point and a point is never clamped to the edge (#2228)."""
+    if not _num(v) or v <= 0:
+        return 0.0
+    step = 10.0 ** int(math.floor(math.log10(v)))
+    for m in (1.0, 2.0, 2.5, 5.0, 10.0):
+        if v < m * step:
+            return round(m * step, 4)
+    return round(10.0 * step, 4)
+
+
+def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, loads=None, now=None,
+                     cores=None, mem_gb=None):
+    """Each drawn column's Tokens, CPU and RAM line, and the machine facts the page prints beside them.
+
+    `spans` is one `trip_spans` answer per run record; `cards[i]` is record i's column runs
+    (`{"column", "start", "end"}`), `calls[i]` its `trip_calls` answer. A delivery is a record whose verdict is at or
+    after `since`, the same rule the bar folds by, so the bar and the lines cover one set of deliveries. `review_calls`
+    is the review token ledger as `{at, tokens}` rows, each placed on the narrowest Review run that holds its time, so
+    one ledger line is never counted twice and two parallel reviews never lose the line to whichever run the fold met
+    first. `loads` is one `load_row` answer per minute record line; None is a record the caller may not read, and then
+    no minute is counted as silent.
+
+    The Tokens line is tokens per minute of the column: a bin's tokens over the minutes the deliveries spend in that
+    bin; its mean is the column's tokens over all its minutes. `tokens_per_issue` is the column's tokens over its
+    visits, a visit being one delivery's run in the column, so a card that re-enters a column adds a visit and is never
+    charged as one issue twice over; a column with no model call reads a true 0. CPU and RAM are shares from 0 to 1, the
+    minute record's percent divided by 100. `peak_load` is the window's highest reading, `cores` the machine's core
+    count, `mem_gb` its memory, and `no_record_minutes` the minutes of the window with no record.
+    """
+    keys = [key for key, _, _ in trip_columns()]
+    N = TRIP_SERIES_POINTS
+    tok = {k: {"bin": [0.0] * N, "min": [0.0] * N, "n": [0] * N, "total": 0.0, "visits": 0} for k in keys}
+    lines = {k: {name: ([[] for _ in range(N)], []) for name in ("cpu", "ram")} for k in keys}
+    now = since if now is None else now
+    live = []
+    for i, s in enumerate(spans or ()):
+        if s is None or not _num(s.get("end")) or s["end"] < since:
+            continue
+        runs = cards[i] if cards and i < len(cards) and cards[i] else ()
+        live.append(runs)
+        for r in runs:
+            k = str(r.get("column") or "").lower()
+            a, b = r.get("start"), r.get("end")
+            if k not in tok or not (_num(a) and _num(b)) or b <= a:
+                continue
+            # One visit per run: a card back in the same column is a new visit, so its tokens divide by the runs that
+            # spent them, never by the one issue that made them.
+            tok[k]["visits"] += 1
+            for j in range(N):
+                tok[k]["min"][j] += (b - a) / N / 60.0
+        for c in (calls[i] if calls and i < len(calls) and calls[i] else ()):
+            t, n = c.get("at"), c.get("tokens")
+            if not _num(t) or not _num(n):
+                continue
+            loc = _run_at(runs, t)
+            if loc is None or loc[0] not in tok:
+                continue
+            k, j = loc
+            tok[k]["bin"][j] += n
+            tok[k]["n"][j] += 1
+            tok[k]["total"] += n
+    for c in review_calls or ():
+        t, n = c.get("at"), c.get("tokens")
+        if "review" not in tok or not (_num(t) and _num(n)):
+            continue
+        # The ledger names no delivery, so the line goes to the narrowest Review run that holds it: two parallel reviews
+        # both hold the call's time, and the narrow one is the closest match. A tie keeps the earliest delivery met.
+        best = None
+        for runs in live:
+            for r in runs or ():
+                if str(r.get("column") or "").lower() != "review":
+                    continue
+                a, b = r.get("start"), r.get("end")
+                if not (_num(a) and _num(b)) or b <= a or not (a <= t < b):
+                    continue
+                width = b - a
+                if best is not None and width >= best[0]:
+                    continue
+                p = min(1.0, max(0.0, (t - a) / width))
+                best = (width, min(int(p * N), N - 1))
+        if best is None:
+            continue
+        j = best[1]
+        tok["review"]["bin"][j] += n
+        tok["review"]["n"][j] += 1
+        tok["review"]["total"] += n
+    for row in loads or ():
+        t = row.get("at")
+        if not _num(t) or not (since <= t <= now):
+            continue
+        for runs in live:
+            loc = _run_at(runs, t)
+            if loc is None:
+                continue
+            k, j = loc
+            if k not in lines:
+                continue
+            for name in ("cpu", "ram"):
+                v = row.get(name)
+                if _num(v):
+                    lines[k][name][0][j].append(v / 100.0)
+                    lines[k][name][1].append(v / 100.0)
+            break
+    out = {}
+    for k in keys:
+        bins = [tok[k]["bin"][j] / tok[k]["min"][j] if tok[k]["n"][j] and tok[k]["min"][j] > 0 else None
+                for j in range(N)]
+        mins = sum(tok[k]["min"])
+        # The mean is the column's rate: a delivery with no call reads no mean, and a call with no tokens reads a 0.
+        mean = tok[k]["total"] / mins if mins > 0 and sum(tok[k]["n"]) else None
+        line = {"tokens": _series(bins, mean),
+                "tokens_per_issue": round(tok[k]["total"] / tok[k]["visits"], 4) if tok[k]["visits"] else 0.0}
+        for name in ("cpu", "ram"):
+            per_bin, every = lines[k][name]
+            mean = sum(every) / len(every) if every else None
+            line[name] = _series([sum(v) / len(v) if v else None for v in per_bin], mean)
+        out[k] = line
+    peak = [row["load"] for row in loads or () if _num(row.get("at")) and _num(row.get("load"))
+            and since <= row["at"] <= now]
+    covered = {row["at"] for row in loads or () if _num(row.get("at")) and _num(row.get("load"))
+               and since <= row["at"] <= now}
+    minutes = int((now - since) // LOAD_CADENCE_S) if _num(now) and now > since else 0
+    # The page draws the three ticks of each lane (#2228), so the fold names them: the Tokens lane covers the highest
+    # rate any column holds, and the Machine lane a fixed 0 to 100% of the machine. The top tick is a round number
+    # strictly above every point, so no point sits on the lane's edge and none is clamped there.
+    rates = [v for k in keys
+             for _, v in ((out[k].get("tokens") or {}).get("points") or ())
+             if _num(v)]
+    top = _tokens_top(max(rates)) if rates else 0.0
+    # A record the caller may not read is no reading at all: it asserts neither a peak nor a count of silent minutes,
+    # never the whole window as a count it never made.
+    return {"lines": out, "peak_load": max(peak) if peak else None,
+            "cores": max(int(cores or 1), 1), "mem_gb": mem_gb,
+            "no_record_minutes": None if loads is None else max(0, minutes - len(covered)),
+            "tokens_ticks": [0, round(top / 2, 4), top], "machine_ticks": [0, 50, 100]}
+
+
+def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=None, now=None,
+         cores=None, mem_gb=None):
     """The trip of one issue as one stacked bar of the board's columns: each column's median and p90 over the deliveries
     of a window, in the definition's order, `Todo`, `Doing`, `Review`, `Landing` and `Gating`. `Closed` draws no column
     (#2199), and its 10 s after the verdict stays under `record_stages`.
@@ -769,7 +961,8 @@ def trip(spans, gates, since):
     with `column`, `label`, `median_s`, `p90_s` and `observations` of the column's larger stage, so a reader of the
     older wire still reads its shape. The record's own per-stage rows live under `record_stages`, one row per entry of
     `TRIP_STAGES_LABELLED` with its own median and share. Fewer than `TRIP_MIN_DELIVERIES` deliveries answer `bar`
-    False, and the page says so and draws no bar.
+    False, and the page says so and draws no bar. Each column also carries what it consumes (see `trip_consumption`),
+    and the payload the machine's peak load, core count, memory and minutes with no record.
     """
     per = {key: [] for key in TRIP_FOLD_KEYS}
     deliveries = 0
@@ -789,6 +982,8 @@ def trip(spans, gates, since):
     held = {col: [k for k in keys if readings[k][0] is not None] for col, _, keys in columns}
     sums = {col: sum(readings[k][0] for k in ks) for col, ks in held.items()}
     total = sum(sums.values())
+    consumed = trip_consumption(spans, since, cards=cards, calls=calls, review_calls=review_calls, loads=loads,
+                                now=now, cores=cores, mem_gb=mem_gb)
     rows, stages = [], []
     for col, label, keys in columns:
         main = _row_stage(keys, readings)
@@ -805,7 +1000,7 @@ def trip(spans, gates, since):
                      "p90_s": round(p90, 3) if p90 is not None else None,
                      "sum_s": round(sums[col], 3) if held[col] else None,
                      "share": round(sums[col] / total, 4) if total and held[col] else 0.0,
-                     "beside": beside})
+                     "beside": beside, **consumed["lines"][col]})
         stages.append({"column": col, "label": label, "observations": n,
                        "median_s": round(median, 3) if median is not None else None,
                        "p90_s": round(p90, 3) if p90 is not None else None})
@@ -817,7 +1012,11 @@ def trip(spans, gates, since):
                               "p90_s": round(p90, 3) if p90 is not None else None,
                               "share": round(med / stage_total, 4) if stage_total and med is not None else 0.0})
     return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "columns": rows, "stages": stages,
-            "record_stages": record_stages, "label": TRIP_LABEL}
+            "record_stages": record_stages, "label": TRIP_LABEL,
+            "peak_load": consumed["peak_load"], "cores": consumed["cores"], "mem_gb": consumed["mem_gb"],
+            "no_record_minutes": consumed["no_record_minutes"],
+            "tokens_ticks": consumed["tokens_ticks"], "machine_ticks": consumed["machine_ticks"]}
+
 
 # The loop state strip (#1765): one strip across the top of the Loop tab, from the two records the loop already writes. The
 # switch audit (`loop-audit.jsonl`) gives active, draining and off: each line is one change, with its writer, origin and the

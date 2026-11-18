@@ -83,7 +83,7 @@ def test_a_profile_can_change_the_wave_age_cap(tmp_path: Path) -> None:
 @pytest.mark.slow(reason="runs the wave's hermetic shell suite over throwaway repositories, more than 20 s on a loaded machine")
 @pytest.mark.heavy
 def test_the_wave_suite_proves_the_age_cap_and_the_red_tip() -> None:
-    r = shell_suites.run(SCRIPTS / "test-wave.sh", timeout=300)
+    r = shell_suites.run(SCRIPTS / "test-wave.sh")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in WAVE_CASES:
