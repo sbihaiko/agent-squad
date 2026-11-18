@@ -178,6 +178,7 @@ test-publish-live.sh 2.50
 test-quality-reading.sh 2.06
 test-quota-floor.sh 0.62
 test-reconcile.sh 1.60
+test-red-tier.sh 4.13
 test-refusal-comment.sh 1.87
 test-refusal-names.sh 0.10
 test-reopen-note.sh 1.64

@@ -387,6 +387,12 @@ passenv SG_PROMOTE_REMOTE=$fake GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$T/fake-
 [ $rc = 0 ] && [ "$(tip main)" = "$n27" ] && [ -z "$(req)" ] && ok "27 a fake remote that takes the push moves main" \
   || ko "27 accept: rc $rc, main $(tip main), want $n27, out '$(cat "$T/out")'"
 
+# 28) A red writes its sha to the red-tier record the dev-to-stg gate reads (#2203); a main that holds the stg tip clears it.
+realign; adv stg red-gate 7200; rg=$(tip stg); checks "$rg" failure success; request "$rg" 600; pass
+[ "$(head -n 1 "$ST/promote-red-tier" 2>/dev/null)" = "$rg" ] && ok "28 a red writes its sha to the red-tier record" || ko "28 red-tier record: '$(cat "$ST/promote-red-tier" 2>/dev/null)'"
+git -C "$R" update-ref refs/heads/main "$(tip stg)"; pass
+[ ! -e "$ST/promote-red-tier" ] && ok "28 a main that holds the stg tip clears the red-tier record" || ko "28 red-tier record survived main holding the tip"
+
 # No loop script but the two promotion scripts names the main push, and the pass itself pushes nothing.
 /usr/bin/grep -nE '^[^#]*\bpush\b' "$d/promote-main-pass.sh" >/dev/null && ko "the pass pushes by itself" || ok "the pass pushes nothing: promote-main.sh moves main"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'

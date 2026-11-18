@@ -138,6 +138,14 @@ g merge-base --is-ancestor "$tip" "origin/$stg" && exit 0   # the tip is already
 o=$(g rev-list --no-merges "$tip..origin/$stg" 2>/dev/null) || o=
 [ -z "$o" ] || refuse "$tip" "not promoted: $stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the $dev tip lacks; the owner resolves it"
 prove "$tip"
+if [ -n "$(bash "$d/red-tier.sh" files "$state")" ]; then   # stg is red: the files of its failing tier run on the tip first (#2203)
+  g checkout -q --detach "$tip" 2>/dev/null || refuse "$tip" "not promoted: the $dev tip could not be checked out for the red tier's files"
+  o=$(bash "$d/red-tier.sh" run "$state" "$W" 2>&1); rc=$?
+  if [ $rc != 0 ]; then
+    bash "$d/red-tier.sh" alert "$state" "$tip"
+    refuse "$tip" "not promoted: the files of the red complete tier fail on the $dev tip: $(bash "$d/red-tier.sh" files "$state" | tr '\n' ' ')"
+  fi
+fi
 . "$d/ghcall.sh"
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
