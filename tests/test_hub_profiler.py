@@ -1724,8 +1724,10 @@ def test_the_view_draws_the_trip_as_five_rows_named_for_the_columns_and_five_seg
     assert [s[0] for s in segs] == ["todo", "doing", "review", "landing", "gating"], \
         "the bar holds one segment per drawn column, in board order, with none for Closed"
     widths = [float(s[2]) for s in segs]
-    assert widths == pytest.approx([0.8466 * 860, 0.0882 * 860, 0.0176 * 860, 0.0265 * 860, 0.0212 * 860], abs=0.2), \
-        "each segment's width is the effective-time share the fold emits over the plot, so no width is a second arithmetic"
+    assert TRIP["columns"][0]["share"] == pytest.approx(0.8466, abs=1e-4), "the fold's own share of Todo"
+    assert widths == pytest.approx(drawn_widths(TRIP["columns"], out, 860), abs=0.2), \
+        "each segment's width follows the effective-time share the fold emits, and none is narrower than its label (#2278)"
+    assert sum(widths) == pytest.approx(860, abs=0.5), "the segments still divide the whole plot"
     assert segs[1][3] == "Doing: median 4.2 min, p90 6.2 min (4 observations); Between two children median 2.5 min", \
         "the hover names the median, the p90 and the stage beside it in words"
     assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == [
@@ -3261,6 +3263,37 @@ def chart_metrics():
     return (ratio * font, float(re.search(r"PROF_TRIP_GUTTER=(\d+)", src).group(1)), font)
 
 
+def label_floors(svg):
+    """The least width each drawn column takes (#2278): the wider line of its label, the name or the small time under
+    it, by the page's own per-character estimate, plus the 13 units of room the page keeps around it."""
+    char, _, font = chart_metrics()
+    names = dict(re.findall(r'<text class="ptlb pts-(\w+)"[^>]*>([^<]*)</text>', svg))
+    times = {c: (float(z), t) for c, z, t in re.findall(r'<text class="ptls pts-(\w+)"[^>]*font-size=(\d+)>([^<]*)</text>', svg)}
+    return {c: max(len(names[c]) * char, len(times[c][1]) * char * times[c][0] / font) + 13 for c in names}
+
+
+def drawn_widths(cols, svg, span):
+    """The widths the rule of #2278 gives, worked here apart from the page: a column with a share is never narrower
+    than its label; the columns at their floor take it first and the others divide the rest by their shares."""
+    floors = label_floors(svg)
+    raw = [max(0.0, c["share"] or 0.0) for c in cols]
+    low = [floors[c["column"]] if r > 0 else 0.0 for c, r in zip(cols, raw, strict=True)]
+    held = set()
+    while True:
+        free = span - sum(low[i] for i in held)
+        total = sum(r for i, r in enumerate(raw) if i not in held) or 1
+        w = [low[i] if i in held else r / total * free for i, r in enumerate(raw)]
+        short = [i for i in range(len(w)) if i not in held and w[i] < low[i]]
+        if not short:
+            return w
+        held.add(short[0])
+
+
+def band_starts(cols, svg, gutter):
+    w = drawn_widths(cols, svg, 1000 - gutter)
+    return [gutter + sum(w[:i]) for i in range(len(w))]
+
+
 def text_boxes(out):
     """Every text the chart lays out as a box in the SVG's user units: its x-range from its anchor, and its width from
     the page's own per-character estimate. The chart sizes every glyph in SVG user units, so each box scales with the
@@ -3294,8 +3327,14 @@ def test_the_chart_draws_a_tokens_lane_and_a_machine_lane_each_with_three_ticks(
 
 def test_a_narrow_column_takes_a_leader_line_to_its_band():
     """AC1: a column too narrow for its label inside the chart carries a guide from its band to the label below."""
-    assert re.findall(r'<line class="ptg pts-(\w+)"', chart_svg(chart_js())) == ["review"], \
-        "the narrow column with a band carries a leader line, the wide ones need none, and a column of no width gets none"
+    v = json.loads(json.dumps(CHART))
+    for col in v["columns"]:
+        col["label"] = col["label"] + " " + "x" * 40   # five labels no plot can hold side by side
+    svg = chart_svg(chart_js(v))
+    assert re.findall(r'<line class="ptg pts-(\w+)"', svg) == ["todo", "doing", "review", "landing"], \
+        "each narrow column with a band carries a leader line, and a column of no width gets none"
+    assert re.findall(r'<line class="ptg pts-(\w+)"', chart_svg(chart_js())) == [], \
+        "a column as wide as its label needs no leader line (#2278)"
 
 
 def test_no_chart_text_overlaps_another_label_or_a_number_at_390_px_and_at_1440_px():
@@ -3475,9 +3514,10 @@ def test_the_width_of_each_column_follows_the_share_the_fold_emits():
     span = 1000 - gutter
     bands = re.findall(r'<rect class="ptc pts-(\w+)" x="([\d.]+)" width="([\d.]+)"', chart_svg(chart_js()))
     assert [b[0] for b in bands] == ["todo", "doing", "review", "landing", "gating"]
-    assert [float(b[1]) for b in bands] == pytest.approx([gutter + span * sum(c["share"] for c in CHART["columns"][:i])
-                                                          for i in range(5)], abs=0.2), "a band opens where the one before it ends"
-    assert [float(b[2]) for b in bands] == pytest.approx([span * c["share"] for c in CHART["columns"]], abs=0.2), \
+    svg = chart_svg(chart_js())
+    assert [float(b[1]) for b in bands] == pytest.approx(band_starts(CHART["columns"], svg, gutter), abs=0.2), \
+        "a band opens where the one before it ends"
+    assert [float(b[2]) for b in bands] == pytest.approx(drawn_widths(CHART["columns"], svg, span), abs=0.2), \
         "a band's width is the share the fold emits, never a second arithmetic"
 
 
@@ -3565,7 +3605,7 @@ def test_the_chart_draws_the_ticks_and_the_points_the_payload_holds():
     span = 1000 - gutter
     out = chart_svg(chart_js())
     todo = CHART["columns"][0]
-    x0, w = gutter, span * todo["share"]
+    x0, w = gutter, drawn_widths(CHART["columns"], out, span)[0]
     assert todo["tokens"]["points"] == [[0.5625, 480.0]]
     line = re.search(r'<polyline class="ptl-tok" points="([\d.]+),([\d.]+)', out)
     assert (float(line.group(1)), float(line.group(2))) == \
@@ -4323,10 +4363,9 @@ def test_each_band_is_tinted_and_a_vertical_rule_separates_two_columns():
     svg = chart_svg(chart_js())
     tint = re.search(r"#proftrip \.ptc\{[^}]*opacity:\.(\d+)", chart_css())
     assert tint and int(tint.group(1)) >= 12, "the band's tint tells two columns apart"
-    span = 1000 - c["gutter"]
     rules = [(float(x), float(y0), float(y1)) for x, y0, y1 in
              re.findall(r'<line class=ptr x1="([\d.]+)" y1="([\d.]+)" x2="[\d.]+" y2="([\d.]+)"', svg)]
-    ends = [c["gutter"] + span * sum(col["share"] for col in CHART["columns"][:i]) for i in range(1, 5)]
+    ends = band_starts(CHART["columns"], svg, c["gutter"])[1:]
     assert [r[0] for r in rules] == pytest.approx(ends[:len(rules)], abs=0.2), \
         "a rule stands at each seam between two drawn columns, never before the first"
     assert [r[1] for r in rules] == [c["top"]] * len(rules) and \
@@ -4340,9 +4379,9 @@ def test_a_zero_width_column_keeps_the_rule_between_the_columns_around_it():
     v = json.loads(json.dumps(CHART))
     v["columns"][1]["share"] = 0.0
     span = 1000 - c["gutter"]
-    rules = [float(x) for x in re.findall(r'<line class=ptr x1="([\d.]+)"', chart_svg(chart_js(v)))]
-    starts = [c["gutter"] + span * sum(col["share"] for col in v["columns"][:i])
-              for i in range(len(v["columns"])) if span * v["columns"][i]["share"] > 0]
+    svg = chart_svg(chart_js(v))
+    rules = [float(x) for x in re.findall(r'<line class=ptr x1="([\d.]+)"', svg)]
+    starts = [x for x, col in zip(band_starts(v["columns"], svg, c["gutter"]), v["columns"], strict=True) if span * col["share"] > 0]
     assert rules == pytest.approx(starts[1:], abs=0.2), "a rule stands at each seam between two drawn columns"
 
 
@@ -4364,7 +4403,7 @@ def test_each_column_mean_prints_in_its_lane_top_right_in_its_lines_colour():
     assert all(mac_top < m[2] < mac_top + c["lane"] for m in means if m[0] != "ptlmt"), \
         "the CPU and RAM means stand in the Machine lane"
     span = 1000 - c["gutter"]
-    first_end = c["gutter"] + span * CHART["columns"][0]["share"]
+    first_end = c["gutter"] + drawn_widths(CHART["columns"], svg, span)[0]
     assert tok[0][1] == pytest.approx(first_end - 3, abs=0.2), "the mean sits at the column's right edge"
     assert tok[0][2] - c["top"] < c["lane"] / 3, "the mean sits at the top of the lane"
     assert [m[3] for m in means[:3]] == ["mean 60", "CPU 50%", "RAM 40%"], "the full copy at a wide column"
@@ -4407,8 +4446,8 @@ def test_each_label_takes_its_columns_colour_with_a_bold_name_and_a_small_median
     assert meds[0] == ("todo", "10", "20.0 s · ×3.0"), \
         "the effective time and the parallelism stand small under the name (#2256)"
     assert "20.0 s" not in names[0][1], "the time is never part of the name"
-    assert re.findall(r'<line class="ptg pts-(\w+)"', svg) == ["review"], \
-        "each narrow column with a band takes a leader line, the wide ones need none, and a column of no width gets none"
+    assert re.findall(r'<line class="ptg pts-(\w+)"', svg) == [], \
+        "a column as wide as its label takes no leader line, and a column of no width gets none (#2278)"
 
 
 def test_tokens_is_white_cpu_is_pink_and_solid_and_ram_is_lilac_and_dashed():
@@ -4436,3 +4475,57 @@ def test_the_table_keeps_each_header_on_one_line_and_short_counts():
     assert trip_row(chart_js(big), "doing")[4] == "834k", "834000 prints as 834k"
     for col in ("todo", "doing", "review", "landing", "gating"):
         assert len(trip_row(out, col)) == 9, f"one value a cell in the {col} row"
+
+
+# ---------------------------------------------------------------- the least width of a column (#2278)
+def short_trip():
+    """A trip like the live one: Doing holds most of the bar, and Review and Landing hold almost none of it."""
+    v = json.loads(json.dumps(CHART))
+    for col, share in zip(v["columns"], (0.30, 0.62, 0.015, 0.001, 0.064), strict=True):
+        col["share"] = share
+        col["median_s"] = col["median_s"] or 2.0
+        col["effective_s"] = col.get("effective_s") or 2.0
+        col["parallelism"] = col.get("parallelism") or 1.0
+    return v
+
+
+def overlaps(boxes):
+    return [(a["text"], b["text"]) for i, a in enumerate(boxes) for b in boxes[i + 1:]
+            if abs(a["y"] - b["y"]) < 13 and a["x0"] < b["x1"] - 1 and b["x0"] < a["x1"] - 1]
+
+
+def test_a_short_column_is_never_narrower_than_its_label():
+    """A column of a tenth of a percent of the trip still draws a band and a segment as wide as its label, its label
+    stands under its own segment, and the widths still add up to the plot."""
+    out = chart_js(short_trip())
+    svg = chart_svg(out)
+    floors = label_floors(svg)
+    segs = {c: float(w) for c, w in re.findall(r'<rect class="ptb-seg ptc pts-(\w+)" x="[\d.]+" y="[\d.]+" width="([\d.]+)"', svg)}
+    assert set(segs) == {"todo", "doing", "review", "landing", "gating"}
+    for col, w in segs.items():
+        assert w >= floors[col] - 0.1, f"{col} is narrower than its label: {w} under {floors[col]}"
+    assert sum(segs.values()) == pytest.approx(1000 - chart_metrics()[1], abs=0.5), "the segments divide the whole plot"
+    assert segs["doing"] > segs["todo"] > segs["gating"], "the columns above the floor keep the order of their shares"
+    assert not re.findall(r'<line class="ptg ', svg), "no label leaves its column, so none takes a leader line"
+    assert set(re.findall(r'<text class="ptlb pts-\w+"[^>]*text-anchor=(\w+)', svg)) == {"middle"}, \
+        "each label stands centred under its own segment"
+    assert not overlaps(text_boxes(out)), "no label and no number shares a box with another"
+
+
+def test_the_labels_on_leader_lines_never_stand_over_each_other():
+    """A label is two lines. When the labels pass the plot, each leader row keeps the height of both lines."""
+    v = short_trip()
+    for col in v["columns"]:
+        col["label"] = col["label"] + " " + "x" * 40
+    out = chart_js(v)
+    assert len(re.findall(r'<line class="ptg ', chart_svg(out))) >= 4, "the labels stand on leader rows"
+    labels = [b for b in text_boxes(out) if b["cls"].startswith(("ptlb", "ptls"))]
+    ys = sorted({b["y"] for b in labels})
+    assert len(ys) == 10 and min(b - a for a, b in zip(ys, ys[1:], strict=False)) >= 13, \
+        "ten lines of text, five names and five times, each on a row of its own"
+
+
+def test_the_phone_keeps_a_short_column_visible():
+    """The phone's lanes and strip hold the same floor: a short column keeps a band of at least 40 of 1000 units."""
+    parts = json.loads(run_js(f"JSON.stringify(profTripShares({json.dumps(short_trip()['columns'])}).map(p=>p.w))"))
+    assert min(parts) >= 40 - 0.01 and sum(parts) == pytest.approx(1000, abs=0.5)

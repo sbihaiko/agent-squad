@@ -69,9 +69,24 @@ const profTokTick=(v,top)=>{const n=Math.round(v||0),t=Math.round(top||0);
  const q=n/div;
  return (Number.isInteger(q)?String(q):q.toFixed(1).replace(/\.0$/,""))+unit};
 const profTripPoint=c=>{const l=c||{};return l.points&&l.points.length?l.mean:null};
+// A drawn column is never narrower than its label (#2278): a short column stays visible, and its
+// label stands under its own segment. The columns that hold the floor take their width first, and the others divide
+// the rest by their shares, so the widths still add up to the plot. A column with no share keeps no width. When the
+// floors alone pass the plot, each floor shrinks by one ratio, and the leader lines place the labels.
+const profTripLabelW=c=>Math.max(profTextW(c.label),profTextW(profTripTime(c),PROF_TRIP_SMALL))+13;
+function profTripWidths(cols,W,need){
+ const raw=cols.map(c=>Math.max(0,c.share||0)),min=cols.map((c,i)=>raw[i]>0?need(c):0);
+ const floor=min.reduce((a,b)=>a+b,0);
+ if(floor>=W)return min.map(m=>m/floor*W);
+ const held=new Set();
+ for(;;){const free=W-[...held].reduce((a,i)=>a+min[i],0),sum=raw.reduce((a,r,i)=>held.has(i)?a:a+r,0)||1;
+  const w=raw.map((r,i)=>held.has(i)?min[i]:r/sum*free),short=w.findIndex((v,i)=>!held.has(i)&&v<min[i]);
+  if(short<0)return w;
+  held.add(short)}}
 function profTripChart(t,cols){
  const G=PROF_TRIP_GUTTER,W=PROF_TRIP_W-G,bands=[];let x=G;   // each column opens where the one before it ends
- cols.forEach(c=>{const w=Math.max(0,c.share||0)*W;bands.push({c,x0:x,x1:x+w});x+=w});
+ const widths=profTripWidths(cols,W,profTripLabelW);
+ cols.forEach((c,i)=>{const w=widths[i];bands.push({c,x0:x,x1:x+w});x+=w});
  const ticks=Array.isArray(t.tokens_ticks)&&t.tokens_ticks.length===3?t.tokens_ticks:[],top=ticks[2]||0;
  // Every column prints the mean of each line inside its lane (#2253), at the top right of the column (#2255), in the
  // colour of its line. The full copy stands at the column's right edge; a column too narrow for it takes a shorter
@@ -149,11 +164,13 @@ function profTripChart(t,cols){
  const wide=[],narrow=[];
  bands.forEach(b=>(fits(b)?wide:narrow).push({b}));
  const wideHtml=wide.map(({b})=>labelAt(b,(b.x0+b.x1)/2,labTop,"middle")).join("");
- const narrowHtml=narrow.map(({b},i)=>{const y=labTop+PROF_TRIP_ROW*(i+1),mid=(b.x0+b.x1)/2,right=mid>=(G+PROF_TRIP_W)/2;
+ // A label is two lines, so each leader row takes the height of both: no name stands over the time of the row above.
+ const labStep=PROF_TRIP_ROW+13;
+ const narrowHtml=narrow.map(({b},i)=>{const y=labTop+labStep*(i+1),mid=(b.x0+b.x1)/2,right=mid>=(G+PROF_TRIP_W)/2;
   const x=right?Math.max(b.x0-6,G):Math.min(b.x1+6,PROF_TRIP_W),anchor=right?"end":"start";
   const guide=(b.c.median_s||0)>0?`<line class="ptg pts-${esc(b.c.column)}" x1="${mid.toFixed(1)}" y1="${barBot.toFixed(1)}" x2="${x.toFixed(1)}" y2="${(y-11).toFixed(1)}"></line>`:"";
   return guide+labelAt(b,x,y,anchor)}).join("");
- const H=labTop+PROF_TRIP_ROW*narrow.length+13+8;
+ const H=labTop+labStep*narrow.length+13+8;
  const aria=`Two lanes over the trip's ${bands.length} columns: tokens a minute, and CPU and RAM as shares of the whole machine`;
  return `<svg id=proftc viewBox="0 0 ${PROF_TRIP_W} ${H}" font-size=${PROF_TRIP_FONT} role=img aria-label="${esc(aria)}" preserveAspectRatio=none>`
   +bandAll+rules
@@ -166,8 +183,9 @@ function profTripChart(t,cols){
 // scales what the payload holds and invents no reading.
 const PROF_LANE_W=1000,PROF_TOK_H=64,PROF_MACH_H=96;
 const profTripPct=v=>v==null?"&#8212;":(100*v).toFixed(0)+"%";
-function profTripShares(cols){const sum=cols.reduce((a,c)=>a+Math.max(0,c.share||0),0)||1;
- return cols.map(c=>({c,w:Math.max(0,c.share||0)/sum*PROF_LANE_W}))}
+const PROF_LANE_MIN=40;   // the phone's floor: a short column keeps a band and a segment a finger can see (#2278)
+function profTripShares(cols){const w=profTripWidths(cols,PROF_LANE_W,()=>PROF_LANE_MIN);
+ return cols.map((c,i)=>({c,w:w[i]}))}
 function profTripBands(parts,h){let x=0,out="";
  for(const {w} of parts){out+=`<rect class=ptlbg x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${h}"></rect>`;x+=w}
  return out}
@@ -196,7 +214,7 @@ function profTripLanes(t){
  const mach=`<div class=ptlh>Machine &middot; percent of the whole machine <span class=ptlkey><i class="ptkey ptkey-cpu"></i>CPU <i class="ptkey ptkey-ram"></i>RAM</span></div>`
   +`<svg class="ptlane ptlane-mach" viewBox="0 0 ${PROF_LANE_W} ${PROF_MACH_H}" role=img aria-label="CPU and RAM as a percent of the whole machine over the trip's columns" preserveAspectRatio=none>`
   +`${profTripBands(parts,PROF_MACH_H)}${profTripLine(parts,"cpu",PROF_MACH_H,1,"ptl-cpu")}${profTripLine(parts,"ram",PROF_MACH_H,1,"ptl-ram",(c,v)=>`RAM ${profTripPct(v).replace("&#8212;","")} of ${gb==null?"the machine":Number(gb).toFixed(0)+" GB"}`)}</svg>`;
- const strip=`<div class=ptstrip>${parts.map(({c,w})=>`<i class="ptseg pts-${esc(c.column)}${c.median_s>0?"":" ptb-none"}" style="flex:${Math.max(0,c.share||0)} 1 0"></i>`).join("")}</div>`;
+ const strip=`<div class=ptstrip>${parts.map(({c,w})=>`<i class="ptseg pts-${esc(c.column)}${c.median_s>0?"":" ptb-none"}" style="flex:${w.toFixed(1)} 1 0"></i>`).join("")}</div>`;
  const labels=`<div class=ptlabels>${cols.map(c=>`<span class=ptlab><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i>${esc(c.label)} ${profTripTime(c)}</span>`).join("")}</div>`;
  return tok+mach+strip+labels}
 function profTripFacts(t){
@@ -236,6 +254,7 @@ function profTrip(t,phone){
  // rule stays in the caption, so the subtitle never restates it.
  const sub=[`${n} deliveries in the last ${span}: the bar folds ${cols.length} segments, one per board column, in the order of the rows below.`,
   "Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.",
+  "No column is narrower than its label, so a short column stays visible.",
   sentence, "CPU and RAM are readings of the whole machine, on one scale, in percent of it.", badLoad, ramReason]
   .filter(Boolean).join(" ");
  return `<section id=proftrip>${head}<p class=tpn>${sub}</p>`
