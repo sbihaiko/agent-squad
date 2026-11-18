@@ -585,40 +585,52 @@ def failed_run_table(rows, window_s, now):
 
 
 # ---------------------------------------------------------------- the trip of one issue (#1769, #2152, #2199)
-# One stacked bar of the trip of an issue, folded into the board's six columns, in the definition's order. A column holds
-# the stages the loop spends its time in there: Todo holds the queue before the run and the wait for a dispatch, Doing
-# holds coding, the gap between two children and the run's own gates, and Review, Landing, Gating and Closed hold the
-# review, the landing, the wave's gate and the wait past the verdict (#1894). A column answers its larger stage's median
-# and p90, with the other stage beside it, and its segment is the sum of its stages' medians, so no measurement leaves the
-# panel. A delivery is a run whose record holds both a passed land and a verdict; a run that landed nothing is no delivery
-# and is not folded. The bars and tables read the percentiles on the `(n - 1)` weight, the rule `docs/loop-sequence.md`
-# names, so a number taken here and the trip table agree.
+# One stacked bar of the trip of an issue, folded into the board's delivery columns, in the definition's order. A column
+# holds the stages the loop spends its time in there: Todo holds the queue before the run and the wait for a dispatch, Doing
+# holds coding, the gap between two children and the run's own gates, and Review, Landing and Gating hold the review, the
+# landing and the wave's gate (#1894). A column answers its larger stage's median and p90, with the other stage beside it,
+# and its segment is the sum of its stages' medians, so no measurement the panel draws leaves it. A delivery is a run whose
+# record holds both a passed land and a verdict; a run that landed nothing is no delivery and is not folded. The bars and
+# tables read the percentiles on the `(n - 1)` weight, the rule `docs/loop-sequence.md` names, so a number taken here and
+# the trip table agree.
 #
 # The run's own gates run inside the run, while the card stands in Doing, so they fold there. Gating is the complete tier
-# that runs after the landing (ADR-0170), read from the gate history alone; a record's gate is never a Gating time.
-TRIP_COLUMN_STAGES = {"Todo": ("queue", "wait"), "Doing": ("coding", "between", "gates"), "Review": ("review",),
-                      "Landing": ("landing",), "Gating": ("gate",), "Closed": ("after",)}
+# that runs after the landing (ADR-0170), read from the gate history alone; a record's gate is never a Gating time. Closed
+# draws no column (#2199): the time after the verdict is not a column the card waits in, and it stays measured under
+# `record_stages`. A board column named here with None is a column a delivery never stands in.
+TRIP_COLUMN_STAGES = {"Backlog": None, "Todo": ("queue", "wait"), "Doing": ("coding", "between", "gates"),
+                      "Review": ("review",), "Landing": ("landing",), "Gating": ("gate",), "Closed": None,
+                      "Abandoned": None}
 
 
-def trip_columns():
-    """The trip's columns in the board definition's order: the six columns of a delivery this fold reads, each as
-    `(key, label, stages)`. The order and the names come from the definition (ADR-0170), never a list kept here, so the
-    panel and the board name one column with one word in one order (#2199)."""
+def trip_columns(text=None):
+    """The trip's columns in the board definition's order: one `(key, label, stages)` per board column a delivery stands
+    in, and no other. The order and the names come from the definition (ADR-0170), never a list kept here, so the panel
+    and the board name one column with one word in one order (#2199).
+
+    A definition column this table does not name raises: a new board column is never dropped from the panel in silence,
+    and the table says by hand whether a delivery stands in it. `text` is one definition to read, the pinned copy when
+    None."""
+    columns = _board_columns.shipped_columns(text)
+    unknown = [s["name"] for s in columns if s["name"] not in TRIP_COLUMN_STAGES]
+    if unknown:
+        raise ValueError("the board definition names " + ", ".join(unknown)
+                         + ", which the trip folds no stage for; name the column in TRIP_COLUMN_STAGES")
     return tuple((s["name"].lower(), s["name"], TRIP_COLUMN_STAGES[s["name"]])
-                 for s in _board_columns.shipped_columns() if s["name"] in TRIP_COLUMN_STAGES)
+                 for s in columns if TRIP_COLUMN_STAGES[s["name"]])
 
 
 # The record's own stage keys with their captions, in the order `trip_spans` names them. `TRIP_STAGES` is the flat tuple
 # of stage keys the fold reads; `TRIP_STAGES_LABELLED` is the `(key, caption)` pairs. Only this module imports either; the
-# payload's `record_stages` list keeps the pair shape, while `stages` stays the six board-column rows of the older wire.
+# payload's `record_stages` list keeps the pair shape, while `stages` stays the board-column rows of the older wire.
 TRIP_STAGES_LABELLED = (("queue", "Queued before the run"), ("wait", "Wait for a dispatch"), ("coding", "Coding"),
                         ("between", "Between two children"), ("review", "Review"), ("gates", "Gates in the run"),
                         ("landing", "Landing"), ("after", "After the verdict"))
-TRIP_STAGE_LABELS = dict(TRIP_STAGES_LABELLED)
-TRIP_STAGES = tuple(key for key, _ in TRIP_STAGES_LABELLED)
 GATING_GATE = "gate"   # the wave's gate, read from the gate history: Gating is the tier after the landing (#2199)
-TRIP_STAGE_LABELS[GATING_GATE] = "Gates"
-TRIP_FOLD_KEYS = TRIP_STAGES + (GATING_GATE,)   # every stage the fold reads, the record's own and the gate history's
+GATE_HISTORY_STAGES = ((GATING_GATE, "Gates"),)   # the stages the gate history adds; a record never holds one
+TRIP_STAGES = tuple(key for key, _ in TRIP_STAGES_LABELLED)
+TRIP_STAGE_LABELS = dict(TRIP_STAGES_LABELLED + GATE_HISTORY_STAGES)
+TRIP_FOLD_KEYS = TRIP_STAGES + tuple(key for key, _ in GATE_HISTORY_STAGES)   # every stage the fold reads
 TRIP_MIN_DELIVERIES = 3   # fewer than three deliveries say so and draw no bar: a median of two is no profile
 TRIP_LABEL = "The trip of an issue"
 _START = frozenset(("run_start", "resume"))   # an event that opens an invocation: the fold reads the last one only
@@ -741,7 +753,8 @@ def _row_stage(keys, readings):
 
 def trip(spans, gates, since):
     """The trip of one issue as one stacked bar of the board's columns: each column's median and p90 over the deliveries
-    of a window, in the definition's order, `Todo`, `Doing`, `Review`, `Landing`, `Gating` and `Closed`.
+    of a window, in the definition's order, `Todo`, `Doing`, `Review`, `Landing` and `Gating`. `Closed` draws no column
+    (#2199), and its 10 s after the verdict stays under `record_stages`.
 
     `spans` is one `trip_spans` answer per run record, None for a record that is no delivery; `gates` is one dict per
     gate-history row of the window, `start` and `finish` in seconds. A delivery is a run whose verdict is at or after
@@ -750,8 +763,9 @@ def trip(spans, gates, since):
     A column that holds two stages answers the larger of the two medians as its `median_s` and `p90_s`, and the other
     stage beside it in `beside`, with its own caption; a stage with no reading leaves `beside` None, so a run that names
     no card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians, the width its
-    segment takes in the bar, so no measurement leaves the panel; `share` is that sum over the total. A row's `stage` is
-    the stage its median belongs to. The payload also keeps `stages`: the six board-column rows, in board order, each
+    segment takes in the bar, so no measurement the panel draws leaves it; `share` is that sum over the total. A row's
+    `stage` is the stage its median belongs to. The payload also keeps `stages`: the drawn board-column rows, in board
+    order, each
     with `column`, `label`, `median_s`, `p90_s` and `observations` of the column's larger stage, so a reader of the
     older wire still reads its shape. The record's own per-stage rows live under `record_stages`, one row per entry of
     `TRIP_STAGES_LABELLED` with its own median and share. Fewer than `TRIP_MIN_DELIVERIES` deliveries answer `bar`

@@ -41,10 +41,11 @@ function profLoad(v){
  return `<section id=profload><div class=lsh><h3>${esc(v.label||"Machine load")}</h3></div>`
   +`<svg viewBox="0 0 ${PROF_LOAD_W} ${PROF_LOAD_H}" role=img aria-label="${esc(aria)}" preserveAspectRatio=none>${gaps}${segs}${core}</svg>`
   +`<p class=lpn>Peak ${Number(v.peak||0).toFixed(2)} over the window; the dashed line is saturation at ${cores} cores${gap}.</p></section>`}
-// The trip of an issue (#1769, #2152): one stacked bar from the hub's fold, one segment and one row per board column, in
-// the board's order. A column that holds two stages reads its larger stage as the median and the p90, and the other
-// stage stands beside it in the same cell with its own median; the segment carries the sum of the column's stages, so no
-// measurement leaves the panel. Fewer than three deliveries draw no bar.
+// The trip of an issue (#1769, #2152, #2199): one stacked bar from the hub's fold, one segment and one row per drawn
+// board column, in the board's order, and the caption counts the segments it draws. A column that holds two stages reads
+// its larger stage as the median and the p90, and the other stage stands beside it in the same cell with its own median;
+// the segment carries the sum of the column's stages, so no measurement the panel draws leaves it. Fewer than three
+// deliveries draw no bar.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
 // The wall-time view of the loop's steps and gates was removed at the owner's request: the panel read as noise over the
 // trip bar and the hot spots, and the API still carries the data for a later view.
@@ -62,7 +63,7 @@ function profTrip(t){
   return `<i class="ptb-seg${painted?` pts-${esc(c.column)}`:" ptb-none"}" style="width:${pct.toFixed(2)}%" title="${esc(profTripTitle(c))}"></i>`};
  const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each board column`)}">${cols.map(seg).join("")}</div>`;
  const rows=cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td><td>${profTripCell(c)}</td><td>${profTripNum(c.p90_s)}</td><td>${c.observations||0}</td></tr>`).join("");
- return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds six segments, one per board column, in the order of the rows below.</p>${bar}`
+ return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds ${cols.length} segments, one per board column, in the order of the rows below.</p>${bar}`
   +`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Column</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
