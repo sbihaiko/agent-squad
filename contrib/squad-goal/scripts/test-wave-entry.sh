@@ -297,4 +297,38 @@ case "$(wfact 35 run-35)" in "held "*test_the_mobile_page_holds_no_column_list*"
   ok "R2272f: the hold record names the failed test and the base answer";;
   *) ko "R2272f: ledger fact of #35: '$(wfact 35 run-35)'";; esac
 
+# base_move <file>: one commit lands on dev while the wave stays where it was, so the base is ahead of the wave tip.
+base_move() { local f=$1 w=$T/w-$1
+  rm -rf "$w"; $G clone -q "$T/origin.git" "$w" 2>/dev/null
+  (cd "$w" && $G checkout -q dev && echo "$f" > "$f" && $G add "$f" \
+    && $G -c user.email=a@b -c user.name=t commit -q -m "base move $f (Refs #2272)" && $G push -q origin HEAD:dev); }
+
+# R2272g (#2272 review): the entry record names the tree the first gate measured. The rebase on the base rewrites the child's
+# head, so a record that reads the head at the top of the retry loop names a tree the first gate never ran on.
+start2 run-36 >/dev/null
+base_move other36
+printf 'run-36\n' > "$T/st/auto/disp-36"; child 36 g36 "origin/wave/run-36"
+head36=$($G -C "$T/c36" rev-parse HEAD)
+G36='if test -f other36; then exit 0; fi; printf "fail\tpytest the base battery failed at tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list\truff mypy pytest\t-\n" > "$GATE_OUTCOME_FILE"; exit 1'
+r=$(SG_WAVE_BASE_PYTEST='exit 0' GATES="$G36" enw run-36 36)
+reb36=$($G -C "$T/c36" rev-parse HEAD)
+[ "$head36" != "$reb36" ] && ok "R2272g: the rebase on the base rewrites the child's head" || ko "R2272g: the head did not move, so the case proves nothing: '$r'"
+case "$(wfact 36 run-36)" in *"the wave tip at ${head36:0:9}"*) ok "R2272g: the entry record names the tree the first gate measured";; *) ko "R2272g: the entry record names another tree: '$(wfact 36 run-36)'";; esac
+# The first red's clause and the base tip's answer are set together (#2272 review): a clause that names the first gate
+# without the base answer would lose AC6 with no error.
+case "$(wfact 36 run-36)" in *"the wave tip at ${head36:0:9}"*"the base tip passes it"*) ok "R2272g: the first red's clause carries the base tip's answer";; *) ko "R2272g: the first red has no base answer: '$(wfact 36 run-36)'";; esac
+case "$(wfact 36 run-36)" in *"rebased on dev at ${reb36:0:9}"*) ok "R2272g: the entry record names the rebased tree apart";; *) ko "R2272g: no rebased tree in the record: '$(wfact 36 run-36)'";; esac
+
+# R2272h (#2272 review): an unproven entry carries the obligation of the tree the first gate measured, never of the rebased
+# tree, which no gate wrote an obligation for.
+start2 run-37 >/dev/null
+base_move other37
+printf 'run-37\n' > "$T/st/auto/disp-37"; child 37 g37 "origin/wave/run-37"
+head37=$($G -C "$T/c37" rev-parse HEAD)
+mkdir -p "$T/st/obligations"; printf 'probe\t%s\n' "$head37" > "$T/st/obligations/ob37"
+cnt37="$T/g37.cnt"; rm -f "$cnt37"
+G37="if [ -e $cnt37 ]; then printf 'unproven\tverify timed out\truff mypy pytest\t-\n' > \"\$GATE_OUTCOME_FILE\"; exit 2; fi; : > $cnt37; printf 'fail\tpytest the base battery failed at tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list\truff mypy pytest\t-\n' > \"\$GATE_OUTCOME_FILE\"; exit 1"
+r=$(SG_WAVE_BASE_PYTEST='exit 0' GATES="$G37" enw run-37 37)
+[ -e "$T/st/proof-card/37/ob37" ] && ok "R2272h: the unproven entry carries the obligation of the tree the first gate measured" || ko "R2272h: the obligation is not the first gate's: '$r'"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

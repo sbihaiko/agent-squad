@@ -710,7 +710,8 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # base is read here, not left to the caller's shell: the sibling check below compares a diff against origin/$base, and an
   # unset base would silently disable it (#1434 review).
   local run=$1 iss=$2 w br sha files out SG_REQUEUE_RUN=$1 base=${SG_BASE:-dev}; w=$(wave_of "$run")
-  local obl="" gwhy="" gnot="" grc=0 reuse="" skipped="" prior="" baseretried=0 firstrs="" rebsha="" gsha="" redtxt=""
+  # firstrs and redtxt are set together, by note_first_red only, and read as a pair: nothing else assigns firstrs (#2272 review).
+  local obl="" gwhy="" gnot="" grc=0 reuse="" skipped="" prior="" baseretried=0 rebsha="" firstrs redtxt gsha0
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
@@ -915,6 +916,14 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     vd=$(base_verdict $ids)
     printf 'failed tests: %s%s; %s' "$(printf '%s' "$ids" | tr '\n' ' ' | sed 's/ $//')" "$more" "$vd"
   }
+  # note_first_red <reason> (#2272 review): the first red the entry sees, recorded in one place as its reason and the base
+  # tip's answer for the tests it names. Both are set together, so a later branch that reads `firstrs` beside `redtxt` never
+  # finds the reason without the base answer. Only the first red sets them; a red after the rebase never overwrites the
+  # measurement of the tree the first gate ran on.
+  note_first_red() {
+    [ -z "$firstrs" ] || return 0
+    firstrs=$1; redtxt=$(red_note "$1")
+  }
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
   # They run under the machine-wide gate lock (#392), in try mode (#575): the fast lane runs the childcc pass, which makes the entry, in the
@@ -927,10 +936,11 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     # child is held, never requeued: the machine, not the child, gave no answer.
     local of oc rs ran notran fgm ph prc
     reuse="" skipped=""
-    # gsha is the tree this gate invocation measures, read here and never reused for another meaning: the reviewed head
-    # (rsha) is read before rebase_on_tip, which rewrites it, so a record that labelled the gate with rsha could name a tree
-    # the gate never ran on (#2272 review). The obligation is read from this same sha.
-    gsha=$($G rev-parse HEAD)
+    # gsha0 is the tree the first gate invocation measures. It is pinned here, before the gate loop, and never reassigned:
+    # a later iteration runs after rebase_on_base rewrites the head, so a read inside the loop would name a tree the first
+    # gate never ran on. The reviewed head (rsha) is read before rebase_on_tip, which also rewrites it, so it is no label
+    # either (#2272 review). Both the first-gate label and the obligation read this same sha.
+    gsha0=$($G rev-parse HEAD)
     # (ADR-0168, #1718) Before the machine lock: a green pass already kept for the tree the child enters with -- the same tree,
     # uncommitted state, base, merge-base and suite its final gate proved -- answers the entry as it stands. The child enters
     # with no second battery and, above all, with no wait behind another gate: a held lock holds no child whose final gate
@@ -971,18 +981,18 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
           # (#2272) A pass on the tree the rebase made follows a red the wave tip carried: the entry record names that red,
           # each test it reported, and the base tip's own answer for each, so a reader sees the base's red was not the child's.
           if [ -z "$prior" ] && [ -n "$firstrs" ]; then
-            prior="the entry gate failed on the wave tip at ${gsha:0:9}: $firstrs"
+            prior="the entry gate failed on the wave tip at ${gsha0:0:9}: $firstrs"
             [ -z "$redtxt" ] || prior="$prior; $redtxt"
             prior="$prior; the child was rebased on $base at ${rebsha:0:9} once, and the gate passed on the rebased tree"
           fi
           return 0;;
         unproven)
           if [ -z "$prior" ] && [ -n "$firstrs" ]; then
-            prior="the entry gate failed on the wave tip at ${gsha:0:9}: $firstrs"
+            prior="the entry gate failed on the wave tip at ${gsha0:0:9}: $firstrs"
             [ -z "$redtxt" ] || prior="$prior; $redtxt"
             prior="$prior; the child was rebased on $base at ${rebsha:0:9} once, and the gate carried its obligation from that tree"
           fi
-          obl=$(obligation_of "$gsha"); gwhy=$rs; gnot=$notran; return 0;;
+          obl=$(obligation_of "$gsha0"); gwhy=$rs; gnot=$notran; return 0;;
         fail)
           # (#2272) A red at the entry may be the base's red, not the child's: the wave was cut from a base that has moved
           # since, and the fix for this red may be on the current base. One rebase on origin/<base> and one re-measure decide
@@ -992,7 +1002,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
           # The red of the first gate is measured once, with the base tip's answer for each test it named, before any rebase:
           # every later path (a pass, an unproven tree, a red again, or a rebase that conflicts and holds the child) carries
           # that same clause, so AC5 and AC6 hold whichever way the retry goes.
-          if [ -z "$firstrs" ]; then firstrs=$rs; redtxt=$(red_note "$rs"); fi
+          note_first_red "$rs"
           if [ "$baseretried" = 0 ] && [ "${SG_WAVE_ENTRY_BASE_RETRY:-1}" != 0 ]; then
             baseretried=1; reuse=""; skipped=""
             rebase_on_base "$redtxt" || return 1
@@ -1008,13 +1018,13 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
           # identical to the first reuses the clause already measured instead of probing the base twice.
           if [ "$rs" = "$firstrs" ]; then rn=$redtxt; else rn=$(red_note "$rs"); fi
           [ -z "$rn" ] || why="$why; $rn"
-          [ -z "$firstrs" ] || [ "$firstrs" = "$rs" ] || why="$why; the first gate failed on the wave tip at ${gsha:0:9}: $firstrs${redtxt:+; $redtxt}"
+          [ -z "$firstrs" ] || [ "$firstrs" = "$rs" ] || why="$why; the first gate failed on the wave tip at ${gsha0:0:9}: $firstrs${redtxt:+; $redtxt}"
           [ -z "$rebsha" ] || why="$why; the child was rebased on $base at ${rebsha:0:9} once, and the gate ran again on that tree: red again"
           refuse "$why"; return 1;;
       esac
       # No word: a memo hit writes none and is always a pass (#955); fast-gate's 2 and 4 are its unproven codes (spec 1163).
       [ $grc = 0 ] && return 0
-      case "$grc" in 2|4) obl=$(obligation_of "$gsha"); gwhy=$rs; gnot=$notran; return 0;; esac
+      case "$grc" in 2|4) obl=$(obligation_of "$gsha0"); gwhy=$rs; gnot=$notran; return 0;; esac
       hold "the local gates reported no outcome (exit $grc); the child enters on a later pass"; return 1
     done
   }
