@@ -1630,6 +1630,15 @@ def test_the_machines_memory_is_a_gib_figure(hub, monkeypatch):
     assert mod.mem_total_gb() == 16.0, "the machine's memory in gibibytes, the figure the OS shows"
 
 
+def test_the_machines_memory_has_a_figure_without_mach_and_without_psutil(hub, monkeypatch):
+    """A Linux runner has no Mach sysctl and may have no psutil: the POSIX page count still names the machine's memory,
+    so the trip payload carries a size on every machine the suite runs on."""
+    mod, *_ = hub
+    monkeypatch.setattr(mod, "_sysctl_u64", lambda name: 0)
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    assert mod.mem_total_gb() > 0, "the POSIX page count answers when the kernel door and psutil do not"
+
+
 def test_a_refused_trip_view_reads_no_minute_count_of_the_record(hub):
     """A caller the hub refused never stats the minute record, so its trip asserts no count of the missing minutes."""
     mod, *_ = hub
