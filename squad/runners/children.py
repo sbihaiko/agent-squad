@@ -330,6 +330,9 @@ class Children:
         if isinstance(r.output, dict):
             rel = e.artifacts.put(name, None, entry, r.output, None)
             outcome, reasons = self.check(disp, r.output, ws, outcome, reasons, extra, name, entry)
+            cls = session.end_class(r.output)      # validated against END_CLASSES there: an unknown value rides no further
+            if cls is not None:
+                extra["end_class"] = cls
         if diag_cap:      # a cap that left a valid artifact: the child passes, and the cap rides in the record
             extra["diagnostic"] = {**extra.get("diagnostic", {}), "cap": diag_cap}
         if self.isolated(d):    # #84: a child's own worktree is committed by the engine when the child passed, before its snapshot

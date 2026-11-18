@@ -64,6 +64,11 @@ touch -t 202001010000 "$T/co/runs/run-jdup/record.jsonl"
 touch -t 202001010000 "$T/co/runs/run-chain/record.jsonl"
 touch -t 202001010000 "$T/co/runs/run-held/record.jsonl" "$T/co/runs/run-loopdup/record.jsonl"
 touch -t 202001010000 "$T/co/runs/run-fail/record.jsonl" "$T/co/runs/run-land/record.jsonl" "$T/co/runs/run-bug/record.jsonl" "$T/co/runs/run-nomark/record.jsonl" "$T/co/runs/run-human/record.jsonl" "$T/co/runs/run-dup/record.jsonl"
+# #2217: a failed run whose artifact named an end class passes it as the fifth argument. No review gave a kind, so none is sent:
+# the empty kind keeps the loop-or-own decision to wave.sh, and the class is never read as the kind.
+mk run-oc; printf 'CHILD — GitHub issue #714 (one PR):\n' > "$T/co/runs/run-oc/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #714"}\n{"event": "verdict", "verdict": "failed", "reasons": ["owner-only: needs a credential"], "exit_code": 1, "end_class": "owner-only"}\n' > "$T/co/runs/run-oc/record.jsonl"
+touch -t 202001010000 "$T/co/runs/run-oc/record.jsonl"
 # #1892: a run whose proof did not finish is no failed dispatch (ADR-0164): three unproven-only runs of one issue count nothing,
 # and a red run that also stayed unproven counts once, with its red reason named.
 for r in u1 u2 u3; do mk run-$r; printf 'CHILD — GitHub issue #712 (one PR):\n' > "$T/co/runs/run-$r/request.txt"
@@ -84,7 +89,8 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q '^o 4 Landing 702$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -Eq 'Todo 702|Done 702' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-702" ] && ok "O: a failed run that landed work stops at Landing, never Todo or Done, and keeps its marker (ADR-0143)" || ko "O #702 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q -- '^--run-fields o 4 704 run-live ' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-704" ] && ok "O: an issue a live run works gets Run fields" || ko "O #704 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Todo 703$' "$T/board.calls" 2>/dev/null && /usr/bin/grep -q '^o 1 To triage 703$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/bug-703" ] && ok "O: autobug run -> loop board Todo + bug board To triage" || ko "O #703 not released: $(cat "$T/board.calls" 2>/dev/null)"
-exp=$'fail 701 run-fail ended failed: adapter_error\nfail 703 run-bug ended failed: node_spend_cap\nfail 705 run-nomark ended completed: nothing landed\nfail 708 run-held ended failed: review_held own\nfail 710 run-chain ended failed: review_held loop\nfail 713 run-r1 ended failed: ac_failed:exit 3; unproven:route.router.1'
+exp=$'fail 701 run-fail ended failed: adapter_error\nfail 703 run-bug ended failed: node_spend_cap\nfail 705 run-nomark ended completed: nothing landed\nfail 708 run-held ended failed: review_held own\nfail 710 run-chain ended failed: review_held loop\nfail 713 run-r1 ended failed: ac_failed:exit 3; unproven:route.router.1
+fail 714 run-oc ended failed: owner-only: needs a credential  owner-only'
 [ "$(sort "$T/wave.calls" 2>/dev/null)" = "$exp" ] && ok "O: each run that delivered nothing counts once through wave.sh fail; landed, live, needs-human and listed runs do not" || ko "O fail calls: '$(cat "$T/wave.calls" 2>/dev/null)'"
 n712=$(/usr/bin/grep -c '^fail 712 ' "$T/wave.calls" 2>/dev/null)
 [ "${n712:-0}" = 0 ] && ok "O: three unproven-only runs never count, so no SQUAD-NOT-STARTABLE marker (ADR-0164)" || ko "O unproven runs counted: $n712 fail calls for #712"

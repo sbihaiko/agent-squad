@@ -11,6 +11,7 @@ ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/grep
 if [ ! -f "$src" ]; then echo "FAIL three startable issues open one run: $src not found"; rm -rf "$T"; exit 1; fi
 for v in $(compgen -e | $G '^SG_'); do unset "$v"; done   # the live loop exports its own SG_*; a leaked one would walk past a stub
+export SG_NIGHTLY_OFF=1   # the nightly window holds every dispatch: a run at that hour would hold these fixtures (as in test-autobug.sh)
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machine-wide ceiling through squad.caps, exported so the reader process sees it; the leases are sandboxed
 mkdir -p "$T/bin" "$T/scripts"
@@ -370,6 +371,15 @@ issues "[{\"number\":55,\"title\":\"a\",\"body\":\"b\",\"labels\":[{\"name\":\"w
 r=$(run)
 [ "$(marked 55)" = 1 ] && ok "LB: a label beside another build's marker goes out" || ko "LB: #55 held by its label beside another build's marker: '$r'"
 [ "$(marked 56)" = 0 ] && ok "LB: a label beside the current build's marker still holds" || ko "LB: #56 went out beside the current build's marker: '$r'"
+# LB2 (#2217): the label of another build does not outlive it: the pass queues the removal the comment queue runs (cqflush
+# unstart~), which deletes the label and the stale marker. The label beside the current build's marker stays.
+ls "$d/st/cq/"o__r#55-unstart~* >/dev/null 2>&1 && ok "LB2: the stale label and its marker are queued for removal" || ko "LB2: the stale frozen:not-startable label of #55 outlives its build"
+ls "$d/st/cq/"o__r#56-unstart~* >/dev/null 2>&1 && ko "LB2: the removal is queued for the issue of this build" || ok "LB2: the label of this build is kept"
+# LB3 (#2217): the removal waits for the build's own marker to go: a stale marker beside the current build's marker keeps the
+# label and both markers, so a later freeze refresh is never cleared by the removal of the stale one.
+issues "[{\"number\":57,\"title\":\"a\",\"body\":\"b\",\"labels\":[{\"name\":\"wave:01\"},{\"name\":\"frozen:not-startable\"}],\"comments\":[\"SQUAD-NOT-STARTABLE: build=000000000000 3 runs failed\",\"SQUAD-NOT-STARTABLE: build=$cur 3 runs failed\"]}]"
+r=$(run)
+ls "$d/st/cq/"o__r#57-unstart~* >/dev/null 2>&1 && ko "LB3: the removal is queued beside the current build's marker: '$r'" || ok "LB3: a stale marker beside the current build's marker queues no removal"
 
 # Y: the frozen:not-startable label is the visible marker: an issue that carries it is skipped as the comment is, with no comment on it.
 scene frozennotstartable

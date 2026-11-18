@@ -25,10 +25,12 @@ class Verdict:
     remains: list = field(default_factory=list)
     folded: list = field(default_factory=list)
     message: str = ""
+    end_class: str | None = None
 
     def event_fields(self):
-        return {"verdict": self.verdict, "exit_code": self.exit_code, "reasons": self.reasons,
-                "remains": self.remains, "folded": self.folded}
+        fields = {"verdict": self.verdict, "exit_code": self.exit_code, "reasons": self.reasons,
+                  "remains": self.remains, "folded": self.folded}
+        return {**fields, "end_class": self.end_class} if self.end_class else fields
 
 
 def exit_code(verdict):
@@ -153,7 +155,7 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     def make(v, rs, rem=True):
         rem_list = remains if v != "completed" and rem else []
         msg = _message(v, rs, rem_list, _resume_ref(run_folder, run_id), opts)
-        return Verdict(v, EXIT[v], _dedupe(rs), rem_list, folded, msg)
+        return Verdict(v, EXIT[v], _dedupe(rs), rem_list, folded, msg, _end_class(failing) if v == "failed" else None)
 
     if pre.get("status") == "failed":
         return make("failed", [pre["reason"]])
@@ -190,6 +192,12 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     if conflict:
         return make("conflict", conflict)
     return make(base or "failed", rs)
+
+
+def _end_class(failing):
+    """The end class a failed run names: the one class its failing outcomes carry, or None when they name two or none (#2217)."""
+    classes = {e["end_class"] for e in failing if e.get("end_class")}
+    return next(iter(classes)) if len(classes) == 1 else None
 
 
 def _resume_ref(run_folder, run_id):

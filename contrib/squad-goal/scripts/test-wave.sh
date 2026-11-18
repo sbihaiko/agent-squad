@@ -404,7 +404,45 @@ case "$r" in *"#40"*"did not close"*) ok "E3: the close that failed is named";; 
 [ "$rc" != 0 ] && ok "E3b: a landing that could not close an issue exits non-zero" || ko "E3b: the landing exited 0 with #40 still open"
 [ -e "$T/st/auto/wave-run-3" ] && ok "E3b: the run keeps its wave marker, so a later pass lands it again" || ko "E3b: the wave marker is gone: nothing tries the close again"
 case "$(wfact 40 run-3)" in "owed "*) [ ! -e "$T/st/auto/wowed-run-3" ] && ok "E3b: the owed close is a fact in the issue's ledger, with no wowed- marker" || ko "E3b: a wowed- marker is written";; *) ko "E3b: ledger fact of #40: '$(wfact 40 run-3)'";; esac
-printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\nfor a in "$@"; do case "$a" in body=@*) cat "${a#body=@}" >> "%s/gh-bodies.log";; esac; done\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+# The stub keeps the labels and the comments a case writes when LABEL_STORE=1 (#2217: the freeze reads back what it wrote),
+# and it refuses a label write for LABEL_REFUSE's issue. Without the store every issue read answers the one shape the other
+# cases expect, so the store never moves them.
+cat > "$T/bin/gh.new" <<'GHEOF'
+#!/bin/bash
+T=__T__
+echo "$*" >> "$T/gh.log"
+n=""; prev=""
+for a in "$@"; do
+  case "$a" in body=@*) cat "${a#body=@}" >> "$T/gh-bodies.log";; esac
+  case "$a" in repos/*/issues/[0-9]*) n=$(printf '%s' "$a" | /usr/bin/sed -n 's#.*/issues/\([0-9]*\).*#\1#p');; esac
+  if [ "${LABEL_STORE:-}" = 1 ] && { [ "$prev" = -f ] || [ "$prev" = --raw-field ]; }; then
+    case "$a" in labels[]=*) printf '%s\n' "${a#labels[]=}" >> "$T/lab-$n";; esac
+  fi
+  prev=$a
+done
+if [ -n "${LABEL_REFUSE:-}" ] && printf '%s' "$*" | /usr/bin/grep -q "issues/$LABEL_REFUSE/labels"; then
+  echo '{"message":"the label write was refused","status":500}'; exit 1
+fi
+case "$*" in
+  *"issues/"*)
+    case "$*" in
+      *"/comments"*)
+        if [ "${LABEL_STORE:-}" = 1 ] && [ -n "$n" ] && [ -f "$T/com-$n" ]; then
+          jq -R -s 'split("\n") | map(select(length > 0)) | map({body: .})' "$T/com-$n"
+        else echo '{"number":1,"state":"closed"}'; fi;;
+      *"/labels"*)
+        if [ "${LABEL_STORE:-}" = 1 ] && [ -n "$n" ] && [ -f "$T/lab-$n" ]; then
+          printf '['
+          awk 'NR > 1 { printf "," } { printf "{\"name\":\"%s\"}", $0 }' "$T/lab-$n"
+          printf ']\n'
+        else echo '[]'; fi;;
+      *)
+        echo '{"number":1,"state":"closed"}';;
+    esac;;
+  *) echo "{}";;
+esac
+GHEOF
+/usr/bin/sed "s|__T__|$T|" "$T/bin/gh.new" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 : > "$T/gh.log"; : > "$T/board.log"; : > "$T/pushes.log"; dev0=$($O rev-parse dev)
 r=$(land2 run-3); rc=$?
 [ $rc = 0 ] && ok "E3b: the later pass delivers the owed issue (exit 0)" || ko "E3b: the later pass exited $rc: '$r'"
@@ -1945,5 +1983,53 @@ r=$(SG_WAVE_TIP_GATES="$TIP2216G" SG_WAVE_CHILD_GATES="$G215" land2 run-215 2>&1
 [ "$(/usr/bin/grep -c '^o 3 Todo 22105$' "$T/board.log")" = 2 ] && ok "W2216: the eviction of the re-entered child moves its card to Todo" || ko "W2216: Todo rows: '$(cat "$T/board.log")' ($r)"
 case "$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#22105" 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("requeued") or {}).get("run-215", {}).get("head", ""))')" in
   "$B2") ok "W2216: the eviction writes its requeue on the re-entered commit";; *) ko "W2216: the requeue head is not the re-entered commit $B2: '$r'";; esac
+# N (#2217): a run that ends owner-only freezes its issue once, and a run that ends does-not-reproduce freezes it at this build.
+# A failed run with no class (a gate reason) is counted as before and freezes nothing. The stub keeps the labels and the
+# comments written, so the freeze reads back what stands.
+posts() { /usr/bin/grep -cE '(^| )-X POST ' "$T/gh.log" 2>/dev/null || echo 0; }
+freezes() { /usr/bin/grep -c "api -X POST repos/x/y/issues/$1/labels" "$T/gh.log" 2>/dev/null || echo 0; }
+export LABEL_STORE=1; rm -f "$T"/lab-* "$T"/com-*
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner217 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
+endfiles() { ls "$T/st/cq/"*#"$1"-endclass* 2>/dev/null; }
+e1=$(endfiles 2217)
+if /usr/bin/grep -q 'issues/2217/labels.*labels\[\]=frozen:owner.*labels\[\]=needs-ratification' "$T/gh.log" \
+   && [ "$(printf '%s\n' "$e1" | /usr/bin/grep -c .)" = 1 ] && /usr/bin/grep -qF 'Reason: owner-only: criterion (1) needs a credential' "$e1"; then
+  ok "N1: an owner-only end freezes its issue with one label write and one queued comment that quotes the reason"
+else ko "N1: owner-only end did not freeze: '$r'"; fi
+[ "$(freezes 2217)" = 1 ] && ok "N1: the two labels go in one request (debt 2)" || ko "N1: freeze requests: '$(/usr/bin/grep 'issues/2217/labels' "$T/gh.log")'"
+cp "$e1" "$T/com-2217"   # the flush posted the queued comment, so the freeze reads back as standing
+w2=$(posts)
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner218 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
+[ "$(posts)" = "$w2" ] && ok "N2: a second run id of the same class writes no second freeze (debt 3)" || ko "N2: a second run id froze the issue again: '$r'"
+case "$r" in *"already stands"*) ok "N2: the standing freeze is named as standing";; *) ko "N2: the standing freeze is not named: '$r'";; esac
+[ "$(endfiles 2217 | /usr/bin/grep -c .)" = 1 ] && ok "N2: and queues no second status comment" || ko "N2: a second status comment was queued"
+rm -f "$T"/st/cq/*#2217-endclass* "$T/com-2217"   # the labels stand, but the comment never reached the issue
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner219 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
+[ "$(endfiles 2217 | /usr/bin/grep -c .)" = 1 ] && ok "N2b: a freeze whose comment is missing queues the comment again (debt 3)" || ko "N2b: the missing comment was not queued again: '$r'"
+case "$r" in *"already stands"*) ko "N2b: a freeze with no comment is named as standing: '$r'";; *) ok "N2b: a freeze with no comment is not named as standing";; esac
+nrb=$($G -C "$T/co" rev-parse --short=12 HEAD)
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr201 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
+e3=$(ls "$T/st/cq/"*#2201-endclass* 2>/dev/null)
+if /usr/bin/grep -q 'issues/2201/labels.*labels\[\]=frozen:not-startable' "$T/gh.log" \
+   && [ "$(printf '%s\n' "$e3" | /usr/bin/grep -c .)" = 1 ] && /usr/bin/grep -qF "SQUAD-NOT-STARTABLE: build=$nrb" "$e3"; then
+  ok "N3: a does-not-reproduce end freezes its issue at this build"
+else ko "N3: does-not-reproduce end did not freeze: '$r'"; fi
+printf 'SQUAD-NOT-STARTABLE: build=%s run run-nr201 ended failed: the defect does not reproduce at the base tip.\n\nReason: the defect does not reproduce at the tip\n' "$nrb" > "$T/com-2201"
+w3=$(posts)
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr202 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
+[ "$(posts)" = "$w3" ] && ok "N3: the same build keeps its freeze and writes nothing again" || ko "N3: the same build froze the issue again: '$r'"
+(cd "$T/co" && echo z > z && $G add z && $G -c user.email=a@b -c user.name=t commit -q -m "a later build")
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr203 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
+[ "$(freezes 2201)" = 2 ] && ok "N3: a later build writes the freeze again" || ko "N3: a later build wrote $(freezes 2201) freeze request(s): '$r'"
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2202 run-gate202 "ac-verify:no_ac_commands" own) 2>&1)
+case "$r" in *"WAVE FAILED #2202"*) ok "N4: a gate reason is counted as before";; *) ko "N4: gate reason not counted: '$r'";; esac
+/usr/bin/grep -q 'issues/2202/labels.*labels\[\]=frozen' "$T/gh.log" && ko "N4: a gate reason froze its issue" || ok "N4: a gate reason freezes nothing"
+export LABEL_REFUSE=2203
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2203 run-own203 "owner-only: a credential" own owner-only) 2>&1); rc=$?
+unset LABEL_REFUSE
+[ "$rc" != 0 ] && ok "N5: a refused freeze exits non-zero (debt 2)" || ko "N5: the refused freeze exited 0: '$r'"
+case "$r" in *"WAVE FROZEN"*) ko "N5: a refused freeze claims the issue is frozen";; *) ok "N5: a refused freeze prints no WAVE FROZEN";; esac
+case "$r" in *"WAVE FREEZE PARTIAL #2203"*) ok "N5: the partial freeze is named";; *) ko "N5: the partial freeze is silent: '$r'";; esac
+[ -z "$(ls "$T/st/cq/"*#2203-endclass* 2>/dev/null)" ] && ok "N5: no comment is queued for a refused freeze" || ko "N5: a comment was queued for a refused freeze"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

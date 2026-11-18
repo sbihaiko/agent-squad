@@ -1524,4 +1524,21 @@ bash "$T/s/autobug.sh" >/dev/null 2>&1; bash "$T/s/autobug.sh" >/dev/null 2>&1
 [ -z "$(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)" ] && ok "13d the refused event is dropped, not left pending" \
   || ko "13d pending kept: $(SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending x/y)"
 
+# (#2217) one bug pass after each end class a failed run writes, in the shape wave.sh leaves the issue: an owner-only
+# freeze (both labels) and a does-not-reproduce freeze (the label beside this build's marker) are skipped; a gate failure,
+# which freezes nothing, is dispatched. The wave suite asserts those shapes; this pass reads them.
+todo 1228
+cur=$(git -C "$T/co" rev-parse --short=12 HEAD)
+fz() {   # <label items> <comments body>: the bug 1228 as the freeze leaves it, then one bug pass
+  printf '[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":[%s]}]\n' "$1" > "$T/issues.json"
+  held "$2"
+  AB_DRY=1 bash "$T/s/autobug.sh" 2>&1
+}
+r=$(fz '"bug","ready-for-agent","frozen:owner","needs-ratification"' '')
+$G -q "AUTOBUG would dispatch.*\[1228\]" <<<"$r" && ko "2217 an owner-only freeze was dispatched: '$r'" || ok "2217 an owner-only freeze is skipped by the bug pass"
+r=$(fz '"bug","ready-for-agent","frozen:not-startable"' "SQUAD-NOT-STARTABLE: build=$cur run run-nr201 ended failed: the defect does not reproduce at the base tip.")
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "2217 a does-not-reproduce freeze at this build was dispatched: '$r'" || ok "2217 a does-not-reproduce freeze at this build is skipped by the bug pass"
+r=$(fz '"bug","ready-for-agent"' '')
+$G -q "AUTOBUG would dispatch.*\[1228\]" <<<"$r" && ok "2217 a gate failure, which freezes nothing, is dispatched" || ko "2217 a gate failure was not dispatched: '$r'"
+
 rm -rf "$T"; exit $fail

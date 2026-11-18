@@ -424,6 +424,16 @@ def _unproven_evidence(out):
     return any(isinstance(r, str) and CHECK_NAMED.search(r) for r in out.get("reasons", []))
 
 
+END_CLASSES = ("owner-only", "does-not-reproduce")
+
+
+def end_class(out):
+    """The class a failed artifact names for its end reason. The artifact's own field decides it, never the reason text (#2217)."""
+    if not isinstance(out, dict) or out.get("status") != "fail":
+        return None
+    return out.get("end_class") if out.get("end_class") in END_CLASSES else None
+
+
 def agent_outcome(node, res, cap_reason, granted=None):
     """Derive the outcome from the declared artifact. An agent node and a dispatch child share it.
 

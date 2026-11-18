@@ -217,6 +217,30 @@ sg_not_startable() {
     }
     END { if (held || (lab != "" && !seen)) exit 0; exit 1 }'
 }
+# sg_rearm_stale <issue> <label-1|0>: a frozen:not-startable label outlives its build no longer (#2217). A marker of another
+# build re-arms the issue on its own (ADR-0159, rule 3), but the label that came with it would hold any later read that met no
+# marker: the dispatch cycle that meets the label queues the removal the comment queue runs (cqflush.sh unstart~), and that
+# one deletes the label and every SQUAD-NOT-STARTABLE comment. The label stays while its marker names this build; a marker
+# that names no build, and a build or a read that cannot be known, prove no other build, so nothing is cleared. A marker that
+# names this build keeps the label and every marker, so the removal is never queued beside it.
+sg_rearm_stale() {
+  local n=$1 out cur f
+  [ "${2:-}" = 1 ] || return 0
+  out=$(gh_api "repos/$SG_REPO/issues/$n/comments?per_page=100" -q '.[].body') || return 0
+  cur=$(sg_loop_build 2>/dev/null) || cur=""
+  [ -n "$cur" ] || return 0
+  printf '%s\n' "$out" | awk -v cur="$cur" '
+    /^SQUAD-NOT-STARTABLE:/ {
+      if (match($0, /build=[0-9a-f]+/)) {
+        b = substr($0, RSTART + 6, RLENGTH - 6)
+        if (b == cur) own = 1; else stale = 1
+      }
+    }
+    END { exit (stale && !own ? 0 : 1) }' || return 0
+  f=$(sg_cq_file "$n-unstart~rearm$$.md" 2>/dev/null) || return 0
+  printf 'SQUAD-NOT-STARTABLE:\n' > "$f" 2>/dev/null || return 0
+  return 0
+}
 # A ticket whose acceptance commands name a repository path the repository does not hold is not dispatched (#729): the run
 # would spend its budget and end failed on a command that cannot pass (run-20261021-043520-76754d named three scripts that did
 # not exist). acpaths.py finds the paths; a path the ticket creates is not missing. sg_ac_refused <issue> <issue.json> <PASS>
