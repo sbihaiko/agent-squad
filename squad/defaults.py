@@ -17,17 +17,34 @@ def load(path=PATH):
     return yaml.safe_load(pathlib.Path(path).read_text())
 
 
+ABSENT = object()   # a key the file leaves out, which a present null is not
+
+
+def _lookup(cfg, key):
+    """The value at `key`, or ABSENT. A one-dot key reads the old single-level lookup, so a file main accepts reads as it
+    always did; a deeper key (columns.<column>.max_cards) walks its whole path."""
+    if key.count(".") == 1:
+        sec, _, name = key.partition(".")
+        return cfg.get(sec, {}).get(name, ABSENT) if isinstance(cfg.get(sec), dict) else ABSENT
+    v = cfg
+    for part in key.split("."):
+        if not isinstance(v, dict) or part not in v:
+            return ABSENT
+        v = v[part]
+    return v
+
+
 def check(cfg):
     """Return a list of defects; empty means the file is sound."""
     from squad import project_settings as P  # the one catalog: this checker and `squad config check` read the same ranges
     bad, o = [], cfg.get("options", {})
     for key, spec in P.CATALOG.items():
-        v = cfg                              # a key with more than one dot reads its own path, as `columns.Doing.max_cards` does
-        for part in key.split("."):
-            v = v.get(part) if isinstance(v, dict) else None
-        if v is None:
+        v = _lookup(cfg, key)
+        if v is ABSENT:
             if key in P.REQUIRED:
                 bad.append(key)
+        elif v is None and key not in P.REQUIRED:
+            pass    # a present null on an optional key means unset, or (an intnone key) an explicit none, as before
         elif P.value_defect(spec, v, key):
             bad.append(key)
     if cfg.get("hooks", {}).get("log_compaction") is not True:

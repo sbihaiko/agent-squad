@@ -68,10 +68,13 @@ review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
     { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; chain_summary; } > "$(sg_cq_status "$i" "mchain")" \
       || { echo "BRANCHREVIEW CHAINHEALTH $br: chainhealth.py failed (the model resolver is missing or unreadable)" >&2; : > "$A/chainhealth-failed"; }; }
 }
-# A card limit on the Review column (#2287): the pass starts no review while the column holds its maximum. The count is
-# the board's one read, through the same seam every dispatcher uses; a read that fails is no reading, so it never holds
-# the pass, and an unread limit is no limit.
-review_max=$(sg_column_limit Review)
+# A card limit on the Review column (#2287): the pass starts no review while the column holds its maximum. The bound is
+# the lower of the column limit and caps.reviews, the machine cap that also bounds Review. The count is this pass's single
+# board read, through the same seam every dispatcher uses. An unread limit is a defect, never "no limit": the pass names
+# it and starts no review.
+reviews_cap=$(sg_caps value reviews --target "$SG_CHECKOUT" 2>/dev/null)
+review_max=$(sg_board_limit_effective Review "$reviews_cap"); cm_rc=$?
+[ "$cm_rc" -eq 0 ] || { echo "BRANCHREVIEW the Review column limit is unreadable; a defect, not no limit: no review starts this pass"; exit 0; }
 case "$review_max" in ''|*[!0-9]*) ;; *)
   if rows=$(sg_board_rows 2>/dev/null); then
     review_n=$(printf '%s\n' "$rows" | awk -F '\t' '$2=="Review"||$2=="Code Review"{n++} END{print n+0}')

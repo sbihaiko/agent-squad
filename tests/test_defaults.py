@@ -25,6 +25,22 @@ def test_a_missing_cap_is_a_defect():
     assert defaults.check(cfg) == ["limits.max_stalls"]
 
 
+def test_a_required_cap_set_to_null_is_a_defect():
+    # A present null is not an absent key: a required gate with `null` must still be named, never treated as unset and
+    # dropped from the check.
+    cfg = defaults.load()
+    cfg["limits"]["max_stalls"] = None
+    assert defaults.check(cfg) == ["limits.max_stalls"]
+
+
+def test_a_file_with_no_multi_dot_key_still_passes():
+    # A file main accepts (no `columns` block, so only the one-dot keys) must still pass: the deeper walk is added for the
+    # multi-dot column keys and changes nothing for a single-dot key.
+    cfg = defaults.load()
+    cfg.pop("columns", None)
+    assert defaults.check(cfg) == []
+
+
 def test_a_read_only_role_drops_the_write_tools():
     roles = defaults.load()["roles"]
     for r in ("scout", "critic", "router"):

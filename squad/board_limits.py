@@ -36,7 +36,7 @@ def limits(target="."):
     out = _applied(dict(DEFAULTS), (D.load() or {}).get("columns"))
     try:
         data, _ = P.load(target)
-    except Exception:
+    except (OSError, P.OptionError):    # an unreadable or unsound file leaves the defaults; it never raises a limit
         data = None
     return _applied(out, (data or {}).get("columns"))
 
@@ -56,8 +56,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Print one board column's card limit.")
     ap.add_argument("column")
     ap.add_argument("--target", default=".")
+    ap.add_argument("--machine-cap", type=int, default=None, help="the machine cap that also bounds the column; the lower applies")
     a = ap.parse_args(argv)
     value = limit(a.column, a.target)
+    if a.machine_cap is not None:
+        value = effective(value, a.machine_cap)
     print("none" if value is None else value)
 
 
