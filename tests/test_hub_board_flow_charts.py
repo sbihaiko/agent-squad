@@ -1859,9 +1859,11 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     svg = _drawn_lead_svg(hub, board, tmp_path)
     others = [(attrs, body) for attrs, body in _svg_texts(svg) if not body.startswith(("Lead time", "Closed date"))]
     tick_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "x") == "57"]
-    # Re-anchored (#1355): the y axis is always log, so its three round ticks name an hour, a day and a week.
-    assert len(tick_labels) == 3, "the log y ticks keep their place beside the axis"
-    assert [body for _, body in tick_labels] == ["1h", "1d", "7d"]
+    # Re-anchored (#1355): the y axis is always log, so its round ticks name round durations.
+    # Re-anchored (#2311): the axis fits the plotted values, so this pair of 1d and 8d cards labels the round durations
+    # from the tick below its 1d card to the tick above its 8d card.
+    assert len(tick_labels) == 5, "the log y ticks keep their place beside the axis"
+    assert [body for _, body in tick_labels] == ["8h", "1d", "2d", "7d", "14d"]
     assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in tick_labels)
     x_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "text-anchor") == "middle"]
     assert len(x_labels) == 7, "the seven x ticks keep their place under the axis"

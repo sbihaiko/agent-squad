@@ -231,21 +231,56 @@ def test_the_band_is_one_sigma_in_log_space_around_the_geometric_mean(lt):
 
 
 def test_the_y_axis_is_always_log_with_round_ticks(lt):
-    """#1355: the chart takes no scale option; every view draws the log axis with its round ticks (#1334)."""
+    """#1355: the chart takes no scale option; every view draws the log axis with its round ticks (#1334).
+
+    Re-anchored (#2311): the axis fits the plotted values. The top is the next round tick above the largest value and
+    the floor the round tick below the smallest, so the ladder each view labels follows its own data."""
     small = _chart(lt, [_closed(1, 3), _closed(2, 30 * 24)])
     long = _chart(lt, [_closed(1, 29 * 24), _closed(2, 5)])
     month = _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])
 
     assert small["axis"] == long["axis"] == month["axis"] == "log"
-    for view, name in ((small, "small"), (long, "long"), (month, "month")):
-        assert [tick["text"] for tick in view["ticks"]] == ["1h", "1d", "7d"], \
-            f"the {name} view does not label the three round log ticks"
-        assert [tick["hours"] for tick in view["ticks"]] == [1, 24, 168], \
-            f"the {name} view's ticks are not one hour, one day and one week"
+    assert [tick["text"] for tick in small["ticks"]] == \
+        ["2h", "4h", "8h", "1d", "2d", "7d", "14d", "30d", "60d"], \
+        "the small view's ladder does not run from the tick below its 3h card to the tick above its 30d card"
+    assert [tick["text"] for tick in long["ticks"]] == ["4h", "8h", "1d", "2d", "7d", "14d", "30d"], \
+        "the long view's ladder does not run from the tick below its 5h card to the tick above its 29d card"
     for view, name in ((long, "long"), (month, "month")):
         week = next(tick["y"] for tick in view["ticks"] if tick["text"] == "7d")
         top = max(dot["y"] for dot in view["dots"])
         assert week < top < 1.0, f"the {name} view's axis does not carry its month-long card above the week tick"
+
+
+def test_the_axis_fits_the_plotted_values(lt):
+    """#2311: the largest value here is 5h, so the top is 8h and not the fixed 60 days; the floor is the round tick
+    below the 1h card, and the ticks are the round durations inside that range."""
+    result = _chart(lt, [_closed(n, h) for n, h in enumerate([1, 2, 3, 4, 5], start=1)])
+
+    assert [tick["text"] for tick in result["ticks"]] == ["30m", "1h", "2h", "4h", "8h"]
+    assert [tick["hours"] for tick in result["ticks"]] == [0.5, 1, 2, 4, 8]
+    assert [tick["y"] for tick in result["ticks"]] == [0, 0.25, 0.5, 0.75, 1.0]
+
+
+def test_every_dot_band_and_reference_line_stays_inside_the_plot(lt):
+    """#2311: the fitted axis carries every mark, so no dot, band edge, stack edge or reference line leaves the plot."""
+    chart = _chart(lt, [_closed(n, h) for n, h in enumerate([1, 2, 3, 4, 5], start=1)])
+
+    marks = [dot["y"] for dot in chart["dots"]]
+    marks += [point["y"] for point in chart["band"]["polygon"]]
+    marks += [band[edge] for dot in chart["dots"] for band in dot["stack"] for edge in ("y0", "y")]
+    lines = (chart["average"], chart["median"], chart["p85"],
+             chart["summary"]["minimum"], chart["summary"]["maximum"])
+    marks += [line["y"] for line in lines if line and line["y"] is not None]
+
+    assert all(0.0 <= y <= 1.0 for y in marks), f"a mark leaves the fitted plot: {marks}"
+
+
+def test_the_axis_floor_follows_cards_under_thirty_minutes(lt):
+    """#2311: the floor is no longer fixed at 30 minutes, so a 5-minute card sits above the axis, not on it."""
+    result = _chart(lt, [_closed(1, 5 / 60), _closed(2, 20 / 60)])
+
+    assert [tick["text"] for tick in result["ticks"]] == ["2m", "5m", "15m", "30m"]
+    assert min(dot["y"] for dot in result["dots"]) > 0.0, "a card under the old 30-minute floor still sits on the axis"
 
 
 def test_a_timeframe_keeps_only_the_cards_closed_inside_it(lt):
@@ -438,7 +473,9 @@ def test_a_single_dot_keeps_the_plain_dot_radius(lt):
 
 
 def test_a_cluster_is_one_fixed_radius_dot_with_its_count_cards_and_ranges(lt):
-    items = [_closed(n, hours, days_ago=2) for n, hours in enumerate((5.0, 5.1, 5.2), start=1)]
+    # Re-anchored (#2311): the axis now fits the plotted hours, so the three cards sit closer together to stay within
+    # one dot on the frame: 5.0h, 5.05h and 5.1h span about 6 px of the fitted 4h..8h axis.
+    items = [_closed(n, hours, days_ago=2) for n, hours in enumerate((5.0, 5.05, 5.1), start=1)]
 
     clusters = _chart(lt, items)["clusters"]
 
@@ -447,8 +484,8 @@ def test_a_cluster_is_one_fixed_radius_dot_with_its_count_cards_and_ranges(lt):
     assert cluster["r"] == lt.CLUSTER_RADIUS_PX, "every cluster takes the one fixed radius"
     assert cluster["count"] == 3 and cluster["cards"] == [1, 2, 3]
     assert cluster["lead"]["min"] == {"hours": 5.0, "text": "5h"}
-    assert cluster["lead"]["max"] == {"hours": 5.2, "text": "5h 12m"}
-    assert cluster["lead"]["text"] == "5h to 5h 12m"
+    assert cluster["lead"]["max"] == {"hours": 5.1, "text": "5h 6m"}
+    assert cluster["lead"]["text"] == "5h to 5h 6m"
     assert cluster["closed"]["text"] == "Nov 28", "one shared close names one day"
 
 
@@ -532,7 +569,9 @@ def _frame_gap(result, first, second):
 
 def test_clusters_follow_the_caller_plot_size(lt):
     # Re-anchored (#1355): on the log axis this pair clears the dot in the full frame and merges in the shorter one.
-    items = [_closed(1, 5), _closed(2, 8)]
+    # Re-anchored (#2311): the fitted axis spreads 5h and 5.2h about 12 px on the 212 px frame and about 6 px on the
+    # 106 px one, so the same pair still names the frame's share of the rule.
+    items = [_closed(1, 5), _closed(2, 5.2)]
     full = {"width": 672, "height": 212}
 
     drawn_apart = _chart(lt, items, plot=full)

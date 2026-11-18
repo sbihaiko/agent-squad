@@ -52,16 +52,18 @@ check("a cluster serves its count and its cards", cluster["count"] == 7 and clus
 check("a cluster serves its date range and its lead-time range",
       cluster["closed"]["start"] == closed.date().isoformat() and cluster["lead"]["min"]["hours"] == 10.0
       and cluster["lead"]["max"]["hours"] == 10.0, (cluster["closed"], cluster["lead"]))
-small = lt.control_chart([card(1, closed, 5), card(2, closed, 8)], timeframe=30, now=now,
+small = lt.control_chart([card(1, closed, 5), card(2, closed, 5.2)], timeframe=30, now=now,
                          plot={"width": 672, "height": 212})
-tall = lt.control_chart([card(1, closed, 5), card(2, closed, 8)], timeframe=30, now=now,
+tall = lt.control_chart([card(1, closed, 5), card(2, closed, 5.2)], timeframe=30, now=now,
                         plot={"width": 672, "height": 106})
 check("the caller's plot size recomputes the clusters from the same rule",
       [c["count"] for c in small["clusters"]] == [1, 1] and [c["count"] for c in tall["clusters"]] == [2],
       ([c["count"] for c in small["clusters"]], [c["count"] for c in tall["clusters"]]))
 # #1355: the one axis is log, so the fixed-radius rule holds in both directions on it: a nearby pair merges, and the
-# (5, 8) pair above still splits. A dense pair that re-split on log, or a far pair that re-merged, fails one of the two.
-near = lt.control_chart([card(1, closed, 5), card(2, closed, 5.4)], timeframe=30, now=now,
+# (5, 5.2) pair above still splits. A dense pair that re-split on log, or a far pair that re-merged, fails one of the two.
+# #2311: the axis fits the plotted hours, so the pair above spans about 12 px of the 212 px frame and 6 px of the 106 px
+# one, and the nearby pair sits inside one dot on the fitted 4h..8h axis.
+near = lt.control_chart([card(1, closed, 5), card(2, closed, 5.02)], timeframe=30, now=now,
                         plot={"width": 672, "height": 212})
 check("a pair closer than one dot on the log axis merges", [c["count"] for c in near["clusters"]] == [2],
       [c["count"] for c in near["clusters"]])
