@@ -29,7 +29,8 @@ case "$*" in
   *"issue(number: 42)"*) printf '{"data":{"repository":{"i42":{"number":42,"state":"OPEN","labels":{"nodes":[{"name":"frozen:owner"}]}}}}}' ;;
   *"issue(number:"*)
     n=$(printf '%s' "$*" | sed -n 's/.*issue(number: \([0-9][0-9]*\)).*/\1/p')
-    printf '{"data":{"repository":{"i":{"number":%s,"state":"OPEN","labels":{"nodes":[]}}}}}' "${n:-0}" ;;
+    s=OPEN; [ -e "@T@/closed-${n:-0}" ] && s=CLOSED
+    printf '{"data":{"repository":{"i":{"number":%s,"state":"%s","labels":{"nodes":[]}}}}}' "${n:-0}" "$s" ;;
   *) printf '{}' ;;
 esac
 STUB
@@ -197,10 +198,11 @@ for s in 70 71; do printf 'by hal9k\nsince 2020-01-01T00:00:00Z\nuntil 2020-01-0
 hw requeue 72 "the local gates failed: s" >/dev/null; o72=$(hw requeue 72 "the local gates failed: t")
 case "$o72" in *"WAVE HAND #72"*) held 72 && ok "two stale hal9k holds leave the hand route open, and the issue is handed over" || ko "#72 logged a hand line with no hold";; *) ko "two stale holds filled the hand route: '$o72'";; esac
 rm -f "$T/st/auto/hold-70" "$T/st/auto/hold-71"; hh release --by hal9k --to Todo 72
-hh hold --by hal9k 73 77
+hh hold --by hal9k 73 77; : > "$T/closed-73"
+olive=$(SG_STATE="$T/st" PYTHONPATH="$(cd "$d/../../.." && pwd)" python3 -m squad.handhold holds --live --closed 73 77 2>/dev/null)
 hw requeue 79 "the local gates failed: u" >/dev/null; o79=$(hw requeue 79 "the local gates failed: v")
-case "$o79" in *"WAVE HAND #79"*) held 79 && ok "a hold on a closed issue does not fill the hand route" || ko "#79 logged a hand line with no hold";; *) ko "a closed hold filled the hand route: '$o79'";; esac
-hh release --by hal9k --to Todo 73 77 79
+case "$o79" in *"WAVE HAND #79"*) held 79 && [ -z "$olive" ] && ok "a hold on a closed issue does not fill the hand route" || ko "#79 logged a hand line with no hold, or a closed hold is live: '$olive'";; *) ko "a closed hold filled the hand route: '$o79'";; esac
+rm -f "$T/closed-73"; hh release --by hal9k --to Todo 73 77 79
 hh hold --by hal9k 73 74
 hw requeue 75 "the local gates failed: w" >/dev/null; o75=$(hw requeue 75 "the local gates failed: x")
 case "$o75" in *"WAVE HAND-FULL #75"*) ! held 75 && ok "two live hal9k holds print HAND-FULL and the issue stays in the queue" || ko "#75 was held past the bound";; *) ko "two live holds did not fill the route: '$o75'";; esac

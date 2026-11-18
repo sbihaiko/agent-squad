@@ -1514,11 +1514,13 @@ def reconcile_board():
         released[n] = want
     for r in HH.holds(state=st, closed=[n for n in HH.holders(state=st) if issue_info(n)[0] == "closed"]):   # a stale hold on a closed issue is released here, once (#2220)
         n = r["issue"]
-        if not (r["stale"] and r["orphan"]) or dry: continue
+        if not r["stale"] or issue_info(n)[0] != "closed" or dry: continue
         with contextlib.redirect_stdout(io.StringIO()):
             rc = HH.release([n], by=r["carrier"], to="Closed", state=st)
+        if rc != 0: continue
+        set_expected(n, "Closed", "a stale hand hold sits on a closed issue", rank=120)
         HH.clear_release(n, state=st)
-        if rc == 0: say(f"HOLD-RELEASED #{n}: the hold by {r['carrier']} is stale and the issue is closed, so it is released to Closed")
+        say(f"HOLD-RELEASED #{n}: the hold by {r['carrier']} is stale and the issue is closed, so it is released to Closed")
     for n, c in sorted(HH.holders(state=st).items(), key=lambda kv: int(kv[0])):
         if n in released: continue
         have = have_all.get(n)

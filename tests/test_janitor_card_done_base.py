@@ -43,6 +43,7 @@ case "$a" in
       *) echo 0;; esac;;
   *projectsV2/*/fields*) echo FID4;;
   *projectsV2/*/items*) @ITEMS@;;
+  *issues/*/events*) echo '[{"event":"closed","actor":{"login":"sbihaiko"}}]';;
   *issues/*"-q .state"*) echo @STATE@;;
   *issues/*) echo -e '@STATE@\\t\\tIssue';;
 esac
@@ -70,7 +71,7 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
     yet) or "closed" (it landed); `entered` leaves the record that the issue's child entered that wave. `card` is the column
     the board answers the issue's card in, none when empty; `live` leaves the run with no verdict; `closed` makes the
     issue read closed."""
-    for name in ("janitor.py", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py", "board-definition.json",
+    for name in ("janitor.py", "ghcall.sh", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py", "board-definition.json",
                  "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
