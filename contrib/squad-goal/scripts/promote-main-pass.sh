@@ -180,7 +180,7 @@ if [ -n "${R:-}" ]; then
         # request. The hook the CI event fires runs in a launchd service session, which carries no login keychain; the
         # watch cycle runs in the owner's session and reaches it. One alert names what could not be reached, and the
         # pass exits 3, so a caller that reads only the status never takes this for the refusal below.
-        alert_once credential "$R: the complete tier is green and $main did not move: $(printf '%s' "$o" | tail -1)"
+        alert_once "credential-${R:0:12}" "$R: the complete tier is green and $main did not move: $(printf '%s' "$o" | tail -1)"
         say "$R not promoted: $(printf '%s' "$o" | tail -1)"; exit 3
       fi
       rm -f "$rec"   # cleared whatever the move answered: a later pass asks again by the rule
@@ -261,7 +261,7 @@ if [ "$green" = 1 ]; then
   # the tip now instead of requesting a second run for it, whichever rule opened the read (ADR-0164).
   o=$(SG_MAIN_BRANCH=$main SG_STG_BRANCH=$stg bash "$d/promote-main.sh" "$stip" 2>&1); rc=$?
   if [ $rc = 3 ]; then   # the credential is out of this process's reach (#1896): no hold, the next pass that reaches it moves main
-    alert_once credential "$stip: the complete tier is green and $main did not move: $(printf '%s' "$o" | tail -1)"
+    alert_once "credential-${stip:0:12}" "$stip: the complete tier is green and $main did not move: $(printf '%s' "$o" | tail -1)"
     say "$stip not promoted: $(printf '%s' "$o" | tail -1)"; exit 3
   fi
   if [ $rc = 0 ]; then
