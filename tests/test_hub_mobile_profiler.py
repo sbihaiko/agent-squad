@@ -134,3 +134,84 @@ def test_the_wall_time_tables_scroll_inside_their_section_on_a_phone(hub):
     """The wall-time view (#1748) draws eight columns of gates; on a 390 px screen they scroll inside their own section, so no
     row widens the page and every column stays reachable."""
     assert "#profwall" not in hub.MOBILE_PAGE, "the removed wall-time panel leaves no rule behind"
+
+
+# ---------------------------------------------------------------- the phone's trip lanes (#2229)
+# The phone draws the trip of an issue from the same payload as the desktop (#2222): a Tokens lane and a Machine lane
+# over the trip's columns, no Machine Load chart, and a table with tokens per issue, mean CPU and mean RAM. The lanes
+# and the table read only the payload's own series and means.
+TRIP = {"label": "The trip of an issue", "window_s": 3600, "deliveries": 4, "bar": True,
+        "cores": 8, "mem_gb": 32.0, "peak_load": 4.2, "no_record_minutes": 10,
+        "columns": [
+            {"column": "todo", "label": "Todo", "median_s": 60.0, "p90_s": 120.0, "observations": 2, "share": 0.1,
+             "tokens": {"points": [[0.5625, 480.0]], "mean": 60.0}, "tokens_per_issue": 600.0,
+             "cpu": {"points": [[0.5625, 0.5]], "mean": 0.5}, "ram": {"points": [[0.5625, 0.4]], "mean": 0.4},
+             "beside": None},
+            {"column": "doing", "label": "Doing", "median_s": 600.0, "p90_s": 900.0, "observations": 3, "share": 0.5,
+             "tokens": {"points": [[0.1875, 120.0], [0.8125, 240.0]], "mean": 120.0}, "tokens_per_issue": 2400.0,
+             "cpu": {"points": [[0.1875, 0.3], [0.8125, 0.6]], "mean": 0.3},
+             "ram": {"points": [[0.1875, 0.2], [0.8125, 0.3]], "mean": 0.25}, "beside": None},
+            {"column": "review", "label": "Review", "median_s": 300.0, "p90_s": 420.0, "observations": 2, "share": 0.3,
+             "tokens": {"points": [[0.5, 80.0]], "mean": 80.0}, "tokens_per_issue": 300.0,
+             "cpu": {"points": [[0.5, 0.2]], "mean": 0.2}, "ram": {"points": [[0.5, 0.1]], "mean": 0.1},
+             "beside": None},
+            {"column": "gating", "label": "Gating", "median_s": 30.0, "p90_s": 40.0, "observations": 1, "share": 0.1,
+             "tokens": {"points": [], "mean": None}, "tokens_per_issue": 0.0,
+             "cpu": {"points": [], "mean": None}, "ram": {"points": [], "mean": None}, "beside": None}]}
+LOAD = {"label": "Machine load", "start": 0, "end": 3600, "peak": 4.2, "cores": 8, "gap_s": 0,
+        "segments": [[{"at": 60, "load": 2.5}]], "gaps": []}
+PHONE_TRIP_VIEW = {**VIEW, "trip": TRIP, "load": LOAD}
+
+
+def phone_trip_html(view=PHONE_TRIP_VIEW):
+    return node_view(view, "await profPoll(); out.html = box.innerHTML;")["html"]
+
+
+@pytest.mark.node_bound
+def test_the_phone_draws_no_machine_load_chart():
+    html = phone_trip_html()
+    assert "id=profload" not in html, "the phone draws no Machine Load chart"
+    assert "Machine load" not in html
+
+
+@pytest.mark.node_bound
+def test_the_phone_draws_the_tokens_lane_and_the_machine_lane_from_the_payload():
+    html = phone_trip_html()
+    assert "ptlane-tok" in html and "tokens/min" in html, "the Tokens lane names its own unit"
+    assert "ptlane-mach" in html and "CPU" in html and "RAM" in html, "the Machine lane names its two lines"
+    assert re.search(r'class="ptl ptl-cpu"', html) and re.search(r'class="ptl ptl-ram"', html), \
+        "the machine lane draws the payload's CPU series solid and its RAM series dashed"
+    tok = re.findall(r'class="ptl ptl-tok"[^>]*points="([^"]+)"', html)
+    assert len(tok) == 3, "one Tokens line per column that holds a point, and none for the empty Gating column"
+
+
+@pytest.mark.node_bound
+def test_the_phone_labels_each_column_with_its_name_and_median_time():
+    html = phone_trip_html()
+    labels = html[html.index("ptlabels"):]
+    for name, median in (("Todo", "1.0 min"), ("Doing", "10.0 min"), ("Review", "5.0 min"), ("Gating", "30.0 s")):
+        assert name in labels and median in labels, f"{name} keeps its name and its median time"
+
+
+@pytest.mark.node_bound
+def test_the_phone_table_shows_tokens_per_issue_mean_cpu_and_mean_ram():
+    html = phone_trip_html()
+    table = html[html.index("id=proftt"):]
+    for head in ("Tokens/issue", "CPU", "RAM"):
+        assert head in table, f"the table names {head}"
+    assert re.search(r"<td>600</td>", table) and re.search(r"<td>50%</td>", table) and re.search(r"<td>40%</td>", table), \
+        "the Todo row carries the payload's tokens per issue and its mean CPU and RAM"
+    gating = html[html.index('data-p="trip/gating"'):]
+    assert "&#8212;" in gating, "a column with no reading prints a dash, never a zero"
+
+
+def test_the_phone_chart_and_labels_stay_inside_the_phone_box(hub):
+    """At 390 px the chart fills its box and every label wraps inside its own cell: the lanes take the full width, and a
+    label is a flex item that may shrink and wrap, so one label never overlaps its neighbour. No test engine lays the page
+    out, so this reads the rules that hold the layout."""
+    page = hub.MOBILE_PAGE
+    assert re.search(r"#proftrip \.ptlane\{[^}]*width:100%[^}]*\}", page), "the lanes take the phone's width"
+    assert re.search(r"#proftrip \.ptlabels\{[^}]*flex-wrap:wrap[^}]*\}", page), "the labels wrap as blocks, never overlap"
+    assert re.search(r"#proftrip \.ptlab\{[^}]*min-width:0[^}]*overflow-wrap:anywhere[^}]*\}", page), \
+        "a label shrinks and wraps inside its own box"
+    assert re.search(r"#profb #proftt td\{[^}]*overflow-wrap:anywhere[^}]*\}", page), "a table cell wraps inside its column"
