@@ -23,6 +23,11 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
+# Each case drives wave.sh through a clone and a push: about 2 s on an idle machine, and more under a gate's load.
+pytestmark = pytest.mark.heavy
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 GIT = "/usr/bin/git"
