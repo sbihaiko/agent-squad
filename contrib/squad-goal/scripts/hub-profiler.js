@@ -110,21 +110,20 @@ function profTripChart(t,cols){
  const lane=Math.max(PROF_TRIP_LANE,lastRow("tok")+13,lastRow("mac")+13);   // a lane holds every mean its columns print
  const tokTop=PROF_TRIP_TOP,tokBot=tokTop+lane,macTop=tokBot+PROF_TRIP_GAP,macBot=macTop+lane;
  const barY=macBot+PROF_TRIP_BAR_GAP,barBot=barY+PROF_TRIP_BAR,labTop=barBot+PROF_TRIP_ROW;
- // A point is a share (0 to 1) and an axis tick is a percent (0 to 100): the two scales differ, so no 50% tick lands
+// A point is a share (0 to 1) and an axis tick is a percent (0 to 100): the two scales differ, so no 50% tick lands
  // on the lane's top beside the 100% (#2253).
  // The scale stands inside each lane by a margin, so the top line and the zero line keep air from the lane's edges and
  // the axis values stand beside their lines, never on the edge of the lane, as the mock draws them (#2282).
  const P=PROF_TRIP_PAD,span=lane-2*P;
  const ty=v=>tokTop+P+span*(1-(top>0?Math.min(Math.max(v,0)/top,1):0));
- // The Machine lane scales each series min-max over the window (#2254): the series' own lowest reading sits at the lane's
+ // The Machine lane scales each series min-max over the window (#2254): the series' own lowest point sits at the lane's
  // bottom and its own highest at its top. CPU and RAM take one pair each, so neither line is flattened by the other's
- // span; a series with one reading in the window draws a flat line at mid height. Every reading the lane draws or prints
- // feeds the pair, a point and a column's mean alike, so a mean the lane prints never leaves an end reading a dash.
+ // span; a series with one point in the window draws a flat line at mid height. Only a point feeds the pair: a column's
+ // mean with no point belongs to no line, so a series of means alone draws nothing and reads a dash at both ends.
  const spanOf=key=>{let n=0,lo=0,hi=0;
   const add=v=>{if(typeof v!=="number"||!isFinite(v))return;if(!n){lo=hi=v}else{if(v<lo)lo=v;if(v>hi)hi=v}n++};
   bands.forEach(b=>{const l=b.c[key]||{};
-   (l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null));
-   add(l.mean)});
+   (l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null))});
   return {n,lo,hi}};
  const cpuSpan=spanOf("cpu"),ramSpan=spanOf("ram");
  const macY=(v,s)=>macTop+P+span*(1-(s.hi>s.lo?Math.min(Math.max((v-s.lo)/(s.hi-s.lo),0),1):0.5));
@@ -224,11 +223,12 @@ function profTripBands(parts,h){let x=0,out="";
 // One line joins the points of adjacent columns, and an empty column breaks it (#2253), so a gap is a gap and never a
 // drop to zero. The empty stretch takes a band over the lane from its top, marked no record, so the gap stands off the
 // data scale. A run of one point draws a dot, because a polyline of one coordinate draws nothing.
-// The span takes every reading the legend states, a point and a column's mean alike, so a mean the table prints never
-// leaves the legend reading a dash. A loop folds the values: a long window never spreads an array into Math.min.
+// The span takes the points of the line the legend states, and no mean: a column's mean with no point belongs to no
+// line, so a series of means alone draws nothing and the legend reads a dash. A loop folds the values: a long window
+// never spreads an array into Math.min.
 function profTripSpan(cols,lane){let n=0,lo=0,hi=0;
  const add=v=>{if(typeof v!=="number"||!isFinite(v))return;if(!n){lo=hi=v}else{if(v<lo)lo=v;if(v>hi)hi=v}n++};
- for(const c of cols){const l=c[lane]||{};(l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null));add(l.mean)}
+ for(const c of cols){const l=c[lane]||{};(l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null))}
  return {n,lo,hi}}
 function profTripLine(parts,lane,h,scale,cls,title){
  const y=v=>{const q=typeof v==="number"&&isFinite(v)?v:scale.lo;

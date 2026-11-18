@@ -3684,46 +3684,55 @@ def test_a_machine_series_with_one_reading_draws_a_flat_line_at_mid_height():
         "one reading in the window draws a flat line at mid height"
 
 
-def test_the_machine_lane_states_its_ends_from_every_reading_the_lane_holds():
-    """AC3 (#2254): the lane's ends state the real lowest and highest percent over every reading the lane draws or
-    prints. A window that mixes a column with a point, a column with a mean alone, and a column with neither takes its
-    ends from all of them, so a mean the table prints never hides the percent it came from."""
+def test_the_machine_lane_states_its_ends_from_the_points_it_draws():
+    """AC3 (#2254): the lane's ends state the real lowest and highest percent of the points the lane draws. A column's
+    mean with no point belongs to no line, so it never sets an end and the lane draws nothing for it; the ends tell
+    the scale of a line that exists, and a series the lane draws no point for reads a dash at both ends."""
     v = json.loads(json.dumps(CHART))
     for col in v["columns"]:
         col["cpu"] = {"points": [], "mean": None}
         col["ram"] = {"points": [], "mean": None}
     v["columns"][0]["cpu"] = {"points": [[0.5, 0.40]], "mean": 0.40}
-    v["columns"][1]["cpu"] = {"points": [], "mean": 0.60}
+    v["columns"][1]["cpu"] = {"points": [[0.5, 0.60]], "mean": 0.60}
+    v["columns"][2]["cpu"] = {"points": [], "mean": 0.20}
     svg = chart_svg(chart_js(v))
     ends = re.findall(r'<text class="ptv (ptvc|ptvr)"[^>]*>([^<]+)</text>', svg)
     assert [t for cls, t in ends if cls == "ptvc"] == ["CPU 60%", "CPU 40%"], \
-        "the highest reading stands at the lane's top and the lowest at its bottom, over a point and a mean alike"
+        "the highest drawn point stands at the lane's top and the lowest at its bottom"
     assert [t for cls, t in ends if cls == "ptvr"] == ["RAM &#8212;", "RAM &#8212;"], \
-        "a series with no reading in the window reads a dash at both ends"
-    assert re.search(r'<rect class="ptgn pts-doing"', svg), \
+        "a series with no point in the window reads a dash at both ends"
+    assert re.search(r'<rect class="ptgn pts-review"', svg), \
         "the column with no CPU point still stands marked as no record on that line"
 
 
-def test_a_machine_series_with_a_mean_and_no_point_states_that_mean_at_its_ends():
-    """AC3 (#2254): a fold that emits a mean with no point still leaves a reading the table prints. The lane states it
-    at both ends and draws no line, so neither end reads a dash over a value the table holds."""
+def test_a_machine_series_with_a_mean_and_no_point_draws_no_line_and_reads_a_dash():
+    """AC3 (#2254): a fold that emits a mean with no point leaves a value the table prints, but no reading of a line.
+    The lane draws nothing and states a dash at both ends, so no end value names a line the page never draws."""
     v = json.loads(json.dumps(CHART))
     for col in v["columns"]:
         col["cpu"] = {"points": [], "mean": 0.40}
         col["ram"] = {"points": [], "mean": 0.20}
     svg = chart_svg(chart_js(v))
     ends = re.findall(r'<text class="ptv (ptvc|ptvr)"[^>]*>([^<]+)</text>', svg)
-    assert ends == [("ptvc", "CPU 40%"), ("ptvr", "RAM 20%"), ("ptvc", "CPU 40%"), ("ptvr", "RAM 20%")], \
-        "each series states its own mean at both ends, and neither end reads a dash"
+    assert ends == [("ptvc", "CPU &#8212;"), ("ptvr", "RAM &#8212;"),
+                    ("ptvc", "CPU &#8212;"), ("ptvr", "RAM &#8212;")], \
+        "each series reads a dash at both ends, because the lane draws no line for it"
     assert not re.search(r'<circle class="ptl-(?:cpu|ram)"|<polyline class="ptl-(?:cpu|ram)"', svg), \
-        "a series with no point draws no line, so the lane states the mean without inventing a sample"
+        "a series with no point draws no line"
+    rows = {c: trip_row(chart_js(v), c) for c in ("todo", "doing")}
+    assert rows["todo"][5] == "40%" and rows["todo"][6] == "20%", \
+        "the table still prints the mean the payload holds, so the dash never hides a value"
 
 
 def test_the_machine_lane_ignores_the_windows_machine_ticks():
-    """AC3 (#2254): the payload still carries the fold's machine_ticks, but the lane now scales each series from its
-    own readings, so a different tick list changes nothing the page draws."""
+    """AC3 (#2254): the payload still carries the fold's machine_ticks, but each lane now scales its series from the
+    points it draws, so a different tick list changes nothing the wide chart or the phone lane draws."""
     assert chart_svg(chart_js({**CHART, "machine_ticks": [0, 25, 50]})) == chart_svg(chart_js()), \
-        "the fold's machine_ticks no longer set the lane's scale"
+        "the fold's machine_ticks no longer set the wide lane's scale"
+    wide = chart_js({**CHART, "machine_ticks": [0, 25, 50]})
+    assert wide == chart_js(), "the wide chart takes no reading from the fold's machine_ticks"
+    assert run_js(f"profTrip({json.dumps({**CHART, 'machine_ticks': [0, 25, 50]})},true)") == \
+        run_js(f"profTrip({json.dumps(CHART)},true)"), "the phone lane takes no reading from the fold's machine_ticks"
 
 
 def test_a_machine_series_with_one_reading_in_one_column_draws_its_dot_at_mid_height():
@@ -3814,16 +3823,38 @@ def test_the_phone_machine_lane_draws_one_reading_at_mid_height_and_names_it_in_
     assert "min-max per line" in out, "the phone lane names its per-line scale, never a whole-machine percent scale"
 
 
-def test_the_phone_machine_legend_states_a_mean_with_no_point():
-    """AC3 (#2254): the phone legend takes its ends from every reading the payload holds, a column's mean as much as a
-    point, so a mean the table prints never leaves the legend reading a dash."""
+def test_the_phone_machine_legend_reads_a_dash_for_a_mean_with_no_point():
+    """AC3 (#2254): the phone legend states the ends of the line it draws, so it takes points only. A column's mean
+    with no point leaves no line, and the legend reads a dash for that series; the table still prints the mean."""
     v = json.loads(json.dumps(CHART))
     for col in v["columns"]:
         col["cpu"] = {"points": [], "mean": 0.40}
         col["ram"] = {"points": [], "mean": 0.20}
     out = run_js(f"profTrip({json.dumps(v)},true)")
-    assert "CPU 40% (single reading)" in out and "RAM 20% (single reading)" in out, \
-        "each series states its own mean in the legend, and neither reads a dash"
+    legend = re.search(r"<span class=ptlkey>(.*?)</span></div>", out, re.S).group(1)
+    assert re.sub(r"<[^>]+>", "", legend).split() == ["CPU", "&#8212;", "RAM", "&#8212;"], \
+        "the legend reads a dash for each series the lane draws no point for"
+    assert not re.search(r'<circle class="ptl ptl-(?:cpu|ram)"|<polyline class="ptl ptl-(?:cpu|ram)"', out), \
+        "a series with no point draws no line on the phone lane either"
+    assert "<td>40%</td><td>20%</td>" in out, "the phone table still prints the mean the payload holds"
+
+
+def test_both_charts_state_one_reading_with_one_precision():
+    """AC3 (#2254): one precision helper formats an end reading for both lanes, so the wide chart's end and the phone
+    legend's end state the same string for the same reading. A reading that rounds to a whole percent never reads with
+    a decimal in one lane and without it in the other."""
+    v = json.loads(json.dumps(CHART))
+    for col in v["columns"]:
+        col["cpu"] = {"points": [], "mean": None}
+        col["ram"] = {"points": [], "mean": None}
+    v["columns"][0]["cpu"] = {"points": [[0.5, 0.405]], "mean": 0.405}
+    v["columns"][1]["cpu"] = {"points": [[0.5, 0.604]], "mean": 0.604}
+    wide = re.findall(r'<text class="ptv ptvc"[^>]*>CPU ([^<]+)</text>', chart_svg(chart_js(v)))
+    legend = re.sub(r"<[^>]+>", "", re.search(
+        r"<span class=ptlkey>(.*?)</span></div>", run_js(f"profTrip({json.dumps(v)},true)"), re.S).group(1))
+    assert wide == ["60%", "41%"], "the wide lane states each end with the shared precision"
+    assert legend.split() == ["CPU", "41%", "to", "60%", "RAM", "&#8212;"], \
+        "the phone legend states the same end strings for the same readings"
 
 
 def test_no_line_takes_the_color_of_a_column_band():
