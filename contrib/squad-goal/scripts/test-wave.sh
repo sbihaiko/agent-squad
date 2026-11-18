@@ -1475,12 +1475,16 @@ TIP1700="SERIAL_TRY=1 SG_GATE_KIND=fast bash $T/s/gate.sh bash $T/tipred1700.sh"
 # blamed on it: the wave waits and the check runs again on a later pass. A second red on that same tip takes the red path.
 # The covering pass is the row the child's entry gate wrote before the wave landed, with caller entry; the tip check runs
 # through gate.sh and writes its own row, the red one. Both name the same tree and the same suite (#1700 finding 5).
-W98=wave/run-98; start2 run-98 >/dev/null; child 1960 g1960 "origin/$W98"; en2 run-98 1960 >/dev/null
+# The wave carries two children (#2209): the one the check names leaves, and the other keeps a tip ahead of the base, so the
+# check runs again on it. A wave whose only child left runs no check at all and closes empty (W2209).
+W98=wave/run-98; start2 run-98 >/dev/null; child 1959 g1959 "origin/$W98"; en2 run-98 1959 >/dev/null; child 1960 g1960 "origin/$W98"; en2 run-98 1960 >/dev/null
 printf 'run-98\n' > "$T/st/auto/disp-1960"; : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/auto/tipred-wave_run-98"
 # The covering pass is the wave entry's row: the child's own gate ran on this tree before the wave landed, with caller entry,
 # over the same kind, selection and scope the tip check names (#1700 finding 5).
 T98=$($G -C "$T/origin.git" rev-parse "$W98")
 printf '1\tfast\tpass\t%s\t0\tselected 2 files\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tentry\n' "$T98" >> "$T/st/gate-history"
+# The tip without #1960 has a pass of its own too: the entry gate of #1959 wrote it (#1699).
+printf '1\tfast\tpass\t%s\t0\tselected 2 files\tdelta\tpass\t-\truff mypy pytest\t-\t2\t-\tentry\n' "$($G -C "$T/origin.git" rev-parse "$W98~1")" >> "$T/st/gate-history"
 r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
 [ $rc != 0 ] && case "$r" in *"WAVE WAIT $W98"*"passed before"*) true;; *) false;; esac && ok "W1687: a tip red on a tree a gate passed holds the wave for a second look" || ko "W1687: first red: exit $rc: '$r'"
 case "$r" in *"broke the wave tip"*) ko "W1687: a child was blamed on the first red of a passed tree: '$r'";; *) ok "W1687: no child is blamed on the first red of a passed tree";; esac
@@ -1492,7 +1496,7 @@ hn=$(awk -F'\t' -v s="$($G -C "$T/origin.git" rev-parse "$W98")" '$4 == s && $14
 [ "$hn" = 1 ] && ok "W1700: the covering pass is the entry gate's row on the wave tip" || ko "W1700: entry pass rows for the wave tip: '$hn' in '$(cat "$T/st/gate-history")'"
 hn=$(awk -F'\t' -v s="$($G -C "$T/origin.git" rev-parse "$W98")" '$4 == s && $14 == "tip" && $3 == "fail"' "$T/st/gate-history" | /usr/bin/grep -c .)
 [ "$hn" = 1 ] && ok "W1700: the tip check writes its own red row" || ko "W1700: tip red rows for the wave tip: '$hn' in '$(cat "$T/st/gate-history")'"
-r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='exit 1' land2 run-98 2>&1); rc=$?
+r=$(SG_WAVE_TIP_GATES="$TIP1700" SG_WAVE_CHILD_GATES='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx g1960 && exit 1; exit 0' land2 run-98 2>&1); rc=$?
 case "$r" in *"WAVE CHECK RED"*"#1960"*) ok "W1687: a second red on the same tip names the child, as before";; *) ko "W1687: second red: exit $rc: '$r'";; esac
 # After the child left, the tip without it is red too, on a tree with a pass of its own: that red takes the old path in
 # the same pass. A second look there would move the one marker to the other tip, and the wave would wait for ever (#1699).
@@ -1886,5 +1890,12 @@ case "$r" in *"WAVE REQUEUE"*) ko "W2209: the same run requeued the child twice:
 [ "$(ls "$T"/st/cq/*22092-wave* 2>/dev/null | /usr/bin/grep -c .)" = 1 ] && ok "W2209: the repeated eviction queues no second comment" || ko "W2209: queued comments: '$(ls "$T"/st/cq/ 2>/dev/null)'"
 [ "$(calls "$T/tip2209.log")" = 2 ] && ok "W2209: each held pass runs the tip gate once" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times in two held passes"
 rm -f "$T/st/auto/ccfix-run-211-1"
+# Two children, one evicted: a child is still ahead of the base, so the check runs again and the wave lands with it.
+W212=wave/run-212; start2 run-212 >/dev/null; child 22093 g22093 "origin/$W212"; en2 run-212 22093 >/dev/null; child 22094 bad2209 "origin/$W212"; en2 run-212 22094 >/dev/null
+printf 'run-212\n' > "$T/st/auto/disp-22094"; : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/tip2209.log"
+r=$(SG_WAVE_TIP_GATES="echo call >> $T/tip2209.log; [ ! -e bad2209 ]" SG_WAVE_CHILD_GATES='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2209 && exit 1; exit 0' land2 run-212 2>&1); rc=$?
+[ $rc = 0 ] && $O cat-file -e dev:g22093 2>/dev/null && ! $O cat-file -e dev:bad2209 2>/dev/null && ok "W2209: with one of two children evicted, the other still lands" || ko "W2209: two children: exit $rc: '$r'"
+[ "$(calls "$T/tip2209.log")" = 2 ] && ok "W2209: the check runs again on the tip that keeps a child" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times with a child left"
+[ "$(/usr/bin/grep -c '^o 3 Todo 22094$' "$T/board.log")" = 1 ] && /usr/bin/grep -q 'issues/22093 -f state=closed' "$T/gh.log" && ok "W2209: the evicted child is requeued once and the other child's issue closes" || ko "W2209: two children: board '$(cat "$T/board.log")'"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
