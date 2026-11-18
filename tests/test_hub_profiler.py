@@ -1220,18 +1220,53 @@ TRIP_SPANS = [{"queue": 2400.0, "wait": 10.0, "coding": 100.0, "between": 60.0, 
                "landing": 90.0, "after": 90.0, "end": NOW - 300}]
 
 
+def board_order():
+    """The board definition's column order, read from the definition itself (#2199). A test that kept its own list
+    could pass while the panel disagreed with the board, so the order comes from the shipped definition."""
+    return [s["name"] for s in load("board_columns_trip_order", SCRIPTS / "board_columns.py").shipped_columns()]
+
+
+def test_the_trip_panel_lists_its_columns_in_the_board_definitions_order(prof):
+    """#2199: the definition is the one order. The panel reads it, so Landing stands before Gating where the board puts
+    them, and no list kept in the panel can disagree with the board again."""
+    t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
+    labels = [r["label"] for r in t["columns"]]
+    assert labels == [n for n in board_order() if n in set(labels)], \
+        "the panel's rows follow the definition's column order, never a list of its own"
+    assert [r["column"] for r in t["columns"]] == [n.lower() for n in labels]
+
+
+def test_the_runs_own_gates_fold_into_the_column_the_card_holds_while_they_run(prof):
+    """#2199: the record's gates run inside the run, so they fold into Doing, the column the card holds while they run.
+    Gating is the wave's gate, read from the gate history; with none, it reads no gate at all."""
+    spans = [{**s, "gates": 90.0} for s in TRIP_SPANS]
+    rows = {r["column"]: r for r in prof.trip(spans, [], since=NOW - 3600)["columns"]}
+    assert rows["gating"]["observations"] == 0 and rows["gating"]["median_s"] is None, \
+        "the run's own gates never fold into Gating"
+    assert rows["doing"]["sum_s"] == 200.0 + 120.0 + 90.0, \
+        "the gates fold into Doing: coding 200 s and between 120 s, with the gate's 90 s beside them"
+
+
+def test_the_wave_gate_folds_into_gating(prof):
+    """#2199: Gating is the complete tier that runs after the landing, so it reads the gate history alone."""
+    gates = [{"start": NOW - 500, "finish": NOW - 440}] * 3
+    rows = {r["column"]: r for r in prof.trip(TRIP_SPANS, gates, since=NOW - 3600)["columns"]}
+    assert (rows["gating"]["observations"], rows["gating"]["median_s"]) == (3, 60.0), \
+        "the wave's three 60 s gates stand in Gating; the record's own gates stand in Doing"
+
+
 def test_the_trip_table_names_the_six_columns_in_board_order(prof):
     """#2152: a row per board column, in the board's order, so the chart and the board name one column with one word."""
     t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
-    assert [r["column"] for r in t["columns"]] == ["todo", "doing", "review", "gating", "landing", "closed"]
-    assert [r["label"] for r in t["columns"]] == ["Todo", "Doing", "Review", "Gating", "Landing", "Closed"]
+    assert [r["column"] for r in t["columns"]] == ["todo", "doing", "review", "landing", "gating", "closed"]
+    assert [r["label"] for r in t["columns"]] == ["Todo", "Doing", "Review", "Landing", "Gating", "Closed"]
 
 
 def test_the_wire_keeps_the_six_column_rows_under_stages(prof):
     """The wire keeps `stages` as the six board-column rows, in board order, each with the five keys an older reader of
     `GET /api/profiler` reads, so the payload gains `columns` and breaks no reader of `stages`."""
     t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
-    assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "gating", "landing", "closed"], \
+    assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "landing", "gating", "closed"], \
         "six rows, in the board's order"
     assert all(set(r) == {"column", "label", "median_s", "p90_s", "observations"} for r in t["stages"]), \
         "a stages row keeps exactly the five keys the older reader reads"
@@ -1256,7 +1291,7 @@ def test_the_wire_holds_six_column_rows_even_on_an_empty_window(prof):
     """A window with no delivery still answers the six rows, each with no reading, so a cached page reads a table of the
     board's own columns and never an absent key."""
     t = prof.trip([], [], 0.0)
-    assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "gating", "landing", "closed"]
+    assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "landing", "gating", "closed"]
     assert all(set(r) == {"column", "label", "median_s", "p90_s", "observations"} for r in t["stages"])
     assert t["stages"][0]["median_s"] is None and t["stages"][0]["observations"] == 0
 
@@ -1283,12 +1318,12 @@ def test_each_column_answers_its_median_and_p90_over_the_deliveries(prof):
     rows = {r["column"]: r for r in t["columns"]}
     assert rows["doing"]["median_s"] == 200.0 and rows["doing"]["p90_s"] == pytest.approx(280.0)
     assert rows["review"]["median_s"] == 40.0 and rows["review"]["observations"] == 3
-    assert rows["gating"]["median_s"] == 60.0 and rows["gating"]["observations"] == 3, \
-        "the two deliveries that hold a gate and the one gate-history row of the window"
+    assert rows["gating"]["median_s"] == 60.0 and rows["gating"]["observations"] == 1, \
+        "Gating reads the one gate-history row of the window alone; the record's own gates stand in Doing (#2199)"
     assert rows["landing"]["p90_s"] == pytest.approx(84.0)
     assert rows["closed"]["median_s"] == 60.0 and rows["closed"]["p90_s"] == pytest.approx(84.0)
-    assert rows["doing"]["share"] == pytest.approx(0.1081, abs=1e-3), "the share is the column's sum of medians over the total"
-    assert rows["todo"]["share"] == pytest.approx(0.8176, abs=1e-3), "the queue and the dispatch wait share one column"
+    assert rows["doing"]["share"] == pytest.approx(0.1344, abs=1e-3), "the share is the column's sum of medians over the total"
+    assert rows["todo"]["share"] == pytest.approx(0.7934, abs=1e-3), "the queue and the dispatch wait share one column"
 
 
 def test_the_todo_row_reads_the_queue_with_the_wait_for_a_dispatch_beside_it(prof):
@@ -1317,13 +1352,15 @@ def test_a_column_shows_its_larger_reading_and_the_other_stage_beside_it(prof):
 
 
 def test_every_stage_of_the_record_lands_in_one_of_the_six_columns(prof):
-    """#2152: the bar folds six segments, so no measurement leaves the panel, even a stage with no median."""
-    seen = set()
-    for c in prof.trip(TRIP_SPANS, [], since=NOW - 3600)["columns"]:
-        seen.add(c["stage"])
-        if c["beside"]:
-            seen.add(c["beside"]["stage"])
-    assert seen == {"queue", "wait", "coding", "between", "review", "gates", "landing", "after"}
+    """#2152, #2199: the bar folds six segments, so no measurement leaves the panel, even a stage a column does not name
+    beside its median. One delivery with every stage a distinct length: the six column sums add up to all of them, the
+    run's own gates in Doing and the wave's gate in Gating."""
+    one = [{"queue": 1.0, "wait": 2.0, "coding": 4.0, "between": 8.0, "review": 16.0, "gates": 32.0,
+            "landing": 64.0, "after": 128.0, "end": NOW - 100}] * 3
+    t = prof.trip(one, [{"start": NOW - 200, "finish": NOW - 100}], since=NOW - 3600)   # the wave's 100 s gate
+    total = sum(c["sum_s"] for c in t["columns"] if c["sum_s"] is not None)
+    assert total == 1 + 2 + 4 + 8 + 16 + 32 + 64 + 128 + 100, \
+        "every stage stands in a column, so every median adds to the bar"
 
 
 def test_a_run_that_names_no_card_reads_no_column_from_the_card(prof):
@@ -1347,14 +1384,16 @@ def test_a_delivery_that_ended_before_the_window_is_not_folded(prof):
     assert prof.trip([*TRIP_SPANS, old], [], since=NOW - 3600)["deliveries"] == 3
 
 
-# The view fixture is the fold's own answer over four worked deliveries, never a hand-written share, so the widths the
-# page paints are the widths `trip` emits. The medians the four spans give: queue 2400, wait 25, coding 250, between 150,
-# review 50, gates 120, landing 75, after 75. The total is their sum over the six columns, 3145 s, and the shares run
-# 0.7711, 0.1272, 0.0159, 0.0382, 0.0238, 0.0238.
+# The view fixture is the fold's own answer over four worked deliveries and one wave gate, never a hand-written share,
+# so the widths the page paints are the widths `trip` emits. The medians the four spans give: queue 2400, wait 25,
+# coding 250, between 150, review 50, gates 120 (these stand in Doing), landing 75, after 75, and the one gate-history
+# row adds a 60 s wave gate in Gating. The total is their sum over the six columns, 3205 s, and the shares run 0.7566,
+# 0.1622, 0.0156, 0.0234, 0.0187, 0.0234.
 TRIP_FOLD = load("hub_profiler_trip_fixture", SCRIPTS / "hub_profiler.py")
 TRIP = {**TRIP_FOLD.trip([*TRIP_SPANS,
                           {"queue": 2400.0, "wait": 40.0, "coding": 400.0, "between": 240.0, "review": 80.0,
-                           "gates": 180.0, "landing": 120.0, "after": 120.0, "end": NOW - 400}], [], since=NOW - 3600),
+                           "gates": 180.0, "landing": 120.0, "after": 120.0, "end": NOW - 400}],
+                         [{"start": NOW - 260, "finish": NOW - 200}], since=NOW - 3600),
         "window_s": 3600, "since": NOW - 3600}
 
 
@@ -1367,21 +1406,21 @@ def test_the_view_draws_the_trip_as_six_rows_named_for_the_columns_and_six_segme
     out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())"))
     assert "<h3>The trip of an issue</h3>" in out and "4 deliveries in the last 1.0 h" in out
     segs = re.findall(r'<i class="ptb-seg pts-(\w+)" style="width:([\d.]+)%" title="([^"]*)"', out)
-    assert [s[0] for s in segs] == ["todo", "doing", "review", "gating", "landing", "closed"], \
+    assert [s[0] for s in segs] == ["todo", "doing", "review", "landing", "gating", "closed"], \
         "the bar holds six segments, one per column, in board order"
-    assert [float(s[1]) for s in segs] == [77.11, 12.72, 1.59, 3.82, 2.38, 2.38], \
+    assert [float(s[1]) for s in segs] == [75.66, 16.22, 1.56, 2.34, 1.87, 2.34], \
         "each segment's width is the share the fold emits, so no width is a second arithmetic"
     assert segs[1][2] == "Doing: median 4.2 min, p90 6.2 min (4 observations); Between two children median 2.5 min", \
         "the hover names the median, the p90 and the stage beside it in words"
     assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Column", "Median", "p90", "Observations"]
     rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
-    assert [r[3] for r in rows] == ["Todo", "Doing", "Review", "Gating", "Landing", "Closed"], \
+    assert [r[3] for r in rows] == ["Todo", "Doing", "Review", "Landing", "Gating", "Closed"], \
         "six rows, each named for its board column, in board order"
     assert rows[0] == ("todo", "todo", "", "Todo", "40.0 min &middot; Wait for a dispatch 25.0 s", "40.0 min", "4"), \
         "the Todo row reads the queue with the dispatch wait beside it in the same cell, named in words"
     assert rows[1] == ("doing", "doing", "", "Doing", "4.2 min &middot; Between two children 2.5 min", "6.2 min", "4")
-    assert rows[3][4:6] == ("2.0 min", "2.8 min")
-    assert rows[4][4:6] == ("1.3 min", "1.9 min")
+    assert rows[3][4:6] == ("1.3 min", "1.9 min"), "Landing stands before Gating, where the board puts it"
+    assert rows[4][4:6] == ("1.0 min", "1.0 min"), "Gating reads the wave gate, never the run's own gate"
     assert [r[1] for r in rows] == [s[0] for s in segs], "a row's swatch is the color of its segment, in the same order: the table is the bar's legend"
     assert all(r[0] == r[1] for r in rows), "the swatch of a row names the column the row names"
 
@@ -1455,18 +1494,18 @@ def test_the_route_answers_the_trip_of_the_window_the_page_asked_for(hub):
     code, v = ask(port, "GET")
     assert code == 200 and v["trip"]["window_s"] == 86400 and v["trip"]["bar"] is True
     assert v["trip"]["deliveries"] == 3, "the delivery two days back is outside the day the page asked for"
-    assert [c["column"] for c in v["trip"]["columns"]] == ["todo", "doing", "review", "gating", "landing", "closed"]
-    assert {c["column"]: c["observations"] for c in v["trip"]["columns"]}["gating"] == 5, \
-        "three deliveries hold a gate each, and the gate history adds its two rows that ran a battery"
+    assert [c["column"] for c in v["trip"]["columns"]] == ["todo", "doing", "review", "landing", "gating", "closed"]
+    assert {c["column"]: c["observations"] for c in v["trip"]["columns"]}["gating"] == 2, \
+        "Gating reads the two gate-history rows that ran a battery; the run's own three gates stand in Doing (#2199)"
     assert v["trip"]["columns"][0]["stage"] == "wait", "a run that names no card still reads its dispatch wait"
     assert v["trip"]["columns"][5]["median_s"] is None, "a run that names no card reads no Closed time"
     cols = {c["column"]: c for c in v["trip"]["columns"]}
-    assert cols["doing"]["sum_s"] == cols["doing"]["median_s"] + cols["doing"]["beside"]["median_s"] == 200.0, \
-        "a two-stage column's segment is the sum of both stage medians, so the span between children stays in the panel"
+    assert cols["doing"]["sum_s"] == 200.0 + cols["doing"]["beside"]["median_s"] + 90.0, \
+        "Doing's segment sums coding 200 s, the 0 s between two children and the run's own 90 s gate"
     assert cols["todo"]["sum_s"] == cols["todo"]["median_s"] == 30.0 and cols["todo"]["beside"] is None, \
         "with no card, the Todo segment is the dispatch wait alone"
-    assert sum(c["share"] for c in v["trip"]["columns"]) == pytest.approx(1.0), \
-        "the six shares divide the whole bar, so no measurement leaves the panel"
+    assert sum(c["share"] for c in v["trip"]["columns"]) == pytest.approx(1.0, abs=1e-3), \
+        "the six rounded shares divide the whole bar, so no measurement leaves the panel"
     assert table.reads == 0, "the trip reads files only, so it shows with the switch off"
     assert ask(port, "GET", path="/api/profiler?w=3600")[1]["trip"]["window_s"] == 3600
 

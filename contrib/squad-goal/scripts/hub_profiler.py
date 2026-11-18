@@ -23,9 +23,16 @@ it answers, is a lower bound.
 """
 import collections
 import functools
+import importlib.util
 import math
+import pathlib
 import re
 import shlex
+
+# The board definition is the one order of its columns (ADR-0170): the trip reads it from the vocabulary module beside
+# this script, so the panel never keeps a list that could disagree with the board (#2199).
+_columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.Path(__file__).resolve().parent / "board_columns.py")
+_board_columns = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_board_columns)
 
 SPAN_S = 600   # the window a profile covers: long enough to see a slow cycle, short enough that an old storm leaves it
 
@@ -577,26 +584,41 @@ def failed_run_table(rows, window_s, now):
             "rows": out, "label": RUN_TABLE_LABEL}
 
 
-# ---------------------------------------------------------------- the trip of one issue (#1769, #2152)
-# One stacked bar of the trip of an issue, folded into the board's six columns. A column holds the stages the loop spends
-# its time in there: Todo holds the queue before the run and the wait for a dispatch, Doing holds coding and the gap
-# between two children, and Review, Gating, Landing and Closed hold the review, the gates, the landing and the wait past
-# the verdict (#1894). A column answers its larger stage's median and p90, with the other stage beside it, and its
-# segment is the sum of its stages' medians, so no measurement leaves the panel. A delivery is a run whose record holds
-# both a passed land and a verdict; a run that landed nothing is no delivery and is not folded. The bars and tables read
-# the percentiles on the `(n - 1)` weight, the rule `docs/loop-sequence.md` names, so a number taken here and the trip
-# table agree.
-TRIP_COLUMNS = (("todo", "Todo", ("queue", "wait")), ("doing", "Doing", ("coding", "between")),
-                ("review", "Review", ("review",)), ("gating", "Gating", ("gates",)),
-                ("landing", "Landing", ("landing",)), ("closed", "Closed", ("after",)))
+# ---------------------------------------------------------------- the trip of one issue (#1769, #2152, #2199)
+# One stacked bar of the trip of an issue, folded into the board's six columns, in the definition's order. A column holds
+# the stages the loop spends its time in there: Todo holds the queue before the run and the wait for a dispatch, Doing
+# holds coding, the gap between two children and the run's own gates, and Review, Landing, Gating and Closed hold the
+# review, the landing, the wave's gate and the wait past the verdict (#1894). A column answers its larger stage's median
+# and p90, with the other stage beside it, and its segment is the sum of its stages' medians, so no measurement leaves the
+# panel. A delivery is a run whose record holds both a passed land and a verdict; a run that landed nothing is no delivery
+# and is not folded. The bars and tables read the percentiles on the `(n - 1)` weight, the rule `docs/loop-sequence.md`
+# names, so a number taken here and the trip table agree.
+#
+# The run's own gates run inside the run, while the card stands in Doing, so they fold there. Gating is the complete tier
+# that runs after the landing (ADR-0170), read from the gate history alone; a record's gate is never a Gating time.
+TRIP_COLUMN_STAGES = {"Todo": ("queue", "wait"), "Doing": ("coding", "between", "gates"), "Review": ("review",),
+                      "Landing": ("landing",), "Gating": ("gate",), "Closed": ("after",)}
+
+
+def trip_columns():
+    """The trip's columns in the board definition's order: the six columns of a delivery this fold reads, each as
+    `(key, label, stages)`. The order and the names come from the definition (ADR-0170), never a list kept here, so the
+    panel and the board name one column with one word in one order (#2199)."""
+    return tuple((s["name"].lower(), s["name"], TRIP_COLUMN_STAGES[s["name"]])
+                 for s in _board_columns.shipped_columns() if s["name"] in TRIP_COLUMN_STAGES)
+
+
 # The record's own stage keys with their captions, in the order `trip_spans` names them. `TRIP_STAGES` is the flat tuple
 # of stage keys the fold reads; `TRIP_STAGES_LABELLED` is the `(key, caption)` pairs. Only this module imports either; the
 # payload's `record_stages` list keeps the pair shape, while `stages` stays the six board-column rows of the older wire.
 TRIP_STAGES_LABELLED = (("queue", "Queued before the run"), ("wait", "Wait for a dispatch"), ("coding", "Coding"),
-                        ("between", "Between two children"), ("review", "Review"), ("gates", "Gates"),
+                        ("between", "Between two children"), ("review", "Review"), ("gates", "Gates in the run"),
                         ("landing", "Landing"), ("after", "After the verdict"))
 TRIP_STAGE_LABELS = dict(TRIP_STAGES_LABELLED)
 TRIP_STAGES = tuple(key for key, _ in TRIP_STAGES_LABELLED)
+GATING_GATE = "gate"   # the wave's gate, read from the gate history: Gating is the tier after the landing (#2199)
+TRIP_STAGE_LABELS[GATING_GATE] = "Gates"
+TRIP_FOLD_KEYS = TRIP_STAGES + (GATING_GATE,)   # every stage the fold reads, the record's own and the gate history's
 TRIP_MIN_DELIVERIES = 3   # fewer than three deliveries say so and draw no bar: a median of two is no profile
 TRIP_LABEL = "The trip of an issue"
 _START = frozenset(("run_start", "resume"))   # an event that opens an invocation: the fold reads the last one only
@@ -719,11 +741,12 @@ def _row_stage(keys, readings):
 
 def trip(spans, gates, since):
     """The trip of one issue as one stacked bar of the board's columns: each column's median and p90 over the deliveries
-    of a window, in the board's order, `Todo`, `Doing`, `Review`, `Gating`, `Landing` and `Closed`.
+    of a window, in the definition's order, `Todo`, `Doing`, `Review`, `Landing`, `Gating` and `Closed`.
 
     `spans` is one `trip_spans` answer per run record, None for a record that is no delivery; `gates` is one dict per
     gate-history row of the window, `start` and `finish` in seconds. A delivery is a run whose verdict is at or after
-    `since`; each gate row after `since` adds one observation to the gates stage, beside the gates each record holds.
+    `since`; each gate row after `since` adds one observation to the wave's gate, which stands in Gating. The run's own
+    `gates` stage stands in Doing, where the card is while it runs (#2199); the record's gate is never a Gating time.
     A column that holds two stages answers the larger of the two medians as its `median_s` and `p90_s`, and the other
     stage beside it in `beside`, with its own caption; a stage with no reading leaves `beside` None, so a run that names
     no card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians, the width its
@@ -734,7 +757,7 @@ def trip(spans, gates, since):
     `TRIP_STAGES_LABELLED` with its own median and share. Fewer than `TRIP_MIN_DELIVERIES` deliveries answer `bar`
     False, and the page says so and draws no bar.
     """
-    per = {key: [] for key in TRIP_STAGES}
+    per = {key: [] for key in TRIP_FOLD_KEYS}
     deliveries = 0
     for s in spans:
         if s is None or s["end"] < since:
@@ -746,13 +769,14 @@ def trip(spans, gates, since):
     for gate in gates:
         d = gate_span(gate, since)
         if d is not None:
-            per["gates"].append(d)
+            per[GATING_GATE].append(d)
     readings = {key: (percentile(v, 50), percentile(v, 90), len(v)) for key, v in per.items()}
-    held = {col: [k for k in keys if readings[k][0] is not None] for col, _, keys in TRIP_COLUMNS}
+    columns = trip_columns()
+    held = {col: [k for k in keys if readings[k][0] is not None] for col, _, keys in columns}
     sums = {col: sum(readings[k][0] for k in ks) for col, ks in held.items()}
     total = sum(sums.values())
     rows, stages = [], []
-    for col, label, keys in TRIP_COLUMNS:
+    for col, label, keys in columns:
         main = _row_stage(keys, readings)
         median, p90, n = readings[main]
         beside, others = None, [k for k in keys if k != main]
