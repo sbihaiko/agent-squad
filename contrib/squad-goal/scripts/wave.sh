@@ -932,7 +932,7 @@ child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | refs_in_message | 
 
 # held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575); a try-mode skip of
 # the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the holders it names (#567).
-held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^serial: lock gate: the landing.s gate is queued ahead: skipped, not queued.*/landing/p' -e 's/^caps: caps\.gates is full ([0-9]* slots), held by \(.*\): .* skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
+held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^serial: lock gate: the landing.s gate is queued ahead: skipped, not queued.*/landing/p' -e 's/^caps: caps\.gates is full ([0-9]* slots), held by \(.*\): .* skipped, not queued (try)$/slots:\1/p' -e 's/^caps: caps\.gates has [0-9]* free slot(s) of [0-9]*: .*; held by \(.*\) (lease pid .* skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
 # waited_out <output>: the bounded wait for the gate lock or the gate slots ran out (serial.sh and caps.py both exit 75 then, and
 # name it). A 75 without that line is the check's own hold deadline, which is a failed check, not a hold (#955).
 waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* waited [0-9.]+s for caps\.gates'; }
@@ -1118,9 +1118,14 @@ wave_check() {
     [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null
     # 3: the check ran no verdict, and the log stays: the landing that waits has to leave the cause and its trace for the
     # next pass (#1700).
-    if [ $rc = 73 ] && hid=$(held_by "$(cat "$clog")"); then
+    # 73 is a skip: the gate took no slot, so the check measured nothing, whatever its line names (ADR-0164). A red is the
+    # check's own answer, 1 or 4, never a skip (#2330).
+    if [ $rc = 73 ]; then
+      hid=$(held_by "$(cat "$clog")")
       case "$hid" in
         slots:*) waitwhy="the tip's check did not run: the gate slots are held by ${hid#slots:}";;
+        landing) waitwhy="the tip's check did not run: the landing's gate is queued ahead of it";;
+        "") waitwhy="the tip's check did not run: the gate took no slot, so it proved nothing (exit 73)";;
         *) waitwhy="the tip's check did not run: the gate lock is held by pid $hid";; esac
       rm -f "$of"; return 3
     fi
@@ -1942,7 +1947,8 @@ land_queue() {
 # the first run last. A wave with nothing ahead of the base leaves the batch before it is sized and lands empty on its own
 # (`land`), after the batch's books; a run that owes a close or is past its age cap does the same (#2288). Exit 10: the batch does not fit --
 # fewer than two waves fit and carry commits, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused --
-# and the caller lands each run alone. Exit 1: the base is red or the gate ran no verdict, so every run waits for a later pass. Exit 2: the network failed.
+# and the caller lands each run alone. Exit 1: the base is red or the gate ran no verdict -- a skip (73) or a wait that ran out (75)
+# measured nothing and waits for a later pass -- so every run waits. Exit 2: the network failed.
 land_batch() {
   local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
   local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0 self0 selfrd er erd
@@ -2003,7 +2009,9 @@ land_batch() {
       gating "$S" "$bstart..HEAD" "${rs[@]}"   # the cards of every wave in the batch stand in Gating while its gate waits or runs (ADR-0170)
       (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${rs[0]}" SG_GATE_CALLER=tip SG_GATE_BATCH="${#rs[@]}:$ids" && eval "$tipgate") >"$clog" 2>&1; rc=$?
       oc=; [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null; rm -f "$of"
-      if { [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null; } || { [ $rc = 75 ] && waited_out "$(cat "$clog")"; }; then
+      # 73 is a skip: the tip's check took no slot, so it measured nothing and blamed nobody. The batch waits for a later pass
+      # and never sends its runs alone, whatever the skip's line names (#2330); a red is the check's own answer, 1 or 4.
+      if [ $rc = 73 ] || { [ $rc = 75 ] && waited_out "$(cat "$clog")"; }; then
         echo "WAVE WAIT batch $ids: the tip's check did not run (the gate lock or slots are held); the batch lands on a later pass (its output is $clog)"; rm -rf "$S"; return 1
       fi
       case "$oc" in pass|unproven|fail) ;; *) oc=; [ $rc = 0 ] && oc=pass; [ $rc = 4 ] && oc=unproven;; esac

@@ -27,6 +27,8 @@
 # so a third gate runs with 2 to 4 workers instead of giving up; fewer than two free is no take, so a gate never holds part of its
 # slots while it waits for the rest. The take is one try, never a wait: a gate that cannot take its slots gives the lock back at
 # once and exits 73, so no gate queues behind a budget it cannot use and no resource is held while the other is awaited.
+# A tip or landing check is the one exception (ADR-0174): it hands its bounded wait to `caps take`, which answers 75 when the bound
+# runs out and names the expiry on its own line, so a waited-out wait is never reported as a skip (73).
 # SQUAD_GATE_WORKERS is the count the gate actually took, and the battery's pytest runs with it. Slots are re-entrant as the lock
 # is: a gate inside a gate holder (SG_SERIAL_HELD names gate) takes none and keeps the holder's SQUAD_GATE_WORKERS. A project file
 # that lowers caps.gates below SG_GATE_WORKERS gives the gate min(workers, ceiling) slots, never a wait for slots that cannot exist.
@@ -311,19 +313,16 @@ case "${1:-}" in
     # bound, and no new gate takes the lock this gate holds, so the wait is one bound plus a margin, never a single try.
     # (#2049) While it waits, its take names the caller as a priority: a waiting marker names this gate as the next holder,
     # and no child gate takes a freed slot until this gate takes its slots or gives up.
-    prio=()
+    prio=(); take=(--try)
     case ${SG_GATE_CALLER:-} in tip|landing)
       prio=(--priority "$SG_GATE_CALLER")
-      : "${SG_GATE_SLOT_WAIT:=1}"; : "${SG_GATE_SLOT_WAIT_SECONDS:=$(( ${SG_GATE_MAX_SECONDS:-900} + 60 ))}";; esac
-    slot_by=$(( $(date +%s) + ${SG_GATE_SLOT_WAIT_SECONDS:-120} )); slot_rc=0
-    while :; do
-      SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try "${prio[@]}"); slot_rc=$?
-      [ "$slot_rc" = 0 ] && break
-      [ "${SG_GATE_SLOT_WAIT:-0}" = 1 ] && [ "$slot_rc" = 73 ] && [ "$(date +%s)" -lt "$slot_by" ] || {
-        [ ${#prio[@]} = 0 ] || sg_caps release gates "gate-$$" >/dev/null 2>&1; exit "$slot_rc"; }
-      echo "gate: holding the lock for its slots: a full battery needs the whole count, so it waits for the running gates to end" >&2
-      sleep 2
-    done
+      : "${SG_GATE_SLOT_WAIT:=1}"; : "${SG_GATE_SLOT_WAIT_SECONDS:=$(( ${SG_GATE_MAX_SECONDS:-900} + 60 ))}"
+      # (#2330) A waiting tip or landing check hands its bound to the budget's one command. caps.py answers 75 when the bound
+      # runs out, with the one line every waited-out reader names. A skip (73) is never a waited-out wait: it means the gate
+      # took no slot at once, and a landing that reads it as the check's own answer lands its runs alone.
+      [ "${SG_GATE_SLOT_WAIT:-0}" = 1 ] && take=(--wait "${SG_GATE_SLOT_WAIT_SECONDS:-120}");; esac
+    SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" "${take[@]}" "${prio[@]}"); slot_rc=$?
+    [ "$slot_rc" = 0 ] || { [ ${#prio[@]} = 0 ] || sg_caps release gates "gate-$$" >/dev/null 2>&1; exit "$slot_rc"; }
     export SQUAD_GATE_WORKERS
     trap 'exit 143' TERM; trap 'exit 130' INT   # a stop past the hold deadline still runs the EXIT trap below
     trap 'sg_caps release gates "gate-$$"' EXIT

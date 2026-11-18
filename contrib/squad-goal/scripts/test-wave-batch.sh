@@ -179,4 +179,17 @@ r=$(mgate run-mc); rc=$?
 [ "$(/usr/bin/grep -v '^GATE$' "$T/board.log" | sort -u)" = "$(printf 'o 3 Gating 131\no 3 Gating 132')" ] && ok "n: a red attempt writes no move after Gating" || ko "n: board log '$(cat "$T/board.log")': '$r'"
 rm -f "$T/st/auto"/wland-*
 
+# o (#2330): a tip check that took no slot measured nothing, so the batch waits for a later pass. It never reads that skip as a
+# failed check and lands each run alone, which runs one full battery per run.
+printf '#!/bin/bash\necho "caps: caps.gates has 2 free slot(s) of 3: gate-9 needs its whole count of 3; held by child-gate-7: gate-9 skipped, not queued (try)" >&2\nexit 73\n' > "$T/o-tip.sh"
+ogate() { (cd "$T/co" && SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES="bash '$T/o-tip.sh'" bash "$T/s/wave.sh" land "$1" "$T/co/runs/$1" 2>&1); }
+rm -f "$T/st/auto"/wland-*; mkrun run-ta 141; mkrun run-tb 142; queue run-tb; reset
+r=$(ogate run-ta); rc=$?
+[ $rc != 0 ] && ok "o: the pass waits" || ko "o: exit $rc: '$r'"
+case "$r" in *"WAVE WAIT batch run-ta,run-tb"*) ok "o: one wait line names the batch";; *) ko "o: no wait line: '$r'";; esac
+case "$r" in *"each run lands alone"*) ko "o: the batch read the skip as a failed check: '$r'";; *) ok "o: the skip never lands each run alone";; esac
+[ "$(devpushes)" = 0 ] && ok "o: no wave lands on the skipped check" || ko "o: pushes to dev: '$(cat "$T/pushes.log")'"
+$O rev-parse -q --verify wave/run-tb >/dev/null && ok "o: the queued wave keeps its branch" || ko "o: the queued run's branch went"
+rm -f "$T/st/auto"/wland-*
+
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
