@@ -810,18 +810,21 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     `spans` is one `trip_spans` answer per run record; `cards[i]` is record i's column runs
     (`{"column", "start", "end"}`), `calls[i]` its `trip_calls` answer. A delivery is a record whose verdict is at or
     after `since`, the same rule the bar folds by, so the bar and the lines cover one set of deliveries. `review_calls`
-    is the review token ledger as `{at, tokens}` rows, each placed on the first delivery whose Review run holds its
-    time, so one ledger line is never counted twice. `loads` is one `load_row` answer per minute record line.
+    is the review token ledger as `{at, tokens}` rows, each placed on the narrowest Review run that holds its time, so
+    one ledger line is never counted twice and two parallel reviews never lose the line to whichever run the fold met
+    first. `loads` is one `load_row` answer per minute record line; None is a record the caller may not read, and then
+    no minute is counted as silent.
 
     The Tokens line is tokens per minute of the column: a bin's tokens over the minutes the deliveries spend in that
-    bin; its mean is the column's tokens over all its minutes. `tokens_per_issue` is the column's tokens over the
-    deliveries that stood in it, a true 0 for a column with no model call. CPU and RAM are shares from 0 to 1, the
+    bin; its mean is the column's tokens over all its minutes. `tokens_per_issue` is the column's tokens over its
+    visits, a visit being one delivery's run in the column, so a card that re-enters a column adds a visit and is never
+    charged as one issue twice over; a column with no model call reads a true 0. CPU and RAM are shares from 0 to 1, the
     minute record's percent divided by 100. `peak_load` is the window's highest reading, `cores` the machine's core
     count, `mem_gb` its memory, and `no_record_minutes` the minutes of the window with no record.
     """
     keys = [key for key, _, _ in trip_columns()]
     N = TRIP_SERIES_POINTS
-    tok = {k: {"bin": [0.0] * N, "min": [0.0] * N, "n": [0] * N, "total": 0.0, "issues": 0} for k in keys}
+    tok = {k: {"bin": [0.0] * N, "min": [0.0] * N, "n": [0] * N, "total": 0.0, "visits": 0} for k in keys}
     lines = {k: {name: ([[] for _ in range(N)], []) for name in ("cpu", "ram")} for k in keys}
     now = since if now is None else now
     live = []
@@ -830,17 +833,16 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
             continue
         runs = cards[i] if cards and i < len(cards) and cards[i] else ()
         live.append(runs)
-        in_col = set()
         for r in runs:
             k = str(r.get("column") or "").lower()
             a, b = r.get("start"), r.get("end")
             if k not in tok or not (_num(a) and _num(b)) or b <= a:
                 continue
-            in_col.add(k)
+            # One visit per run: a card back in the same column is a new visit, so its tokens divide by the runs that
+            # spent them, never by the one issue that made them.
+            tok[k]["visits"] += 1
             for j in range(N):
                 tok[k]["min"][j] += (b - a) / N / 60.0
-        for k in in_col:
-            tok[k]["issues"] += 1
         for c in (calls[i] if calls and i < len(calls) and calls[i] else ()):
             t, n = c.get("at"), c.get("tokens")
             if not _num(t) or not _num(n):
@@ -854,17 +856,29 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
             tok[k]["total"] += n
     for c in review_calls or ():
         t, n = c.get("at"), c.get("tokens")
-        if not (_num(t) and _num(n)):
+        if "review" not in tok or not (_num(t) and _num(n)):
             continue
+        # The ledger names no delivery, so the line goes to the narrowest Review run that holds it: two parallel reviews
+        # both hold the call's time, and the narrow one is the closest match. A tie keeps the earliest delivery met.
+        best = None
         for runs in live:
-            loc = _run_at(runs, t, "review")
-            if loc is None:
-                continue
-            k, j = loc
-            tok[k]["bin"][j] += n
-            tok[k]["n"][j] += 1
-            tok[k]["total"] += n
-            break
+            for r in runs or ():
+                if str(r.get("column") or "").lower() != "review":
+                    continue
+                a, b = r.get("start"), r.get("end")
+                if not (_num(a) and _num(b)) or b <= a or not (a <= t < b):
+                    continue
+                width = b - a
+                if best is not None and width >= best[0]:
+                    continue
+                p = min(1.0, max(0.0, (t - a) / width))
+                best = (width, min(int(p * N), N - 1))
+        if best is None:
+            continue
+        j = best[1]
+        tok["review"]["bin"][j] += n
+        tok["review"]["n"][j] += 1
+        tok["review"]["total"] += n
     for row in loads or ():
         t = row.get("at")
         if not _num(t) or not (since <= t <= now):
@@ -890,7 +904,7 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
         # The mean is the column's rate: a delivery with no call reads no mean, and a call with no tokens reads a 0.
         mean = tok[k]["total"] / mins if mins > 0 and sum(tok[k]["n"]) else None
         line = {"tokens": _series(bins, mean),
-                "tokens_per_issue": round(tok[k]["total"] / tok[k]["issues"], 4) if tok[k]["issues"] else 0.0}
+                "tokens_per_issue": round(tok[k]["total"] / tok[k]["visits"], 4) if tok[k]["visits"] else 0.0}
         for name in ("cpu", "ram"):
             per_bin, every = lines[k][name]
             mean = sum(every) / len(every) if every else None
@@ -901,9 +915,11 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     covered = {row["at"] for row in loads or () if _num(row.get("at")) and _num(row.get("load"))
                and since <= row["at"] <= now}
     minutes = int((now - since) // LOAD_CADENCE_S) if _num(now) and now > since else 0
+    # A record the caller may not read is no reading at all: it asserts neither a peak nor a count of silent minutes,
+    # never the whole window as a count it never made.
     return {"lines": out, "peak_load": max(peak) if peak else None,
             "cores": max(int(cores or 1), 1), "mem_gb": mem_gb,
-            "no_record_minutes": max(0, minutes - len(covered))}
+            "no_record_minutes": None if loads is None else max(0, minutes - len(covered))}
 
 
 def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=None, now=None,

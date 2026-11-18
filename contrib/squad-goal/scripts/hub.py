@@ -2857,14 +2857,15 @@ def trip_review_calls(since):
             if c["t0"] >= since and not c.get("uncounted")]
 
 def mem_total_gb():
-    """The machine's memory in gigabytes, the number the RAM line's hover reads: the kernel's own figure, else psutil,
-    else None. None is no guess."""
+    """The machine's memory in gibibytes, the size the reader's own system shows, and the number the RAM line's hover
+    reads: the kernel's own figure, else psutil, else None. None is no guess: a machine that answers neither source
+    carries no memory figure, and the hover names no size."""
     total = _sysctl_u64("hw.memsize")
     if not total:
         try:
             import psutil; total = psutil.virtual_memory().total
         except Exception: total = 0
-    return round(total / 1e9, 1) if total else None
+    return round(total / 1024 ** 3, 1) if total else None
 
 def load_rows_now():
     """The minute record's rows, re-read only when the file's identity moved: the one cache `load_view` keeps, so the
@@ -2881,7 +2882,8 @@ def trip_view(window_s, now=None, allowed=True):
     it shows with the CPU sampling switch off. Beside the bar it carries what each column consumes (#2227): the run
     records' call outcomes and the review token ledger as Tokens, and the minute record's whole-machine CPU and RAM, each
     sample placed in the column the card stood in at its time. `allowed` False is a caller the hub refused: then the
-    minute record is not stat and the CPU and RAM lines read no row, as the load chart reads none."""
+    minute record is not stat, the CPU and RAM lines read no row, and the payload asserts neither a peak nor a count of
+    silent minutes, as the load chart reads none."""
     now = time.time() if now is None else now
     since = now - window_s
     files = []
@@ -2898,7 +2900,7 @@ def trip_view(window_s, now=None, allowed=True):
                                  for p in files], trip_gates(since), since,
                                 cards=[next((columns[n] for n in issues[p] if n in columns), None) for p in files],
                                 calls=[trip_calls_of(p) for p in files], review_calls=trip_review_calls(since),
-                                loads=load_rows_now() if allowed else [], now=now, cores=os.cpu_count(),
+                                loads=load_rows_now() if allowed else None, now=now, cores=os.cpu_count(),
                                 mem_gb=mem_total_gb())}
 
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line

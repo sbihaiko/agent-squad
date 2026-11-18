@@ -1520,6 +1520,37 @@ def test_a_column_with_no_model_call_carries_zero_tokens_per_issue(prof):
     assert rows["doing"]["tokens_per_issue"] == 0.0, "a column no delivery stood in spends a zero too"
 
 
+def test_a_delivery_that_re_enters_a_column_counts_one_visit_for_each_run(prof):
+    """Todo → Doing → Todo: the card stands in Todo twice, so the column's rate divides the two visits' 2000 tokens by
+    the two visits, never by the one issue that made them."""
+    out = prof.trip([span_at(2400.0)], [], since=CS,
+                    cards=[card(("Todo", 0.0, 600.0), ("Doing", 600.0, 1200.0), ("Todo", 1200.0, 2400.0))],
+                    calls=[[{"at": CS + 300.0, "tokens": 1000}, {"at": CS + 1800.0, "tokens": 1000}]],
+                    loads=[], now=CS + 3600.0)
+    todo = {r["column"]: r for r in out["columns"]}["todo"]
+    assert todo["tokens_per_issue"] == 1000.0, "the column's tokens over its two visits, one visit for each run"
+
+
+def test_a_review_call_of_two_parallel_reviews_lands_on_the_narrowest_run(prof):
+    """Two cards stand in Review when one ledger line lands, and the ledger names no delivery: the line goes to the
+    narrowest Review run that holds it, counted once, never to whichever run the fold met first."""
+    out = prof.trip([span_at(1800.0), span_at(1800.0)], [], since=CS,
+                    cards=[card(("Review", 0.0, 1800.0)), card(("Review", 600.0, 1800.0))],
+                    calls=[[], []], review_calls=[{"at": CS + 1200.0, "tokens": 500}],
+                    loads=[], now=CS + 3600.0)
+    review = {r["column"]: r for r in out["columns"]}["review"]
+    assert review["tokens"]["points"] == [[0.5625, 80.0]], \
+        "the 1200 s run is narrower than the 1800 s one, so the line at 0.5 of it counts once, over the bin's 6.25 min"
+    assert review["tokens_per_issue"] == 250.0, "the line is counted once, over the column's two visits"
+
+
+def test_a_refused_caller_reads_no_count_of_the_records_minutes(prof):
+    out = prof.trip([span_at(600.0)], [], since=CS, cards=[card(("Doing", 0.0, 600.0))], calls=[[]],
+                    loads=None, now=CS + 3600.0)
+    assert out["peak_load"] is None and out["no_record_minutes"] is None, \
+        "a record the caller may not read asserts no count of its minutes, never the whole window"
+
+
 def test_the_payload_carries_the_peak_the_cores_and_the_minutes_with_no_record(prof):
     rows = every_minute(3001.0)
     rows[0]["load"] = 14.0
@@ -1590,6 +1621,21 @@ def test_the_route_carries_the_tokens_cpu_and_ram_of_each_column(hub):
         shutil.rmtree(d, ignore_errors=True)
         hist.unlink(missing_ok=True)
         (state / "load-record.tsv").unlink(missing_ok=True)
+
+
+def test_the_machines_memory_is_a_gib_figure(hub, monkeypatch):
+    """The RAM hover names the size the reader's OS shows: 16 GiB is 16.0, never the decimal 17.2."""
+    mod, *_ = hub
+    monkeypatch.setattr(mod, "_sysctl_u64", lambda name: 16 * 1024 ** 3)
+    assert mod.mem_total_gb() == 16.0, "the machine's memory in gibibytes, the figure the OS shows"
+
+
+def test_a_refused_trip_view_reads_no_minute_count_of_the_record(hub):
+    """A caller the hub refused never stats the minute record, so its trip asserts no count of the missing minutes."""
+    mod, *_ = hub
+    trip = mod.trip_view(3600, allowed=False)
+    assert trip["peak_load"] is None and trip["no_record_minutes"] is None, \
+        "the record is unread, so the payload names neither a peak nor a count of silent minutes"
 
 
 # The view fixture is the fold's own answer over four worked deliveries and one wave gate, never a hand-written share,
