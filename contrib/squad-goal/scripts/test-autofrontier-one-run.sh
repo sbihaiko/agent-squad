@@ -370,6 +370,10 @@ issues "[{\"number\":55,\"title\":\"a\",\"body\":\"b\",\"labels\":[{\"name\":\"w
 r=$(run)
 [ "$(marked 55)" = 1 ] && ok "LB: a label beside another build's marker goes out" || ko "LB: #55 held by its label beside another build's marker: '$r'"
 [ "$(marked 56)" = 0 ] && ok "LB: a label beside the current build's marker still holds" || ko "LB: #56 went out beside the current build's marker: '$r'"
+# LB2 (#2217): the label of another build does not outlive it: the pass queues the removal the comment queue runs (cqflush
+# unstart~), which deletes the label and the stale marker. The label beside the current build's marker stays.
+ls "$d/st/cq/"o__r#55-unstart~* >/dev/null 2>&1 && ok "LB2: the stale label and its marker are queued for removal" || ko "LB2: the stale frozen:not-startable label of #55 outlives its build"
+ls "$d/st/cq/"o__r#56-unstart~* >/dev/null 2>&1 && ko "LB2: the removal is queued for the issue of this build" || ok "LB2: the label of this build is kept"
 
 # Y: the frozen:not-startable label is the visible marker: an issue that carries it is skipped as the comment is, with no comment on it.
 scene frozennotstartable

@@ -267,6 +267,7 @@ while [ $i -lt ${#cands[@]} ]; do
   # with the marker and never alone past it. A list entry that says the marker holds needs no read; one that says it does not still
   # needs one when the label is there, to tell a marker of another build from no marker at all.
   flab=; case ",$labels," in *",frozen:not-startable,"*) flab=1;; esac
+  sg_rearm_stale "$n" "$flab"   # a label of another build goes with its marker; the label of this build stays (#2217, ADR-0159)
   hold=; if [ "$ns" = true ]; then hold=1; elif [ "$ns" != false ] || [ -n "$flab" ]; then sg_not_startable "$n" "$flab" && hold=1; fi
   [ -n "$hold" ] && { why_card "$n" "not startable" "SQUAD-NOT-STARTABLE (its marker, or its label with no marker to re-arm it)"; echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE (its marker, or its frozen:not-startable label with no marker to re-arm it) holds it"; continue; }
   h=$(sg_ledger_held "$n") && { why_card "$n" held "a corrupt ledger holds it"; echo "FRONTIER skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)

@@ -364,19 +364,46 @@ stop() {
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }
 
+# freeze_stand <issue> <class>: 0 when the issue already carries the freeze this class writes, so a later run of the same
+# class writes no label and no comment again (#2217). owner-only stands while both of its labels are there, because only
+# the owner lifts that freeze. does-not-reproduce stands only while its marker names this build: a later build dispatches
+# the issue, so that freeze is written anew. A read that does not answer is no proof of a freeze: the caller writes, and
+# GitHub dedupes a label it already holds.
+freeze_stand() {
+  local n=$1 cls=$2 labels cur body
+  labels=$(gh_api "repos/$SG_REPO/issues/$n/labels" -q '[.[]?.name] | join(" ")' 2>/dev/null) || return 1
+  if [ "$cls" = owner-only ]; then
+    case " $labels " in *" frozen:owner "*) ;; *) return 1;; esac
+    case " $labels " in *" needs-ratification "*) return 0;; *) return 1;; esac
+  fi
+  case " $labels " in *" frozen:not-startable "*) ;; *) return 1;; esac
+  cur=$(sg_loop_build)
+  [ -n "$cur" ] || return 1
+  body=$(gh_api "repos/$SG_REPO/issues/$n/comments?per_page=100" -q '.[].body' 2>/dev/null) || return 1
+  printf '%s\n' "$body" | /usr/bin/grep -q "^SQUAD-NOT-STARTABLE: build=${cur} "
+}
+
 # freeze_class <issue> <run> <why> <class>: a failed run whose artifact named its end class freezes its issue in one comment that
-# quotes the reason (#2217). owner-only takes frozen:owner and needs-ratification, held until the owner frees it. does-not-reproduce
-# writes the not-startable marker at this build, so a later build dispatches the issue again.
+# quotes the reason (#2217). owner-only takes frozen:owner and needs-ratification in one label request, held until the owner
+# frees it; a request GitHub refuses freezes nothing, and the caller reports the partial state. does-not-reproduce writes the
+# not-startable marker at this build, so a later build dispatches the issue again. Sets froze=1 when it wrote the freeze and
+# froze=0 when the freeze already stood.
 freeze_class() {
   local n=$1 run=$2 why=$3 cls=$4 f out
+  froze=0
+  freeze_stand "$n" "$cls" && return 0
   if [ "$cls" = owner-only ]; then
-    freeze_owner "$n"
-    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=needs-ratification" 2>&1) || printf 'WAVE-FREEZE #%s needs-ratification refused: %s\n' "$n" "$out"
-    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) && printf 'Loop freeze: run %s ended failed with an owner-only reason. The loop does not dispatch this issue again; the owner decides it.\n\nReason: %s\n' "$run" "$why" > "$f"
+    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" -f "labels[]=needs-ratification" 2>&1) || {
+      printf 'WAVE-FREEZE #%s frozen:owner and needs-ratification refused: %s\n' "$n" "$out"; return 1; }
+    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
+    printf 'Loop freeze: run %s ended failed with an owner-only reason. The loop does not dispatch this issue again; the owner decides it.\n\nReason: %s\n' "$run" "$why" > "$f"
   else
-    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" 2>&1) || printf 'WAVE-FREEZE #%s frozen:not-startable refused: %s\n' "$n" "$out"
-    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) && printf 'SQUAD-NOT-STARTABLE: build=%s run %s ended failed: the defect does not reproduce at the base tip. A later build dispatches it again.\n\nReason: %s\n' "$(sg_loop_build)" "$run" "$why" > "$f"
+    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" 2>&1) || {
+      printf 'WAVE-FREEZE #%s frozen:not-startable refused: %s\n' "$n" "$out"; return 1; }
+    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
+    printf 'SQUAD-NOT-STARTABLE: build=%s run %s ended failed: the defect does not reproduce at the base tip. A later build dispatches it again.\n\nReason: %s\n' "$(sg_loop_build)" "$run" "$why" > "$f"
   fi
+  froze=1
 }
 
 # hand <issue> <why>: the issue's own count reached SG_HAND_AT (2 by default) below SG_REQUEUE_CAP, so the loop hands it to
@@ -611,24 +638,28 @@ retire_run() {
   rm -f "$m" "$m.done"
 }
 
-fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
-  local n=$1 run=$2 why=$3
+fail() {   # <issue> <run> <why> [own|loop] [end class]: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
+  local n=$1 run=$2 why=$3 kind=${4:-} cls=${5:-} loopf=0
   { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
   probe_refuted "$n" "$run" && return 0   # a probe whose acceptance command is unmet refutes its premise (#888)
-  if [ -n "${5:-}" ]; then   # the artifact named its end class (#2217): the issue freezes once, and no count reaches the cap
-    count "$n" "$run" "$why" "${4:-own}"
-    [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
-    freeze_class "$n" "$run" "$why" "$5"
-    echo "WAVE FROZEN #$n: run $run ended $5, so it is not dispatched again: $why"; return 0
+  loop_caused "$why" "$kind" && loopf=1
+  # The count decision: one failed dispatch, which a run counts once, under its own ledger when the loop caused it (#621).
+  if [ "$loopf" = 1 ]; then count "$n" "$run" "$why" loop; else count "$n" "$run" "$why" own; fi
+  # The freeze decision, apart from the count (#2217): an artifact that named its end class freezes the issue even when a
+  # loop-caused reason would never reach the count's cap. The freeze is its own idempotence marker, so a later run of the
+  # same class writes nothing again.
+  if [ -n "$cls" ]; then
+    freeze_class "$n" "$run" "$why" "$cls" \
+      || { echo "WAVE FREEZE PARTIAL #$n: run $run ended $cls and the freeze did not complete: $why"; return 1; }
+    [ "$froze" = 1 ] && echo "WAVE FROZEN #$n: run $run ended $cls, so it is not dispatched again: $why" \
+                     || echo "WAVE FROZEN #$n: run $run ended $cls; its freeze already stands: $why"
+    return 0
   fi
-  if loop_caused "$why" "${4:-}"; then   # the loop's failure, not the issue's (#621): its own ledger and bound
-    count "$n" "$run" "$why" loop
-    [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
+  [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
+  if [ "$loopf" = 1 ]; then
     [ "$c" -ge "${SG_LOOP_REQUEUE_CAP:-6}" ] && { loop_stop "$n" "$why"; return 0; }
     echo "WAVE FAILED #$n: loop-caused, $c of ${SG_LOOP_REQUEUE_CAP:-6} (run $run), not counted toward the cap: $why"; return 0
   fi
-  count "$n" "$run" "$why"
-  [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
   [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ] && { stop "$n" "$why"; return 0; }
   hand "$n" "$why" && return 0
   echo "WAVE FAILED #$n: $c of ${SG_REQUEUE_CAP:-3} failed dispatches with no change (run $run): $why"

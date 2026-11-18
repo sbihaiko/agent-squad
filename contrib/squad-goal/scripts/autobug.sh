@@ -372,6 +372,7 @@ for sel in "$lab" debt; do
     # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
     # is one request per candidate that got this far, and it is a refusal-safe read like every other one here.
     flab=; case ",$labels," in *",frozen:not-startable,"*) flab=1;; esac
+    sg_rearm_stale "$n" "$flab"   # a label of another build goes with its marker; the label of this build stays (#2217, ADR-0159)
     sg_not_startable "$n" "$flab" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE (its marker, or its frozen:not-startable label with no marker to re-arm it)"; continue; }
     h=$(sg_ledger_held "$n") && { echo "AUTOBUG skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
     # ADR-0150 across runs: a live run that edits a file of this bug's body holds the bug, and the line names that run. The
