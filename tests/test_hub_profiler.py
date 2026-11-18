@@ -3259,7 +3259,6 @@ def test_no_chart_text_overlaps_another_label_or_a_number_at_390_px_and_at_1440_
     """AC1 (#2253): every label, mean and axis value keeps its own box at the phone width and at the desktop width.
     The chart sizes its text in SVG user units, so each glyph box scales with the viewBox; the test measures the boxes
     in pixels at both widths and fails on any overlap."""
-    src = (SCRIPTS / "hub-profiler.js").read_text()
     _, _, font = chart_metrics()
     svg = chart_svg(chart_js())
     assert f"font-size={font:g}" in svg, "the chart sizes its text in SVG user units"
