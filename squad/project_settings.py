@@ -63,6 +63,11 @@ CATALOG = {
     "tailnet.profiler_write": ("bool", None, None, "true or false", "the tailnet may turn the hub's CPU sampling on and off; off, that switch is read-only from the tailnet"),
     "tailnet.board_priority_write": ("bool", None, None, "true or false", "the tailnet may set a card's Priority from the hub; off, that write is refused from the tailnet"),
 }
+# The board columns a card limit may bound (#2287). `columns.<column>.max_cards` takes a whole number from 1 to 100, or
+# none for no limit; `squad/board_limits.py` resolves the value the frontier, the review pass and the hub read.
+COLUMN_CARDS = ("Todo", "Doing", "Review", "Landing", "Gating")
+for _column in COLUMN_CARDS:
+    CATALOG[f"columns.{_column}.max_cards"] = ("intnone", 1, 100, "cards", f"cards the {_column} column holds; none means no limit")
 # The keys the plugin defaults must hold; a missing one is a defect of that file. The rest are optional.
 REQUIRED = {"options.effort", "options.permission_mode", "limits.max_stalls", "limits.max_budget_usd", "limits.max_output_tokens", "limits.context_tokens",
             "limits.deadline_seconds", "run.max_parallel", "run.spend_cap"}
@@ -178,6 +183,11 @@ def value_defect(spec, v, key=""):
     elif kind == "bool":
         if not isinstance(v, bool):
             return "must be true or false"
+    elif kind == "intnone":
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, int) or not low <= v <= high:
+            return f"must be an integer from {low} to {high}, or none"
     else:
         if isinstance(v, bool) or not isinstance(v, (int, float)) or (kind == "int" and int(v) != v):
             return f"must be {'an integer' if kind == 'int' else 'a number'} ({unit})"
@@ -286,6 +296,8 @@ def _coerce(key, raw):
     spec = CATALOG.get("options." + key.split(".")[-1]) if key.startswith("roles.") else CATALOG.get(key)
     if spec and spec[0] == "str":
         return raw
+    if spec and spec[0] == "intnone" and isinstance(raw, str) and raw.strip().lower() in ("none", "null"):
+        return None
     try:
         return yaml.safe_load(raw)
     except yaml.YAMLError:
