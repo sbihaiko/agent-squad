@@ -140,4 +140,24 @@ $O cat-file -e dev:g-run-u 2>/dev/null && ok "j: the wave with commits is in the
 [ "$(closes)" = "91 " ] && ok "j: its issue closes" || ko "j: closes '$(closes)': '$r'"
 rm -f "$T/st/auto"/wland-*
 
+# k (#2288): a lead past its age cap leaves the batch and takes its own path; the two fresh waves land behind one tip gate.
+mkrun run-v 101; mkrun run-w 102; mkrun run-x 103; queue run-w; queue run-x; reset
+echo $(( $(date +%s) - 100000 )) > "$T/st/auto/wave-start-run-v"
+r=$(landq run-v); rc=$?
+case "$r" in *"run-v is past its age cap, so it leaves the batch"*) ok "k: the expired lead leaves the batch";; *) ko "k: no leave line: '$r'";; esac
+/usr/bin/grep -qE '^2:run-(w,run-x|x,run-w) ' "$TIPLOG" && ok "k: the two fresh waves share one tip gate" || ko "k: tip gates: '$(cat "$TIPLOG")': '$r'"
+$O cat-file -e dev:g-run-w 2>/dev/null && $O cat-file -e dev:g-run-x 2>/dev/null && ok "k: both fresh waves are in the base" || ko "k: dev lacks a fresh wave: '$r'"
+[ -e "$T/st/auto/wland-run-w" ] && [ -e "$T/st/auto/wland-run-x" ] && ok "k: each fresh run gets its landed marker" || ko "k: markers: $(ls "$T/st/auto")"
+rm -f "$T/st/auto"/wland-*
+
+# l (#2288): a red base makes the batch wait before it stacks a wave: no gate runs and no wave lands.
+mkrun run-y 111; mkrun run-z 112; queue run-z; reset
+printf 'red2 %s fast-battery ended failure\n' "$(date +%s)" > "$T/st/auto/basecheck-$($O rev-parse dev)"
+r=$(landq run-y); rc=$?
+[ $rc != 0 ] && ok "l: the pass waits on a red base" || ko "l: exit $rc: '$r'"
+[ ! -s "$TIPLOG" ] && ok "l: no gate runs on a red base" || ko "l: tip gates: '$(cat "$TIPLOG")': '$r'"
+[ "$(devpushes)" = 0 ] && ok "l: no wave lands on a red base" || ko "l: pushes: '$(cat "$T/pushes.log")'"
+case "$r" in *"WAVE WAIT batch run-y,run-z"*) ok "l: one wait line names the batch";; *) ko "l: no wait line: '$r'";; esac
+rm -f "$T/st/auto"/basecheck-* "$T/st/auto"/wland-*
+
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

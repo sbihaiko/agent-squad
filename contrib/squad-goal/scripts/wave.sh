@@ -1921,9 +1921,9 @@ land_queue() {
 # the fetch, with a new stack and a new gate, as `land` does. After the push each run takes `land`'s own books (land_books)
 # over its own range of the stack: the claimed runs first, with the `BATCH <run>:` prefix and their `wland-<run>` marker, and
 # the first run last. A wave with nothing ahead of the base leaves the batch before it is sized and lands empty on its own
-# (`land`), after the batch's books. Exit 10: the batch does not fit -- a run owes a close, is past its age cap, fewer than two
-# waves carry commits, the base is red, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused --
-# and the caller lands each run alone. Exit 1: the gate ran no verdict, so every run waits for a later pass. Exit 2: the network failed.
+# (`land`), after the batch's books; a run that owes a close or is past its age cap does the same (#2288). Exit 10: the batch does not fit --
+# fewer than two waves fit and carry commits, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused --
+# and the caller lands each run alone. Exit 1: the base is red or the gate ran no verdict, so every run waits for a later pass. Exit 2: the network failed.
 land_batch() {
   local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
   local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0 self0 selfrd er erd
@@ -1933,10 +1933,21 @@ land_batch() {
     rs+=("$1"); rds+=("$rd")
     ws+=("$(wave_of "$1")"); shift 2; done
   self0=${rs[0]:-}; selfrd=${rds[0]:-}
+  # A red base fails every gate the batch or a lone run would start, so the batch waits before it stacks a wave, as the lone
+  # landing waits (#2288).
+  red=$(sg_base_red "$base") && { echo "WAVE WAIT batch $(IFS=,; printf '%s' "${rs[*]}"): $red; the batch lands on a later pass"; return 1; }
+  # A run that owes a close or is past its age cap takes its own landing path, so it leaves the batch and lands alone after
+  # it, as an empty wave does; the other runs stay in one batch (#2288). One such run used to send every run of the batch alone.
+  kr=() krd=() kw=()
   for i in "${!rs[@]}"; do
-    [ -z "$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "${rs[$i]}" 2>/dev/null)" ] || { echo "WAVE BATCH: ${rs[$i]} owes a close, so each run lands alone"; return 10; }
-    expired "${rs[$i]}" && { echo "WAVE BATCH: ${rs[$i]} is past its age cap, so each run lands alone"; return 10; }
+    if [ -n "$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "${rs[$i]}" 2>/dev/null)" ]; then
+      echo "WAVE BATCH: ${rs[$i]} owes a close, so it leaves the batch and lands alone"; ers+=("${rs[$i]}"); erds+=("${rds[$i]}")
+    elif expired "${rs[$i]}"; then
+      echo "WAVE BATCH: ${rs[$i]} is past its age cap, so it leaves the batch and lands alone"; ers+=("${rs[$i]}"); erds+=("${rds[$i]}")
+    else kr+=("${rs[$i]}"); krd+=("${rds[$i]}"); kw+=("${ws[$i]}"); fi
   done
+  rs=("${kr[@]}"); rds=("${krd[@]}"); ws=("${kw[@]}")
+  [ "${#rs[@]}" -ge 2 ] || { echo "WAVE BATCH: ${#rs[@]} wave(s) fit the batch, so each run lands alone"; return 10; }
   S=$(mktemp -d) || return 10
   sc() { $G -C "$S" "$@"; }
   sc init -q . && sc remote add origin "$remote" 2>/dev/null
@@ -1965,7 +1976,6 @@ land_batch() {
       [ "$(sc rev-parse HEAD)" != "$k" ] || { echo "WAVE BATCH: ${ws[$i]} adds nothing to the stack, so each run lands alone"; rm -rf "$S"; return 10; }
       sc checkout -q -B land HEAD 2>/dev/null; tips+=("$(sc rev-parse HEAD)")
     done
-    red=$(sg_base_red "$base") && { echo "WAVE BATCH: $red, so each run lands alone"; rm -rf "$S"; return 10; }
     # One tip gate on the exact stacked tip, as wave_check runs it, with the batch named for the gate history (SG_GATE_BATCH).
     # No child is blamed here: a red goes to the fallback, where each wave's own check keeps its red path.
     if [ -n "$tipgate" ]; then
