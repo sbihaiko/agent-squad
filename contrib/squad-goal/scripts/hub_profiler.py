@@ -761,6 +761,9 @@ def _row_stage(keys, readings):
 # `tokens_per_issue` says so.
 TRIP_SERIES_POINTS = 8
 TRIP_LINES = ("tokens", "cpu", "ram")
+# A load average is the runnable work on a machine of `cores` cores. A reading over ten times the core count is a burst
+# of runnable threads, not a reading of saturation, so the fold reports it as invalid and never as the peak (#2253).
+LOAD_SANE_PER_CORE = 10.0
 
 
 def trip_calls(events):
@@ -831,8 +834,11 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     bin; its mean is the column's tokens over all its minutes. `tokens_per_issue` is the column's tokens over its
     visits, a visit being one delivery's run in the column, so a card that re-enters a column adds a visit and is never
     charged as one issue twice over; a column with no model call reads a true 0. CPU and RAM are shares from 0 to 1, the
-    minute record's percent divided by 100. `peak_load` is the window's highest reading, `cores` the machine's core
-    count, `mem_gb` its memory, and `no_record_minutes` the minutes of the window with no record.
+    minute record's percent divided by 100. `peak_load` is the window's highest sane reading, `cores` the machine's
+    core count, `mem_gb` its memory, and `no_record_minutes` the minutes of the window with no record. A reading over
+    `load_bound` is a burst of runnable threads, not a saturation reading: the fold reports it in `invalid_loads` and
+    never as the peak (#2253). `ram_minutes` counts the minutes that carry a memory value, so the page can name why a
+    RAM cell reads a dash.
     """
     keys = [key for key, _, _ in trip_columns()]
     N = TRIP_SERIES_POINTS
@@ -922,10 +928,20 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
             mean = sum(every) / len(every) if every else None
             line[name] = _series([sum(v) / len(v) if v else None for v in per_bin], mean)
         out[k] = line
-    peak = [row["load"] for row in loads or () if _num(row.get("at")) and _num(row.get("load"))
-            and since <= row["at"] <= now]
+    cores_n = max(int(cores or 1), 1)
+    bound = LOAD_SANE_PER_CORE * cores_n
+    readings = [row["load"] for row in loads or () if _num(row.get("at")) and _num(row.get("load"))
+                and since <= row["at"] <= now]
+    # A reading over the sane bound is a burst of runnable threads, never the machine's saturation: it is counted as
+    # invalid and kept out of the peak, so the page never names an impossible number as the machine's load (#2253).
+    sane = [v for v in readings if v <= bound]
+    invalid = [v for v in readings if v > bound]
     covered = {row["at"] for row in loads or () if _num(row.get("at")) and _num(row.get("load"))
                and since <= row["at"] <= now}
+    # The RAM line has a source only from the day the minute record gained its memory field (#2222): a row with no
+    # value is no reading, and the page states why a column draws no RAM line where the window holds none.
+    ram_minutes = None if loads is None else sum(
+        1 for row in loads or () if _num(row.get("at")) and _num(row.get("ram")) and since <= row["at"] <= now)
     minutes = int((now - since) // LOAD_CADENCE_S) if _num(now) and now > since else 0
     # The page draws the three ticks of each lane (#2228), so the fold names them: the Tokens lane covers the highest
     # rate any column holds, and the Machine lane a fixed 0 to 100% of the machine. The top tick is a round number
@@ -936,9 +952,11 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     top = _tokens_top(max(rates)) if rates else 0.0
     # A record the caller may not read is no reading at all: it asserts neither a peak nor a count of silent minutes,
     # never the whole window as a count it never made.
-    return {"lines": out, "peak_load": max(peak) if peak else None,
-            "cores": max(int(cores or 1), 1), "mem_gb": mem_gb,
+    return {"lines": out, "peak_load": max(sane) if sane else None,
+            "cores": cores_n, "mem_gb": mem_gb, "load_bound": bound,
+            "invalid_loads": len(invalid), "invalid_peak": max(invalid) if invalid else None,
             "no_record_minutes": None if loads is None else max(0, minutes - len(covered)),
+            "ram_minutes": ram_minutes, "window_minutes": minutes,
             "tokens_ticks": [0, round(top / 2, 4), top], "machine_ticks": [0, 50, 100]}
 
 
@@ -1014,7 +1032,12 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "columns": rows, "stages": stages,
             "record_stages": record_stages, "label": TRIP_LABEL,
             "peak_load": consumed["peak_load"], "cores": consumed["cores"], "mem_gb": consumed["mem_gb"],
-            "no_record_minutes": consumed["no_record_minutes"],
+            "load_bound": consumed["load_bound"], "invalid_loads": consumed["invalid_loads"],
+            "invalid_peak": consumed["invalid_peak"], "ram_minutes": consumed["ram_minutes"],
+            "window_minutes": consumed["window_minutes"], "no_record_minutes": consumed["no_record_minutes"],
+            # One header holds every row's count, but Gating counts the window's gate-history rows while every other
+            # column counts deliveries, so the payload names the difference both tables print (#2253).
+            "observations_note": "Gating counts gate runs; every other column counts deliveries",
             "tokens_ticks": consumed["tokens_ticks"], "machine_ticks": consumed["machine_ticks"]}
 
 

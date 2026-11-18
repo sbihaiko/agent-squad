@@ -185,7 +185,7 @@ def test_the_phone_draws_the_tokens_lane_and_the_machine_lane_from_the_payload()
     assert re.search(r'class="ptl ptl-cpu"', html) and re.search(r'class="ptl ptl-ram"', html), \
         "the machine lane draws the payload's CPU series solid and its RAM series dashed"
     tok = re.findall(r'class="ptl ptl-tok"[^>]*points="([^"]+)"', html)
-    assert len(tok) == 3, "one Tokens line per column that holds a point, and none for the empty Gating column"
+    assert len(tok) == 1, "one Tokens line joins the three adjacent columns that hold a point, and the empty one breaks it"
 
 
 @pytest.mark.node_bound
