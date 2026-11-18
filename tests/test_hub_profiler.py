@@ -3253,7 +3253,8 @@ def test_the_chart_draws_a_tokens_lane_and_a_machine_lane_each_with_its_values()
     ends = re.findall(r'<text class="ptv (?:ptvc|ptvr)"[^>]*>([^<]+)</text>', out)
     assert ends == ["CPU 50%", "RAM 40%", "CPU 50%", "RAM 40%"], \
         "the Machine lane states the real lowest and highest percent for CPU and for RAM at its ends"
-    assert "k tokens / min" in out and "% of the machine" in out, "each lane names its unit in the gutter"
+    assert "k tokens / min" in out and "min-max per line" in out, \
+        "the Tokens lane names its unit, and the Machine lane names its per-line scale in the gutter"
 
 
 def test_a_narrow_column_takes_a_leader_line_to_its_band():
@@ -3418,6 +3419,67 @@ def test_a_machine_series_with_one_reading_draws_a_flat_line_at_mid_height():
         "one reading in the window draws a flat line at mid height"
 
 
+def test_the_machine_lane_states_its_ends_from_every_reading_the_lane_holds():
+    """AC3 (#2254): the lane's ends state the real lowest and highest percent over every reading the lane draws or
+    prints. A window that mixes a column with a point, a column with a mean alone, and a column with neither takes its
+    ends from all of them, so a mean the table prints never hides the percent it came from."""
+    v = json.loads(json.dumps(CHART))
+    for col in v["columns"]:
+        col["cpu"] = {"points": [], "mean": None}
+        col["ram"] = {"points": [], "mean": None}
+    v["columns"][0]["cpu"] = {"points": [[0.5, 0.40]], "mean": 0.40}
+    v["columns"][1]["cpu"] = {"points": [], "mean": 0.60}
+    svg = chart_svg(chart_js(v))
+    ends = re.findall(r'<text class="ptv (ptvc|ptvr)"[^>]*>([^<]+)</text>', svg)
+    assert [t for cls, t in ends if cls == "ptvc"] == ["CPU 60%", "CPU 40%"], \
+        "the highest reading stands at the lane's top and the lowest at its bottom, over a point and a mean alike"
+    assert [t for cls, t in ends if cls == "ptvr"] == ["RAM &#8212;", "RAM &#8212;"], \
+        "a series with no reading in the window reads a dash at both ends"
+    assert re.search(r'<rect class="ptgn pts-doing"', svg), \
+        "the column with no CPU point still stands marked as no record on that line"
+
+
+def test_a_machine_series_with_a_mean_and_no_point_states_that_mean_at_its_ends():
+    """AC3 (#2254): a fold that emits a mean with no point still leaves a reading the table prints. The lane states it
+    at both ends and draws no line, so neither end reads a dash over a value the table holds."""
+    v = json.loads(json.dumps(CHART))
+    for col in v["columns"]:
+        col["cpu"] = {"points": [], "mean": 0.40}
+        col["ram"] = {"points": [], "mean": 0.20}
+    svg = chart_svg(chart_js(v))
+    ends = re.findall(r'<text class="ptv (ptvc|ptvr)"[^>]*>([^<]+)</text>', svg)
+    assert ends == [("ptvc", "CPU 40%"), ("ptvr", "RAM 20%"), ("ptvc", "CPU 40%"), ("ptvr", "RAM 20%")], \
+        "each series states its own mean at both ends, and neither end reads a dash"
+    assert not re.search(r'<circle class="ptl-(?:cpu|ram)"|<polyline class="ptl-(?:cpu|ram)"', svg), \
+        "a series with no point draws no line, so the lane states the mean without inventing a sample"
+
+
+def test_the_machine_lane_ignores_the_windows_machine_ticks():
+    """AC3 (#2254): the payload still carries the fold's machine_ticks, but the lane now scales each series from its
+    own readings, so a different tick list changes nothing the page draws."""
+    assert chart_svg(chart_js({**CHART, "machine_ticks": [0, 25, 50]})) == chart_svg(chart_js()), \
+        "the fold's machine_ticks no longer set the lane's scale"
+
+
+def test_a_machine_series_with_one_reading_in_one_column_draws_its_dot_at_mid_height():
+    """AC5 (#2254): the realistic single-reading window holds one CPU point in one column and none in the rest. The
+    lane draws that reading as a dot at the lane's middle and states the same value at both ends, so one reading
+    reads as neither the lane's top nor its bottom."""
+    c = trip_consts()
+    mid = c["top"] + c["lane"] + c["gap"] + c["lane"] / 2
+    v = json.loads(json.dumps(CHART))
+    for col in v["columns"]:
+        col["cpu"] = {"points": [], "mean": None}
+        col["ram"] = {"points": [], "mean": None}
+    v["columns"][0]["cpu"] = {"points": [[0.5, 0.55]], "mean": 0.55}
+    svg = chart_svg(chart_js(v))
+    dot = re.search(r'<circle class="ptl-cpu" cx="[\d.]+" cy="([\d.]+)"', svg)
+    assert dot, "a run of one point draws a dot, because a polyline of one coordinate draws nothing"
+    assert float(dot.group(1)) == pytest.approx(mid, abs=0.1), "the single reading sits at the lane's middle"
+    assert re.findall(r'<text class="ptv ptvc"[^>]*>([^<]+)</text>', svg) == ["CPU 55%", "CPU 55%"], \
+        "both ends state the one reading"
+
+
 def test_each_axis_value_prints_once():
     """AC3 (#2254): the Tokens lane's three values print once, and the Machine lane's four end values print once
     each, in the gutter."""
@@ -3465,6 +3527,38 @@ def test_the_phone_lanes_mark_a_column_with_no_point_as_no_record():
     out = run_js(f"profTrip({json.dumps(v)},true)")
     mark = re.search(r'<rect class="ptl-nr"[^>]*><title>([^<]*)</title></rect>', out)
     assert mark and "no record" in mark.group(1), "the empty column's stretch is marked, never drawn as a zero"
+
+
+def test_the_phone_machine_lane_draws_one_reading_at_mid_height_and_names_it_in_the_legend():
+    """AC3 and AC5 (#2254): the phone lane and its legend state the real ends of each line. A line with one reading in
+    the window says so in the legend, draws that reading at the lane's middle, and the lane's accessibility label
+    names the flat case."""
+    h = float(re.search(r"PROF_MACH_H=(\d+)", (SCRIPTS / "hub-profiler.js").read_text()).group(1))
+    v = json.loads(json.dumps(CHART))
+    for col in v["columns"]:
+        col["cpu"] = {"points": [], "mean": None}
+        col["ram"] = {"points": [], "mean": None}
+    v["columns"][0]["cpu"] = {"points": [[0.5, 0.55]], "mean": 0.55}
+    out = run_js(f"profTrip({json.dumps(v)},true)")
+    assert "CPU 55% (single reading)" in out, "the legend names the one reading instead of a range of one value"
+    assert "CPU 55% to 55%" not in out, "a range of one value never prints as a range"
+    dot = re.search(r'<circle class="ptl ptl-cpu" cx="[\d.]+" cy="([\d.]+)"', out)
+    assert dot, "a run of one point draws a dot on the phone lane"
+    assert float(dot.group(1)) == pytest.approx(h / 2, abs=0.1), "one reading sits at the lane's middle"
+    assert "mid height when it holds one reading" in out, "the lane's accessibility label names the flat case"
+    assert "min-max per line" in out, "the phone lane names its per-line scale, never a whole-machine percent scale"
+
+
+def test_the_phone_machine_legend_states_a_mean_with_no_point():
+    """AC3 (#2254): the phone legend takes its ends from every reading the payload holds, a column's mean as much as a
+    point, so a mean the table prints never leaves the legend reading a dash."""
+    v = json.loads(json.dumps(CHART))
+    for col in v["columns"]:
+        col["cpu"] = {"points": [], "mean": 0.40}
+        col["ram"] = {"points": [], "mean": 0.20}
+    out = run_js(f"profTrip({json.dumps(v)},true)")
+    assert "CPU 40% (single reading)" in out and "RAM 20% (single reading)" in out, \
+        "each series states its own mean in the legend, and neither reads a dash"
 
 
 def test_no_line_takes_the_color_of_a_column_band():
@@ -4243,7 +4337,7 @@ def test_each_lane_names_its_unit_and_legend_in_the_left_gutter():
     left of the plot, outside it."""
     c = trip_consts()
     svg = chart_svg(chart_js())
-    for text in ("Tokens", "k tokens / min", "Machine", "% of the machine", "CPU", "RAM"):
+    for text in ("Tokens", "k tokens / min", "Machine", "min-max per line", "CPU", "RAM"):
         m = re.search(r'<text class=(?:ptn|ptu)[^>]*x="(\d+)"[^>]*>' + re.escape(text) + "</text>", svg)
         assert m and float(m.group(1)) < c["gutter"], f"{text} stands in the left gutter"
     assert re.search(r'<line class="ptkey ptl-cpu"[^>]*></line>', svg), "the CPU legend keeps the CPU line's colour"

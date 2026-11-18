@@ -94,10 +94,14 @@ function profTripChart(t,cols){
  const ty=v=>tokTop+lane*(1-(top>0?Math.min(Math.max(v,0)/top,1):0));
  // The Machine lane scales each series min-max over the window (#2254): the series' own lowest reading sits at the lane's
  // bottom and its own highest at its top. CPU and RAM take one pair each, so neither line is flattened by the other's
- // span; a series with one reading in the window draws a flat line at mid height.
- const spanOf=key=>{const vals=bands.flatMap(b=>(((b.c[key]||{}).points)||[]).map(p=>p[1]))
-   .filter(v=>typeof v==="number"&&isFinite(v));
-  return {n:vals.length,lo:vals.length?Math.min(...vals):0,hi:vals.length?Math.max(...vals):0}};
+ // span; a series with one reading in the window draws a flat line at mid height. Every reading the lane draws or prints
+ // feeds the pair, a point and a column's mean alike, so a mean the lane prints never leaves an end reading a dash.
+ const spanOf=key=>{let n=0,lo=0,hi=0;
+  const add=v=>{if(typeof v!=="number"||!isFinite(v))return;if(!n){lo=hi=v}else{if(v<lo)lo=v;if(v>hi)hi=v}n++};
+  bands.forEach(b=>{const l=b.c[key]||{};
+   (l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null));
+   add(l.mean)});
+  return {n,lo,hi}};
  const cpuSpan=spanOf("cpu"),ramSpan=spanOf("ram");
  const macY=(v,s)=>macTop+lane*(1-(s.hi>s.lo?Math.min(Math.max((v-s.lo)/(s.hi-s.lo),0),1):0.5));
  const endPct=(s,v)=>s.n?profTripPct(v):"&#8212;";
@@ -117,7 +121,7 @@ function profTripChart(t,cols){
  const gutter=`<text class=ptn x="0" y="${(tokTop+12).toFixed(1)}">Tokens</text>`
   +`<text class=ptu x="0" y="${(tokTop+27).toFixed(1)}">k tokens / min</text>`
   +`<text class=ptn x="0" y="${(macTop+12).toFixed(1)}">Machine</text>`
-  +`<text class=ptu x="0" y="${(macTop+27).toFixed(1)}">% of the machine</text>`
+  +`<text class=ptu x="0" y="${(macTop+27).toFixed(1)}">min-max per line</text>`
   +`<line class="ptkey ptl-cpu" x1="0" y1="${(macTop+45).toFixed(1)}" x2="16" y2="${(macTop+45).toFixed(1)}"></line>`
   +`<text class=ptu x="20" y="${(macTop+49).toFixed(1)}">CPU</text>`
   +`<line class="ptkey ptl-ram" x1="0" y1="${(macTop+63).toFixed(1)}" x2="16" y2="${(macTop+63).toFixed(1)}">${ramMem}</line>`
@@ -188,11 +192,15 @@ function profTripBands(parts,h){let x=0,out="";
 // One line joins the points of adjacent columns, and an empty column breaks it (#2253), so a gap is a gap and never a
 // drop to zero. The empty stretch takes a band over the lane from its top, marked no record, so the gap stands off the
 // data scale. A run of one point draws a dot, because a polyline of one coordinate draws nothing.
-function profTripSpan(cols,lane){const vals=cols.flatMap(c=>(((c[lane]||{}).points)||[]).map(p=>p[1]))
-  .filter(v=>typeof v==="number"&&isFinite(v));
- return {n:vals.length,lo:vals.length?Math.min(...vals):0,hi:vals.length?Math.max(...vals):0}}
+// The span takes every reading the legend states, a point and a column's mean alike, so a mean the table prints never
+// leaves the legend reading a dash. A loop folds the values: a long window never spreads an array into Math.min.
+function profTripSpan(cols,lane){let n=0,lo=0,hi=0;
+ const add=v=>{if(typeof v!=="number"||!isFinite(v))return;if(!n){lo=hi=v}else{if(v<lo)lo=v;if(v>hi)hi=v}n++};
+ for(const c of cols){const l=c[lane]||{};(l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null));add(l.mean)}
+ return {n,lo,hi}}
 function profTripLine(parts,lane,h,scale,cls,title){
- const y=v=>h*(1-(scale.hi>scale.lo?Math.min(1,Math.max(0,((v||0)-scale.lo)/(scale.hi-scale.lo))):0.5));
+ const y=v=>{const q=typeof v==="number"&&isFinite(v)?v:scale.lo;
+  return h*(1-(scale.hi>scale.lo?Math.min(1,Math.max(0,(q-scale.lo)/(scale.hi-scale.lo))):0.5))};
  let x=0,out="",run=[];
  const flush=()=>{if(run.length===1){const q=run[0];out+=`<circle class="ptl ${cls}" cx="${q.x}" cy="${q.y}" r="3">${q.t}</circle>`}
   else if(run.length>1)out+=`<polyline class="ptl ${cls}" points="${run.map(q=>q.x+","+q.y).join(" ")}"></polyline>`;run=[]};
@@ -211,11 +219,13 @@ function profTripLanes(t){
  const tokMax=Math.max(1,...cols.flatMap(c=>(((c.tokens||{}).points)||[]).map(p=>p[1]||0)));
  const cpu=profTripSpan(cols,"cpu"),ram=profTripSpan(cols,"ram"),gb=t.mem_gb;
  // The legend states the real percent of each line's own ends (#2254): its lowest and its highest reading in the window.
- const span=s=>s.n?(profTripPct(s.lo)===profTripPct(s.hi)?profTripPct(s.lo):`${profTripPct(s.lo)} to ${profTripPct(s.hi)}`):"&#8212;";
+ // A flat series compares the numbers, never the formatted strings, and names its one reading, so two readings that
+ // round to the same percent still read as a range.
+ const span=s=>!s.n?"&#8212;":s.lo===s.hi?`${profTripPct(s.lo)} (single reading)`:`${profTripPct(s.lo)} to ${profTripPct(s.hi)}`;
  const tok=`<div class=ptlh>Tokens &middot; tokens/min</div><svg class="ptlane ptlane-tok" viewBox="0 0 ${PROF_LANE_W} ${PROF_TOK_H}" role=img aria-label="${esc(`Tokens per minute over the trip's columns, zero to ${Math.round(tokMax)}`)}" preserveAspectRatio=none>${profTripBands(parts,PROF_TOK_H)}${profTripLine(parts,"tokens",PROF_TOK_H,{n:1,lo:0,hi:tokMax},"ptl-tok")}</svg>`;
- const mach=`<div class=ptlh>Machine &middot; percent of the whole machine <span class=ptlkey><i class="ptkey ptkey-cpu"></i>CPU ${span(cpu)} <i class="ptkey ptkey-ram"></i>RAM ${span(ram)}</span></div>`
-  +`<svg class="ptlane ptlane-mach" viewBox="0 0 ${PROF_LANE_W} ${PROF_MACH_H}" role=img aria-label="CPU and RAM as a percent of the whole machine over the trip's columns, each scaled to its own lowest and highest reading" preserveAspectRatio=none>`
-  +`${profTripBands(parts,PROF_MACH_H)}${profTripLine(parts,"cpu",PROF_MACH_H,cpu,"ptl-cpu",(c,v)=>`CPU ${profTripPct(v)} of the whole machine`)}${profTripLine(parts,"ram",PROF_MACH_H,ram,"ptl-ram",(c,v)=>`RAM ${profTripPct(v).replace("&#8212;","")} of ${gb==null?"the machine":Number(gb).toFixed(0)+" GB"}`)}</svg>`;
+ const mach=`<div class=ptlh>Machine &middot; min-max per line <span class=ptlkey><i class="ptkey ptkey-cpu"></i>CPU ${span(cpu)} <i class="ptkey ptkey-ram"></i>RAM ${span(ram)}</span></div>`
+  +`<svg class="ptlane ptlane-mach" viewBox="0 0 ${PROF_LANE_W} ${PROF_MACH_H}" role=img aria-label="CPU and RAM as a percent of the whole machine over the trip's columns, each scaled from its own lowest to its own highest reading, or at mid height when it holds one reading" preserveAspectRatio=none>`
+  +`${profTripBands(parts,PROF_MACH_H)}${profTripLine(parts,"cpu",PROF_MACH_H,cpu,"ptl-cpu",(c,v)=>v==null?"CPU: no reading":`CPU ${profTripPct(v)} of the whole machine`)}${profTripLine(parts,"ram",PROF_MACH_H,ram,"ptl-ram",(c,v)=>v==null?"RAM: no reading":`RAM ${profTripPct(v)} of ${gb==null?"the machine":Number(gb).toFixed(0)+" GB"}`)}</svg>`;
  const strip=`<div class=ptstrip>${parts.map(({c,w})=>`<i class="ptseg pts-${esc(c.column)}${c.median_s>0?"":" ptb-none"}" style="flex:${Math.max(0,c.share||0)} 1 0"></i>`).join("")}</div>`;
  const labels=`<div class=ptlabels>${cols.map(c=>`<span class=ptlab><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i>${esc(c.label)} ${profTripNum(c.median_s)}</span>`).join("")}</div>`;
  return tok+mach+strip+labels}
