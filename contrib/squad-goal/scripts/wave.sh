@@ -931,8 +931,11 @@ tipgate=${SG_WAVE_TIP_GATES-"$(sg_base_gate "origin/$base" "$py" wave-tip)"}
 child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | refs_in_message | tail -1; }
 
 # held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575); a try-mode skip of
-# the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the holders it names (#567).
-held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^serial: lock gate: the landing.s gate is queued ahead: skipped, not queued.*/landing/p' -e 's/^caps: caps\.gates is full ([0-9]* slots), held by \(.*\): .* skipped, not queued (try)$/slots:\1/p' -e 's/^caps: caps\.gates has [0-9]* free slot(s) of [0-9]*: .*; held by \(.*\) (lease pid .* skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
+# the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the holder it names (#567). The budget writes the
+# hold three ways -- `is full (N slots)`, `has N free slot(s) of M`, and `keeps its freed slots for <waiter>, a waiting priority
+# check (ADR-0174)` -- and each ends with the same tail, so one expression reads all three and takes the first holder's name,
+# dropping the lease detail that follows it (#2330).
+held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^serial: lock gate: the landing.s gate is queued ahead: skipped, not queued.*/landing/p' -e 's/^caps: caps\.gates .*held by \([^ :]*\).*skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
 # waited_out <output>: the bounded wait for the gate lock or the gate slots ran out (serial.sh and caps.py both exit 75 then, and
 # name it). A 75 without that line is the check's own hold deadline, which is a failed check, not a hold (#955).
 waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* waited [0-9.]+s for caps\.gates'; }
@@ -1951,7 +1954,7 @@ land_queue() {
 # measured nothing and waits for a later pass -- so every run waits. Exit 2: the network failed.
 land_batch() {
   local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
-  local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0 self0 selfrd er erd
+  local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 dropped="" tipobl="" brc=0 self0 selfrd er erd hid why
   local rows issues anyref rfs nontest SG_REQUEUE_RUN
   while [ $# -ge 2 ]; do
     rd=$2; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
@@ -2011,8 +2014,18 @@ land_batch() {
       oc=; [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null; rm -f "$of"
       # 73 is a skip: the tip's check took no slot, so it measured nothing and blamed nobody. The batch waits for a later pass
       # and never sends its runs alone, whatever the skip's line names (#2330); a red is the check's own answer, 1 or 4.
-      if [ $rc = 73 ] || { [ $rc = 75 ] && waited_out "$(cat "$clog")"; }; then
-        echo "WAVE WAIT batch $ids: the tip's check did not run (the gate lock or slots are held); the batch lands on a later pass (its output is $clog)"; rm -rf "$S"; return 1
+      # The wait line names the holder the budget counted, so the trail says which gate the batch waited behind.
+      if [ $rc = 73 ]; then
+        hid=$(held_by "$(cat "$clog")")
+        case "$hid" in
+          slots:*) why="the gate slots are held by ${hid#slots:}";;
+          landing) why="the landing's gate is queued ahead";;
+          "") why="the gate took no slot";;
+          *) why="the gate lock is held by pid $hid";; esac
+        echo "WAVE WAIT batch $ids: the tip's check did not run ($why); the batch lands on a later pass (its output is $clog)"; rm -rf "$S"; return 1
+      fi
+      if [ $rc = 75 ] && waited_out "$(cat "$clog")"; then
+        echo "WAVE WAIT batch $ids: the tip's check did not run (the bounded wait for the gate lock or slots ran out); the batch lands on a later pass (its output is $clog)"; rm -rf "$S"; return 1
       fi
       case "$oc" in pass|unproven|fail) ;; *) oc=; [ $rc = 0 ] && oc=pass; [ $rc = 4 ] && oc=unproven;; esac
       [ "$oc" = pass ] || { echo "WAVE BATCH: the tip's check of batch $ids is ${oc:-red}, so each run lands alone (its output is $clog)"; rm -rf "$S"; return 10; }
