@@ -97,4 +97,13 @@ EOF
 expired run-k && ko "K: a young wave is expired" || ok "K: a young wave is not expired"
 expired run-none && ko "K: a run with no wave is expired" || ok "K: a run with no wave is not expired"
 
+# L: a wait for a gate slot is no wave time (#2231, ADR-0166): one gate row [now-700, now-400] and one suite row
+# [now-350, now-50] pause 600 s, so 1500 - 600 is under the 1000 s cap.
+wave run-l 1500 <<'EOF'
+{"event": "run_start", "ts": @-1500}
+EOF
+awk -v s=$((now - 400)) 'BEGIN{f[5]=s; f[18]="300"; for(i=1;i<=23;i++) printf "%s%s", (i>1?"\t":""), (f[i]==""?"-":f[i]); print ""}' > "$T/st/gate-history"
+printf '%s\t%s\t300\t1\t1\t0\ttest-x.sh\t-\n' "$((now - 50))" "$((now - 50))" > "$T/st/child-suite-history"
+expired run-l && ko "L: a gate wait spent the age cap" || ok "L: a gate and a suite wait do not spend the age cap"
+
 rm -rf "$T"; [ $fail = 0 ] && echo "test-wavepause: all checks green" || { echo "test-wavepause: failed"; exit 1; }
