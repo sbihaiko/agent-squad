@@ -1681,24 +1681,26 @@ def test_the_view_draws_the_trip_as_five_rows_named_for_the_columns_and_five_seg
     out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())"))
     assert "<h3>The trip of an issue</h3>" in out and "4 deliveries in the last 1.0 h" in out
     assert "the bar folds 5 segments, one per board column" in out, "the caption counts the segments it draws (#2199)"
-    segs = re.findall(r'<i class="ptb-seg pts-(\w+)" style="width:([\d.]+)%" title="([^"]*)"', out)
+    segs = re.findall(r'<rect class="ptb-seg ptc pts-(\w+)" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"[^>]*>'
+                      r'<title>([^<]*)</title></rect>', out)
     assert [s[0] for s in segs] == ["todo", "doing", "review", "landing", "gating"], \
         "the bar holds one segment per drawn column, in board order, with none for Closed"
-    assert [float(s[1]) for s in segs] == [77.48, 16.61, 1.60, 2.40, 1.92], \
-        "each segment's width is the share the fold emits, so no width is a second arithmetic"
-    assert segs[1][2] == "Doing: median 4.2 min, p90 6.2 min (4 observations); Between two children median 2.5 min", \
+    widths = [float(s[2]) for s in segs]
+    assert widths == pytest.approx([0.7748 * 860, 0.1661 * 860, 0.0160 * 860, 0.0240 * 860, 0.0192 * 860], abs=0.2), \
+        "each segment's width is the share the fold emits over the plot, so no width is a second arithmetic"
+    assert segs[1][3] == "Doing: median 4.2 min, p90 6.2 min (4 observations); Between two children median 2.5 min", \
         "the hover names the median, the p90 and the stage beside it in words"
     assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == [
-        "Column", "Tokens/issue", "Mean CPU", "Mean RAM", "Median", "p90",
+        "Column", "Median", "Tokens / issue", "CPU mean", "RAM mean", "p90",
         "Observations (Gating counts gate runs; every other column counts deliveries)"]
     rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
     assert [r[3] for r in rows] == ["Todo", "Doing", "Review", "Landing", "Gating"], \
         "five rows, each named for its board column, in board order, with no Closed row"
-    assert rows[0][3:] == ("Todo", "0", "&#8212;", "&#8212;", "40.0 min &middot; Wait for a dispatch 25.0 s", "40.0 min", "4"), \
-        "the Todo row reads the queue with the dispatch wait beside it in the same cell, named in words; the fixture folds no call and no load, so its rates read a zero and two dashes"
-    assert rows[1][3:] == ("Doing", "0", "&#8212;", "&#8212;", "4.2 min &middot; Between two children 2.5 min", "6.2 min", "4")
-    assert rows[3][7:9] == ("1.3 min", "1.9 min"), "Landing stands before Gating, where the board puts it"
-    assert rows[4][7:9] == ("1.0 min", "1.0 min"), "Gating reads the wave gate, never the run's own gate"
+    assert rows[0][3:] == ("Todo", "40.0 min", "0", "&#8212;", "&#8212;", "40.0 min", "4"), \
+        "the Todo row reads the queue alone; the fixture folds no call and no load, so its rates read a zero and two dashes"
+    assert rows[1][3:] == ("Doing", "4.2 min", "0", "&#8212;", "&#8212;", "6.2 min", "4")
+    assert (rows[3][4], rows[3][8]) == ("1.3 min", "1.9 min"), "Landing stands before Gating, where the board puts it"
+    assert (rows[4][4], rows[4][8]) == ("1.0 min", "1.0 min"), "Gating reads the wave gate, never the run's own gate"
     assert [r[1] for r in rows] == [s[0] for s in segs], "a row's swatch is the color of its segment, in the same order: the table is the bar's legend"
     assert all(r[0] == r[1] for r in rows), "the swatch of a row names the column the row names"
 
@@ -1709,7 +1711,7 @@ def test_a_column_with_no_median_draws_a_hollow_swatch_and_no_colour_segment():
     row = re.search(r'<tr data-p="trip/review"><td class=pn><i class="([^"]*)" aria-hidden=true></i>', out)
     assert row and "ptk-review" in row.group(1) and "ptk-none" in row.group(1), "a column with no median keeps its color as an outline, never a reading"
     assert "ptb-seg pts-review" not in out, "a column with no median paints no colour, so no 4 px ghost shows a colour it has no time for"
-    assert len(re.findall(r'<i class="ptb-seg', out)) == 5, "the bar still holds one segment per drawn column: the empty column takes no colour"
+    assert len(re.findall(r'<rect class="ptb-seg', out)) == 5, "the bar still holds one segment per drawn column: the empty column takes no colour"
     assert out.count("ptk-none") == 1, "only the column without a median is hollow"
 
 
@@ -3224,29 +3226,31 @@ def text_boxes(out):
     """Every text the chart lays out as a box in the SVG's user units: its x-range from its anchor, and its width from
     the page's own per-character estimate. The chart sizes every glyph in SVG user units, so each box scales with the
     viewBox and the same boxes hold on screen at 390 px and at 1440 px."""
-    char, _, _ = chart_metrics()
+    char, _, font = chart_metrics()
     rows = []
     for m in re.finditer(r'<text class=(?:"([^"]*)"|([\w-]+))([^>]*)>([^<]*)</text>', chart_svg(out)):
         cls, attrs, text = (m.group(1) or m.group(2)), m.group(3), m.group(4)
         x = float(re.search(r'\bx="([\d.]+)"', attrs).group(1))
         y = float(re.search(r'\by="([\d.]+)"', attrs).group(1))
         anchor = (re.search(r"text-anchor=(\w+)", attrs) or [None, "start"])[1]
+        size = re.search(r'\bfont-size="?([\d.]+)"?', attrs)
         plain = re.sub(r"&(?:#\d+|\w+);", "~", text)   # one entity is one glyph
-        w = len(plain) * char
+        w = len(plain) * char * (float(size.group(1)) / font if size else 1)
         x0 = x - w if anchor == "end" else x - w / 2 if anchor == "middle" else x
         rows.append({"cls": cls, "text": text, "x0": x0, "x1": x0 + w, "y": y})
     return rows
 
 
 def test_the_chart_draws_a_tokens_lane_and_a_machine_lane_each_with_three_ticks():
-    """AC5: two lanes, and each prints three values once, each with its unit. The Tokens value stands in k or M, so the
-    lane never prints a raw count."""
+    """AC5: two lanes, and each prints three short values once; the unit stands in the lane's gutter. The Tokens value
+    reads k or M, so the lane never prints a raw count (#2255)."""
     out = chart_svg(chart_js())
     assert ">Tokens<" in out and ">Machine<" in out, "one lane for the tokens a minute and one for the machine"
     ticks = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", out)
-    assert [t for t in ticks if t.endswith("tok/min")] == ["0 tok/min", "500 tok/min", "1k tok/min"], \
-        "three Tokens values, each with its unit, and the top one stands above the token rate the payload holds"
+    assert [t for t in ticks if t.endswith("k")] == ["0k", "0.5k", "1k"], \
+        "three Tokens values in short units, and the top one stands above the token rate the payload holds"
     assert [t for t in ticks if t.endswith("%")] == ["0%", "50%", "100%"], "three Machine values on a 0 to 100% scale"
+    assert "k tokens / min" in out and "% of the machine" in out, "each lane names its unit in the gutter"
 
 
 def test_a_narrow_column_takes_a_leader_line_to_its_band():
@@ -3283,23 +3287,24 @@ def test_each_column_prints_its_mean_inside_its_lane():
     top = float(re.search(r"PROF_TRIP_TOP=(\d+)", src).group(1))
     gap = float(re.search(r"PROF_TRIP_GAP=(\d+)", src).group(1))
     tok_top, mac_top = top, top + lane + gap
-    means = re.findall(r'<text class="ptlm pts-(\w+)" x="[\d.]+" y="([\d.]+)"[^>]*>([^<]*)</text>', chart_svg(chart_js()))
+    means = re.findall(r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="[\d.]+" y="([\d.]+)"[^>]*>([^<]*)</text>',
+                       chart_svg(chart_js()))
     where = {}
-    for col, y, text in means:
-        where.setdefault(col, []).append((float(y), text))
-    for col in ("todo", "doing", "review", "landing", "gating"):
-        assert col in where, f"the {col} column prints its means inside its lane"
-        ys = where[col]
-        assert sum(tok_top < y < tok_top + lane for y, _ in ys) == 1, \
-            f"the {col} column prints its token mean in the Tokens lane"
-        assert sum(mac_top < y < mac_top + lane for y, _ in ys) == 2, \
-            f"the {col} column prints its CPU and RAM means in the Machine lane"
-    todo = [t for _, t in where["todo"]]
-    assert todo == ["mean 60 tok/min", "CPU 50.0%", "RAM 40.0%"], "the wide column prints the full copy"
-    review = [t for _, t in where["review"]]
-    assert review == ["&#8212;/min", "50.0%", "40.0%"], "a narrow column prints the short copy inside its lane"
+    for line, y, text in means:
+        where.setdefault(line, []).append((float(y), text))
+    for line in ("ptlmt", "ptlmc", "ptlmr"):
+        assert line in where, f"every column prints its {line} mean inside its lane"
+    assert sum(tok_top < y < tok_top + lane for y, _ in where["ptlmt"]) == 5, \
+        "every column prints its token mean in the Tokens lane"
+    assert sum(mac_top < y < mac_top + lane for y, _ in where["ptlmc"]) == 5, \
+        "every column prints its CPU mean in the Machine lane"
+    assert sum(mac_top < y < mac_top + lane for y, _ in where["ptlmr"]) == 5, \
+        "every column prints its RAM mean in the Machine lane"
+    todo = [where[k][0][1] for k in ("ptlmt", "ptlmc", "ptlmr")]
+    assert todo == ["mean 60", "CPU 50%", "RAM 40%"], "the wide column prints the full copy"
+    assert where["ptlmt"][2][1] == "&#8212;", "a narrow column prints the short copy inside its lane"
     labels = dict(re.findall(r'<text class="ptlb pts-(\w+)"[^>]*>([^<]*)</text>', chart_svg(chart_js())))
-    assert labels["review"] == "Review 10.0 s", "the leader row carries the column's name and median alone"
+    assert labels["review"] == "Review", "the leader row carries the column's name alone"
     assert "mean" not in "".join(labels.values()), "no mean stands under the chart: every mean is in its lane"
 
 
@@ -3360,7 +3365,7 @@ def test_the_machine_axis_scales_its_percent_ticks_over_the_lane():
 def test_each_axis_value_prints_once():
     """AC5: each lane's three values print once, in the gutter, with no second copy over the lane's top."""
     texts = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", chart_svg(chart_js()))
-    assert texts == ["0 tok/min", "500 tok/min", "1k tok/min", "0%", "50%", "100%"], \
+    assert texts == ["0k", "0.5k", "1k", "0%", "50%", "100%"], \
         "the six axis values, each printed once"
 
 
@@ -3368,13 +3373,13 @@ def test_token_counts_print_in_k_or_m_units_on_the_axis_and_in_the_table():
     """AC6: the Tokens axis and the table print a count in k or M, never the raw integer."""
     out = chart_js()
     svg = chart_svg(out)
-    assert "1k tok/min" in svg and "1000 tok/min" not in svg, "the axis rounds 1000 to 1k"
-    assert (trip_row(out, "todo")[1], trip_row(out, "doing")[1]) == ("600", "2.4k"), \
+    assert ">1k</text>" in svg and ">1000" not in svg, "the axis rounds 1000 to 1k"
+    assert (trip_row(out, "todo")[2], trip_row(out, "doing")[2]) == ("600", "2.4k"), \
         "the table prints 2400 in k units"
     big = json.loads(json.dumps(CHART))
     by = {c["column"]: c for c in big["columns"]}
     by["todo"]["tokens_per_issue"], by["doing"]["tokens_per_issue"] = 6310834.0, 834000.0
-    rows = {c: trip_row(chart_js(big), c)[1] for c in ("todo", "doing")}
+    rows = {c: trip_row(chart_js(big), c)[2] for c in ("todo", "doing")}
     assert rows == {"todo": "6.3M", "doing": "834k"}, "a million prints in M, a large thousand count in k"
 
 
@@ -3439,17 +3444,17 @@ def test_the_width_of_each_column_follows_the_share_the_fold_emits():
 
 def test_the_table_keeps_median_p90_and_observations_and_adds_tokens_cpu_and_ram():
     """AC17 of the spec: the table keeps its three columns and adds the three a column consumes; the Observations
-    header names the one row that counts another thing (AC9, #2253)."""
+    header names the one row that counts another thing (AC9, #2253). The order follows the mock (#2255): Median,
+    Tokens / issue, CPU mean, RAM mean, with p90 and Observations last, and each cell holds one value."""
     out = chart_js()
     at = out.index("<table id=proftt")
     table = out[at:out.index("</table>", at) + 8]
     heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", table, re.S)]
-    assert heads[:4] == ["Column", "Tokens/issue", "Mean CPU", "Mean RAM"], heads
-    assert heads[-3:] == ["Median", "p90",
-                          "Observations (Gating counts gate runs; every other column counts deliveries)"], \
-        "the header names the difference: Gating counts the window's gate rows, every other row a delivery"
-    assert trip_row(out, "todo") == ["Todo", "600", "50.0%", "40.0%", "1.0 min &middot; Wait for a dispatch 10.0 s", "1.0 min", "3"]
-    assert trip_row(out, "doing") == ["Doing", "2.4k", "50.0%", "40.0%", "1.0 min &middot; Between two children 0 ms", "1.0 min", "3"]
+    assert heads == ["Column", "Median", "Tokens / issue", "CPU mean", "RAM mean", "p90",
+                     "Observations (Gating counts gate runs; every other column counts deliveries)"], heads
+    assert trip_row(out, "todo") == ["Todo", "1.0 min", "600", "50%", "40%", "1.0 min", "3"]
+    assert trip_row(out, "doing") == ["Doing", "1.0 min", "2.4k", "50%", "40%", "1.0 min", "3"]
+    assert "&middot;" not in "".join(trip_row(out, "todo")), "each cell holds one value, never two facts"
 
 
 def test_one_sentence_above_the_chart_states_the_peak_the_saturation_and_the_silent_minutes():
@@ -3472,17 +3477,19 @@ def test_a_line_with_no_data_draws_nothing_there_and_the_table_prints_a_dash():
     dash."""
     out = chart_js()
     row = trip_row(out, "gating")
-    assert row[2:4] == ["&#8212;", "&#8212;"], "no mean of CPU and RAM reads a dash, never a zero"
+    assert row[3:5] == ["&#8212;", "&#8212;"], "no mean of CPU and RAM reads a dash, never a zero"
     svg = chart_svg(out)
     assert not re.search(r'ptgn pts-gating', svg), "a column of no width has no stretch to mark"
 
 
 def test_the_ram_hover_names_the_value_in_gigabytes_once_on_the_legend():
-    """AC11 of the spec: the machine's gigabytes show on the RAM legend entry, never on a column's percent."""
+    """AC11 of the spec: the machine's gigabytes show on the RAM legend entry in the Machine lane's gutter, never on a
+    column's percent."""
     src = chart_js()
-    legend = re.search(r"<i class=plk-ram></i><span([^>]*)>RAM</span>", src)
-    assert legend and "32.0 GB" in legend.group(1), "the RAM legend entry's hover names the machine's memory"
-    assert "GB" not in chart_svg(src), "no line or value inside the lane claims gigabytes"
+    assert re.search(r"<line class=\"ptkey ptl-ram\"[^>]*><title>the machine holds 32.0 GB of memory</title></line>",
+                     chart_svg(src)), "the RAM legend entry's hover names the machine's memory"
+    plain = re.sub(r"<title>[^<]*</title>", "", chart_svg(src))
+    assert "GB" not in plain, "no line or value inside the lane claims gigabytes"
 
 
 def test_the_chart_draws_the_ticks_and_the_points_the_payload_holds():
@@ -3535,8 +3542,8 @@ def test_a_wide_column_with_no_point_on_a_line_prints_a_dash_for_that_mean():
     """AC10 and AC2: a line with no point in a wide column reads a dash in its mean, never a value alone."""
     v = json.loads(json.dumps(CHART))
     v["columns"][0]["ram"] = {"points": [], "mean": None}
-    means = re.findall(r'<text class="ptlm pts-(\w+)"[^>]*>([^<]*)</text>', chart_svg(chart_js(v)))
-    assert ("todo", "RAM &#8212;") in means, "the RAM line draws nothing and its mean reads a dash"
+    means = re.findall(r'<text class="ptlm (ptlmt|ptlmc|ptlmr)"[^>]*>([^<]*)</text>', chart_svg(chart_js(v)))
+    assert ("ptlmr", "RAM &#8212;") in means, "the RAM line draws nothing and its mean reads a dash"
 
 
 def test_a_column_mean_divides_by_the_minutes_spent_in_that_column_alone(prof):
@@ -4137,3 +4144,228 @@ def test_each_gate_history_reader_takes_the_runner_fields_from_the_same_end(prof
         mod = load(f"{name[:-3]}_under_test", SCRIPTS / name)
         assert mod.gate_mode(row.split("\t")) == "gated", f"{name} loses the entry mode after the runner fields"
         assert mod.gate_mode(gate_queue_line(1000, 900).split("\t")) == "gated", f"{name} loses it on a row with no runner"
+
+
+# ---------------------------------------------------------------- the trip chart follows the mock of #2222 (#2255)
+# The owner chose the mock's layout on 2026-11-18. The tests below pin the layout alone: the order of the blocks, the
+# gutter that names each lane, the three short ticks a lane, the band tint and its rules, the mean of each column inside
+# its lane, the thin bar under the Machine lane, the labels in the column's colour, the lines' colours and the table.
+def trip_consts():
+    """The layout constants the page declares, read from the source so a test measures the page's own frame."""
+    src = (SCRIPTS / "hub-profiler.js").read_text()
+
+    def num(name):
+        return float(re.search(name + r"=([\d.]+)", src).group(1))
+    return {"gutter": num("PROF_TRIP_GUTTER"), "lane": num("PROF_TRIP_LANE"), "top": num("PROF_TRIP_TOP"),
+            "gap": num("PROF_TRIP_GAP"), "row": num("PROF_TRIP_ROW")}
+
+
+def test_the_blocks_follow_the_mock_from_the_heading_to_the_table():
+    """AC1 (#2255): heading, subtitle, Tokens lane, Machine lane, trip bar, labels, table. One subtitle carries every
+    sentence the page states above the chart, and the label row stands below the bar's foot, never over it."""
+    c = trip_consts()
+    out = chart_js()
+    order = [out.index("<h3>"), out.index("<p class=tpn>"), out.index("<svg id=proftc"), out.index("<table id=proftt")]
+    assert order == sorted(order), "heading, subtitle, the chart, the table"
+    assert out.count("<p class=tpn>") == 1, "one subtitle, never four sentences over three places"
+    svg = chart_svg(out)
+    assert svg.index(">Tokens<") < svg.index(">Machine<") < svg.index('class="ptb-seg') < svg.index('class="ptlb'), \
+        "the lanes come first, then the bar, then the labels"
+    bar = re.search(r'<rect class=ptbbar x="[\d.]+" y="([\d.]+)" width="[\d.]+" height="([\d.]+)"', svg)
+    bar_bottom = float(bar.group(1)) + float(bar.group(2))
+    label_ys = [float(y) for y in re.findall(r'<text class="ptl[bs] pts-\w+"[^>]*y="([\d.]+)"', svg)]
+    assert label_ys and min(label_ys) == pytest.approx(bar_bottom + c["row"]), \
+        "the first label row opens one row under the bar's foot"
+
+
+def test_each_lane_names_its_unit_and_legend_in_the_left_gutter():
+    """AC2 (#2255): each lane's title, unit and legend stand in the gutter at the left, and its axis values stand at the
+    left of the plot, outside it."""
+    c = trip_consts()
+    svg = chart_svg(chart_js())
+    for text in ("Tokens", "k tokens / min", "Machine", "% of the machine", "CPU", "RAM"):
+        m = re.search(r'<text class=(?:ptn|ptu)[^>]*x="(\d+)"[^>]*>' + re.escape(text) + "</text>", svg)
+        assert m and float(m.group(1)) < c["gutter"], f"{text} stands in the left gutter"
+    assert re.search(r'<line class="ptkey ptl-cpu"[^>]*></line>', svg), "the CPU legend keeps the CPU line's colour"
+    assert re.search(r'<line class="ptkey ptl-ram"[^>]*>', svg), "the RAM legend keeps the RAM line's colour, dashed"
+    ticks = re.findall(r'<text class=ptt x="([\d.]+)" [^>]*text-anchor=end>([^<]+)</text>', svg)
+    assert len(ticks) == 6 and all(float(x) < c["gutter"] for x, _ in ticks), \
+        "each axis value stands in the gutter, left of the plot"
+
+
+def test_each_lane_prints_at_most_three_short_ticks_and_a_gap_separates_the_lanes():
+    """AC3 (#2255): each lane holds three ticks at most, in short units, and a gap stands between the two lanes."""
+    c = trip_consts()
+    assert c["gap"] > 0, "a gap separates the Tokens lane from the Machine lane"
+    svg = chart_svg(chart_js())
+    ticks = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", svg)
+    assert [t for t in ticks if t.endswith("k")] == ["0k", "0.5k", "1k"], "three short Tokens ticks"
+    assert [t for t in ticks if t.endswith("%")] == ["0%", "50%", "100%"], "three short Machine ticks"
+    assert all(len(t) <= 6 for t in ticks), "no tick prints a long value"
+    ys = [float(y) for y in re.findall(r'<line class=ptg0 x1="[\d.]+" y1="([\d.]+)"', svg)]
+    assert max(ys[:3]) <= c["top"] + c["lane"], "the Tokens grid ends at its lane's bottom"
+    assert min(ys[3:]) >= c["top"] + c["lane"] + c["gap"], "the Machine grid starts after the gap"
+    assert "dasharray" in re.search(r"#proftrip \.ptg0\{([^}]*)\}", chart_css()).group(1), "the grid is dashed"
+
+
+def test_a_sub_thousand_tokens_axis_keeps_three_distinct_short_ticks():
+    """AC3 (#2255): a Tokens lane whose top tick is below a thousand keeps three ticks that read apart, each a short
+    value, never three labels that round to the same text."""
+    v = json.loads(json.dumps(CHART))
+    v["tokens_ticks"] = [0, 20, 40]
+    ticks = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", chart_svg(chart_js(v)))[:3]
+    assert len(ticks) == 3 and len(set(ticks)) == 3, f"three distinct Tokens ticks, got {ticks}"
+    assert all(len(t) <= 6 for t in ticks), f"each tick stays short, got {ticks}"
+
+
+def test_the_subtitle_joins_its_sentences_with_single_spaces():
+    """AC1 (#2255): one subtitle joins its sentences with one space each, and it never restates a layout rule the
+    caption already carries."""
+    v = json.loads(json.dumps(CHART))
+    v.update(invalid_loads=2, ram_minutes=0)
+    sub = re.search(r"<p class=tpn>(.*?)</p>", chart_js(v), re.S).group(1)
+    assert "  " not in sub, "one space joins two sentences"
+    assert sub == sub.strip(), "the subtitle opens and ends on a word"
+    assert "Width follows" not in sub, "the caption carries no second copy of the layout rule"
+
+
+def test_no_two_means_share_a_box_in_a_lane():
+    """AC5/AC7 (#2255): a run of narrow columns pushes many mean texts into one lane, and every text still keeps its
+    own box, so one mean never prints over another."""
+    char = chart_metrics()[0]
+    v = json.loads(json.dumps(CHART))
+    base = CHART["columns"]
+    v["columns"] = []
+    for i, share in enumerate([0.8] + [0.02] * 5):
+        col = json.loads(json.dumps(base[i % len(base)]))
+        col.update(column=f"c{i}", label=f"Col{i}", share=share)
+        v["columns"].append(col)
+    means = [(line, float(x), float(y), text) for line, x, y, text in re.findall(
+        r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="([\d.]+)" y="([\d.]+)" text-anchor=end>([^<]*)</text>',
+        chart_svg(chart_js(v)))]
+    assert len(means) == 18, "six columns, three lines"
+    boxes = [(line, y, x - len(text) * char, x, text) for line, x, y, text in means]
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1:]:
+            assert not (abs(a[1] - b[1]) < 13 and a[2] < b[3] and b[2] < a[3]), \
+                f"{a[4]!r} and {b[4]!r} share a box in the {a[0]} lane"
+
+
+def test_each_band_is_tinted_and_a_vertical_rule_separates_two_columns():
+    """AC4 (#2255): each column band is clearly tinted, and a vertical rule between two columns runs through both lanes."""
+    c = trip_consts()
+    svg = chart_svg(chart_js())
+    tint = re.search(r"#proftrip \.ptc\{[^}]*opacity:\.(\d+)", chart_css())
+    assert tint and int(tint.group(1)) >= 12, "the band's tint tells two columns apart"
+    span = 1000 - c["gutter"]
+    rules = [(float(x), float(y0), float(y1)) for x, y0, y1 in
+             re.findall(r'<line class=ptr x1="([\d.]+)" y1="([\d.]+)" x2="[\d.]+" y2="([\d.]+)"', svg)]
+    ends = [c["gutter"] + span * sum(col["share"] for col in CHART["columns"][:i]) for i in range(1, 5)]
+    assert [r[0] for r in rules] == pytest.approx(ends[:len(rules)], abs=0.2), \
+        "a rule stands at each seam between two drawn columns, never before the first"
+    assert [r[1] for r in rules] == [c["top"]] * len(rules) and \
+        [r[2] for r in rules] == [c["top"] + 2 * c["lane"] + c["gap"]] * len(rules), "the rule crosses both lanes"
+
+
+def test_a_zero_width_column_keeps_the_rule_between_the_columns_around_it():
+    """AC4 (#2255): a board column that drew no delivery paints no band, and the rule still stands at the seam
+    between the two drawn columns on either side of it."""
+    c = trip_consts()
+    v = json.loads(json.dumps(CHART))
+    v["columns"][1]["share"] = 0.0
+    span = 1000 - c["gutter"]
+    rules = [float(x) for x in re.findall(r'<line class=ptr x1="([\d.]+)"', chart_svg(chart_js(v)))]
+    starts = [c["gutter"] + span * sum(col["share"] for col in v["columns"][:i])
+              for i in range(len(v["columns"])) if span * v["columns"][i]["share"] > 0]
+    assert rules == pytest.approx(starts[1:], abs=0.2), "a rule stands at each seam between two drawn columns"
+
+
+def test_each_column_mean_prints_in_its_lane_top_right_in_its_lines_colour():
+    """AC5 (#2255): each column's mean prints inside its lane, at the top right of the column, in the colour of its
+    line: white for Tokens, pink for CPU and lilac for RAM."""
+    c = trip_consts()
+    mac_top = c["top"] + c["lane"] + c["gap"]
+    svg = chart_svg(chart_js())
+    css = chart_css()
+    assert re.search(r"#proftrip \.ptlmt\{[^}]*fill:var\(--fg\)", css), "the token mean takes the line's white"
+    assert re.search(r"#proftrip \.ptlmc\{[^}]*fill:var\(--s2\)", css), "the CPU mean takes the line's pink"
+    assert re.search(r"#proftrip \.ptlmr\{[^}]*fill:var\(--none\)", css), "the RAM mean takes the line's lilac"
+    means = [(line, float(x), float(y), text) for line, x, y, text in re.findall(
+        r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="([\d.]+)" y="([\d.]+)" text-anchor=end>([^<]*)</text>', svg)]
+    assert len(means) == 15, "five columns, three lines"
+    tok = [m for m in means if m[0] == "ptlmt"]
+    assert all(c["top"] < m[2] < c["top"] + c["lane"] for m in tok), "the token means stand in the Tokens lane"
+    assert all(mac_top < m[2] < mac_top + c["lane"] for m in means if m[0] != "ptlmt"), \
+        "the CPU and RAM means stand in the Machine lane"
+    span = 1000 - c["gutter"]
+    first_end = c["gutter"] + span * CHART["columns"][0]["share"]
+    assert tok[0][1] == pytest.approx(first_end - 3, abs=0.2), "the mean sits at the column's right edge"
+    assert tok[0][2] - c["top"] < c["lane"] / 3, "the mean sits at the top of the lane"
+    assert [m[3] for m in means[:3]] == ["mean 60", "CPU 50%", "RAM 40%"], "the full copy at a wide column"
+
+
+def test_the_trip_bar_is_thin_and_sits_under_the_machine_lane_across_the_plot():
+    """AC6 (#2255): the bar is thin, sits under the Machine lane, spans the plot, and each segment sits under its band."""
+    c = trip_consts()
+    svg = chart_svg(chart_js())
+    span = 1000 - c["gutter"]
+    bar = re.search(r'<rect class=ptbbar x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"', svg)
+    assert bar, "the bar is drawn in the chart"
+    x, y, w, h = (float(v) for v in bar.groups())
+    assert (x, w) == (pytest.approx(c["gutter"]), pytest.approx(span)), "the bar has the plot's width, never the page's"
+    assert h <= 10, "the bar is thin"
+    assert y >= c["top"] + 2 * c["lane"] + c["gap"], "the bar sits under the Machine lane"
+    segs = [(col, float(sx), float(sw)) for col, sx, sw in re.findall(
+        r'<rect class="ptb-seg[^"]*pts-(\w+)" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"', svg)]
+    bands = {col: (float(bx), float(bw)) for col, bx, bw in
+             re.findall(r'<rect class="ptc pts-(\w+)" x="([\d.]+)" width="([\d.]+)"', svg)}
+    assert segs and all((sx, sw) == pytest.approx(bands[col], abs=0.2) for col, sx, sw in segs), \
+        "each segment sits under its band, at the band's own width"
+    assert len(re.findall(r'<rect class="ptb-seg', svg)) == len(bands), "one segment a column"
+
+
+def test_each_label_takes_its_columns_colour_with_a_bold_name_and_a_small_median():
+    """AC7 (#2255): a label takes the column's colour, prints the name in bold with the median small under it, and no
+    two labels overlap; a narrow column takes a leader line."""
+    svg = chart_svg(chart_js())
+    css = chart_css()
+    for col, var in (("todo", "--s5"), ("doing", "--run"), ("review", "--acc"), ("landing", "--ok"),
+                     ("gating", "--warn")):
+        for cls in ("ptlb", "ptls"):
+            assert re.search(rf"#proftrip text\.{cls}\.pts-{col}\{{[^}}]*fill:var\({var}\)", css), \
+                f"the {col} label takes the column's colour"
+    names = re.findall(r'<text class="ptlb pts-(\w+)" x="[\d.]+" y="[\d.]+" text-anchor=\w+ font-weight=600>([^<]*)</text>',
+                       svg)
+    assert names[:2] == [("todo", "Todo"), ("doing", "Doing")], "the name stands alone, in bold"
+    meds = re.findall(r'<text class="ptls pts-(\w+)"[^>]*font-size=(\d+)>([^<]*)</text>', svg)
+    assert meds[0] == ("todo", "10", "1.0 min"), "the median stands small under the name"
+    assert "1.0 min" not in names[0][1], "the median is never part of the name"
+    assert re.findall(r'<line class="ptg pts-(\w+)"', svg) == ["review", "landing"], \
+        "each narrow column with a band takes a leader line, the wide ones need none, and a column of no width gets none"
+
+
+def test_tokens_is_white_cpu_is_pink_and_solid_and_ram_is_lilac_and_dashed():
+    """AC8 (#2255): the three lines keep the palette roles of the page."""
+    css = chart_css()
+    tok = re.search(r"#proftrip \.ptl-tok\{([^}]*)\}", css).group(1)
+    cpu = re.search(r"#proftrip \.ptl-cpu\{([^}]*)\}", css).group(1)
+    ram = re.search(r"#proftrip \.ptl-ram\{([^}]*)\}", css).group(1)
+    assert "stroke:var(--fg)" in tok and "dasharray" not in tok, "Tokens is white and solid"
+    assert "stroke:var(--s2)" in cpu and "dasharray" not in cpu, "CPU is pink and solid"
+    assert "stroke:var(--none)" in ram and "dasharray" in ram, "RAM is lilac and dashed"
+
+
+def test_the_table_keeps_each_header_on_one_line_and_short_counts():
+    """AC9 (#2255): the headers stay on one line, each cell holds one value, and a count prints in short units."""
+    css = chart_css()
+    assert re.search(r"#proftt th\{[^}]*white-space:nowrap", css), "no header breaks over two lines"
+    out = chart_js()
+    at = out.index("<table id=proftt")
+    heads = re.findall(r"<th[^>]*>(.*?)</th>", out[at:], re.S)
+    assert [re.sub(r"<[^>]+>", "", h) for h in heads[:5]] == ["Column", "Median", "Tokens / issue", "CPU mean", "RAM mean"]
+    assert trip_row(out, "doing")[2] == "2.4k", "a count prints in short units"
+    big = json.loads(json.dumps(CHART))
+    big["columns"][1]["tokens_per_issue"] = 834000.0
+    assert trip_row(chart_js(big), "doing")[2] == "834k", "834000 prints as 834k"
+    for col in ("todo", "doing", "review", "landing", "gating"):
+        assert len(trip_row(out, col)) == 7, f"one value a cell in the {col} row"
