@@ -22,6 +22,11 @@ HELPER_READERS = {"tests/ci_shards.py": SHARD_GUARD}
 # tests/shell_suites_seconds.txt, so a suite added there reaches it and no other test (#1799).
 SHELL_SUITES = "contrib/squad-goal/scripts"
 MEASURED_LINE_GUARD = "tests/test_shell_suite_runner.py"
+# A script read by path, never imported as a package module, pulls files in from disk when a test loads it: the hub serves
+# its page from hub-mobile.html, hub-profiler.js and the scripts beside it, read at start (#2271). A changed file that such
+# a script names reaches every test that loads the script. The scan of these scripts feeds that edge alone: they sit
+# beside the package, so their module names never join the import graph.
+SCRIPT_DIRS = ("contrib/squad-goal/scripts",)
 # The gate stages that may run the delta: the tests a change reaches. The landing, the promotion proof and the nightly
 # always run the full battery, so a cheaper check never weakens the gate a delivery stands on (ADR-0018). A stage this
 # list does not name is full too: a typo in a stage never narrows a gate.
@@ -178,6 +183,33 @@ def _scan_file(job):
         return rel, None
 
 
+def _script_files(root):
+    return sorted(
+        path.relative_to(root).as_posix()
+        for folder in SCRIPT_DIRS
+        for path in (root / folder).rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
+
+
+def _readers(root, changed):
+    """The scripts of the tree that pull each changed file in: a script names it by a path literal, or imports it by name.
+    A test that loads such a script loads the changed file too (#2271). The key is the changed file's basename and the
+    value the scripts that read it, so one lookup serves the live list below."""
+    wanted = {Path(rel).name for rel in changed}
+    readers = {}
+    for rel in _script_files(root):
+        try:
+            names, _, literals, _, _ = _scan(rel, (root / rel).read_text())
+        except (SyntaxError, ValueError, OSError):
+            continue   # a script that does not parse names no reader; the live file it would carry answers `all` below
+        # An import names a module, so its file is the last part plus `.py`; a path literal names the file itself.
+        spelled = {Path(literal).name for literal in literals} | {name.rpartition(".")[2] + ".py" for name in names}
+        for base in wanted & spelled:
+            readers.setdefault(base, set()).add(rel)
+    return readers
+
+
 def _inert(root):
     lines = (root / INERT).read_text().splitlines()
     return {line.strip() for line in lines if line.strip() and not line.startswith("#")}
@@ -324,9 +356,14 @@ def _answer(root, base):
             for directory in lists:
                 listed.setdefault(directory, set()).add(rel)
 
+    readers = _readers(root, live)
     selected = set()
     for rel in live:
         hits = _named_by(named, listed, rel)
+        # A script that reads the changed file reaches the tests that load it (#2271). Its own tests are the named ones, so
+        # a test that loads the script by a path literal or imports it is selected whichever file of the pair changed.
+        for script in readers.get(Path(rel).name, ()):
+            hits |= _named_by(named, listed, script)
         if _is_test(rel):
             hits.add(rel)
         elif rel in added_paths and _is_shell_suite(rel):
@@ -334,7 +371,9 @@ def _answer(root, base):
         elif (rel.startswith(("squad/", "tests/")) or rel in DATA_READERS.values()) and rel.endswith(".py"):
             hits |= _reach(_module(rel), rel, importers, dynamic, resolved)
         if not hits:
-            _all(f"{rel} is reached by no test: no import, no path literal, not inert")
+            if rel.endswith(".py"):
+                _all(f"{rel} is reached by no test: no import, no path literal, not inert")
+            _all(f"{rel} is reached by no reader the selector can name: no test names it and no script reads it")
         selected |= hits
     added_or_deleted = _git(root, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=AD",
                             merge_base.stdout.strip(), "HEAD")

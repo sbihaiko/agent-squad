@@ -39,6 +39,11 @@ run_def hashfirst c "GitHub issue #1500 and GitHub issue 1487" pass
 run_def unmapped c "a child whose prompt names no issue at all" pass
 run_def refs c "Every commit message carries the line \`Refs #1493\` on its own line. GOAL (issue 1493, SPEC 9 child): fix it." pass
 run_def cluster c "CHILD — GitHub issue(s) 5201, 5202, 5203 (work in the worktree the run gives you)." pass
+# (#2276) A child maps only to an issue its run was dispatched for: a prompt that cites another issue first never decides it.
+req() { printf 'CHILD — GitHub issue(s) %s (bug; one root cause, one branch):\n' "$2" > "$T/co/runs/$1/request.txt"; }
+run_def cited c "Fix two bugs. The fix of the red itself is issue #5399. Commit with Refs #5301 and Refs #5302." pass; req cited "5301, 5302"
+run_def citedown c "GitHub issue #5311. The body says the old fix is issue #5398." pass; req citedown "5311, 5312"
+run_def citednone c "Fix the bug the ticket describes; issue #5397 is its history." pass; req citednone "5321"
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
 export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo 5104:Code_Complete 5105:Doing 5106:Doing 5107:Doing"
@@ -57,6 +62,12 @@ echo "$m" | /usr/bin/grep -q ' 1492$' && ok "gui/N / wt-as-N: moved" || ko "gui/
 for c in 5201 5202 5203; do echo "$m" | /usr/bin/grep -q " $c$" && ok "a cluster child moves #$c" || ko "a cluster child did not move #$c"; done
 echo "$m" | /usr/bin/grep -q ' 1493$' && ok "Refs #N, the dispatchers' own link: moved (#555)" || ko "Refs #N not moved: the router wrote issue N with no hash"
 echo "$m" | /usr/bin/grep -q ' 1500$' && ok "hash pattern still wins first" || ko "hash pattern lost first-match"
+echo "$m" | /usr/bin/grep -q ' 5301$' && ok "a prompt that cites a foreign issue first maps to the run's issue it names (#2276)" || ko "the cited child did not move #5301: $m"
+echo "$m" | /usr/bin/grep -q ' 53[9][0-9]$' && ko "a cited foreign issue was moved: $m" || ok "a cited foreign issue moves no card (#2276)"
+echo "$out" | /usr/bin/grep -c 'CHILDCC REMAP cited c: its prompt names #5399 first' | /usr/bin/grep -qx 1 && ok "the remap is reported once, with the reference read (#2276)" || ko "the remap line is missing or repeated: $out"
+echo "$m" | /usr/bin/grep -q ' 5311$' && ok "a prompt whose first reference is a run issue keeps it (#2276)" || ko "the unchanged path lost #5311: $m"
+echo "$out" | /usr/bin/grep -q 'CHILDCC REMAP citedown' && ko "the unchanged path was reported as a remap" || ok "the unchanged path reports no remap (#2276)"
+echo "$m" | /usr/bin/grep -q ' 5321$' && ok "a prompt that names no run issue maps to the run's own issue (#2276)" || ko "the child with no run reference did not move #5321: $m"
 echo "$out" | /usr/bin/grep -q 'CHILDCC UNMAPPED unmapped c' && ok "unmapped child logged once" || ko "unmapped child not logged: $out"
 echo "$out" | /usr/bin/grep -c 'CHILDCC UNMAPPED unmapped c' | /usr/bin/grep -qx 1 && ok "unmapped child logged once only" || ko "unmapped child logged more than once"
 # No run parent (#559): a run of two children creates no issue and links no sub-issue; the run's summary rides the janitor's terminal comment.
