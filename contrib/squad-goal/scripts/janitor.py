@@ -1645,7 +1645,8 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     # costs no call for a run already counted. A corrupt ledger holds the issue (ADR-0149 rule 4): nothing is counted and the
     # hold is named; the pass decides it again once the owner's rearm wrote a fresh file. A ledger module that cannot be
     # loaded sends the call: wave.sh counts a run once anyway.
-    if proof_unfinished(i["reasons"]):
+    nochange = any(n in iss and str((i["kid_review"].get(k) or {}).get("verdict") or "") == "no_change" for k, iss in i["kid_issue"].items())
+    if proof_unfinished(i["reasons"]) and not nochange:
         say(f"UNPROVEN #{n}: run {f.name} ended with its proof unfinished, so it is no failed dispatch ({'; '.join(i['reasons'])})")
         return True
     rec = {}
@@ -1678,6 +1679,7 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
         if n not in iss or not rv or str(rv.get("verdict") or "").lower() in ("approve", "no_review", ""): continue
         lost = str(rv.get("verdict")) == "deadline" or "every review model failed" in str(rv.get("findings") or "") or str(rv.get("stderr") or "").startswith("review_not_started")
         kind = "own" if not lost or kind == "own" else "loop"
+    if nochange: kind = "nochange"
     if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return False
     tail = [kind, i["end_class"]] if i.get("end_class") else ([kind] if kind else [])
     out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *tail])[1].strip()

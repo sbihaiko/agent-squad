@@ -641,10 +641,15 @@ retire_run() {
   rm -f "$m" "$m.done"
 }
 
-fail() {   # <issue> <run> <why> [own|loop] [end class]: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
+fail() {   # <issue> <run> <why> [own|loop|nochange] [end class]: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
   local n=$1 run=$2 why=$3 kind=${4:-} cls=${5:-} loopf=0
   { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
   probe_refuted "$n" "$run" && return 0   # a probe whose acceptance command is unmet refutes its premise (#888)
+  if [ "$kind" = nochange ]; then   # a run that changed no file is never tried again: one such run marks the issue for the owner (#2245)
+    count "$n" "$run" "$why" own
+    [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
+    stop "$n" "$why"; return 0
+  fi
   loop_caused "$why" "$kind" && loopf=1
   # The count decision: one failed dispatch, which a run counts once, under its own ledger when the loop caused it (#621).
   if [ "$loopf" = 1 ]; then count "$n" "$run" "$why" loop; else count "$n" "$run" "$why" own; fi

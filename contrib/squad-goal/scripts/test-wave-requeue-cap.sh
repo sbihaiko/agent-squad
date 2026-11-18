@@ -207,6 +207,16 @@ hh hold --by hal9k 73 74
 hw requeue 75 "the local gates failed: w" >/dev/null; o75=$(hw requeue 75 "the local gates failed: x")
 case "$o75" in *"WAVE HAND-FULL #75"*) ! held 75 && ok "two live hal9k holds print HAND-FULL and the issue stays in the queue" || ko "#75 was held past the bound";; *) ko "two live holds did not fill the route: '$o75'";; esac
 hh release --by hal9k --to Todo 73 74
+# #2245: a run that changed no file is one failed dispatch that marks its issue for the owner at once, not at the third failure.
+# Two empty landings after that stop put nothing back in the queue, so two passes start no second run for the issue.
+o81=$(w fail 81 n1 "ended completed: unproven:route.router.1; unproven:route" nochange)
+case "$o81" in *"WAVE STOP #81"*) ok "a run that changed no file stops its issue at once";; *) ko "no stop after one no-change run: '$o81'";; esac
+[ "$(gl 81)" = 1 ] && /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/81/labels -f labels[]=frozen:owner' "$T/gh.log" && ok "the no-change stop freezes the issue for the owner" || ko "freeze #81: '$(/usr/bin/grep 'issues/81' "$T/gh.log" | tr '\n' ' ')'"
+echo req > "$T/st/auto/disp-81"
+o81a=$(w requeue 81 "the wave reached its age cap (3600 s) and landed empty without this child: it is back in the queue" cap)
+o81b=$(w requeue 81 "the wave reached its age cap (3600 s) and landed empty without this child: it is back in the queue" cap)
+case "$o81a$o81b" in *"WAVE REQUEUE #81"*) ko "an empty landing after the stop requeued #81: '$o81a $o81b'";; *) ok "two empty landings after the stop put nothing back in the queue";; esac
+! /usr/bin/grep -q ' Todo 81$' "$T/board.log" && ok "the card of the stopped issue does not move to Todo" || ko "board: '$(/usr/bin/grep ' 81$' "$T/board.log")'"
 # The wave's age cap sends a child's issue back to the queue, and the loop then builds it again from the base: the commits
 # the child made reach no branch, so the cap pushes the child's head to fix/<n>-salvage-<run>, the work branch a finished run
 # with no wave already pushes, and names that branch (#2030, #2231).

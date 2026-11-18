@@ -80,6 +80,11 @@ touch -t 202001010000 "$T/co/runs/run-r1/record.jsonl"
 for r in u4 u5; do mk run-$r; printf 'CHILD — GitHub issue #713 (one PR):\n' > "$T/co/runs/run-$r/request.txt"
   printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #713"}\n{"event": "verdict", "verdict": "completed", "reasons": ["unproven:route.router.1"], "exit_code": 0}\n' > "$T/co/runs/run-$r/record.jsonl"
   touch -t 202001010000 "$T/co/runs/run-$r/record.jsonl"; done
+# #2245: a run that changed no file and passed its land with review_nochange counts once as `nochange`, even though its reasons
+# are unfinished proofs (an empty selection never runs a suite), so the issue never reaches a stop by repeated empty waves.
+mk run-nc; printf 'CHILD — GitHub issue #715 (one PR):\n' > "$T/co/runs/run-nc/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #715"}\n{"event": "land", "node": "c1", "outcome": "pass", "reasons": ["review_nochange"], "effect": {"name": "review", "before": "a1b2c3", "head": "a1b2c3", "review": {"verdict": "no_change"}}}\n{"event": "verdict", "verdict": "completed", "reasons": ["unproven:route.router.1", "unproven:route"], "exit_code": 0}\n' > "$T/co/runs/run-nc/record.jsonl"
+touch -t 202001010000 "$T/co/runs/run-nc/record.jsonl"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BUG_DOING=Doing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 701$' "$T/board.calls" 2>/dev/null && ok "O: failed run -> card back to Todo" || ko "O #701 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
 [ ! -e "$T/st/auto/disp-701" ] && ok "O: failed run -> disp marker dropped" || ko "O disp-701 kept: $o"
@@ -91,7 +96,9 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q '^o 4 Todo 703$' "$T/board.calls" 2>/dev/null && /usr/bin/grep -q '^o 1 To triage 703$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/bug-703" ] && ok "O: autobug run -> loop board Todo + bug board To triage" || ko "O #703 not released: $(cat "$T/board.calls" 2>/dev/null)"
 exp=$'fail 701 run-fail ended failed: adapter_error\nfail 703 run-bug ended failed: node_spend_cap\nfail 705 run-nomark ended completed: nothing landed\nfail 708 run-held ended failed: review_held own\nfail 710 run-chain ended failed: review_held loop\nfail 713 run-r1 ended failed: ac_failed:exit 3; unproven:route.router.1
 fail 714 run-oc ended failed: owner-only: needs a credential  owner-only'
-[ "$(sort "$T/wave.calls" 2>/dev/null)" = "$exp" ] && ok "O: each run that delivered nothing counts once through wave.sh fail; landed, live, needs-human and listed runs do not" || ko "O fail calls: '$(cat "$T/wave.calls" 2>/dev/null)'"
+[ "$(sort "$T/wave.calls" 2>/dev/null | /usr/bin/grep -v '^fail 715 ')" = "$exp" ] && ok "O: each run that delivered nothing counts once through wave.sh fail; landed, live, needs-human and listed runs do not" || ko "O fail calls: '$(cat "$T/wave.calls" 2>/dev/null)'"
+n715=$(/usr/bin/grep -c '^fail 715 run-nc .* nochange$' "$T/wave.calls" 2>/dev/null)
+[ "${n715:-0}" = 1 ] && ok "O: a run that changed no file counts once as nochange, though its reasons are unproven (#2245)" || ko "O nochange run: $n715 nochange fail calls for #715: '$(/usr/bin/grep '^fail 715 ' "$T/wave.calls" 2>/dev/null)'"
 n712=$(/usr/bin/grep -c '^fail 712 ' "$T/wave.calls" 2>/dev/null)
 [ "${n712:-0}" = 0 ] && ok "O: three unproven-only runs never count, so no SQUAD-NOT-STARTABLE marker (ADR-0164)" || ko "O unproven runs counted: $n712 fail calls for #712"
 n713=$(/usr/bin/grep -c '^fail 713 ' "$T/wave.calls" 2>/dev/null)
