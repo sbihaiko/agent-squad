@@ -58,7 +58,7 @@ const profTripTime=c=>`${profTripNum(c.effective_s)} · ${profTripPar(c.parallel
 // A text's width is its user-unit font size times its character count, so a label too wide for its column takes a leader
 // line instead of a box over its neighbour. Every glyph in the chart is sized in SVG user units, so its box scales with
 // the viewBox: the layout holds at 390 px and at 1440 px alike. A CSS caption size would not scale, so the chart sets none.
-const PROF_TRIP_W=1000,PROF_TRIP_GUTTER=140,PROF_TRIP_LANE=110,PROF_TRIP_TOP=8,PROF_TRIP_GAP=16;
+const PROF_TRIP_W=1000,PROF_TRIP_GUTTER=140,PROF_TRIP_LANE=110,PROF_TRIP_TOP=8,PROF_TRIP_GAP=16,PROF_TRIP_PAD=14,PROF_TRIP_AXIS_GAP=12,PROF_TRIP_TITLE=15;
 const PROF_TRIP_FONT=13,PROF_TRIP_CHAR=PROF_TRIP_FONT*0.6,PROF_TRIP_ROW=16;
 const PROF_TRIP_SMALL=10,PROF_TRIP_MEAN=11,PROF_TRIP_BAR=8,PROF_TRIP_BAR_GAP=6;
 const profTextW=(s,size)=>String(s).length*PROF_TRIP_CHAR*(size||PROF_TRIP_FONT)/PROF_TRIP_FONT;
@@ -109,12 +109,15 @@ function profTripChart(t,cols){
  const barY=macBot+PROF_TRIP_BAR_GAP,barBot=barY+PROF_TRIP_BAR,labTop=barBot+PROF_TRIP_ROW;
  // A point is a share (0 to 1) and an axis tick is a percent (0 to 100): the two scales differ, so no 50% tick lands
  // on the lane's top beside the 100% (#2253).
- const ty=v=>tokTop+lane*(1-(top>0?Math.min(Math.max(v,0)/top,1):0)),my=v=>macTop+lane*(1-Math.min(Math.max(v,0),1));
- const myTick=v=>macTop+lane*(1-Math.min(Math.max(v,0),100)/100);
+ // The scale stands inside each lane by a margin, so the top line and the zero line keep air from the lane's edges and
+ // the axis values stand beside their lines, never on the edge of the lane, as the mock draws them (#2282).
+ const P=PROF_TRIP_PAD,span=lane-2*P;
+ const ty=v=>tokTop+P+span*(1-(top>0?Math.min(Math.max(v,0)/top,1):0)),my=v=>macTop+P+span*(1-Math.min(Math.max(v,0),1));
+ const myTick=v=>macTop+P+span*(1-Math.min(Math.max(v,0),100)/100);
  const tx=(b,p)=>b.x0+Math.min(Math.max(p,0),1)*(b.x1-b.x0);
  // Each lane's values stand once, in the gutter, so no value is drawn over a lane, a band or a mean (#2253).
  const axis=(values,y0,fmt)=>values.map(v=>`<line class=ptg0 x1="${G}" y1="${y0(v).toFixed(1)}" x2="${PROF_TRIP_W}" y2="${y0(v).toFixed(1)}"></line>`
-  +`<text class=ptt x="${G-6}" y="${(y0(v)+4).toFixed(1)}" text-anchor=end>${esc(fmt(v))}</text>`).join("");
+  +`<text class=ptt x="${G-PROF_TRIP_AXIS_GAP}" y="${(y0(v)+4).toFixed(1)}" text-anchor=end>${esc(fmt(v))}</text>`).join("");
  const bandsOf=(y,h)=>bands.map(b=>`<rect class="ptc pts-${esc(b.c.column)}" x="${b.x0.toFixed(1)}" width="${(b.x1-b.x0).toFixed(1)}" y="${y}" height="${h}"></rect>`).join("");
  // One band per column over both lanes, so a column reads as one block; a dark gap then parts the two lanes, as the
  // mock draws them (#2282).
@@ -126,14 +129,16 @@ function profTripChart(t,cols){
  // Each lane's title, unit and legend stand in the left gutter (#2255); the Machine lane's legend keeps the colours of
  // the two lines it names, and the RAM entry's hover names the machine's memory in gigabytes.
  const ramMem=t.mem_gb==null?"":"<title>the machine holds "+Number(t.mem_gb).toFixed(1)+" GB of memory</title>";
- const gutter=`<text class=ptn x="0" y="${(tokTop+12).toFixed(1)}">Tokens</text>`
-  +`<text class=ptu x="0" y="${(tokTop+27).toFixed(1)}">k tokens / min</text>`
-  +`<text class=ptn x="0" y="${(macTop+12).toFixed(1)}">Machine</text>`
-  +`<text class=ptu x="0" y="${(macTop+27).toFixed(1)}">% of the machine</text>`
-  +`<line class="ptkey ptl-cpu" x1="0" y1="${(macTop+45).toFixed(1)}" x2="16" y2="${(macTop+45).toFixed(1)}"></line>`
-  +`<text class=ptu x="20" y="${(macTop+49).toFixed(1)}">CPU</text>`
-  +`<line class="ptkey ptl-ram" x1="0" y1="${(macTop+63).toFixed(1)}" x2="16" y2="${(macTop+63).toFixed(1)}">${ramMem}</line>`
-  +`<text class=ptu x="20" y="${(macTop+67).toFixed(1)}">RAM</text>`;
+ // A lane's title stands on the line of its top value, so the title and the scale read as one row.
+ const tt=tokTop+P+5,mt=macTop+P+5;
+ const gutter=`<text class=ptn x="0" font-size=${PROF_TRIP_TITLE} y="${tt.toFixed(1)}">Tokens</text>`
+  +`<text class=ptu x="0" y="${(tt+16).toFixed(1)}">k tokens / min</text>`
+  +`<text class=ptn x="0" font-size=${PROF_TRIP_TITLE} y="${mt.toFixed(1)}">Machine</text>`
+  +`<text class=ptu x="0" y="${(mt+16).toFixed(1)}">% of the machine</text>`
+  +`<line class="ptkey ptl-cpu" x1="0" y1="${(mt+34).toFixed(1)}" x2="16" y2="${(mt+34).toFixed(1)}"></line>`
+  +`<text class=ptu x="20" y="${(mt+38).toFixed(1)}">CPU</text>`
+  +`<line class="ptkey ptl-ram" x1="0" y1="${(mt+52).toFixed(1)}" x2="16" y2="${(mt+52).toFixed(1)}">${ramMem}</line>`
+  +`<text class=ptu x="20" y="${(mt+56).toFixed(1)}">RAM</text>`;
  // The trip bar is thin, it has the plot's width and it sits under the Machine lane (#2255): one segment a column, each
  // under its band, and a column with no median paints no colour.
  const barBands=bands.map(b=>{const painted=(b.c.median_s||0)>0;

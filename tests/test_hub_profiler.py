@@ -3446,11 +3446,12 @@ def test_the_machine_axis_scales_its_percent_ticks_over_the_lane():
     top = float(re.search(r"PROF_TRIP_TOP=(\d+)", src).group(1))
     lane_h = float(re.search(r"PROF_TRIP_LANE=(\d+)", src).group(1))
     gap = float(re.search(r"PROF_TRIP_GAP=(\d+)", src).group(1))
+    pad = float(re.search(r"PROF_TRIP_PAD=(\d+)", src).group(1))
     mac_top = top + lane_h + gap
     ys = [float(y) for y in re.findall(r'<line class=ptg0 x1="[\d.]+" y1="([\d.]+)"', chart_svg(chart_js()))]
-    assert ys == [top + lane_h, top + lane_h / 2, top,
-                  mac_top + lane_h, mac_top + lane_h / 2, mac_top], \
-        "0% stands at each lane's bottom, 50% at its middle and 100% at its top"
+    assert ys == [top + lane_h - pad, top + lane_h / 2, top + pad,
+                  mac_top + lane_h - pad, mac_top + lane_h / 2, mac_top + pad], \
+        "0% stands on each lane's bottom margin, 50% at its middle and 100% on its top margin (#2282)"
 
 
 def test_each_axis_value_prints_once():
@@ -3676,7 +3677,8 @@ def test_the_chart_draws_the_ticks_and_the_points_the_payload_holds():
     assert todo["tokens"]["points"] == [[0.5625, 480.0]]
     line = re.search(r'<polyline class="ptl-tok" points="([\d.]+),([\d.]+)', out)
     assert (float(line.group(1)), float(line.group(2))) == \
-        (pytest.approx(x0 + 0.5625 * w, abs=0.1), pytest.approx(trip_consts()["top"] + trip_consts()["lane"] * (1 - 480 / 1000), abs=0.1)), \
+        (pytest.approx(x0 + 0.5625 * w, abs=0.1), pytest.approx(trip_consts()["top"] + trip_consts()["pad"]
+                                                 + (trip_consts()["lane"] - 2 * trip_consts()["pad"]) * (1 - 480 / 1000), abs=0.1)), \
         "the first Tokens point sits at its position in Todo and its height on the payload's own scale"
 
 
@@ -4329,7 +4331,7 @@ def trip_consts():
     def num(name):
         return float(re.search(name + r"=([\d.]+)", src).group(1))
     return {"gutter": num("PROF_TRIP_GUTTER"), "lane": num("PROF_TRIP_LANE"), "top": num("PROF_TRIP_TOP"),
-            "gap": num("PROF_TRIP_GAP"), "row": num("PROF_TRIP_ROW")}
+            "gap": num("PROF_TRIP_GAP"), "row": num("PROF_TRIP_ROW"), "pad": num("PROF_TRIP_PAD")}
 
 
 def test_the_blocks_follow_the_mock_from_the_heading_to_the_table():
@@ -4625,3 +4627,24 @@ def test_a_mean_in_a_lane_is_smaller_than_a_label():
     svg = chart_svg(chart_js())
     sizes = set(re.findall(r'<text class="ptlm [^"]*"[^>]*font-size=(\d+)>', svg))
     assert sizes == {"11"} and 11 < chart_metrics()[2], "each mean prints at 11 units, under the 13 of a label"
+
+
+def test_each_lane_keeps_a_margin_inside_its_band_and_its_values_stand_off_the_plot():
+    """#2282: the mock draws each lane's scale inside its band by a margin, its values a gap left of the plot, and the
+    lane's title on the row of its top value."""
+    c = trip_consts()
+    src = (SCRIPTS / "hub-profiler.js").read_text()
+    gap = float(re.search(r"PROF_TRIP_AXIS_GAP=(\d+)", src).group(1))
+    svg = chart_svg(chart_js())
+    lines = [float(y) for y in re.findall(r'<line class=ptg0 x1="[\d.]+" y1="([\d.]+)"', svg)]
+    assert min(lines) - c["top"] >= c["pad"] >= 10, "the top value line keeps air above it"
+    assert c["top"] + c["lane"] - max(lines[:3]) >= c["pad"], "the zero line keeps air below it"
+    xs = {float(x) for x in re.findall(r'<text class=ptt x="([\d.]+)"', svg)}
+    assert xs == {c["gutter"] - gap} and gap >= 10, "every axis value stands one gap left of the plot"
+    title = re.search(r'<text class=ptn x="0" font-size=(\d+) y="([\d.]+)">Tokens</text>', svg)
+    assert title and int(title.group(1)) > trip_consts_font(src), "the lane title is larger than the chart text"
+    assert abs(float(title.group(2)) - (min(lines) + 4)) <= 2, "the title stands on the row of the top value"
+
+
+def trip_consts_font(src):
+    return int(re.search(r"PROF_TRIP_FONT=(\d+)", src).group(1))
