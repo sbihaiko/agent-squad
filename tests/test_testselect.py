@@ -615,3 +615,82 @@ def test_a_delta_that_only_edits_a_shell_suite_does_not_select_the_measured_line
         extra={**MEASURED_LINE_GUARD_BASE, suite: "true\n", "tests/test_namer.py": "SUITE = 'test-alpha.sh'\n"},
     )
     assert select(repo) == ["tests/test_namer.py"]
+
+
+READER_SCRIPT = (
+    "import pathlib\n"
+    "HERE = pathlib.Path(__file__).resolve().parent\n"
+    'PAGE = (HERE / "hub-mobile.html").read_text()\n'
+    'PROFILER = (HERE / "hub-profiler.js").read_text()\n'
+)
+READER_LOADER = (
+    "import importlib.util\n"
+    "import pathlib\n"
+    "HUB = pathlib.Path(__file__).resolve().parent.parent / 'contrib/squad-goal/scripts/hub.py'\n"
+    "\n"
+    "def test_the_page_loads():\n"
+    "    spec = importlib.util.spec_from_file_location('hub', HUB)\n"
+    "    mod = importlib.util.module_from_spec(spec)\n"
+    "    spec.loader.exec_module(mod)\n"
+    "    assert '<html>' in mod.PAGE\n"
+)
+READER_NAMER = (
+    "import pathlib\n"
+    "PAGE = pathlib.Path(__file__).resolve().parent.parent / 'contrib/squad-goal/scripts/hub-mobile.html'\n"
+    "\n"
+    "def test_the_page_has_a_tag():\n"
+    "    assert '<html>' in PAGE.read_text()\n"
+)
+
+
+def test_a_changed_asset_reaches_the_tests_that_load_the_script_reading_it(tmp_path):
+    """#2271: the hub reads its page from hub-mobile.html and hub-profiler.js when it starts, so a change to either reaches
+    every test that loads the hub. The selector read only the test's own path literals, so a test that loads the page
+    through the hub stayed unselected and the delta gate proved nothing about it."""
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/hub-mobile.html": "<html>two</html>\n"},
+        extra={
+            "contrib/squad-goal/scripts/hub.py": READER_SCRIPT,
+            "contrib/squad-goal/scripts/hub-mobile.html": "<html>one</html>\n",
+            "contrib/squad-goal/scripts/hub-profiler.js": "var one = 1;\n",
+            "tests/test_hub_page.py": READER_LOADER,
+            "tests/test_page_tag.py": READER_NAMER,
+        },
+    )
+    assert select(repo) == ["tests/test_hub_page.py", "tests/test_page_tag.py"]
+
+
+def test_a_changed_script_another_script_imports_reaches_the_tests_that_load_that_one(tmp_path):
+    """#2271: the hub imports hub_profiler at start, so a change to hub_profiler reaches every test that loads the hub, and
+    not only the tests that name hub_profiler."""
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/hub_profiler.py": "ROW = 2\n"},
+        extra={
+            "contrib/squad-goal/scripts/hub.py": "import hub_profiler\nROW = hub_profiler.ROW\n",
+            "contrib/squad-goal/scripts/hub_profiler.py": "ROW = 1\n",
+            "tests/test_hub_page.py": READER_LOADER,
+        },
+    )
+    assert select(repo) == ["tests/test_hub_page.py"]
+
+
+def test_a_changed_asset_no_test_and_no_script_reads_answers_all_with_the_reason(tmp_path):
+    """#2271: the selector names the readers of a changed asset it can place. When it cannot name one, the answer is the
+    full battery with the reason, never a narrower list that leaves the readers out (ADR-0169)."""
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/hub-mobile.html": "<html>two</html>\n"},
+        extra={
+            "contrib/squad-goal/scripts/hub.py": (
+                "import pathlib\n"
+                'PAGE = (pathlib.Path(__file__).resolve().parent / "other.html").read_text()\n'
+            ),
+            "contrib/squad-goal/scripts/hub-mobile.html": "<html>one</html>\n",
+            "contrib/squad-goal/scripts/other.html": "<html>one</html>\n",
+            "tests/test_hub_page.py": READER_LOADER,
+        },
+    )
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and "hub-mobile.html" in lines[0]
