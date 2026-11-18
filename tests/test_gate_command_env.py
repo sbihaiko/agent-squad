@@ -131,12 +131,50 @@ def test_a_gate_that_could_not_run_is_unproven_not_a_failed_check(tmp_path):    
     assert r.findings == [f"unproven:{UNPROVEN_CMD}"]
 
 
-def test_an_exit_four_with_no_unproven_line_is_no_unproven_check(tmp_path):     # #1825
-    # The exit code alone never proves that nothing ran: a command that answers 4 and says nothing of the gate is a
-    # measured failure, so the run holds it instead of carrying it (ADR-0164).
+BOUNDED_ALREADY_LINE = ("fast-gate: bounded already at ab12cd34e: a child spends one bounded attempt per head (#1527); "
+                        "the entry gate and the landing own the obligation (ADR-0164), so commit and report done "
+                        "(log /tmp/fast-gate.log)")
+
+
+def folded(tmp_path, cmd):
+    """The gate result of one command, folded into the run verdict the way the engine folds a record (#2337)."""
+    from squad import verdict as V
+    r = run(tmp_path, cmd)
+    reasons = [f"ac-verify:{f}" for f in r.findings]
+    rows = [{"event": "outcome", "node": "final_gate", "entry": 1, "outcome": r.outcome, "reasons": reasons},
+            {"event": "outcome", "node": "main", "entry": 1, "outcome": r.outcome, "reasons": reasons}]
+    events = [{"event": "run_start", "run_id": "r1", "graph_name": "g", "graph_hash": "h", "engine_options": {},
+               "root": "main", "plan": ["main", "final_gate"]}] + rows
+    for i, e in enumerate(events, 1):
+        e["pos"] = i
+    return r, V.fold(events)
+
+
+def test_an_entry_gate_at_exit_four_with_no_red_folds_to_completed_unproven(tmp_path):     # #2337
+    # The fast gate answers exit 4 on a line that names no red and carries no pytest summary: the bounded-attempt line
+    # (#1527) is one of them. The gate measured nothing, so it is unproven (ADR-0164), and a run whose only failing
+    # outcome is unproven completes with unproven:<node> instead of failing and losing its commits.
+    cmd = f"echo {shlex.quote(BOUNDED_ALREADY_LINE)}; exit 4"
+    r, v = folded(tmp_path, cmd)
+    assert r.outcome == "unproven", r.findings
+    assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
+    assert v.reasons == ["unproven:final_gate"]
+
+
+def test_a_measured_red_at_exit_four_still_folds_to_failed(tmp_path):     # #2337
+    # A measurement that names a red is never released by the exit code: the defect holds the run (ADR-0164).
+    cmd = "printf 'FAIL contrib/squad-goal/scripts/test-x.sh::case\\n'; exit 4"
+    r, v = folded(tmp_path, cmd)
+    assert r.outcome == "fail" and (v.verdict, v.exit_code) == ("failed", 1), v.reasons
+    assert any(reason.startswith("ac-verify:ac_failed:") for reason in v.reasons), v.reasons
+
+
+def test_an_exit_four_with_no_summary_and_no_red_is_unproven(tmp_path):     # #2337
+    # The gate's own words are not required: an exit-4 line that names no red carries no such word, and the run must not
+    # lose the commits of a measurement that never happened. A summary or a named red still makes it a measured failure.
     r = run(tmp_path, "sh -c 'exit 4'")
-    assert r.outcome == "fail"
-    assert r.findings == ["ac_failed:sh -c 'exit 4'"]
+    assert r.ok and r.outcome == "unproven"
+    assert r.findings == ["unproven:sh -c 'exit 4'"]
 
 
 def test_a_measured_shell_red_at_exit_four_is_not_unproven(tmp_path):     # #1825
