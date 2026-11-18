@@ -31,7 +31,7 @@ pytestmark = pytest.mark.heavy
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 GIT = "/usr/bin/git"
-# The scripts wave.sh and its landing path read beside themselves, as test-wave.sh copies them into its own directory.
+# The scripts wave.sh and its landing path read beside themselves, as the split wave suites copy them into their own directory.
 COPY = (
     "wave.sh", "wavepause.py", "issue_ledger.py", "ghread.py", "child_issues.py", "address.sh", "gate.sh", "caps.sh",
     "serial.sh", "ghcall.sh", "drainpolicy.py", "base-battery.sh", "basecheck.sh", "fast-gate.sh", "quality-reading.py",

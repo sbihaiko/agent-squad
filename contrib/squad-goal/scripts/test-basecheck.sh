@@ -7,7 +7,7 @@
 # evidence: a completed job whose steps list is empty never started, so an all-never-started run is unproven and holds nothing
 # (#1629). Silence releases nothing: a run the door cannot read, an empty job list, a failed job with no steps evidence and a check
 # that names no run all leave the fail standing, so the head stays red. The callers' holds are
-# proved by the fixture runs of test-branchland.sh and test-wave.sh. Stub gh (every argv logged), a bare local remote, a temp state
+# proved by the fixture runs of test-branchland.sh and test-wave-land.sh. Stub gh (every argv logged), a bare local remote, a temp state
 # dir per case. One line per case.
 # usage: bash test-basecheck.sh [scripts dir]
 unset SG_SERIAL_HELD SG_BASE_CI_GATE SG_BASE_CI_RECHECK SG_BASE_CI_GRACE SG_BASE_CI_OK_TTL   # an ambient gate or loop setting must not decide these cases
