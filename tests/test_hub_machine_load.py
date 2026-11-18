@@ -1101,11 +1101,67 @@ def test_the_row_bar_draws_closed_over_total(hub):
     assert '<span class=spwv>3 of 7 closed</span>' in row, row
     assert re.search(r'<i style="width:42\.85\d*%"></i>', row), row
     zero = _speed_html(hub, _speed(arrivals={"bugs": _row(0, 0), "loop_bugs": _row(0, 0)}))
-    start = zero.index('class="spw mute"')
-    end = zero.find('class="spw ', start + 1)
-    zero_row = zero[start:end if end != -1 else len(zero)]   # the row's own markup, up to the next row
-    assert '<span class=spwv>none</span>' in zero_row, zero_row   # the visible text, not only the aria-label
-    assert "spwt" not in zero_row, zero_row   # a kind with no card draws no bar
+    assert "Bugs" not in zero and "Loop-bugs" not in zero, zero   # a kind with no card is not drawn (#2285)
+
+
+def _drawn_rows(html):
+    """The row labels the card draws, in order: the words inside the label span of each row."""
+    return re.findall(r"<span class=spwl>([^<]+)</span>", html)
+
+
+def test_a_row_with_nothing_to_count_is_not_drawn(hub):
+    """#2285: a row whose total is zero has no label, no text and no bar; only the three kinds with cards draw."""
+    html = _speed_html(hub, _speed(tasks=_row(0, 0), arrivals={"bugs": _row(0, 0), "loop_bugs": _row(0, 0)},
+                                   specs=_specs(open_n=0, value="no open spec", bar=False, state="none")))
+    assert _drawn_rows(html) == [], html
+    assert "Tasks" not in html and "Bugs" not in html and "Loop-bugs" not in html and "Specs" not in html, html
+    assert "spwt" not in html, "a hidden row draws no bar"
+    text = re.sub(r"<[^>]+>", " ", html)
+    assert re.search(r"10\s+cards closed in the last 4 h", text), "the hero line still draws"
+    assert "spr role=img" in html, "the hero bar still draws"
+
+
+def test_each_kind_row_hides_on_its_own_zero_total(hub):
+    """#2285: the rule holds per row: one kind with no card leaves the other two drawn."""
+    cases = [("tasks", _row(0, 0), "Tasks"), ("bugs", _row(0, 0), "Bugs"), ("loop_bugs", _row(0, 0), "Loop-bugs")]
+    for key, zero, name in cases:
+        kw = {"tasks": _row(4, 10), "arrivals": {"bugs": _row(3, 7), "loop_bugs": _row(2, 4)}}
+        if key == "tasks":
+            kw["tasks"] = zero
+        else:
+            kw["arrivals"][key] = zero
+        rows = _drawn_rows(_speed_html(hub, _speed(**kw)))
+        assert name not in rows, (name, rows)
+        assert [n for n in ("Tasks", "Bugs", "Loop-bugs", "Specs") if n != name and n in rows], (name, rows)
+
+
+def test_a_row_above_zero_with_zero_closed_draws_an_empty_bar(hub):
+    """#2285: a kind with cards and none closed stays drawn, with a bar at no fill."""
+    html = _speed_html(hub, _speed(arrivals={"bugs": _row(0, 2), "loop_bugs": _row(2, 4)}))
+    row = re.search(r'class="spw warn".*?</div>', html, re.S).group(0)
+    assert '<span class=spwv>0 of 2 closed</span>' in row, row
+    assert '<i style="width:0%"></i>' in row, row
+
+
+def test_the_specs_row_is_not_drawn_when_no_spec_is_open(hub):
+    """#2285: no open spec leaves no Specs row, with no history and with one."""
+    no_spec = _specs(open_n=0, value="no open spec", bar=False, state="none")
+    for sp in (_speed(specs=no_spec), None):
+        html = _speed_html(hub, sp) if sp else _run_speed(hub, "null", no_spec)
+        assert "Specs" not in html, html
+        assert "spw spec" not in html, html
+
+
+def _run_speed(hub, sp_json, specs):
+    """The card drawn for a fact given as raw JSON, so the no-history case keeps the Specs fact beside it."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
+    i = hub.PAGE.index("function speedRow(")
+    script = f"{esc}\n{hub.PAGE[i:hub.PAGE.index('function instUsage', i)]}\nconsole.log(speedRow({sp_json}, {json.dumps(specs)}))"
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return out.stdout
 
 
 def test_a_row_of_every_card_closed_fills_its_track(hub):
@@ -1157,12 +1213,13 @@ def test_closes_before_the_window_draw_the_bar_at_zero_fill(hub):
     assert 'style="width:0%"' in html and "spr role=img" in html, html
 
 
-def test_nothing_closed_or_open_reads_none_in_the_muted_tone(hub):
+def test_a_kind_with_no_card_leaves_no_row_behind(hub):
+    """#2285: a row with nothing to count is not drawn, so no muted row names an empty kind."""
     empty = _row(0, 0)
     html = _speed_html(hub, _speed(window=0, day=6, trend="down",
                                    arrivals={"bugs": empty, "loop_bugs": empty}))
-    assert 'class="spw mute" role=img aria-label="Bugs: none"' in html, html
-    assert 'class="spw mute" role=img aria-label="Loop-bugs: none"' in html, html
+    assert 'class="spw mute"' not in html and "Bugs" not in html and "Loop-bugs" not in html, html
+    assert 'class="spw ok" role=img aria-label="Tasks: 4 of 10 closed"' in html, "the kind with cards stays drawn"
 
 
 def test_the_last_line_names_the_age_only_once_the_oldest_source_is_stale(hub):
