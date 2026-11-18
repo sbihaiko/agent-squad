@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, math, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, board_priority, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, procscan, provkey, session_card, session_send, sessions, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
+import agyquota, board_lag, board_priority, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, priority_backfill, procscan, provkey, session_card, session_send, sessions, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import board_wait, issue_state
 import http.client
@@ -5807,6 +5807,11 @@ def board(moves=None):
             row["sb"] = True   # the start control: a Backlog spec whose plan holds a ticket (#1128); the count is asked on the press only
         if i.get("b"): row["b"] = i["b"]
         row["pr"] = board_priority.card_mark(i)   # the priority icon, tone and label the card wears; a card with no value is normal (#1981)
+        with PRIORITY_LOCK:   # the owner's written level draws at once with its pending chip; a refusal keeps the read's value (#2289)
+            want = PRIORITY_FLIGHT.get(i["n"])
+            why = PRIORITY_REFUSED.get(i["n"])
+        if want is not None: row["pr"] = board_priority.mark(want); row["prp"] = True
+        if why is not None: row["prr"] = why[1]
         if isinstance(i.get("gt"), (int, float)) and i["gt"] > 0:
             row["gt"] = int(i["gt"])   # the card's Gate Tries, off the field the read carried (#1255)
             row["gchip"] = f"Gating · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
@@ -6150,6 +6155,128 @@ def send_cards(cards):
     if r.returncode == 0: return [c["n"] for c in cards], None
     lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
     return [int(n) for n in MOVED_LINE.findall(r.stdout or "")], (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]
+# The owner's Priority write (#2289). A write is the writer's `--priority` path (`board.sh --priority`), which sends one
+# PATCH only when the value changes (ADR-0144) and reads the value back. The route answers at once; the card draws the
+# chosen mark with a pending chip until the writer answers, and a refusal keeps the read's value and names its reason.
+PRIORITY_LEVELS = ("urgent", "high", "normal", "low")
+PRIORITY_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_BOARD_PRIORITY_WRITE is not on (tailnet.board_priority_write)"
+PRIORITY_AUDIT = STATE / "board-priority.jsonl"   # one line per write the owner asked for: the card, old value, new value, time (#2289)
+PRIORITY_FLIGHT = {}    # card number -> level the owner chose, from the route's answer until the writer's
+PRIORITY_REFUSED = {}   # card number -> (old level, the reason the writer refused)
+PRIORITY_LOCK = threading.Lock()
+PRIORITY_THREADS = []
+
+def priority_call(n, level):
+    """The one writer call of a Priority write: `--priority <owner> <project> <n> <level>` through the board seam, with the
+    state directory and item id this hub already holds, so the writer reads no whole-project list for the id."""
+    env = {**os.environ, "SG_STATE": str(STATE), "SG_REPO": REPO, "SG_MOVE_BY": "owner"}
+    env["SG_BOARD_ITEM_HINTS"] = json.dumps({str(i["n"]): i["i"] for i in board_cache.get("items") or []
+                                             if i.get("n") == n and i.get("i") and (i.get("r") or REPO).lower() == REPO.lower()})
+    argv = ["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), "--priority", OWNER, str(PROJECT_NO), str(n), level]
+    return subprocess.run(argv, capture_output=True, text=True, timeout=PROMOTE_TIMEOUT_BASE + _settle_seconds(), env=env)
+
+def wait_for_priorities(timeout=30.0):
+    """Join every background Priority write this process started. The suite calls it to read the board once the writer answered."""
+    with PRIORITY_LOCK: threads = list(PRIORITY_THREADS)
+    for t in threads: t.join(timeout)
+
+def priority_refusal(a, origin_ok, tn):
+    """The reason a Priority write is refused, or '' when it may run: the access rule, then its own tailnet grant, then the
+    origin and body. The loop-write grant is not read here (ADR-0162, #2289)."""
+    if not a.allowed: return a.reason
+    if a.tailnet and tn.get("board_priority_write") is not True: return PRIORITY_READ_ONLY
+    return "" if origin_ok else "forbidden"
+
+def priority_audit(issue, old, new, who, frm):
+    """One line per write the owner asked for: the card, the old value, the new value, the time, and who asked from where."""
+    record = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "issue": issue, "repository": REPO,
+              "from": old, "to": new, "who": who, "from_where": frm}
+    with PRIORITY_AUDIT.open("a") as f: f.write(json.dumps(record) + "\n")
+
+def priority_family(spec):
+    """The spec and its open children as the inheritance rule reads them (#1979), from the board cache alone: the parent the
+    read recorded (`pa`), each child's labels and state, and the spec's sub-issue list. A closed child is not a target."""
+    items = {i["n"]: i for i in board_cache.get("items") or []}
+    kids = sorted(n for n, i in items.items() if i.get("pa") == spec and str(i.get("s") or "").lower() == "open")
+    def row(n):
+        i = items[n]
+        return {"body": "", "sub_issues": [], "labels": list(i.get("l") or []),
+                "state": "open" if str(i.get("s") or "").lower() == "open" else "closed"}
+    by = {spec: {**row(spec), "sub_issues": kids}}
+    for n in kids: by[n] = row(n)
+    return by
+
+def priority_propagate(spec, level):
+    """Carry a spec's new Priority to its open children by the inheritance rule (#1979). A failure here never undoes the
+    spec's own write, which the writer already proved: it is logged once and the next change carries the value again."""
+    item = next((i for i in board_cache.get("items") or [] if i.get("n") == spec), None)
+    if item is None or _columns_module.SPEC_LABEL not in (item.get("l") or []): return
+    try:
+        priority_backfill.propagate(board_seam(), REPO, spec, int(time.time() * 1000), level, priority_family(spec))
+    except Exception as e:
+        log_once(f"hub: the Priority of spec #{spec} did not reach its children: {type(e).__name__}: {' '.join(str(e).split())}")
+
+def _settle_priority(n, level, old):
+    """The writer's answer for one Priority write, in the background. A proved write changes the served value at once, so the
+    card's next draw carries it with no pending chip and no board read; a refusal keeps the read's value and names its reason."""
+    reason = None
+    try:
+        r = priority_call(n, level)
+        if r.returncode != 0:
+            lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
+            reason = (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]
+    except subprocess.TimeoutExpired as e:
+        reason = f"the writer had not answered after {int(e.timeout)} s: the board is read again"
+        try: (STATE / "board-dirty").touch()
+        except OSError: pass
+    except Exception as e:
+        reason = str(e)[:200] or "the writer did not answer"
+    if reason is None:
+        with _board_lock:
+            for i in board_cache.get("items") or []:
+                if i.get("n") == n: i["p"] = level
+        save_board()
+    with PRIORITY_LOCK:
+        PRIORITY_FLIGHT.pop(n, None)
+        if reason is None: PRIORITY_REFUSED.pop(n, None)
+        else: PRIORITY_REFUSED[n] = (old, reason)
+    if reason is None: priority_propagate(n, level)
+
+def priority_write(body, who="owner", frm="loopback"):
+    """One Priority write the owner asked for: validate, skip a value the card already carries (ADR-0144), audit the write,
+    and send it in the background. The answer names the card and the level, and whether a write was sent."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    n, level = body.get("issue"), body.get("priority")
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0: return {"err": "issue: a number"}
+    if level not in PRIORITY_LEVELS: return {"err": "priority: one of urgent, high, normal, low"}
+    item = next((i for i in board_cache.get("items") or [] if i.get("n") == n), None)
+    if item is None: return {"err": "not on the board"}
+    if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: its Priority is not written"}
+    old = item.get("p") or ""
+    if old == level: return {"ok": True, "issue": n, "priority": level, "changed": False}   # no board write on an unchanged value
+    with PRIORITY_LOCK:
+        if n in PRIORITY_FLIGHT: return {"err": "the card's Priority is already being written"}
+    PRIORITY_AUDIT.parent.mkdir(parents=True, exist_ok=True)
+    priority_audit(n, old, level, who, frm)
+    with PRIORITY_LOCK:
+        PRIORITY_FLIGHT[n] = level
+        PRIORITY_REFUSED.pop(n, None)
+        PRIORITY_THREADS[:] = [t for t in PRIORITY_THREADS if t.is_alive()]
+        t = threading.Thread(target=_settle_priority, args=(n, level, old), daemon=True, name=f"board-priority-{n}")
+        PRIORITY_THREADS.append(t)
+    t.start()
+    return {"ok": True, "issue": n, "priority": level, "changed": True, "pending": True}
+
+def priority_route(a, raw, origin_ok):
+    """The `/api/board/priority` write read as the loop switch's is: the access rule, the tailnet grant, then the origin and
+    JSON body before any write. A refusal names its reason."""
+    why = priority_refusal(a, origin_ok, tailnet_block())
+    if why: return 403, {"err": "forbidden", "reason": why}
+    try: body = json.loads(raw or b"{}")
+    except ValueError: return 400, {"err": "bad request"}
+    out = priority_write(body, a.login or "owner", "tailnet" if a.tailnet else "loopback")
+    return (400 if "err" in out else 200), out
+
 BATCH_AUDIT = STATE / "board-batch.jsonl"   # one line per batch write the owner asked for: the count, the cards and who asked (#1098)
 def promote_batch_plan():
     """The cards the batch moves, in write order, or the refusal. Every card the owner's move would start goes in, a spec
@@ -6530,7 +6657,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .prio{font-weight:600;margin-right:4px}#bbody .prio.red{color:var(--err)}#bbody .prio.yellow{color:var(--warn)}#bbody .prio.blue{color:var(--acc)}#bbody .pinh{font-size:var(--fs-caption);color:var(--mute);margin-right:4px}
 #bbody .lchip{border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-caption);font-weight:600;border:1px solid var(--line-strong);line-height:20px;white-space:nowrap;color:var(--mute)}#bbody .lchip[data-k=spec]{color:var(--mute);border-color:var(--line);font-weight:400}#bbody .it>.fz{order:-1}
 #bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}#bbody .bmv{display:inline-block;margin-left:8px;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .bmv:disabled{opacity:.5;cursor:default}#bbody .it .spb{display:inline-block;margin-top:4px;margin-left:6px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .spb:hover{border-color:var(--acc)}#bbody .it .syncb{display:inline-block;margin-top:4px;margin-left:6px;font:inherit;font-size:var(--fs-caption);padding:0 7px;border-radius:var(--radius-lg);cursor:pointer;color:var(--mute);background:var(--inset);border:1px solid var(--line)}#bbody .it .syncb:hover{border-color:var(--acc);color:var(--acc)}#bbody .it .syncb:disabled{opacity:.5;cursor:default}#bbody .syncage{display:inline-block;margin-top:4px;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);font-variant-numeric:tabular-nums;color:var(--acc);border:1px solid var(--tint-acc-line);background:var(--tint-acc)}#spdlg{margin:6px 0;padding:8px 10px;border-radius:var(--radius-md);border:1px solid var(--acc);background:var(--inset);font-size:var(--fs-body)}#spdlg button{margin:6px 6px 0 0;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-caption);border-radius:var(--radius-lg);cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#spnote{margin:4px 0;font-size:var(--fs-caption);color:var(--ok)}   /* the owner's move, on a Backlog card only (#560) */
-#bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .prr.pwr{color:var(--err)}#bbody .it{position:relative}#bbody .prio.pbtn{cursor:pointer;border-radius:4px;padding:0 2px}#bbody .prio.pbtn:hover,#bbody .prio.pbtn:focus-visible{outline:1px solid var(--acc)}#bbody .prd{position:absolute;z-index:40;top:1.6em;left:6px;margin:2px 0 0;padding:4px;list-style:none;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);box-shadow:0 4px 14px #0006;min-width:132px}#bbody .prd [role=option]{padding:5px 8px;border-radius:4px;cursor:pointer;font-size:var(--fs-caption)}#bbody .prd [role=option][aria-selected=true]{background:var(--tint-acc);font-weight:600}#bbody .prd [role=option]:focus{outline:1px solid var(--acc)}#bbody .prp{display:inline-block;margin-left:6px;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--on-tone);background:var(--warn)}   /* a Priority write not proved yet (#2289) */
 #bbody .it .blk{display:block;margin-top:4px;font-size:var(--fs-caption);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--acc);text-decoration:none}
 #bbody .prs .it .cir{display:inline-block;margin-left:6px;font-size:var(--fs-caption);letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:var(--radius-xl);padding:0 5px;white-space:nowrap}   /* the pull request's own CI rollup (#440) */#bbody .prs .it .cir.pass{color:var(--on-tint);background:color-mix(in srgb,var(--ok) var(--tint-alpha),var(--card));border-color:var(--tint-ok-line)}#bbody .prs .it .cir.fail{color:var(--on-tint);background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card));border-color:var(--tint-err-line)}#bbody .prs .it .cir.pending{color:var(--on-tint);background:color-mix(in srgb,var(--run) var(--tint-alpha),var(--card));border-color:var(--tint-run-line)}
 #bbody .prs .it .au{color:var(--mute);font-size:var(--fs-caption)}   /* the author the pull request was opened by (#440) */
@@ -7700,7 +7827,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr",tt=String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${loopBugLabel(x)?`<span class="bugc loop">${esc(loopBugLabel(x))}</span>`:(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pr?`<span class="prio ${x.pr.tone}" title="${esc(x.pr.label)}" aria-label="${esc(x.pr.label)}" role=img>${({"double-chevron-up":"⇈","arrow-up":"↑","bar":"▬","arrow-down":"↓"})[x.pr.icon]}</span>${x.pr.inherit?`<span class=pinh title="${x.pr.inherit==="pending"?"inheritance pending":"inherited priority"}">${x.pr.inherit==="pending"?"pending":"inherited"}</span>`:""}`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt title="${esc(tt).replace(/"/g,"&quot;")}">${esc(tt)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${pr?"":`<button class=syncb data-n="${x.n}" title="re-read only this card from GitHub now: its column, labels, holder, blockers and sub-issue count">Sync</button>`}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}">${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">${esc(x.hc||(x.hs==="running"?"Squad · running":"Squad"))}</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr",tt=String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${loopBugLabel(x)?`<span class="bugc loop">${esc(loopBugLabel(x))}</span>`:(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pr?`<span class="prio ${x.pr.tone}${pr?"":" pbtn"}" data-level="${x.pr.level}" title="${esc(x.pr.label)}${pr?"":" — set the Priority"}" aria-label="${esc(x.pr.label)}" ${pr?"role=img":"role=button tabindex=0 aria-haspopup=listbox aria-expanded=false"}>${({"double-chevron-up":"⇈","arrow-up":"↑","bar":"▬","arrow-down":"↓"})[x.pr.icon]}</span>${x.pr.inherit?`<span class=pinh title="${x.pr.inherit==="pending"?"inheritance pending":"inherited priority"}">${x.pr.inherit==="pending"?"pending":"inherited"}</span>`:""}${x.prp?`<span class=prp title="a Priority write the board read has not carried yet">pending</span>`:""}${x.prr?`<div class="prr pwr">${esc(x.prr)}</div>`:""}`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt title="${esc(tt).replace(/"/g,"&quot;")}">${esc(tt)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${pr?"":`<button class=syncb data-n="${x.n}" title="re-read only this card from GitHub now: its column, labels, holder, blockers and sub-issue count">Sync</button>`}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}">${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">${esc(x.hc||(x.hs==="running"?"Squad · running":"Squad"))}</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // Every column the user leaves visible is a lane of every group, even one holding no card at all (#1994): the lane
 // keeps its minimum width, its tint and its label with a zero, so a group reads as the board's columns and an empty
 // one reads as empty, never as missing. The visible set is derived on every render -- from the user's hidden set,
@@ -7926,6 +8053,28 @@ document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pm
 try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
  if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.textContent=label;b.disabled=false}
  else{b.textContent="sent to Todo";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.textContent=label;b.disabled=false}});
+// The owner's Priority dropdown (#2289): a press on the card's mark opens the four levels, the card's own level is
+// selected, arrow keys move and Enter chooses. Escape and a press outside close it with no write. The press draws the new
+// mark and a pending chip at once; the hub writes the card's Priority in the background and a refusal names its reason and
+// restores the mark the read holds. A pull request card carries no mark and so no dropdown.
+const PRD_LEVELS=["urgent","high","normal","low"],PRD_ICON={urgent:"⇈",high:"↑",normal:"▬",low:"↓"},PRD_TONE={urgent:"red",high:"red",normal:"yellow",low:"blue"};
+const prdClose=()=>{for(const d of document.querySelectorAll("#bbody .prd"))d.remove();for(const b of document.querySelectorAll("#bbody .prio.pbtn"))b.setAttribute("aria-expanded","false")};
+const prdPaint=(b,l)=>{b.dataset.level=l;b.className="prio pbtn "+PRD_TONE[l];b.textContent=PRD_ICON[l];b.title="Priority "+l+" — set the Priority";b.setAttribute("aria-label","Priority "+l)};
+const prdShow=b=>{prdClose();const cur=b.dataset.level,dd=document.createElement("div");dd.className="prd";dd.setAttribute("role","listbox");dd.setAttribute("aria-label","Priority");dd.innerHTML=PRD_LEVELS.map(l=>`<div role=option tabindex=-1 data-level="${l}" aria-selected="${l===cur}">${PRD_ICON[l]} ${l[0].toUpperCase()+l.slice(1)}</div>`).join("");b.setAttribute("aria-expanded","true");b.parentElement.insertBefore(dd,b.nextSibling);(dd.querySelector("[aria-selected=true]")||dd.firstElementChild).focus()};
+const prdPick=async(b,l)=>{const card=b.closest(".it"),n=+card.dataset.n,old=b.dataset.level;prdClose();if(l===old)return;prdPaint(b,l);const chip=document.createElement("span");chip.className="prp";chip.textContent="pending";chip.title="the Priority write has not been proved yet";card.appendChild(chip);
+try{const r=await fetch("/api/board/priority",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n,priority:l})}),d=await r.json();
+ if(d.err){prdPaint(b,old);chip.remove();card.insertAdjacentHTML("beforeend",`<div class="prr pwr">${esc(d.err)}${d.reason?" — "+esc(d.reason):""}</div>`)}
+ else pollBoard()}catch(x){prdPaint(b,old);chip.remove();card.insertAdjacentHTML("beforeend",'<div class="prr pwr">the hub did not answer</div>')}};
+document.addEventListener("click",e=>{const b=e.target.closest("#bbody .prio.pbtn");if(b){e.preventDefault();e.stopPropagation();b.getAttribute("aria-expanded")==="true"?prdClose():prdShow(b);return}const o=e.target.closest("#bbody .prd [role=option]");if(o){e.preventDefault();e.stopPropagation();prdPick(o.closest(".prd").previousElementSibling,o.dataset.level);return}if(!e.target.closest("#bbody .prd"))prdClose()});
+document.addEventListener("keydown",e=>{const b=e.target.closest&&e.target.closest("#bbody .prio.pbtn");
+ if(e.key==="Escape"){const open=document.querySelector("#bbody .prd");if(open){e.preventDefault();const btn=open.previousElementSibling;prdClose();if(btn)btn.focus()}return}
+ if(b&&(e.key==="Enter"||e.key===" "||e.key==="ArrowDown")){e.preventDefault();prdShow(b);return}
+ const o=e.target.closest&&e.target.closest("#bbody .prd [role=option]");if(!o)return;
+ const opts=[...o.parentElement.querySelectorAll("[role=option]")],i=opts.indexOf(o);
+ if(e.key==="ArrowDown"){e.preventDefault();opts[Math.min(i+1,opts.length-1)].focus()}
+ else if(e.key==="ArrowUp"){e.preventDefault();opts[Math.max(i-1,0)].focus()}
+ else if(e.key==="Enter"){e.preventDefault();prdPick(o.parentElement.previousElementSibling,o.dataset.level)}
+ else if(e.key==="Tab")prdClose()});
 // Sync one card (#1668, #1669): one read serves the card's Sync control and the sheet's. The answer names the rows it
 // refreshed, their count and the instant of that read, never the whole board's. A failed read leaves the rows the page
 // already had and names the error where the press began; a card GitHub no longer carries keeps its last good row and is
@@ -9779,6 +9928,15 @@ class H(BaseHTTPRequestHandler):
         except ValueError: body = None
         self.answer(*profiler_switch(a, body, origin_ok))
 
+    def priority_post(self, a):
+        """The Kanban card's Priority write (#2289): the body before any refusal, then the hub's own origin (or the tailnet's
+        with its own grant), then the write. A refused write names its reason and changes nothing."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        tn = tailnet_block()
+        origin_ok = "json" in (self.headers.get("Content-Type") or "") and ((self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self))
+        self.answer(*priority_route(a, raw, origin_ok))
+
     def send_to_session(self, a):
         """A message to a live session (#834, #898): a JSON body, and from loopback the hub's own Origin, from the tailnet an
         allowed login, the tailnet Origin and the grant (ADR-0152 rule 9)."""
@@ -9949,6 +10107,7 @@ class H(BaseHTTPRequestHandler):
         if route_path(self.path) in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[route_path(self.path)])
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         if self.path.split("?", 1)[0] == "/api/profiler": return self.profiler_post(a)
+        if self.path.split("?", 1)[0] == "/api/board/priority": return self.priority_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
