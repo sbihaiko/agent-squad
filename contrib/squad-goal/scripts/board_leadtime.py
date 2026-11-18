@@ -180,7 +180,7 @@ def lead_time(items, window=20, now=None, measure=MEASURE):
 # strictly below the smallest, so a view of hours-sized cards no longer runs to a fixed 60 days and no card sits on the
 # axis. Under the ladder's first tick the round step halves; past its last tick it doubles.
 LOG_FLOOR_HOURS = 1 / 60      # the smallest round tick, one minute; a rolling value no smaller is logged
-AXIS_MIN_HOURS = 1 / 3600     # one second: under it the axis floor never drops, whatever the smallest card
+AXIS_MIN_HOURS = 1e-12        # the halving's hard stop, under any real mark: a mark at or under zero still ends it
 DEFAULT_TOP_HOURS = 24        # the axis top of a view that plots nothing
 PLOT_WIDTH, PLOT_HEIGHT = 672, 212  # the lead chart's usable frame: the 800 x 340 page frame less its 64 px margins
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
@@ -245,8 +245,9 @@ def _round_above(hours):
 
 
 def _round_below(hours):
-    """The last round tick strictly below `hours`, the axis floor. Under the ladder's first tick the round step halves,
-    down to one second, so the floor is always under the smallest mark and the log range never collapses (#2311)."""
+    """The last round tick strictly below `hours`, the axis floor. Under the ladder's first tick the round step halves
+    until the floor is strictly below the smallest mark, so the log range never collapses and no card sits on the axis
+    (#2311). Only a mark at or under zero reaches the hard stop."""
     for tick in reversed(ROUND_TICKS_HOURS):
         if tick < hours:
             return tick
@@ -257,18 +258,19 @@ def _round_below(hours):
 
 
 def _axis_ticks(floor, top):
-    """The round durations inside the fitted range, the floor and the top included. Past the ladder's last tick the
-    round step doubles, so a long view labels round durations and never only its two raw ends (#2311)."""
+    """The round durations inside the fitted range, the floor and the top included. Under the ladder's first tick the
+    round step halves and past its last tick it doubles, so every label is a round duration and no raw mark becomes an
+    end label (#2311)."""
     ticks = [tick for tick in ROUND_TICKS_HOURS if floor <= tick <= top]
     high = ROUND_TICKS_HOURS[-1]
     while high < top:
         high *= 2
         if floor <= high <= top:
             ticks.append(high)
-    if not ticks or ticks[0] > floor:
+    if ticks and ticks[0] > floor:   # the floor under the first rung: its halving is itself a round step
         ticks.insert(0, floor)
-    if ticks[-1] < top:
-        ticks.append(top)
+    if not ticks:
+        return [floor, top] if floor < top else [floor]
     return ticks
 
 

@@ -294,6 +294,29 @@ def test_the_axis_floor_sits_strictly_below_a_card_at_the_smallest_round_tick(lt
     assert min(dot["y"] for dot in result["dots"]) > 0.0, "a one-minute card sits on the axis"
 
 
+def test_the_axis_floor_sits_strictly_below_a_sub_second_card(lt):
+    """#2311: the halving never stops at or above the smallest mark, so even a card under one second sits above the
+    floor and the log span stays positive: the floor is the contract, not the collapse guard."""
+    result = _chart(lt, [_closed(1, 0.4 / 3600), _closed(2, 2 / 3600)])
+
+    smallest = min(dot["hours"] for dot in result["dots"])
+    assert result["ticks"][0]["hours"] < smallest, "the floor is at or above the sub-second card"
+    assert result["ticks"][-1]["hours"] > smallest, "the top is not above the sub-second card"
+    assert min(dot["y"] for dot in result["dots"]) > 0.0, "a sub-second card sits on the axis"
+
+
+def test_every_tick_labels_a_round_duration(lt):
+    """#2311: every axis label is a round duration drawn from the ladder, its halvings or its doublings; a raw mark
+    never becomes one of the two end labels."""
+    def round_duration(hours):
+        return any(ratio > 0 and abs(ratio - 2 ** round(math.log2(ratio))) < 1e-9
+                   for ratio in (hours / rung for rung in lt.ROUND_TICKS_HOURS))
+
+    for hours in (0.4 / 3600, 1, 5 * 24, 30000):
+        view = _chart(lt, [_closed(1, hours), _closed(2, hours * 8)])
+        assert all(round_duration(tick["hours"]) for tick in view["ticks"]), view["ticks"]
+
+
 def test_the_axis_labels_the_round_durations_inside_a_between_rung_range(lt):
     """#2311: a view whose smallest card is 5 days and whose largest is 40 days labels the round durations inside that
     range, so neither end is a raw mark."""
