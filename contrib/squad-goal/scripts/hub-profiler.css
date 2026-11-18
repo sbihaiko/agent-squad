@@ -19,10 +19,12 @@
 #proftrip .ptl-cpu{fill:none;stroke:var(--s2);stroke-width:1.6;vector-effect:non-scaling-stroke}
 #proftrip .ptl-ram{fill:none;stroke:var(--none);stroke-width:1.6;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
 #proftrip circle.ptl-tok{fill:var(--fg)}#proftrip circle.ptl-cpu{fill:var(--s2)}#proftrip circle.ptl-ram{fill:var(--none)}
-#proftrip .ptgn{stroke:var(--mute);stroke-width:1;stroke-dasharray:2 3;opacity:.7;vector-effect:non-scaling-stroke}
+#proftrip .ptgn{fill:var(--mute);opacity:.14;stroke:none}   /* a no-record stretch: a band over the lane, off the data scale */
 #proftrip .ptg0{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
 #proftrip .ptg{stroke:var(--mute);stroke-width:1;stroke-dasharray:2 2;vector-effect:non-scaling-stroke}
-#proftrip .ptt,#proftrip .ptn,#proftrip .ptlb,#proftrip .ptlm{fill:var(--mute);font-size:var(--fs-caption)}
+/* The chart sizes its glyphs in SVG user units on the svg element, so each box scales with the viewBox; no CSS
+   length here takes that over, because a caption size would not scale and would share boxes at a narrow width. */
+#proftrip .ptt,#proftrip .ptn,#proftrip .ptlb,#proftrip .ptlm{fill:var(--mute)}
 #proftrip .ptlb{fill:var(--text)}
 #proftrip .ptn{letter-spacing:.04em;text-transform:uppercase}
 #proftrip .ptlg{display:inline-flex;align-items:center;gap:4px;margin-right:8px}

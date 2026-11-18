@@ -1689,7 +1689,8 @@ def test_the_view_draws_the_trip_as_five_rows_named_for_the_columns_and_five_seg
     assert segs[1][2] == "Doing: median 4.2 min, p90 6.2 min (4 observations); Between two children median 2.5 min", \
         "the hover names the median, the p90 and the stage beside it in words"
     assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == [
-        "Column", "Tokens/issue", "Mean CPU", "Mean RAM", "Median", "p90", "Observations (Gating: gate runs)"]
+        "Column", "Tokens/issue", "Mean CPU", "Mean RAM", "Median", "p90",
+        "Observations (Gating counts gate runs; every other column counts deliveries)"]
     rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
     assert [r[3] for r in rows] == ["Todo", "Doing", "Review", "Landing", "Gating"], \
         "five rows, each named for its board column, in board order, with no Closed row"
@@ -3211,21 +3212,22 @@ def trip_row(out, col):
 
 # ---------------------------------------------------------------- the trip chart's layout (#2253)
 def chart_metrics():
-    """The layout constants the page declares: the per-character width the chart reserves for a text, and the left
-    gutter its axis values take."""
+    """The layout constants the page declares: the user-unit font size of the chart's text, the per-character width
+    that size reserves, and the left gutter its axis values take."""
     src = (SCRIPTS / "hub-profiler.js").read_text()
-    return (float(re.search(r"PROF_TRIP_CHAR=([\d.]+)", src).group(1)),
-            float(re.search(r"PROF_TRIP_GUTTER=(\d+)", src).group(1)))
+    font = float(re.search(r"PROF_TRIP_FONT=([\d.]+)", src).group(1))
+    ratio = float(re.search(r"PROF_TRIP_CHAR=PROF_TRIP_FONT\*([\d.]+)", src).group(1))
+    return (ratio * font, float(re.search(r"PROF_TRIP_GUTTER=(\d+)", src).group(1)), font)
 
 
 def text_boxes(out):
     """Every text the chart lays out as a box in the SVG's user units: its x-range from its anchor, and its width from
-    the page's own per-character estimate. The chart's viewBox scales uniformly (`height:auto`), so two boxes apart in
-    these units are apart on screen at 390 px and at 1440 px alike."""
-    char, _ = chart_metrics()
+    the page's own per-character estimate. The chart sizes every glyph in SVG user units, so each box scales with the
+    viewBox and the same boxes hold on screen at 390 px and at 1440 px."""
+    char, _, _ = chart_metrics()
     rows = []
-    for m in re.finditer(r'<text class="([^"]*)"([^>]*)>([^<]*)</text>', chart_svg(out)):
-        cls, attrs, text = m.groups()
+    for m in re.finditer(r'<text class=(?:"([^"]*)"|([\w-]+))([^>]*)>([^<]*)</text>', chart_svg(out)):
+        cls, attrs, text = (m.group(1) or m.group(2)), m.group(3), m.group(4)
         x = float(re.search(r'\bx="([\d.]+)"', attrs).group(1))
         y = float(re.search(r'\by="([\d.]+)"', attrs).group(1))
         anchor = (re.search(r"text-anchor=(\w+)", attrs) or [None, "start"])[1]
@@ -3254,27 +3256,52 @@ def test_a_narrow_column_takes_a_leader_line_to_its_band():
 
 
 def test_no_chart_text_overlaps_another_label_or_a_number_at_390_px_and_at_1440_px():
-    """AC1 (#2253): every label, mean and axis value keeps its box. The chart text is SVG in a viewBox scaled
-    uniformly, so one check in user units holds at 390 px and at 1440 px alike."""
-    boxes = text_boxes(chart_js())
-    bad = [(a["text"], b["text"]) for i, a in enumerate(boxes) for b in boxes[i + 1:]
-           if abs(a["y"] - b["y"]) < 13 and a["x0"] < b["x1"] - 1 and b["x0"] < a["x1"] - 1]
-    assert not bad, f"these texts share a box: {bad}"
-
-
-def test_each_column_prints_its_mean_inside_its_lane_or_beside_its_leader():
-    """AC2 (#2253): a wide column prints the mean of each line inside its lane, at the top of the column; a narrow
-    column, where no text fits, carries the same numbers in its leader label."""
+    """AC1 (#2253): every label, mean and axis value keeps its own box at the phone width and at the desktop width.
+    The chart sizes its text in SVG user units, so each glyph box scales with the viewBox; the test measures the boxes
+    in pixels at both widths and fails on any overlap."""
+    src = (SCRIPTS / "hub-profiler.js").read_text()
+    _, _, font = chart_metrics()
     svg = chart_svg(chart_js())
-    means = re.findall(r'<text class="ptlm pts-(\w+)"[^>]*>([^<]*)</text>', svg)
-    assert ("todo", "mean 60 tok/min") in means and ("todo", "CPU 50.0%") in means and ("todo", "RAM 40.0%") in means, \
-        "a wide column prints the mean of the Tokens line and of the CPU and RAM lines inside its lane"
-    assert not [c for c, _ in means if c in ("review", "landing", "gating")], \
-        "a narrow column keeps its means in its leader label, never in a box that would run over its neighbour"
-    labels = dict(re.findall(r'<text class="ptlb pts-(\w+)"[^>]*>([^<]*)</text>', svg))
-    assert labels["review"] == "Review 10.0 s &middot; mean &#8212; tok/min &middot; CPU 50.0% &middot; RAM 40.0%", \
-        "the narrow label keeps its name, its median and the three means the lane cannot hold"
-    assert "mean" in labels["gating"], "a column of no width prints its means in its own leader row"
+    assert f"font-size={font:g}" in svg, "the chart sizes its text in SVG user units"
+    css = chart_css()
+    assert not re.search(r"#proftrip[^{]*\.pt(?:t|lb|lm|n)[^{]*\{[^}]*font-size", css), \
+        "no CSS length overrides the chart text: a caption size does not scale with the viewBox"
+    boxes = text_boxes(chart_js())
+    assert boxes, "the chart lays out text to check"
+    for width in (390, 1440):
+        scale = width / 1000.0
+        bad = [(a["text"], b["text"]) for i, a in enumerate(boxes) for b in boxes[i + 1:]
+               if abs(a["y"] - b["y"]) * scale < 13 * scale
+               and a["x0"] * scale < b["x1"] * scale - scale and b["x0"] * scale < a["x1"] * scale - scale]
+        assert not bad, f"these texts share a box at {width} px: {bad}"
+
+
+def test_each_column_prints_its_mean_inside_its_lane():
+    """AC2 (#2253): every column prints the mean of each line inside its lane, at the top of the column. A narrow
+    column takes a shorter copy so the number stays in the lane and never runs under the chart."""
+    src = (SCRIPTS / "hub-profiler.js").read_text()
+    lane = float(re.search(r"PROF_TRIP_LANE=(\d+)", src).group(1))
+    top = float(re.search(r"PROF_TRIP_TOP=(\d+)", src).group(1))
+    gap = float(re.search(r"PROF_TRIP_GAP=(\d+)", src).group(1))
+    tok_top, mac_top = top, top + lane + gap
+    means = re.findall(r'<text class="ptlm pts-(\w+)" x="[\d.]+" y="([\d.]+)"[^>]*>([^<]*)</text>', chart_svg(chart_js()))
+    where = {}
+    for col, y, text in means:
+        where.setdefault(col, []).append((float(y), text))
+    for col in ("todo", "doing", "review", "landing", "gating"):
+        assert col in where, f"the {col} column prints its means inside its lane"
+        ys = where[col]
+        assert sum(tok_top < y < tok_top + lane for y, _ in ys) == 1, \
+            f"the {col} column prints its token mean in the Tokens lane"
+        assert sum(mac_top < y < mac_top + lane for y, _ in ys) == 2, \
+            f"the {col} column prints its CPU and RAM means in the Machine lane"
+    todo = [t for _, t in where["todo"]]
+    assert todo == ["mean 60 tok/min", "CPU 50.0%", "RAM 40.0%"], "the wide column prints the full copy"
+    review = [t for _, t in where["review"]]
+    assert review == ["&#8212;/min", "50.0%", "40.0%"], "a narrow column prints the short copy inside its lane"
+    labels = dict(re.findall(r'<text class="ptlb pts-(\w+)"[^>]*>([^<]*)</text>', chart_svg(chart_js())))
+    assert labels["review"] == "Review 10.0 s", "the leader row carries the column's name and median alone"
+    assert "mean" not in "".join(labels.values()), "no mean stands under the chart: every mean is in its lane"
 
 
 def test_the_machine_lane_draws_the_ram_line_where_a_reading_exists_and_states_why_none_does():
@@ -3294,7 +3321,11 @@ def test_the_machine_lane_draws_the_ram_line_where_a_reading_exists_and_states_w
 
 def test_a_line_joins_adjacent_columns_and_an_empty_column_is_marked_no_record():
     """AC4 (#2253): one line runs out of a column into the next; a column with no point breaks the line and the page
-    marks that stretch as no record, never a zero."""
+    marks that stretch as no record. The mark is a band over the lane, never a stroke on the data scale, so it can
+    never read as a zero or as a middle-of-scale sample."""
+    src = (SCRIPTS / "hub-profiler.js").read_text()
+    lane = float(re.search(r"PROF_TRIP_LANE=(\d+)", src).group(1))
+    top = float(re.search(r"PROF_TRIP_TOP=(\d+)", src).group(1))
     svg = chart_svg(chart_js())
     tok = re.search(r'<polyline class="ptl-tok" points="([^"]+)"', svg)
     assert tok, "the token line is one polyline over the columns that hold a point"
@@ -3305,8 +3336,26 @@ def test_a_line_joins_adjacent_columns_and_an_empty_column_is_marked_no_record()
     v = json.loads(json.dumps(CHART))
     v["columns"][2]["tokens"] = {"points": [], "mean": None}
     holed = chart_svg(chart_js(v))
-    assert re.search(r'<line class="ptgn pts-review"', holed) and "no record" in holed, \
-        "the column with no Tokens point is marked as no record, never drawn as zero"
+    mark = re.search(r'<rect class="ptgn pts-review" x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)">'
+                     r'<title>([^<]*)</title></rect>', holed)
+    assert mark, "the column with no Tokens point is marked as no record, never drawn as zero"
+    assert (float(mark.group(2)), float(mark.group(4))) == (top, lane), \
+        "the mark spans the Tokens lane from its top, so it is not on the data scale"
+    assert "no record" in mark.group(5)
+
+
+def test_the_machine_axis_scales_its_percent_ticks_over_the_lane():
+    """AC5 (#2253): the Machine axis carries percent ticks, and its scale reads them as percents: 0% at the lane's
+    bottom, 50% at its middle and 100% at its top. A share scale would put the 50% tick beside the 100% one."""
+    src = (SCRIPTS / "hub-profiler.js").read_text()
+    top = float(re.search(r"PROF_TRIP_TOP=(\d+)", src).group(1))
+    lane_h = float(re.search(r"PROF_TRIP_LANE=(\d+)", src).group(1))
+    gap = float(re.search(r"PROF_TRIP_GAP=(\d+)", src).group(1))
+    mac_top = top + lane_h + gap
+    ys = [float(y) for y in re.findall(r'<line class=ptg0 x1="[\d.]+" y1="([\d.]+)"', chart_svg(chart_js()))]
+    assert ys == [top + lane_h, top + lane_h / 2, top,
+                  mac_top + lane_h, mac_top + lane_h / 2, mac_top], \
+        "0% stands at each lane's bottom, 50% at its middle and 100% at its top"
 
 
 def test_each_axis_value_prints_once():
@@ -3328,6 +3377,31 @@ def test_token_counts_print_in_k_or_m_units_on_the_axis_and_in_the_table():
     by["todo"]["tokens_per_issue"], by["doing"]["tokens_per_issue"] = 6310834.0, 834000.0
     rows = {c: trip_row(chart_js(big), c)[1] for c in ("todo", "doing")}
     assert rows == {"todo": "6.3M", "doing": "834k"}, "a million prints in M, a large thousand count in k"
+
+
+def test_the_phone_table_takes_its_header_from_the_payload_and_prints_k_units():
+    """AC6 and AC9 (#2253): the phone table carries the same Observations header the payload names and the same k or M
+    token units as the desktop table, so the two tables never drift and no raw count stands in either."""
+    out = run_js(f"profTrip({json.dumps(CHART)},true)")
+    heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", out, re.S)]
+    assert "Observations (Gating counts gate runs; every other column counts deliveries)" in heads, \
+        "the phone's header names the Gating difference the payload states"
+    assert "Tokens/issue" in heads
+    cells = {c: [re.sub(r"<[^>]+>", "", td) for td in
+                 re.findall(r"<td[^>]*>(.*?)</td>", re.search(r'<tr data-p="trip/' + c + r'">(.*?)</tr>', out, re.S).group(1), re.S)]
+             for c in ("todo", "doing")}
+    assert (cells["todo"][4], cells["doing"][4]) == ("600", "2.4k"), \
+        "the phone's Tokens/issue cell prints 2400 in k units, never the raw integer"
+
+
+def test_the_phone_lanes_mark_a_column_with_no_point_as_no_record():
+    """AC4 (#2253): the phone lanes break the line at a column with no point and mark that stretch as no record, so
+    the gap never reads as a zero or as a sample."""
+    v = json.loads(json.dumps(CHART))
+    v["columns"][2]["tokens"] = {"points": [], "mean": None}
+    out = run_js(f"profTrip({json.dumps(v)},true)")
+    mark = re.search(r'<rect class="ptl-nr"[^>]*><title>([^<]*)</title></rect>', out)
+    assert mark and "no record" in mark.group(1), "the empty column's stretch is marked, never drawn as a zero"
 
 
 def test_no_line_takes_the_color_of_a_column_band():
@@ -3372,7 +3446,8 @@ def test_the_table_keeps_median_p90_and_observations_and_adds_tokens_cpu_and_ram
     table = out[at:out.index("</table>", at) + 8]
     heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", table, re.S)]
     assert heads[:4] == ["Column", "Tokens/issue", "Mean CPU", "Mean RAM"], heads
-    assert heads[-3:] == ["Median", "p90", "Observations (Gating: gate runs)"], \
+    assert heads[-3:] == ["Median", "p90",
+                          "Observations (Gating counts gate runs; every other column counts deliveries)"], \
         "the header names the difference: Gating counts the window's gate rows, every other row a delivery"
     assert trip_row(out, "todo") == ["Todo", "600", "50.0%", "40.0%", "1.0 min &middot; Wait for a dispatch 10.0 s", "1.0 min", "3"]
     assert trip_row(out, "doing") == ["Doing", "2.4k", "50.0%", "40.0%", "1.0 min &middot; Between two children 0 ms", "1.0 min", "3"]

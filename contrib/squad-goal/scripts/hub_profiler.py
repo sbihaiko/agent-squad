@@ -1036,8 +1036,8 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
             "invalid_peak": consumed["invalid_peak"], "ram_minutes": consumed["ram_minutes"],
             "window_minutes": consumed["window_minutes"], "no_record_minutes": consumed["no_record_minutes"],
             # One header holds every row's count, but Gating counts the window's gate-history rows while every other
-            # column counts deliveries, so the payload names the difference the header prints (#2253).
-            "observations_note": "one delivery per column; Gating counts the gate-history rows of the window",
+            # column counts deliveries, so the payload names the difference both tables print (#2253).
+            "observations_note": "Gating counts gate runs; every other column counts deliveries",
             "tokens_ticks": consumed["tokens_ticks"], "machine_ticks": consumed["machine_ticks"]}
 
 
