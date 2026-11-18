@@ -464,7 +464,7 @@ def _refresh_with(hub, monkeypatch, tmp_path, results, clock):
     monkeypatch.setattr(hub, "board_pass", fake_pass)
     with pytest.raises(_Done):
         hub.refresh_board()
-    return [b - a for a, b in zip(starts, starts[1:])]
+    return [b - a for a, b in zip(starts, starts[1:], strict=False)]
 
 
 def test_a_failed_full_read_is_retried_within_thirty_seconds(hub, monkeypatch, tmp_path):
