@@ -188,6 +188,8 @@ The column is the one the writer asks for. A board write that the API refuses le
 | 19 | promote-stg.sh | gate-status-full (`SG_PROMOTE_PROOF=local`) or the dev tip's CI (`ci`), under the gate lock | the open dev → stg pull request, merged; no push to stg; promote.log once per tip and reason | - |
 | 20 | live-guard.sh | main tree branch is stg and clean; fetch origin/stg; `publish-live.sh --check`; live `PUBLISHED`, `scripts/models.json` digest and `scripts/*.bak-*`; `driver.sha` (written by `watchd.sh start`) | ff of the main tree; the file list and `PUBLISHED` (source HEAD sha) into `~/.claude/skills/squad-goal`; each issue a published `Closes #n` names, closed with one comment (sha, publish time) (#732); `live-guard.models`, `.clutter`, `.restart` (each note named once) | - |
 
+The promotion runner runs inside the login session, with no SessionCreate in its LaunchAgent.
+
 ### Run folders
 
 A loop run keeps its folder inside its target: `worktrees/child/gui-N/runs/RUN` or `worktrees/run/KEY/runs/RUN`. The owner's checkout is never written. active-runs.txt holds the absolute path. The loop consumers read every place a run folder can be: `<checkout>/runs`, `worktrees/run/*/runs`, `worktrees/child/*/runs` (`tokens.py`, `janitor.py`, `health.sh`, `hub.py run_roots`, `wtclean.sh`).
