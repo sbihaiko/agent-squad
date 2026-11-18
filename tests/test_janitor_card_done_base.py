@@ -33,7 +33,14 @@ N = 2030  # the issue a finished run delivered, whose pull request names it
 STUB = """#!/bin/bash
 a="$*"; echo "$a" >> "@CALLS@"
 case "$a" in
-  *graphql*) printf '%s' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}';;
+  *graphql*)   # the open-issue list (#2220 put the door beside the janitor, so this read answers): the issue is in it while it is open
+    nodes='[]'
+    if [ "@STATE@" = open ]; then
+      nodes='[{"number":@N@,"title":"Issue","body":"","state":"OPEN","stateReason":null,"createdAt":"2026-10-13T08:00:00Z",'
+      nodes=$nodes'"repository":{"nameWithOwner":"x/y"},"labels":{"nodes":[]},"blockedBy":{"pageInfo":{"hasNextPage":false},"nodes":[]},'
+      nodes=$nodes'"parent":null,"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}]'
+    fi
+    printf '%s' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":'"$nodes"'}}}}';;
   *search/issues*)
     case "$a" in *"-X GET"*|*"--method GET"*) ;; *) echo '{"message":"Not Found"}'; exit 1;; esac
     case "$a" in
