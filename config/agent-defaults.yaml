@@ -64,6 +64,7 @@ tailnet:                            # the project file's tailnet block; its edit
   terminals_send: false             # the phone may send a message to a live session of this profile, for every allowed login; off until the owner sets it true
   loop_write: false                 # the tailnet may start and stop the loop from the hub; off, the switch is read-only from the tailnet (SQUAD_TAILNET_LOOP_WRITE)
   profiler_write: false             # the tailnet may turn the hub's CPU sampling on and off; off, that switch is read-only from the tailnet (SQUAD_TAILNET_PROFILER_WRITE)
+  board_priority_write: false       # the tailnet may set a card's Priority from the hub; off, that write is refused from the tailnet (SQUAD_TAILNET_BOARD_PRIORITY_WRITE)
 
 watch:                              # what starts with a run from `work` or `task`
   dashboard: true                   # open the run dashboard page on the new run. A headless environment prints the URL. A failed open is a warning, never a verdict. A resume reuses a page already open.
