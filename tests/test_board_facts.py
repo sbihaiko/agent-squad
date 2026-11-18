@@ -66,7 +66,7 @@ def _spec(*children):
 
 
 def test_a_spec_with_a_ticket_in_flight_reads_todo():
-    for child in ("Todo", "In Progress", "Doing", "Code Review", "Code Complete", "Review", "Landing", "Gating"):
+    for child in ("Todo", "In Progress", "Doing", "Code Complete", "Review", "Landing", "Gating"):
         assert columns.column_for(_spec(child))[0] == "Todo"
 
 

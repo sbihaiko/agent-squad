@@ -29,8 +29,8 @@ CASES = [
     (["In Progress"], "Todo"),
     (["Doing"], "Todo"),
     (["Code Complete", "Todo"], "Todo"),
-    (["Code Review", "Todo"], "Todo"),   # a child whose review holds it is in flight (#603)
-    (["Code Review", "Done"], "Todo"),
+    (["Review", "Todo"], "Todo"),   # a child whose review holds it is in flight (#603)
+    (["Review", "Done"], "Todo"),
     (["Done", "In Progress"], "Todo"),
     (["Done"], None),
     (["Done", "Done"], None),

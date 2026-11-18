@@ -27,7 +27,7 @@ Every write verb touches `$SG_STATE/board-dirty`, so the board pass re-reads at 
 
 usage: python3 -m squad.handhold hold <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold renew <n>... [--by manual|hal9k] [--minutes N]
-       python3 -m squad.handhold release <n>... --to Todo|"Code Complete"|Closed [--by manual|hal9k]
+       python3 -m squad.handhold release <n>... --to Todo|Landing|Closed [--by manual|hal9k]
        python3 -m squad.handhold holds
 
 The bound defaults to `SG_HAND_HOLD_MINUTES` (240). The label writes name the repository `SG_REPO` names (owner/name).
@@ -50,7 +50,7 @@ from squad import run_liveness as RL
 
 CARRIERS = ("manual", "hal9k")
 LABELS = {"manual": "ready-for-human", "hal9k": "ready-for-HAL9K"}   # the holder label each carrier writes on the issue
-COLUMNS = ("Todo", "Code Complete", "Closed")   # the columns a release may name: work is done or it goes back to Todo
+COLUMNS = ("Todo", "Landing", "Closed")   # the columns a release may name, in the shipped vocabulary: work is done or it goes back to Todo (#2190)
 DEFAULT_MINUTES = 240
 ENV_MINUTES = "SG_HAND_HOLD_MINUTES"
 ENV_REPO = "SG_REPO"
@@ -296,7 +296,7 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, to=None, label
         raise ValueError(f"--by names one of {', '.join(CARRIERS)}, not {by!r}")
     if verb == "release":
         if to is None:
-            raise ValueError('release needs --to Todo|"Code Complete"|Closed: a card is never left in a ghost state')
+            raise ValueError('release needs --to Todo|Landing|Closed: a card is never left in a ghost state')
         if to not in COLUMNS:
             raise ValueError(f"--to names one of {', '.join(COLUMNS)}, not {to!r}")
     nums = _numbers(issues)

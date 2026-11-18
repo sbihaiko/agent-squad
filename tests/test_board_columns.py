@@ -89,7 +89,7 @@ def test_a_card_that_reached_gating_leaves_it_only_forward(table):
     Gating forward never re-enters it for the same wave."""
     assert table.past("Gating", "Landing"), "a write back from Gating is not past"
     assert table.refused_for_automated("Gating", "Landing")
-    assert table.past("Gating", "Code Complete"), "a version 1 spelling of Landing reads the same column (#2151)"
+    assert not table.past("Gating", "Code Complete"), "an old spelling of Landing is no column now (#2190)"
     assert not table.past("Gating", "Closed"), "the one forward move out of Gating reads as past"
     assert table.past("Closed", "Gating"), "a re-entry into Gating after the wave landed is past"
 

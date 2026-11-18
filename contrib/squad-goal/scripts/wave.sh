@@ -15,8 +15,8 @@
 # worktree, is rebased on the wave tip, and enters the branch by a fast-forward: git refuses a push that is not one, so no
 # merge commit can enter. A child that fails its gates, conflicts with the wave tip, or whose push is refused never enters:
 # its issue goes back to the queue (its dispatch marker is dropped and its card returns to the column the dispatch reads),
-# and `enter` says why on one `WAVE REQUEUE` line. A child that entered moves its card to Code Complete: Code Complete means
-# the child is in the wave branch, Done means the wave is in `dev`. The wave branch is rebased on `dev` only before its own
+# and `enter` says why on one `WAVE REQUEUE` line. A child that entered moves its card to Landing: Landing means
+# the child is in the wave branch, Closed means the wave is in `dev`. The wave branch is rebased on `dev` only before its own
 # final push (the wave's landing pass), never between entries: between them the tip moves only by a child that entered.
 # A child whose own commits and a sibling's commits in the wave change one file never enters (#1434): the entry reads the two
 # diffs, not the issue bodies, so a file neither body names is a conflict before the wave, not a conflict at the landing.
@@ -87,7 +87,7 @@ wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' 
 # mark <run> <wave>: the run has a wave, and its completion has one to land. $SG_STATE/auto is the loop's marker directory;
 # `land` clears the marker when the wave is in $SG_BASE.
 # `waved-<run>` is the durable record that the run cut a wave: nothing clears it, so childcc.py still knows, after the landing
-# removed `wave-<run>`, that a child of this run never gets the direct Code Complete move.
+# removed `wave-<run>`, that a child of this run never gets the direct Landing move.
 mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-$1" && printf '%s\n' "$2" > "$SG_STATE/auto/waved-$1" \
   && { [ -s "$SG_STATE/auto/wave-start-$1" ] || date +%s > "$SG_STATE/auto/wave-start-$1"; }; }
 
@@ -548,7 +548,7 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     echo "WAVE STOP #$n: $h, so the age cap does not put it back in the queue: $why"; return 0
   fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
-  SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-requeue-$n}" SG_MOVE_SHA="$(reset_sha "${SG_REQUEUE_RUN:-}")" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Code Complete as a no-landing move (#1340)
+  SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-requeue-$n}" SG_MOVE_SHA="$(reset_sha "${SG_REQUEUE_RUN:-}")" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Landing as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
 }
@@ -798,7 +798,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     if perr=$($G push -q origin "HEAD:refs/heads/$w" 2>&1); then
       board_write "Landing" "$iss"   # a refused write is named, never dropped (#593); the definition's column name (#2155)
       proof_card "$iss" "$obl"   # an unproven entry carries its fact on the card until the settlement answers it (#1176)
-      # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Code Complete reads it, never the
+      # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Landing reads it, never the
       # run's own land. An unproven entry carries its obligation there, so the job that settles it is attached to the run that
       # admitted the child (spec 1163, #1174). A pass carries none; gate.sh is the obligation's one writer.
       local cause="entered $w at $sha"
@@ -1216,7 +1216,7 @@ stuck() {
   export SG_GH_PASS=wave
   for n in $refs; do
     gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" >/dev/null 2>&1
-    SG_MOVE_REASON=no-landing SG_MOVE_EVENT="$run" SG_MOVE_SHA="$(reset_sha "$run")" board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Code Complete (#657, #1340); frozen:owner holds it out of the frontier
+    SG_MOVE_REASON=no-landing SG_MOVE_EVENT="$run" SG_MOVE_SHA="$(reset_sha "$run")" board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Landing (#657, #1340); frozen:owner holds it out of the frontier
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done

@@ -40,8 +40,8 @@ case "$a" in
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
-    printf '2201\tCode Complete\thttps://api.github.com/repos/x/y\n2202\tTodo\thttps://api.github.com/repos/x/y\n'
-    printf '2203\tTodo\thttps://api.github.com/repos/x/y\n2204\tCode Complete\thttps://api.github.com/repos/x/y\n'
+    printf '2201\tLanding\thttps://api.github.com/repos/x/y\n2202\tTodo\thttps://api.github.com/repos/x/y\n'
+    printf '2203\tTodo\thttps://api.github.com/repos/x/y\n2204\tLanding\thttps://api.github.com/repos/x/y\n'
     printf '2205\tClosed\thttps://api.github.com/repos/x/y\n2206\tClosed\thttps://api.github.com/repos/x/y\n'
     printf '2208\tClosed\thttps://api.github.com/repos/x/y\n'
     /usr/bin/grep -q '^STATUS o 4 Todo 2209$' "TMPDIR/board.calls" 2>/dev/null && c=Todo || c=Closed   # the board keeps the move: a second pass reads Todo

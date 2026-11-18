@@ -45,7 +45,7 @@ const cardSpec=x=>x.sp?x.n:(x.pa??x.n);   // a spec card wears its own color, an
 const isLoopBug=x=>(x.l||[]).some(l=>l==="loop-bug"||String(l).startsWith("loop-bug:"));
 const cardColor=(slots,x)=>isLoopBug(x)?"var(--err)":specColor(slots,cardSpec(x));   // a loop-bug has no spec: it wears the Loop bugs lane red
 // </card-rules>
-const SPEC_IN_FLIGHT=["Todo","In Progress","Doing","Code Review","Code Complete","Review","Landing","Gating"];   // a ticket in flight, identical to board_facts.py LIVE_WORK
+const SPEC_IN_FLIGHT=["Todo","In Progress","Doing","Code Complete","Review","Landing","Gating"];   // a ticket in flight, identical to board_facts.py LIVE_WORK
 // groups: the issue columns in board order, each { name, items }. o: { fs, fk, text, lc, hideDone, closed, hidden }.
 // `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.

@@ -214,9 +214,9 @@ def test_a_child_that_entered_the_wave_reads_code_complete(tmp_path):
     assert f"ADD o 4 Landing {N}" in landing(log), f"the card did not read Landing after the entry: {log}"
 
 
-# Code Review (#603): with the shipped vocabulary, a child of an ended run whose code is done and that has not entered its
-# open wave is in Code Review, the column of the review that holds it. The reconcile never moves a card back from a later
-# column; a run that delivered nothing still sends the card to Todo, and the entry still means Code Complete.
+# Review (#603): with the shipped vocabulary, a child of an ended run whose code is done and that has not entered its
+# open wave is in Review, the column of the review that holds it. The reconcile never moves a card back from a later
+# column; a run that delivered nothing still sends the card to Todo, and the entry still means Landing.
 SHIPPED = {"SG_BOARD_VOCAB": "shipped"}
 
 
@@ -230,25 +230,25 @@ def test_a_landed_child_waiting_for_its_open_wave_is_in_code_review(tmp_path):
 
 
 @pytest.mark.heavy
-@pytest.mark.parametrize("later", ["Code Complete", "Closed"])
+@pytest.mark.parametrize("later", ["Landing", "Closed"])
 def test_the_reconcile_never_moves_a_later_card_back_to_code_review(tmp_path, later):
     sandbox(tmp_path, "echo 0", landed=True, wave="open", card=later)
     janitor(tmp_path, **SHIPPED)
     log = writes(tmp_path)
-    assert f"Code Review {N}" not in log and f"Doing {N}" not in log, f"a {later} card moved back: {log}"
+    assert f"Review {N}" not in log and f"Doing {N}" not in log, f"a {later} card moved back: {log}"
 
 
 @pytest.mark.heavy
 def test_a_live_run_never_moves_a_code_review_card_back_to_doing(tmp_path):
-    sandbox(tmp_path, "echo 0", wave="open", card="Code Review", live=True)
+    sandbox(tmp_path, "echo 0", wave="open", card="Review", live=True)
     janitor(tmp_path, **SHIPPED)
     log = writes(tmp_path)
-    assert f"Doing {N}" not in log, f"a Code Review card went back to Doing: {log}"
+    assert f"Doing {N}" not in log, f"a Review card went back to Doing: {log}"
 
 
 @pytest.mark.heavy
 def test_a_run_that_delivered_nothing_still_sends_a_code_review_card_to_todo(tmp_path):
-    sandbox(tmp_path, "echo 0", card="Code Review")
+    sandbox(tmp_path, "echo 0", card="Review")
     janitor(tmp_path, **SHIPPED)
     log = writes(tmp_path)
     assert f"STATUS o 4 Todo {N}" in log, f"the requeue did not send the card to Todo: {log}"
@@ -256,7 +256,7 @@ def test_a_run_that_delivered_nothing_still_sends_a_code_review_card_to_todo(tmp
 
 @pytest.mark.heavy
 def test_the_wave_entry_still_moves_a_code_review_card_to_code_complete(tmp_path):
-    sandbox(tmp_path, "echo 0", landed=True, wave="open", entered=True, card="Code Review")
+    sandbox(tmp_path, "echo 0", landed=True, wave="open", entered=True, card="Review")
     janitor(tmp_path, **SHIPPED)
     log = writes(tmp_path)
     assert f"STATUS o 4 Landing {N}" in landing(log), f"the entry did not move the card to Landing: {log}"

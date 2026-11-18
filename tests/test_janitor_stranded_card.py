@@ -222,7 +222,7 @@ def test_a_stopped_issue_is_not_said_to_dispatch_again(tmp_path):
 @pytest.mark.heavy
 def test_an_open_wave_over_a_stopped_issue_names_the_stop(tmp_path):
     """The issue is stopped and an old run's wave is still open: the line names the stop, not HELD-BY-WAVE."""
-    sandbox(tmp_path, card="Code Complete")
+    sandbox(tmp_path, card="Landing")
     finished_run(tmp_path, wave=True)
     ledger(tmp_path, "stop", f"x/y#{N}", "three failed dispatches with no change", "own")
     janitor(tmp_path)
@@ -234,7 +234,7 @@ def test_an_open_wave_over_a_stopped_issue_names_the_stop(tmp_path):
 @pytest.mark.heavy
 def test_an_open_wave_over_a_live_issue_still_reads_held_by_wave(tmp_path):
     """The other side: an issue no ledger stopped keeps its HELD-BY-WAVE line."""
-    sandbox(tmp_path, card="Code Complete")
+    sandbox(tmp_path, card="Landing")
     finished_run(tmp_path, wave=True)
     janitor(tmp_path)
     assert f"HELD-BY-WAVE #{N}" in decided(tmp_path), decided(tmp_path)
@@ -277,7 +277,7 @@ def test_a_doing_card_with_no_dispatch_evidence_is_left_alone(tmp_path):
 @pytest.mark.heavy
 def test_a_stranded_code_complete_card_returns_to_todo(tmp_path):
     """No run, no marker, no branch, no freeze, no landing: the card goes back to Todo, named no-landing and STRANDED."""
-    sandbox(tmp_path, card="Code Complete")
+    sandbox(tmp_path, card="Landing")
     janitor(tmp_path)
     assert f"STATUS o 4 Todo {N} reason=no-landing" in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
     assert f"STRANDED #{N}" in decided(tmp_path), decided(tmp_path)
@@ -285,8 +285,8 @@ def test_a_stranded_code_complete_card_returns_to_todo(tmp_path):
 
 @pytest.mark.heavy
 def test_a_stranded_code_review_card_returns_to_todo(tmp_path):
-    """The shipped column Code Review strands the same way."""
-    sandbox(tmp_path, card="Code Review")
+    """The shipped column Review strands the same way."""
+    sandbox(tmp_path, card="Review")
     janitor(tmp_path, SG_BOARD_VOCAB="shipped")
     assert f"STATUS o 4 Todo {N} reason=no-landing" in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
     assert f"STRANDED #{N}" in decided(tmp_path), decided(tmp_path)
@@ -294,7 +294,7 @@ def test_a_stranded_code_review_card_returns_to_todo(tmp_path):
 
 @pytest.mark.heavy
 def test_a_frozen_card_is_not_stranded(tmp_path):
-    sandbox(tmp_path, card="Code Complete", labels="frozen:owner")
+    sandbox(tmp_path, card="Landing", labels="frozen:owner")
     janitor(tmp_path)
     assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path)
     assert f"STRANDED #{N}" not in decided(tmp_path)
@@ -302,7 +302,7 @@ def test_a_frozen_card_is_not_stranded(tmp_path):
 
 @pytest.mark.heavy
 def test_a_card_with_a_hand_fix_in_the_landing_branch_is_not_stranded(tmp_path):
-    sandbox(tmp_path, card="Code Complete", named=True)
+    sandbox(tmp_path, card="Landing", named=True)
     janitor(tmp_path)
     assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path)
     assert f"STRANDED #{N}" not in decided(tmp_path)
@@ -310,7 +310,7 @@ def test_a_card_with_a_hand_fix_in_the_landing_branch_is_not_stranded(tmp_path):
 
 @pytest.mark.heavy
 def test_a_card_with_a_kept_marker_is_not_stranded(tmp_path):
-    sandbox(tmp_path, card="Code Complete")
+    sandbox(tmp_path, card="Landing")
     (tmp_path / f"st/auto/kept-fix_{N}-rebase-run-x").write_text("origin/wave/run-x\n")
     janitor(tmp_path)
     assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path)

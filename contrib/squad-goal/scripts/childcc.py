@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A child that finished with outcome pass moves its issue to Code Complete (called by watch.sh every loop).
+"""A child that finished with outcome pass moves its issue to Landing (called by watch.sh every loop).
 A child that finished with outcome unproven is a finished child too (ADR-0164): its work is done and the proof could not
 finish, so it enters its wave, and the entry records the obligation the tree still owes. A child with outcome fail, or a
 child whose own landing failed, never enters: a measured red holds delivery.
@@ -15,8 +15,8 @@ The child's issue is read from its own spawn prompt, first match wins: "GitHub i
 A pass whose prompt names no issue is logged once (CHILDCC UNMAPPED <run> <child>) instead of being skipped silently.
 The runs the pass works are its arguments, else every live run: watch.sh's completion of a finished run hands it that one run, so the children that run finished are in its wave before that same step lands the wave (#375 review).
 Live runs move at once; a run that already has its verdict (tiny and fork-only runs go pass -> verdict in under 1 s, so they are never seen live) is backfilled once,
-but only when the card is still in Todo/In Progress/Blocked, never past Code Complete; a run with a wave not yet landed is not backfilled by card but by its wave marker, so a child that has not entered still enters. The once-marker is written when the child entered or needs no entry, never after a refused entry: the next pass tries it again. Once per child (marker auto/cc-<run>-<child>); only an open issue moves; queues a comment with the child's first reason.
-Closed comes later (the wave lands in dev), so Code Complete never overrides a later column: an issue already
+but only when the card is still in Todo/In Progress/Blocked, never past Landing; a run with a wave not yet landed is not backfilled by card but by its wave marker, so a child that has not entered still enters. The once-marker is written when the child entered or needs no entry, never after a refused entry: the next pass tries it again. Once per child (marker auto/cc-<run>-<child>); only an open issue moves; queues a comment with the child's first reason.
+Closed comes later (the wave lands in dev), so Landing never overrides a later column: an issue already
 past it is left alone because the marker is written the first time the child is seen passing.
 One pass works at most SG_CHILDCC_BUDGET pending children (1 by default, #590): a review and the gates take 2 to 15 min a
 child, and a pass that worked every child held the childcc lock, and every landing behind it, for 14 to 25 min. A child is
@@ -41,8 +41,8 @@ A gate-lock or gate-slot hold with no review run in this pass is no work: it spe
 A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
 the queue once with the landing's reason, and no card moves (#592).
 With the shipped vocabulary a child whose review starts, or that is deferred while it waits for review, moves its card from
-Doing to Code Review through board.sh, once per child (marker auto/crv-<run>-<child>): a card in any other column, past
-Code Review or sent back to Todo by a requeue, is never moved (#603, ADR-0143, ADR-0144).
+Doing to Review through board.sh, once per child (marker auto/crv-<run>-<child>): a card in any other column, past
+Review or sent back to Todo by a requeue, is never moved (#603, ADR-0143, ADR-0144).
 A run reviews its own children (#601): the verdict of its review gate is in the child's `land` event. While such a run is live
 its passed child is still its own (#696): it reviews it, fixes it or lands it, so the child is pending here only once its `land`
 event is in the record or the run has its verdict. Such a run's dispatch node names a review gate (its graph.json), or its
@@ -68,7 +68,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam mo
 import child_issues   # the issues a child's spawn text names (#555)
 import issue_ledger   # the issue's loop facts: the head a run requeued its child on is a fact there, never a marker (ADR-0149)
 from issue_state import board_state
-from board_columns import claimed_names, CODE_REVIEW   # the claimed card names: "Doing" on this board, "In Progress" on the default (#1342); the review column's canonical name (#2155)
+from board_columns import claimed_names, CODE_REVIEW, landing_column   # the claimed card names: "Doing" on this board, "In Progress" on the default (#1342); the review column's canonical name (#2155)
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -78,7 +78,7 @@ childreview = str(pathlib.Path(__file__).resolve().parent / "childreview.sh")   
 childfix = str(pathlib.Path(__file__).resolve().parent / "childfix.sh")   # the fix run in the child's kept worktree, beside this pass (#636)
 state = board_state()   # the dispatch pass asks the seam what state an issue carries, never the carrier (#236)
 BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
-SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Code Review column (#603)
+SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Review column (#603)
 HOLD_TRIES = int(os.environ.get("SG_HOLD_TRIES") or 3)   # the review holds on one head before the child is requeued (#620)
 DEFER_MAX = int(os.environ.get("SG_CHILDCC_DEFER_MAX") or 6)   # the passes one attempted child waits on one unchanged (tip, cause) before its issue goes back to the queue (#931, ADR-0134)
 HOLDS = set()   # the children this pass held out of their wave, neither entered nor requeued: the landing waits for them (#620)
@@ -146,7 +146,7 @@ def claimed(claim, head):   # a review claim [head, pid] holds while its pass is
     except PermissionError: pass
     return True
 def code_review(name, child, n, why):
-    """Move the card of a child its review holds from Doing to Code Review, once per child (#603). Only a Doing card moves:
+    """Move the card of a child its review holds from Doing to Review, once per child (#603). Only a Doing card moves:
     a later column is never moved back, and a Todo card is a requeue's. A carrier that does not answer leaves no marker,
     so the next pass asks again; a refused write is named, never dropped."""
     mk = A / f"crv-{name}-{child}"
@@ -156,7 +156,7 @@ def code_review(name, child, n, why):
     mk.touch()
     if have not in ("Doing", "In Progress"): return
     e = subprocess.run([board, owner, proj, CODE_REVIEW, str(n)], capture_output=True, text=True)
-    if e.returncode: print(f"CHILDCC-BOARD #{n} Code Review refused: {(e.stdout + e.stderr).strip()[:300]}", flush=True)
+    if e.returncode: print(f"CHILDCC-BOARD #{n} {CODE_REVIEW} refused: {(e.stdout + e.stderr).strip()[:300]}", flush=True)
     else: print(f"CODE REVIEW #{n} ({name} {child}): {why}", flush=True)
 def caps_cmd(*argv):   # `python3 -m squad.caps <argv>`: the machine-wide budget's one command (SG_SQUAD names the repository, else the one this script lives in)
     root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
@@ -440,7 +440,7 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
         visited.discard(key); continue
     if s == "closed": logged(f"closed {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its issue is closed; no entry, no card move"); mk.touch(); continue
     waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
-    if (A / f"waved-{name}").exists() and not waved:   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
+    if (A / f"waved-{name}").exists() and not waved:   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Landing move)
         logged(f"landed {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run's wave landed without it; no entry, no card move"); mk.touch(); continue
     if finished and not waved and not (A / f"waved-{name}").exists():   # the run cut no wave: no wave- or waved- marker (#1349)
         card = card_status(n)   # read once: the salvage and the backfill below share it
@@ -498,12 +498,12 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     mk.touch()
     if entered is None:   # no wave: the pass moves the cards itself, one per issue the child works (#954)
         for sib in every_issue(d, n):
-            subprocess.run([board, owner, proj, "Landing", str(sib)], capture_output=True)
+            subprocess.run([board, owner, proj, landing_column(SHIPPED), str(sib)], capture_output=True)   # the vocabulary's own column (#2190)
             print(f"CODE COMPLETE #{sib} ({name} {child})", flush=True)
     ow = word.get(child, "pass")   # the outcome the child ended on: `unproven` is no pass, so the record never claims one
     (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: {ow}. "
         + (f"Its entry carries the proof obligation the tree still owes (ADR-0164). " if ow == "unproven" else "")
-        + f"Cards -> Code Complete: {', '.join('#' + str(x) for x in every_issue(d, n))} (Closed follows when the wave lands in dev). {why[:600]}\n")
+        + f"Cards -> {landing_column(SHIPPED)}: {', '.join('#' + str(x) for x in every_issue(d, n))} (Closed follows when the wave lands in dev). {why[:600]}\n")
 # The round holds the children worked since the last complete pass. A pass is complete when every child it left had its turn
 # in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did. A held
 # child is never in `visited` (#620): it holds the landing until its hold is requeued or its wave reaches its age cap.
@@ -516,7 +516,7 @@ left = [k for k in keys - visited if k not in rnd or k in RUN_HELD]
 WAITING = st / "childcc-waiting"
 _tmp = WAITING.with_name(f"{WAITING.name}.{os.getpid()}.tmp"); _tmp.write_text(f"{len(keys - visited)}\n"); os.replace(_tmp, WAITING)
 HELD.update(key=None, step=None, rk=None); publish(live=False)
-for key, r, child, why, n, finished, d, lwhy, *_ in pending:   # a child that waits for review: its card reads Code Review (#603)
+for key, r, child, why, n, finished, d, lwhy, *_ in pending:   # a child that waits for review: its card reads Review (#603)
     name = pathlib.Path(r).name
     if key not in visited and key not in RUN_HELD and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
 info = {p[0]: p for p in pending}

@@ -14,15 +14,15 @@ board_columns, never from a table here. This script has no write mode: the appli
 import json
 import sys
 
-from board_columns import ALIAS_COLUMNS, FREEZE_LABEL, SHIPPED_NAME, SPEC_LABEL, column_for, view_column
+from board_columns import V1_NAMES, FREEZE_LABEL, SHIPPED_NAME, SPEC_LABEL, column_for, view_column
 
 MOVED_OPTIONS = tuple(SHIPPED_NAME)   # an old option with a shipped column to take its cards
 RETIRED_OPTIONS = ("Testing", "Pushing")   # the definition no longer names them, and no column takes their cards
 OLD_OPTIONS = MOVED_OPTIONS + RETIRED_OPTIONS
 REFUSED = 3
-# The options the shipped definition renames in place (#2154): the old spelling and the canonical one. The map is read
-# from the one alias table, never written a second time.
-RENAMES = {old: entry["name"] for entry in ALIAS_COLUMNS for old in entry["old"]}
+# The options the shipped definition renames in place (#2154): the version 1 name and the canonical one. The map is read
+# from the version 1 table, never written a second time (#2190).
+RENAMES = dict(V1_NAMES)
 
 
 def renamed(options):

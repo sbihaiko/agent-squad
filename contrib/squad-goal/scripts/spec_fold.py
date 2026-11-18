@@ -1,7 +1,7 @@
 """A spec's board column: a fold over the columns of its sub-issues, forward only (#550, #1131, #1906).
 
 A spec is a document, never work (ADR-0142): while any of its tickets is in flight (Todo or beyond, before a terminal
-column) its card reads Todo, and it never follows a ticket into Doing, Code Review or Code Complete. When no ticket is in
+column) its card reads Todo, and it never follows a ticket into Doing, Review or Code Complete. When no ticket is in
 flight the children write no column: the spec's own issue state answers, `own` (Closed or Abandoned), and an open issue
 answers None, so the card keeps the column the owner gave it. The children's terminal columns never give a spec a column;
 the card follows the issue (ADR-0142 section 7, #1906). A card the fold itself lifted returns to the owner's column once no
@@ -14,8 +14,8 @@ it, and to Closed or Abandoned when every child is terminal: that roll-up is not
 DOING, CLOSED, ABANDONED, TODO = "Doing", "Closed", "Abandoned", "Todo"
 TAG = "reverted"   # the tag a card carries when its delivery was taken back (reconcile.py's TAG)
 _CLOSED = {"Done", CLOSED}   # the shipped terminal column of a delivered issue, and the spec vocabulary's name for it
-_REACHED_DOING = {"In Progress", "Code Review", "Code Complete", DOING} | _CLOSED   # the child columns from which the work is under way or past it
-_IN_FLIGHT = {"Todo", "In Progress", "Code Review", "Code Complete", DOING}   # an open ticket the spec's lane reports: Todo or beyond
+_REACHED_DOING = {"In Progress", "Review", "Code Complete", DOING} | _CLOSED   # the child columns from which the work is under way or past it
+_IN_FLIGHT = {"Todo", "In Progress", "Review", "Code Complete", DOING}   # an open ticket the spec's lane reports: Todo or beyond
 WORK = _REACHED_DOING - _CLOSED   # the work columns: a spec card in one of them is not work, and the fold returns it to the owner's column
 _TERMINAL = _CLOSED | {ABANDONED}
 _BACK = {None: 0, "Backlog": 0, TODO: 1, DOING: 2, CLOSED: 3, ABANDONED: 3}

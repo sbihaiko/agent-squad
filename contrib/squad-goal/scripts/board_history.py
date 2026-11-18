@@ -159,7 +159,7 @@ def intervals(events):
         if e["type"] == "status": state["status_t"] = _instant(e["t"])
         column, hold = None, None
         if state["on_board"] and state["status"]:
-            column, hold = view_column(state["status"], state["closed"], sorted(state["labels"]), None)
+            column, hold = view_column(_columns.recorded_column(state["status"]), state["closed"], sorted(state["labels"]), None)   # history keeps the names it recorded (#2190)
         snap = {"on_board": state["on_board"], "column": column, "hold": hold, "spec": state["spec"]}
         if out and {k: out[-1][k] for k in snap} == snap:
             continue

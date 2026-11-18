@@ -76,7 +76,7 @@ def test_a_hand_hold_moves_its_todo_card_to_doing_once(tmp_path, by):
 
 
 @pytest.mark.heavy
-@pytest.mark.parametrize("card", ["Doing", "Code Review", "Code Complete"])
+@pytest.mark.parametrize("card", ["Doing", "Review", "Landing"])
 def test_a_pass_over_a_live_hold_writes_nothing_and_never_moves_the_card_back(tmp_path, card):
     bare(tmp_path, card)
     assert hand(tmp_path, "hold", str(N)).returncode == 0
@@ -104,7 +104,7 @@ def test_a_taken_marker_never_lets_a_card_go_back_to_todo(tmp_path):
 
 
 @pytest.mark.heavy
-@pytest.mark.parametrize(("column", "card"), [("Code Complete", "Doing"), ("Todo", "Doing")])
+@pytest.mark.parametrize(("column", "card"), [("Landing", "Doing"), ("Todo", "Doing")])
 def test_a_release_moves_the_card_once_and_its_record_goes(tmp_path, column, card):
     st = bare(tmp_path, card)
     assert hand(tmp_path, "hold", str(N)).returncode == 0
@@ -152,9 +152,9 @@ def test_a_release_record_for_an_open_issue_still_moves_its_card(tmp_path):
     """The drop is the closed issue's: a release for an open issue keeps its one move."""
     st = bare(tmp_path, "Doing")
     assert hand(tmp_path, "hold", str(N)).returncode == 0
-    assert hand(tmp_path, "release", str(N), "--to", "Code Complete").returncode == 0
+    assert hand(tmp_path, "release", str(N), "--to", "Landing").returncode == 0
     janitor(tmp_path, **SHIPPED)
-    assert moves(tmp_path) == [f"STATUS o 4 Code Complete {N}"], writes(tmp_path)
+    assert moves(tmp_path) == [f"STATUS o 4 Landing {N}"], writes(tmp_path)
     assert not (st / f"auto/release-{N}").exists()
 
 
