@@ -155,16 +155,31 @@ scene colfull
 graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
 four
 { for n in 41 42 43 44 45 46; do printf '%s\tDoing\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
-printf 'caps:\n  runs: 1\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$d/co/docs/squad/defaults.yaml"
+printf 'caps:\n  runs: 10\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$d/co/docs/squad/defaults.yaml"
 r=$(run)
 case "$r" in *"FRONTIER column Doing full: 6 of 2 card(s) in Doing; nothing dispatched this pass"*) ok "a full Doing column refuses the pass, naming the count and the limit";; *) ko "no column-full line: '$r'";; esac
 [ "$(printf '%s' "$r" | $G -c 'FRONTIER column Doing full')" = 1 ] && ok "the refusal is said once a pass" || ko "the refusal printed $(printf '%s' "$r" | $G -c 'FRONTIER column Doing full') times"
 [ ! -s "$MKLOG" ] && ok "no request is built while Doing is full" || ko "a request was built while Doing was full"
 # 7) The same cards under a limit above the count: the column is not full, and the pass dispatches as it always did.
-printf 'caps:\n  runs: 1\ncolumns:\n  Doing:\n    max_cards: 9\n' > "$d/co/docs/squad/defaults.yaml"
+printf 'caps:\n  runs: 10\ncolumns:\n  Doing:\n    max_cards: 9\n' > "$d/co/docs/squad/defaults.yaml"
 r=$(run)
 case "$r" in *"FRONTIER column Doing full"*) ko "the pass called the column full under a limit of 9 with 6 cards";; *) ok "a column under its limit never refuses the pass";; esac
+
+# 8) caps.runs lowers the Doing bound (#2287): 6 cards under a column limit of 9 is not full on the column alone, but
+#    caps.runs 2 makes the effective bound 2, so the pass refuses. This proves the lower of the two applies.
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 9\n' > "$d/co/docs/squad/defaults.yaml"
+r=$(run)
+case "$r" in *"FRONTIER column Doing full: 6 of 2 card(s) in Doing"*) ok "caps.runs lowers the Doing column limit";; *) ko "caps.runs did not lower the Doing limit: '$r'";; esac
 unset GH_BOARD
+
+# 9) An unreadable limit is a defect, not no limit (#2287): when the module fails, the pass names it and dispatches nothing.
+scene nolimitread
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four
+printf '#!/bin/bash\nsg_column_limit() { return 2; }\nsg_board_limit_effective() { return 2; }\n' > "$T/scripts/columnlimit.sh"
+r=$(run)
+case "$r" in *"FRONTIER the Doing column limit is unreadable"*) ok "an unreadable limit stops the pass";; *) ko "no unreadable-limit line: '$r'";; esac
+[ ! -s "$MKLOG" ] && ok "nothing is dispatched with an unread limit" || ko "a request was built with an unread limit"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

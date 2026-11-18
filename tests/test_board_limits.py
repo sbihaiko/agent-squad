@@ -4,8 +4,6 @@ The project settings file accepts one limit per board column, a whole number fro
 defaults follow the present machine limits, so the first release changes no behaviour. A column limit never raises a
 machine cap: the lower of the two applies.
 """
-from pathlib import Path
-
 import pytest
 import yaml
 
@@ -88,3 +86,17 @@ def test_the_lower_of_a_column_limit_and_a_machine_cap_applies():
 def test_a_column_with_no_limit_answers_none(tmp_path):
     assert B.limit("Todo", tmp_path) is None
     assert B.limit("Doing", tmp_path) == 6
+
+
+def test_a_project_null_keeps_an_explicit_none_over_a_default_number(tmp_path):
+    # A present `null` is a limit of none, not an absent key: it overrides the plugin default of 6 and keeps that column
+    # unbounded, so a required gate never disappears through a null.
+    _project(tmp_path, "columns:\n  Doing:\n    max_cards: null\n")
+    assert B.limits(tmp_path)["Doing"] is None
+
+
+def test_the_effective_limit_comes_from_the_command_line(tmp_path, capsys):
+    # The dispatch passes read the lower of the column limit and the machine cap through this one command, so a column
+    # never raises a machine cap.
+    B.main(["Doing", "--target", str(tmp_path), "--machine-cap", "2"])
+    assert capsys.readouterr().out.strip() == "2"

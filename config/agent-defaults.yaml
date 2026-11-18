@@ -54,7 +54,7 @@ caps:                               # machine-wide, across every repository and 
 
 columns:                            # the card limit of each board column (#2287), a whole number from 1 to 100 or none; a project may change one in docs/squad/defaults.yaml
   Todo: {max_cards: null}           # a waiting card holds no machine
-  Doing: {max_cards: 6}             # caps.runs 3 runs, at most 2 tickets each (ADR-0158)
+  Doing: {max_cards: 6}             # six cards may be in flight at once
   Review: {max_cards: 4}            # caps.reviews 4
   Landing: {max_cards: null}        # a landing is one fast-forward push and holds no machine
   Gating: {max_cards: null}         # caps.gates bounds the gate workers, and one wave gate carries all the cards of its wave

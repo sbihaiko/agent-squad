@@ -90,6 +90,24 @@ def test_a_limit_that_breaks_its_rule_is_refused_and_writes_nothing(hub):
     assert not (co / "docs" / "squad" / "defaults.yaml").exists()
 
 
+def test_a_write_that_fails_on_a_later_column_leaves_no_partial_file(hub, monkeypatch):
+    # The save stages every column and writes the file once. A failure while writing must leave the file as it was, never
+    # with the first column changed and the rest missing.
+    mod, co = hub
+    _, ps = mod._board_limit_parts()
+    real = ps._write
+
+    def boom(path, data):
+        if isinstance((data.get("columns") or {}).get("Review"), dict):
+            raise OSError("disk full")
+        return real(path, data)
+
+    monkeypatch.setattr(ps, "_write", boom)
+    out = mod.columns_set({"columns": {"Doing": "2", "Review": "none"}, "confirm": True})
+    assert "err" in out
+    assert not (co / "docs" / "squad" / "defaults.yaml").exists(), "a failed save left a partial settings file"
+
+
 # --- the page
 
 def test_the_settings_page_carries_a_board_theme(hub):

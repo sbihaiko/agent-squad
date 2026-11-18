@@ -343,6 +343,27 @@ def set_key(target, key, raw):
     return True
 
 
+def set_keys(target, items):
+    """Write several keys in one atomic write. Return True when the file changed. Every key is checked before any byte is
+    written, so a bad value or a failed write leaves the file as it was, never with the first keys changed and the rest
+    missing. A tailnet key is refused here: its home is `.env`, and it is set alone."""
+    if any(key in ENV_KEYS for key, _ in items):
+        _refuse(next(key for key, _ in items if key in ENV_KEYS), "a tailnet key lives in .env and is set alone")
+    path, data = _read(target)
+    new = copy.deepcopy(data)
+    for key, raw in items:
+        parts = _parts(key)
+        node = new
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+        node[parts[-1]] = _coerce(key, raw)
+    validate(new)
+    if new == data and path.is_file():
+        return False
+    _write(path, new)
+    return True
+
+
 def reset_key(target, key):
     """Remove one key and keep the others; drop a section left empty. Return True when the file changed."""
     if key in ENV_KEYS:

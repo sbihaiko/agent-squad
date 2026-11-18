@@ -9563,12 +9563,12 @@ def columns_set(body):
     diff = [f"Board · {n}: {cur.get(n) if cur.get(n) is not None else 'none'} -> {v if v is not None else 'none'}"
             for n, v in new.items() if v != cur.get(n)]
     if body.get("confirm") is not True: return {"diff": diff}
-    for n, v in new.items():
-        if v == cur.get(n): continue
+    changes = [(f"columns.{n}.max_cards", "none" if v is None else str(v)) for n, v in new.items() if v != cur.get(n)]
+    if changes:   # every column is staged and the file is written once: a failure leaves no partial save (#2287)
         try:
-            ps.set_key(CHECKOUT or ".", f"columns.{n}.max_cards", "none" if v is None else str(v))
+            ps.set_keys(CHECKOUT or ".", changes)
         except Exception as e:
-            return {"err": f"{n}: {e}", "diff": diff}
+            return {"err": f"the settings file was not written: {e}", "diff": diff}
     return {"diff": diff, "state": columns_read()}
 
 class Access(NamedTuple):
