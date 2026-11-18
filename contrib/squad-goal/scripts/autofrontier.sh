@@ -71,10 +71,22 @@ open_cards() {
     echo "FRONTIER: the open issues did not answer; a closed card may count as waiting" >&2; printf '%s\n' "$1"
   fi
 }
+slot_record() {   # <todo cards>: who holds each run slot now (#2286). The pass writes it from the counters it already
+                  # reads, so no measure of its own starts; a failure is named and never fails the pass, a measure is no gate.
+  [ -n "${AF_DRY:-}" ] && return 0
+  ( cd "$SG_CHECKOUT" 2>/dev/null && python3 - "$SG_STATE" "${1:-0}" "${SG_SQUAD:-}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[3] or ".")
+from squad import slot_holders as S
+S.record_pass(sys.argv[1], int(sys.argv[2]))
+PY
+  ) >/dev/null 2>&1 || echo "FRONTIER: the slot-holder record was not written" >&2
+}
 idle_noslot() {   # the pass has no run slot or no child room: every Todo card waits for one, and the line says so
   todo=$(sg_todo_cards) || { echo "FRONTIER: the board did not answer; nothing dispatched this pass" >&2; return 0; }
   todo=$(open_cards "$todo")
   todo=" $(echo $todo) "; : > "$F/why"; idle "$F/why" "no slot"
+  slot_record $(echo $todo | wc -w)
 }
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
@@ -315,6 +327,7 @@ done
 if [ -n "$broke" ]; then   # the walk ended at the envelope: the cards past it wait for a slot, not for a reason of their own
   while [ $i -lt ${#cands[@]} ]; do IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
     case "$todo" in *" $n "*) why_card "$n" "no slot" "past the pass's envelope";; esac; done
+  slot_record $(echo $todo | wc -w)
 fi
 # The auto-triage (#1672, #1676): a card the walk took with no triage label gets the go label written here, once -- after
 # the claim, so an overlapping pass cannot take the same card, and after every gate, so a card left behind is never

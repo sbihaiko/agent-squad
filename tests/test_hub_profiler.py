@@ -2064,6 +2064,102 @@ def test_a_gate_history_row_names_its_entry_mode_and_an_older_row_still_parses(h
     assert (new["reason"], new["caller"], new["mode"]) == ("why\twith\ttabs", "entry", "gated")
 
 
+def test_the_slot_wait_split_names_the_todo_wait_each_holder_kind_carries(prof):
+    """#2286: each frontier pass that refuses a startable card for "no slot" names the holder of each run slot, and the
+    fold gives the minutes of Todo wait per holder kind, the largest first. A record speaks from its own instant to the
+    next record, and the last one to now; every kind a record names accrues the whole stretch it holds a slot in."""
+    recs = [{"at": 1000.0, "free": 0, "cap": 3, "todo": 5,
+             "holders": [{"name": "run-a", "kind": "doing"}, {"name": "run-b", "kind": "doing"},
+                         {"name": "run-c", "kind": "doing"}]},
+            {"at": 1600.0, "free": 0, "cap": 3, "todo": 4,
+             "holders": [{"name": "run-d", "kind": "gates"}, {"name": "run-e", "kind": "gates"},
+                         {"name": "run-f", "kind": "autobug"}]}]
+    states = [{"start": 1000.0, "end": 2200.0, "state": "active"},
+              {"start": 2200.0, "end": 2800.0, "state": "draining"}]
+    out = prof.slot_wait(recs, states, 1000.0, 2800.0)
+    minutes = {line["kind"]: line["minutes"] for line in out["lines"]}
+    assert out["refusals"] == 2, "both refusals of the window are counted"
+    assert minutes["doing"] == 10.0, "three doing holders for the first 600 s, 10 minutes"
+    assert minutes["gates"] == 15.0 and minutes["autobug"] == 15.0, \
+        "the last record speaks from 1600 to now, one gap cap at most"
+    assert minutes["drained"] == 10.0, "the drain ran 2200 to 2800 while a startable card waited in Todo"
+    order = [line["minutes"] for line in out["lines"]]
+    assert order == sorted(order, reverse=True), f"the lines come largest first: {out['lines']}"
+    assert {line["kind"]: line["passes"] for line in out["lines"]}["gates"] == 1, "one refusal names the gates kind"
+
+
+def test_no_drained_minute_counts_without_a_startable_todo_card(prof):
+    """#2286: the drained minutes count only while a startable card waited in Todo, so a record that names none adds none."""
+    recs = [{"at": 1000.0, "free": 0, "cap": 3, "todo": 0,
+             "holders": [{"name": "run-a", "kind": "landing"}]}]
+    states = [{"start": 1000.0, "end": 2000.0, "state": "off"}]
+    out = prof.slot_wait(recs, states, 1000.0, 2000.0)
+    assert out["drained_minutes"] == 0.0, "no Todo card waited, so no minute is a drained wait"
+
+
+def test_a_corrupt_or_timeless_slot_record_line_is_dropped_whole(prof):
+    """#2286: a half-written line is no record, and no line stops the reader of the file the page draws."""
+    text = '{"at": 1000.0, "free": 0, "cap": 3, "todo": 4, "holders": []}\nnot json\n{"free": 1}\n'
+    assert [r["at"] for r in prof.slot_records(text)] == [1000.0]
+    assert prof.slot_records("") == [] and prof.slot_records(None) == []
+
+
+def test_a_refusal_record_speaks_for_its_gap_cap_only(prof):
+    """#2286: a stale record never claims the hours after it, so a pass that stopped writing reads as no wait, not as one
+    holder pinning every slot for a day."""
+    recs = [{"at": 1000.0, "free": 0, "cap": 3, "todo": 3,
+             "holders": [{"name": "run-a", "kind": "gates"}]}]
+    out = prof.slot_wait(recs, [], 1000.0, 1000.0 + 7200)
+    minutes = {line["kind"]: line["minutes"] for line in out["lines"]}
+    assert minutes["gates"] == prof.SLOT_GAP_CAP_S / 60.0, "the record speaks for one gap cap, never two hours"
+
+
+SLOT_WAIT = {"window_s": 86400, "refusals": 12, "drained_minutes": 90.0,
+             "lines": [{"kind": "gates", "label": "Waiting for a gate slot", "minutes": 300.0, "passes": 8},
+                       {"kind": "landing", "label": "Finished, waiting for its landing", "minutes": 120.0, "passes": 4},
+                       {"kind": "drained", "label": "Loop drained or stopped", "minutes": 90.0, "passes": 2},
+                       {"kind": "doing", "label": "A run with a card in Doing", "minutes": 30.0, "passes": 1}]}
+
+
+def test_the_loop_page_shows_the_slot_wait_split_under_the_trip_table():
+    """#2286: the split stands under the trip table, one line per holder kind, the largest first."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': SLOT_WAIT})},new Set())")
+    at = out.index("<section id=profslots>")
+    assert at > out.index("<table id=proftt"), "the split stands under the trip table"
+    assert at < out.index("<table id=proft ", out.index("</table>", out.index("<table id=proftt"))), \
+        "the split stands above the hot-spot tree"
+    rows = re.findall(r'<tr data-p="slot/(\w+)"><td class=pnm>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td></tr>', out[at:])
+    assert [r[0] for r in rows] == ["gates", "landing", "drained", "doing"], \
+        "one line per holder kind, the largest first, in the order the payload gives"
+    assert rows[0][1:] == ("Waiting for a gate slot", "5.0 h", "8"), "the line names the kind, its minutes and its passes"
+    assert "12 refusals" in out[at:], "the block names the refusals it folded"
+
+
+def test_the_slot_wait_split_says_so_when_no_refusal_was_recorded():
+    """#2286: a window with no record draws no invented line, so an empty window reads as no measure."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': {'window_s': 86400, 'refusals': 0, 'lines': [], 'drained_minutes': 0.0}})},new Set())")
+    at = out.index("<section id=profslots>")
+    assert "No refused dispatch" in out[at:], "a window with no refusal names that, and draws no empty table"
+    assert 'data-p="slot/' not in out[at:]
+
+
+def test_the_route_carries_the_slot_wait_split_of_the_records_it_reads(hub):
+    """#2286: the payload folds the refusal records the frontier wrote, keyed to the page's window."""
+    mod, port, _, state, _ = hub
+    now = time.time()
+    recs = [{"at": now - 600, "free": 0, "cap": 3, "todo": 4,
+             "holders": [{"name": "run-a", "kind": "gates"}, {"name": "run-b", "kind": "gates"}]},
+            {"at": now - 300, "free": 0, "cap": 3, "todo": 2,
+             "holders": [{"name": "run-c", "kind": "landing"}]}]
+    (state / "slot-refusals.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    code, v = ask(port, "GET")
+    assert code == 200 and v["slot_wait"]["refusals"] == 2
+    minutes = {line["kind"]: line["minutes"] for line in v["slot_wait"]["lines"]}
+    assert minutes["gates"] == 5.0, "the first record speaks the five minutes to the second"
+    assert minutes["landing"] == pytest.approx(5.0, abs=0.2), "the last record speaks to the poll's own now, one gap cap at most"
+    (state / "slot-refusals.jsonl").unlink()
+
+
 def test_the_profile_doc_names_the_bar_as_the_live_form_of_its_trip_table():
     doc = (ROOT / "docs/loop-sequence.md").read_text()
     section = doc[doc.index("## 0."):doc.index("### Hot spots")]
