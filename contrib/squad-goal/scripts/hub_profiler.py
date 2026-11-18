@@ -589,7 +589,7 @@ def failed_run_table(rows, window_s, now):
 # holds the stages the loop spends its time in there: Todo holds the queue before the run and the wait for a dispatch, Doing
 # holds coding, the gap between two children and the run's own gates, and Review, Landing and Gating hold the review, the
 # landing and the wave's gate (#1894). A column answers its larger stage's median and p90, with the other stage beside it,
-# and its segment is the sum of its stages' medians, so no measurement the panel draws leaves it. A delivery is a run whose
+# and its width is its time per issue over the issues standing in it at once (#2256). A delivery is a run whose
 # record holds both a passed land and a verdict; a run that landed nothing is no delivery and is not folded. The bars and
 # tables read the percentiles on the `(n - 1)` weight, the rule `docs/loop-sequence.md` names, so a number taken here and
 # the trip table agree.
@@ -749,6 +749,26 @@ def _row_stage(keys, readings):
     seconds is a reading and None is none. Equal medians keep the column's own order (`queue` before `wait`, `coding`
     before `between`), never a dict's order."""
     return max(keys, key=lambda k: (readings[k][0] is not None, readings[k][0] if readings[k][0] is not None else 0.0))
+
+
+def column_parallelism(runs):
+    """The mean count of issues standing in one column at the same time, over the time at least one stands: the sum of
+    the runs' lengths over the length of their union (#2256). Two issues that share one span read 2.0; two that follow
+    each other read 1.0. None on no run, and never below 1, because a run is one issue standing."""
+    iv = sorted((r.get("start"), r.get("end")) for r in runs or ()
+                if _num(r.get("start")) and _num(r.get("end")) and r["end"] > r["start"])
+    if not iv:
+        return None
+    total = sum(b - a for a, b in iv)
+    union, cur_a, cur_b = 0.0, iv[0][0], iv[0][1]
+    for a, b in iv[1:]:
+        if a > cur_b:
+            union += cur_b - cur_a
+            cur_a, cur_b = a, b
+        else:
+            cur_b = max(cur_b, b)
+    union += cur_b - cur_a
+    return total / union if union > 0 else None
 
 
 # What a column consumes (#2227): three lines beside the bar, Tokens, CPU and RAM. A sample goes to the column the card
@@ -972,8 +992,10 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     `gates` stage stands in Doing, where the card is while it runs (#2199); the record's gate is never a Gating time.
     A column that holds two stages answers the larger of the two medians as its `median_s` and `p90_s`, and the other
     stage beside it in `beside`, with its own caption; a stage with no reading leaves `beside` None, so a run that names
-    no card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians, the width its
-    segment takes in the bar, so no measurement the panel draws leaves it; `share` is that sum over the total. A row's
+    no card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians. `parallelism` is the
+    mean count of issues standing in the column at once, over the card's own runs, and `effective_s` is the column's
+    time per issue, `median_s`, over its parallelism (#2256); `share` is the effective time over the total, the width
+    its segment takes in the bar. A row's
     `stage` is the stage its median belongs to. The payload also keeps `stages`: the drawn board-column rows, in board
     order, each
     with `column`, `label`, `median_s`, `p90_s` and `observations` of the column's larger stage, so a reader of the
@@ -999,12 +1021,28 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     columns = trip_columns()
     held = {col: [k for k in keys if readings[k][0] is not None] for col, _, keys in columns}
     sums = {col: sum(readings[k][0] for k in ks) for col, ks in held.items()}
-    total = sum(sums.values())
+    mains = {col: _row_stage(keys, readings) for col, _, keys in columns}
+    # #2256: a column's width is its effective time per delivery, its time per issue divided by its parallelism. The
+    # runs are the card's own column runs, the spans the chart already folds, so the fold adds no reader of GitHub. A
+    # column the board recorded no run for, or one where no two issues overlap, runs one at a time.
+    runs_of = {col: [] for col, _, _ in columns}
+    for i, s in enumerate(spans):
+        if s is None or s["end"] < since:
+            continue
+        for r in (cards[i] if cards and i < len(cards) and cards[i] else ()):
+            k = str(r.get("column") or "").lower()
+            if k in runs_of:
+                runs_of[k].append(r)
+    parallel = {col: max(1.0, p) if (p := column_parallelism(runs_of[col])) is not None else 1.0
+                for col, _, _ in columns}
+    effective = {col: readings[mains[col]][0] / parallel[col] if readings[mains[col]][0] is not None else None
+                 for col, _, _ in columns}
+    effective_total = sum(v for v in effective.values() if v)
     consumed = trip_consumption(spans, since, cards=cards, calls=calls, review_calls=review_calls, loads=loads,
                                 now=now, cores=cores, mem_gb=mem_gb)
     rows, stages = [], []
     for col, label, keys in columns:
-        main = _row_stage(keys, readings)
+        main = mains[col]
         median, p90, n = readings[main]
         beside, others = None, [k for k in keys if k != main]
         # A stage the record never held is None, never a zero, so it stands nowhere: when the main reading is a known
@@ -1017,7 +1055,9 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
                      "median_s": round(median, 3) if median is not None else None,
                      "p90_s": round(p90, 3) if p90 is not None else None,
                      "sum_s": round(sums[col], 3) if held[col] else None,
-                     "share": round(sums[col] / total, 4) if total and held[col] else 0.0,
+                     "parallelism": round(parallel[col], 3) if effective[col] is not None else None,
+                     "effective_s": round(effective[col], 3) if effective[col] is not None else None,
+                     "share": round(effective[col] / effective_total, 4) if effective_total and effective[col] else 0.0,
                      "beside": beside, **consumed["lines"][col]})
         stages.append({"column": col, "label": label, "observations": n,
                        "median_s": round(median, 3) if median is not None else None,
