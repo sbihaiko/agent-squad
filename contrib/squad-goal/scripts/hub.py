@@ -2858,14 +2858,17 @@ def trip_review_calls(since):
 
 def mem_total_gb():
     """The machine's memory in gibibytes, the size the reader's own system shows, and the number the RAM line's hover
-    reads: the kernel's own figure, else psutil, else None. None is no guess: a machine that answers neither source
+    reads: the kernel's own figure, else psutil, else the POSIX page count, else None. None is no guess: a machine that answers neither source
     carries no memory figure, and the hover names no size."""
     total = _sysctl_u64("hw.memsize")
     if not total:
         try:
             import psutil; total = psutil.virtual_memory().total
         except Exception: total = 0
-    return round(total / 1024 ** 3, 1) if total else None
+    if not total:   # #2240: a Linux runner has no Mach sysctl and may have no psutil; the POSIX page count needs neither
+        try: total = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+        except (ValueError, OSError, AttributeError): total = 0
+    return round(total / 1024 ** 3, 1) if total > 0 else None
 
 def load_rows_now():
     """The minute record's rows, re-read only when the file's identity moved: the one cache `load_view` keeps, so the
