@@ -180,7 +180,12 @@ case "$r" in *"#23"*review*) ok "H: the missing review is said";; *) ko "H: the 
 # the holder's own -- the pid the lock records is the holder's own pid -- and gives up as a failure if that lock never comes to it.
 # The wait is generous (tens of seconds), never the old five: a busy machine delays the holder's own startup, and a runner started
 # before the holder is inside the lock passes first and proves nothing.
-
+hold() { SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 10; echo holder >> $T/gl" & holder=$!
+  for _ in $(seq 1 600); do
+    [ "$(cat "$T/st/locks/gate/pid" 2>/dev/null)" = "$holder" ] && return 0
+    kill -0 "$holder" 2>/dev/null || return 1   # the holder is gone: it never came to hold the lock
+    sleep 0.1; done
+  return 1; }
 # I (#392, #575): the entry gate takes the machine-wide gate lock and never runs beside its holder. It does not wait for it
 # either (try mode): the entry runs inline in the fast lane, so it holds the child out, and the next pass, after the holder, enters it.
 printf 'run-1\n' > "$T/st/auto/disp-24"; child 24 g24; rev 24; rm -f "$T/gl"

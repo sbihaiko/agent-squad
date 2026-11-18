@@ -31,7 +31,10 @@ unset GATE_REUSE_FILE
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
-cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/base-battery.sh" "$d/basecheck.sh" "$d/fast-gate.sh" "$d/quality-reading.py" "$d/siblings.py" "$d/cluster.py" "$d/autohunt.sh" "$d/revformat.py" "$T/s/" 2>/dev/null
+# The scripts a case runs: one copy of this checkout's scripts, by a list.
+for f in wave.sh issue_ledger.py ghread.py wavepause.py child_issues.py address.sh caps.sh serial.sh  \
+  ghcall.sh drainpolicy.py base-battery.sh basecheck.sh fast-gate.sh quality-reading.py siblings.py  \
+  cluster.py autohunt.sh revformat.py gate.sh; do cp "$d/$f" "$T/s/"; done 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 # A capped run here is an ended run: the retirement an age-cap requeue waits for (#1970) is test-wave-retire.sh's, and here
 # a stub proves the end at once, so no process table is read and no process is signalled.
@@ -137,13 +140,6 @@ GHEOF
 }
 
 # Helpers a part calls but another part defines: one copy here, so every part holds them.
-hold() { SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 10; echo holder >> $T/gl" & holder=$!
-  for _ in $(seq 1 600); do
-    [ "$(cat "$T/st/locks/gate/pid" 2>/dev/null)" = "$holder" ] && return 0
-    kill -0 "$holder" 2>/dev/null || return 1   # the holder is gone: it never came to hold the lock
-    sleep 0.1; done
-  return 1; }
-
 start2() { local o; o=$((cd "$T/co" && bash "$T/s/wave.sh" start "$1") 2>&1) || { ko "start2 $1: the wave branch was not cut: $o"; return 1; }; }
 
 

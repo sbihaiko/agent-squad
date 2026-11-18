@@ -4,6 +4,15 @@
 # mirrors: wave.sh wave-fixture.sh
 . "$(dirname "$0")/wave-fixture.sh"
 
+# The Z9 cases take the machine-wide gate lock, as the entry cases do; the holder helper is beside them,
+# never in the fixture: a script the loop could run must not take the lock (tests/test_squad_full_gate_machine_lock.py).
+hold() { SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 10; echo holder >> $T/gl" & holder=$!
+  for _ in $(seq 1 600); do
+    [ "$(cat "$T/st/locks/gate/pid" 2>/dev/null)" = "$holder" ] && return 0
+    kill -0 "$holder" 2>/dev/null || return 1   # the holder is gone: it never came to hold the lock
+    sleep 0.1; done
+  return 1; }
+
 # L (#1500): a landing conflict keeps the wave head on fix/<n>-land-<run> for one rebase round, never a requeue and a rebuild. The
 # marker's line 1 is the bare base ref (every #1344 reader stays unchanged); `issue <n>` lines are the close set; `round <k> <sha>`
 # lines are the rounds that started. The repeat rule reads the base sha: the same sha after a round is a loop bug, a moved base
