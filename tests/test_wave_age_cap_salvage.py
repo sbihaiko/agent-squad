@@ -43,8 +43,13 @@ def _run(argv, cwd, env, timeout=120):
     return subprocess.run(argv, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
 
 
+# The fixture's git carries its own identity (#2247): a runner's config names none, and git there refuses an
+# auto-detected address, so a setup commit that read the host's config would fail and the remote would carry no `dev`.
+IDENTITY = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "a@b", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "a@b"}
+
+
 def _git(repo, *args, env=None):
-    return _run([GIT, "-C", str(repo), *args], ROOT, env or os.environ.copy())
+    return _run([GIT, "-C", str(repo), *args], ROOT, env or {**os.environ, **IDENTITY})
 
 
 def _scripts(tmp: Path) -> Path:
@@ -85,8 +90,7 @@ class Fixture:
         env = {
             **os.environ,
             "PATH": f"{tmp}:{os.environ.get('PATH', '')}",
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "a@b",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "a@b",
+            **IDENTITY,
         }
         env.update(SG_STATE=str(self.st), SG_REPO="owner/repo", SG_BASE="dev", SG_OWNER="o", SG_PROJECT="3",
                    SG_CHECKOUT=str(self.co), BOARD=str(self.board), SG_LAND_REMOTE=str(self.origin),
@@ -237,3 +241,26 @@ def test_a_second_entry_gate_on_one_tree_reuses_the_verdict(tmp_path: Path) -> N
     assert ran.read_text().split() == ["ran"], "the second entry gate on one tree ran the suite again"
     line = [x for x in second.stdout.splitlines() if x.strip()][-1]
     assert line.startswith("fast-gate: pass ") and "memo" in line, f"the second call printed no kept verdict: {line!r}"
+
+
+def test_the_fixture_stands_on_a_runner_with_no_git_identity(tmp_path: Path, monkeypatch) -> None:
+    """Criterion E (#2247): a CI runner carries no user.name and user.email, so the fixture's own identity must stand.
+
+    The fixture's setup commits read the host's git config. On a runner that config names no identity, every setup
+    commit fails, the bare remote carries no `dev`, and the wave tests report a defect the code does not have.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    # This host's config names no identity, and auto-detection is off, as on a runner whose hostname git refuses:
+    # a commit that reads the host's config fails, while one that carries its own identity passes.
+    (home / "gitconfig").write_text("[user]\n\tuseConfigOnly = true\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(home / "system-gitconfig"))
+    for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+    fx = Fixture(tmp_path)
+    got = _git(fx.origin, "rev-parse", "-q", "--verify", "refs/heads/dev")
+    assert got.returncode == 0, f"the remote carries no dev branch, so the setup commit ran on no identity: {got.stderr}"
+    r = fx.wave("start", "run-e")
+    assert r.returncode == 0, r.stdout + r.stderr
