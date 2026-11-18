@@ -1588,6 +1588,21 @@ def test_cpu_and_ram_are_shares_and_the_payload_carries_the_memory(prof):
     assert out["mem_gb"] == 64.0, "the page reads the machine's memory for the RAM hover"
 
 
+def test_a_minute_record_counts_in_every_column_a_delivery_occupies(prof):
+    """Two deliveries overlap: one stands in Todo for the whole window, the other leaves Todo for Gating at 600 s.
+    Every minute record of that window stands in a run of both deliveries, so each column reads the CPU and RAM mean
+    of the minutes its own run holds — Gating never reads a dash because Todo met the minute first (#2314)."""
+    out = prof.trip([span_at(1800.0), span_at(1800.0)], [], since=CS,
+                    cards=[card(("Todo", 0.0, 1800.0)), card(("Todo", 0.0, 600.0), ("Gating", 600.0, 1800.0))],
+                    calls=[[], []], loads=every_minute(1800.0, cpu=50.0, ram=40.0), now=CS + 1800.0)
+    rows = {r["column"]: r for r in out["columns"]}
+    assert rows["todo"]["cpu"]["mean"] == 0.5 and rows["todo"]["ram"]["mean"] == 0.4, \
+        "Todo's run holds every minute of the window"
+    assert rows["gating"]["cpu"]["mean"] == 0.5, "Gating's run holds the 20 minutes from 600 s, so it reads a CPU mean"
+    assert rows["gating"]["ram"]["mean"] == 0.4, "and a RAM mean over those minutes, never a dash"
+    assert rows["gating"]["cpu"]["points"], "each held minute draws its point on the Gating line"
+
+
 def test_a_column_with_no_sample_carries_no_point_and_no_mean(prof):
     out = prof.trip([span_at(600.0)], [], since=CS, cards=[card(("Todo", 0.0, 600.0))], calls=[[]],
                     loads=[{"at": CS + 900.0, "load": 4.0, "cpu": 50.0, "ram": 40.0}],

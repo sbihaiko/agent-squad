@@ -172,6 +172,11 @@ stored[1421] = dict(base, events=ev + [{"t": "2026-11-02T00:00:00Z", "type": "cl
 print("reopen", hub._history_due(stored, [dict(row, n=1421, s="OPEN")]))
 stored[1421]["events"] = stored[1421]["events"] + [{"t": "2026-11-03T00:00:00Z", "type": "reopened"}]
 print("resettled", hub._history_due(stored, [dict(row, n=1421, s="OPEN")]))
+moved = dict(row, n=1422, s="OPEN", st="Review")
+stored[1422] = dict(base, events=ev)
+print("moved", hub._history_due(stored, [moved]))
+stored[1422]["events"] = ev + [{"t": "2026-11-01T08:00:00Z", "type": "status", "status": "Review"}]
+print("moved-settled", hub._history_due(stored, [moved]))
 PY
 grep -q '^due \[1420\]$' "$T/out4.txt" \
   && ok "the hub's own row marks an API close that moved no card as due" || ko "hub row: $(cat "$T/out4.txt")"
@@ -183,6 +188,10 @@ grep -q '^reopen \[1421\]$' "$T/out4.txt" \
   && ok "the hub's own row marks a reopen of a record that last closed as due" || ko "hub row reopen: $(cat "$T/out4.txt")"
 grep -q '^resettled \[\]$' "$T/out4.txt" \
   && ok "the reopened hub row settles once its record carries the reopen" || ko "hub row resettled: $(cat "$T/out4.txt")"
+grep -q '^moved \[1422\]$' "$T/out4.txt" \
+  && ok "a Status move the clock hides is due on the value alone" || ko "moved hub row: $(cat "$T/out4.txt")"
+grep -q '^moved-settled \[\]$' "$T/out4.txt" \
+  && ok "the moved hub row settles once its record carries the new Status" || ko "moved hub row settled: $(cat "$T/out4.txt")"
 
 "$py" - "$T/s" <<'PY' >"$T/boardtime.txt" 2>&1
 import sys

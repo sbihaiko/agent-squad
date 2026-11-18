@@ -1031,7 +1031,8 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     is the review token ledger as `{at, tokens}` rows, each placed on the narrowest Review run that holds its time, so
     one ledger line is never counted twice and two parallel reviews never lose the line to whichever run the fold met
     first. `loads` is one `load_row` answer per minute record line; None is a record the caller may not read, and then
-    no minute is counted as silent.
+    no minute is counted as silent. A minute record counts once in each column a delivery occupies at that minute, so
+    overlapping deliveries each read their own line (#2314).
 
     The Tokens line is tokens per minute of the column: a bin's tokens over the minutes the deliveries spend in that
     bin; its mean is the column's tokens over all its minutes. `tokens_per_issue` is the column's tokens over its
@@ -1104,19 +1105,22 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
         t = row.get("at")
         if not _num(t) or not (since <= t <= now):
             continue
+        # A minute record is one reading of the machine: it counts in every column a delivery occupies at that minute,
+        # and two deliveries that share a column count it there once (#2314).
+        seen = set()
         for runs in live:
             loc = _run_at(runs, t)
             if loc is None:
                 continue
             k, j = loc
-            if k not in lines:
+            if k not in lines or k in seen:
                 continue
+            seen.add(k)
             for name in ("cpu", "ram"):
                 v = row.get(name)
                 if _num(v):
                     lines[k][name][0][j].append(v / 100.0)
                     lines[k][name][1].append(v / 100.0)
-            break
     out = {}
     for k in keys:
         bins = [tok[k]["bin"][j] / tok[k]["min"][j] if tok[k]["n"][j] and tok[k]["min"][j] > 0 else None

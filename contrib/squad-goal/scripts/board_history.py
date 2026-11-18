@@ -73,11 +73,13 @@ def due_reads(items, stored):
 
 def due_items(items, stored):
     """The numbers a history pass reads, from the board's own rows. A row states the issue's number (`n`), the Status
-    field's updatedAt (`su`), and the issue's own state (`s`). The closed flag comes from the issue state -- the value
-    the issue API answers and the items read carries as `content.state` -- never from the card's Status (`st`), which a
-    close through the API leaves where it was (#1419). Every row states its state; a row that names none is read once
-    and then stands open against its record."""
-    return due_reads([{"n": i["n"], "status_updated": i.get("su") or "",
+    value (`st`), the Status field's updatedAt (`su`), and the issue's own state (`s`). The closed flag comes from the
+    issue state -- the value the issue API answers and the items read carries as `content.state` -- never from the
+    card's Status (`st`), which a close through the API leaves where it was (#1419). The Status value is the row's own
+    reason to read: a record whose clock already agrees with the row, and whose events stop at an older Status, is due
+    on the value alone (#1394, #2313). Every row states its state; a row that names none is read once and then stands
+    open against its record."""
+    return due_reads([{"n": i["n"], "status_updated": i.get("su") or "", "status": i.get("st") or "",
                        "closed": str(i.get("s") or "").lower() == "closed"} for i in items], stored)
 
 

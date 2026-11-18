@@ -60,6 +60,16 @@ def test_a_close_that_moves_no_card_is_read_from_the_board_row():
     assert bh.due_items([dict(row, s="OPEN")], stored) == [], "an open card against an open record is no reason"
 
 
+def test_a_status_move_the_clock_hides_is_read_from_the_board_row():
+    stored = {2286: {"issue_updated": "2026-11-18T14:29:07Z", "status_updated": "2026-11-18T14:29:10Z",
+                     "events": [{"t": "2026-11-18T14:29:07Z", "type": "status", "status": "Todo"}],
+                     "complete": True}}
+    row = {"n": 2286, "su": "2026-11-18T14:29:10Z", "st": "Review", "s": "OPEN"}
+    assert bh.due_items([row], stored) == [2286], "the clock agrees and only the value says the record is behind"
+    stored[2286]["events"].append({"t": "2026-11-18T16:39:39Z", "type": "status", "status": "Review"})
+    assert bh.due_items([row], stored) == [], "a record that ends in the card's Status is settled"
+
+
 def test_a_short_timeline_is_due_again_until_it_is_complete():
     items = [{"n": 4, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
               "closed": False}]
