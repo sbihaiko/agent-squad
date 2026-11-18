@@ -4,7 +4,7 @@
 #profb .psw{position:relative;flex:none;width:52px;aspect-ratio:52/32;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true]{background:var(--ok)}
 #profb .psw i{position:absolute;top:50%;margin-top:-13px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}#profb .psw[aria-checked=true] i{transform:translateX(20px)}
 #profb .psw:disabled{opacity:.6;cursor:default}#profb .psw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-#proftrip{margin:0 0 16px}#proftrip h3{margin:0 0 4px;font-size:var(--fs-caption);font-weight:600}#proftrip .tpn{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
+#proftrip{margin:0 0 16px}#proftrip h3{margin:0 0 4px;font-size:var(--fs-body);font-weight:700}#proftrip .tpn{color:var(--mute);font-size:var(--fs-caption);margin:0 0 10px}
 #proftrip .ptb{display:flex;gap:1px;width:100%;height:14px;margin:0 0 8px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}#proftrip i.ptb-seg{display:block;height:100%;min-width:4px}
 #proftrip .ptk{display:inline-block;width:10px;height:10px;margin-right:8px;border-radius:var(--radius-sm);vertical-align:-1px;background:currentColor}
 #proftrip .pts-todo{background:var(--s5)}#proftrip .pts-doing{background:var(--run)}#proftrip .pts-review{background:var(--acc)}#proftrip .pts-gating{background:var(--warn)}#proftrip .pts-landing{background:var(--ok)}
@@ -15,32 +15,31 @@
    magenta, and RAM the lavender, dashed. A column with no point draws no line there, and the stretch is marked instead.
    The tint tells two columns apart, and a rule stands at each seam between them. */
 #proftrip svg{display:block;width:100%;height:auto;margin:4px 0 6px}
-#proftrip .ptc{fill:currentColor;opacity:.16}
-#proftrip .ptl-tok{fill:none;stroke:var(--fg);stroke-width:1.6;vector-effect:non-scaling-stroke}
-#proftrip .ptl-cpu{fill:none;stroke:var(--s2);stroke-width:1.6;vector-effect:non-scaling-stroke}
-#proftrip .ptl-ram{fill:none;stroke:var(--none);stroke-width:1.6;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
-#proftrip circle.ptl-tok{fill:var(--fg)}#proftrip circle.ptl-cpu{fill:var(--s2)}#proftrip circle.ptl-ram{fill:var(--none)}
-#proftrip .ptgn{fill:var(--mute);opacity:.14;stroke:none}   /* a no-record stretch: a band over the lane, off the data scale */
-#proftrip .ptr{stroke:var(--edge);stroke-width:1;opacity:.55;vector-effect:non-scaling-stroke}
+#proftrip .ptc{fill:currentColor;opacity:.30}
+#proftrip .ptl-tok{fill:none;stroke:var(--fg);stroke-width:2;vector-effect:non-scaling-stroke}
+#proftrip .ptl-cpu{fill:none;stroke:var(--s7);stroke-width:2;vector-effect:non-scaling-stroke}
+#proftrip .ptl-ram{fill:none;stroke:var(--none);stroke-width:2;stroke-dasharray:5 4;vector-effect:non-scaling-stroke}
+#proftrip circle.ptl-tok{fill:var(--fg)}#proftrip circle.ptl-cpu{fill:var(--s7)}#proftrip circle.ptl-ram{fill:var(--none)}
+#proftrip .ptgn{fill:var(--bg);opacity:.18;stroke:none}   /* a no-record stretch: a band over the lane, off the data scale */
+#proftrip .ptr{stroke:var(--bg);stroke-width:2;opacity:1;vector-effect:non-scaling-stroke}
 #proftrip .ptg0{stroke:var(--line);stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
 #proftrip .ptg{stroke:var(--mute);stroke-width:1;stroke-dasharray:2 2;vector-effect:non-scaling-stroke}
 /* The chart sizes its glyphs in SVG user units on the svg element, so each box scales with the viewBox; no CSS
    length here takes that over, because a caption size would not scale and would share boxes at a narrow width. */
 #proftrip .ptt,#proftrip .ptn,#proftrip .ptu,#proftrip .ptlm{fill:var(--mute)}
-#proftrip .ptn{fill:var(--text);font-weight:600}
-#proftrip .ptlb,#proftrip .ptls{fill:var(--text)}
+#proftrip .ptn{fill:var(--fg);font-weight:700}
+#proftrip .ptlb{fill:var(--fg)}#proftrip .ptls{fill:var(--mute)}
+#proftrip .ptgap{fill:var(--bg)}#proftrip .ptfoot{color:var(--mute);font-size:var(--fs-caption);margin:8px 0 0}
 #proftrip text.ptlb.pts-todo{fill:var(--s5)}#proftrip text.ptlb.pts-doing{fill:var(--run)}#proftrip text.ptlb.pts-review{fill:var(--acc)}
 #proftrip text.ptlb.pts-gating{fill:var(--warn)}#proftrip text.ptlb.pts-landing{fill:var(--ok)}
-#proftrip text.ptls.pts-todo{fill:var(--s5)}#proftrip text.ptls.pts-doing{fill:var(--run)}#proftrip text.ptls.pts-review{fill:var(--acc)}
-#proftrip text.ptls.pts-gating{fill:var(--warn)}#proftrip text.ptls.pts-landing{fill:var(--ok)}
-#proftrip .ptlmt{fill:var(--fg)}#proftrip .ptlmc{fill:var(--s2)}#proftrip .ptlmr{fill:var(--none)}
+#proftrip .ptlmt{fill:var(--fg)}#proftrip .ptlmc{fill:var(--s7)}#proftrip .ptlmr{fill:var(--none)}
 #proftrip .ptkey{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
 #proftrip .ptbbar{fill:var(--edge);opacity:.35}
 #proftrip rect.ptb-seg{fill:currentColor;opacity:1}
 #proftrip rect.ptb-seg.ptb-none{fill:none}
 #proftrip .ptk.ptk-none{background:none;box-shadow:inset 0 0 0 1px currentColor}
 #proftrip .ptb-seg.ptb-none{min-width:0;background:none}
-#proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#proftt th{text-align:right;color:var(--mute);font-weight:400;white-space:nowrap;padding:4px 8px;border-bottom:1px solid var(--line)}#proftt th:first-child{text-align:left}#proftt td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#proftt td:first-child{text-align:left}
+#proftt{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb #proftt th{text-align:right;color:var(--mute);font-weight:400;white-space:nowrap;padding:8px 10px;border-bottom:1px solid var(--line)}#profb #proftt th:first-child{text-align:left}#profb #proftt td{text-align:right;padding:6px 10px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}#profb #proftt td:first-child{text-align:left}
 #profc{margin-top:16px}#proft,#profc{border-collapse:collapse;width:100%;font-size:var(--fs-caption)}#profb table th{text-align:right;color:var(--mute);font-weight:400;padding:4px 8px;border-bottom:1px solid var(--line)}#profb table th:first-child{text-align:left}
 #profb table td{padding:2px 8px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}#profb table td.pn{text-align:left;width:100%}#profb table tr[aria-expanded]{cursor:pointer}#profb table tbody tr:hover{background:var(--panel)}
 #profb table .ptw{display:inline-block;width:18px;min-width:0;min-height:0;padding:0;border:0;background:none;color:var(--mute);cursor:pointer}#profb table .pbw{display:inline-block;width:120px;height:10px;margin:0 8px 0 2px;background:var(--edge);vertical-align:middle}

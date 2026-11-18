@@ -3629,13 +3629,14 @@ def test_the_trip_payload_carries_no_p90_and_no_observations_note(prof):
     assert "observations_note" not in t
 
 
-def test_one_sentence_above_the_chart_states_the_peak_the_saturation_and_the_silent_minutes():
+def test_one_sentence_under_the_table_states_the_peak_the_saturation_and_the_silent_minutes():
     """AC8 of the spec: the peak load, the saturation at the core count and the minutes with no load record, in one
-    sentence."""
+    sentence. The sentence stands in the note under the table, so the chart opens as its mock opens (#2282)."""
     out = chart_js()
     sentence = "Peak load 4.00 against saturation at 8 cores; 21 minutes carried no load record."
     assert sentence in out
-    assert out.index(sentence) < out.index("<svg id=proftc")
+    assert out.index("</table><p class=ptfoot>") < out.index(sentence), "the machine facts stand in the note under the table"
+    assert sentence not in re.search(r"<p class=tpn>(.*?)</p>", out, re.S).group(1), "the subtitle never restates them"
 
 
 def test_the_page_states_that_cpu_and_ram_are_readings_of_the_whole_machine():
@@ -3675,7 +3676,7 @@ def test_the_chart_draws_the_ticks_and_the_points_the_payload_holds():
     assert todo["tokens"]["points"] == [[0.5625, 480.0]]
     line = re.search(r'<polyline class="ptl-tok" points="([\d.]+),([\d.]+)', out)
     assert (float(line.group(1)), float(line.group(2))) == \
-        (pytest.approx(x0 + 0.5625 * w, abs=0.1), pytest.approx(26 + 110 * (1 - 480 / 1000), abs=0.1)), \
+        (pytest.approx(x0 + 0.5625 * w, abs=0.1), pytest.approx(trip_consts()["top"] + trip_consts()["lane"] * (1 - 480 / 1000), abs=0.1)), \
         "the first Tokens point sits at its position in Todo and its height on the payload's own scale"
 
 
@@ -4412,10 +4413,10 @@ def test_no_two_means_share_a_box_in_a_lane():
         col.update(column=f"c{i}", label=f"Col{i}", share=share)
         v["columns"].append(col)
     means = [(line, float(x), float(y), text) for line, x, y, text in re.findall(
-        r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="([\d.]+)" y="([\d.]+)" text-anchor=end>([^<]*)</text>',
+        r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="([\d.]+)" y="([\d.]+)" text-anchor=end font-size=11>([^<]*)</text>',
         chart_svg(chart_js(v)))]
     assert len(means) == 18, "six columns, three lines"
-    boxes = [(line, y, x - len(text) * char, x, text) for line, x, y, text in means]
+    boxes = [(line, y, x - len(re.sub(r'&#?\w+;', '~', text)) * char * 11 / 13, x, text) for line, x, y, text in means]
     for i, a in enumerate(boxes):
         for b in boxes[i + 1:]:
             assert not (abs(a[1] - b[1]) < 13 and a[2] < b[3] and b[2] < a[3]), \
@@ -4427,7 +4428,7 @@ def test_each_band_is_tinted_and_a_vertical_rule_separates_two_columns():
     c = trip_consts()
     svg = chart_svg(chart_js())
     tint = re.search(r"#proftrip \.ptc\{[^}]*opacity:\.(\d+)", chart_css())
-    assert tint and int(tint.group(1)) >= 12, "the band's tint tells two columns apart"
+    assert tint and int(tint.group(1)) >= 25, "the band's tint tells two columns apart"
     rules = [(float(x), float(y0), float(y1)) for x, y0, y1 in
              re.findall(r'<line class=ptr x1="([\d.]+)" y1="([\d.]+)" x2="[\d.]+" y2="([\d.]+)"', svg)]
     ends = band_starts(CHART["columns"], svg, c["gutter"])[1:]
@@ -4458,10 +4459,10 @@ def test_each_column_mean_prints_in_its_lane_top_right_in_its_lines_colour():
     svg = chart_svg(chart_js())
     css = chart_css()
     assert re.search(r"#proftrip \.ptlmt\{[^}]*fill:var\(--fg\)", css), "the token mean takes the line's white"
-    assert re.search(r"#proftrip \.ptlmc\{[^}]*fill:var\(--s2\)", css), "the CPU mean takes the line's pink"
+    assert re.search(r"#proftrip \.ptlmc\{[^}]*fill:var\(--s7\)", css), "the CPU mean takes the line's pink"
     assert re.search(r"#proftrip \.ptlmr\{[^}]*fill:var\(--none\)", css), "the RAM mean takes the line's lilac"
     means = [(line, float(x), float(y), text) for line, x, y, text in re.findall(
-        r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="([\d.]+)" y="([\d.]+)" text-anchor=end>([^<]*)</text>', svg)]
+        r'<text class="ptlm (ptlmt|ptlmc|ptlmr)" x="([\d.]+)" y="([\d.]+)" text-anchor=end font-size=11>([^<]*)</text>', svg)]
     assert len(means) == 15, "five columns, three lines"
     tok = [m for m in means if m[0] == "ptlmt"]
     assert all(c["top"] < m[2] < c["top"] + c["lane"] for m in tok), "the token means stand in the Tokens lane"
@@ -4469,7 +4470,7 @@ def test_each_column_mean_prints_in_its_lane_top_right_in_its_lines_colour():
         "the CPU and RAM means stand in the Machine lane"
     span = 1000 - c["gutter"]
     first_end = c["gutter"] + drawn_widths(CHART["columns"], svg, span)[0]
-    assert tok[0][1] == pytest.approx(first_end - 3, abs=0.2), "the mean sits at the column's right edge"
+    assert tok[0][1] == pytest.approx(first_end - 5, abs=0.2), "the mean sits at the column's right edge"
     assert tok[0][2] - c["top"] < c["lane"] / 3, "the mean sits at the top of the lane"
     assert [m[3] for m in means[:3]] == ["mean 60", "CPU 50%", "RAM 40%"], "the full copy at a wide column"
 
@@ -4501,9 +4502,10 @@ def test_each_label_takes_its_columns_colour_with_a_bold_name_and_a_small_median
     css = chart_css()
     for col, var in (("todo", "--s5"), ("doing", "--run"), ("review", "--acc"), ("landing", "--ok"),
                      ("gating", "--warn")):
-        for cls in ("ptlb", "ptls"):
-            assert re.search(rf"#proftrip text\.{cls}\.pts-{col}\{{[^}}]*fill:var\({var}\)", css), \
-                f"the {col} label takes the column's colour"
+        assert re.search(rf"#proftrip text\.ptlb\.pts-{col}\{{[^}}]*fill:var\({var}\)", css), \
+            f"the {col} name takes the column's colour"
+        assert f"text.ptls.pts-{col}" not in css, "the time under a name is grey, as the mock draws it (#2282)"
+    assert re.search(r"#proftrip \.ptls\{fill:var\(--mute\)\}", css), "the time under a name is grey"
     names = re.findall(r'<text class="ptlb pts-(\w+)" x="[\d.]+" y="[\d.]+" text-anchor=\w+ font-weight=600>([^<]*)</text>',
                        svg)
     assert names[:2] == [("todo", "Todo"), ("doing", "Doing")], "the name stands alone, in bold"
@@ -4522,7 +4524,7 @@ def test_tokens_is_white_cpu_is_pink_and_solid_and_ram_is_lilac_and_dashed():
     cpu = re.search(r"#proftrip \.ptl-cpu\{([^}]*)\}", css).group(1)
     ram = re.search(r"#proftrip \.ptl-ram\{([^}]*)\}", css).group(1)
     assert "stroke:var(--fg)" in tok and "dasharray" not in tok, "Tokens is white and solid"
-    assert "stroke:var(--s2)" in cpu and "dasharray" not in cpu, "CPU is pink and solid"
+    assert "stroke:var(--s7)" in cpu and "dasharray" not in cpu, "CPU is pink and solid"
     assert "stroke:var(--none)" in ram and "dasharray" in ram, "RAM is lilac and dashed"
 
 
@@ -4594,3 +4596,32 @@ def test_the_phone_keeps_a_short_column_visible():
     """The phone's lanes and strip hold the same floor: a short column keeps a band of at least 40 of 1000 units."""
     parts = json.loads(run_js(f"JSON.stringify(profTripShares({json.dumps(short_trip()['columns'])}).map(p=>p.w))"))
     assert min(parts) >= 40 - 0.01 and sum(parts) == pytest.approx(1000, abs=0.5)
+
+
+# ---------------------------------------------------------------- the finish of the mock (#2282)
+def test_every_colour_the_chart_names_is_a_colour_the_page_defines():
+    """A fill that names a variable the page never defines paints black: the lane titles were invisible that way."""
+    defined = set(re.findall(r"(--[\w-]+):", (SCRIPTS / "hub.py").read_text() + (SCRIPTS / "web-tokens.css").read_text()))
+    used = set(re.findall(r"var\((--[\w-]+)\)", chart_css()))
+    assert used - defined == set(), f"the chart names colours the page does not define: {sorted(used - defined)}"
+
+
+def test_a_dark_gap_parts_the_two_lanes():
+    c = trip_consts()
+    gap = re.search(r'<rect class=ptgap x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)">', chart_svg(chart_js()))
+    assert gap, "one rect covers the bands between the lanes"
+    assert [float(v) for v in gap.groups()] == [c["gutter"], c["top"] + c["lane"], 1000 - c["gutter"], c["gap"]]
+    assert re.search(r"#proftrip \.ptgap\{fill:var\(--bg\)\}", chart_css()), "the gap takes the page's background"
+
+
+def test_the_lines_are_two_units_thick_and_a_dark_rule_parts_two_columns():
+    css = chart_css()
+    for cls in ("ptl-tok", "ptl-cpu", "ptl-ram"):
+        assert re.search(rf"#proftrip \.{cls}\{{[^}}]*stroke-width:2;", css), f"{cls} is two units thick"
+    assert re.search(r"#proftrip \.ptr\{stroke:var\(--bg\);stroke-width:2;opacity:1;", css), "the rule between two columns is dark"
+
+
+def test_a_mean_in_a_lane_is_smaller_than_a_label():
+    svg = chart_svg(chart_js())
+    sizes = set(re.findall(r'<text class="ptlm [^"]*"[^>]*font-size=(\d+)>', svg))
+    assert sizes == {"11"} and 11 < chart_metrics()[2], "each mean prints at 11 units, under the 13 of a label"

@@ -58,9 +58,9 @@ const profTripTime=c=>`${profTripNum(c.effective_s)} · ${profTripPar(c.parallel
 // A text's width is its user-unit font size times its character count, so a label too wide for its column takes a leader
 // line instead of a box over its neighbour. Every glyph in the chart is sized in SVG user units, so its box scales with
 // the viewBox: the layout holds at 390 px and at 1440 px alike. A CSS caption size would not scale, so the chart sets none.
-const PROF_TRIP_W=1000,PROF_TRIP_GUTTER=140,PROF_TRIP_LANE=110,PROF_TRIP_TOP=26,PROF_TRIP_GAP=26;
+const PROF_TRIP_W=1000,PROF_TRIP_GUTTER=140,PROF_TRIP_LANE=110,PROF_TRIP_TOP=8,PROF_TRIP_GAP=16;
 const PROF_TRIP_FONT=13,PROF_TRIP_CHAR=PROF_TRIP_FONT*0.6,PROF_TRIP_ROW=16;
-const PROF_TRIP_SMALL=10,PROF_TRIP_BAR=8,PROF_TRIP_BAR_GAP=6;
+const PROF_TRIP_SMALL=10,PROF_TRIP_MEAN=11,PROF_TRIP_BAR=8,PROF_TRIP_BAR_GAP=6;
 const profTextW=(s,size)=>String(s).length*PROF_TRIP_CHAR*(size||PROF_TRIP_FONT)/PROF_TRIP_FONT;
 // A tick prints in the unit its lane's top tick sets (#2255): a lane in the thousands reads 0k, 20k, 40k, and a lane
 // below a thousand keeps its raw count, so the three ticks of one axis never round to the same label.
@@ -92,9 +92,9 @@ function profTripChart(t,cols){
  // colour of its line. The full copy stands at the column's right edge; a column too narrow for it takes a shorter
  // copy, and a row that a text already holds takes the next one, so two texts never share a box. The row list grows
  // when every row is held, and the lane grows with it, so a run of narrow columns prints no mean over another.
- const v=c=>profTripPoint(c),fit=(b,full,short)=>(b.x1-b.x0)>=profTextW(full)+6?full:short;
+ const v=c=>profTripPoint(c),fit=(b,full,short)=>(b.x1-b.x0)>=profTextW(full,PROF_TRIP_MEAN)+8?full:short;
  const placed={tok:[],mac:[]},rows={tok:[],mac:[]};
- const put=(k,b,cls,text)=>{const w=profTextW(text),x1=b.x1-3,x0=x1-w;
+ const put=(k,b,cls,text)=>{const w=profTextW(text,PROF_TRIP_MEAN),x1=b.x1-5,x0=x1-w;
   let y=rows[k].find(c=>!placed[k].some(p=>Math.abs(p.y-c)<13&&x0<p.x1+1&&p.x0<x1+1));
   if(y==null){y=rows[k].length?rows[k][rows[k].length-1]+PROF_TRIP_ROW:11;rows[k].push(y)}
   placed[k].push({y,x0,x1});
@@ -116,7 +116,9 @@ function profTripChart(t,cols){
  const axis=(values,y0,fmt)=>values.map(v=>`<line class=ptg0 x1="${G}" y1="${y0(v).toFixed(1)}" x2="${PROF_TRIP_W}" y2="${y0(v).toFixed(1)}"></line>`
   +`<text class=ptt x="${G-6}" y="${(y0(v)+4).toFixed(1)}" text-anchor=end>${esc(fmt(v))}</text>`).join("");
  const bandsOf=(y,h)=>bands.map(b=>`<rect class="ptc pts-${esc(b.c.column)}" x="${b.x0.toFixed(1)}" width="${(b.x1-b.x0).toFixed(1)}" y="${y}" height="${h}"></rect>`).join("");
- const bandAll=bandsOf(tokTop,macBot-tokTop);   // one band per column over both lanes, so a column reads as one block
+ // One band per column over both lanes, so a column reads as one block; a dark gap then parts the two lanes, as the
+ // mock draws them (#2282).
+ const bandAll=bandsOf(tokTop,macBot-tokTop)+`<rect class=ptgap x="${G}" y="${tokBot}" width="${W}" height="${PROF_TRIP_GAP}"></rect>`;
  // A vertical rule stands at each seam between two drawn columns and crosses both lanes (#2255), so two adjacent
  // columns of a like tint stay apart.
  const drawnBands=bands.filter(b=>b.x1-b.x0>0);
@@ -153,7 +155,7 @@ function profTripChart(t,cols){
   +lineOf("ptl-cpu","cpu",my,"CPU, percent of the whole machine",v=>`CPU ${profPct(v)} of the whole machine`,macTop,lane)
   +lineOf("ptl-ram","ram",my,"RAM, percent of the whole machine",v=>`RAM ${profPct(v)} of the whole machine`,macTop,lane);
  // Each mean stands at its row in its lane, in the order the columns place them, so a text never leaves its lane.
- const inLane=means.map(([k,m])=>`<text class="ptlm ${m.cls}" x="${m.x1.toFixed(1)}" y="${((k==="tok"?tokTop:macTop)+m.y).toFixed(1)}" text-anchor=end>${m.text}</text>`).join("");
+ const inLane=means.map(([k,m])=>`<text class="ptlm ${m.cls}" x="${m.x1.toFixed(1)}" y="${((k==="tok"?tokTop:macTop)+m.y).toFixed(1)}" text-anchor=end font-size=${PROF_TRIP_MEAN}>${m.text}</text>`).join("");
  // A label prints the column's name in bold with its effective time and parallelism small beneath, in the column's
  // colour (#2255, #2256). A label too
  // wide for its column takes a leader line and stands on its own row: no label can then share a box with another, and a
@@ -248,13 +250,14 @@ function profTrip(t,phone){
  // One subtitle carries every sentence the page states above the chart (#2255), so the blocks follow the mock: heading,
  // subtitle, the two lanes, the bar, the labels and the table. The sentences join with one space each, and the layout
  // rule stays in the caption, so the subtitle never restates it.
+ // The subtitle holds what a reader needs to read the chart (#2282): the count, the width rule and the scale. The
+ // machine facts stand in one note under the table, so the chart opens as the mock opens.
  const sub=[`${n} deliveries in the last ${span}: the bar folds ${cols.length} segments, one per board column, in the order of the rows below.`,
   "Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.",
-  "No column is narrower than its label, so a short column stays visible.",
-  sentence, "CPU and RAM are readings of the whole machine, on one scale, in percent of it.", badLoad, ramReason]
-  .filter(Boolean).join(" ");
+  "CPU and RAM are readings of the whole machine, on one scale, in percent of it."].join(" ");
+ const foot=[sentence, badLoad, ramReason].filter(Boolean).join(" ");
  return `<section id=proftrip>${head}<p class=tpn>${sub}</p>`
-  +profTripChart(t,cols)+table+`</section>`}
+  +profTripChart(t,cols)+table+`<p class=ptfoot>${foot}</p></section>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;
