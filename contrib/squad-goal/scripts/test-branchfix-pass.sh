@@ -85,6 +85,19 @@ r=$(OPEN="10 11 12" SG_FIX_PASS_MAX=2 fp)
 : > "$T/launch.log"; push gui/7-x; rev gui/7-x CHANGES "f.sh:1 x"; r=$(SG_LAND_REMOTE=$T/none.git fp)
 [ ! -s "$T/launch.log" ] && ok "an unreadable branch list dispatches nothing" || ko "a fix ran with no branch list"
 case "$r" in *"BRANCHFIX: the remote branch list is not readable"*) ok "the failed read is named";; *) ko "no read failure line: '$r'";; esac
+# 7b) (#2323) a connect that drops is transient: the same pass reads the branch list again, so one dropped connect neither ends
+#     the pass nor costs its fix round. A read that keeps failing still names itself once (case 7).
+cat > "$T/bin/flakygit" <<J
+#!/bin/bash
+echo "\$*" >> "$T/git.log"
+[ "\$1" = ls-remote ] && [ ! -e "$T/connected" ] && { touch "$T/connected"; echo "fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443 after 75000 ms: Couldn't connect to server" >&2; exit 128; }
+exec /usr/bin/git "\$@"
+J
+chmod +x "$T/bin/flakygit"; : > "$T/launch.log"; rm -f "$T/connected" "$T/git.log"
+push gui/7-x; rev gui/7-x CHANGES "w.sh:1 the transient read"
+r=$(OPEN="7" SG_GIT="$T/bin/flakygit" SG_BRANCH_LIST_PAUSE=0 fp)
+[ "$(/usr/bin/grep -c 'ls-remote --heads' "$T/git.log" 2>/dev/null)" = 2 ] && ok "2323 a dropped connect: the branch list is read again inside the same pass" || ko "2323 the dropped connect was not retried: '$(cat "$T/git.log" 2>&1)' '$r'"
+[ "$(n gui/7-x)" = 1 ] && ok "2323 the retried read keeps the pass's fix round" || ko "2323 one dropped connect cost the pass its fix round: '$r'"
 # 8) every GitHub call goes through the door: no bare gh in the pass
 /usr/bin/grep -nE '(^|[^_])gh api' "$d/branchfixpass.sh" | /usr/bin/grep -v '^[0-9]*:#' >/dev/null && ko "branchfixpass.sh calls gh api directly" || ok "the pass calls GitHub only through ghcall.sh"
 # 9) an issue that carries a label of SG_FRONTIER_SKIP_LABELS is skipped, read from the open-issue list with no other call

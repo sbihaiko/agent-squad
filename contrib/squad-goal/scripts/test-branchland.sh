@@ -575,4 +575,28 @@ printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_8-rebase-hand.md"; printf '%s\n'
 r=$(OPEN=8 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
 [ "$(python3 "$T/s/revformat.py" --classify "$T/st/review-fix_8-rebase-hand.md" "$T/st/review-fix_8-rebase-hand.sha" "$hs")" = changes ] && ok "1960 the lander's round review classifies as changes" || ko "1960 the lander's round review: $(cat "$T/st/review-fix_8-rebase-hand.md")"
 
+# (#2323) A connect that drops is transient: the branch list read is tried again inside the same pass, so one dropped connect no
+# longer ends the whole cycle. A read that keeps failing names itself once, lands nothing and starts no fix round.
+cat > "$T/bin/flakygit" <<J
+#!/bin/bash
+echo "\$*" >> "$T/git.log"
+[ "\$1" = ls-remote ] && [ ! -e "$T/connected" ] && { touch "$T/connected"; echo "fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443 after 75000 ms: Couldn't connect to server" >&2; exit 128; }
+exec /usr/bin/git "\$@"
+J
+chmod +x "$T/bin/flakygit"
+reset; rm -f "$T/connected" "$T/git.log" "$T/st/auto/branchland-fixpending-"*
+r=$(SG_GIT="$T/bin/flakygit" SG_BRANCH_LIST_PAUSE=0 CHECKS="$GREEN" bl)
+[ "$(/usr/bin/grep -c 'ls-remote --heads' "$T/git.log" 2>/dev/null)" = 2 ] && ok "2323 a dropped connect: the branch list is read again inside the same pass" || ko "2323 the dropped connect was not retried: '$(cat "$T/git.log" 2>&1)' '$r'"
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "2323 the retried read lands the branch in the same pass";; *) ko "2323 one dropped connect ended the pass: '$r'";; esac
+cat > "$T/bin/deadgit" <<J
+#!/bin/bash
+[ "\$1" = ls-remote ] && { echo "fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443: Connection timed out" >&2; exit 128; }
+exec /usr/bin/git "\$@"
+J
+chmod +x "$T/bin/deadgit"
+reset; rm -f "$T/st/auto/branchland-fixpending-"*
+r=$(SG_GIT="$T/bin/deadgit" SG_BRANCH_LIST_PAUSE=0 CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "2323 a read that keeps failing lands nothing" || ko "2323 a dead read landed: '$r'"
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'BRANCHLAND: the remote branch list is not readable')" = 1 ] && ok "2323 a read that keeps failing names itself once" || ko "2323 the dead read's lines: '$r'"
+
 rm -rf "$T"; exit $fail
