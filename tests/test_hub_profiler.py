@@ -2204,7 +2204,9 @@ def test_the_route_carries_the_slot_wait_split_of_the_records_it_reads(hub):
         # `now` (at most the gap cap).
         route = {line["kind"]: line["minutes"] for line in v["slot_wait"]["lines"]}
         assert route["gates"] == 5.0, "the first refusal's 300 s to the second are 5 minutes of gate wait"
-        assert 5.0 <= route["landing"] <= (t1 - (now - 300)) / 60 + 1e-6, \
+        # The route's own now lies inside [t0, t1], and its minutes are rounded to one decimal: the value the same clock
+        # gives is the value the route carries.
+        assert route["landing"] == round(((t0 + t1) / 2 - (now - 300)) / 60, 1), \
             f"the last refusal speaks from its instant to the route's own now, never to another clock: {route}"
         # The fold on a frozen clock: the first record speaks its five minutes to the second record, and the second
         # record speaks to the `now` handed in, one gap cap at most.
