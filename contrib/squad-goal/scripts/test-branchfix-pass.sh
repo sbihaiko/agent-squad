@@ -240,4 +240,9 @@ push gui/11-s; rev gui/11-s CHANGES "d.sh:2 the same finding"; r=$(OPEN="7 8 9 1
 push gui/11-s; rev gui/11-s CHANGES "d.sh:3 the same finding"; r=$(OPEN="7 8 9 11" fp)
 [ "$(n gui/11-s)" = 2 ] && ok "22 the third pass with the same finding dispatches no third fix run" || ko "22 dispatched $(n gui/11-s) fix runs: '$r'"
 case "$r" in *"BRANCHFIX STOP gui/11-s"*"stalled"*) ok "22 the stop names the branch as stalled";; *) ko "22 no stalled stop line: '$r'";; esac
+# 24) (#2309) a tip whose fix marker was released (test-janitor-neverstarted.sh proves the janitor releases the marker of
+#     a never-started run) is dispatched again by the next pass. Case 2 already proves a standing marker holds its tip.
+: > "$T/launch.log"; push gui/40-ns; rev gui/40-ns CHANGES "v.sh:1 fix"
+r=$(OPEN="40" fp)
+[ "$(n gui/40-ns)" = 1 ] && ok "2309 the pass after the marker's release dispatches that tip again" || ko "2309 after the release: $(n gui/40-ns) dispatch(es): '$r'"
 exit $fail

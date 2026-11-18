@@ -20,7 +20,7 @@
  I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
     also stop it when every one closed after the run started and before the run's last progress and the run holds no landing for it (no land in its record or the ledger, no branch of its children naming the issue), and write the verdict that says why (#1571);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
- J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
+ J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again, and the auto/branchfix-<key>-<sha9> marker of the fix round it never started, so the fix pass dispatches that tip again (#2309). Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
  K  a disp-<n> marker whose request log says `Nothing ran` or `refusing to start` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
     A run that landed a change, an issue a live run works or a pending wave carries, and an issue with an open work branch keeps its marker; a run drops only a marker its own request wrote (#539). The loop-board card is rule R's: O writes none, and its comment names the column R wrote
@@ -149,6 +149,15 @@ def queue_neverstart(n, body):
     (st / "cq").mkdir(exist_ok=True)
     (st / "cq" / f"{CQ}#{n}-neverstart-{os.getpid()}.md").write_text(body)
 def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issues the run was dispatched for, at most twice
+    # (#2309) A fix round keeps auto/branchfix-<key>-<sha9> with the run id it dispatched, and the fix pass skips a tip
+    # whose marker stands. A run that never started dispatched no round, so its marker names work that never began and
+    # would hold that tip for ever: the marker drops here, whatever the retry count of its issues. Only a marker this
+    # run's own name stands in is released.
+    fx = [p for p in (st / "auto").glob("branchfix-*") if marker_text(p) == f.name] if (st / "auto").is_dir() else []
+    if fx:
+        say(f"NEVER-STARTED run {f.name}: {len(fx)} fix marker(s) of the round it never started released ({', '.join(sorted(p.name for p in fx))})")
+        if not dry:
+            for p in fx: p.unlink(missing_ok=True)
     req = f / "request.txt"
     nums = issues_named(req.read_text()) if req.exists() else set()
     tail = launch_tail(f)

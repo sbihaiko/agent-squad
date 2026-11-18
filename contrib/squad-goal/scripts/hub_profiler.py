@@ -1145,9 +1145,10 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     ram_minutes = None if loads is None else sum(
         1 for row in loads or () if _num(row.get("at")) and _num(row.get("ram")) and since <= row["at"] <= now)
     minutes = int((now - since) // LOAD_CADENCE_S) if _num(now) and now > since else 0
-    # The page draws the three ticks of each lane (#2228), so the fold names them: the Tokens lane covers the highest
-    # rate any column holds, and the Machine lane a fixed 0 to 100% of the machine. The top tick is a round number
-    # strictly above every point, so no point sits on the lane's edge and none is clamped there.
+    # The page draws the Tokens lane's three ticks (#2228), so the fold names them: the lane covers the highest rate any
+    # column holds. The top tick is a round number strictly above every point, so no point sits on the lane's edge and
+    # none is clamped there. The Machine lane scales each of its series from its own readings (#2254), so it takes no
+    # tick list from the fold.
     rates = [v for k in keys
              for _, v in ((out[k].get("tokens") or {}).get("points") or ())
              if _num(v)]
@@ -1159,7 +1160,7 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
             "invalid_loads": len(invalid), "invalid_peak": max(invalid) if invalid else None,
             "no_record_minutes": None if loads is None else max(0, minutes - len(covered)),
             "ram_minutes": ram_minutes, "window_minutes": minutes,
-            "tokens_ticks": [0, round(top / 2, 4), top], "machine_ticks": [0, 50, 100]}
+            "tokens_ticks": [0, round(top / 2, 4), top]}
 
 
 def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=None, now=None,
@@ -1273,7 +1274,7 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
             "invalid_peak": consumed["invalid_peak"], "ram_minutes": consumed["ram_minutes"],
             "window_minutes": consumed["window_minutes"], "no_record_minutes": consumed["no_record_minutes"],
             "rework": trip_rework(rework, since),
-            "tokens_ticks": consumed["tokens_ticks"], "machine_ticks": consumed["machine_ticks"]}
+            "tokens_ticks": consumed["tokens_ticks"]}
 
 
 # The loop state strip (#1765): one strip across the top of the Loop tab, from the two records the loop already writes. The
