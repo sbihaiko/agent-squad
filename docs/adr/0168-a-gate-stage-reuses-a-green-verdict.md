@@ -63,7 +63,7 @@ never reused.
 
 `contrib/squad-goal/scripts/test-fast-gate.sh` guards the lock-free probe (`--memo-hit`): it answers a stored pass with
 its reuse line and no battery, and it answers no pass for a red, a different tree, a tree whose dirt changed or a memo
-turned off. `contrib/squad-goal/scripts/test-wave.sh` guards the wave entry that reads the probe before the gate lock: a
+turned off. `contrib/squad-goal/scripts/test-wave-conflict.sh` guards the wave entry that reads the probe before the gate lock: a
 child whose final gate proved the tree it enters with enters under a held gate lock with no second battery and with the
 reuse named in its entry record, while a child that committed after its gate still meets the lock and runs its own
 battery.

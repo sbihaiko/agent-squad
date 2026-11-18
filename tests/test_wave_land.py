@@ -1,6 +1,7 @@
 """The wave's run lifecycle (#375, ADR-0145 rules 2, 8, 9, 10, 12 and 14): the branch a run cuts, the children that enter it, and the one push that lands it.
 
-The behaviour is proved offline by two hermetic shell suites. `contrib/squad-goal/scripts/test-wave.sh` drives the three
+The behaviour is proved offline by hermetic shell suites. `contrib/squad-goal/scripts/test-wave-entry.sh` and
+`contrib/squad-goal/scripts/test-wave-land.sh` drive the three
 verbs of `wave.sh` over a bare local remote whose pre-receive hook logs every ref a push writes: what each verb does.
 `contrib/squad-goal/scripts/test-wave-lifecycle.sh` drives the production paths those verbs are reached by -- the launch
 (`contrib/squad-goal/scripts/launch.py`) cuts the run's wave branch, the pass watch.sh runs over every live run
@@ -288,13 +289,16 @@ def test_a_commit_the_base_already_holds_closes_no_issue(wave):
 @pytest.mark.slow(reason="runs the wave's hermetic shell suite over a throwaway remote")
 @pytest.mark.heavy
 def test_the_wave_suite_proves_the_landing_pass():
-    """The suite's bound is its own measured time times the load the cap excuses (`shell_suites.timeout_for`), never a wall
-    second tuned on a quiet machine: 47 s quiet crossed a 120 s hand-tuned bound at load 61 (#736)."""
-    r = shell_suites.run(SCRIPTS / "test-wave.sh")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "TDD GREEN" in r.stdout, r.stdout
+    """The split suites' bounds are their own measured times times the load the cap excuses (`shell_suites.timeout_for`),
+    never a wall second tuned on a quiet machine: 47 s quiet crossed a 120 s hand-tuned bound at load 61 (#736)."""
+    out = ""
+    for name in ("test-wave-entry.sh", "test-wave-land.sh"):
+        r = shell_suites.run(SCRIPTS / name)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "TDD GREEN" in r.stdout, r.stdout
+        out += r.stdout
     for case in LAND_CASES:
-        assert f"ok   {case}" in r.stdout, f"{case} did not pass in the wave suite:\n{r.stdout}"
+        assert f"ok   {case}" in out, f"{case} did not pass in the wave suites:\n{out}"
 
 
 @pytest.mark.slow(reason="runs the wave's hermetic shell suite over a throwaway remote, handed the gate lock")
@@ -308,9 +312,10 @@ def test_the_wave_suite_survives_an_inherited_gate_lock():
     the gate hands it, and keep every FAIL line."""
     env = {"SG_SERIAL_HELD": "gate", "SG_GATE_STATUS": "self", "SG_GATE_KIND": "full",
            "SERIAL_WAIT_SECONDS": "86400", "SERIAL_HOLD_SECONDS": "7200"}
-    r = shell_suites.run(SCRIPTS / "test-wave.sh", extra_env=env)
-    fails = [line for line in (r.stdout + r.stderr).splitlines() if line.startswith("FAIL")]
-    assert r.returncode == 0 and not fails, r.stdout + r.stderr
+    for name in ("test-wave-entry.sh", "test-wave-land.sh"):
+        r = shell_suites.run(SCRIPTS / name, extra_env=env)
+        fails = [line for line in (r.stdout + r.stderr).splitlines() if line.startswith("FAIL")]
+        assert r.returncode == 0 and not fails, r.stdout + r.stderr
 
 
 @pytest.mark.slow(reason="runs the run lifecycle over a throwaway checkout, remote and stubbed launch")

@@ -76,7 +76,8 @@
 # back to the queue -- and the wave without it lands. A red tip no child's suite names is a landing that failed, as before.
 # Exit: 0 entered (or the wave branch was cut, or the wave landed), 1 not entered (requeued after a failed gate, a conflict or a
 # refused push; held where it stands when the review did not approve the child), 2 a bad call or a wave branch that is not there.
-# Guards: `test-wave.sh`.
+# Guards: `test-wave-entry.sh`, `test-wave-land.sh`, `test-wave-retry.sh`, `test-wave-aged.sh`, `test-wave-obligation.sh`,
+# `test-wave-issue.sh`, `test-wave-tipcheck.sh`, `test-wave-conflict.sh`, `test-wave-eviction.sh`.
 here="$(cd "$(dirname "$0")" && pwd)"   # fixed at the start: a relative $0 means nothing once the work moves to a child's worktree
 . "$here/env.sh" 2>/dev/null || exit 0
 . "$here/ghcall.sh"   # the close and the board write go through the doors beside this script

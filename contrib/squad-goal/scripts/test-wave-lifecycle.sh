@@ -3,7 +3,7 @@
 # run's wave branch, the production child-completion pass makes a finished child enter it, and the production completion of
 # a finished run lands the wave its children are in.
 #
-# `wave.sh` owns the three verbs, and `test-wave.sh` proves what each one does. What this suite proves is that the verbs are
+# `wave.sh` owns the three verbs, and `test-wave-entry.sh` and `test-wave-land.sh` prove what each one does. What this suite proves is that the verbs are
 # reached by the code production runs -- a verb no production path calls is a feature the loop cannot use, and a suite that
 # calls it by hand reports coverage the loop does not have (#375 review):
 #   1) `contrib/squad-goal/scripts/launch.py`, the one launch every dispatcher (autofrontier.sh, autobug.sh) starts a run

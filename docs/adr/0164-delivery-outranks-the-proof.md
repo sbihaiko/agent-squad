@@ -47,4 +47,4 @@ The same reading applies to a landing gate: a gate that measured a red holds eve
 The ground truth stays off the delivery path. The nightly keeps the full suite in both modes, heavy included
 (ADR-0153); it is what turns a marker or an obligation into a fact, and it never gates a landing.
 
-Guard: `contrib/squad-goal/scripts/test-promote-pass.sh`, `contrib/squad-goal/scripts/test-wave.sh`, `tests/test_adr_index.py`.
+Guard: `contrib/squad-goal/scripts/test-promote-pass.sh`, `contrib/squad-goal/scripts/test-wave-obligation.sh`, `tests/test_adr_index.py`.

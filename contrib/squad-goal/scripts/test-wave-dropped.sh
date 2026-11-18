@@ -63,22 +63,24 @@ r=$(DROP=92 SG_WAVE_TIP_GATES=$TIPRED SG_WAVE_CHILD_GATES=$CHILDRED land run-b);
 [ "$(closes)" = "93 " ] && ok "b: only the survivor #93 closes" || ko "b: closes '$(closes)': '$r'"
 case "$r" in *"landed in dev (#93)"*) ok "b: the landing names #93 only";; *) ko "b: landing line: '$r'";; esac
 
-# c: an interrupted bisection (the child leaves, then the tip's check holds), then a retry that lands the original wave:
-# the issues whose work landed close. The wave carries a second child, so a tip stays ahead of the base and the check runs
-# again: a wave whose only child left runs no check and closes empty (#2209, test-wave.sh W2209).
+# c: an interrupted bisection (the child leaves, then the tip's check holds), then a retry: the child that left stays out,
+# so the retry lands only the survivor's work and closes only its issue (#2301). The wave carries a second child, so a tip stays ahead of the base and the check runs
+# again: a wave whose only child left runs no check and closes empty (#2209, test-wave-eviction.sh).
 mkrun run-c 94,98 "bad work 94 (Refs #94)"; addc run-c "work 98 (Refs #98)" g98; entered run-c 94; entered run-c 98; : > "$T/gh.log"; rm -f "$T/n-c"
 TIPC='n=$(cat "$SG_STATE/n-c" 2>/dev/null || echo 0); echo $((n + 1)) > "$SG_STATE/n-c"; if [ $n = 0 ]; then ! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q bad; elif [ $n = 1 ]; then echo "serial: waited 1s for lock gate (bounded)"; exit 75; else true; fi'
 r=$(DROP=94 SG_WAVE_TIP_GATES=$TIPC SG_WAVE_CHILD_GATES=$CHILDRED land run-c); rc=$?
 [ $rc != 0 ] && [ -z "$(closes)" ] && ok "c: the interrupted landing closes nothing" || ko "c: exit $rc, closes '$(closes)': '$r'"
 r=$(SG_WAVE_TIP_GATES=true land run-c); rc=$?
-[ $rc = 0 ] && [ "$(closes)" = "94 98 " ] && ok "c: the retry that lands the original wave closes #94 and #98" || ko "c: exit $rc, closes '$(closes)': '$r'"
+[ $rc = 0 ] && [ "$(closes)" = "98 " ] && ok "c: the retry closes #98 only" || ko "c: exit $rc, closes '$(closes)': '$r'"
+/usr/bin/git -C "$T/origin.git" log --format=%s dev | /usr/bin/grep -q "bad work 94" && ko "c: the work of #94, which left the wave, reached dev" || ok "c: the work of #94, which left the wave, stays off dev"
+/usr/bin/git -C "$T/origin.git" log --format=%s dev | /usr/bin/grep -q "work 98" && ok "c: the work of #98 reached dev" || ko "c: the work of #98 is not on dev"
 
 # d: a refused child that re-enters and lands closes.
 mkrun run-d 95 "work 95 (Refs #95)"; ledger wave x/y#95 run-d refused "an earlier refusal" keep; entered run-d 95; : > "$T/gh.log"
 r=$(SG_WAVE_TIP_GATES=true land run-d); rc=$?
 [ $rc = 0 ] && [ "$(closes)" = "95 " ] && ok "d: a refused child that re-entered and landed closes" || ko "d: exit $rc, closes '$(closes)': '$r'"
 
-# e: work already in the base (a squash without Refs, test-wave.sh case U): the empty wave still closes the entered child.
+# e: work already in the base (a squash without Refs, test-wave-aged.sh case U): the empty wave still closes the entered child.
 mkrun run-e 96 ""; entered run-e 96; : > "$T/gh.log"
 r=$(SG_WAVE_TIP_GATES=true land run-e); rc=$?
 [ $rc = 0 ] && [ "$(closes)" = "96 " ] && ok "e: an entered child of an empty wave still closes" || ko "e: exit $rc, closes '$(closes)': '$r'"
