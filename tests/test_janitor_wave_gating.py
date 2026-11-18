@@ -182,19 +182,19 @@ def _reconcile(tmp_path: Path, monkeypatch, card: str, standing: str, live_gate:
 
 
 def test_the_shipped_axis_orders_gating_after_code_complete_and_before_closed():
-    """The writer is reachable only on an axis that ranks Gating forward of Code Complete (ADR-0170 rule 1): the fact
-    answers Gating, a write from Code Complete into it is not past, and a write back out of it is."""
+    """The writer is reachable only on an axis that ranks Gating forward of Landing (ADR-0170 rule 1): the fact
+    answers Gating, a write from Landing into it is not past, and a write back out of it is."""
     import board_columns
     assert board_columns.column_for({"gating": True, "wave_branch": True})[0] == "Gating"
-    assert not board_columns.past("Code Complete", "Gating"), "a write from Code Complete into Gating reads as a move back"
-    assert board_columns.past("Gating", "Code Complete"), "a green gate could pull a Gating card back to Code Complete"
+    assert not board_columns.past("Landing", "Gating"), "a write from Landing into Gating reads as a move back"
+    assert board_columns.past("Gating", "Landing"), "a green gate could pull a Gating card back to Landing"
     assert not board_columns.past("Gating", "Closed"), "the one forward move out of Gating reads as a move back"
     assert board_columns.past("Closed", "Gating"), "a Closed card could return to Gating"
 
 
 @pytest.mark.heavy
 def test_a_live_gate_writes_the_wave_card_to_gating(tmp_path, monkeypatch):
-    writes, _ = _reconcile(tmp_path, monkeypatch, "Code Complete", "ahead", live_gate=True)
+    writes, _ = _reconcile(tmp_path, monkeypatch, "Landing", "ahead", live_gate=True)
     assert writes == [(["o", "4", "Gating", str(CHILD)], None)], f"the card did not enter Gating: {writes}"
 
 
@@ -202,20 +202,20 @@ def test_a_live_gate_writes_the_wave_card_to_gating(tmp_path, monkeypatch):
 def test_a_red_attempt_with_no_live_marker_still_writes_gating(tmp_path, monkeypatch):
     ga, journal = _journal(tmp_path)
     ga.record_attempt(journal, 0, TIP, "fail", "", now=int(time.time()), wave=WAVE_RUN)
-    writes, _ = _reconcile(tmp_path, monkeypatch, "Code Complete", "ahead")
+    writes, _ = _reconcile(tmp_path, monkeypatch, "Landing", "ahead")
     assert writes == [(["o", "4", "Gating", str(CHILD)], None)], f"a red attempt did not hold Gating: {writes}"
 
 
 @pytest.mark.heavy
 def test_no_attempt_leaves_the_wave_card_in_code_complete(tmp_path, monkeypatch):
-    writes, have = _reconcile(tmp_path, monkeypatch, "Code Complete", "ahead")
+    writes, have = _reconcile(tmp_path, monkeypatch, "Landing", "ahead")
     assert writes == [], f"a card with no gate attempt moved: {writes}"
-    assert have[str(CHILD)] == "Code Complete"
+    assert have[str(CHILD)] == "Landing"
 
 
 @pytest.mark.heavy
 def test_a_second_pass_writes_nothing_when_the_card_already_reads_gating(tmp_path, monkeypatch):
-    first, _ = _reconcile(tmp_path, monkeypatch, "Code Complete", "ahead", live_gate=True)
+    first, _ = _reconcile(tmp_path, monkeypatch, "Landing", "ahead", live_gate=True)
     assert first == [(["o", "4", "Gating", str(CHILD)], None)], f"the first pass did not write Gating: {first}"
     second, have = _reconcile(tmp_path, monkeypatch, "Gating", "ahead", live_gate=True)
     assert second == [], f"a second pass rewrote the same column: {second}"
@@ -226,7 +226,7 @@ def test_a_second_pass_writes_nothing_when_the_card_already_reads_gating(tmp_pat
 def test_a_closed_card_never_returns_to_gating(tmp_path, monkeypatch):
     """A client closed the card first: the live gate holds it in Gating, while a Closed card keeps the landing's column.
     The landed write is the positive control, so a writer that writes nothing cannot pass this case."""
-    landed, _ = _reconcile(tmp_path, monkeypatch, "Code Complete", "behind", live_gate=True)
+    landed, _ = _reconcile(tmp_path, monkeypatch, "Landing", "behind", live_gate=True)
     assert landed == [(["o", "4", "Closed", str(CHILD)], None)], f"the landing did not write Closed: {landed}"
     writes, have = _reconcile(tmp_path, monkeypatch, "Closed", "ahead", live_gate=True)
     assert writes == [], f"a Closed card moved: {writes}"
@@ -235,7 +235,7 @@ def test_a_closed_card_never_returns_to_gating(tmp_path, monkeypatch):
 
 @pytest.mark.heavy
 def test_the_landed_wave_writes_closed_after_gating(tmp_path, monkeypatch):
-    gating, _ = _reconcile(tmp_path, monkeypatch, "Code Complete", "ahead", live_gate=True)
+    gating, _ = _reconcile(tmp_path, monkeypatch, "Landing", "ahead", live_gate=True)
     assert gating == [(["o", "4", "Gating", str(CHILD)], None)], f"the card did not enter Gating: {gating}"
     closed, _ = _reconcile(tmp_path, monkeypatch, "Gating", "behind")
     assert closed == [(["o", "4", "Closed", str(CHILD)], None)], f"the landed wave did not write Closed: {closed}"
@@ -243,9 +243,9 @@ def test_the_landed_wave_writes_closed_after_gating(tmp_path, monkeypatch):
 
 @pytest.mark.heavy
 def test_a_gating_card_leaves_only_for_closed(tmp_path, monkeypatch):
-    """A green gate does not send the card back to Code Complete (ADR-0170 rule 2): it waits in Gating until the wave lands."""
-    first, _ = _reconcile(tmp_path, monkeypatch, "Code Complete", "ahead", live_gate=True)
+    """A green gate does not send the card back to Landing (ADR-0170 rule 2): it waits in Gating until the wave lands."""
+    first, _ = _reconcile(tmp_path, monkeypatch, "Landing", "ahead", live_gate=True)
     assert first == [(["o", "4", "Gating", str(CHILD)], None)], f"the pass did not write Gating: {first}"
     second, have = _reconcile(tmp_path, monkeypatch, "Gating", "ahead")
-    assert second == [], f"a Gating card moved back to Code Complete: {second}"
+    assert second == [], f"a Gating card moved back to Landing: {second}"
     assert have[str(CHILD)] == "Gating"

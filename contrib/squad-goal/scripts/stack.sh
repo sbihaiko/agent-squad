@@ -1,8 +1,8 @@
 # usage: stack.sh <issue>   Dispatch readiness for one issue, from its "## Blocked by" section:
 #   READY                    every blocker is closed
 #   WAIT <reason>            anything else: an open blocker, a blocker whose state is not readable, a blocker the body names
-#                            with no native blocked-by relation while it reads open (#1758), a blocker sitting in Code Review or
-#                            Code Complete whose work has not landed, or a ticket of a spec the owner has not started (below). The loop builds a
+#                            with no native blocked-by relation while it reads open (#1758), a blocker sitting in Review or
+#                            Landing whose work has not landed, or a ticket of a spec the owner has not started (below). The loop builds a
 #                            child only on the line, so a blocker whose branch is not in $SG_BASE yet waits; optimistic branch
 #                            stacking returns with the wave rules of ADR-0145 (#372).
 # A caller that already holds the facts hands them over and saves the reads (#383): SG_STACK_ISSUE names a file with the

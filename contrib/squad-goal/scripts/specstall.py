@@ -15,7 +15,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the alias m
 from board_columns import ALIAS_COLUMNS, SHIPPED_NAME, canonical   # noqa: E402  the one map of the board's column names
 
 # The shipped board's own axis, in the definition's order (#2002), read from the one alias map: `tests/test_spec_stall.py`
-# proves it names the shipped columns. A card that wears either spelling of a column reads as that column, and a card that
+# proves it names the shipped columns. A card that wears a spelling the map holds reads as that column, and a card that
 # wears a retired pre-definition name reads as the column `SHIPPED_NAME` gives it. Blocked is no column: it is the owner's
 # freeze over the column the work reached, so a card wears it on no axis of its own.
 COLUMNS = tuple(entry["name"] for entry in ALIAS_COLUMNS)

@@ -24,26 +24,26 @@ case "$a" in
     /usr/bin/grep -v "^$n	" "TMPDIR/cards.tsv" > "TMPDIR/cards.new"; printf '%s\t%s\n' "$n" "$name" >> "TMPDIR/cards.new"; mv "TMPDIR/cards.new" "TMPDIR/cards.tsv"
     echo '{"id":"ITEM"}';;
   *users/o*) echo '{"type":"Organization"}';;
-  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"Backlog","name":{"raw":"Backlog"}},{"id":"Todo","name":{"raw":"Todo"}},{"id":"Doing","name":{"raw":"Doing"}},{"id":"Code_Review","name":{"raw":"Code Review"}},{"id":"Code_Complete","name":{"raw":"Code Complete"}},{"id":"Closed","name":{"raw":"Closed"}}]}]';;
+  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"Backlog","name":{"raw":"Backlog"}},{"id":"Todo","name":{"raw":"Todo"}},{"id":"Doing","name":{"raw":"Doing"}},{"id":"Review","name":{"raw":"Review"}},{"id":"Landing","name":{"raw":"Landing"}},{"id":"Closed","name":{"raw":"Closed"}}]}]';;
   *'fields[]=F_STATUS'*) while IFS=$'\t' read -r n s; do printf '%s\t%s\thttps://api.github.com/repos/%s\n' "$n" "$s" "$(cat "TMPDIR/urlrepo")"; done < "TMPDIR/cards.tsv";;
   *items?per_page=100*) u=$(cat "TMPDIR/urlrepo"); while IFS=$'\t' read -r n s; do printf '[%s,"ITEM%s","https://api.github.com/repos/%s"]\n' "$n" "$n" "$u"; done < "TMPDIR/cards.tsv";;
   *) echo '{"message":"not found"}' >&2; exit 1;;
 esac
 J
 sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-seed() { printf '2001\tTodo\n2002\tDoing\n2003\tCode Review\n2004\tCode Complete\n2005\tClosed\n2006\tBacklog\n' > "$T/cards.tsv"; : > "$T/gh.calls"; rm -f "$T/st/board-rejections.jsonl" "$T/fail-next-read"; }
+seed() { printf '2001\tTodo\n2002\tDoing\n2003\tReview\n2004\tLanding\n2005\tClosed\n2006\tBacklog\n' > "$T/cards.tsv"; : > "$T/gh.calls"; rm -f "$T/st/board-rejections.jsonl" "$T/fail-next-read"; }
 run() { SG_STATE="$T/st" SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0 SG_REPO="$(cat "$T/urlrepo")" python3 "$T/s-board.py" "$@"; }
 col() { awk -F'\t' -v n="$1" '$1 == n {print $2}' "$T/cards.tsv"; }
 rework() { /usr/bin/grep -c "issues/$1/labels" "$T/gh.calls"; }
 rej() { [ -f "$T/st/board-rejections.jsonl" ] && wc -l < "$T/st/board-rejections.jsonl" | tr -d ' ' || echo 0; }
 
 seed; o=$(SG_MOVE_BY=loop run o 4 "Todo" 2003 2>&1); rc=$?
-[ "$rc" -eq 3 ] && [ "$(col 2003)" = "Code Review" ] && ok "a review rejection (Code Review to Todo) by a loop writer is refused, the card keeps Code Review" || ko "review rejection: exit $rc, column $(col 2003): $o"
+[ "$rc" -eq 3 ] && [ "$(col 2003)" = "Review" ] && ok "a review rejection (Review to Todo) by a loop writer is refused, the card keeps Review" || ko "review rejection: exit $rc, column $(col 2003): $o"
 [ "$(rework 2003)" -ge 1 ] && ok "a refused backward move adds the rework label to its issue" || ko "rework label missing: $(cat "$T/gh.calls")"
-[ "$(rej)" = 1 ] && grep -q '"issue": 2003' "$T/st/board-rejections.jsonl" && grep -q '"from": "Code Review"' "$T/st/board-rejections.jsonl" && ok "the refusal is logged with its issue and column" || ko "rejection log: $(cat "$T/st/board-rejections.jsonl" 2>/dev/null)"
+[ "$(rej)" = 1 ] && grep -q '"issue": 2003' "$T/st/board-rejections.jsonl" && grep -q '"from": "Review"' "$T/st/board-rejections.jsonl" && ok "the refusal is logged with its issue and column" || ko "rejection log: $(cat "$T/st/board-rejections.jsonl" 2>/dev/null)"
 
 seed; o=$(SG_MOVE_BY=loop run o 4 "Doing" 2004 2>&1); rc=$?
-[ "$rc" -eq 3 ] && [ "$(col 2004)" = "Code Complete" ] && ok "a requeue or failed landing (Code Complete to Doing) keeps its column" || ko "code complete backward: exit $rc, column $(col 2004): $o"
+[ "$rc" -eq 3 ] && [ "$(col 2004)" = "Landing" ] && ok "a requeue or failed landing (Landing to Doing) keeps its column" || ko "code complete backward: exit $rc, column $(col 2004): $o"
 
 seed; o=$(SG_MOVE_BY=loop run o 4 "Todo" 2005 2>&1); rc=$?
 [ "$rc" -eq 3 ] && [ "$(col 2005)" = "Closed" ] && ok "a reopening (Closed to Todo) by a loop writer keeps Closed" || ko "reopen: exit $rc, column $(col 2005): $o"
@@ -58,10 +58,10 @@ seed; o=$(SG_MOVE_BY=loop run o 4 "Todo" 2002 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(col 2002)" = "Todo" ] && ok "the one backward move, Doing back to Todo, is allowed for a loop writer" || ko "unclaim: exit $rc, column $(col 2002): $o"
 
 seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing run o 4 "Todo" 2004 2>&1); rc=$?
-[ "$rc" -eq 0 ] && [ "$(col 2004)" = "Todo" ] && ok "a run that landed nothing unclaims its card from Code Complete (#1059)" || ko "no-landing unclaim: exit $rc, column $(col 2004): $o"
+[ "$rc" -eq 0 ] && [ "$(col 2004)" = "Todo" ] && ok "a run that landed nothing unclaims its card from Landing (#1059)" || ko "no-landing unclaim: exit $rc, column $(col 2004): $o"
 
 seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing run o 4 "Backlog" 2004 2>&1); rc=$?
-[ "$rc" -eq 3 ] && [ "$(col 2004)" = "Code Complete" ] && ok "the no-landing exception reaches Todo only, never Backlog" || ko "no-landing to Backlog: exit $rc, column $(col 2004): $o"
+[ "$rc" -eq 3 ] && [ "$(col 2004)" = "Landing" ] && ok "the no-landing exception reaches Todo only, never Backlog" || ko "no-landing to Backlog: exit $rc, column $(col 2004): $o"
 
 seed; o=$(SG_MOVE_BY=owner SG_MOVE_REASON=no-landing run o 4 "Todo" 2004 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(col 2004)" = "Todo" ] && ok "the owner's door moves a card back with or without the reason" || ko "owner unclaim: exit $rc, column $(col 2004): $o"
@@ -72,13 +72,13 @@ seed; o=$(SG_MOVE_BY=owner run o 4 "Todo" 2004 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(col 2004)" = "Todo" ] && ok "the owner's backward move is written" || ko "owner backward: exit $rc, column $(col 2004): $o"
 
 seed; o=$(run o 4 "Todo" 2003 2>&1); rc=$?
-[ "$rc" -eq 3 ] && [ "$(col 2003)" = "Code Review" ] && ok "a write with no SG_MOVE_BY is an automated writer and is refused" || ko "no context: exit $rc, column $(col 2003): $o"
+[ "$rc" -eq 3 ] && [ "$(col 2003)" = "Review" ] && ok "a write with no SG_MOVE_BY is an automated writer and is refused" || ko "no context: exit $rc, column $(col 2003): $o"
 
 seed; o=$(SG_MOVE_BY=loop run o 4 "Doing" 2005 2>&1); rc=$?
 [ "$(col 2005)" = "Closed" ] && [ "$rc" -eq 3 ] && ok "a terminal card stays terminal for a loop writer" || ko "terminal: exit $rc, column $(col 2005): $o"
 
 seed; o=$(SG_MOVE_BY=loop run o 4 "Todo" 2003 2001 2>&1); rc=$?
-[ "$rc" -eq 3 ] && [ "$(col 2003)" = "Code Review" ] && [ "$(col 2001)" = "Todo" ] && ok "a refusal in a batch leaves the other cards of the batch to their own moves" || ko "batch: exit $rc: $o"
+[ "$rc" -eq 3 ] && [ "$(col 2003)" = "Review" ] && [ "$(col 2001)" = "Todo" ] && ok "a refusal in a batch leaves the other cards of the batch to their own moves" || ko "batch: exit $rc: $o"
 
 # #1909: only the owner moves a Backlog card to Todo. A hold names itself, keeps the card in Backlog, writes no rework label,
 # and is recorded; the owner's door moves it.

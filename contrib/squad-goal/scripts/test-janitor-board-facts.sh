@@ -58,11 +58,11 @@ printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_2305-x.md"; printf 'old\n' > "$T
 o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
-has '^STATUS o 4 Code Complete 2301$' && ok "an approved wave ahead of dev: its child's card is Code Complete" || ko "#2301 not Code Complete: $(bc) $o"
-has '^STATUS o 4 Code Complete 2302$' && ok "a wave ahead of dev with no approval: Code Complete" || ko "#2302 not Code Complete: $(bc)"
+has '^STATUS o 4 Landing 2301$' && ok "an approved wave ahead of dev: its child's card is Landing" || ko "#2301 not Landing: $(bc) $o"
+has '^STATUS o 4 Landing 2302$' && ok "a wave ahead of dev with no approval: Landing" || ko "#2302 not Landing: $(bc)"
 has '^STATUS o 4 Closed 2303$' && ok "a wave in dev while the dev tip's CI runs: Closed, the CI holds nothing open" || ko "#2303 not Closed: $(bc) $o"
-has '^STATUS o 4 Code Review 2305$' && ok "a work branch whose review waits: Code Review (#603)" || ko "#2305 not Code Review: $(bc)"
-has '^STATUS o 4 Code Complete 2306$' && ok "a work branch with no review yet keeps Code Complete" || ko "#2306 lost Code Complete: $(bc)"
+has '^STATUS o 4 Review 2305$' && ok "a work branch whose review waits: Review (#603)" || ko "#2305 not Review: $(bc)"
+has '^STATUS o 4 Landing 2306$' && ok "a work branch with no review yet keeps Landing" || ko "#2306 lost Landing: $(bc)"
 /usr/bin/grep -q 'commits/dev/check-runs' "$T/gh.calls" && ok "the dev tip's CI is read once through the door" || ko "no check-runs read"
 [ "$(/usr/bin/grep -c 'commits/dev/check-runs' "$T/gh.calls")" -le 1 ] && ok "the dev tip's CI is read at most once a pass" || ko "check-runs read more than once"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

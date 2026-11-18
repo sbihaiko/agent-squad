@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One seam reads and writes the state an issue carries (#236, ADR-0141 clause 4).
 
-A **state** is one name of the flow's vocabulary -- `Todo`, `In Progress`, `Code Complete` -- and never a
+A **state** is one name of the flow's vocabulary -- `Todo`, `Doing`, `Landing` -- and never a
 storage detail. A **binding** is the carrier a repository works that vocabulary in. Today this repository
 binds it to a GitHub Project (v2) Status field, and `BoardBinding` here is that carrier's one client: it
 holds every reach the board API takes for state, so no caller needs one of its own.
@@ -12,7 +12,7 @@ The seam answers two questions and only these:
     state = board_state()               # the binding this repository is configured with (SG_OWNER, SG_PROJECT, SG_REPO)
     state.read(236)                     # the state issue 236 carries, "" when it carries none
     state.read_all()                    # every card, one read: {236: "Todo", ...}
-    state.write(236, "Code Review")         # proven by the read that follows; returns the state the issue then carries
+    state.write(236, "Review")              # proven by the read that follows; returns the state the issue then carries
     state.holder(236)                   # the run that holds issue 236: {"run": id, "started": time}, None when none does
     state.holders()                     # every holder, one read: {"236": {"run": ..., "started": ...}}
     state.board()                       # every state and holder, one read: ({236: "Todo"}, {"236": {"run": ..., "started": ...}})

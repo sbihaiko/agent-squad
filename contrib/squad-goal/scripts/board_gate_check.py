@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The real-project check of a card's Gating path (SPEC 1218, #1258).
 
-One disposable card is taken through Todo -> Doing -> Code Complete -> Gating -> Closed. This reader proves that path
+One disposable card is taken through Todo -> Doing -> Landing -> Gating -> Closed. This reader proves that path
 from the stores the live loop keeps, never from a fixture:
 
   path                 the card's column intervals run forward through the five columns, in the board's own axis order;
@@ -51,7 +51,7 @@ import gate_attempts
 GATING = board_columns.ROLE["gating"]
 TODO = board_columns.ROLE["issue_todo"]
 CLOSED = board_columns.ROLE["issue_closed"]
-PATH_COLUMNS = tuple(board_columns.canonical(c) for c in (TODO, "Doing", "Code Complete", GATING, CLOSED))   # the definition's names (#2155)
+PATH_COLUMNS = (TODO, board_columns.DOING, board_columns.LANDING, GATING, CLOSED)   # the definition's names (#2155, #2190)
 SETTLE_SECONDS = 900   # how late a board poll may record a Status change against the gate's own instant
 MATCH_SECONDS = 120    # how close an attempt's finish and a gate-history line's finish are one gate run
 HOUR = 3600.0
@@ -247,7 +247,7 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
     # 1. path: the five columns, forward along the board's axis.
     axis = _axis()
     order = {name: i for i, name in enumerate(axis)}
-    seq = [board_columns.canonical(r["column"]) for r in runs if r["on_board"] and board_columns.canonical(r["column"]) in order]
+    seq = [board_columns.recorded_column(r["column"]) for r in runs if r["on_board"] and board_columns.recorded_column(r["column"]) in order]   # history keeps the names it recorded (#2190)
     first_order = [order[name] for name in dict.fromkeys(seq)]
     present = all(name in seq for name in PATH_COLUMNS)
     ordered = first_order == sorted(first_order)

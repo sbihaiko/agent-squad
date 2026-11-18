@@ -62,8 +62,8 @@
     With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
-    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci (reported facts, no column), and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Code Review, Doing).
-    A child of an ended run whose code is done and that has not entered the run's open wave is in Code Review, and no live run or
+    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci (reported facts, no column), and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Landing, Review, Doing).
+    A child of an ended run whose code is done and that has not entered the run's open wave is in Review, and no live run or
     review moves a card back from a later column (#603, ADR-0143). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
  M  the live skill copy ($SG_LIVE_DIR, else ~/.claude/skills/squad-goal): a file whose mtime changed, or that came or went, since the last pass while no
     publish ran raises LIVE-MTIME (#659). live-guard.sh stamps $SG_STATE/live-publish.stamp when it publishes, and every publish writes the live PUBLISHED file
@@ -1216,11 +1216,12 @@ def reconcile_board():
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
     # The terminal column is one function for every vocabulary: the reconciler reads the same one, so the two passes cannot
     # disagree about where a closed issue's card belongs (spec #132, #1932).
-    from board_columns import terminal_column, ROLE, canonical   # both spellings of a column resolve before a compare (#2151)
+    from board_columns import terminal_column, ROLE, canonical, CODE_REVIEW, landing_column   # a column's spellings resolve before a compare (#2151)
     if shipped:
-        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past, CODE_REVIEW
+        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past
     doing = "Doing" if shipped else "In Progress"
-    GATING = "Gating"   # the shipped column between Code Complete and Closed; board_columns.ROLE names the same word (ADR-0170)
+    landing = landing_column(shipped)   # Landing on the shipped board, the legacy board's own column otherwise (#2190)
+    GATING = "Gating"   # the shipped column between Landing and Closed; board_columns.ROLE names the same word (ADR-0170)
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     stopped = set()   # issues whose newest run stopped needs-human or failed: no stale branch or local landing moves them forward
     def unfrozen(n, f, i):   # the owner's rearm lifted the freeze (#1562): the line is written once per (issue, run verdict), so an
@@ -1275,13 +1276,13 @@ def reconcile_board():
             if mt is not None and mt <= i["spawn_ts"]:
                 say(f"UNHELD #{n}: run {i['run_id']} gave it no child; {m.name} dropped")
                 if not dry: m.unlink(missing_ok=True)
-    def code_complete(n, f, i, why):   # a landing is Code Complete only once the wave, when the run cut one, holds the issue (#467)
+    def code_complete(n, f, i, why):   # a landing is Landing only once the wave, when the run cut one, holds the issue (#467)
         e = wave_entry(n, f, i)
         if e == "open" and shipped: set_expected(n, CODE_REVIEW, f"{why}; its child's code is done and its review holds it out of the open wave of run {i['run_id']}", i["run_id"], i["run_ts"], 35)   # #603
         elif e == "open": set_expected(n, "In Progress", f"{why}; its child has not entered the open wave of run {i['run_id']} yet", i["run_id"], i["run_ts"], 30)
         elif e == "out": set_expected(n, os.environ.get("SG_TODO", "Todo"), f"{why}, but the wave of run {i['run_id']} landed without its child", i["run_id"], i["run_ts"], 20)
         else:
-            set_expected(n, "Landing", why, i["run_id"], i["run_ts"], 60)
+            set_expected(n, landing, why, i["run_id"], i["run_ts"], 60)
             wave_column(n, f, i)
     def stopped_run(n, f, i, evidence):   # a run that stopped needs-human never moves its issue's card forward: its Blocked stands, whatever local landing it left (ADR-0029, #660)
         stopped.add(n)   # the "nothing landed" stop stands even when the owner's rearm lifts the freeze (#1562): a stale branch never reads as delivered work
@@ -1467,13 +1468,13 @@ def reconcile_board():
                     if not mk.exists():
                         say(f"DOING-NO-RUN #{n}: a card sits in Doing with no live run and no marker; the janitor leaves it and the owner moves it")
                         if not dry: mk.touch()
-            # The #1034 recovery, widened (#1958): a card in Code Review or Code Complete that nothing holds and nothing delivered
+            # The #1034 recovery, widened (#1958): a card in Review or Landing that nothing holds and nothing delivered
             # is stranded, since the frontier reads Todo only. No live run or open wave, no dispatch or kept marker, no remote
             # branch ahead of the landing branch or in it, no freeze, no landing fact and no `(#N)` landing: the card goes back
             # to Todo by the one backward move (ADR-0143), named no-landing, with one STRANDED line. A rule that ranked the card
             # this pass decides it instead.
             have_n = have_cards.get(n, "")
-            if (not is_spec and canonical(have_n) in ({canonical("Code Complete")} | ({canonical(CODE_REVIEW)} if shipped else set())) and n not in expected
+            if (not is_spec and canonical(have_n) in ({canonical(landing)} | ({canonical(CODE_REVIEW)} if shipped else set())) and n not in expected
                     and not holding(n) and not any((st / "auto" / f"{k}-{n}").exists() for k in ("disp", "bug"))
                     and not kept_marker(n) and branch_ahead_count(n) == "0" and branch_in_dev_count(n) == "0"
                     and not owner_frozen(n) and n not in held_owner and not (olabels[n] & STRAND_HOLDS)
@@ -1488,11 +1489,11 @@ def reconcile_board():
         if term: set_expected(n, term if shipped else "Done", "issue is closed" if term == ROLE["abandoned"] else f"issue is closed as {reason}", "", "", 95 if term == ROLE["abandoned"] else 90)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
-        if n not in specs and named_landing(n): set_expected(n, "Landing", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665). A newer no-landing requeue or run end wins over it (#1958)
+        if n not in specs and named_landing(n): set_expected(n, landing, "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665). A newer no-landing requeue or run end wins over it (#1958)
         if n not in specs and n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set, and a branch that names a spec is its children's (#665)
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
-            else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
-        if n not in specs and branch_in_dev_count(n) != "0" and canonical(cards(proj)[1].get(str(n), "")) == canonical("Code Complete"):   # a fresh branch is in dev too, so only a card that reached the wave is delivered by it, and a spec's branch is its children's (#665)
+            else: set_expected(n, landing, "a work branch names the issue and is not in dev yet", "", "", 50)
+        if n not in specs and branch_in_dev_count(n) != "0" and canonical(cards(proj)[1].get(str(n), "")) == canonical(landing):   # a fresh branch is in dev too, so only a card that reached the wave is delivered by it, and a spec's branch is its children's (#665)
             set_expected(n, "Closed" if shipped else "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
@@ -1501,14 +1502,14 @@ def reconcile_board():
     # card moves through the same loop below, and the record goes when the card carries the column. No marker, no hold and no
     # release: this block writes nothing. The format and the reader are squad/handhold.py's.
     HH = _handhold_module()
-    hand_columns = {canonical(doing), canonical("Code Complete")} | ({canonical(CODE_REVIEW), canonical(GATING)} if shipped else set())
+    hand_columns = {canonical(doing), canonical(landing)} | ({canonical(CODE_REVIEW), canonical(GATING)} if shipped else set())
     released = {}
     for n, col in HH.releases(state=st).items():
         if issue_info(n)[0] == "closed":   # the closed-issue rule already names the card column (ADR-0143 rule 2), so a release has no move to make: the record goes, never a write the board refuses every pass (#1869)
             if not dry: HH.clear_release(n, state=st)
             say(f"HAND-RELEASE-DROPPED #{n}: the issue is closed, so the release to {col} writes nothing and its record is removed")
             continue
-        want = col if shipped else {"Closed": "Done"}.get(col, col)
+        want = col if shipped else {"Closed": "Done", "Landing": landing}.get(col, col)   # a release names the shipped column; the legacy board reads its own (#2190)
         set_expected(n, want, f"a hand hold was released to {col}", rank=120)
         released[n] = want
     for n, c in sorted(HH.holders(state=st).items(), key=lambda kv: int(kv[0])):
@@ -1547,7 +1548,7 @@ def reconcile_board():
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
-        if shipped and canonical(want) in {canonical(x) for x in (doing, CODE_REVIEW, "Code Complete", GATING)} and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
+        if shipped and canonical(want) in {canonical(x) for x in (doing, CODE_REVIEW, landing, GATING)} and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
         if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
@@ -1559,7 +1560,7 @@ def reconcile_board():
             held = (holders(proj) or {}).get(str(n))
             if run_id and held != {"run": run_id, "started": run_ts or ""}:   # only a holder or a start the card does not carry is written (#327)
                 if board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}") and holders(proj) is not None: holders(proj)[str(n)] = {"run": run_id, "started": run_ts or ""}   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
-        elif canonical(have) in {canonical(x) for x in ("In Progress", "Doing", "Code Review")} and canonical(have) != canonical(want):
+        elif canonical(have) in {canonical(x) for x in ("In Progress", "Doing", CODE_REVIEW)} and canonical(have) != canonical(want):
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
     for n, want in sorted(released.items(), key=lambda kv: int(kv[0])):   # a release applies once: its record goes when the card carries the column
         if cards(proj)[1].get(str(n)) == want and not dry:
@@ -1872,7 +1873,8 @@ if left:
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
-    from board_columns import canonical   # rule P resolves both spellings of a column before a compare (#2151)
+    from board_columns import canonical, CODE_REVIEW, landing_column   # rule P resolves a column's spellings before a compare (#2151)
+    landing = landing_column(os.environ.get("SG_BOARD_VOCAB") == "shipped")   # the vocabulary's own column, never an alias (#2190)
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     for l in sh("git", "-C", fd, "log", "-n", "200", "--format=%h %ct %s", fb).splitlines():
         h, ct, subj = (l.split(None, 2) + ["", ""])[:3]
@@ -1902,7 +1904,7 @@ if fd and fb:
             if holding(n): continue                          # a live run works it, or a wave still carries it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
-            if canonical(card_status(proj, n)) not in {canonical(x) for x in ("In Progress", "Doing", "Code Review", "Code Complete")}: continue   # only what the landing set: a card another step moved past it is never downgraded
+            if canonical(card_status(proj, n)) not in {canonical(x) for x in ("In Progress", "Doing", CODE_REVIEW, landing)}: continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
             marks = [mk.name] + [f"{k}-{n}" for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()]
@@ -1923,7 +1925,8 @@ hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-b
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     import ghthrottle
-    from board_columns import canonical   # the comment pass resolves both spellings of a column before a compare (#2151)
+    from board_columns import canonical, CODE_REVIEW, landing_column   # the comment pass resolves a column's spellings before a compare (#2151)
+    landing = landing_column(os.environ.get("SG_BOARD_VOCAB") == "shipped")   # the vocabulary's own column, never an alias (#2190)
     floor = int(os.environ.get("SG_GH_FLOOR") or 300)
     low = next(((pool, left) for pool in ("core", "graphql") if (left := ghthrottle.pool_below(pool, floor)) is not None), None)   # GraphQL has a quota of its own (#1648)
     if low is not None:
@@ -1943,7 +1946,7 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
                     say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open{repair}")
                     if not dry: mk.touch()
             continue
-        if not (op and canonical(stt) in {canonical(x) for x in ("Todo", "Blocked", "In Progress", "Doing", "Code Review", "Code Complete")}): continue
+        if not (op and canonical(stt) in {canonical(x) for x in ("Todo", "Blocked", "In Progress", "Doing", CODE_REVIEW, landing)}): continue
         os.environ["SG_GH_PASS"] = "janitor"
         r, comments = door("gh_pages", f"repos/{repo}/issues/{n}/comments?per_page=100", "-q", r'.[]|[.created_at,(.body|gsub("\\n";" "))]|join("\t")')
         cm = [x.split("\t", 1) for x in comments.splitlines() if "\t" in x] if r == 0 else []

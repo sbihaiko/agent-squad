@@ -160,7 +160,7 @@ def test_the_check_passes_when_no_card_carries_an_old_option(tmp_path):
 
 def test_the_rename_carries_every_option_id_and_maps_the_two_old_names(mig):
     """#2154: one field call carries every option with its own id, so each card keeps the column it stands in.
-    The two old names come from the one alias map, never a second table."""
+    The two old names come from the version 1 map, never a second table (#2190)."""
     options = [{"id": "a", "name": "Todo", "color": "GRAY", "description": ""},
                {"id": "b", "name": "Code Review", "color": "ORANGE", "description": ""},
                {"id": "c", "name": "Code Complete", "color": "ORANGE", "description": ""}]

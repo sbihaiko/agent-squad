@@ -1168,7 +1168,7 @@ def load_tick(sample=None, now=None, load=None):
 #   throughput (runs/hour, median, tks/s)     -> nowhere: `last progress` answers "is it moving?" without a rate that
 #                                                changes too fast to read
 #   per-column board counts                   -> the column headers directly above the footer
-#   the age of the oldest card in a column    -> the column header (`Code Review (3) · 2h`), one number per column
+#   the age of the oldest card in a column    -> the column header (`Review (3) · 2h`), one number per column
 #   fork-ahead / branches waiting / last      -> a left-pane accordion; `fork-parked` already reaches the footer
 #   base-test duration                           through `health`, and the three reserved here take the fourth accordion
 #                                                when they arrive: the numbering here and the page's `ACC` are one list
@@ -5366,7 +5366,7 @@ def lead_zoom(query):
     a = (q.get("a") or [None])[0]
     if a is None: a = LEAD_START   # the page opens on the trip from Todo, the column the payload already measures from
     b = (q.get("b") or [""])[0] or None
-    a, b = _columns_module.canonical(a), _columns_module.canonical(b)   # a bookmark of either spelling reads its column (#2151)
+    a, b = _columns_module.recorded_column(a), _columns_module.recorded_column(b)   # a bookmark keeps the name it recorded, so a version 1 name reads its column (#2151, #2190)
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     fw, fs, fk, ty = board_filters(query)

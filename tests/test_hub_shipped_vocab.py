@@ -48,7 +48,7 @@ CARDS = [  # (item, the column the table names, the freeze marker)
     (_item(2, "Doing"), "Doing", None),
     (_item(3, "Open Specs", labels=["spec"]), "Backlog", None),
     (_item(4, "Blocked"), "Backlog", "frozen:owner"),
-    (_item(5, "Code Complete"), "Landing", None),
+    (_item(5, "Landing"), "Landing", None),
     (_item(6, "Landing"), "Landing", None),
     (_item(7, "Merging"), "Landing", None),
     (_item(8, None), "Backlog", None),
@@ -57,7 +57,7 @@ CARDS = [  # (item, the column the table names, the freeze marker)
     (_item(11, "Abandoned", state="closed"), "Abandoned", None),
     (_item(12, "Todo", state="closed"), "Closed", None),
     (_item(13, "Doing", labels=["frozen:owner"]), "Doing", "frozen:owner"),
-    (_item(14, "Code Review"), "Review", None),   # the child's review holds it (#603)
+    (_item(14, "Review"), "Review", None),   # the child's review holds it (#603)
 ]
 
 

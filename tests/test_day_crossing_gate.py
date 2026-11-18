@@ -239,7 +239,7 @@ def test_each_recorded_move_is_the_column_its_event_derives(day, rules):
     """#1908 criterion 1: the rule layer recomputes each card's column from the fixture's events, and the recorded move is
     the column it should have reached."""
     for transition in day["transitions"]:
-        assert derived_column(rules, transition) == rules.canonical(transition["to"]), \
+        assert derived_column(rules, transition) == rules.recorded_column(transition["to"]), \
             f"the transition of {transition['issue']} at {transition['t']} names {transition['to']} for {transition['event']}"
 
 
@@ -248,7 +248,7 @@ def test_the_replay_through_the_fake_carrier_reaches_each_expected_column(day, r
     should have reached, and every write the carrier received names an event's column."""
     carrier = replay(day, rules)
     spelled = {issue: rules.canonical(status) for issue, status in carrier.status.items()}
-    expected = {issue: rules.canonical(status) for issue, status in day["expected"].items()}
+    expected = {issue: rules.recorded_column(status) for issue, status in day["expected"].items()}
     assert spelled == expected, f"the carrier stands on {carrier.status}"
     assert all(kind == "status" for kind, _, _ in carrier.writes), "a write the rule layer did not derive reached the carrier"
 
@@ -261,7 +261,7 @@ def test_each_cards_column_time_is_a_run_of_events_the_hub_reads(day, rules, his
     for issue, spans in runs.items():
         assert spans, f"card {issue} has no column interval"
         recorded = [t["to"] for t in day["transitions"] if t["issue"] == issue][-1]
-        assert spans[-1][0] == rules.canonical(recorded), f"card {issue} ends on {spans[-1][0]}, and its board recorded {recorded}"
+        assert spans[-1][0] == rules.recorded_column(recorded), f"card {issue} ends on {spans[-1][0]}, and its board recorded {recorded}"
 
 
 def test_no_review_time_falls_under_doing(day, history):
