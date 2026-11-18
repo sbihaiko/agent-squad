@@ -21,6 +21,11 @@ def drop_live_paths():
     # The loop exports SG_RUN_REVIEW too (#601): the shipped router graph's review gate runs the script it names, so a run a
     # test drives would review its children through the live loop's runreview.sh. Without it, the gate answers "no review here".
     os.environ.pop("SG_RUN_REVIEW", None)
+    # (#2306) A gate started from a git hook inherits GIT_DIR (and its two siblings). A test that runs `git init --bare`
+    # with no path then re-initializes that directory and sets core.bare there, and the checkout fails every git command.
+    # The session drops them, so no test helper or test body writes into the repository that runs it.
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        os.environ.pop(name, None)
 
 
 @pytest.fixture(scope="session", autouse=True)

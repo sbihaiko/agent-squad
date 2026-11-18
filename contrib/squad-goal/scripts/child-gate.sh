@@ -12,6 +12,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/caps.sh"
 [ $# -gt 0 ] || { echo "usage: child-gate.sh <suite> [args...]" >&2; exit 2; }
 suite=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); shift
+# (#2306) A suite started from a git hook inherits GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE. A test that runs `git init
+# --bare` with no path then re-initializes GIT_DIR and sets core.bare = true there, and the checkout fails every git
+# command. The gate hands the suite a clean git environment.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 # One suite per call (#2025). A glob of suites gives the first suite the others as its arguments, and a suite that reads its
 # first argument as the script under test then runs a suite in its place. A watch suite ran itself that way at every level.
 for a in "$@"; do

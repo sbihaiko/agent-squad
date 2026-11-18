@@ -38,6 +38,11 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 . "$here/base-battery.sh"
 . "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
 py=$(sg_gate_python)
+# (#2306) A gate started from a git hook inherits GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE. A test that runs `git init
+# --bare` with no path then re-initializes GIT_DIR and sets core.bare = true there, and the checkout this gate is proving
+# fails every git command (`fatal: this operation must be run in a work tree`). The gate drops the three before its own git
+# reads and before the battery and the suites run, so no test writes into the repository that runs it.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 # (#1872, #2085) A child's count is one, whatever the selector answers: its battery is a delta, and a change the delta cannot
 # place runs no pytest at all (the `narrow` battery below), so no child gate is ever a full battery that would need the whole
 # count to fit its bound (ADR-0163, ADR-0018). The full-battery wait belongs to the delivery's own gates, which hold the lock.

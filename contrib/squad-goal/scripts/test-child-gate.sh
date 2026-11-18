@@ -62,6 +62,14 @@ printf '#!/bin/bash\nulimit -u > "%s/ulimit"\n' "$T" > "$T/proj/test-u.sh"
 bash "$d/child-gate.sh" ./test-u.sh > /dev/null 2>&1
 uu=$(cat "$T/ulimit" 2>/dev/null); per=$(sysctl -n kern.maxprocperuid 2>/dev/null || ulimit -u)
 [ -n "$uu" ] && [ "$uu" != unlimited ] && [ "$uu" -lt "$per" ] && ok "the suite runs under a process bound ($uu) below the user's ($per)" || ko "suite ulimit -u ${uu:-none}, user ${per:-?}"
+# (#2306) A suite a git hook starts inherits GIT_DIR: `git init --bare` with no path then re-initializes that directory and
+# sets core.bare there, and the checkout fails every git command. The gate hands the suite a clean git environment.
+printf '#!/bin/bash\nprintf "gitenv GIT_DIR=%%s GIT_WORK_TREE=%%s GIT_INDEX_FILE=%%s\\n" "${GIT_DIR-unset}" "${GIT_WORK_TREE-unset}" "${GIT_INDEX_FILE-unset}" > "%s/gitenv"\n' "$T" > "$T/proj/test-env.sh"
+GIT_DIR="$T/proj/.git" GIT_WORK_TREE="$T/proj" GIT_INDEX_FILE="$T/proj/.git/index" bash "$d/child-gate.sh" ./test-env.sh > "$T/env.out" 2>&1; rce=$?
+[ "$rce" = 0 ] && [ "$(cat "$T/gitenv" 2>/dev/null)" = "gitenv GIT_DIR=unset GIT_WORK_TREE=unset GIT_INDEX_FILE=unset" ] \
+  && ok "a child suite inherits no GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE" || ko "child git env: rc $rce: '$(cat "$T/gitenv" 2>&1)'"
+[ "$(git -C "$T/proj" config --get core.bare)" = false ] && ok "the gate leaves its checkout's config alone" || ko "the gate changed core.bare: $(git -C "$T/proj" config --get core.bare)"
+
 # a watch suite refuses a source that is not a watch.sh, before it builds a fixture
 printf '#!/bin/bash\nexit 0\n' > "$T/other.sh"
 for w in test-watch-cycle.sh test-watch-land.sh test-watch-orphan.sh; do

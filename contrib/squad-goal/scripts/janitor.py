@@ -2086,6 +2086,27 @@ def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lan
     if dry or mk.exists(): return
     alert(f"WATCHD-ORPHAN: watchd.pid names no live supervisor (pid {sup or 'none'}), and {', '.join(lanes)} still runs (NEEDS OWNER)")
     mk.write_text(f"{now}\n")
+def bare_checkout():   # #2306: a checkout whose config says core.bare = true answers every git command with
+    # "fatal: this operation must be run in a work tree", and the loop cannot read or publish from it. One alert per
+    # episode, and it names each checkout, so the owner knows which tree to repair.
+    dirs = [co]
+    for r in (os.environ.get("SG_REPOS") or "").split():
+        p = pathlib.Path(r)
+        if p.is_dir() and p.resolve() not in dirs: dirs.append(p.resolve())
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    bare = []
+    for d in dirs:
+        if not (d / ".git").exists(): continue
+        r, out = _run(["git", "-C", str(d), "config", "--local", "--get", "core.bare"], env=env)
+        if r == 0 and out.strip() == "true": bare.append(str(d))
+    mk = st / "bare-checkout-alert"
+    if not bare:
+        if not dry: mk.unlink(missing_ok=True)
+        return
+    if dry or mk.exists(): return
+    for d in bare:
+        alert(f"BARE-CHECKOUT {d}: core.bare = true, so every git command there fails (fatal: this operation must be run in a work tree); run `git -C {d} config core.bare false`")
+    mk.write_text(f"{now}\n")
 def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, or an editor's .DS_Store (#661)
     parts = rel.split("/")
     return "__pycache__" in parts or rel.endswith((".pyc", ".pyo")) or parts[-1] == ".DS_Store"
@@ -2110,6 +2131,7 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
     changed = sorted(k for k in set(cur) | set(files) if cur.get(k) != files.get(k))
     if changed:
         alert(f"LIVE-MTIME {live}: {len(changed)} file(s) changed with no publish: {', '.join(changed[:5])}")
+bare_checkout()
 frontier_idle()
 spec_stall()
 deadlock_audit()
