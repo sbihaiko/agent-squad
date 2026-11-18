@@ -72,7 +72,7 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
     the board answers the issue's card in, none when empty; `live` leaves the run with no verdict; `closed` makes the
     issue read closed."""
     for name in ("janitor.py", "ghcall.sh", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py", "board-definition.json",
-                 "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py", "deadlock.py"):
+                 "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
     calls = tmp_path / "calls"
@@ -287,3 +287,17 @@ def test_a_finished_run_still_reads_its_card_on_the_pass_that_drops_its_line(tmp
     assert f"ADD o 4 Landing {N}" in landing(log), f"the card did not reach Landing: {log}"
     assert (tmp_path / "st/active-runs.txt").read_text().split() == [], (
         "the finished run kept its active-runs line, so it still holds the child room rule #2138 won")
+
+
+@pytest.mark.heavy
+def test_the_pass_reads_the_deadlock_rules_from_the_repository_when_they_are_not_beside_the_script(tmp_path):
+    """#2237: the pass loads deadlock.py from the tree that SG_SQUAD names when the script's own directory carries no copy.
+
+    The janitor runs under `python3 -I`, which keeps its directory off sys.path, so it imports every sibling itself. A
+    sandbox copies janitor.py alone: before this fix the import raised ModuleNotFoundError and the pass ended before the
+    deadlock audit. The audit's own cause file proves the rules loaded and ran."""
+    sandbox(tmp_path, "echo 0")
+    assert not (tmp_path / "deadlock.py").exists(), "the sandbox copied the rules, so this case proves nothing"
+    p = janitor(tmp_path)
+    assert "ModuleNotFoundError" not in p.stderr, p.stderr
+    assert (tmp_path / "st/deadlock-causes.json").exists(), f"the deadlock audit never ran: {p.stderr}"
