@@ -242,4 +242,59 @@ r=$(SG_WAVE_BASE_PYTEST='exit 0' GATES="$G32" enw run-32 32)
 [ "$($O rev-parse wave/run-32)" != "$($G -C "$T/c32" rev-parse HEAD)" ] && ok "R2272c: a child's own red keeps it out" || ko "R2272c: #32 entered: '$r'"
 case "$(wfact 32 run-32)" in *test_child_own.py::test_own*"the base tip passes"*) ok "R2272c: the record says the base tip passes the child's red";; *) ko "R2272c: ledger fact of #32: '$(wfact 32 run-32)'";; esac
 
+# enb <run> <issue> [VAR=value...]: the entry of a child with the case's own env, passed explicitly to the child process.
+enb() { local r=$1 n=$2; shift 2; REV_BASE=wave/$r rev "$n"; (cd "$T/c$n" && env "$@" SG_WAVE_GATES="${GATES-true}" bash "$T/s/wave.sh" enter "$r" "$n"); }
+
+# R2272d: with no SG_WAVE_BASE_PYTEST the base answer comes from the gate's own interpreter ($SG_GATE_PY, through gate.sh),
+# so the base probe takes the same gate lock and environment the child's gate ran under. The stub interpreter proves what
+# the probe ran and where: it records its argv and the gate.sh environment it was started in, and answers one red test.
+start2 run-33 >/dev/null
+printf 'run-33\n' > "$T/st/auto/disp-33"; child 33 g33 "origin/wave/run-33"
+cat > "$T/fakepy33" <<'PY'
+#!/bin/bash
+case "$*" in "-m squad.procs "*) exec python3 "$@";; esac   # caps.sh's process read keeps its real interpreter
+printf '%s\n' "$*" > "$FAKE_ARGV"
+printf '%s\n' "${GATE_BASE_FILE:+under-gate}" > "$FAKE_GATE"
+echo "FAILED tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list - assert 0"
+exit 1
+PY
+chmod +x "$T/fakepy33"
+G33='printf "fail\tpytest the base battery failed at tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list\truff mypy pytest\t-\n" > "$GATE_OUTCOME_FILE"; exit 1'
+r=$(GATES="$G33" enb run-33 33 SG_GATE_PY="$T/fakepy33" FAKE_ARGV="$T/base33.argv" FAKE_GATE="$T/base33.gate")
+case "$(cat "$T/base33.argv" 2>/dev/null)" in *"-m pytest"*test_the_mobile_page_holds_no_column_list*)
+  ok "R2272d: the default probe runs pytest on the named test with the gate's interpreter";;
+  *) ko "R2272d: probe argv: '$(cat "$T/base33.argv" 2>/dev/null)'";; esac
+[ "$(cat "$T/base33.gate" 2>/dev/null)" = under-gate ] && ok "R2272d: the probe runs through gate.sh, under its environment" || ko "R2272d: the probe ran outside gate.sh"
+case "$(wfact 33 run-33)" in *test_the_mobile_page_holds_no_column_list*"the base tip fails it"*)
+  ok "R2272d: the record says the base tip fails the named test";;
+  *) ko "R2272d: ledger fact of #33: '$(wfact 33 run-33)'";; esac
+
+# R2272e: SG_WAVE_ENTRY_BASE_RETRY=0 is the opt-out: the gate runs exactly once, the child is requeued on that red, and the
+# record still names the failed test and the base tip's answer for it.
+start2 run-34 >/dev/null
+printf 'run-34\n' > "$T/st/auto/disp-34"; child 34 g34 "origin/wave/run-34"
+cnt="$T/g34.count"; : > "$cnt"
+G34="echo x >> $cnt; printf 'fail\tpytest the base battery failed at tests/test_child_own.py::test_own\truff mypy pytest\t-\n' > \"\$GATE_OUTCOME_FILE\"; exit 1"
+r=$(GATES="$G34" enb run-34 34 SG_WAVE_ENTRY_BASE_RETRY=0 SG_WAVE_BASE_PYTEST='exit 0')
+[ "$(calls "$cnt")" = 1 ] && ok "R2272e: SG_WAVE_ENTRY_BASE_RETRY=0 runs the gate exactly once" || ko "R2272e: the gate ran $(calls "$cnt") times"
+case "$r" in *"WAVE REQUEUE #34"*) ok "R2272e: the opt-out requeues on the first red";; *) ko "R2272e: no requeue: '$r'";; esac
+case "$(wfact 34 run-34)" in *test_child_own.py::test_own*"the base tip passes"*)
+  ok "R2272e: the record still names the failed test and the base answer";;
+  *) ko "R2272e: ledger fact of #34: '$(wfact 34 run-34)'";; esac
+
+# R2272f: the red gate is followed by a rebase on the base, and that rebase conflicts. The child is held where it stands and
+# nothing is requeued -- and the hold still names the failed test and whether the base tip fails it (AC5, AC6).
+start2 run-35 >/dev/null
+rm -rf "$T/w35"; $G clone -q "$T/origin.git" "$T/w35" 2>/dev/null
+(cd "$T/w35" && $G checkout -q dev && echo base > other35 && $G add other35 && $G -c user.email=a@b -c user.name=t commit -q -m "base move (Refs #2272)" && $G push -q origin HEAD:dev)
+printf 'run-35\n' > "$T/st/auto/disp-35"; child 35 other35 "origin/wave/run-35"
+G35='printf "fail\tpytest the base battery failed at tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list\truff mypy pytest\t-\n" > "$GATE_OUTCOME_FILE"; exit 1'
+r=$(GATES="$G35" enb run-35 35 SG_WAVE_BASE_PYTEST='echo "FAILED tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list - assert 0"; exit 1')
+case "$r" in *"WAVE HOLD #35"*conflict*) ok "R2272f: a base that conflicts on the rebase holds the child";; *) ko "R2272f: no hold: '$r'";; esac
+case "$r" in *"WAVE REQUEUE #35"*) ko "R2272f: the conflict requeued the child: '$r'";; *) ok "R2272f: a conflict requeues nothing";; esac
+[ -e "$T/st/auto/disp-35" ] && ok "R2272f: the held child keeps its dispatch marker" || ko "R2272f: the marker of a held child was dropped"
+case "$(wfact 35 run-35)" in "held "*test_the_mobile_page_holds_no_column_list*"the base tip fails it"*)
+  ok "R2272f: the hold record names the failed test and the base answer";;
+  *) ko "R2272f: ledger fact of #35: '$(wfact 35 run-35)'";; esac
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
