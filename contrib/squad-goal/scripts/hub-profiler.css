@@ -20,6 +20,8 @@
 #proftrip .ptl-cpu{fill:none;stroke:var(--s7);stroke-width:2;vector-effect:non-scaling-stroke}
 #proftrip .ptl-ram{fill:none;stroke:var(--none);stroke-width:2;stroke-dasharray:5 4;vector-effect:non-scaling-stroke}
 #proftrip circle.ptl-tok{fill:var(--fg)}#proftrip circle.ptl-cpu{fill:var(--s7)}#proftrip circle.ptl-ram{fill:var(--none)}
+#proftrip .ptmk{stroke-width:2;vector-effect:non-scaling-stroke}#proftrip .ptmkc{stroke:var(--s7)}#proftrip .ptmkr{stroke:var(--none);stroke-dasharray:5 4}
+#proftrip line.ptl-mean{stroke-width:2;vector-effect:non-scaling-stroke}#proftrip line.ptl-mean.ptl-cpu{stroke:var(--s7)}#proftrip line.ptl-mean.ptl-ram{stroke:var(--none);stroke-dasharray:5 4}
 #proftrip .ptgn{fill:var(--bg);opacity:.18;stroke:none}   /* a no-record stretch: a band over the lane, off the data scale */
 #proftrip .ptr{stroke:var(--bg);stroke-width:2;opacity:1;vector-effect:non-scaling-stroke}
 #proftrip .ptg0{stroke:var(--line);stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}

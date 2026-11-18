@@ -116,14 +116,15 @@ function profTripChart(t,cols){
  // the axis values stand beside their lines, never on the edge of the lane, as the mock draws them (#2282).
  const P=PROF_TRIP_PAD,span=lane-2*P;
  const ty=v=>tokTop+P+span*(1-(top>0?Math.min(Math.max(v,0)/top,1):0));
- // The Machine lane scales each series min-max over the window (#2254): the series' own lowest point sits at the lane's
- // bottom and its own highest at its top. CPU and RAM take one pair each, so neither line is flattened by the other's
- // span; a series with one point in the window draws a flat line at mid height. Only a point feeds the pair: a column's
- // mean with no point belongs to no line, so a series of means alone draws nothing and reads a dash at both ends.
+ // The Machine lane scales each series min-max over the window (#2254): the series' own lowest reading sits at the
+ // lane's bottom and its own highest at its top. CPU and RAM take one pair each, so neither line is flattened by the
+ // other's span; a series with one reading in the window draws a flat line at mid height. Every reading the lane draws
+ // or prints feeds the pair, a point and a column's mean alike, so a mean the lane marks never leaves an end a dash.
  const spanOf=key=>{let n=0,lo=0,hi=0;
   const add=v=>{if(typeof v!=="number"||!isFinite(v))return;if(!n){lo=hi=v}else{if(v<lo)lo=v;if(v>hi)hi=v}n++};
   bands.forEach(b=>{const l=b.c[key]||{};
-   (l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null))});
+   (l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null));
+   add(l.mean)});
   return {n,lo,hi}};
  const cpuSpan=spanOf("cpu"),ramSpan=spanOf("ram");
  const macY=(v,s)=>macTop+P+span*(1-(s.hi>s.lo?Math.min(Math.max((v-s.lo)/(s.hi-s.lo),0),1):0.5));
@@ -156,10 +157,10 @@ function profTripChart(t,cols){
  // The Machine lane's ends state the real percent of each series (#2254): its highest reading at the lane's top and its
  // lowest at its bottom, in the line's colour, so a normalized point never hides the reading it came from. A series
  // with no reading in the window reads a dash, never a zero.
- const ends=`<text class="ptv ptvc" x="0" y="${(macTop+P-14).toFixed(1)}">CPU ${endPct(cpuSpan,cpuSpan.hi)}</text>`
-  +`<text class="ptv ptvr" x="0" y="${(macTop+P).toFixed(1)}">RAM ${endPct(ramSpan,ramSpan.hi)}</text>`
-  +`<text class="ptv ptvc" x="0" y="${(macBot-P).toFixed(1)}">CPU ${endPct(cpuSpan,cpuSpan.lo)}</text>`
-  +`<text class="ptv ptvr" x="0" y="${(macBot-P+14).toFixed(1)}">RAM ${endPct(ramSpan,ramSpan.lo)}</text>`;
+ const ends=`<text class="ptv ptvc" x="0" y="${(macTop-17).toFixed(1)}">CPU ${endPct(cpuSpan,cpuSpan.hi)}</text>`
+  +`<text class="ptv ptvr" x="0" y="${(macTop-3).toFixed(1)}">RAM ${endPct(ramSpan,ramSpan.hi)}</text>`
+  +`<text class="ptv ptvc" x="0" y="${(macBot-17).toFixed(1)}">CPU ${endPct(cpuSpan,cpuSpan.lo)}</text>`
+  +`<text class="ptv ptvr" x="0" y="${(macBot-3).toFixed(1)}">RAM ${endPct(ramSpan,ramSpan.lo)}</text>`;
  // The trip bar is thin, it has the plot's width and it sits under the Machine lane (#2255): one segment a column, each
  // under its band, and a column with no median paints no colour.
  const barBands=bands.map(b=>{const painted=(b.c.median_s||0)>0;
@@ -178,7 +179,13 @@ function profTripChart(t,cols){
   for(const s of seq){if(!s.pts.length){flush();continue}run.push(...s.pts);crossed.push(s.b)}
   flush();
   const hover=seq.flatMap(s=>s.pts.map(q=>`<circle class=ptph cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r=3><title>${esc(`${s.b.c.label}: ${val(q.v)}`)}</title></circle>`)).join("");
-  return hover+out+seq.filter(s=>!s.pts.length&&s.b.x1-s.b.x0>0).map(s=>`<rect class="ptgn pts-${esc(s.b.c.column)}" x="${(s.b.x0+1).toFixed(1)}" y="${top}" width="${Math.max(0,s.b.x1-s.b.x0-2).toFixed(1)}" height="${h}"><title>${esc(`${s.b.c.label}: no record on this line`)}</title></rect>`).join("")};
+  return hover+out+seq.filter(s=>!s.pts.length&&s.b.x1-s.b.x0>0&&!(typeof (s.b.c[lane]||{}).mean==="number")).map(s=>`<rect class="ptgn pts-${esc(s.b.c.column)}" x="${(s.b.x0+1).toFixed(1)}" y="${top}" width="${Math.max(0,s.b.x1-s.b.x0-2).toFixed(1)}" height="${h}"><title>${esc(`${s.b.c.label}: no record on this line`)}</title></rect>`).join("")};
+ // A mean with no point is still a reading the table prints (#2254): the lane marks it with a tick across its column
+ // at the reading's own value, so the mean the page states is the mean the lane shows.
+ const meanTicks=bands.map(b=>["cpu","ram"].map(key=>{const l=b.c[key]||{},mean=l.mean;
+  if((l.points&&l.points.length)||typeof mean!=="number"||!isFinite(mean)||b.x1-b.x0<=0)return "";
+  const y=macY(mean,key==="cpu"?cpuSpan:ramSpan).toFixed(1);
+  return `<line class="ptmk ${key==="cpu"?"ptmkc":"ptmkr"}" x1="${(b.x0+2).toFixed(1)}" y1="${y}" x2="${(b.x1-2).toFixed(1)}" y2="${y}"><title>${esc(`${b.c.label}: ${key==="cpu"?"CPU":"RAM"} mean ${profTripPct(mean)} of the whole machine`)}</title></line>`}).join("")).join("");
  const drawn=lineOf("ptl-tok","tokens",ty,"tokens a minute",v=>`${profTokens(v)} tokens a minute`,tokTop,lane)
   +lineOf("ptl-cpu","cpu",v=>macY(v,cpuSpan),"CPU, percent of the whole machine",v=>`CPU ${profPct(v)} of the whole machine`,macTop,lane)
   +lineOf("ptl-ram","ram",v=>macY(v,ramSpan),"RAM, percent of the whole machine",v=>`RAM ${profPct(v)} of the whole machine`,macTop,lane);
@@ -206,7 +213,7 @@ function profTripChart(t,cols){
   +bandAll+rules
   +axis(Array.isArray(t.tokens_ticks)?t.tokens_ticks:[],ty,v=>profTokTick(v,top))
   +gutter+ends
-  +drawn+bar+inLane+wideHtml+narrowHtml+`</svg>`}
+  +drawn+meanTicks+bar+inLane+wideHtml+narrowHtml+`</svg>`}
 // The phone's lanes (#2229): the same payload, drawn for a narrow screen. Each column keeps its own width in the lane, so
 // a point sits at its position inside the column; a column with no point draws no line there, never a zero. The Tokens
 // lane holds one line on its own scale, the Machine lane holds CPU solid and RAM dashed, each scaled min-max over its
@@ -223,12 +230,11 @@ function profTripBands(parts,h){let x=0,out="";
 // One line joins the points of adjacent columns, and an empty column breaks it (#2253), so a gap is a gap and never a
 // drop to zero. The empty stretch takes a band over the lane from its top, marked no record, so the gap stands off the
 // data scale. A run of one point draws a dot, because a polyline of one coordinate draws nothing.
-// The span takes the points of the line the legend states, and no mean: a column's mean with no point belongs to no
-// line, so a series of means alone draws nothing and the legend reads a dash. A loop folds the values: a long window
-// never spreads an array into Math.min.
+// The span takes every reading the legend states, a point and a column's mean alike, so a mean the table prints never
+// leaves the legend reading a dash. A loop folds the values: a long window never spreads an array into Math.min.
 function profTripSpan(cols,lane){let n=0,lo=0,hi=0;
  const add=v=>{if(typeof v!=="number"||!isFinite(v))return;if(!n){lo=hi=v}else{if(v<lo)lo=v;if(v>hi)hi=v}n++};
- for(const c of cols){const l=c[lane]||{};(l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null))}
+ for(const c of cols){const l=c[lane]||{};(l.points||[]).forEach(p=>add(Array.isArray(p)?p[1]:null));add(l.mean)}
  return {n,lo,hi}}
 function profTripLine(parts,lane,h,scale,cls,title){
  const y=v=>{const q=typeof v==="number"&&isFinite(v)?v:scale.lo;
@@ -237,9 +243,11 @@ function profTripLine(parts,lane,h,scale,cls,title){
  const flush=()=>{if(run.length===1){const q=run[0];out+=`<circle class="ptl ${cls}" cx="${q.x}" cy="${q.y}" r="3">${q.t}</circle>`}
   else if(run.length>1)out+=`<polyline class="ptl ${cls}" points="${run.map(q=>q.x+","+q.y).join(" ")}"></polyline>`;run=[]};
  for(const {c,w} of parts){
-  const pts=((c[lane]||{}).points)||[];
+  const pts=((c[lane]||{}).points)||[],mean=(c[lane]||{}).mean;
   if(!pts.length){flush();
-   if(w>0)out+=`<rect class="ptl-nr" x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${h}"><title>${esc(`${c.label||c.column}: no record`)}</title></rect>`;
+   if(typeof mean==="number"&&isFinite(mean)&&w>0){const my=y(mean).toFixed(1);   // a mean with no point: a tick, not a gap
+    out+=`<line class="ptl-mean ${cls}" x1="${x.toFixed(1)}" y1="${my}" x2="${(x+w).toFixed(1)}" y2="${my}"><title>${esc(`${c.label||c.column}: ${title?title(c,mean):"mean"}`)}</title></line>`}
+   else if(w>0)out+=`<rect class="ptl-nr" x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${h}"><title>${esc(`${c.label||c.column}: no record`)}</title></rect>`;
    x+=w;continue}
   for(const [p,v] of pts)run.push({x:(x+Math.min(1,Math.max(0,p))*w).toFixed(1),y:y(v).toFixed(1),
    t:title?`<title>${esc(title(c,v))}</title>`:""});
