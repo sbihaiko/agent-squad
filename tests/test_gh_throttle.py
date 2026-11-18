@@ -115,15 +115,17 @@ def test_a_doubled_landing_pass_burst_is_bounded_by_the_budget(tmp_path):
         served.append(clock.at)
         return ghread.Transport(rc=0, body="[]")
 
-    burst = ghthrottle.DEFAULT_BUDGET  # a reader that fans out per candidate: the shape the aggregate reads retired, and the case the bucket still bounds
-    a = throttle(tmp_path, clock)
-    b = throttle(tmp_path, clock)
+    burst = 5  # a reader that fans out per candidate: the shape the aggregate reads retired, and the case the bucket still bounds.
+    # The bound is the bucket's, not the number's, so a small budget proves it with ten file round trips instead of six hundred:
+    # the runner's disk made the default budget's 600 reads a 2.9 s call, and the default budget has its own case below.
+    a = throttle(tmp_path, clock, budget=burst)
+    b = throttle(tmp_path, clock, budget=burst)
     for i in range(2 * burst):
         (a if i % 2 else b).read(f"repos/o/r/issues/{i}", transport=transport)
     assert len(served) == 2 * burst, "a read past the budget waits its turn, it is never dropped"
     assert clock.slept, "two full budgets have to exceed a single budget"
     before_the_first_wait = [at for at in served if at == served[0]]
-    assert len(before_the_first_wait) == ghthrottle.DEFAULT_BUDGET, (
+    assert len(before_the_first_wait) == burst, (
         f"{len(before_the_first_wait)} requests reached GitHub before the bucket ran dry"
     )
 

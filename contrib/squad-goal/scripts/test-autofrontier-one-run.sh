@@ -843,6 +843,18 @@ rm -f "$SG_STATE"/auto/disp-*
 [ "$($G -c '^CUT FROM:' "$MKLOG.body")" = 2 ] && ok "X3: a kept stacked branch still names the branch it sits on" || ko "X3: CUT FROM lines: '$($G '^CUT FROM' "$MKLOG.body")'"
 rm -f "$T/scripts/cluster.py" "$T/scripts/slicecut.py" "$T/scripts/siblings.py"
 
+# X4 (#2260): a ticket whose blocker sits in Landing with an approved tip is READY, and its child starts on that tip.
+#    The pass hands the stack line's branch to the request as CUT FROM, and the record names the tip it started from.
+scene stack2260
+printf '#!/bin/bash\ncase "$1" in 431) printf "READY\\nSTACK TIP aaaa1111bbbb2222cccc3333dddd4444eeee5555 gui/430 #430\\n";; *) echo READY;; esac\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
+issues '[{"number":431,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":432,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+: > "$MKLOG.body"; r=$(run)
+$G -qx 'CUT FROM: gui/430' "$MKLOG.body" && ok "X4: a child of a Landing blocker starts on the blocker's branch" || ko "X4: CUT FROM lines: '$($G '^CUT FROM' "$MKLOG.body")'"
+$G -qx 'STACK TIP: aaaa1111bbbb2222cccc3333dddd4444eeee5555 (#430, a blocker in Landing)' "$MKLOG.body" && ok "X4: the request records the blocker tip the child started from" || ko "X4: STACK TIP lines: '$($G '^STACK TIP' "$MKLOG.body")'"
+$G -qF 'the approved tip aaaa1111bbbb2222cccc3333dddd4444eeee5555 of blocker #430' "$MKLOG.body" && ok "X4: the brief tells the child to build on the approved tip" || ko "X4: the brief does not name the tip: '$($G 'approved tip' "$MKLOG.body")'"
+[ "$($G -c '^CUT FROM:' "$MKLOG.body")" = 1 ] && ok "X4: a child with no Landing blocker keeps the base" || ko "X4: $($G -c '^CUT FROM:' "$MKLOG.body") CUT FROM lines for one stacked child"
+printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
+
 # #756: the fixture carries every file the pass sources, so no case reads a pass that died on a missing helper.
 # A missing siblings.py is a FRONTIER NOTE the pass prints on purpose; a missing sourced .sh is a pass that ran without its helper.
 /usr/bin/grep -qE '\.sh: No such file or directory' "$T/pass.out" && ko "a pass sourced a file the fixture lacks: $(/usr/bin/grep -m1 -E '\.sh: No such file' "$T/pass.out")" || ok "every file the pass sources is in the fixture"

@@ -214,6 +214,11 @@ if v:
   # its own log: a suite of hours must never hold this cycle, and it takes its own `nightly` lock, never the landing one.
   # nightly.sh runs at most once a day by its own marker; each later cycle's start costs one file read and exits.
   { srec_start nightly; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" nightly bash "$(dirname "$0")/nightly.sh" 2>&1 | sed "s/^/NIGHTLY /" >> "$SG_STATE/nightly.log"; srec_end "$drec" nightly $? ) 2>/dev/null & }
+  # Every shell suite runs on the dev tip once a day (#2307), outside the landing path: a landing gate selects only the suites
+  # its delta touches, so a suite that no ticket touches stays red on dev until an unrelated ticket's landing fails on it. The
+  # pass runs one suite at a time under the gate lock and one gate slot, never beside a landing gate, and its own day marker
+  # makes every later cycle's start one file read. It is detached under its own single-flight stage and log, like the nightly.
+  { srec_start daysuites; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" daysuites bash "$(dirname "$0")/daysuites.sh" 2>&1 | sed "s/^/DAYSUITES /" >> "$SG_STATE/daysuites.log"; srec_end "$drec" daysuites $? ) 2>/dev/null & }
   # The base's own check (#790): read once per cycle, so a red head that no landing reads is reported. It holds nothing.
   ( tm bash "$(dirname "$0")/single.sh" basecheck bash "$(dirname "$0")/basecheckpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch landing (#355): a pushed work branch with a green check lands in dev by a fast-forward push.
