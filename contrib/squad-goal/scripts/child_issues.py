@@ -52,6 +52,31 @@ def cluster(text):
     return out
 
 
+def request_issues(text):
+    """The issues a run was dispatched for: the cluster form on the request's own `CHILD` lines, in order (#2276)."""
+    out = []
+    for line in plain(text).splitlines():
+        if line.startswith("CHILD"):
+            out += [x for x in cluster(line) if x not in out]
+    return out
+
+
+def of_run(text, run):
+    """The issue one child of a run works, and the foreign reference its text named first, or None (#2276).
+
+    The router words a child in its own way, and a ticket body it pastes may cite another issue before the child's own
+    `Refs #N`. A child maps only to an issue its run was dispatched for: when the text's first match is none of them, the
+    first reference that is one of them wins, and with no such reference the run's first issue. A run with no known
+    issues keeps the first match."""
+    mine = (cluster(text) or [None])[0] or first(text)
+    run = [str(x) for x in run or []]
+    if not run or mine in run: return mine, None
+    for m in _NAMED.finditer(plain(text)):
+        for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or m.group(3) or ""):
+            if x in run: return x, mine
+    return run[0], mine
+
+
 if __name__ == "__main__" and sys.argv[1:2] == ["first"]:
     n = first(sys.stdin.read())
     if n: print(n)

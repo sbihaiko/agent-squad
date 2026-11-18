@@ -369,6 +369,8 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
     finished = record_finished(rec)
+    try: run_issues = child_issues.request_issues((rec.parent / "request.txt").read_text())   # the issues the run was dispatched for (#2276)
+    except OSError: run_issues = []
     issue, seen, done, unmapped, defn, failed, verdict, word = {}, set(), {}, [], {}, {}, {}, {}   # done: one item per child, its last finished entry (#611); word: the outcome that entry ended on
     owned, landed, rounds = set(), set(), {}   # the children the run reviews itself (#696), the children with a `land` event, and each child's last review round
     try: gated = {g.get("name") for g in json.loads((rec.parent / "graph.json").read_text()).get("nodes", []) if isinstance(g, dict) and g.get("review")}   # the dispatch nodes with a review gate
@@ -378,7 +380,8 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
         try: d = json.loads(l)
         except Exception: continue
         if d.get("event") == "spawn_accepted":
-            seen.add(d["child"]); defn[d["child"]] = d.get("definition"); n = cluster_from(json.dumps(d.get("definition"))) or issue_from(json.dumps(d.get("definition")))
+            seen.add(d["child"]); defn[d["child"]] = d.get("definition"); n, cited = child_issues.of_run(json.dumps(d.get("definition")), run_issues); n = int(n) if n else None
+            if cited: logged(f"remap {rec.parent.name} {d['child']}", f"CHILDCC REMAP {rec.parent.name} {d['child']}: its prompt names #{cited} first, which is no issue of its run; mapped to #{n}")   # a cited issue never decides the mapping (#2276)
             if d.get("envelope") in gated: owned.add(d["child"])
             if n is not None: issue[d["child"]] = n
         elif d.get("event") == "outcome" and d.get("outcome") in ("pass", "unproven") and d.get("node") in issue:   # unproven: the work is done and the proof could not finish, so the child is finished and its entry carries the obligation (ADR-0164)

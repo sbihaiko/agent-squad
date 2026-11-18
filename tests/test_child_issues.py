@@ -58,3 +58,21 @@ def test_a_cluster_line_names_every_issue_the_child_works():
     assert m.cluster("One child for GitHub issue #1500 and a note on issue #1487") == ["1500"]
     assert m.cluster("GitHub issues 1491 on the fork") == ["1491"]
     assert m.cluster("a child whose prompt names no issue at all") == []
+
+
+def test_a_child_maps_only_to_an_issue_of_its_run():
+    """#2276: a ticket body the router pastes may cite another issue first; a cited issue never decides the mapping."""
+    m = _mod()
+    cited = "Fix two bugs. The fix of the red itself is issue #5399. Commit with Refs #5301 and Refs #5302."
+    assert m.of_run(cited, ["5301", "5302"]) == ("5301", "5399")
+    assert m.of_run("GitHub issue #5311; the old fix is issue #5398.", ["5311", "5312"]) == ("5311", None)
+    assert m.of_run("issue #5397 is its history.", ["5321"]) == ("5321", "5397")
+    assert m.of_run(cited, []) == ("5399", None)   # a run with no known issues keeps the first match
+    assert m.of_run("a prompt that names no issue", []) == (None, None)
+
+
+def test_the_request_issues_come_from_its_child_lines_only():
+    m = _mod()
+    text = "CHILD — GitHub issue(s) 2271, 2272 (bug):\n\"title\"\nThe fix of the red itself is GitHub issue #2266.\n"
+    assert m.request_issues(text) == ["2271", "2272"]
+    assert m.request_issues("no header here, only issue #7") == []
