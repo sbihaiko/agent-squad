@@ -23,11 +23,13 @@ class AdapterError(Exception):
 
 
 class MessageOverCeiling(AdapterError):
-    """The transport's reader stopped on one message bigger than its own JSON ceiling.
+    """The transport's reader stopped on one message bigger than the buffer it frames.
 
     The ceiling and the size of the frame that hit it are facts about the transport, not about the work: the model never
     answered badly, its message was simply past what the reader reads. They are kept apart from every other adapter
-    failure so an operator does not have to read the diagnostic text to tell the two apart (issue #1814).
+    failure so an operator does not have to read the diagnostic text to tell the two apart (issue #1814). A message over
+    the adapter's own ceiling, but within its reader buffer, is no longer this: the call goes on and the record carries
+    one `message_over_ceiling` event (issue #2267).
     """
 
     def __init__(self, message, ceiling, size, **kw):

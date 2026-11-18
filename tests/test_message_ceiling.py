@@ -47,8 +47,41 @@ def transport_ceiling(line, ceiling):
 
 
 @dataclass
+class ToolUseBlock:
+    id: str
+    name: str
+    input: dict = field(default_factory=dict)
+
+
+@dataclass
+class ToolResultBlock:
+    tool_use_id: str
+    content: str = ""
+    is_error: bool = False
+
+
+@dataclass
 class AssistantMessage:
     content: list = field(default_factory=list)
+    model: str = "claude-sonnet-5-5"
+    usage: dict | None = None
+    error: str | None = None
+
+
+@dataclass
+class UserMessage:
+    content: list = field(default_factory=list)
+
+
+@dataclass
+class ResultMessage:
+    subtype: str = "success"
+    result: str = ""
+    total_cost_usd: float = 0.1
+    is_error: bool = False
+    num_turns: int = 1
+    session_id: str = "run-s1"
+    usage: dict | None = None
 
 
 @dataclass
@@ -111,3 +144,75 @@ async def test_an_adapter_failure_that_is_not_the_ceiling_keeps_the_bare_reason(
     await eng.run()
     e = outs(tmp_path)[0]
     assert e["reasons"] == ["adapter_error"] and "transport" not in e["diagnostic"]
+
+
+# --- #2267: one oversize message must not end the run -------------------------------------------
+#
+# The reader carries a frame up to its buffer, so the session survives a message the adapter calls oversize: the
+# adapter records one event and hands the session a short error for the tool call the frame carries.
+
+OVER = 2 * CEILING      # a frame well past the ceiling the adapter declares
+
+
+def ceiling_events(path):
+    return [e for e in record.read(path / "record.jsonl") if e["event"] == "message_over_ceiling"]
+
+
+async def pre_tool_use(options, tool, tool_id, tool_input):
+    """The hook answer the CLI would get for that call: the first PreToolUse hook that refuses it."""
+    for matcher in options.kw["hooks"]["PreToolUse"]:
+        answer = await matcher.hooks[0]({"tool_name": tool, "tool_input": tool_input}, tool_id, None)
+        if answer:
+            return answer
+    return {}
+
+
+def oversize_tool_query(answer_box):
+    """One call whose session writes a message past the ceiling: a Write tool call, then the tool result the CLI got
+    for it, then a clean result. The CLI reads the hook answer before it returns the result, as it does live."""
+    async def query(*, prompt, options):
+        tool_input = {"file_path": "big.txt", "content": "x" * OVER}
+        yield AssistantMessage(content=[ToolUseBlock(id="t1", name="Write", input=tool_input)])
+        answer = await pre_tool_use(options, "Write", "t1", tool_input)
+        answer_box.append(answer)
+        reason = answer.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+        yield UserMessage(content=[ToolResultBlock(tool_use_id="t1", content=reason, is_error=True)])
+        yield ResultMessage(result=json.dumps({"status": "pass", "x": "done"}))
+    return query
+
+
+async def test_an_oversize_tool_call_message_continues_the_run_with_one_recorded_event(tmp_path):
+    box = []
+    adapter = SdkAdapter(query=oversize_tool_query(box), options_cls=Options)
+    d = doc([agent("a", output_key="x", next={})], ["a"])
+    v = await Engine(from_doc(d), adapter, tmp_path).run()
+    assert v.verdict == "completed"                            # (1) one message over the ceiling does not end the run
+    assert outs(tmp_path)[0]["outcome"] == "pass"
+    events = ceiling_events(tmp_path)
+    assert len(events) == 1                                     # (3) one event, naming the tool call and the size
+    e = events[0]
+    assert e["tool"] == "t1" and e["name"] == "Write"
+    assert OVER <= e["size"] < OVER + 4096 and e["ceiling"] == CEILING
+    answer = box[0]["hookSpecificOutput"]                       # (2) the session gets a short error for that call
+    assert answer["permissionDecision"] == "deny"
+    assert str(e["size"]) in answer["permissionDecisionReason"]
+    assert str(CEILING) in answer["permissionDecisionReason"]
+
+
+def oversize_result_query():
+    """One call whose session reads a tool result past the ceiling, then ends clean: the frame has no tool call to refuse."""
+    async def query(*, prompt, options):
+        yield UserMessage(content=[ToolResultBlock(tool_use_id="t7", content="y" * OVER)])
+        yield ResultMessage(result=json.dumps({"status": "pass", "x": "done"}))
+    return query
+
+
+async def test_an_oversize_result_message_continues_the_run_and_still_names_its_tool_call(tmp_path):
+    adapter = SdkAdapter(query=oversize_result_query(), options_cls=Options)
+    d = doc([agent("a", output_key="x", next={})], ["a"])
+    v = await Engine(from_doc(d), adapter, tmp_path).run()
+    assert v.verdict == "completed"
+    assert outs(tmp_path)[0]["outcome"] == "pass"
+    events = ceiling_events(tmp_path)
+    assert len(events) == 1 and events[0]["tool"] == "t7"
+    assert OVER <= events[0]["size"] < OVER + 4096

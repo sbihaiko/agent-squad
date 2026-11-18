@@ -11,6 +11,7 @@ record then says where the call has got to — its assistant messages so far, th
 the tool it last used — so a reader can tell a live call from an abandoned one. Every other message
 is read and dropped.
 """
+import dataclasses
 import json
 import os
 import re
@@ -32,6 +33,43 @@ ESCAPE = re.compile(r"\\(.)", re.S)     # one backslash pair; JSON allows only t
 JSON_ESCAPES = '"\\/bfnrtu'
 CEILING_TEXT = re.compile(r"exceeded maximum buffer size of (\d+) bytes")
 FRAME_TEXT = re.compile(r"Buffer size (\d+) exceeds limit (\d+)")
+# #2267: the reader's own 1 MiB limit killed a run: one 1114112-byte message ended run-20261118-091256-7b8177 after 75 s
+# with nothing delivered. The adapter now carries a frame up to READER_BUFFER, so the reader never dies on a message the
+# CLI wrote, and it keeps its own ceiling below that: a frame past TRANSPORT_CEILING is a fact of the record, and the
+# session goes on. A frame past READER_BUFFER still ends the call, because the reader cannot frame it at all.
+TRANSPORT_CEILING = 1024 * 1024     # bytes of one message; the SDK reader's own default, kept as the ceiling the adapter declares
+READER_BUFFER = 16 * TRANSPORT_CEILING    # the SDK reader's buffer: the hard bound above which no message is framed
+
+
+def frame_size(message):
+    """Bytes of one message as the transport frames it: the JSON text of the message, read as UTF-8.
+    The reader's limit counts the bytes of that one line, so the adapter measures the same text it was framed from."""
+    try:
+        text = json.dumps(dataclasses.asdict(message), separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):     # a message the SDK builds outside a dataclass: its text is the fact there is
+        text = str(message)
+    return len(text.encode())
+
+
+def over_ceiling_line(size, ceiling):
+    """The one line the session reads for a tool call whose message was past the ceiling."""
+    return (f"transport: the message for this tool call was {size} bytes, over the {ceiling}-byte JSON ceiling of the "
+            f"session's reader. It was not delivered. Make the same call with a smaller request.")
+
+
+def ceiling_tools(message):
+    """`[(tool_call_id, tool_name)]` of the calls one message carries; a tool result names the id it answers and no
+    name. Empty when the message names no call."""
+    out = []
+    for block in getattr(message, "content", None) or []:
+        kind = type(block).__name__
+        if kind == "ToolUseBlock":
+            out.append((getattr(block, "id", None), getattr(block, "name", None)))
+        elif kind == "ToolResultBlock":
+            out.append((getattr(block, "tool_use_id", None), None))
+    return out
+
+
 PROGRESS_SECONDS = 10.0     # the default interval between two progress events of one call; a setting in agent-defaults.yaml
 INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 CACHE_KEYS = (("cache_read", "cache_read_input_tokens"), ("cache_write", "cache_creation_input_tokens"))
@@ -250,7 +288,9 @@ class SdkAdapter:
     """`query` and `options_cls` are injectable so a test runs with no SDK and no spend."""
 
     def __init__(self, query=None, options_cls=None, setting_sources=("project",), extra_options=None, hook_cls=None, log_compaction=False,
-                 hook_timeout=60, progress_seconds=PROGRESS_SECONDS, prices=None, registry=None, resolve=False):
+                 hook_timeout=60, progress_seconds=PROGRESS_SECONDS, prices=None, registry=None, resolve=False,
+                 ceiling=TRANSPORT_CEILING, buffer_size=READER_BUFFER):
+        self.ceiling, self.buffer_size = ceiling, buffer_size   # #2267: the declared ceiling, and the reader's buffer above it
         self.prices = prices      # the `prices` block of agent-defaults.yaml: {client, models}; None prices no model
         self.registry, self.resolve = registry, resolve   # the run_start `models` setting: map a spelling only when it is true
         self._reg = None          # the loaded registry, read once
@@ -282,15 +322,25 @@ class SdkAdapter:
                 self._hook_cls = sandbox.Matcher
         return self._hook_cls
 
-    def _hooks(self, req):
+    def _hooks(self, req, denies=None):
         """The sandbox wall on every session (PreToolUse, squad/sandbox.py), and a PreCompact hook that logs each
-        compaction to the run record when the setting asks for it. The timeout is set on the matcher (G12)."""
+        compaction to the run record when the setting asks for it. The timeout is set on the matcher (G12).
+
+        `denies` maps a tool call id to the reason a message past the ceiling left for it (#2267): the CLI asks this
+        hook for that call, and the answer is the short error the session reads for it."""
         cls = self._matcher_cls()
 
         def on_deny(tool, reason):
             if self.sink:
                 self.sink("sandbox_deny", node=req.node, entry=req.entry, item=req.item, session=req.session_id, tool=tool, reason=reason)
-        hooks = {"PreToolUse": [cls(matcher=sandbox.MATCHER, hooks=[sandbox.pre_tool_use(req.workspace or os.getcwd(), on_deny)],
+
+        async def over_ceiling(input_data, tool_use_id, context):
+            reason = (denies or {}).get(tool_use_id)
+            if reason is None:
+                return {}
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}
+
+        hooks = {"PreToolUse": [cls(matcher=sandbox.MATCHER, hooks=[over_ceiling, sandbox.pre_tool_use(req.workspace or os.getcwd(), on_deny)],
                                     timeout=self.hook_timeout)]}
         if not self.log_compaction:
             return hooks
@@ -317,11 +367,11 @@ class SdkAdapter:
             self._reg = modelreg.load(self.registry) if self.registry else modelreg.default_registry()
         return modelreg.invocation(req.model, "sdk", reg=self._reg).wire
 
-    def options(self, req, tail=None):
+    def options(self, req, tail=None, denies=None):
         _, cls = self._sdk()
         kw: dict[str, object] = dict(cwd=req.workspace, model=self._model(req), tools=list(req.tools),
                                      max_budget_usd=prices.sdk_budget(self.prices, req.model, req.max_spend), permission_mode="bypassPermissions",
-                                     setting_sources=self.setting_sources)
+                                     setting_sources=self.setting_sources, max_buffer_size=self.buffer_size)   # #2267: the reader's buffer above the ceiling
         kw.update(self.extra_options)   # the engine's defaults land first: the node's own pick has the last word
         if req.effort:
             kw["effort"] = req.effort
@@ -340,7 +390,7 @@ class SdkAdapter:
             sp = dict(sp) if isinstance(sp, dict) else {"type": "preset", "preset": "claude_code"}
             sp["append"] = "\n\n".join(x for x in (sp.get("append"), req.instructions) if x)
             kw["system_prompt"] = sp
-        kw["hooks"] = self._hooks(req)
+        kw["hooks"] = self._hooks(req, denies)
         kw["cli_path"] = sandbox.WRAPPER     # #1469: every child's CLI, and so every process it starts, runs under the signal profile
         kw["env"] = {**kw.get("env", {}), **sandbox.sdk_cli_env()}
         if tail is not None:    # the CLI's stderr is piped only when a callback asks for it
@@ -348,18 +398,37 @@ class SdkAdapter:
             kw["stderr"] = tail
         return cls(**kw)
 
+    def _over_ceiling(self, req, message, size, denies):
+        """One message past the adapter's ceiling: one record event naming the tool call and the size, and a short error
+        the session reads for that call. The call goes on; the stream is never dropped for a frame the reader carried.
+
+        A tool call in the frame is refused by the `over_ceiling` hook, so the model reads the size and the ceiling and
+        makes a smaller call. A tool result in the frame answers a call the CLI already ran, so the session holds that
+        result: the event names it, and the session needs no error for it.
+        """
+        tool, name = (ceiling_tools(message) or [(None, None)])[0]
+        if self.sink:
+            self.sink("message_over_ceiling", node=req.node, entry=req.entry, item=req.item, session=req.session_id,
+                      tool=tool, name=name, size=size, ceiling=self.ceiling)
+        for tool_id, tool_name in ceiling_tools(message):
+            if tool_name is not None and tool_id is not None:     # a tool use: the hook refuses this call
+                denies[tool_id] = over_ceiling_line(size, self.ceiling)
+
     async def call(self, req):
         query, _ = self._sdk()
         result, subagents, output_cap, served = None, 0, False, False
         prog = _Progress(req, self.sink, self.progress_seconds)
         watch = StallWatch(req.max_stalls)
         tail = _Tail()
-        stream = query(prompt=req.prompt, options=self.options(req, tail))
+        denies = {}     # #2267: tool call id -> the short error a message past the ceiling left for it
+        stream = query(prompt=req.prompt, options=self.options(req, tail, denies))
         try:
             async for m in stream:
                 kind = type(m).__name__
                 if req.pulse is not None:      # every message the call reads is a sign of life for the no-progress window (#1289)
                     req.pulse.beat()
+                if (size := frame_size(m)) > self.ceiling:     # #2267: one oversize message is a record fact, never the run's end
+                    self._over_ceiling(req, m, size, denies)
                 if kind == "AssistantMessage":
                     # A spent subscription answers with a synthetic message that carries an error (#507): the model served
                     # nothing, so it does not make the call served, and the grant goes back.
@@ -390,9 +459,10 @@ class SdkAdapter:
             # A refusal after the work carries what the work spent: the result is in hand before the CLI exits non-zero.
             spend, usage, source = failed_spend(self.prices, req.model, result)
             # Probed 2026-10-11 (run-20261011-171934-888e92, issue #1814): one message past the reader's JSON ceiling
-            # ends the read stream inside the transport — `guard()` raises out of its own frame loop — so the frame
-            # cannot be dropped and the session cannot go on. The ceiling and the size of that frame are the only facts
-            # there are, and they are what this error carries.
+            # ends the read stream inside the transport — `guard()` raises out of its own frame loop. The adapter's
+            # buffer (READER_BUFFER) now carries every message up to that bound, and a message past the adapter's own
+            # ceiling is handled in the loop (#2267); only a frame past the buffer reaches here, and the ceiling and
+            # the size of that frame are the only facts there are.
             if over := ceiling_hit(e):
                 ceiling, size = over
                 raise MessageOverCeiling(
