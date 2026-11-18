@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
+import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, math, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, board_lag, board_priority, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, hub_voice, issue_ledger, modelreg, models_chains, procscan, provkey, session_card, session_send, sessions, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
@@ -4366,7 +4366,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
     repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
-    if _under_floor("board pass"): return board_cache
+    if _under_floor("board pass"): return True
     items = lc = cases = None
     gaps = []   # why the flow sample is skipped when the reads answered but are not whole (#894); none when they are whole
     read_started = time.time()   # when the list read begins: each row keeps it as its observation instant (#974)
@@ -4431,7 +4431,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     if items is None:
         gaps.insert(0, f"items read failed: {board_cache.get('err')}")
     _flow.append(_flow.history_path(BOARD, REPO), rows, incomplete="; ".join(gaps) or None)
-    return board_cache
+    return items is not None
 MERGED_INPUTS = ("st", "s", "l", "cr", "su", "iu")   # the column inputs of a row: Status and its instant, item instant, issue state, labels and close reason (#974)
 def merge_items(held, fresh, observed):
     """The rows of one read merged into the rows the cache holds (ADR-0149). Every row takes the read's structure; its column
@@ -4594,6 +4594,8 @@ def save_board():
     profile in one process, so the pid alone is shared."""
     _tmp = _temp_name(BOARD); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
 FULL_EVERY = 600   # seconds between full board reads; a board-dirty flag reads at once
+FULL_RETRY_FIRST = 15   # seconds before the next try of a failed full read; each further failure doubles it, never past FULL_EVERY (#2207)
+SETTLE_EVERY = 16   # seconds before the pass a board move asks for: the items route lags a write by seconds (#1790)
 DIRTY_MIN_SECS = 30.0   # the least gap between two full reads a card move asks for: a board of a thousand cards is a
                         # dozen pages, so one read per move spent the hub's CPU on a board that changed in one card (#1790)
 FAST_EVERY = 15    # seconds between fast reads of the open cards
@@ -4656,27 +4658,43 @@ def refresh_fast():
         try: fast_board_pass()
         except Exception as e:
             with _board_lock: set_part("status", err=str(e)[:80])   # one failed fast pass never ends the loop
+def retry_wait(failures):
+    """Seconds a failed full read waits before its next try, counted from when that read ended (#2207)."""
+    return min(FULL_EVERY, FULL_RETRY_FIRST * 2 ** (failures - 1))
+def _cooldown_until():
+    """The instant the shared GitHub cooldown holds reads until, or 0 when none holds (ghthrottle, #2207)."""
+    return float(ghthrottle.Throttle(state_dir=STATE, clock=time.time).holding().get("until", 0))
 def refresh_board():
     """board_pass() every FULL_EVERY seconds, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
     The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
-    quick = False
+    quick, fails = False, 0
     watched = read_wanted()
     while True:
+        wait = FULL_EVERY
         if watched:   # the board read is a page's reading: with no page it does no work (#1790)
-            try: board_pass()
+            try: failed = board_pass() is False
             except Exception as e:
+                failed = True
                 with _board_lock: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
-        for _ in range(8 if quick else FULL_EVERY // 2):
+            fails = fails + 1 if failed else 0
+            if fails: wait = retry_wait(fails)
+        cooling = _cooldown_until()
+        wait = max(min(wait, SETTLE_EVERY) if quick else wait, cooling - time.time())
+        for _ in range(math.ceil(wait / 2)):
             read_pause(2)
+            held = time.time() < cooling
             now_watched = read_wanted()
             if now_watched and not watched:
-                watched = True; quick = False; break   # the page's first read: the board is read now, not a cycle later (#1790)
+                watched = True
+                if not held: quick = False; break   # the page's first read: the board is read now, not a cycle later (#1790)
+                continue
             if not now_watched:
                 watched = False
                 continue                              # no page: the dirty flag is not read either
+            if held: continue                         # a GitHub cooldown holds: no read starts before it ends (#2207)
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0):
-                    if time.time() - (board_cache.get("t") or 0) < DIRTY_MIN_SECS: continue   # a burst of moves asks once (#1790): the fast read carries each card's column in the meantime
+                    if fails or time.time() - (board_cache.get("t") or 0) < DIRTY_MIN_SECS: continue   # a burst of moves asks once (#1790): the fast read carries each card's column in the meantime
                     quick = True; break
             except OSError: pass
         else: quick = False

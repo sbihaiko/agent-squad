@@ -431,3 +431,87 @@ def test_a_move_pass_is_read_again_after_the_board_settles(hub, monkeypatch):
     with pytest.raises(StopIteration):
         hub.refresh_board()
     assert len(passes) == 3, "the start pass, the pass the touch asked for, and the settle pass"
+
+
+class _Done(BaseException):
+    """Ends a refresh loop under test; a BaseException, so the loop's own `except Exception` never takes it."""
+
+
+class _Clock:
+    """Time that moves only when the refresh loop sleeps: a retry gap is read off the clock, and no test sleeps."""
+
+    def __init__(self, monkeypatch, hub):
+        self.now = 1_000_000.0
+        monkeypatch.setattr(hub.time, "time", lambda: self.now)
+        monkeypatch.setattr(hub.time, "sleep", self.sleep)
+
+    def sleep(self, secs):
+        self.now += secs
+
+
+def _refresh_with(hub, monkeypatch, tmp_path, results, clock):
+    """refresh_board over fake passes: results[i] is pass i's answer, True for a good read and False for a failed one."""
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
+    starts = []
+
+    def fake_pass():
+        if len(starts) == len(results):
+            raise _Done()
+        starts.append(clock.now)
+        return results[len(starts) - 1]
+
+    monkeypatch.setattr(hub, "board_pass", fake_pass)
+    with pytest.raises(_Done):
+        hub.refresh_board()
+    return [b - a for a, b in zip(starts, starts[1:])]
+
+
+def test_a_failed_full_read_is_retried_within_thirty_seconds(hub, monkeypatch, tmp_path):
+    clock = _Clock(monkeypatch, hub)
+    gaps = _refresh_with(hub, monkeypatch, tmp_path, [False, True], clock)
+    assert gaps and gaps[0] <= 30, "one failed full read: the next read starts within 30 s, not one full period later"
+
+
+def test_consecutive_failures_grow_the_wait_and_stop_at_the_full_period(hub, monkeypatch, tmp_path):
+    clock = _Clock(monkeypatch, hub)
+    gaps = _refresh_with(hub, monkeypatch, tmp_path, [False] * 9, clock)
+    assert gaps == [16, 30, 60, 120, 240, 480, 600, 600], \
+        "each failure doubles the 15 s first wait, rounded to the 2 s beat, and the wait never passes FULL_EVERY"
+
+
+def test_a_good_read_after_a_failure_restores_the_full_cadence_and_clears_err(hub, monkeypatch, tmp_path):
+    clock = _Clock(monkeypatch, hub)
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
+    gh = {"run": _fake_gh([], fail=True)}
+    monkeypatch.setattr(hub.subprocess, "run", lambda cmd, **kw: gh["run"](cmd, **kw))
+    starts, errs = [], []
+    board_pass = hub.board_pass
+
+    def real_pass():
+        starts.append(clock.now)
+        if len(starts) > 3:
+            raise _Done()
+        if len(starts) == 2:
+            gh["run"] = _fake_gh([])   # GitHub answers again from the second read on
+        result = board_pass()
+        errs.append(hub.board_cache["err"])
+        return result
+
+    monkeypatch.setattr(hub, "board_pass", real_pass)
+    with pytest.raises(_Done):
+        hub.refresh_board()
+    assert errs[0], "the failed read names its error"
+    assert starts[1] - starts[0] <= 30, "the failed read is retried within 30 s"
+    assert errs[1] is None, "the good read clears err"
+    assert starts[2] - starts[1] == hub.FULL_EVERY, "after a good read the cadence is the full period again"
+
+
+def test_no_retry_starts_while_a_github_cooldown_holds(hub, monkeypatch, tmp_path):
+    clock = _Clock(monkeypatch, hub)
+    until = clock.now + 700   # longer than the full period, so the cooldown alone sets the wait
+    (tmp_path / "gh-cooldown.json").write_text(json.dumps({"until": until, "at": clock.now, "pass": "landing",
+                                                           "message": "API rate limit exceeded"}))
+    gaps = _refresh_with(hub, monkeypatch, tmp_path, [False, True], clock)
+    assert gaps and gaps[0] >= 700, "the retry starts only once the GitHub cooldown has ended"
