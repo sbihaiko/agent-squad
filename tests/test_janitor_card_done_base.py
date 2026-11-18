@@ -72,7 +72,7 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
     the board answers the issue's card in, none when empty; `live` leaves the run with no verdict; `closed` makes the
     issue read closed."""
     for name in ("janitor.py", "ghcall.sh", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py", "board-definition.json",
-                 "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py"):
+                 "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py", "deadlock.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
     calls = tmp_path / "calls"
