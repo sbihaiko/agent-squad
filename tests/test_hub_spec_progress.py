@@ -259,6 +259,14 @@ def test_the_open_card_of_a_closed_spec_counts_as_no_spec(hub):
     assert hub.nospec_count(items, moves={}, now=NOW) == {"closed": 0, "total": 1}
 
 
+def test_a_class_label_card_leaves_the_no_spec_count(hub):
+    """#2283: the loop-bug mark is the prefix rule the dispatcher reads (ADR-0146), so `loop-bug:landing` has its own
+    lane and never counts as a No spec card."""
+    items = [_item(50, "Todo", labels=("bug", "loop-bug:landing"), o=_iso(NOW - 3600)),
+             _item(51, "Todo", labels=(), o=_iso(NOW - 3600))]
+    assert hub.nospec_count(items, moves={}, now=NOW) == {"closed": 0, "total": 1}
+
+
 def test_the_specs_row_leaves_the_no_spec_group_out(hub):
     """Owner, 2026-11-18: the Specs row counts only the sub-issues of open specs; the No spec group is in no count."""
     p = hub.spec_progress(BOARD + NOSPEC, moves={}, now=NOW)

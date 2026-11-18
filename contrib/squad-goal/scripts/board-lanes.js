@@ -15,7 +15,7 @@ const colTracks=counts=>counts.map(n=>`minmax(${COL_MIN},${colWeight(n)}fr)`).jo
 const specKey=x=>x.pa==null?"none":String(x.pa);
 const numCmp=(a,b)=>a==null?(b==null?0:1):b==null?-1:a-b;
 // A card's kind for the Kinds filter (#904): a pull request, a bug (labelled bug or loop-bug), or an issue.
-const kindKey=x=>x.kind==="pr"?"pr":(hasLabel(x,"bug")||hasLabel(x,"loop-bug"))?"bug":"issue";
+const kindKey=x=>x.kind==="pr"?"pr":(hasLabel(x,"bug")||isLoopBug(x))?"bug":"issue";
 const KIND_OPTIONS=[["issue","Issue"],["bug","Bug"],["pr","PR"]];
 // The filters (#899, #904): an empty list means all; the lists combine with AND. Keys are the values the bar offers.
 // A `wave:NN` label is no filter and no lane (SPEC 1965, #1988).
@@ -42,7 +42,10 @@ const specSlots=nums=>{const m=new Map(),used=new Set();
     if(used.size<8)while(used.has(s))s=(s+1)%8;used.add(s);m.set(n,s+1)});return m};
 const specColor=(slots,n)=>n==null||!Number.isFinite(Number(n))?SPEC_GREY:`var(--s${slots.get(Number(n))||Number(n)%8+1})`;
 const cardSpec=x=>x.sp?x.n:(x.pa??x.n);   // a spec card wears its own color, and a card of no spec its number's: a card is never grey (#1640)
-const isLoopBug=x=>(x.l||[]).some(l=>l==="loop-bug"||String(l).startsWith("loop-bug:"));
+// The loop-bug mark is the prefix rule the dispatcher reads (ADR-0146): bare `loop-bug` or any `loop-bug:<class>`. The
+// label itself is returned, so a reader names the class the card carries.
+const loopBugLabel=x=>(x.l||[]).find(l=>l==="loop-bug"||String(l).startsWith("loop-bug:"))||null;
+const isLoopBug=x=>loopBugLabel(x)!=null;
 const cardColor=(slots,x)=>isLoopBug(x)?"var(--err)":specColor(slots,cardSpec(x));   // a loop-bug has no spec: it wears the Loop bugs lane red
 // </card-rules>
 const SPEC_IN_FLIGHT=["Todo","In Progress","Doing","Code Complete","Review","Landing","Gating"];   // a ticket in flight, identical to board_facts.py LIVE_WORK
@@ -59,7 +62,7 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
  return}rows.push({...x,col:g.name})}));
   const lanes=new Map(),ensure=(id,meta)=>{if(!lanes.has(id))lanes.set(id,{id,...meta,all:[],vis:[]});return lanes.get(id)};
   const laneOf=x=>{
-    if(hasLabel(x,"loop-bug"))return["bugs",{kind:"bugs",title:"Loop bugs"}];
+    if(isLoopBug(x))return["bugs",{kind:"bugs",title:"Loop bugs"}];
     if(x.pa==null)return["none",{kind:"none",title:"No spec"}];
     const sp=specs.get(x.pa)||{title:"",st:""};
     return["s"+x.pa,{kind:"s",num:x.pa,title:sp.title,st:sp.st,sc:sp.sc}]};

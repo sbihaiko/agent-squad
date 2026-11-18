@@ -10,6 +10,7 @@ the page carries it, and read the served page for the selector.
 """
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -269,10 +270,55 @@ def test_spec_mode_draws_no_spec_cards_as_cards_only_in_their_lane(hub):
     assert 42 in [r["n"] for ln in model["lanes"] if ln["id"] == "none" for r in ln["all"]], "an open card of a closed spec is lost"
 
 
+CARD_STUBS = """
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const colOf = () => "#000";
+const CN = {};
+const SLOTS = new Map();
+const tint = () => "";
+const gstrip = () => "";
+const age = () => "";
+const ageC = () => "";
+const bo = {labels: []};
+"""
+
+
+def _card_html(hub, card):
+    """One card drawn by the page's own renderer over the page's own card rules, run by node (ADR-0137)."""
+    if NODE is None:
+        pytest.skip("node is required")
+    src = re.search(r"^const cards=.*$", hub.PAGE, re.M).group(0)
+    rules = re.search(r"// <card-rules>.*?// </card-rules>", hub.PAGE, re.S).group(0)
+    script = (CARD_STUBS + "\n" + rules + "\n" + src
+              + f"\nconsole.log(JSON.stringify(cards({{name: 'Todo'}}, [{json.dumps(card)}], [{json.dumps(card)}])));")
+    p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
 def test_a_card_shows_a_loop_bug_chip_or_a_bug_chip_as_text(hub):
-    page = hub.PAGE
-    assert '<span class="bugc loop">loop-bug</span>' in page, "a loop-bug card shows no loop-bug chip"
-    assert '<span class="bugc">bug</span>' in page, "a bug card shows no bug chip"
+    html = _card_html(hub, {"n": 895, "t": "a loop defect", "l": ["bug", "loop-bug"]})
+    assert '<span class="bugc loop">loop-bug</span>' in html, "a loop-bug card shows no loop-bug chip"
+    bug = _card_html(hub, {"n": 900, "t": "a bug", "l": ["bug"]})
+    assert '<span class="bugc">bug</span>' in bug, "a bug card shows no bug chip"
+
+
+def test_a_class_label_card_wears_the_loop_bug_chip_naming_its_class(hub):
+    """#2283: the loop-bug mark is the same prefix rule the dispatcher reads (ADR-0146), so `loop-bug:landing` is a
+    loop defect too, and the chip names the class the card carries."""
+    html = _card_html(hub, {"n": 2276, "t": "the landing stalls", "l": ["bug", "loop-bug:landing"]})
+    assert '<span class="bugc loop">loop-bug:landing</span>' in html, html
+    assert '<span class="bugc">bug</span>' not in html, "a class label still falls to the plain bug chip"
+
+
+def test_a_class_label_card_sits_in_the_loop_bugs_lane(hub):
+    """#2283: the lane rule reads the same prefix, so no class label card falls to the No spec lane."""
+    groups = [{"name": "Todo", "items": [_row(2276, "Todo", ["bug", "loop-bug:landing"])]},
+              {"name": "Closed", "end": True, "n": 0, "items": []}]
+    model = _build(groups, sum={"specs": [], "waves": []})
+    bugs = next((ln for ln in model["lanes"] if ln["id"] == "bugs"), None)
+    assert bugs is not None and [r["n"] for r in bugs["all"]] == [2276], model["lanes"]
+    assert "none" not in [ln["id"] for ln in model["lanes"]], model["lanes"]
 
 
 # ---- the board answer carries the open rows and the summaries, never a closed row (#972) ----
