@@ -744,11 +744,26 @@ def gate_span(gate, since):
     return finish - start
 
 
+def _spread(values):
+    """One stage's readings: its min, median, p85 and max, and its count (#2280). No value makes every reading None and
+    the count zero, so a column the window never observed prints a dash and never a zero."""
+    if not values:
+        return {"min_s": None, "median_s": None, "p85_s": None, "max_s": None, "observations": 0}
+    return {"min_s": min(values), "median_s": percentile(values, 50), "p85_s": percentile(values, 85),
+            "max_s": max(values), "observations": len(values)}
+
+
+def _rounded(v):
+    """One reading as the wire prints it, and None where there is none."""
+    return round(v, 3) if v is not None else None
+
+
 def _row_stage(keys, readings):
     """The stage whose median a column answers: the larger median, and a known reading over an unknown one, because zero
     seconds is a reading and None is none. Equal medians keep the column's own order (`queue` before `wait`, `coding`
     before `between`), never a dict's order."""
-    return max(keys, key=lambda k: (readings[k][0] is not None, readings[k][0] if readings[k][0] is not None else 0.0))
+    return max(keys, key=lambda k: (readings[k]["median_s"] is not None,
+                                    readings[k]["median_s"] if readings[k]["median_s"] is not None else 0.0))
 
 
 def column_parallelism(runs):
@@ -982,7 +997,7 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
 
 def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=None, now=None,
          cores=None, mem_gb=None):
-    """The trip of one issue as one stacked bar of the board's columns: each column's median and p90 over the deliveries
+    """The trip of one issue as one stacked bar of the board's columns: each column's median and p85 over the deliveries
     of a window, in the definition's order, `Todo`, `Doing`, `Review`, `Landing` and `Gating`. `Closed` draws no column
     (#2199), and its 10 s after the verdict stays under `record_stages`.
 
@@ -990,19 +1005,22 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     gate-history row of the window, `start` and `finish` in seconds. A delivery is a run whose verdict is at or after
     `since`; each gate row after `since` adds one observation to the wave's gate, which stands in Gating. The run's own
     `gates` stage stands in Doing, where the card is while it runs (#2199); the record's gate is never a Gating time.
-    A column that holds two stages answers the larger of the two medians as its `median_s` and `p90_s`, and the other
-    stage beside it in `beside`, with its own caption; a stage with no reading leaves `beside` None, so a run that names
-    no card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians. `parallelism` is the
+    A column that holds two stages answers the larger of the two medians as its `median_s`, and its `min_s`, `p85_s` and
+    `max_s` come from that same stage, never from the other one (#2280); the other stage stands beside it in `beside`,
+    with its own caption and its own four readings. A stage with no reading leaves `beside` None, so a run that names no
+    card reads no column the card alone fills. `sum_s` is the sum of the column's stage medians. `parallelism` is the
     mean count of issues standing in the column at once, over the card's own runs, and `effective_s` is the column's
     time per issue, `median_s`, over its parallelism (#2256); `share` is the effective time over the total, the width
     its segment takes in the bar. A row's
     `stage` is the stage its median belongs to. The payload also keeps `stages`: the drawn board-column rows, in board
     order, each
-    with `column`, `label`, `median_s`, `p90_s` and `observations` of the column's larger stage, so a reader of the
-    older wire still reads its shape. The record's own per-stage rows live under `record_stages`, one row per entry of
-    `TRIP_STAGES_LABELLED` with its own median and share. Fewer than `TRIP_MIN_DELIVERIES` deliveries answer `bar`
-    False, and the page says so and draws no bar. Each column also carries what it consumes (see `trip_consumption`),
-    and the payload the machine's peak load, core count, memory and minutes with no record.
+    with `column`, `label`, `observations`, `min_s`, `median_s`, `p85_s` and `max_s` of the column's larger stage. The
+    payload names p85 where the older wire named p90 and carries no `p90_s` and no `observations_note` (#2280), so a
+    row's shape is the board-column row with one more reading at each end. The record's own per-stage rows live under
+    `record_stages`, one row per entry of `TRIP_STAGES_LABELLED` with its own four readings and share. Fewer than
+    `TRIP_MIN_DELIVERIES` deliveries answer `bar` False, and the page says so and draws no bar. Each column also carries
+    what it consumes (see `trip_consumption`), and the payload the machine's peak load, core count, memory and minutes
+    with no record.
     """
     per = {key: [] for key in TRIP_FOLD_KEYS}
     deliveries = 0
@@ -1017,10 +1035,10 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
         d = gate_span(gate, since)
         if d is not None:
             per[GATING_GATE].append(d)
-    readings = {key: (percentile(v, 50), percentile(v, 90), len(v)) for key, v in per.items()}
+    readings = {key: _spread(v) for key, v in per.items()}
     columns = trip_columns()
-    held = {col: [k for k in keys if readings[k][0] is not None] for col, _, keys in columns}
-    sums = {col: sum(readings[k][0] for k in ks) for col, ks in held.items()}
+    held = {col: [k for k in keys if readings[k]["median_s"] is not None] for col, _, keys in columns}
+    sums = {col: sum(readings[k]["median_s"] for k in ks) for col, ks in held.items()}
     mains = {col: _row_stage(keys, readings) for col, _, keys in columns}
     # #2256: a column's width is its effective time per delivery, its time per issue divided by its parallelism. The
     # runs are the card's own column runs, the spans the chart already folds, so the fold adds no reader of GitHub. A
@@ -1035,7 +1053,8 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
                 runs_of[k].append(r)
     parallel = {col: max(1.0, p) if (p := column_parallelism(runs_of[col])) is not None else 1.0
                 for col, _, _ in columns}
-    effective = {col: readings[mains[col]][0] / parallel[col] if readings[mains[col]][0] is not None else None
+    effective = {col: readings[mains[col]]["median_s"] / parallel[col]
+                 if readings[mains[col]]["median_s"] is not None else None
                  for col, _, _ in columns}
     effective_total = sum(v for v in effective.values() if v)
     consumed = trip_consumption(spans, since, cards=cards, calls=calls, review_calls=review_calls, loads=loads,
@@ -1043,41 +1062,40 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     rows, stages = [], []
     for col, label, keys in columns:
         main = mains[col]
-        median, p90, n = readings[main]
+        r = readings[main]
         beside, others = None, [k for k in keys if k != main]
         # A stage the record never held is None, never a zero, so it stands nowhere: when the main reading is a known
         # zero, the unknown stage adds no second reading to the cell, and the column reads its zero alone.
-        if others and readings[others[0]][0] is not None:
-            omed, op90, on = readings[others[0]]
-            beside = {"stage": others[0], "label": TRIP_STAGE_LABELS[others[0]], "observations": on,
-                      "median_s": round(omed, 3), "p90_s": round(op90, 3)}
-        rows.append({"column": col, "label": label, "stage": main, "observations": n,
-                     "median_s": round(median, 3) if median is not None else None,
-                     "p90_s": round(p90, 3) if p90 is not None else None,
+        if others and readings[others[0]]["median_s"] is not None:
+            o = readings[others[0]]
+            beside = {"stage": others[0], "label": TRIP_STAGE_LABELS[others[0]], "observations": o["observations"],
+                      "min_s": _rounded(o["min_s"]), "median_s": _rounded(o["median_s"]),
+                      "p85_s": _rounded(o["p85_s"]), "max_s": _rounded(o["max_s"])}
+        rows.append({"column": col, "label": label, "stage": main, "observations": r["observations"],
+                     "min_s": _rounded(r["min_s"]), "median_s": _rounded(r["median_s"]),
+                     "p85_s": _rounded(r["p85_s"]), "max_s": _rounded(r["max_s"]),
                      "sum_s": round(sums[col], 3) if held[col] else None,
                      "parallelism": round(parallel[col], 3) if effective[col] is not None else None,
                      "effective_s": round(effective[col], 3) if effective[col] is not None else None,
                      "share": round(effective[col] / effective_total, 4) if effective_total and effective[col] else 0.0,
                      "beside": beside, **consumed["lines"][col]})
-        stages.append({"column": col, "label": label, "observations": n,
-                       "median_s": round(median, 3) if median is not None else None,
-                       "p90_s": round(p90, 3) if p90 is not None else None})
-    record_stages, stage_total = [], sum(m for m in (readings[k][0] for k in TRIP_STAGES) if m)
+        stages.append({"column": col, "label": label, "observations": r["observations"],
+                       "min_s": _rounded(r["min_s"]), "median_s": _rounded(r["median_s"]),
+                       "p85_s": _rounded(r["p85_s"]), "max_s": _rounded(r["max_s"])})
+    record_stages, stage_total = [], sum(m for m in (readings[k]["median_s"] for k in TRIP_STAGES) if m)
     for key, label in TRIP_STAGES_LABELLED:
-        med, p90, n = readings[key]
-        record_stages.append({"stage": key, "label": label, "observations": n,
-                              "median_s": round(med, 3) if med is not None else None,
-                              "p90_s": round(p90, 3) if p90 is not None else None,
-                              "share": round(med / stage_total, 4) if stage_total and med is not None else 0.0})
+        r = readings[key]
+        record_stages.append({"stage": key, "label": label, "observations": r["observations"],
+                              "min_s": _rounded(r["min_s"]), "median_s": _rounded(r["median_s"]),
+                              "p85_s": _rounded(r["p85_s"]), "max_s": _rounded(r["max_s"]),
+                              "share": round(r["median_s"] / stage_total, 4)
+                              if stage_total and r["median_s"] is not None else 0.0})
     return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "columns": rows, "stages": stages,
             "record_stages": record_stages, "label": TRIP_LABEL,
             "peak_load": consumed["peak_load"], "cores": consumed["cores"], "mem_gb": consumed["mem_gb"],
             "load_bound": consumed["load_bound"], "invalid_loads": consumed["invalid_loads"],
             "invalid_peak": consumed["invalid_peak"], "ram_minutes": consumed["ram_minutes"],
             "window_minutes": consumed["window_minutes"], "no_record_minutes": consumed["no_record_minutes"],
-            # One header holds every row's count, but Gating counts the window's gate-history rows while every other
-            # column counts deliveries, so the payload names the difference both tables print (#2253).
-            "observations_note": "Gating counts gate runs; every other column counts deliveries",
             "tokens_ticks": consumed["tokens_ticks"], "machine_ticks": consumed["machine_ticks"]}
 
 

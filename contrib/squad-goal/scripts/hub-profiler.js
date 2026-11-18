@@ -43,10 +43,10 @@ const profTokUnit=v=>{if(v==null)return "&#8212;";const n=Math.round(v);
  if(n>=1e6)return (n/1e6).toFixed(n>=1e7?0:1).replace(/\.0$/,"")+"M";
  if(n>=1000)return (n/1000).toFixed(n>=1e4?0:1).replace(/\.0$/,"")+"k";
  return String(n)};
-const profTripRead=(name,s)=>`${name}: median ${profTripNum(s.median_s)}, p90 ${profTripNum(s.p90_s)} (${s.observations} observation${s.observations===1?"":"s"})`;
-const profTripTitle=c=>{const main=profTripRead(c.label,c);
- return c.beside?`${main}; ${esc(c.beside.label||c.beside.stage)} median ${profTripNum(c.beside.median_s)}`:main};
-const profTripCell=c=>profTripNum(c.median_s)+(c.beside?` &middot; ${esc(c.beside.label||c.beside.stage)} ${profTripNum(c.beside.median_s)}`:"");
+// A segment's hover reads its own column alone: the median, then the p85, then the observation count (#2280). The stage
+// beside the column's larger one stays in the payload, never in a hover or a cell.
+const profTripRead=(name,s)=>`${name}: median ${profTripNum(s.median_s)}, p85 ${profTripNum(s.p85_s)} (${s.observations} observation${s.observations===1?"":"s"})`;
+const profTripTitle=c=>profTripRead(c.label,c);
 // A column's width follows its effective time per delivery (#2256): its time per issue over its parallelism. The
 // label and the table print both numbers, so no width is a figure the page never shows.
 const profTripPar=p=>p==null?"&#8212;":"×"+Number(p).toFixed(1);
@@ -227,23 +227,19 @@ function profTrip(t,phone){
  const cols=t.columns||[];
  const silent=t.no_record_minutes==null?"the record's missing minutes were not read":`${t.no_record_minutes} minutes carried no load record`;
  const sentence=`Peak load ${t.peak_load==null?"&#8212;":Number(t.peak_load).toFixed(2)} against saturation at ${t.cores||1} cores; ${silent}.`;
- // One header names the Observations count on both tables, taken from the payload, and both print a token count in k
- // or M, so the phone and the desktop never drift (#2253).
- const obs="Observations"+(t.observations_note?` (${esc(t.observations_note)})`:"");   // the rule layer words the note; the view names no column
+ // One table serves both screens (#2280): the stage first, the column's four readings of its larger stage, then the
+ // parallelism and the effective time the chart's label states, then the three costs, each cell one value. The median
+ // takes the header `Time per issue` it carried in #2256. Both screens print a token count in k or M, so the phone and
+ // the desktop never drift (#2253).
+ const dash="&#8212;";
+ const table=`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Stage</th><th>Min</th><th>Time per issue</th><th>p85</th><th>Max</th><th>Parallelism</th><th>Effective time</th><th>Tokens / issue</th><th>CPU mean</th><th>RAM mean</th></tr></thead><tbody>${cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td>`
+  +`<td>${profTripNum(c.min_s)}</td><td>${profTripNum(c.median_s)}</td><td>${profTripNum(c.p85_s)}</td><td>${profTripNum(c.max_s)}</td>`
+  +`<td>${profTripPar(c.parallelism)}</td><td>${profTripNum(c.effective_s)}</td>`
+  +`<td>${profTokUnit(c.tokens_per_issue)}</td>`
+  +`<td>${(c.cpu||{}).mean!=null?profTripPct(c.cpu.mean):dash}</td><td>${(c.ram||{}).mean!=null?profTripPct(c.ram.mean):dash}</td></tr>`).join("")}</tbody></table>`;
  // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them.
  if(phone)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below. Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.</p>`
-  +profTripFacts(t)+profTripLanes(t)
-  +`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Column</th><th>Time per issue</th><th>Parallelism</th><th>Effective time</th><th>p90</th><th>${obs}</th><th>Tokens/issue</th><th>CPU</th><th>RAM</th></tr></thead><tbody>${cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td><td>${profTripCell(c)}</td><td>${profTripPar(c.parallelism)}</td><td>${profTripNum(c.effective_s)}</td><td>${profTripNum(c.p90_s)}</td><td>${c.observations||0}</td><td>${profTokUnit(c.tokens_per_issue)}</td><td>${profTripPct((c.cpu||{}).mean)}</td><td>${profTripPct((c.ram||{}).mean)}</td></tr>`).join("")}</tbody></table></section>`;
- const dash="&#8212;";
- // The table follows the mock (#2255), with the three time columns of #2256: Time per issue, Parallelism and
- // Effective time, then Tokens / issue, CPU mean and RAM mean, p90 and Observations last, and each cell holds one value.
- const rows=cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td>`
-  +`<td>${profTripNum(c.median_s)}</td>`
-  +`<td>${profTripPar(c.parallelism)}</td>`
-  +`<td>${profTripNum(c.effective_s)}</td>`
-  +`<td>${profTokUnit(c.tokens_per_issue)}</td>`
-  +`<td>${c.cpu&&c.cpu.mean!=null?profTripPct(c.cpu.mean):dash}</td><td>${c.ram&&c.ram.mean!=null?profTripPct(c.ram.mean):dash}</td>`
-  +`<td>${profTripNum(c.p90_s)}</td><td>${c.observations||0}</td></tr>`).join("");
+  +profTripFacts(t)+profTripLanes(t)+table+`</section>`;
  // A RAM field the record never carried is named, so a dash never reads as zero memory use (#2253).
  const ramReason=t.ram_minutes===0?"No RAM reading in this window: the load record has no memory field there.":"";
  // A reading over ten times the core count is a burst of runnable threads, not a saturation reading; the page says so
@@ -258,8 +254,7 @@ function profTrip(t,phone){
   sentence, "CPU and RAM are readings of the whole machine, on one scale, in percent of it.", badLoad, ramReason]
   .filter(Boolean).join(" ");
  return `<section id=proftrip>${head}<p class=tpn>${sub}</p>`
-  +profTripChart(t,cols)
-  +`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Column</th><th>Time per issue</th><th>Parallelism</th><th>Effective time</th><th>Tokens / issue</th><th>CPU mean</th><th>RAM mean</th><th>p90</th><th>${obs}</th></tr></thead><tbody>${rows}</tbody></table></section>`}
+  +profTripChart(t,cols)+table+`</section>`}
 function profNote(v){
  if(!v.on)return "CPU sampling is off. On, the hub reads the process table every second and folds the loop of this profile into a hot-spot tree.";
  const at=v.last_reading?new Date(v.last_reading*1000):null,f=v.failed_readings||0;

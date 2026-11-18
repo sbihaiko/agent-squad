@@ -146,19 +146,19 @@ def test_the_wall_time_tables_scroll_inside_their_section_on_a_phone(hub):
 TRIP = {"label": "The trip of an issue", "window_s": 3600, "deliveries": 4, "bar": True,
         "cores": 8, "mem_gb": 32.0, "peak_load": 4.2, "no_record_minutes": 10,
         "columns": [
-            {"column": "todo", "label": "Todo", "median_s": 60.0, "p90_s": 120.0, "observations": 2, "parallelism": 1.0, "effective_s": 60.0, "share": 0.1,
+            {"column": "todo", "label": "Todo", "min_s": 60.0, "median_s": 60.0, "p85_s": 120.0, "max_s": 120.0, "observations": 2, "parallelism": 1.0, "effective_s": 60.0, "share": 0.1,
              "tokens": {"points": [[0.5625, 480.0]], "mean": 60.0}, "tokens_per_issue": 600.0,
              "cpu": {"points": [[0.5625, 0.5]], "mean": 0.5}, "ram": {"points": [[0.5625, 0.4]], "mean": 0.4},
              "beside": None},
-            {"column": "doing", "label": "Doing", "median_s": 600.0, "p90_s": 900.0, "observations": 3, "parallelism": 2.0, "effective_s": 300.0, "share": 0.5,
+            {"column": "doing", "label": "Doing", "min_s": 600.0, "median_s": 600.0, "p85_s": 900.0, "max_s": 900.0, "observations": 3, "parallelism": 2.0, "effective_s": 300.0, "share": 0.5,
              "tokens": {"points": [[0.1875, 120.0], [0.8125, 240.0]], "mean": 120.0}, "tokens_per_issue": 2400.0,
              "cpu": {"points": [[0.1875, 0.3], [0.8125, 0.6]], "mean": 0.3},
              "ram": {"points": [[0.1875, 0.2], [0.8125, 0.3]], "mean": 0.25}, "beside": None},
-            {"column": "review", "label": "Review", "median_s": 300.0, "p90_s": 420.0, "observations": 2, "parallelism": 1.0, "effective_s": 300.0, "share": 0.3,
+            {"column": "review", "label": "Review", "min_s": 300.0, "median_s": 300.0, "p85_s": 420.0, "max_s": 420.0, "observations": 2, "parallelism": 1.0, "effective_s": 300.0, "share": 0.3,
              "tokens": {"points": [[0.5, 80.0]], "mean": 80.0}, "tokens_per_issue": 300.0,
              "cpu": {"points": [[0.5, 0.2]], "mean": 0.2}, "ram": {"points": [[0.5, 0.1]], "mean": 0.1},
              "beside": None},
-            {"column": "gating", "label": "Gating", "median_s": 30.0, "p90_s": 40.0, "observations": 1, "parallelism": 1.0, "effective_s": 30.0, "share": 0.1,
+            {"column": "gating", "label": "Gating", "min_s": 30.0, "median_s": 30.0, "p85_s": 40.0, "max_s": 40.0, "observations": 1, "parallelism": 1.0, "effective_s": 30.0, "share": 0.1,
              "tokens": {"points": [], "mean": None}, "tokens_per_issue": 0.0,
              "cpu": {"points": [], "mean": None}, "ram": {"points": [], "mean": None}, "beside": None}]}
 LOAD = {"label": "Machine load", "start": 0, "end": 3600, "peak": 4.2, "cores": 8, "gap_s": 0,
@@ -201,7 +201,8 @@ def test_the_phone_labels_each_column_with_its_name_and_median_time():
 def test_the_phone_table_shows_tokens_per_issue_mean_cpu_and_mean_ram():
     html = phone_trip_html()
     table = html[html.index("id=proftt"):]
-    for head in ("Tokens/issue", "CPU", "RAM"):
+    for head in ("Stage", "Min", "Time per issue", "p85", "Max", "Parallelism", "Effective time", "Tokens / issue",
+                 "CPU mean", "RAM mean"):
         assert head in table, f"the table names {head}"
     assert re.search(r"<td>600</td>", table) and re.search(r"<td>50%</td>", table) and re.search(r"<td>40%</td>", table), \
         "the Todo row carries the payload's tokens per issue and its mean CPU and RAM"

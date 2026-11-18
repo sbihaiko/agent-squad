@@ -1310,15 +1310,17 @@ def test_the_wave_gate_folds_into_gating(prof):
 
 
 def test_the_wire_keeps_the_drawn_column_rows_under_stages(prof):
-    """The wire keeps `stages` as the drawn board-column rows, in board order, each with the five keys an older reader of
-    `GET /api/profiler` reads, so the payload gains `columns` and breaks no reader of `stages`. No Closed row (#2199)."""
+    """The wire keeps `stages` as the drawn board-column rows, in board order, each with the keys an older reader of
+    `GET /api/profiler` reads, so the payload gains `columns` and breaks no reader of `stages`. No Closed row (#2199).
+    The time keys are the four readings of #2280, never a p90."""
     t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
     assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "landing", "gating"], \
         "five rows, in the board's order, with no Closed row"
-    assert all(set(r) == {"column", "label", "median_s", "p90_s", "observations"} for r in t["stages"]), \
-        "a stages row keeps exactly the five keys the older reader reads"
+    assert all(set(r) == {"column", "label", "observations", "min_s", "median_s", "p85_s", "max_s"} for r in t["stages"]), \
+        "a stages row keeps exactly the keys the older reader reads"
     todo = t["stages"][0]
-    assert (todo["label"], todo["median_s"], todo["p90_s"], todo["observations"]) == ("Todo", 2400.0, 2400.0, 3), \
+    assert (todo["label"], todo["min_s"], todo["median_s"], todo["p85_s"], todo["max_s"], todo["observations"]) == \
+        ("Todo", 2400.0, 2400.0, 2400.0, 2400.0, 3), \
         "the Todo row answers its larger stage, the queue at 40 min over three deliveries"
 
 
@@ -1330,8 +1332,8 @@ def test_the_record_stages_live_under_their_own_key(prof):
     rows = {r["stage"]: r for r in t["record_stages"]}
     assert rows["queue"]["median_s"] == 2400.0 and rows["wait"]["median_s"] == 20.0
     assert rows["wait"]["label"] == "Wait for a dispatch"
-    assert set(rows["wait"]) == {"stage", "label", "observations", "median_s", "p90_s", "share"}, \
-        "the per-stage row keeps the six keys the fold answers"
+    assert set(rows["wait"]) == {"stage", "label", "observations", "min_s", "median_s", "p85_s", "max_s", "share"}, \
+        "the per-stage row keeps the keys the fold answers"
 
 
 def test_the_wire_holds_the_drawn_column_rows_even_on_an_empty_window(prof):
@@ -1339,7 +1341,7 @@ def test_the_wire_holds_the_drawn_column_rows_even_on_an_empty_window(prof):
     board's own columns and never an absent key."""
     t = prof.trip([], [], 0.0)
     assert [r["column"] for r in t["stages"]] == ["todo", "doing", "review", "landing", "gating"]
-    assert all(set(r) == {"column", "label", "median_s", "p90_s", "observations"} for r in t["stages"])
+    assert all(set(r) == {"column", "label", "observations", "min_s", "median_s", "p85_s", "max_s"} for r in t["stages"])
     assert t["stages"][0]["median_s"] is None and t["stages"][0]["observations"] == 0
 
 
@@ -1357,17 +1359,17 @@ def test_a_tie_in_a_column_hands_the_row_to_the_first_stage_in_board_order(prof)
         "a known zero is the row's reading; the unknown stage stands nowhere"
 
 
-def test_each_column_answers_its_median_and_p90_over_the_deliveries(prof):
+def test_each_column_answers_its_median_and_p85_over_the_deliveries(prof):
     gates = [{"start": NOW - 500, "finish": NOW - 440},                    # 60 s, inside the window
              {"start": NOW - 9000, "finish": NOW - 8000}]                  # outside it: no observation
     t = prof.trip(TRIP_SPANS, gates, since=NOW - 3600)
     assert t["deliveries"] == 3 and t["bar"] is True
     rows = {r["column"]: r for r in t["columns"]}
-    assert rows["doing"]["median_s"] == 200.0 and rows["doing"]["p90_s"] == pytest.approx(280.0)
+    assert rows["doing"]["median_s"] == 200.0 and rows["doing"]["p85_s"] == pytest.approx(270.0)
     assert rows["review"]["median_s"] == 40.0 and rows["review"]["observations"] == 3
     assert rows["gating"]["median_s"] == 60.0 and rows["gating"]["observations"] == 1, \
         "Gating reads the one gate-history row of the window alone; the record's own gates stand in Doing (#2199)"
-    assert rows["landing"]["p90_s"] == pytest.approx(84.0)
+    assert rows["landing"]["p85_s"] == pytest.approx(81.0)
     assert "closed" not in rows, "the time after the verdict draws no column (#2199)"
     assert (rows["doing"]["parallelism"], rows["doing"]["effective_s"]) == (1.0, 200.0), \
         "no card runs are read here, so every column runs one issue at a time and its effective time is its median"
@@ -1378,18 +1380,19 @@ def test_each_column_answers_its_median_and_p90_over_the_deliveries(prof):
 
 
 def test_the_todo_row_reads_the_queue_with_the_wait_for_a_dispatch_beside_it(prof):
-    """#2152: the column's larger reading is its median and p90, and the other stage stands beside it with its own."""
+    """#2152: the column's larger reading is its median and p85, and the other stage stands beside it with its own four
+    readings (#2280)."""
     todo = {r["column"]: r for r in prof.trip(TRIP_SPANS, [], since=NOW - 3600)["columns"]}["todo"]
-    assert (todo["stage"], todo["median_s"], todo["p90_s"]) == ("queue", 2400.0, 2400.0)
+    assert (todo["stage"], todo["median_s"], todo["p85_s"]) == ("queue", 2400.0, 2400.0)
     assert todo["beside"] == {"stage": "wait", "label": "Wait for a dispatch", "observations": 3,
-                              "median_s": 20.0, "p90_s": pytest.approx(28.0)}
+                              "min_s": 10.0, "median_s": 20.0, "p85_s": pytest.approx(27.0), "max_s": 30.0}
 
 
 def test_the_doing_row_reads_coding_with_the_span_between_two_children_beside_it(prof):
     doing = {r["column"]: r for r in prof.trip(TRIP_SPANS, [], since=NOW - 3600)["columns"]}["doing"]
-    assert (doing["stage"], doing["median_s"], doing["p90_s"]) == ("coding", 200.0, pytest.approx(280.0))
+    assert (doing["stage"], doing["median_s"], doing["p85_s"]) == ("coding", 200.0, pytest.approx(270.0))
     assert doing["beside"] == {"stage": "between", "label": "Between two children", "observations": 3,
-                               "median_s": 120.0, "p90_s": pytest.approx(168.0)}
+                               "min_s": 60.0, "median_s": 120.0, "p85_s": pytest.approx(162.0), "max_s": 180.0}
 
 
 def test_a_column_shows_its_larger_reading_and_the_other_stage_beside_it(prof):
@@ -1728,20 +1731,25 @@ def test_the_view_draws_the_trip_as_five_rows_named_for_the_columns_and_five_seg
     assert widths == pytest.approx(drawn_widths(TRIP["columns"], out, 860), abs=0.2), \
         "each segment's width follows the effective-time share the fold emits, and none is narrower than its label (#2278)"
     assert sum(widths) == pytest.approx(860, abs=0.5), "the segments still divide the whole plot"
-    assert segs[1][3] == "Doing: median 4.2 min, p90 6.2 min (4 observations); Between two children median 2.5 min", \
-        "the hover names the median, the p90 and the stage beside it in words"
-    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == [
-        "Column", "Time per issue", "Parallelism", "Effective time", "Tokens / issue", "CPU mean", "RAM mean", "p90",
-        "Observations (Gating counts gate runs; every other column counts deliveries)"]
-    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
+    assert segs[1][3] == "Doing: median 4.2 min, p85 5.9 min (4 observations)", \
+        "the hover names the median, the p85 and the count, and no other stage (#2280)"
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == TRIP_HEADS
+    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td>'
+                      + r"<td>([^<]*)</td>" * 9, out)
     assert [r[3] for r in rows] == ["Todo", "Doing", "Review", "Landing", "Gating"], \
         "five rows, each named for its board column, in board order, with no Closed row"
-    assert rows[0][3:] == ("Todo", "40.0 min", "×1.0", "40.0 min", "0", "&#8212;", "&#8212;", "40.0 min", "4"), \
+    assert rows[0][3:] == ("Todo", "40.0 min", "40.0 min", "40.0 min", "40.0 min", "×1.0", "40.0 min", "0",
+                           "&#8212;", "&#8212;"), \
         "the Todo row reads the queue alone; the fixture folds no call and no load, so its rates read a zero and two dashes"
-    assert rows[1][3:] == ("Doing", "4.2 min", "×1.0", "4.2 min", "0", "&#8212;", "&#8212;", "6.2 min", "4")
-    assert (rows[3][4], rows[3][6], rows[3][10]) == ("1.3 min", "1.3 min", "1.9 min"), \
-        "Landing stands before Gating, where the board puts it, and one at a time its effective time is its median"
-    assert (rows[4][4], rows[4][10]) == ("1.0 min", "1.0 min"), "Gating reads the wave gate, never the run's own gate"
+    assert rows[1][3:] == ("Doing", "1.7 min", "4.2 min", "5.9 min", "6.7 min", "×1.0", "4.2 min", "0",
+                           "&#8212;", "&#8212;"), \
+        "the four time cells read the one stage: coding's 100, 250, 355 and 400 s over the four deliveries"
+    assert (rows[3][4], rows[3][5], rows[3][6], rows[3][7]) == ("30.0 s", "1.3 min", "1.8 min", "2.0 min"), \
+        "Landing stands before Gating, where the board puts it"
+    assert (rows[3][8], rows[3][9]) == ("×1.0", "1.3 min"), \
+        "the parallelism and the effective time keep the value and the format of #2256"
+    assert rows[4][4:8] == ("1.0 min", "1.0 min", "1.0 min", "1.0 min"), \
+        "Gating reads the wave gate, never the run's own gate"
     assert [r[1] for r in rows] == [s[0] for s in segs], "a row's swatch is the color of its segment, in the same order: the table is the bar's legend"
     assert all(r[0] == r[1] for r in rows), "the swatch of a row names the column the row names"
 
@@ -3238,6 +3246,11 @@ def chart_trip():
 
 CHART = chart_trip()
 
+# The trip table's one header (#2280): the stage first, the four readings of its larger stage, then the two #2256
+# columns the owner kept, then the three costs. Both screens print this list.
+TRIP_HEADS = ["Stage", "Min", "Time per issue", "p85", "Max", "Parallelism", "Effective time", "Tokens / issue",
+              "CPU mean", "RAM mean"]
+
 
 def chart_svg(out):
     at = out.index("<svg id=proftc")
@@ -3452,28 +3465,28 @@ def test_token_counts_print_in_k_or_m_units_on_the_axis_and_in_the_table():
     out = chart_js()
     svg = chart_svg(out)
     assert ">1k</text>" in svg and ">1000" not in svg, "the axis rounds 1000 to 1k"
-    assert (trip_row(out, "todo")[4], trip_row(out, "doing")[4]) == ("600", "2.4k"), \
+    assert (trip_row(out, "todo")[7], trip_row(out, "doing")[7]) == ("600", "2.4k"), \
         "the table prints 2400 in k units"
     big = json.loads(json.dumps(CHART))
     by = {c["column"]: c for c in big["columns"]}
     by["todo"]["tokens_per_issue"], by["doing"]["tokens_per_issue"] = 6310834.0, 834000.0
-    rows = {c: trip_row(chart_js(big), c)[4] for c in ("todo", "doing")}
+    rows = {c: trip_row(chart_js(big), c)[7] for c in ("todo", "doing")}
     assert rows == {"todo": "6.3M", "doing": "834k"}, "a million prints in M, a large thousand count in k"
 
 
-def test_the_phone_table_takes_its_header_from_the_payload_and_prints_k_units():
-    """AC6 and AC9 (#2253): the phone table carries the same Observations header the payload names and the same k or M
-    token units as the desktop table, so the two tables never drift and no raw count stands in either."""
+def test_the_phone_table_names_the_same_columns_as_the_desktop_and_prints_k_units():
+    """#2253, #2280: the phone table carries the same columns in the same order as the desktop table, and the same k or M
+    token units, so the two tables never drift and no raw count stands in either."""
     out = run_js(f"profTrip({json.dumps(CHART)},true)")
-    heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", out, re.S)]
-    assert "Observations (Gating counts gate runs; every other column counts deliveries)" in heads, \
-        "the phone's header names the Gating difference the payload states"
-    assert "Tokens/issue" in heads
+    at = out.index("<table id=proftt")
+    heads = [re.sub(r"<[^>]+>", "", h)
+             for h in re.findall(r"<th[^>]*>(.*?)</th>", out[at:out.index("</table>", at)], re.S)]
+    assert heads == TRIP_HEADS, heads
     cells = {c: [re.sub(r"<[^>]+>", "", td) for td in
                  re.findall(r"<td[^>]*>(.*?)</td>", re.search(r'<tr data-p="trip/' + c + r'">(.*?)</tr>', out, re.S).group(1), re.S)]
              for c in ("todo", "doing")}
-    assert (cells["todo"][6], cells["doing"][6]) == ("600", "2.4k"), \
-        "the phone's Tokens/issue cell prints 2400 in k units, never the raw integer"
+    assert (cells["todo"][7], cells["doing"][7]) == ("600", "2.4k"), \
+        "the phone's Tokens / issue cell prints 2400 in k units, never the raw integer"
 
 
 def test_the_phone_lanes_mark_a_column_with_no_point_as_no_record():
@@ -3529,14 +3542,16 @@ def test_each_column_label_states_the_effective_time_and_the_parallelism():
     assert labels["landing"] == "10.0 s · ×1.0", "a column the board recorded no run for runs one at a time"
 
 
-def test_the_trip_table_splits_the_time_into_time_per_issue_parallelism_and_effective_time():
-    """#2256: the table's three time columns are the median it showed, the parallelism, and their quotient."""
+def test_the_trip_table_keeps_the_three_columns_of_2256_and_drops_p90_and_the_count():
+    """#2280: the owner kept `Time per issue`, `Parallelism` and `Effective time` with their header, value and format,
+    so only `p90` and `Observations` leave the table."""
     out = chart_js()
     at = out.index("<table id=proftt")
-    heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", out[at:], re.S)]
-    assert heads[:4] == ["Column", "Time per issue", "Parallelism", "Effective time"], heads
-    assert trip_row(out, "doing")[:4] == ["Doing", "1.0 min", "×3.0", "20.0 s"], \
-        "Doing reads its 60 s median, ×3.0, and the 20 s each delivery takes"
+    heads = [re.sub(r"<[^>]+>", "", h)
+             for h in re.findall(r"<th[^>]*>(.*?)</th>", out[at:out.index("</table>", at)], re.S)]
+    assert [h for h in heads if h in ("Time per issue", "Parallelism", "Effective time")] == \
+        ["Time per issue", "Parallelism", "Effective time"], heads
+    assert not [h for h in heads if h in ("p90", "Observations")], heads
 
 
 def test_the_subtitle_states_the_effective_time_rule_in_one_sentence():
@@ -3546,21 +3561,72 @@ def test_the_subtitle_states_the_effective_time_rule_in_one_sentence():
            "standing in it at once." in out
 
 
-def test_the_table_keeps_median_p90_and_observations_and_adds_tokens_cpu_and_ram():
-    """AC17 of the spec: the table keeps its three columns and adds the three a column consumes; the Observations
-    header names the one row that counts another thing (AC9, #2253). The order follows the mock (#2255), with the
-    three time columns of #2256: Time per issue, Parallelism, Effective time, then Tokens / issue, CPU mean, RAM mean,
-    with p90 and Observations last, and each cell holds one value."""
+# ---------------------------------------------------------------- the trip table's order (#2280)
+def test_the_trip_table_orders_the_stage_the_four_times_and_the_three_costs():
+    """#2280: the desktop table and the phone table name one set of columns in one order, the time cells read the
+    column's own stage, and no cell holds two facts."""
     out = chart_js()
     at = out.index("<table id=proftt")
-    table = out[at:out.index("</table>", at) + 8]
-    heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", table, re.S)]
-    assert heads == ["Column", "Time per issue", "Parallelism", "Effective time", "Tokens / issue", "CPU mean",
-                     "RAM mean", "p90",
-                     "Observations (Gating counts gate runs; every other column counts deliveries)"], heads
-    assert trip_row(out, "todo") == ["Todo", "1.0 min", "×3.0", "20.0 s", "600", "50%", "40%", "1.0 min", "3"]
-    assert trip_row(out, "doing") == ["Doing", "1.0 min", "×3.0", "20.0 s", "2.4k", "50%", "40%", "1.0 min", "3"]
-    assert "&middot;" not in "".join(trip_row(out, "todo")), "each cell holds one value, never two facts"
+    desk = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", out[at:out.index("</table>", at)], re.S)]
+    phone_out = run_js(f"profTrip({json.dumps(CHART)},true)")
+    pat = phone_out.index("<table id=proftt")
+    phone = [re.sub(r"<[^>]+>", "", h)
+             for h in re.findall(r"<th[^>]*>(.*?)</th>", phone_out[pat:phone_out.index("</table>", pat)], re.S)]
+    assert desk == TRIP_HEADS and phone == TRIP_HEADS, (desk, phone)
+    assert trip_row(out, "todo") == ["Todo", "1.0 min", "1.0 min", "1.0 min", "1.0 min", "×3.0", "20.0 s",
+                                     "600", "50%", "40%"], \
+        "the four time cells read the column's stage: three like deliveries give one value four times"
+    assert "&middot;" not in "".join(trip_row(out, "doing")), "each cell holds one value, never two facts"
+
+
+def test_a_column_with_no_observation_prints_a_dash_in_each_time_cell():
+    """#2280: a column the window never observed has no reading, so each of its four time cells prints a dash, never a
+    zero and never a blank."""
+    out = chart_js()
+    row = trip_row(out, "gating")
+    assert row[:5] == ["Gating", "&#8212;", "&#8212;", "&#8212;", "&#8212;"], row
+    assert row[5:7] == ["&#8212;", "&#8212;"], "the parallelism and the effective time read a dash too"
+    assert row[8:] == ["&#8212;", "&#8212;"], "the two machine means read a dash too"
+
+
+def test_the_bar_segment_hover_reads_the_median_the_p85_and_the_count():
+    """#2280: the hover of a bar segment names the median, then the p85, then the observation count, on the one stage
+    the column answers."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP})},new Set())")
+    titles = dict(re.findall(r'<rect class="ptb-seg ptc pts-(\w+)"[^>]*><title>([^<]*)</title></rect>', out))
+    assert titles["doing"] == "Doing: median 4.2 min, p85 5.9 min (4 observations)", titles.get("doing")
+
+
+def test_the_trip_fold_answers_the_min_median_p85_and_max_of_the_larger_stage(prof):
+    """#2280: one stage answers the column, and all four readings come from that stage, so Min, Median, p85 and Max never
+    mix the two stages a column holds. Doing's coding runs 100, 200 and 300 s; its between runs 60, 120 and 180 s."""
+    rows = {r["column"]: r for r in prof.trip(TRIP_SPANS, [], since=NOW - 3600)["columns"]}
+    doing = rows["doing"]
+    assert (doing["stage"], doing["min_s"], doing["median_s"], doing["p85_s"], doing["max_s"]) == \
+        ("coding", 100.0, 200.0, pytest.approx(270.0), 300.0), doing
+    assert (doing["beside"]["stage"], doing["beside"]["min_s"], doing["beside"]["p85_s"]) == \
+        ("between", 60.0, pytest.approx(162.0)), "the stage beside the column keeps its own four readings"
+    gating = rows["gating"]
+    assert (gating["observations"], gating["min_s"], gating["median_s"], gating["p85_s"], gating["max_s"]) == \
+        (0, None, None, None, None), "no observation is no reading"
+
+
+def test_the_trip_payload_carries_no_p90_and_no_observations_note(prof):
+    """#2280: the trip answers p85 everywhere, so no field of the payload is named p90, and the note that explained the
+    removed Observations header is gone."""
+    t = prof.trip(TRIP_SPANS, [{"start": NOW - 500, "finish": NOW - 440}], since=NOW - 3600)
+
+    def keys(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                yield k
+                yield from keys(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from keys(v)
+
+    assert "p90_s" not in set(keys(t)), "the payload names no p90 field in any row"
+    assert "observations_note" not in t
 
 
 def test_one_sentence_above_the_chart_states_the_peak_the_saturation_and_the_silent_minutes():
@@ -3583,7 +3649,7 @@ def test_a_line_with_no_data_draws_nothing_there_and_the_table_prints_a_dash():
     dash."""
     out = chart_js()
     row = trip_row(out, "gating")
-    assert row[5:7] == ["&#8212;", "&#8212;"], "no mean of CPU and RAM reads a dash, never a zero"
+    assert row[8:10] == ["&#8212;", "&#8212;"], "no mean of CPU and RAM reads a dash, never a zero"
     svg = chart_svg(out)
     assert not re.search(r'ptgn pts-gating', svg), "a column of no width has no stretch to mark"
 
@@ -3664,17 +3730,16 @@ def test_a_column_mean_divides_by_the_minutes_spent_in_that_column_alone(prof):
     assert rows["doing"]["tokens"]["mean"] == 600.0, "600 tokens over Doing's own one minute, never over 61"
 
 
-def test_the_observations_header_names_the_gating_difference(prof):
-    """AC9 (#2253): every row counts deliveries except Gating, which counts the window's gate rows, and the header
-    names that difference."""
+def test_each_row_counts_its_own_observations_and_the_payload_carries_no_note(prof):
+    """#2253, #2280: every row counts deliveries except Gating, which counts the window's gate rows. The count stands in
+    the segment's hover, so the payload carries no note that explained a removed header."""
     gates = [{"start": CS + 10, "finish": CS + 70}, {"start": CS + 100, "finish": CS + 160}]
     t = prof.trip([span_at(600.0)], gates, since=CS, cards=[card(("Doing", 0.0, 600.0))], calls=[[]], loads=[],
                   now=CS + 3600.0)
     rows = {r["column"]: r for r in t["columns"]}
     assert rows["doing"]["observations"] == 1 and rows["gating"]["observations"] == 2, \
         "Doing counts its one delivery, Gating the two gate rows of the window"
-    assert "Gating" in t["observations_note"] and "gate" in t["observations_note"], \
-        "the payload names the difference the header prints"
+    assert "observations_note" not in t, "the payload names no note for a header the table no longer prints"
 
 
 def test_a_load_reading_above_the_sane_bound_is_invalid_not_the_peak(prof):
@@ -4467,14 +4532,14 @@ def test_the_table_keeps_each_header_on_one_line_and_short_counts():
     assert re.search(r"#proftt th\{[^}]*white-space:nowrap", css), "no header breaks over two lines"
     out = chart_js()
     at = out.index("<table id=proftt")
-    heads = re.findall(r"<th[^>]*>(.*?)</th>", out[at:], re.S)
-    assert [re.sub(r"<[^>]+>", "", h) for h in heads[:4]] == ["Column", "Time per issue", "Parallelism", "Effective time"]
-    assert trip_row(out, "doing")[4] == "2.4k", "a count prints in short units"
+    heads = re.findall(r"<th[^>]*>(.*?)</th>", out[at:out.index("</table>", at)], re.S)
+    assert [re.sub(r"<[^>]+>", "", h) for h in heads] == TRIP_HEADS
+    assert trip_row(out, "doing")[7] == "2.4k", "a count prints in short units"
     big = json.loads(json.dumps(CHART))
     big["columns"][1]["tokens_per_issue"] = 834000.0
-    assert trip_row(chart_js(big), "doing")[4] == "834k", "834000 prints as 834k"
+    assert trip_row(chart_js(big), "doing")[7] == "834k", "834000 prints as 834k"
     for col in ("todo", "doing", "review", "landing", "gating"):
-        assert len(trip_row(out, col)) == 9, f"one value a cell in the {col} row"
+        assert len(trip_row(out, col)) == 10, f"one value a cell in the {col} row"
 
 
 # ---------------------------------------------------------------- the least width of a column (#2278)
