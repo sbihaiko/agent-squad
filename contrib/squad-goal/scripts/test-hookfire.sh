@@ -52,6 +52,9 @@ case "$(cat "$T/state/cycle.log")" in *"HOOK promote rc=76"*) ok "the held lock 
 DUMMY_RC=1 run "a failed pass fails the firing" dev 1
 case "$(cat "$T/err")" in *"promote failed"*) ok "the failure names the pass";; *) ko "the failure does not name the pass: '$(cat "$T/err")'";; esac
 case "$(cat "$T/state/cycle.log")" in *"HOOK promote rc=1"*) ok "the failure is recorded";; *) ko "the failure is not recorded: '$(cat "$T/state/cycle.log")'";; esac
+# 6b. A credential refusal (rc 3, #2213) is no red: the pass wrote its one alert, so the firing exits 0 and the run stays green.
+DUMMY_RC=3 run "a credential refusal on the promotion branch is no failed firing" stg 0
+case "$(cat "$T/state/cycle.log")" in *"HOOK promote-main rc=3"*) ok "the refusal is recorded in the cycle log";; *) ko "the refusal is not recorded: '$(cat "$T/state/cycle.log")'";; esac
 # 7. The workflow that fires the hook: the event, the runner label, the one fixed command, and no checkout anywhere.
 w=$(cd "$(dirname "$d")/../.." 2>/dev/null && pwd)/.github/workflows/squad-hook.yml
 [ -f "$w" ] && ok "the hook workflow exists" || ko "no .github/workflows/squad-hook.yml"
