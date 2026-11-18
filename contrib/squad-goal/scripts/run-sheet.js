@@ -31,6 +31,24 @@ function rkText(e){const k=e.event||"",why=(e.reasons||[])[0]||e.reason||"";
   if(k==="verdict")return add("verdict",e.verdict);
   if(k==="compaction")return add("context compaction",e.trigger);
   return add(k||"event",why)}
+// The wall time split of a run, as squad/run_time.py reads the record: seconds of suite, gate wait, model and idle.
+function rkSplit(rec){const ts=rec.map(e=>+e.ts).filter(Number.isFinite),wall=ts.length?Math.max(...ts)-Math.min(...ts):0;
+  const gates=new Set(rec.filter(e=>e.event==="gate_start").map(e=>e.node)),calls=new Set(rec.filter(e=>e.event==="call_start").map(e=>e.node));
+  const bash={suite:0,gate:0};let agent=0,stage=0;
+  rec.forEach(e=>{if(e.event==="progress"&&e.phase==="end"&&["suite","gate"].includes(e.command_class))bash[e.command_class]+=+e.elapsed||0;
+    else if(e.event==="outcome"&&gates.has(e.node))stage+=+e.elapsed||0;
+    else if(e.event==="outcome"&&calls.has(e.node))agent+=+e.elapsed||0});
+  const suite=bash.suite+stage,model=Math.max(0,agent-bash.suite-bash.gate),idle=Math.max(0,wall-suite-bash.gate-model);
+  return{wall,suite,gate_wait:bash.gate,model,idle}}
+// The gate stages that ran more than once on one tree and suite, most seconds first, as squad/run_time.py reads them.
+function rkRepeats(rec){const started=new Map(),groups=new Map();
+  rec.forEach(e=>{const at=[e.node,e.entry,e.item].join("|");
+    if(e.event==="gate_start")started.set(at,e);
+    else if(e.event==="gate_result"){const b=started.get(at);started.delete(at);let s=0;
+      if(b){const t0=b.started_at!=null?b.started_at:b.ts;s=Math.max(0,(+e.ts||0)-(+t0||0))}
+      const k=[e.suite,e.sha,e.dirt].join("|"),g=groups.get(k)||{suite:e.suite,sha:e.sha,dirt:e.dirt,count:0,seconds:0};
+      g.count++;g.seconds+=s;groups.set(k,g)}});
+  return[...groups.values()].filter(g=>g.count>1).sort((a,b)=>b.seconds-a.seconds)}
 // row: the run row the hub serves. rec: the record's events, in order. Returns the sheet's model.
 function rkModel(row,rec){rec=(rec||[]).filter(e=>e&&typeof e==="object");
   const live=row.rank===0||!!row.running,gates=new Set(rec.filter(e=>e.event==="gate_start"&&e.node).map(e=>e.node));
@@ -50,7 +68,7 @@ function rkModel(row,rec){rec=(rec||[]).filter(e=>e&&typeof e==="object");
     tk:e.event==="outcome"&&e.tokens_in?rkTok(e.tokens_in)+" in":"",usd:e.spend?rkUsd(e.spend):""}))
     .sort((a,b)=>b.ts-a.ts||b.i-a.i);
   return{id:row.id,label:row.label||"",live,issues:(row.issues||[]).map(Number).filter(n=>n>0),graph:start.graph_name||"",
-    chips:{state:live?"live":"ended",id:row.id,cost:rkUsd(row.spend),el:rkMin(row.dur)},nodes,models,total,ev}}
+    chips:{state:live?"live":"ended",id:row.id,cost:rkUsd(row.spend),el:rkMin(row.dur)},nodes,models,total,ev,split:rkSplit(rec),repeats:rkRepeats(rec)}}
 // f: {n, m, l}; an empty key means all. The warn level also shows the errors.
 const rkFilter=(ev,f)=>ev.filter(e=>(!f.n||e.n===f.n)&&(!f.m||e.m===f.m)&&(!f.l||e.l===f.l||(f.l==="warn"&&e.l==="error")));
 const RK_SN={done:"done",run:"running",fail:"failed",pend:"pending"};
@@ -61,6 +79,8 @@ function rkOverview(m){const issues=m.issues.map(n=>`<a href="#" data-o="${n}">#
   return `<div class=row><b>Issues</b><span>${issues}</span></div>
 <div class=row><b>Elapsed</b><span>${rkEsc(m.chips.el)}${m.graph?` · graph ${rkEsc(m.graph)}`:""}</span></div>
 <div class=row><b>Spend</b><span>${rkEsc(m.chips.cost)} · ${rkTok(m.total.tin)} in · ${rkTok(m.total.tout)} out</span></div>
+<div class=row><b>Wall time</b><span>${[["suite",m.split.suite],["gate wait",m.split.gate_wait],["model",m.split.model],["idle",m.split.idle]].map(([k,v])=>k+" "+rkMin(v/60)).join(" · ")}</span></div>
+${m.repeats.length?`<div class=row><b>Repeated</b><span>${m.repeats.map(r=>`${rkEsc(r.suite)} ×${r.count}, ${rkMin(r.seconds/60)}`).join("<br>")}</span></div>`:""}
 ${last?`<div class=row><b>Last events</b><span>${last} <a href="#" data-rkt="tr">all</a></span></div>`:""}
 <div class=sec>Nodes</div><div class=rkn>${nodes||"<span class=m>no node yet</span>"}</div>
 <div class=sec>Models</div><div class=mt2>${rows||"<span class=m>no model call yet</span>"}${rows?`<div class="mrow tot"><b>Total</b><span class="r">${rkUsd(m.total.usd)}</span><small>${m.total.calls} calls</small></div>`:""}</div>

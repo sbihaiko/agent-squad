@@ -22,7 +22,7 @@ SHARD_COUNT = 6
 SHARDS: tuple[tuple[str, ...], ...] = (
     (
         "tests/test_ac_repeat.py", "tests/test_ac_verify_routes.py", "tests/test_actions.py", "tests/test_active_runs_write.py", "tests/test_adapt.py", "tests/test_agent_doors.py", "tests/test_spec_stall.py",
-        "tests/test_bash_time.py", "tests/test_board_define.py", "tests/test_board_labels.py", "tests/test_board_lag.py", "tests/test_browser_bounds.py", "tests/test_chain_fallback.py", "tests/test_chain_view.py",
+        "tests/test_bash_time.py", "tests/test_run_time.py","tests/test_board_define.py", "tests/test_board_labels.py", "tests/test_board_lag.py", "tests/test_browser_bounds.py", "tests/test_chain_fallback.py", "tests/test_chain_view.py",
         "tests/test_coding_model_tools.py", "tests/test_dashboard_layer_focus.py", "tests/test_dashboard_narrow.py", "tests/test_dashboard_page.py", "tests/test_dashboard_parity.py",
         "tests/test_dashboard_view.py", "tests/test_deadlock_validator.py","tests/test_edge_write.py","tests/test_wave_migrate.py","tests/test_each.py", "tests/test_entry_no_progress.py", "tests/test_fundroom.py", "tests/test_gate_lock.py",
         "tests/test_gh_budget_per_pass.py", "tests/test_glossary_name.py", "tests/test_graph.py", "tests/test_gui_test_e2e.py", "tests/test_gui_test_format.py",
