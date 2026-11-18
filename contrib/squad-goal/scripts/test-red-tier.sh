@@ -57,6 +57,8 @@ case "\$*" in
   *"pulls?state=open"*) ;;
   *"-X POST repos/x/emu/pulls"*) echo '{"number":7}';;
   *"-X PUT repos/x/emu/pulls/7/merge"*) if git -C "$T/w" fetch -q origin && git -C "$T/w" push -q origin origin/dev:refs/heads/stg; then echo '{"merged":true}'; else echo '{"merged":false,"message":"push refused"}'; fi;;
+  *"commits/"*"check-runs"*) echo '{"check_runs":[{"id":99,"name":"full-xdist-2","status":"completed","conclusion":"failure"}]}';;
+  *"actions/jobs/99/logs"*) cat "$T/job-log" 2>/dev/null;;
   *) echo '{}';;
 esac
 EOF
@@ -95,6 +97,42 @@ adv "fix four"; D4=$(tip dev); bash "$d/red-tier.sh" clear "$ST"; : > "$T/runner
 out=$(SG_RED_TIER_PYTEST=$T/runner-fail bash "$d/promote-stg.sh" 2>&1); rc=$?
 if [ $rc = 0 ] && [ "$(tip stg)" = "$D4" ] && [ ! -s "$T/runner.log" ]; then ok "6 no red record: the promotion runs no file"
 else ko "6 no record: rc $rc, stg $(tip stg), runner '$(cat "$T/runner.log")'"; fi
+
+cat > "$T/runner-named" <<EOF
+#!/bin/bash
+echo "RUN \$*" >> "$T/runner.log"
+echo "collected 2 items"
+echo "FAILED tests/test_two.py::test_b - AssertionError"
+echo "1 failed, 1 passed"
+exit 1
+EOF
+chmod +x "$T/runner-named"
+
+adv "fix five"; D5=$(tip dev); record >/dev/null 2>&1
+SG_RED_TIER_PYTEST=$T/runner-named bash "$d/promote-stg.sh" >/dev/null 2>&1
+if [ -s "$ST/red-tier-run.log" ] && grep -qF "FAILED tests/test_two.py::test_b" "$ST/red-tier-run.log"; then
+  ok "7 a failed red tier run keeps its pytest output in a log under the state directory"
+else ko "7 red tier log: '$(cat "$ST/red-tier-run.log" 2>/dev/null)'"; fi
+
+adv "fix six"; D6=$(tip dev); record >/dev/null 2>&1
+out=$(SG_RED_TIER_PYTEST=$T/runner-named bash "$d/promote-stg.sh" 2>&1)
+alert=$(tail -n 1 "$ST/alerts.log" 2>/dev/null)
+if printf '%s' "$out" | grep -qF "tests/test_two.py::test_b" && ! printf '%s' "$out" | grep -qF "tests/test_three.py" \
+  && printf '%s' "$alert" | grep -qF "tests/test_two.py::test_b" && ! printf '%s' "$alert" | grep -qF "tests/test_three.py"; then
+  ok "8 the refusal and the alert name the failing tests, never the whole shard"
+else ko "8 refusal '$out' alert '$alert'"; fi
+
+adv "fix seven"; record_log() { printf '%s\n' full-xdist-2 | bash "$d/red-tier.sh" record "$ST" "$T/w" "$(tip dev)" "$T/ci.yml"; }
+printf '%s\n' "2026-11-18T05:00:00Z ##[group]Run python3 -m pytest -n auto tests/test_two.py tests/test_three.py" \
+  "2026-11-18T05:00:09Z FAILED tests/test_three.py::test_c - AssertionError" "2026-11-18T05:00:10Z ##[error]Process completed with exit code 1." > "$T/job-log"
+record_log >/dev/null 2>&1
+named=$(bash "$d/red-tier.sh" files "$ST" | tr '\n' ' ')
+printf '%s\n' "2026-11-18T05:00:09Z all tests passed" > "$T/job-log"
+record_log >/dev/null 2>&1
+silent=$(bash "$d/red-tier.sh" files "$ST" | tr '\n' ' ')
+if [ "$named" = "tests/test_three.py " ] && [ "$silent" = "tests/test_two.py tests/test_three.py " ]; then
+  ok "9 the record holds the failing files the job log names, and the shard when it names none"
+else ko "9 record named '$named' silent '$silent'"; fi
 
 rm -rf "$T"
 exit $fail

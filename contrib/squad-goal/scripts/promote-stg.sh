@@ -140,10 +140,10 @@ o=$(g rev-list --no-merges "$tip..origin/$stg" 2>/dev/null) || o=
 prove "$tip"
 if [ -n "$(bash "$d/red-tier.sh" files "$state")" ]; then   # stg is red: the files of its failing tier run on the tip first (#2203)
   g checkout -q --detach "$tip" 2>/dev/null || refuse "$tip" "not promoted: the $dev tip could not be checked out for the red tier's files"
-  o=$(bash "$d/red-tier.sh" run "$state" "$W" 2>&1); rc=$?
+  bash "$d/red-tier.sh" run "$state" "$W"; rc=$?
   if [ $rc != 0 ]; then
     bash "$d/red-tier.sh" alert "$state" "$tip"
-    refuse "$tip" "not promoted: the files of the red complete tier fail on the $dev tip: $(bash "$d/red-tier.sh" files "$state" | tr '\n' ' ')"
+    refuse "$tip" "not promoted: the tests of the red complete tier fail on the $dev tip: $(bash "$d/red-tier.sh" failed "$state")"
   fi
 fi
 . "$d/ghcall.sh"
