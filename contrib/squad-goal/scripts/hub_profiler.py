@@ -1247,8 +1247,9 @@ LOAD_GAP_BEFORE = "no load record before the first one in this stretch"
 
 
 def load_row(raw):
-    """One record line as the chart reads it: `{at, load, cpu}`, where a field the writer could not read is None. None
-    for a line that names no time: a malformed line is not a point and draws no load of its own."""
+    """One record line as the chart reads it: `{at, load, cpu, ram}`, where a field the writer could not read is None, and
+    an old-shape line with no memory field reads `ram` as None. None for a line that names no time: a malformed line is
+    not a point and draws no load of its own."""
     fields = str(raw).split("\t")
     try:
         at = float(fields[0])
@@ -1261,7 +1262,7 @@ def load_row(raw):
         except (IndexError, TypeError, ValueError):
             return None
         return v
-    return {"at": at, "load": num(1), "cpu": num(2)}
+    return {"at": at, "load": num(1), "cpu": num(2), "ram": num(3)}
 
 
 def load_chart(rows, start, end, cores, cadence=LOAD_CADENCE_S):

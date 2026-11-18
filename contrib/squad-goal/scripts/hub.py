@@ -1044,7 +1044,7 @@ LOAD_RECORD_MAX_LINES = LOAD_RECORD_MAX_AGE // LOAD_RECORD_SECS   # 1440: the ag
 def load_record_path():
     """The minute record's file, resolved when it is used: hubmux gives each profile its own STATE, and a resolution per
     call keeps each profile's line in its own state folder (#1768)."""
-    return STATE / "load-record.tsv"      # one line a minute: `<epoch> TAB <1-minute load average> TAB <CPU share>`
+    return STATE / "load-record.tsv"      # one line a minute: `<epoch> TAB <load average> TAB <CPU share> TAB <memory share>`
 
 def _write_record(path, text):
     """Write `text` to `path` so a reader sees the old file or the whole new one, and a power cut leaves one of the two:
@@ -1095,7 +1095,7 @@ def _record_tail(limit):
     if pos > 0 and lines: lines = lines[1:]   # the first line of a cut is half a line
     return lines[-limit:]
 
-def load_record_add(minute, load, cpu):
+def load_record_add(minute, load, cpu, ram=None):
     """Append the minute's line, keep the lines inside the age and the cap, and return the rows, in one atomic write."""
     keep = {}
     for raw in _record_tail(LOAD_RECORD_MAX_LINES - 1):
@@ -1103,7 +1103,8 @@ def load_record_add(minute, load, cpu):
         try: at = float(fields[0])
         except (IndexError, ValueError): continue
         if minute - LOAD_RECORD_MAX_AGE <= at < minute: keep[at] = raw
-    keep[minute] = "\t".join((f"{minute:.3f}", f"{load:.2f}", "-" if cpu is None else f"{cpu:.1f}"))
+    keep[minute] = "\t".join((f"{minute:.3f}", f"{load:.2f}", "-" if cpu is None else f"{cpu:.1f}",
+                              "-" if ram is None else f"{ram:.1f}"))
     lines = sorted(keep.items())[-LOAD_RECORD_MAX_LINES:]
     _write_record(load_record_path(), "\n".join(raw for _, raw in lines) + "\n")
     return [hub_profiler.load_row(raw) for _, raw in lines]
@@ -1137,7 +1138,7 @@ def load_record_tick(sample, now, load=None):
     cpu = None if cold else (round(LOAD_STATE.get("record_cpu_sum", 0.0) / n, 1) if n else None)
     rows = None
     if load is not None:
-        try: rows = load_record_add(minute, load, cpu)
+        try: rows = load_record_add(minute, load, cpu, sample.get("ram"))
         except OSError: rows = None   # a gap, never a broken sampler
     LOAD_STATE["record_at"], LOAD_STATE["record_cpu_sum"], LOAD_STATE["record_cpu_n"] = minute, 0.0, 0
     if rows is not None:

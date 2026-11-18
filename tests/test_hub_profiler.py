@@ -2446,9 +2446,15 @@ def test_a_record_outside_the_window_is_not_drawn(prof):
 
 
 def test_a_record_line_reads_time_load_and_cpu_share(prof):
-    assert prof.load_row("1800000000.000\t6.25\t78.5") == {"at": 1_800_000_000.0, "load": 6.25, "cpu": 78.5}
-    assert prof.load_row("1800000000.000\t-\t-") == {"at": 1_800_000_000.0, "load": None, "cpu": None}
+    assert prof.load_row("1800000000.000\t6.25\t78.5") == {"at": 1_800_000_000.0, "load": 6.25, "cpu": 78.5, "ram": None}
+    assert prof.load_row("1800000000.000\t-\t-\t-") == {"at": 1_800_000_000.0, "load": None, "cpu": None, "ram": None}
     assert prof.load_row("garbage") is None and prof.load_row("") is None
+
+
+def test_a_record_line_reads_the_memory_share_and_an_old_line_reads_none(prof):
+    assert prof.load_row("1800000000.000\t6.25\t78.5\t61.2")["ram"] == 61.2
+    assert prof.load_row("1800000000.000\t6.25\t78.5")["ram"] is None, "an old-shape line names no memory, never zero"
+    assert prof.load_row("1800000000.000\t6.25\t78.5\t-")["ram"] is None, "a failed memory source writes no value"
 
 
 def test_the_core_count_is_the_reference_line_and_one_core_is_the_floor(prof):
@@ -2500,6 +2506,38 @@ def test_the_minute_record_carries_time_load_and_cpu_share(hub):
     assert (float(lines[0][0]), lines[0][1], lines[0][2]) == (LBASE, "3.00", "-"), \
         "the first line of a cold record has one sample, so it names no share"
     assert (float(lines[1][0]), lines[1][1], lines[1][2]) == (LBASE + 60, "5.00", "30.0"), "the share is the tick samples' mean"
+
+
+def test_the_minute_record_line_carries_the_memory_share_beside_load_and_cpu(hub):
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None)
+    for i, (at, cpu, ram) in enumerate(((LBASE, 80.0, 50.0), (LBASE + 30, 40.0, 60.0), (LBASE + 60, 20.0, 70.0))):
+        mod.load_tick({"cpu": cpu, "ram": ram, "gpu": None}, now=at, load=3.0 + i)
+    lines = [ln.split("\t") for ln in path.read_text().splitlines()]
+    assert lines[0][1:] == ["3.00", "-", "50.0"], "the first line carries the memory of its own tick beside load and CPU"
+    assert lines[1][1:] == ["5.00", "30.0", "70.0"], "the memory is the reading of the tick that wrote the line"
+
+
+def test_a_failed_memory_source_writes_no_memory_value_and_keeps_load_and_cpu(hub):
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.unlink(missing_ok=True)
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None)
+    for i, (at, cpu) in enumerate(((LBASE, 80.0), (LBASE + 30, 40.0), (LBASE + 60, 20.0))):
+        mod.load_tick({"cpu": cpu, "ram": None, "gpu": None}, now=at, load=3.0 + i)
+    lines = [ln.split("\t") for ln in path.read_text().splitlines()]
+    assert lines[1][1:] == ["5.00", "30.0", "-"], "a memory source that fails writes no value; load and CPU stay"
+
+
+def test_an_old_shape_line_keeps_its_place_and_names_no_memory(hub):
+    mod, _, _, state, _ = hub
+    path = state / "load-record.tsv"
+    path.write_text(f"{LBASE - H}\t1.00\t10.0\n")
+    mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None)
+    rows = mod.load_record_add(LBASE, 2.0, 20.0, 45.0)
+    assert [r["ram"] for r in rows] == [None, 45.0], "the old line reads with no memory, never zero"
 
 
 def test_the_minute_record_drops_the_lines_past_its_fixed_age(hub):
@@ -2583,7 +2621,7 @@ def test_the_record_takes_the_tick_s_own_sample_and_load_read(hub, monkeypatch):
                                          "ram": lambda: None, "gpu": lambda: None})
     monkeypatch.setattr(mod, "_loadavg", lambda: (_ for _ in ()).throw(AssertionError("a second load read")))
     mod.load_tick({"cpu": 42.0, "ram": None, "gpu": None}, now=LBASE, load=1.5)
-    assert path.read_text().split("\t")[1:] == ["1.50", "-\n"], "the tick's own load, and no share on a cold record"
+    assert path.read_text().split("\t")[1:] == ["1.50", "-", "-\n"], "the tick's own load, and no share on a cold record"
 
 
 def test_a_failed_write_keeps_the_pending_window_one_minute(hub, monkeypatch):
@@ -2816,7 +2854,7 @@ def test_the_first_line_of_a_cold_record_carries_no_cpu_share(hub):
     path.unlink(missing_ok=True)
     mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None)
     mod.load_tick({"cpu": 80.0, "ram": None, "gpu": None}, now=LBASE, load=3.0)
-    assert path.read_text().splitlines()[0].split("\t")[1:] == ["3.00", "-"], \
+    assert path.read_text().splitlines()[0].split("\t")[1:] == ["3.00", "-", "-"], \
         "one sample is no minute mean, so the first line names no share"
     mod.load_tick({"cpu": 20.0, "ram": None, "gpu": None}, now=LBASE + 60, load=2.0)
     assert path.read_text().splitlines()[1].split("\t")[2] == "20.0", "the second line carries the minute's mean"
@@ -2867,7 +2905,7 @@ def test_a_check_hub_on_a_scratch_state_folder_writes_the_record_s_first_line(tm
         wait(lambda: mod.load_record_path().is_file() and mod.load_record_path().read_text().strip())
         assert str(mod.load_record_path()).startswith(str(base)), "the record lands in the profile's own state folder"
         first = mod.load_record_path().read_text().splitlines()[0].split("\t")
-        assert len(first) == 3 and float(first[0]) > 0 and float(first[1]) >= 0 and first[2] == "-", \
+        assert len(first) == 4 and float(first[0]) > 0 and float(first[1]) >= 0 and first[2] == "-", \
             "the first line of a cold record carries the load and no CPU share"
     finally:
         done.set()                                          # the loop ends at its next pause, whatever this test saw
@@ -2901,7 +2939,7 @@ def test_two_profiles_keep_their_minute_records_in_their_own_state_folders(tmp_p
         mod.load_tick({"cpu": 10.0 + 20.0 * i, "ram": None, "gpu": None}, now=LBASE, load=1.0 + i)
         path = mod.load_record_path()
         assert str(path).startswith(str(base)), f"{slug}'s record lands in its own state folder"
-        assert path.read_text().splitlines() == [f"{LBASE:.3f}\t{1.0 + i:.2f}\t-"], \
+        assert path.read_text().splitlines() == [f"{LBASE:.3f}\t{1.0 + i:.2f}\t-\t-"], \
             f"{slug} wrote its own line, never the other profile's (a cold first line carries no share)"
 
 
