@@ -949,3 +949,82 @@ def test_nightly_workflow_pins_its_schedule_dev_ref_and_read_only_token():
         assert runs == [s["run"] for s in ci[name]["steps"] if "pytest" in s.get("run", "")], \
             f"{name} runs the command of its complete-tier sibling in ci.yml"
         assert "not heavy" not in " ".join(runs), f"{name} deselects the heavy tests"
+
+
+RED_SHA = "5d43d7f95" + "0" * 31
+RED_LOG = ("2026-11-17T10:00:00.0000000Z FAILED tests/test_alpha.py::test_one - boom\n"
+           "2026-11-17T10:00:00.0000000Z squad/alpha.py:12: AssertionError\n")
+
+
+def _guard_after_red_tier(tmp_path, changed: list[str], red_conclusion: str = "failure", compare_ok: bool = True):
+    """The guard step's script on a tip with no run of its own, after a complete tier on stg (run 40, on RED_SHA) whose
+    first job ended `red_conclusion` and whose log names the failing files. The stub `gh` answers the compare of the red
+    sha with the tip from `changed`, or fails when `compare_ok` is false. Returns the calls and the `run=` line."""
+    wf = _ci_workflow()
+    script = next(s["run"] for s in wf["jobs"][GUARD_JOB]["steps"] if s.get("id") == "once")
+    (tmp_path / "bin").mkdir(parents=True)
+    box = tmp_path / "box"
+    box.mkdir()
+    calls = box / "calls"
+    calls.write_text("")
+    (box / "log.txt").write_text(RED_LOG)
+    (box / "comments.json").write_text("[]")
+    (box / "runs.json").write_text(json.dumps({"workflow_runs": [
+        {"id": 40, "head_sha": RED_SHA, "status": "completed", "conclusion": "failure"}]}))
+    (box / "jobs.json").write_text(json.dumps({"jobs": [
+        {"id": 400, "name": COMPLETE_TIER_JOBS[0], "status": "completed", "conclusion": red_conclusion},
+        {"id": 401, "name": COMPLETE_TIER_JOBS[1], "status": "completed", "conclusion": "success"}]}))
+    if compare_ok:
+        (box / "compare.txt").write_text("".join(f"{f}\n" for f in changed))
+    gh = tmp_path / "bin" / "gh"
+    gh.write_text(
+        "#!/bin/bash\ninp=''\ncase \"$*\" in *--input*) inp=$(cat);; esac\n"
+        "printf '%s %s\\n' \"$*\" \"$inp\" >> \"$CALLS\"\ncase \"$*\" in\n"
+        "  *issues/5/comments\\?per_page=100*) cat \"$BOX/comments.json\";;\n"
+        "  *issues/5/comments*) echo '{\"id\": 99}';;\n"
+        "  *actions/jobs/400/logs*) cat \"$BOX/log.txt\";;\n"
+        "  *actions/runs/40/jobs*) cat \"$BOX/jobs.json\";;\n"
+        "  *compare/*) if [ -f \"$BOX/compare.txt\" ]; then cat \"$BOX/compare.txt\"; else exit 1; fi;;\n"
+        "  *actions/runs*) cat \"$BOX/runs.json\";;\n"
+        "  *) echo '{\"check_runs\": []}';;\n"
+        "esac\n")
+    gh.chmod(0o755)
+    out = box / "out"
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}", "SHA": TIP_SHA,
+           "REPO": "o/r", "GITHUB_OUTPUT": str(out), "GITHUB_RUN_ID": "7", "HEAD_REF": "stg", "PR": "5",
+           "CALLS": str(calls), "BOX": str(box)}
+    r = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return calls.read_text().splitlines(), out.read_text().strip()
+
+
+@pytest.mark.heavy
+def test_a_tip_that_changes_no_red_file_starts_no_tier_after_a_red_tier(tmp_path):
+    """Guard for #2204: when the last complete tier on stg is red, a label on a tip that changes none of its red files
+    starts no tier, and the pull request names the red sha and the files."""
+    calls, answer = _guard_after_red_tier(tmp_path / "unchanged", changed=["README.md"])
+    assert answer == "run=false", "a label on a tip that changes no red file started a tier after a red one"
+    posts = _comment_posts(calls)
+    assert len(posts) == 1, f"the guard posts one reason; posted {posts}"
+    body = posts[0]
+    assert RED_SHA in body, f"the comment names the red sha: {body!r}"
+    assert "tests/test_alpha.py" in body and "squad/alpha.py" in body, f"the comment names the red files: {body!r}"
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize("changed", [["tests/test_alpha.py"], ["squad/alpha.py", "README.md"]])
+def test_a_tip_that_changes_a_red_file_starts_the_tier(tmp_path, changed):
+    """Guard for #2204: a tip that changes one of the red files starts the tier as before, and writes no comment."""
+    calls, answer = _guard_after_red_tier(tmp_path / "touched", changed=changed)
+    assert answer == "run=true", f"a tip that changes {changed} did not start the tier"
+    assert _comment_posts(calls) == [], "a label that starts the tier writes nothing extra"
+
+
+@pytest.mark.heavy
+def test_no_red_reason_holds_the_tier_without_a_known_red(tmp_path):
+    """Guard for #2204: the red rule holds a tier only for a last complete tier that is red. A cancelled or timed-out
+    tier is unproven, and a compare the guard cannot read is unknown: both start the tier."""
+    assert _guard_after_red_tier(tmp_path / "green", changed=["README.md"], red_conclusion="success")[1] == "run=true"
+    assert _guard_after_red_tier(tmp_path / "cancelled", changed=["README.md"],
+                                 red_conclusion="cancelled")[1] == "run=true"
+    assert _guard_after_red_tier(tmp_path / "nocompare", changed=[], compare_ok=False)[1] == "run=true"
