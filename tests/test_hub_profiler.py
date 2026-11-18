@@ -1245,6 +1245,10 @@ TRIP_DRAWN = ("Todo", "Doing", "Review", "Landing", "Gating")
 def test_the_trip_panel_lists_its_columns_in_the_board_definitions_order(prof):
     """#2199: the panel's order is the board's order. The literal is pinned to the definition above, so Landing stands
     before Gating here only because the board puts it there; a panel that keeps its own list fails this test."""
+    assert set(TRIP_DRAWN) <= set(definition_statuses()), \
+        "every column this literal names is a definition column: a typo here would blame the panel for a test fault"
+    assert all(prof.TRIP_COLUMN_STAGES.get(n) for n in TRIP_DRAWN), \
+        "every column this literal names folds a real stage in the trip's table, so the panel draws it"
     t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
     labels = [r["label"] for r in t["columns"]]
     assert labels == list(TRIP_DRAWN), "the panel's rows follow the board's column order, never a list of its own"
@@ -1262,13 +1266,27 @@ def test_a_board_column_the_trip_has_no_stage_for_is_refused_never_dropped(prof)
 
 def test_the_trip_panel_draws_no_closed_column(prof):
     """#2199: the time after the verdict is not a column the card waits in, so the panel draws no Closed segment and no
-    Closed row, and the columns it draws are every definition column a delivery passes through, and only those."""
+    Closed row, and the columns it draws are every definition column the trip's one stage table folds a stage for, and
+    only those. This file keeps no exclusion list: a new column that the table maps to a stage is drawn, and a column it
+    maps to None is not, so a future column needs no edit here."""
     t = prof.trip(TRIP_SPANS, [], since=NOW - 3600)
     assert "closed" not in [r["column"] for r in t["columns"]]
     assert "Closed" not in [r["label"] for r in t["stages"]]
-    assert {r["label"] for r in t["columns"]} == {n for n in definition_statuses()
-                                                  if n not in ("Backlog", "Closed", "Abandoned")}, \
-        "the panel drops exactly the columns a delivery never stands in, and no other"
+    drawn = {s["name"] for s in prof._board_columns.shipped_columns()
+             if prof.TRIP_COLUMN_STAGES.get(s["name"])}
+    assert {r["label"] for r in t["columns"]} == drawn, \
+        "the panel draws every definition column the trip's table folds a stage for, and no other"
+
+
+def test_the_trip_table_names_every_definition_column_and_folds_none_for_a_column_a_delivery_never_stands_in(prof):
+    """#2199: the trip's stage table is the one membership list, so it names every column the definition ships (a column
+    it misses raises, never drops), and the columns it maps to no stage are exactly the three a delivery never stands in:
+    Backlog before a dispatch, Closed after the verdict, and Abandoned. A new column mapped to None breaks this test, so
+    the author states why the panel leaves it out."""
+    assert set(prof.TRIP_COLUMN_STAGES) == set(definition_statuses()), \
+        "the table names every definition column and no column the definition lost"
+    assert {n for n, stages in prof.TRIP_COLUMN_STAGES.items() if not stages} == {"Backlog", "Closed", "Abandoned"}, \
+        "only these three columns are left out of the trip, each for a reason this test names"
 
 
 def test_the_runs_own_gates_fold_into_the_column_the_card_holds_while_they_run(prof):
