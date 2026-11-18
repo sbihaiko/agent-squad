@@ -1884,11 +1884,11 @@ printf 'run-211\n' > "$T/st/auto/disp-22092"; printf '%s\n' "$T/nofix2209" > "$T
 r=$(SG_WAVE_TIP_GATES="$TIP2209" SG_WAVE_CHILD_GATES='exit 1' land2 run-211 2>&1); rc=$?
 [ $rc != 0 ] && case "$r" in *"WAVE WAIT $W211"*"does not land empty"*) true;; *) false;; esac && ok "W2209: a fix run in flight holds the empty landing after the eviction" || ko "W2209: held pass: exit $rc: '$r'"
 r=$(SG_WAVE_TIP_GATES="$TIP2209" SG_WAVE_CHILD_GATES='exit 1' land2 run-211 2>&1); rc=$?
-case "$r" in *"WAVE CHECK RED"*"#22092 broke the wave tip"*) ok "W2209: the repeated eviction is named";; *) ko "W2209: the repeated eviction is not named: '$r'";; esac
+case "$r" in *"WAVE CHECK RED"*) ko "W2209: the held pass evicted the child again: '$r'";; *) ok "W2209: the held pass evicts no child again";; esac
 case "$r" in *"WAVE REQUEUE"*) ko "W2209: the same run requeued the child twice: '$r'";; *) ok "W2209: the same run requeues the child once";; esac
 [ "$(/usr/bin/grep -c '^o 3 Todo 22092$' "$T/board.log")" = 1 ] && ok "W2209: the repeated eviction moves no card again" || ko "W2209: Todo rows after two evictions: '$(cat "$T/board.log")'"
 [ "$(ls "$T"/st/cq/*22092-wave* 2>/dev/null | /usr/bin/grep -c .)" = 1 ] && ok "W2209: the repeated eviction queues no second comment" || ko "W2209: queued comments: '$(ls "$T"/st/cq/ 2>/dev/null)'"
-[ "$(calls "$T/tip2209.log")" = 2 ] && ok "W2209: each held pass runs the tip gate once" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times in two held passes"
+[ "$(calls "$T/tip2209.log")" = 1 ] && ok "W2209: the held pass runs no second tip gate" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times in two held passes"
 rm -f "$T/st/auto/ccfix-run-211-1"
 # Two children, one evicted: a child is still ahead of the base, so the check runs again and the wave lands with it.
 W212=wave/run-212; start2 run-212 >/dev/null; child 22093 g22093 "origin/$W212"; en2 run-212 22093 >/dev/null; child 22094 bad2209 "origin/$W212"; en2 run-212 22094 >/dev/null
@@ -1897,5 +1897,53 @@ r=$(SG_WAVE_TIP_GATES="echo call >> $T/tip2209.log; [ ! -e bad2209 ]" SG_WAVE_CH
 [ $rc = 0 ] && $O cat-file -e dev:g22093 2>/dev/null && ! $O cat-file -e dev:bad2209 2>/dev/null && ok "W2209: with one of two children evicted, the other still lands" || ko "W2209: two children: exit $rc: '$r'"
 [ "$(calls "$T/tip2209.log")" = 2 ] && ok "W2209: the check runs again on the tip that keeps a child" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times with a child left"
 [ "$(/usr/bin/grep -c '^o 3 Todo 22094$' "$T/board.log")" = 1 ] && /usr/bin/grep -q 'issues/22093 -f state=closed' "$T/gh.log" && ok "W2209: the evicted child is requeued once and the other child's issue closes" || ko "W2209: two children: board '$(cat "$T/board.log")'"
+
+# W2216 (#2216), criterion 2: two children, the newer one red. The pass evicts it and the trimmed tip ends unproven. The next pass
+# keeps the trimmed tip: it does not evict the same child again, and its tip check runs once, on the child the run kept.
+W213=wave/run-213; start2 run-213 >/dev/null; child 22101 g22101 "origin/$W213"; en2 run-213 22101 >/dev/null
+child 22102 bad2216 "origin/$W213"; en2 run-213 22102 >/dev/null
+printf 'run-213\n' > "$T/st/auto/disp-22101"; printf 'run-213\n' > "$T/st/auto/disp-22102"
+: > "$T/board.log"; rm -f "$T/tip2216.log"
+TIP2216="echo call >> $T/tip2216.log; [ ! -e bad2216 ] || exit 1; exit 4"
+C213='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2216 && exit 1; exit 0'
+r=$(SG_WAVE_TIP_GATES="$TIP2216" SG_WAVE_CHILD_GATES="$C213" land2 run-213 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W213"*unproven*) ok "W2216: pass 1 holds the trimmed tip as unproven after the eviction";; *) ko "W2216: pass 1: exit $rc: '$r'";; esac
+[ "$(calls "$T/tip2216.log")" = 2 ] && ok "W2216: pass 1 runs the tip gate on the full tip and on the trimmed tip" || ko "W2216: pass 1 ran the tip gate $(calls "$T/tip2216.log") times"
+r=$(SG_WAVE_TIP_GATES="$TIP2216" SG_WAVE_CHILD_GATES="$C213" land2 run-213 2>&1); rc=$?
+case "$r" in *"WAVE CHECK RED"*) ko "W2216: pass 2 evicted the child again: '$r'";; *) ok "W2216: pass 2 evicts no child again";; esac
+[ "$(calls "$T/tip2216.log")" = 3 ] && ok "W2216: pass 2 runs the tip gate once, on the trimmed tip" || ko "W2216: the tip gate ran $(calls "$T/tip2216.log") times after two passes"
+[ "$(/usr/bin/grep -c '^o 3 Todo 22102$' "$T/board.log")" = 1 ] && ok "W2216: the evicted child's card goes to Todo once" || ko "W2216: Todo rows: '$(cat "$T/board.log")'"
+
+# W2216 (#2216), criterion 3: the run predates a rearm, so its ledger answers floor to the requeue fact. The eviction writes its
+# card move and comment once, and a held pass repeats neither.
+W214=wave/run-214; start2 run-214 >/dev/null; child 22103 bad2216f "origin/$W214"; en2 run-214 22103 >/dev/null
+SG_STATE=$T/st python3 "$T/s/issue_ledger.py" rearm "x/y#22103" >/dev/null 2>&1
+printf 'run-214\n' > "$T/st/auto/disp-22103"; printf '%s\n' "$T/nofix2216" > "$T/st/auto/ccfix-run-214-1"
+: > "$T/board.log"; rm -f "$T"/st/cq/*22103-wave*
+TIP2216F="[ ! -e bad2216f ] || exit 1; exit 0"
+F214='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2216f && exit 1; exit 0'
+r=$(SG_WAVE_TIP_GATES="$TIP2216F" SG_WAVE_CHILD_GATES="$F214" land2 run-214 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W214"*"does not land empty"*) ok "W2216: pass 1 holds the empty landing after the eviction";; *) ko "W2216: pass 1: exit $rc: '$r'";; esac
+r=$(SG_WAVE_TIP_GATES="$TIP2216F" SG_WAVE_CHILD_GATES="$F214" land2 run-214 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W214"*"does not land empty"*) ok "W2216: pass 2 holds the empty landing";; *) ko "W2216: pass 2: exit $rc: '$r'";; esac
+[ "$(/usr/bin/grep -c '^o 3 Todo 22103$' "$T/board.log")" = 1 ] && ok "W2216: a held pass under floor repeats no card move" || ko "W2216: Todo rows under floor: '$(cat "$T/board.log")'"
+[ "$(ls "$T"/st/cq/*22103-wave* 2>/dev/null | /usr/bin/grep -c .)" = 1 ] && ok "W2216: a held pass under floor repeats no comment" || ko "W2216: queued comments under floor: '$(ls "$T"/st/cq/ 2>/dev/null)'"
+
+# W2216 (#2216), criterion 4: a child evicted at one commit re-enters with a fix that is red too, reads stuck, and is evicted
+# again. The second eviction writes its requeue on the new commit.
+W215=wave/run-215; start2 run-215 >/dev/null; child 22105 bad2216g "origin/$W215"; en2 run-215 22105 >/dev/null
+printf 'run-215\n' > "$T/st/auto/disp-22105"; : > "$T/board.log"
+TIP2216G="[ ! -e bad2216g ] || exit 1; exit 0"
+G215='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2216g && exit 1; exit 0'
+r=$(SG_WAVE_TIP_GATES="$TIP2216G" SG_WAVE_CHILD_GATES="$G215" land2 run-215 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "W2216: the first eviction closes its wave empty" || ko "W2216: first eviction: exit $rc: '$r'"
+start2 run-215 >/dev/null; child 22105 bad2216g "origin/$W215"; en2 run-215 22105 >/dev/null
+SG_STATE=$T/st python3 "$T/s/issue_ledger.py" wave "x/y#22105" run-215 stuck "the check at the tip of $W215 is red" >/dev/null 2>&1
+case "$(wfact 22105 run-215)" in stuck*) ok "W2216: the re-entered child reads stuck";; *) ko "W2216: the re-entered child reads '$(wfact 22105 run-215)'";; esac
+B2=$($O rev-parse -q --verify "refs/heads/$W215")
+r=$(SG_WAVE_TIP_GATES="$TIP2216G" SG_WAVE_CHILD_GATES="$G215" land2 run-215 2>&1); rc=$?
+[ "$(/usr/bin/grep -c '^o 3 Todo 22105$' "$T/board.log")" = 2 ] && ok "W2216: the eviction of the re-entered child moves its card to Todo" || ko "W2216: Todo rows: '$(cat "$T/board.log")' ($r)"
+case "$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#22105" 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("requeued") or {}).get("run-215", {}).get("head", ""))')" in
+  "$B2") ok "W2216: the eviction writes its requeue on the re-entered commit";; *) ko "W2216: the requeue head is not the re-entered commit $B2: '$r'";; esac
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
