@@ -970,15 +970,30 @@ flake_release() {
     *) echo "WAVE-FLAKE $w: the bug for the flaky check was not filed: $out";; esac
   return 0
 }
-# evicted_before <issue> <run> <sha>: the run already requeued the issue for this same commit (its requeue fact names the
-# head, #2209). A child that entered again after a fix carries another commit, whatever its wave fact reads since (a later
-# pass may have written `stuck` over `entered`), so its eviction is written. A ledger that does not answer is no proof,
-# so the eviction is written.
+# evicted_before <issue> <run> <sha>: the run already evicted the issue's child at this same commit. The run's marker holds each
+# commit it evicted (#2216), so a ledger that answers floor or refuses the requeue fact repeats nothing. The requeue fact
+# names the last head (#2209). A child that entered again carries another commit, so its eviction is not yet written.
 evicted_before() {
+  [ -n "$3" ] || return 1
+  /usr/bin/grep -qx "$3" "$SG_STATE/auto/evicted-$2-$1" 2>/dev/null && return 0
   ledger read "$1" 2>/dev/null | python3 -c 'import json, sys
 d = json.load(sys.stdin); run, sha = sys.argv[1], sys.argv[2]
 q = (d.get("requeued") or {}).get(run) or {}
 sys.exit(0 if sha and q.get("head") == sha else 1)' "$2" "$3" 2>/dev/null
+}
+# evicted_mark <issue> <run> <sha>: the run's marker of one eviction, written whatever the ledger answers (#2216).
+evicted_mark() { mkdir -p "$SG_STATE/auto" 2>/dev/null && printf '%s\n' "$3" >> "$SG_STATE/auto/evicted-$2-$1"; }
+# drop_evicted <clone> <run>: removes from the clone's tip each child commit the run already evicted (#2216), newest first, and
+# prints the issues it removed. A tip with no child left reads as an empty landing, so no tip check runs on it.
+drop_evicted() {
+  local S=$1 run=$2 sha cx
+  while read -r sha; do
+    [ -n "$sha" ] || continue
+    cx=$(child_of "$S" "$sha")
+    evicted_before "$cx" "$run" "$sha" || continue
+    $G -C "$S" rebase --onto "$sha^" "$sha" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1; return 1; }
+    printf '%s ' "$cx"
+  done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)
 }
 wave_check() {
   local S=$1 w=$2 rc crc found cx clog oc of hsha mk look=1 tk tsel tsc hb hid known rset rkey
@@ -1099,6 +1114,7 @@ wave_check() {
       wave_fact "$run" "$cx" refused "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
       requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
       ledger requeue "$cx" "$run" "$found" >/dev/null 2>&1
+      evicted_mark "$cx" "$run" "$found"
       echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
     fi
     dropped="${dropped:+$dropped }$cx"; look=0   # land keeps the set: the tree it pushes lacks this child's commits (#1416)
@@ -1514,6 +1530,9 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
       wave_conflict "$run" "$w" "$rd" "$S" "$out" "$files"; rm -rf "$S"; return 1; }
+    # (#2216) A child this run already evicted is removed before the empty check and the tip check, so a pass that finds the
+    # same child red again runs no check on it: the tip check runs on the children the run kept, or on none.
+    gone=$(drop_evicted "$S" "$run"); [ -z "$gone" ] || dropped="${dropped:+$dropped }${gone% }"
     # Nothing ahead of the base is a wave that landed empty (a run with no dispatch, every child failed its gates, no child):
     # there is nothing to push or close, so the wave ref goes, the marker goes, and the run is done, exit 0. It is read
     # BEFORE the tip's check: an empty wave has no child commit to blame for a red check, so that check can only fail the
