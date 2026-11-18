@@ -207,4 +207,39 @@ else
   ko "I: the holder never came to hold the gate lock, so the entry wait could not be proved"
 fi
 
+# R2272 (#2272): the wave was cut from a base that carried a red, and the base moved with the fix before the child's gate
+# ran. The child's gate fails on the stale wave tip; the entry rebases the child on the current base once, runs the gate
+# again on the rebased tree, and a pass enters it. The record names the failed test and the base tip's own answer for it.
+# enw <run> <issue>: the entry of a child into its own wave, with the gate command the case names (GATES).
+enw() { local r=$1 n=$2; REV_BASE=wave/$r rev "$n"; (cd "$T/c$n" && SG_WAVE_GATES=${GATES-true} bash "$T/s/wave.sh" enter "$r" "$n"); }
+start2 run-30 >/dev/null
+devmoved
+printf 'run-30\n' > "$T/st/auto/disp-30"; child 30 g30 "origin/wave/run-30"
+G30='if test -f other; then exit 0; fi; printf "fail\tpytest the base battery failed at tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list\truff mypy pytest\t-\n" > "$GATE_OUTCOME_FILE"; exit 1'
+r=$(SG_WAVE_BASE_PYTEST='exit 0' GATES="$G30" enw run-30 30)
+[ "$(entered 30)" = yes ] && ok "R2272: a pass on the rebased tip enters the child" || ko "R2272: #30 did not enter: '$r'"
+$O cat-file -e "wave/run-30:other" 2>/dev/null && ok "R2272: the rebased child carries the base's fix" || ko "R2272: the wave lacks the base's commit: '$r'"
+entry30=$(wfact 30 run-30)
+case "$entry30" in "entered "*test_the_mobile_page_holds_no_column_list*) ok "R2272: the entry names the test the first gate failed";; *) ko "R2272: ledger fact of #30: '$entry30'";; esac
+case "$entry30" in *"the base tip passes"*) ok "R2272: the entry says the base tip passes the named test";; *) ko "R2272: no base answer: '$entry30'";; esac
+
+# R2272b: the base moved but still fails the named test: the rebased tree is red again, the child goes back to the queue,
+# and the record names the test and says the base tip fails it too.
+start2 run-31 >/dev/null
+printf 'run-31\n' > "$T/st/auto/disp-31"; child 31 g31 "origin/wave/run-31"
+G31='printf "fail\tpytest the base battery failed at tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list\truff mypy pytest\t-\n" > "$GATE_OUTCOME_FILE"; exit 1'
+r=$(SG_WAVE_BASE_PYTEST='echo "FAILED tests/test_hub_mobile_move.py::test_the_mobile_page_holds_no_column_list - assert 0"; exit 1' GATES="$G31" enw run-31 31)
+[ "$(entered 31)" = no ] && ok "R2272b: a red on the rebased tip keeps the child out" || ko "R2272b: #31 entered: '$r'"
+case "$r" in *"WAVE REQUEUE #31"*test_the_mobile_page_holds_no_column_list*) ok "R2272b: the requeue names the failed test";; *) ko "R2272b: no test in the requeue: '$r'";; esac
+case "$(wfact 31 run-31)" in *test_the_mobile_page_holds_no_column_list*"the base tip fails it"*) ok "R2272b: the record says the base tip fails the named test";; *) ko "R2272b: ledger fact of #31: '$(wfact 31 run-31)'";; esac
+/usr/bin/grep -qx 'o 3 Todo 31' "$T/board.log" && ok "R2272b: the child goes back to the queue" || ko "R2272b: no Todo card for #31"
+
+# R2272c: the child's own red, the base tip passes it: the record says so, and the requeue stands as before.
+start2 run-32 >/dev/null
+printf 'run-32\n' > "$T/st/auto/disp-32"; child 32 g32 "origin/wave/run-32"
+G32='printf "fail\tpytest the base battery failed at tests/test_child_own.py::test_own\truff mypy pytest\t-\n" > "$GATE_OUTCOME_FILE"; exit 1'
+r=$(SG_WAVE_BASE_PYTEST='exit 0' GATES="$G32" enw run-32 32)
+[ "$(entered 32)" = no ] && ok "R2272c: a child's own red keeps it out" || ko "R2272c: #32 entered: '$r'"
+case "$(wfact 32 run-32)" in *test_child_own.py::test_own*"the base tip passes"*) ok "R2272c: the record says the base tip passes the child's red";; *) ko "R2272c: ledger fact of #32: '$(wfact 32 run-32)'";; esac
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
