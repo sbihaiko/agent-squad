@@ -1852,4 +1852,39 @@ $O cat-file -e dev:z12bad 2>/dev/null && ko "Z12: the bad child landed" || ok "Z
 /usr/bin/grep -q 'issues/991 -f state=closed' "$T/gh.log" && ko "Z12: the bad child's issue was closed" || ok "Z12: the bad child's issue is not closed"
 [ ! -e "$T/st/auto/disp-991" ] && /usr/bin/grep -qx 'o 3 Todo 991' "$T/board.log" && ok "Z12: the bad child is back in the queue" || ko "Z12: the bad child was not requeued"
 
+# W2209 (#2209): the tip check evicts the wave's only child, so nothing is ahead of the base. The landing runs no second tip
+# gate on a tip that equals the base: it closes the wave as an empty landing in the same pass, and the remote wave branch,
+# which still carries the evicted commit, goes. Before, the pass ended with the wave kept, and every later pass ran the
+# check, evicted the child and requeued it again, each at the price of a full gate.
+W209=wave/run-209; start2 run-209 >/dev/null; child 22091 g22091 "origin/$W209"; en2 run-209 22091 >/dev/null
+mkdir -p "$T/co/runs/run-209"; printf 'CHILD 1: GitHub issue #22091\n' > "$T/co/runs/run-209/request.txt"
+printf 'run-209\n' > "$T/st/auto/disp-22091"; : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/tip2209.log"
+TIP2209="echo call >> $T/tip2209.log; false"
+r=$(SG_WAVE_TIP_GATES="$TIP2209" SG_WAVE_CHILD_GATES='exit 1' land2 run-209 2>&1); rc=$?
+[ $rc = 0 ] && ok "W2209: a wave whose only child the tip check evicted lands empty (exit 0)" || ko "W2209: pass 1: exit $rc: '$r'"
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c "^WAVE $W209 landed empty in dev")" = 1 ] && ok "W2209: the empty landing is said once" || ko "W2209: no single empty-landing line: '$r'"
+[ "$(calls "$T/tip2209.log")" = 1 ] && ok "W2209: the tip gate runs once, never on a tip that equals the base" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times: '$r'"
+[ -z "$($O rev-parse -q --verify "refs/heads/$W209" 2>/dev/null)" ] && ok "W2209: the remote wave branch is deleted" || ko "W2209: the remote wave branch is still there"
+$O cat-file -e dev:g22091 2>/dev/null && ko "W2209: the evicted child landed" || ok "W2209: the evicted child is not in dev"
+/usr/bin/grep -q 'issues/22091 -f state=closed' "$T/gh.log" && ko "W2209: the evicted child's issue was closed" || ok "W2209: the evicted child's issue is not closed"
+[ ! -e "$T/st/auto/wave-run-209" ] && ok "W2209: the run's wave marker is gone" || ko "W2209: the run's wave marker is still there"
+# A second pass finds no wave: it runs no check and requeues nothing.
+r=$(SG_WAVE_TIP_GATES="$TIP2209" SG_WAVE_CHILD_GATES='exit 1' land2 run-209 2>&1); rc=$?
+case "$r" in *"WAVE CHECK RED"*|*"WAVE REQUEUE"*) ko "W2209: the second pass evicted or requeued again: '$r'";; *) ok "W2209: the second pass names no red check and no requeue";; esac
+[ "$(calls "$T/tip2209.log")" = 1 ] && ok "W2209: the second pass runs no tip gate" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times after two passes"
+[ "$(/usr/bin/grep -c '^o 3 Todo 22091$' "$T/board.log")" = 1 ] && ok "W2209: the evicted child's card goes to Todo once" || ko "W2209: Todo rows: '$(cat "$T/board.log")'"
+# The empty landing is held (a fix run of the wave has no verdict yet), so the wave stays and the next pass evicts the same
+# child again: the commit is dropped and named, and no second refused fact, card move or comment is written for the run.
+W211=wave/run-211; start2 run-211 >/dev/null; child 22092 g22092 "origin/$W211"; en2 run-211 22092 >/dev/null
+printf 'run-211\n' > "$T/st/auto/disp-22092"; printf '%s\n' "$T/nofix2209" > "$T/st/auto/ccfix-run-211-1"; : > "$T/board.log"; rm -f "$T/tip2209.log" "$T"/st/cq/*22092-wave*
+r=$(SG_WAVE_TIP_GATES="$TIP2209" SG_WAVE_CHILD_GATES='exit 1' land2 run-211 2>&1); rc=$?
+[ $rc != 0 ] && case "$r" in *"WAVE WAIT $W211"*"does not land empty"*) true;; *) false;; esac && ok "W2209: a fix run in flight holds the empty landing after the eviction" || ko "W2209: held pass: exit $rc: '$r'"
+r=$(SG_WAVE_TIP_GATES="$TIP2209" SG_WAVE_CHILD_GATES='exit 1' land2 run-211 2>&1); rc=$?
+case "$r" in *"WAVE CHECK RED"*"#22092 broke the wave tip"*) ok "W2209: the repeated eviction is named";; *) ko "W2209: the repeated eviction is not named: '$r'";; esac
+case "$r" in *"WAVE REQUEUE"*) ko "W2209: the same run requeued the child twice: '$r'";; *) ok "W2209: the same run requeues the child once";; esac
+[ "$(/usr/bin/grep -c '^o 3 Todo 22092$' "$T/board.log")" = 1 ] && ok "W2209: the repeated eviction moves no card again" || ko "W2209: Todo rows after two evictions: '$(cat "$T/board.log")'"
+[ "$(ls "$T"/st/cq/*22092-wave* 2>/dev/null | /usr/bin/grep -c .)" = 1 ] && ok "W2209: the repeated eviction queues no second comment" || ko "W2209: queued comments: '$(ls "$T"/st/cq/ 2>/dev/null)'"
+[ "$(calls "$T/tip2209.log")" = 2 ] && ok "W2209: each held pass runs the tip gate once" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times in two held passes"
+rm -f "$T/st/auto/ccfix-run-211-1"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
