@@ -1882,7 +1882,9 @@ SLOT_KIND_LABELS = {"doing": "A run with a card in Doing", "landing": "Finished,
                     "drained": "Loop drained or stopped"}
 SLOT_KIND_ORDER = ("doing", "landing", "gates", "autobug", "unknown", "drained")   # the order ties keep
 SLOT_GAP_CAP_S = 900   # a refusal record speaks for the wait after it, at most this long: a stale file claims no hours
-DRAINED_STATES = frozenset(("draining", "off"))
+# A drained stretch is one no pass dispatches in: the loop drains, is off, or is silent past the strip's own bound while
+# the switch says on. A `gap` names a stretch no source covers, which is no evidence of a wait and so is never drained.
+DRAINED_STATES = frozenset(("draining", "off", "down"))
 
 
 def slot_records(text):
@@ -1906,13 +1908,19 @@ def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
     strip's rows (`start`, `end`, `state`) of the same window. A record outside `[since, now]` is no part of the
     window. Each record covers its own instant to the next record's, to `now`, or one `gap_cap` at most, whichever is
     first, and every kind it names adds those minutes. A drained stretch adds its own minutes when the last record at
-    or before its start names a startable Todo card (`todo` above zero): the wait went on while no pass could write.
+    or before its end names a startable Todo card (`todo` above zero): no pass writes a record while no dispatch runs,
+    so that record speaks for the whole stretch, and it speaks even when it stands before the window's start.
     `lines` holds one row per kind with minutes, the kind's own order breaking a tie, and `drained` is counted in the
     `drained_minutes` field as well, because the page names it apart.
     """
     rows = sorted((r for r in records
                    if isinstance(r, dict) and isinstance(r.get("at"), (int, float)) and not isinstance(r.get("at"), bool)
                    and since <= r["at"] <= now), key=lambda r: r["at"])
+    # The drained evidence spans the whole file, not the window: a refusal written before the window still says whether a
+    # card waited when the loop stopped inside it.
+    everything = sorted((r for r in records
+                         if isinstance(r, dict) and isinstance(r.get("at"), (int, float))
+                         and not isinstance(r.get("at"), bool)), key=lambda r: r["at"])
     minutes = {k: 0.0 for k in SLOT_KIND_ORDER}
     passes = {k: 0 for k in SLOT_KIND_ORDER}
     for i, r in enumerate(rows):
@@ -1923,7 +1931,7 @@ def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
             if k not in minutes: continue
             minutes[k] += span
             passes[k] += 1
-    drained = 0.0
+    drained, drained_rows = 0.0, 0
     for st in states or ():
         if not isinstance(st, dict) or st.get("state") not in DRAINED_STATES: continue
         a, b = st.get("start"), st.get("end")
@@ -1931,13 +1939,13 @@ def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
             continue
         a, b = max(a, since), min(b, now)
         if b <= a: continue
-        before = [r for r in rows if r["at"] <= a]
-        if before and (before[-1].get("todo") or 0) > 0:
+        before = [r for r in everything if r["at"] <= b]
+        if before and _num(before[-1].get("todo")) and before[-1]["todo"] > 0:
             drained += (b - a) / 60.0
+            drained_rows += 1
     if drained > 0:
         minutes["drained"] = drained
-        passes["drained"] = sum(1 for st in states or ()
-                                if isinstance(st, dict) and st.get("state") in DRAINED_STATES)
+        passes["drained"] = drained_rows
     lines = [{"kind": k, "label": SLOT_KIND_LABELS[k], "minutes": round(minutes[k], 1), "passes": passes[k]}
              for k in SLOT_KIND_ORDER if minutes[k] > 0]
     lines.sort(key=lambda line: (-line["minutes"], SLOT_KIND_ORDER.index(line["kind"])))

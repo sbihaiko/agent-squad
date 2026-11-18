@@ -53,19 +53,22 @@ def _folder(checkout, name):
 
 def _autobug_holders(state_dir, checkout, holders):
     """The holders autobug dispatched: the claim markers `auto/bug-<n>` name the issues it took, and the run's own
-    request names them. A marker's issue the request does not name is another run's."""
-    marks = sorted(p.name[4:] for p in (pathlib.Path(state_dir) / "auto").glob("bug-*")
-                   if p.name[4:].isdigit())
+    request names them. A marker's issue the request does not name is another run's.
+
+    The markers are read once and each request is scanned for its own numbers with one small pattern, never for one
+    alternation built from every marker: the frontier pass calls this on its own hot path, so a large `auto/` directory
+    costs one small scan a request, never one huge pattern a pass."""
+    marks = {p.name[4:] for p in (pathlib.Path(state_dir) / "auto").glob("bug-*") if p.name[4:].isdigit()}
     if not marks:
         return set()
-    rx = re.compile(r"(?<!\d)(" + "|".join(marks) + r")(?!\d)")
+    rx = re.compile(r"(?<!\d)(\d+)(?!\d)")
     out = set()
     for name in holders:
         try:
             text = (_folder(checkout, name) / "request.txt").read_text(errors="replace")
         except OSError:
             continue
-        if rx.search(text):
+        if any(n in marks for n in rx.findall(text)):
             out.add(name)
     return out
 

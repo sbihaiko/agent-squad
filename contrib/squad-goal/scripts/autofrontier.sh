@@ -20,8 +20,8 @@ skipcsv=$(sg_skip_labels frontier "${SG_BUG_LABEL:-bug},debt,run-parent")   # th
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 [ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
-F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'release_pending; rm -rf "$F"' EXIT   # the pass's scratch: the issue list, a card's entry, and the reasons a card waits (#733)
-pick=(); notes=(); ready=(); kids=(); full=""; broke=; claimed=(); cutp=(); cutb=(); triaged=()   # the walk's facts, declared here so the idle line can read them at any exit
+F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'release_pending; slot_record_final; rm -rf "$F"' EXIT   # the pass's scratch: the issue list, a card's entry, and the reasons a card waits (#733)
+pick=(); notes=(); ready=(); kids=(); full=""; broke=; claimed=(); cutp=(); cutb=(); triaged=(); slot_due=   # the walk's facts, declared here so the idle line and the exit hook can read them at any exit
 # claim_issue <n> <token>: the dispatch marker as one atomic create (#865). The walk's check of the marker is only a hint: the walk
 # reads an issue's facts for seconds before it picks it, and a second pass in that window used to see no marker and launch the same
 # issue. The claim is the create itself (noclobber), so exactly one pass takes an issue, however the passes overlapped.
@@ -35,7 +35,12 @@ release_pending() { local n; for n in ${claimed[@]+"${claimed[@]}"}; do [ "$(cat
 # detail follows only when the reasons differ from the previous pass (a hash in $A/frontier-why), so a quiet loop costs one
 # line a beat and a changed one explains itself.
 WHY_REASONS=("triage failed" "held" "sibling" "no slot" "blocked" "claimed" "busy" "not startable" "skip label" "ac paths" "not listed")
-why_card() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$F/why"; }   # <issue> <reason> [note]: a Todo card this walk left behind
+why_card() {   # <issue> <reason> [note]: a Todo card this walk left behind. A refusal for "no slot" is the one the exit
+               # hook records the slot holders for (#2286), so the reason is read here and nowhere else.
+  printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$F/why"
+  [ "$2" = "no slot" ] && slot_due=1
+  return 0
+}
 idle() {   # <reasons file> [reason for a card the file does not name]: the summary line, and the detail when the reasons changed
   local f=$1 def=${2:-"not listed"} n r c line parts="" total h cards="$F/why.cards"
   [ -e "$f" ] || : > "$f"
@@ -72,21 +77,29 @@ open_cards() {
   fi
 }
 slot_record() {   # <todo cards>: who holds each run slot now (#2286). The pass writes it from the counters it already
-                  # reads, so no measure of its own starts; a failure is named and never fails the pass, a measure is no gate.
+                  # reads, so no measure of its own starts; a failure is named with its own reason and never fails the pass,
+                  # because a measure is no gate.
   [ -n "${AF_DRY:-}" ] && return 0
-  ( cd "$SG_CHECKOUT" 2>/dev/null && python3 - "$SG_STATE" "${1:-0}" "${SG_SQUAD:-}" <<'PY'
+  local out
+  out=$( { cd "${SG_CHECKOUT:?the pass names no checkout for its slot record}" && python3 - "$SG_STATE" "${1:-0}" "${SG_SQUAD:-}" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[3] or ".")
 from squad import slot_holders as S
 S.record_pass(sys.argv[1], int(sys.argv[2]))
 PY
-  ) >/dev/null 2>&1 || echo "FRONTIER: the slot-holder record was not written" >&2
+  } 2>&1 )
+  [ -z "$out" ] || printf 'FRONTIER: the slot-holder record was not written: %s\n' "$(printf '%s\n' "$out" | head -n 1)" >&2
+  return 0
+}
+slot_record_final() {   # a pass that refused a startable card for "no slot" writes the holder record once, at its exit,
+                        # so every refusal path that names the reason is recorded and none writes the record twice (#2286)
+  [ -n "$slot_due" ] && slot_record $(echo $todo | wc -w)
+  return 0
 }
 idle_noslot() {   # the pass has no run slot or no child room: every Todo card waits for one, and the line says so
   todo=$(sg_todo_cards) || { echo "FRONTIER: the board did not answer; nothing dispatched this pass" >&2; return 0; }
   todo=$(open_cards "$todo")
-  todo=" $(echo $todo) "; : > "$F/why"; idle "$F/why" "no slot"
-  slot_record $(echo $todo | wc -w)
+  todo=" $(echo $todo) "; : > "$F/why"; idle "$F/why" "no slot"; slot_due=1
 }
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
@@ -327,7 +340,6 @@ done
 if [ -n "$broke" ]; then   # the walk ended at the envelope: the cards past it wait for a slot, not for a reason of their own
   while [ $i -lt ${#cands[@]} ]; do IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
     case "$todo" in *" $n "*) why_card "$n" "no slot" "past the pass's envelope";; esac; done
-  slot_record $(echo $todo | wc -w)
 fi
 # The auto-triage (#1672, #1676): a card the walk took with no triage label gets the go label written here, once -- after
 # the claim, so an overlapping pass cannot take the same card, and after every gate, so a card left behind is never

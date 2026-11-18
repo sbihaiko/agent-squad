@@ -107,5 +107,18 @@ four; run
 [ "$(spent)" = "$seed" ] && ok "the request names the seed's dispatch budget" || ko "the request names '$(spent)', not the seed's '$seed'"
 $G -q 'spend 8' "$MKLOG.body" && ko "the request still carries the hardcoded spend 8" || ok "no hardcoded spend 8 survives"
 
+# 3) (#2286) A pass that refuses a startable card for "no slot" writes the slot-holder record from the counters it already
+#    reads: the record names the slot count it left and the cards waiting in Todo, so the Loop page can split the wait.
+scene slots
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four; run
+rec=$d/st/slot-refusals.jsonl
+if [ -f "$rec" ]; then
+  [ "$(tail -1 "$rec" | jq -r '.todo')" = 4 ] && ok "the refusal writes the slot-holder record with the four cards waiting" || ko "the record names '$(tail -1 "$rec" | jq -r '.todo')' cards, not the four in Todo"
+  [ "$(tail -1 "$rec" | jq -r '.cap')" = 1 ] && ok "the record names the run cap the pass read" || ko "the record names cap '$(tail -1 "$rec" | jq -r '.cap')', not the pass's 1"
+else
+  ko "a pass that refused a startable card for no slot wrote no slot-holder record"
+fi
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

@@ -7,6 +7,8 @@ table: the pass hands them the facts it already holds.
 """
 import json
 
+import pytest
+
 from squad import slot_holders as SH
 
 
@@ -45,6 +47,36 @@ def test_a_pass_records_the_kind_of_every_slot_it_holds(tmp_path, monkeypatch):
         "run-a": "gates", "run-b": "autobug", "run-c": "doing", "run-d": "unknown"}
     assert (rec["free"], rec["cap"], rec["todo"]) == (0, 3, 4)
     assert lines(st / SH.FILE) == [rec], "the pass writes one line, and it is the record it answers"
+
+
+def test_a_pass_whose_ceiling_cannot_be_read_writes_no_guess(tmp_path, monkeypatch):
+    """#2286: the record names facts the pass already holds, so a ceiling it cannot read writes no record and raises:
+    the pass names the failure instead of recording an invented holder."""
+    from squad import caps as C
+    st = tmp_path / "st"
+    st.mkdir()
+
+    def broken(checkout=None):
+        raise RuntimeError("no caps block")
+    monkeypatch.setattr(C, "ceiling", broken)
+    with pytest.raises(RuntimeError):
+        SH.record_pass(st, 3, str(tmp_path))
+    assert not (st / SH.FILE).exists(), "no record is written from a ceiling the pass could not read"
+
+
+def test_an_autobug_marker_the_request_does_not_name_is_another_runs(tmp_path):
+    """#2286: the marker set and the run's own request decide together, so a marker of another issue never names this
+    run, and a request that names the issue names it whatever the text around the number."""
+    co = tmp_path / "co"
+    (co / "runs" / "run-a").mkdir(parents=True)
+    (co / "runs" / "run-a" / "request.txt").write_text("CHILD - GitHub issue #77\n")
+    (co / "runs" / "run-b").mkdir(parents=True)
+    (co / "runs" / "run-b" / "request.txt").write_text("CHILD - GitHub issue #777\n")
+    st = tmp_path / "st"
+    (st / "auto").mkdir(parents=True)
+    (st / "auto" / "bug-77").write_text("a\n")
+    assert SH._autobug_holders(st, co, ["run-a", "run-b"]) == {"run-a"}, \
+        "the digits of issue 777 are no match for the marker of issue 77"
 
 
 def test_a_holder_is_classified_by_the_slot_it_holds():

@@ -2088,6 +2088,24 @@ def test_the_slot_wait_split_names_the_todo_wait_each_holder_kind_carries(prof):
     assert {line["kind"]: line["passes"] for line in out["lines"]}["gates"] == 1, "one refusal names the gates kind"
 
 
+def test_a_drain_that_starts_after_the_last_refusal_still_owes_its_minutes(prof):
+    """#2286: a loop stopped at 1000 s owes its drained minutes to the Todo wait the last refusal named, even when that
+    refusal stands before the window's own start: no pass writes a record while the loop is stopped."""
+    recs = [{"at": 900.0, "free": 0, "cap": 3, "todo": 4, "holders": [{"name": "run-a", "kind": "doing"}]}]
+    states = [{"start": 1000.0, "end": 1900.0, "state": "off"}]
+    out = prof.slot_wait(recs, states, 950.0, 1900.0)
+    assert out["drained_minutes"] == 15.0, "the stopped stretch of 900 s is a drained Todo wait"
+
+
+def test_a_silent_loop_with_the_switch_on_counts_as_a_drained_wait(prof):
+    """#2286: a loop the strip reads as `down` steps no pass, so the last refusal's startable card waits for it too."""
+    recs = [{"at": 1000.0, "free": 0, "cap": 3, "todo": 2, "holders": [{"name": "run-a", "kind": "landing"}]}]
+    states = [{"start": 1000.0, "end": 1600.0, "state": "active"},
+              {"start": 1600.0, "end": 2200.0, "state": "down"}]
+    out = prof.slot_wait(recs, states, 1000.0, 2200.0)
+    assert out["drained_minutes"] == 10.0, "the silent stretch is a drained wait, counted once"
+
+
 def test_no_drained_minute_counts_without_a_startable_todo_card(prof):
     """#2286: the drained minutes count only while a startable card waited in Todo, so a record that names none adds none."""
     recs = [{"at": 1000.0, "free": 0, "cap": 3, "todo": 0,
@@ -2135,6 +2153,27 @@ def test_the_loop_page_shows_the_slot_wait_split_under_the_trip_table():
     assert "12 refusals" in out[at:], "the block names the refusals it folded"
 
 
+def test_the_slot_wait_split_names_the_drained_minutes_apart():
+    """#2286: the record counts the minutes the loop was drained or stopped while a card waited, and the page prints
+    that number apart from the holder lines."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': SLOT_WAIT})},new Set())")
+    at = out.index("<section id=profslots>")
+    caption = out[at:out.index("<table", at)]
+    assert "drained or stopped" in caption and "1.5 h" in caption, \
+        f"the caption names the 90 drained minutes of the payload: {caption}"
+
+
+def test_the_slot_wait_split_is_drawn_only_under_a_trip_table():
+    """#2286: the split stands under the trip table, so a view with no trip draws no holder line, and the file view
+    draws the split only where it draws that table."""
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': None, 'slot_wait': SLOT_WAIT})},new Set())")
+    assert "<section id=profslots>" not in out, "no trip table above it, so the split stays off the page"
+    file_view = {**VIEW, "on": False, "tree": None, "trip": TRIP, "slot_wait": SLOT_WAIT}
+    out = run_js(f"profHtml({json.dumps(file_view)},new Set())")
+    at = out.index("<section id=profslots>")
+    assert at > out.index("<table id=proftt"), "the file view draws the split under the trip table, never apart"
+
+
 def test_the_slot_wait_split_says_so_when_no_refusal_was_recorded():
     """#2286: a window with no record draws no invented line, so an empty window reads as no measure."""
     out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': {'window_s': 86400, 'refusals': 0, 'lines': [], 'drained_minutes': 0.0}})},new Set())")
@@ -2144,20 +2183,27 @@ def test_the_slot_wait_split_says_so_when_no_refusal_was_recorded():
 
 
 def test_the_route_carries_the_slot_wait_split_of_the_records_it_reads(hub):
-    """#2286: the payload folds the refusal records the frontier wrote, keyed to the page's window."""
+    """#2286: the payload folds the refusal records the frontier wrote, keyed to the page's window, and a caller the
+    hub refused reads no record, so its payload names no split."""
     mod, port, _, state, _ = hub
     now = time.time()
+    path = state / "slot-refusals.jsonl"
     recs = [{"at": now - 600, "free": 0, "cap": 3, "todo": 4,
              "holders": [{"name": "run-a", "kind": "gates"}, {"name": "run-b", "kind": "gates"}]},
             {"at": now - 300, "free": 0, "cap": 3, "todo": 2,
              "holders": [{"name": "run-c", "kind": "landing"}]}]
-    (state / "slot-refusals.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
-    code, v = ask(port, "GET")
-    assert code == 200 and v["slot_wait"]["refusals"] == 2
-    minutes = {line["kind"]: line["minutes"] for line in v["slot_wait"]["lines"]}
-    assert minutes["gates"] == 5.0, "the first record speaks the five minutes to the second"
-    assert minutes["landing"] == pytest.approx(5.0, abs=0.2), "the last record speaks to the poll's own now, one gap cap at most"
-    (state / "slot-refusals.jsonl").unlink()
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    try:
+        code, v = ask(port, "GET")
+        assert code == 200 and v["slot_wait"]["refusals"] == 2
+        assert {line["kind"] for line in v["slot_wait"]["lines"]} == {"gates", "landing"}
+        # The fold on a frozen clock: the first record speaks its five minutes to the second record, and the second
+        # record speaks to the `now` handed in, one gap cap at most.
+        out = mod.slot_wait_view(86400, now, [], allowed=True)
+        assert {line["kind"]: line["minutes"] for line in out["lines"]} == {"gates": 5.0, "landing": 5.0}
+    finally:
+        path.unlink(missing_ok=True)
+    assert mod.slot_wait_view(86400, now, [], allowed=False) is None, "a refused caller gets no split"
 
 
 def test_the_profile_doc_names_the_bar_as_the_live_form_of_its_trip_table():
