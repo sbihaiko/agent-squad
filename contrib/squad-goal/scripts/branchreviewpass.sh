@@ -16,6 +16,7 @@
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/caps.sh"
 export SG_GH_PASS=branchreview
 SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/workbranches.sh"
+. "$here/columnlimit.sh"; . "$here/startability.sh"; export SG_GH_PASS=branchreview   # the board's one read below, and the column limit it bounds (#2287)
 remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; max=${SG_REVIEW_PASS_MAX:-3}
 export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
@@ -67,6 +68,16 @@ review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
     { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; chain_summary; } > "$(sg_cq_status "$i" "mchain")" \
       || { echo "BRANCHREVIEW CHAINHEALTH $br: chainhealth.py failed (the model resolver is missing or unreadable)" >&2; : > "$A/chainhealth-failed"; }; }
 }
+# A card limit on the Review column (#2287): the pass starts no review while the column holds its maximum. The count is
+# the board's one read, through the same seam every dispatcher uses; a read that fails is no reading, so it never holds
+# the pass, and an unread limit is no limit.
+review_max=$(sg_column_limit Review)
+case "$review_max" in ''|*[!0-9]*) ;; *)
+  if rows=$(sg_board_rows 2>/dev/null); then
+    review_n=$(printf '%s\n' "$rows" | awk -F '\t' '$2=="Review"||$2=="Code Review"{n++} END{print n+0}')
+    [ "$review_n" -lt "$review_max" ] || { echo "BRANCHREVIEW column Review full: $review_n of $review_max card(s) in Review; no review starts this pass"; exit 0; }
+  fi ;;
+esac
 done=0; now=$(date +%s); jobs_list=
 while read -r sha br i; do
   [ -n "$br" ] && [ "$done" -lt "$max" ] || continue

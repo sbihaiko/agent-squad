@@ -22,8 +22,9 @@ def check(cfg):
     from squad import project_settings as P  # the one catalog: this checker and `squad config check` read the same ranges
     bad, o = [], cfg.get("options", {})
     for key, spec in P.CATALOG.items():
-        sec, _, name = key.partition(".")
-        v = cfg.get(sec, {}).get(name) if isinstance(cfg.get(sec), dict) else None
+        v = cfg                              # a key with more than one dot reads its own path, as `columns.Doing.max_cards` does
+        for part in key.split("."):
+            v = v.get(part) if isinstance(v, dict) else None
         if v is None:
             if key in P.REQUIRED:
                 bad.append(key)

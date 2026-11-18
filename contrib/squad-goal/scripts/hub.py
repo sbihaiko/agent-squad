@@ -5944,7 +5944,7 @@ def board(moves=None):
     pending_new = {fd_int(fd) for fd in board_cache.get("fast_pending") or []} - {fd_int(i.get("fd")) for i in board_cache["items"]}
     pending_new.discard(None)
     if pred_defects: report_predictions(pred_defects)   # the loop's log names each one once, whatever the page does
-    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "pending_new": len(pending_new), "pred": pred_defects, "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
+    return {"t": board_cache["t"], "overdue": board_read_overdue(board_cache["t"]), "err": board_cache["err"] or board_stale(), "pending_new": len(pending_new), "pred": pred_defects, "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "done": COLUMN["issue_closed"], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "limits": board_column_limits(), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # `limits` is the card limit of each column, shown as `n / max` (#2287); `done` names the delivered column, so the phone counts done tickets without naming a column (#1604); sum is the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -6855,13 +6855,14 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
-<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=brd>Board<small id=brdnav>&#8212;</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=brd>Board</option><option value=acc>Access</option></select></label>
 <details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>off</span></summary><div class=sb id=lopb></div></details>
 <details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr>on</span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
+<details id=brd class=sp data-sp=brd><summary>Board<span class=sr id=brdsr>&#8212;</span></summary><div class=sb id=brdb></div></details>
 <details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>&#8212;</span></summary><div class=sb><div id=accb></div><div class=sdev><h4>This device</h4><a id=mobile-link href="#">mobile view</a><p class=note>The phone check runs <code>/agent-squad:start-mobile</code> on this machine.</p></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile";document.getElementById("mobile-link").onclick=()=>localStorage.removeItem("squad-view")</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
@@ -7102,6 +7103,7 @@ function mdlDiffLines(old,cur,lab){const T="Models & chains · ",out=[],ids=[...
  for(const k of Object.keys(lab)){const a=chainDesc(old,k),b=chainDesc(cur,k);if(a!==b)out.push(`- ${T}${lab[k]}: ${a||"(empty)"}`,`+ ${T}${lab[k]}: ${b||"(empty)"}`)}
  return out}
 function themeLine(theme,l){return l.startsWith(theme+" · ")?l:theme+" · "+l}
+function colCount(n,max){return max==null?String(n):n+" / "+max}   // a column header's count: `n` with no limit, `n / max` with one (#2287)
 // }SETV
 let mdl=null,mdlSrv="",mdlMsg="",mdlRmk={};const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision",router_models:"Router"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images.",router_models:"The models the router runs on, tried in order."},EFF=["low","medium","high","max"];
 /* ✕ marks a row; the row stays, struck, until Save takes it out of the chain with its effort and hours (#913). */
@@ -7257,17 +7259,42 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
  else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
  else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
  });
+/* Settings > Board (#2287): the card limit of each board column. The page renders and asks; the hub validates, shows the
+   diff and writes the project settings file on confirm (ADR-0137). A blank field is no limit. The frontier reads Doing,
+   the review pass reads Review, and the Kanban header shows the count against the limit. */
+// BRD{ the Board theme's pure rules (#2287): its values, its dirty test and its render. Run in node by tests.
+let brdS=null,brdDraft=null,brdMsg="";
+const brdClone=o=>JSON.parse(JSON.stringify(o));
+const brdVals=()=>brdDraft||(brdS&&brdS.columns)||[];
+const brdLimits=()=>Object.fromEntries(brdVals().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
+const brdDirty=()=>!!brdS&&!!brdDraft&&JSON.stringify(brdDraft)!==JSON.stringify(brdS.columns);
+function brdRender(){const b=$("#brdb");if(!b)return;if(!brdS){b.innerHTML="<span class=m>Loading the data.</span>";return}
+ const cols=brdVals();
+ setChip("brd",cols.some(c=>c.max_cards!=null)?"limited":"no limit");
+ let h=setNow("brd",[setTile("Columns",String(cols.length),"neutral")],`Project file: <code>${esc(brdS.file||"none")}</code>`)
+  +setSettings("brd",cols.map(c=>setRow(c.name,`<input data-col="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder="no limit" aria-label="${esc(c.name)} maximum cards">`,"the most cards this column holds; empty means no limit")));
+ if(brdMsg)h+=`<div class="mx${brdMsg.startsWith("!")?" err":""}" role=status>${esc(brdMsg.replace(/^!/,""))}</div>`;
+ b.innerHTML=h;if(typeof setBar==="function")setBar()}
+// }BRD
+async function brdLoad(){try{brdS=await (await fetch("/api/columns")).json();brdDraft=brdClone(brdS.columns||[]);brdMsg=brdS.err?"!"+brdS.err:"";brdRender()}catch(e){brdMsg="!load failed";brdRender()}}
+async function brdPost(confirm){try{const r=await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:brdLimits(),confirm})})),d=await r.json();
+ if(d.err){brdMsg="!"+d.err}
+ else if(confirm){brdS=d.state||brdS;brdDraft=brdClone(brdS.columns||[]);brdMsg=(d.diff||[]).length?"saved · the frontier and the review pass read it on their next pass":"nothing changed"}
+ else brdMsg=(d.diff||[]).length?"":(brdDraft=brdClone(brdS.columns||[]),"nothing changed")}catch(x){brdMsg="!save failed"}
+ brdRender()}
+$("#brdb").addEventListener("input",e=>{const n=e.target.dataset.col;if(!n||!brdDraft)return;const c=brdDraft.find(x=>x.name===n);
+ if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);brdMsg="";if(typeof setBar==="function")setBar()});
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Loop and
    Access have no Save: the bar hides there. */
-const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
-const SET_SAVE=["lim","mdl","slk","sub"];   // the themes the one Save writes; Loop and Access stage no file here
+const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",brd:"Board",acc:"Access"};
+const SET_SAVE=["lim","mdl","slk","sub","brd"];   // the themes the one Save writes; Loop and Access stage no file here
 let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
 const limDirty=()=>{if(!limS||!$("#limc"))return false;const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)};
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
-const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
+const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()],["brd",brdDirty()]].filter(x=>x[1]).map(x=>x[0]);
 /* The Save bar is always visible (#1278): a read-only theme reads "nothing to save here" with both buttons disabled,
    never a bar that disappears and leaves the reader guessing whether anything was lost. */
 function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme);bar.hidden=false;
@@ -7290,6 +7317,7 @@ $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"))}
  if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
  if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
+ if(d.includes("brd"))groups.push(await setAskOne("/api/columns",{columns:brdLimits()},"Board",(brdS&&brdS.file)||"(the project settings file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
  $("#sdpre").textContent=diffByFile(groups)||"No change to save.";$("#sdok").disabled=!any||bad;$("#sdlg").showModal()};
 $("#sdno").onclick=()=>{sPend=null;limPend=null;$("#sdlg").close()};
@@ -7298,20 +7326,22 @@ $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  if(d.includes("lim"))await limPost(true);
  if(d.includes("slk"))await slPost(true);
  if(d.includes("sub")){const r=await subPost(true);subMsg=r.err?"!"+r.err:"saved";subRender()}
- setBar();barSay([mdlMsg,limMsg,slMsg,subMsg])};
+ if(d.includes("brd"))await brdPost(true);
+ setBar();barSay([mdlMsg,limMsg,slMsg,subMsg,brdMsg])};
 // The verdict of a save belongs where the Save button is: the panel's own line sits at the end of a long scrolling
 // column, so a refusal read there as "nothing happened" (owner, 2026-11-01).
 const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);if(!say.length)return;
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
- if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}setBar()};
+ if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
+ if(brdS){brdDraft=brdClone(brdS.columns||[]);brdMsg="";brdRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
+const ACC=["stats","mdl","lim","slk","brd"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
 ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();
- if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}});
+ if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}else if(i==="brd"&&e.open){brdLoad()}});
  if(openAcc.has(i))e.open=true});   // a panel stored open loads through its own toggle, once (#1278)
 /* A refused write gets every control disabled and the reason stated (#1278); the observer keeps a render from re-enabling
    what it drew after the first pass. The loop switch is the hub's to gate: it follows the `write` field, never this flag. */
@@ -7736,6 +7766,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
+const COLS=b.limits||{};   // the card limit of each column (#2287): the hub resolves it, and the header shows the count against it
 lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pending_new||0;readStale=!!b.err||lastBoardOver;lastBoardErr=b.err||"";$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items);   // every open card feeds the swimlane model and the spec colours (#969)
 const sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -7770,7 +7801,7 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
  return `<span class="lf lf-${k}${c.full?" full":""}" style="justify-content:${c.al}">${inner}</span>`};
  const drawn=c=>m.lanes.reduce((s,l)=>s+(l.collapsed?0:(l.counts[c]||0)),0);   // a collapsed lane draws no cell, so its cards widen no column of the grid
  const tracks=colTracks(m.vc.map(drawn));   // each column's track takes the weight of its card count in the drawn lanes (#1994)
- let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)};--tracks:${tracks}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");   // the header counts the whole board, a collapsed lane included
+ let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)};--tracks:${tracks}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${colCount(ccount(c),COLS[c])}</b>${eye({name:c})}</div>`).join("");   // the header counts the whole board, a collapsed lane included
  for(const l of m.lanes){const cl=l.collapsed,bugs=l.kind==="bugs",lc=bugs?"var(--err)":l.num!=null?specColor(SLOTS,l.num):"var(--acc)",   // a spec lane takes its card colour (#917)
    hd=laneHead(l,BOARD_VOCAB).rows;   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}">`+hd.map((r,i)=>`<span class=lh-r${i+1}>${r.map(c=>headCell(l,c,cl)).join("")}</span>`).join("")+`</header>`;
@@ -7782,7 +7813,7 @@ const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).inc
 const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
  vis=all.filter(g=>!g.end&&(!bottom||(!hid.has(g.name)&&!autoHidden(g)))),autos=bottom?all.filter(g=>!g.end&&autoHidden(g)):[];   // a closed status is never a column, so it has no eye and no line to show it (#969)
-const badge=g=>`<span class=n>${f?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
+const badge=g=>`<span class=n>${f?fits[g.name].length+"/"+g.n:colCount(g.n,COLS[g.name])}</span>`;   // the number the header shows, against its card limit (#2287), and the number the strip's line repeats
 const one=g=>{const bmv=g.name===COLNAME.unscheduled?`<button class=bmv type=button title="move every Backlog card to Todo: the hub names how many first">Move all to Todo</button>`:"",it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}${bmv}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}${bmv}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
@@ -9463,6 +9494,83 @@ def tailnet_block(checkout=None):
     not load, so the seam refuses every tailnet request."""
     return tailnet_source(checkout)[0]
 
+# --- The card limit of each board column (#2287). One resolution (squad/board_limits.py): the plugin defaults, then the
+# project settings file under the profile's checkout. The Settings page reads and writes it, and the Kanban header shows it.
+_BOARD_LIMITS = {}
+
+
+def _board_limit_parts():
+    """The two `squad` modules the Board theme reads, loaded by the same rule as the tailnet block."""
+    if "mods" not in _BOARD_LIMITS:
+        _BOARD_LIMITS["mods"] = load_squad(tailnet_roots(), ("board_limits", "project_settings"))
+    return _BOARD_LIMITS["mods"]
+
+
+def board_column_limits():
+    """Every board column's card limit, for the Kanban header. A reader that cannot load leaves the header with no limit."""
+    try:
+        bl, _ = _board_limit_parts()
+        return bl.limits(CHECKOUT or ".")
+    except Exception as e:
+        log_once(f"hub: the column limits are unavailable: {type(e).__name__}: {' '.join(str(e).split())}")
+        return {}
+
+
+def columns_read():
+    """The Settings Board theme's data: one row per board column with its limit, and the file a Save writes."""
+    try:
+        bl, _ = _board_limit_parts()
+    except Exception as e:
+        return {"columns": [], "file": "", "err": f"the settings reader did not load: {type(e).__name__}: {' '.join(str(e).split())}"}
+    lim = bl.limits(CHECKOUT or ".")
+    return {"file": str(pathlib.Path(CHECKOUT or ".") / "docs" / "squad" / "defaults.yaml"),
+            "columns": [{"name": n, "max_cards": lim.get(n)} for n in bl.COLUMNS]}
+
+
+def _limit_text(raw):
+    """A limit as the page types it: a whole number from 1 to 100, `none`, or an empty field, which is none. None on a
+    value the rule refuses, so the caller names the column."""
+    if raw is None: return None
+    text = str(raw).strip().lower()
+    if text in ("", "none"): return None
+    if not text.isdigit(): return None
+    n = int(text)
+    return n if 1 <= n <= 100 else None
+
+
+def columns_set(body):
+    """POST /api/columns: validate, diff, then write. With `confirm` false it answers the diff and writes nothing, as the
+    Spend & limits theme does. A value that breaks its rule is refused with a message and no write."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    try:
+        bl, ps = _board_limit_parts()
+    except Exception as e:
+        return {"err": f"the settings reader did not load: {type(e).__name__}: {' '.join(str(e).split())}"}
+    try:
+        cur = bl.limits(CHECKOUT or ".")
+    except Exception as e:
+        return {"err": f"the limits could not be read: {e}"}
+    sent = body.get("columns")
+    if not isinstance(sent, dict): return {"err": "bad request"}
+    new = {}
+    for name, raw in sent.items():
+        if name not in bl.COLUMNS: return {"err": f"no board column {name!r}"}
+        value = _limit_text(raw)
+        text = str(raw if raw is not None else "").strip().lower()
+        if value is None and text not in ("", "none"):
+            return {"err": f"{name}: the limit is an integer from 1 to 100, or none"}
+        new[name] = value
+    diff = [f"Board · {n}: {cur.get(n) if cur.get(n) is not None else 'none'} -> {v if v is not None else 'none'}"
+            for n, v in new.items() if v != cur.get(n)]
+    if body.get("confirm") is not True: return {"diff": diff}
+    for n, v in new.items():
+        if v == cur.get(n): continue
+        try:
+            ps.set_key(CHECKOUT or ".", f"columns.{n}.max_cards", "none" if v is None else str(v))
+        except Exception as e:
+            return {"err": f"{n}: {e}", "diff": diff}
+    return {"diff": diff, "state": columns_read()}
+
 class Access(NamedTuple):
     allowed: bool
     reason: str
@@ -9763,6 +9871,7 @@ class H(BaseHTTPRequestHandler):
                                                                     "gauges": subs_gauges(), "file": str(PLANS)}).encode(), "application/json"   # the theme draws the sidebar card's own rows, and names its file (#1281)
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
+        elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Board (#2287)
         elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
@@ -10001,7 +10110,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/profiler": return self.profiler_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         read_only = self.path == "/api/sync"   # a press is a read: its failed read answers an error in a 200, never a request defect (#1668)
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
@@ -10012,6 +10121,7 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/promote" and isinstance(body, dict) and body.get("batch") is True: out = promote_batch(body, a.login or "owner")   # the owner's batch move (#1098)
                 elif self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
+                elif self.path == "/api/columns": out = columns_set(body)   # Settings > Board (#2287)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}

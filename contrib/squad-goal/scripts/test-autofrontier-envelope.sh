@@ -39,13 +39,13 @@ GH
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
 cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(dirname "$src")/skiplabels.sh" "$T/scripts/skiplabels.sh"   # the one skip set (#1593) and the shared reads (#428): the stub below keeps the real file's helpers and fixes only what this suite pins
-printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_ledger_held() { return 1; }\nsg_ac_refused() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\nsg_board_rows() { jq -r ".[]|\\"\\(.number)\\tTodo\\"" "$GH_ISSUES"; }\n' > "$T/scripts/startability.sh"   # every fixture card sits in Todo (#550)
+printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_ledger_held() { return 1; }\nsg_ac_refused() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\nsg_board_rows() { if [ -n "${GH_BOARD:-}" ]; then cat "$GH_BOARD"; else jq -r ".[]|\\"\\(.number)\\tTodo\\"" "$GH_ISSUES"; fi; }\n' > "$T/scripts/startability.sh"   # every fixture card sits in Todo (#550) unless a case writes its own rows
 printf '#!/bin/bash\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\necho x >> "$MKLOG"; cp "$2" "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
 cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src")"/{models.json,req-checklist.txt} "$T/scripts/"
 printf '%%s\n' 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\n")' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,siblings.py,cluster.py,loopbug.sh,basered.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,siblings.py,cluster.py,loopbug.sh,basered.sh,columnlimit.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
 scene() { # <name>: fresh state, its own env.sh; no graph written here -- each case writes the one it needs
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
@@ -149,6 +149,22 @@ four
 out=$(SG_SQUAD=$d/fk SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1); rc=$?
 case "$out" in *"FRONTIER: the slot-holder record was not written"*) ok "a failed record is named on stderr";; *) ko "a failed record is silent: '$out'";; esac
 [ "$rc" = 0 ] && ok "a failed record never fails the pass" || ko "a failed record ended the pass with $rc"
+# 6) A column limit: no card enters Doing while Doing holds its maximum, and the pass says so once (#2287). The board read
+#    is the pass's own, so a card in Doing costs the pass no second read.
+scene colfull
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four
+{ for n in 41 42 43 44 45 46; do printf '%s\tDoing\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
+printf 'caps:\n  runs: 1\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$d/co/docs/squad/defaults.yaml"
+r=$(run)
+case "$r" in *"FRONTIER column Doing full: 6 of 2 card(s) in Doing; nothing dispatched this pass"*) ok "a full Doing column refuses the pass, naming the count and the limit";; *) ko "no column-full line: '$r'";; esac
+[ "$(printf '%s' "$r" | $G -c 'FRONTIER column Doing full')" = 1 ] && ok "the refusal is said once a pass" || ko "the refusal printed $(printf '%s' "$r" | $G -c 'FRONTIER column Doing full') times"
+[ ! -s "$MKLOG" ] && ok "no request is built while Doing is full" || ko "a request was built while Doing was full"
+# 7) The same cards under a limit above the count: the column is not full, and the pass dispatches as it always did.
+printf 'caps:\n  runs: 1\ncolumns:\n  Doing:\n    max_cards: 9\n' > "$d/co/docs/squad/defaults.yaml"
+r=$(run)
+case "$r" in *"FRONTIER column Doing full"*) ko "the pass called the column full under a limit of 9 with 6 cards";; *) ok "a column under its limit never refuses the pass";; esac
+unset GH_BOARD
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

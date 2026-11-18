@@ -15,7 +15,7 @@
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
 # to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
 # landing anything, whatever its verdict (janitor rule O; rule R sets the card: Todo after a failed run, Blocked after needs-human). Empty SG_FRONTIER_LABEL turns it off.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/loopbug.sh"; . "$(dirname "$0")/startability.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/loopbug.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/columnlimit.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 skipcsv=$(sg_frontier_skip)   # the frontier's own skip set (#1593): a bug-lane label like no-auto never holds a frontier card; the bug, debt and run-parent units belong to their own lanes
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
@@ -264,6 +264,12 @@ board=$(sg_board_rows "$(sg_go_csv "$F/issues.json" "$SG_FRONTIER_LABEL")") || {
 printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
 export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from this pass's one board read (#1620)
 export SG_STACK_GRAPH="$F/issues.json"   # stack.sh holds a card whose dependency component is invalid or unknown (#1984)
+# A card limit on the Doing column (#2287): the pass starts no card while the column holds its maximum, and says so once.
+# The count is the pass's own board read, so the limit costs no second read. An unread limit is no limit: the read is the
+# one the module's defaults already answer, and a settings file that cannot be read never stops dispatch.
+doing_max=$(sg_column_limit Doing)
+case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(awk -F '\t' '$2=="Doing"||$2=="In Progress"{n++} END{print n+0}' "$F/board")
+  [ "$doing_n" -lt "$doing_max" ] || { echo "FRONTIER column Doing full: $doing_n of $doing_max card(s) in Doing; nothing dispatched this pass"; exit 0; } ;; esac
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "   # the issues whose card sits in Todo: the owner's go signal (#550)
 git -C "${SG_CHECKOUT:-.}" log --format='%ct%x09%s' "origin/${SG_LAND_BRANCH:-dev}" > "$F/dev-subjects" 2>/dev/null || : > "$F/dev-subjects"
 closers=" $(python3 "$here/specstall.py" closers "$F/issues.json" "$F/dev-subjects" 2>/dev/null | tr '\n' ' ')"   # a ticket that closes its spec ranks before ordinary work (#1962)

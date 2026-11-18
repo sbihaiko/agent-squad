@@ -52,6 +52,13 @@ caps:                               # machine-wide, across every repository and 
   gates: 12                         # gate worker slots on this machine: a gate takes SG_GATE_WORKERS of them, all or none, after it takes the gate lock; a project may lower it, and a gate then takes min(workers, this)
   reviews: 4                        # live reviews on this machine, branch and child alike: a childcc review that finds none skips this pass, a branch review waits
 
+columns:                            # the card limit of each board column (#2287), a whole number from 1 to 100 or none; a project may change one in docs/squad/defaults.yaml
+  Todo: {max_cards: null}           # a waiting card holds no machine
+  Doing: {max_cards: 6}             # caps.runs 3 runs, at most 2 tickets each (ADR-0158)
+  Review: {max_cards: 4}            # caps.reviews 4
+  Landing: {max_cards: null}        # a landing is one fast-forward push and holds no machine
+  Gating: {max_cards: null}         # caps.gates bounds the gate workers, and one wave gate carries all the cards of its wave
+
 dashboard:                          # the run dashboard page; run_start records it, the page reads it from the record
   reread_seconds: 1                 # how often the page rereads record.jsonl while a run lives. The page has no control for it. The page uses 1 when a record lacks it.
   watch_seconds: 0.2                # how often the server stats the record path while a stream is open. A pushed event follows a write within this step. A record from before it, or a file:// page, uses reread_seconds.
