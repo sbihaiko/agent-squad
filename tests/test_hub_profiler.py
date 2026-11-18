@@ -3311,7 +3311,7 @@ def test_the_chart_draws_the_ticks_and_the_points_the_payload_holds():
     band = re.search(r'<rect class="ptc pts-todo" x="([\d.]+)" width="([\d.]+)"', out)
     x0, w = float(band.group(1)), float(band.group(2))
     pts = re.search(r'<polyline class="ptl-tok pts-todo" points="([^"]*)"', out).group(1).split()
-    assert pts == ["%.1f,%.1f" % (x0 + p * w, 18 + 110 * (1 - v / 960))
+    assert pts == [f"{x0 + p * w:.1f},{18 + 110 * (1 - v / 960):.1f}"
                    for p, v in CHART["columns"][0]["tokens"]["points"]], \
         "a Tokens point sits at its position in the band and its height on the payload's own scale"
 
