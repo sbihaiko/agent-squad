@@ -1990,22 +1990,31 @@ posts() { /usr/bin/grep -cE '(^| )-X POST ' "$T/gh.log" 2>/dev/null || echo 0; }
 freezes() { /usr/bin/grep -c "api -X POST repos/x/y/issues/$1/labels" "$T/gh.log" 2>/dev/null || echo 0; }
 export LABEL_STORE=1; rm -f "$T"/lab-* "$T"/com-*
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner217 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
+endfiles() { ls "$T/st/cq/"*#"$1"-endclass* 2>/dev/null; }
+e1=$(endfiles 2217)
 if /usr/bin/grep -q 'issues/2217/labels.*labels\[\]=frozen:owner.*labels\[\]=needs-ratification' "$T/gh.log" \
-   && /usr/bin/grep -rq 'owner-only: criterion (1) needs a credential' "$T/st" 2>/dev/null; then
-  ok "N1: an owner-only end freezes its issue with one label write and a comment that quotes the reason"
+   && [ "$(printf '%s\n' "$e1" | /usr/bin/grep -c .)" = 1 ] && /usr/bin/grep -qF 'Reason: owner-only: criterion (1) needs a credential' "$e1"; then
+  ok "N1: an owner-only end freezes its issue with one label write and one queued comment that quotes the reason"
 else ko "N1: owner-only end did not freeze: '$r'"; fi
 [ "$(freezes 2217)" = 1 ] && ok "N1: the two labels go in one request (debt 2)" || ko "N1: freeze requests: '$(/usr/bin/grep 'issues/2217/labels' "$T/gh.log")'"
-c2=$(ls "$T/st/cq/"*#2217-endclass* 2>/dev/null | wc -l | tr -d ' '); w2=$(posts)
+cp "$e1" "$T/com-2217"   # the flush posted the queued comment, so the freeze reads back as standing
+w2=$(posts)
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner218 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
-[ "$(posts)" = "$w2" ] && ok "N2: a second run id of the same class writes no second freeze (blocking 3)" || ko "N2: a second run id froze the issue again: '$r'"
-[ "$(ls "$T/st/cq/"*#2217-endclass* 2>/dev/null | wc -l | tr -d ' ')" = "$c2" ] && ok "N2: and queues no second status comment" || ko "N2: a second status comment was queued"
+[ "$(posts)" = "$w2" ] && ok "N2: a second run id of the same class writes no second freeze (debt 3)" || ko "N2: a second run id froze the issue again: '$r'"
+case "$r" in *"already stands"*) ok "N2: the standing freeze is named as standing";; *) ko "N2: the standing freeze is not named: '$r'";; esac
+[ "$(endfiles 2217 | /usr/bin/grep -c .)" = 1 ] && ok "N2: and queues no second status comment" || ko "N2: a second status comment was queued"
+rm -f "$T"/st/cq/*#2217-endclass* "$T/com-2217"   # the labels stand, but the comment never reached the issue
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner219 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
+[ "$(endfiles 2217 | /usr/bin/grep -c .)" = 1 ] && ok "N2b: a freeze whose comment is missing queues the comment again (debt 3)" || ko "N2b: the missing comment was not queued again: '$r'"
+case "$r" in *"already stands"*) ko "N2b: a freeze with no comment is named as standing: '$r'";; *) ok "N2b: a freeze with no comment is not named as standing";; esac
 nrb=$($G -C "$T/co" rev-parse --short=12 HEAD)
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr201 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
+e3=$(ls "$T/st/cq/"*#2201-endclass* 2>/dev/null)
 if /usr/bin/grep -q 'issues/2201/labels.*labels\[\]=frozen:not-startable' "$T/gh.log" \
-   && /usr/bin/grep -rq "SQUAD-NOT-STARTABLE: build=$nrb" "$T/st" 2>/dev/null; then
+   && [ "$(printf '%s\n' "$e3" | /usr/bin/grep -c .)" = 1 ] && /usr/bin/grep -qF "SQUAD-NOT-STARTABLE: build=$nrb" "$e3"; then
   ok "N3: a does-not-reproduce end freezes its issue at this build"
 else ko "N3: does-not-reproduce end did not freeze: '$r'"; fi
-printf 'SQUAD-NOT-STARTABLE: build=%s run run-nr201 ended failed: the defect does not reproduce at the base tip.\n' "$nrb" > "$T/com-2201"
+printf 'SQUAD-NOT-STARTABLE: build=%s run run-nr201 ended failed: the defect does not reproduce at the base tip.\n\nReason: the defect does not reproduce at the tip\n' "$nrb" > "$T/com-2201"
 w3=$(posts)
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr202 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
 [ "$(posts)" = "$w3" ] && ok "N3: the same build keeps its freeze and writes nothing again" || ko "N3: the same build froze the issue again: '$r'"

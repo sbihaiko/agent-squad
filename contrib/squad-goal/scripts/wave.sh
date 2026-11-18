@@ -364,23 +364,26 @@ stop() {
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }
 
-# freeze_stand <issue> <class>: 0 when the issue already carries the freeze this class writes, so a later run of the same
-# class writes no label and no comment again (#2217). owner-only stands while both of its labels are there, because only
-# the owner lifts that freeze. does-not-reproduce stands only while its marker names this build: a later build dispatches
-# the issue, so that freeze is written anew. A read that does not answer is no proof of a freeze: the caller writes, and
-# GitHub dedupes a label it already holds.
+# freeze_stand <issue> <class> <why>: 0 when the issue already carries the freeze this class writes for this reason (#2217).
+# The freeze stands only with both its labels and a comment that quotes the reason: owner-only needs frozen:owner and
+# needs-ratification; does-not-reproduce needs frozen:not-startable and a marker that names this build. A label with no
+# comment, the state a refused comment queue leaves, is not standing, so the next pass writes the comment again. A read
+# that does not answer is no proof of a freeze: the caller writes, and GitHub dedupes a label it already holds.
 freeze_stand() {
-  local n=$1 cls=$2 labels cur body
+  local n=$1 cls=$2 why=$3 labels cur body
   labels=$(gh_api "repos/$SG_REPO/issues/$n/labels" -q '[.[]?.name] | join(" ")' 2>/dev/null) || return 1
   if [ "$cls" = owner-only ]; then
     case " $labels " in *" frozen:owner "*) ;; *) return 1;; esac
-    case " $labels " in *" needs-ratification "*) return 0;; *) return 1;; esac
+    case " $labels " in *" needs-ratification "*) ;; *) return 1;; esac
+  else
+    case " $labels " in *" frozen:not-startable "*) ;; *) return 1;; esac
+    cur=$(sg_loop_build)
+    [ -n "$cur" ] || return 1
   fi
-  case " $labels " in *" frozen:not-startable "*) ;; *) return 1;; esac
-  cur=$(sg_loop_build)
-  [ -n "$cur" ] || return 1
   body=$(gh_api "repos/$SG_REPO/issues/$n/comments?per_page=100" -q '.[].body' 2>/dev/null) || return 1
-  printf '%s\n' "$body" | /usr/bin/grep -q "^SQUAD-NOT-STARTABLE: build=${cur} "
+  printf '%s\n' "$body" | /usr/bin/grep -qF "Reason: $why" || return 1
+  [ "$cls" = owner-only ] && return 0
+  printf '%s\n' "$body" | /usr/bin/grep -qF "SQUAD-NOT-STARTABLE: build=${cur} "
 }
 
 # freeze_class <issue> <run> <why> <class>: a failed run whose artifact named its end class freezes its issue in one comment that
@@ -391,16 +394,16 @@ freeze_stand() {
 freeze_class() {
   local n=$1 run=$2 why=$3 cls=$4 f out
   froze=0
-  freeze_stand "$n" "$cls" && return 0
+  freeze_stand "$n" "$cls" "$why" && return 0
   if [ "$cls" = owner-only ]; then
     out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" -f "labels[]=needs-ratification" 2>&1) || {
       printf 'WAVE-FREEZE #%s frozen:owner and needs-ratification refused: %s\n' "$n" "$out"; return 1; }
-    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
+    f=$(sg_cq_file "$n-endclass.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
     printf 'Loop freeze: run %s ended failed with an owner-only reason. The loop does not dispatch this issue again; the owner decides it.\n\nReason: %s\n' "$run" "$why" > "$f"
   else
     out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" 2>&1) || {
       printf 'WAVE-FREEZE #%s frozen:not-startable refused: %s\n' "$n" "$out"; return 1; }
-    f=$(sg_cq_file "$n-endclass$$.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
+    f=$(sg_cq_file "$n-endclass.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
     printf 'SQUAD-NOT-STARTABLE: build=%s run %s ended failed: the defect does not reproduce at the base tip. A later build dispatches it again.\n\nReason: %s\n' "$(sg_loop_build)" "$run" "$why" > "$f"
   fi
   froze=1

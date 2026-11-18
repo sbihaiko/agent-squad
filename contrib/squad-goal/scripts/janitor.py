@@ -1679,7 +1679,8 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
         lost = str(rv.get("verdict")) == "deadline" or "every review model failed" in str(rv.get("findings") or "") or str(rv.get("stderr") or "").startswith("review_not_started")
         kind = "own" if not lost or kind == "own" else "loop"
     if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return False
-    out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *(([kind or "own", i["end_class"]]) if i.get("end_class") else ([kind] if kind else []))])[1].strip()
+    tail = [kind, i["end_class"]] if i.get("end_class") else ([kind] if kind else [])
+    out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *tail])[1].strip()
     if out: say(f"FAILED-DISPATCH #{n}: {out}")
     # A probe's refutation that gh or I/O failed (#888): the run stays uncounted, so the next pass calls `fail` and sends it again.
     return "WAVE PROBE-RETRY" not in out
