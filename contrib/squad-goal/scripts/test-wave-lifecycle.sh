@@ -12,7 +12,7 @@
 #   2) `contrib/squad-goal/scripts/childcc.py`, the pass watch.sh runs every cycle over every live run, is what sees a
 #      child finish with outcome pass: it runs `wave.sh enter <run> <issue>` in the tree the engine made for that child
 #      (`<run>/ws/<workspace>-<child>`, squad/runners/children.py), so the child's local gates, its rebase on the wave tip
-#      and its --ff-only entry are the entry, and its card reads Code Complete only when the child is in the wave.
+#      and its --ff-only entry are the entry, and its card reads Landing only when the child is in the wave.
 #   3) `contrib/squad-goal/scripts/watch.sh`, the loop's own cycle, is what reads a finished run's verdict: its completion
 #      runs the run's child-entry pass and then `wave.sh land <run>`, so the wave it lands is one the run's finished
 #      children are in (#375 review). The order is the whole point: a landing attempted before the entry finds an empty
@@ -165,19 +165,19 @@ child "$R1" 65 g65; before=$(wtip "$R1"); out=$(childcc); rc=$?
   || ko "L2: the wave tip is '$(wtip "$R1")' and the child's head '$(child_head "$R1" 65)': '$(printf '%s' "$out" | tail -3)'"
 case "$out" in *"entered wave/$R1 (#65)"*) ok "L2: the entry is said";; *) ko "L2: the entry is silent: '$(printf '%s' "$out" | tail -5)'";; esac
 $O cat-file -e "wave/$R1:g65" 2>/dev/null && ok "L2: the work of the child is in the wave branch" || ko "L2: the child's work is not in the wave"
-/usr/bin/grep -qx 'o 3 Code Complete 65' "$T/board.log" && ok "L2: the card of the child that entered reads Code Complete" \
-  || ko "L2: no Code Complete card: '$(cat "$T/board.log" 2>/dev/null)'"
+/usr/bin/grep -qx 'o 3 Landing 65' "$T/board.log" && ok "L2: the card of the child that entered reads Landing" \
+  || ko "L2: no Landing card: '$(cat "$T/board.log" 2>/dev/null)'"
 [ "$before" != "$(wtip "$R1")" ] && ok "L2: the entry is what moved the wave tip" || ko "L2: the wave tip did not move"
 
-# 3) A child whose gates fail never enters, and its issue goes back to the queue: the card is not moved to Code Complete.
+# 3) A child whose gates fail never enters, and its issue goes back to the queue: the card is not moved to Landing.
 R2=run-20261014-000000-bbb222
 : > "$T/board.log"
 launch "$R2" 66 >/dev/null 2>&1; child "$R2" 66 g66; before=$(wtip "$R2")
 out=$(GATES=false childcc)
 [ -n "$(wtip "$R2")" ] && [ "$(wtip "$R2")" = "$before" ] && ok "L3: a child whose gates fail never enters the wave" \
   || ko "L3: the wave tip moved to '$(wtip "$R2")'"
-/usr/bin/grep -q 'Code Complete 66' "$T/board.log" && ko "L3: the card of a child that did not enter reads Code Complete" \
-  || ok "L3: a child that did not enter moves no card to Code Complete"
+/usr/bin/grep -qE '(Landing|Code Complete) 66' "$T/board.log" && ko "L3: the card of a child that did not enter reads Landing" \
+  || ok "L3: a child that did not enter moves no card to Landing"
 case "$out" in *"WAVE REQUEUE #66"*) ok "L3: the refused entry is said";; *) ko "L3: the refusal is silent: '$(printf '%s' "$out" | tail -5)'";; esac
 /usr/bin/grep -qx 'o 3 Todo 66' "$T/board.log" && ok "L3: the issue of a child that did not enter is back in the queue" \
   || ko "L3: the issue was not requeued: '$(cat "$T/board.log" 2>/dev/null)'"
@@ -191,7 +191,7 @@ tip=$(wtip "$R2"); out=$(childcc)
 child "$R2" 66 g66b >/dev/null 2>&1; out=$(childcc)
 [ "$(wtip "$R2")" = "$(child_head "$R2" 66)" ] && ok "L6: a child that failed its gates enters on the next pass" \
   || ko "L6: the wave tip is '$(wtip "$R2")' and the child's head '$(child_head "$R2" 66)': '$(printf '%s' "$out" | tail -3)'"
-/usr/bin/grep -qx 'o 3 Code Complete 66' "$T/board.log" && ok "L6: its card reads Code Complete once it entered" || ko "L6: no Code Complete card for #66"
+/usr/bin/grep -qx 'o 3 Landing 66' "$T/board.log" && ok "L6: its card reads Landing once it entered" || ko "L6: no Landing card for #66"
 before=$(wtip "$R2"); out=$(childcc)
 [ "$(wtip "$R2")" = "$before" ] && ! printf '%s' "$out" | /usr/bin/grep -q "entered wave/$R2" && ok "L6: a child that entered is not entered again" || ko "L6: the entered child was entered again: '$out'"
 

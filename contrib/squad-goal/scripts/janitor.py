@@ -1552,7 +1552,7 @@ def reconcile_board():
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
             if note: queue_terminal(n, want, note)
-        elif have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None, run_id):
+        elif canonical(have) != canonical(want) and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None, run_id):   # either spelling of a column is that column (ADR-0170): a card the legacy board spells Code Complete never reads as a move to Landing
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:

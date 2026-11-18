@@ -158,6 +158,13 @@ def writes(tmp_path: Path) -> str:
     return "".join(x + "\n" for x in (f.read_text().splitlines() if f.exists() else []) if x.startswith(("STATUS", "ADD")))
 
 
+def landing(log: str) -> str:
+    """The write lines that name the Landing column of #N, in either spelling (ADR-0170, #2155): the definition names it
+    `Landing`, and a version 1 board spells the same column `Code Complete`. A reader folds the two, so a guard that
+    pinned one spelling would pass over a write in the other."""
+    return "\n".join(line for line in log.splitlines() if f" Landing {N}" in line or f" Code Complete {N}" in line)
+
+
 def decided(tmp_path: Path) -> str:
     f = tmp_path / "st/cycle.log"
     return f.read_text() if f.exists() else ""
@@ -171,7 +178,7 @@ def test_a_hand_fix_with_no_later_requeue_keeps_code_complete(tmp_path):
     """#519 stands: a `(#N)` commit in the landing branch with no later requeue or run is Code Complete."""
     sandbox(tmp_path, card="Todo", named=True)
     janitor(tmp_path)
-    assert f"STATUS o 4 Code Complete {N}" in writes(tmp_path), f"a hand fix lost Code Complete: {writes(tmp_path)}"
+    assert f"STATUS o 4 Landing {N}" in landing(writes(tmp_path)), f"a hand fix lost Landing: {writes(tmp_path)}"
 
 
 @pytest.mark.heavy
@@ -180,7 +187,7 @@ def test_a_requeue_newer_than_the_named_commit_keeps_the_card_in_todo(tmp_path):
     sandbox(tmp_path, card="Todo", named=True)
     assert ledger(tmp_path, "requeue", f"x/y#{N}", "run-requeued", "abc123") == "recorded"
     janitor(tmp_path)
-    assert f"Code Complete {N}" not in writes(tmp_path), f"an older named commit overwrote the requeue: {writes(tmp_path)}"
+    assert landing(writes(tmp_path)) == "", f"an older named commit overwrote the requeue: {writes(tmp_path)}"
 
 
 @pytest.mark.heavy
@@ -190,7 +197,7 @@ def test_a_run_end_newer_than_the_named_commit_wins_over_it(tmp_path):
     finished_run(tmp_path)
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"Code Complete {N}" not in log, f"an older named commit overwrote the run end: {log}"
+    assert landing(log) == "", f"an older named commit overwrote the run end: {log}"
     assert f"STATUS o 4 Todo {N} reason=no-landing" in log, f"the run end did not return the card: {log}"
 
 

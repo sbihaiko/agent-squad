@@ -131,13 +131,20 @@ def writes(tmp_path: Path) -> str:
     return f.read_text() if f.exists() else ""
 
 
+def landing(log: str) -> str:
+    """The write lines that name the Landing column of #N, in either spelling (ADR-0170, #2155): the definition names it
+    `Landing`, and a version 1 board spells the same column `Code Complete`. A reader folds the two, so a guard that
+    pinned one spelling would pass over a write in the other."""
+    return "\n".join(line for line in log.splitlines() if f" Landing {N}" in line or f" Code Complete {N}" in line)
+
+
 @pytest.mark.heavy
 def test_a_locally_landed_run_without_a_merged_pr_stops_at_code_complete(tmp_path):
     """A run's own landing is not a merge into the base, so it does not make an open issue Done."""
     sandbox(tmp_path, "echo 0", landed=True)
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"ADD o 4 Code Complete {N}" in log, f"the card did not stop at Code Complete: {log}"
+    assert f"ADD o 4 Landing {N}" in landing(log), f"the card did not stop at Landing: {log}"
     assert f"Done {N}" not in log, f"the card read Done from a local landing: {log}"
 
 
@@ -149,7 +156,7 @@ def test_a_record_land_head_with_no_landing_fact_delivers_nothing(tmp_path):
     sandbox(tmp_path, "echo 0", landed=True, wave="closed", entered=True, fact=False)
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"Code Complete {N}" not in log, f"the card read Code Complete over a landing no pass recorded: {log}"
+    assert landing(log) == "", f"the card read Landing over a landing no pass recorded: {log}"
     assert f"ADD o 4 Todo {N}" in log, f"the card did not go back to the queue: {log}"
 
 
@@ -159,7 +166,7 @@ def test_the_landing_pass_fact_is_what_makes_the_entered_child_code_complete(tmp
     sandbox(tmp_path, "echo 0", landed=True, wave="closed", entered=True)
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"ADD o 4 Code Complete {N}" in log, f"the landing fact did not reach Code Complete: {log}"
+    assert f"ADD o 4 Landing {N}" in landing(log), f"the landing fact did not reach Landing: {log}"
 
 
 @pytest.mark.heavy
@@ -182,7 +189,7 @@ def test_a_landed_child_that_never_entered_a_landed_wave_goes_back_to_the_queue(
     sandbox(tmp_path, "echo 0", landed=True, wave="closed")
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"Code Complete {N}" not in log, f"the card read Code Complete over a child that never entered the wave: {log}"
+    assert landing(log) == "", f"the card read Landing over a child that never entered the wave: {log}"
     assert f"ADD o 4 Todo {N}" in log, f"the card did not go back to the queue: {log}"
     assert not (tmp_path / f"st/auto/disp-{N}").exists(), "the dispatch marker held an issue no wave carries"
 
@@ -193,7 +200,7 @@ def test_a_landed_child_that_has_not_entered_an_open_wave_stays_in_progress(tmp_
     sandbox(tmp_path, "echo 0", landed=True, wave="open")
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"Code Complete {N}" not in log, f"the card read Code Complete before the child entered the wave: {log}"
+    assert landing(log) == "", f"the card read Landing before the child entered the wave: {log}"
     assert f"ADD o 4 In Progress {N}" in log, f"the card did not stay in progress: {log}"
     assert (tmp_path / f"st/auto/disp-{N}").exists(), "the dispatch marker went while the wave could still take the child"
 
@@ -204,7 +211,7 @@ def test_a_child_that_entered_the_wave_reads_code_complete(tmp_path):
     sandbox(tmp_path, "echo 0", landed=True, wave="open", entered=True)
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"ADD o 4 Code Complete {N}" in log, f"the card did not read Code Complete after the entry: {log}"
+    assert f"ADD o 4 Landing {N}" in landing(log), f"the card did not read Landing after the entry: {log}"
 
 
 # Code Review (#603): with the shipped vocabulary, a child of an ended run whose code is done and that has not entered its
@@ -252,7 +259,7 @@ def test_the_wave_entry_still_moves_a_code_review_card_to_code_complete(tmp_path
     sandbox(tmp_path, "echo 0", landed=True, wave="open", entered=True, card="Code Review")
     janitor(tmp_path, **SHIPPED)
     log = writes(tmp_path)
-    assert f"STATUS o 4 Code Complete {N}" in log, f"the entry did not move the card to Code Complete: {log}"
+    assert f"STATUS o 4 Landing {N}" in landing(log), f"the entry did not move the card to Landing: {log}"
 
 
 @pytest.mark.heavy
@@ -276,6 +283,6 @@ def test_a_finished_run_still_reads_its_card_on_the_pass_that_drops_its_line(tmp
     between = lines[drop[0] + 1:card[0]]
     assert not [line for line in between if " janitor pass " in line], (
         f"a pass boundary stands between the drop and the card read: the card pass read a run a later pass dropped: {journal}")
-    assert f"ADD o 4 Code Complete {N}" in log, f"the card did not reach Code Complete: {log}"
+    assert f"ADD o 4 Landing {N}" in landing(log), f"the card did not reach Landing: {log}"
     assert (tmp_path / "st/active-runs.txt").read_text().split() == [], (
         "the finished run kept its active-runs line, so it still holds the child room rule #2138 won")
