@@ -28,6 +28,7 @@ const SLOTS = new Map();
 const specColor = () => "var(--mute)";
 const cardSpec = () => null;
 const cardColor = () => "var(--mute)";
+const loopBugLabel = x => (x.l || []).find(l => l === "loop-bug" || String(l).startsWith("loop-bug:")) || null;
 const tint = () => "";
 const gstrip = () => "";
 const lbc = () => "";
