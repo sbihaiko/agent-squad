@@ -38,14 +38,17 @@ wait "$pc"
 # through the same module, and its bound fails this case instead of letting an empty ceiling pass as free.
 nb0=$(/usr/bin/grep -cF "$T/proj/test-b.sh" "$hist" 2>/dev/null)
 mkdir -p "$T/slow"; printf 'import time\ntime.sleep(2)\n' > "$T/slow/sitecustomize.py"
-gates_held() {  # the live holders of caps.gates, read as child-gate.sh reads it: SQUAD_CAPS_DIR through squad.caps
-  PYTHONPATH="$SG_SQUAD" python3 -c 'import sys; from squad import caps; print(" ".join(caps.ceiling(sys.argv[1]).holders("gates")))' "$T/proj" 2>/dev/null
+gates_held() {  # the live holders of caps.gates and their lease pids, read as child-gate.sh reads them: the same
+  # SQUAD_CAPS_DIR through squad.caps. The probe names the folder the holder inherits, never the default one a bare
+  # python would read, so an empty answer means no holder, not a folder the holder never writes.
+  SQUAD_CAPS_DIR="$T/caps" PYTHONPATH="$SG_SQUAD" python3 -c \
+    'import sys; from squad import caps; print("; ".join(caps.ceiling(sys.argv[1]).holding("gates")))' "$T/proj" 2>/dev/null
 }
 PYTHONPATH="$T/slow" bash "$d/child-gate.sh" ./test-a.sh > "$T/h.out" 2>&1 & ph=$!
 held=; bound=$((SECONDS + 30))
 while [ "$SECONDS" -lt "$bound" ]; do
   held=$(gates_held)
-  case " $held " in *" child-gate-$ph "*) break;; esac
+  case "$held" in *"child-gate-$ph (lease pid $ph,"*) break;; esac   # the holder's own name and lease pid
   held=; sleep 0.1
 done
 [ -n "$held" ] && ok "the holder's gates slot is read from the slot state" || ko "the holder took no gates slot within 30 s: $(cat "$T/h.out")"
