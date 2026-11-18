@@ -86,6 +86,8 @@ def _split(items):
 
 
 def _duration(hours):
+    if hours * 60 < 1:   # under one minute: whole seconds, so a fine axis labels its floor (#2311)
+        return f"{round(hours * 3600)}s"
     minutes = round(hours * 60)
     days, rest = divmod(minutes, 1440)
     hrs, mins = divmod(rest, 60)
@@ -175,8 +177,10 @@ def lead_time(items, window=20, now=None, measure=MEASURE):
 # SPEC 889 #900: the control chart. The hub serves every number and position; the page draws marks only.
 # SPEC 1327 #1355: the y axis is always log, with round ticks (#1334); the chart takes no scale option.
 # #2311: the axis fits the plotted values. The top is the round tick above the largest mark and the floor the round tick
-# below the smallest, so a view of hours-sized cards no longer runs to a fixed 60 days.
-LOG_FLOOR_HOURS = 1 / 60      # no log of a span under one minute; the axis floor never drops below it
+# strictly below the smallest, so a view of hours-sized cards no longer runs to a fixed 60 days and no card sits on the
+# axis. Under the ladder's first tick the round step halves; past its last tick it doubles.
+LOG_FLOOR_HOURS = 1 / 60      # the smallest round tick, one minute; a rolling value no smaller is logged
+AXIS_MIN_HOURS = 1 / 3600     # one second: under it the axis floor never drops, whatever the smallest card
 DEFAULT_TOP_HOURS = 24        # the axis top of a view that plots nothing
 PLOT_WIDTH, PLOT_HEIGHT = 672, 212  # the lead chart's usable frame: the 800 x 340 page frame less its 64 px margins
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
@@ -241,18 +245,26 @@ def _round_above(hours):
 
 
 def _round_below(hours):
-    """The last round tick below `hours`, the axis floor, never under one minute."""
-    floor = LOG_FLOOR_HOURS
-    for tick in ROUND_TICKS_HOURS:
-        if tick >= hours:
-            break
-        floor = tick
+    """The last round tick strictly below `hours`, the axis floor. Under the ladder's first tick the round step halves,
+    down to one second, so the floor is always under the smallest mark and the log range never collapses (#2311)."""
+    for tick in reversed(ROUND_TICKS_HOURS):
+        if tick < hours:
+            return tick
+    floor = ROUND_TICKS_HOURS[0]
+    while floor >= hours and floor > AXIS_MIN_HOURS:
+        floor /= 2
     return floor
 
 
 def _axis_ticks(floor, top):
-    """The round durations inside the fitted range, the floor and the top included."""
+    """The round durations inside the fitted range, the floor and the top included. Past the ladder's last tick the
+    round step doubles, so a long view labels round durations and never only its two raw ends (#2311)."""
     ticks = [tick for tick in ROUND_TICKS_HOURS if floor <= tick <= top]
+    high = ROUND_TICKS_HOURS[-1]
+    while high < top:
+        high *= 2
+        if floor <= high <= top:
+            ticks.append(high)
     if not ticks or ticks[0] > floor:
         ticks.insert(0, floor)
     if ticks[-1] < top:
@@ -377,9 +389,12 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
                                          min(hours) if hours else None, max(hours) if hours else None])
     floor = _round_below(min(marks)) if marks else 1.0
     top = _round_above(max(marks)) if marks else DEFAULT_TOP_HOURS
+    log_span = math.log10(top) - math.log10(floor)
+    if log_span <= 0:   # a floor at or above the top would divide by zero: the top takes one more round step (#2311)
+        top = _round_above(top)
+        log_span = math.log10(top) - math.log10(floor)
     def position(h):
-        return _clamp((math.log10(max(h, floor)) - math.log10(floor))
-                      / (math.log10(top) - math.log10(floor)))
+        return _clamp((math.log10(max(h, floor)) - math.log10(floor)) / log_span)
     ticks = [(h, _duration(h), position(h)) for h in _axis_ticks(floor, top)]
 
     dots = []

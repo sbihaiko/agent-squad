@@ -283,6 +283,36 @@ def test_the_axis_floor_follows_cards_under_thirty_minutes(lt):
     assert min(dot["y"] for dot in result["dots"]) > 0.0, "a card under the old 30-minute floor still sits on the axis"
 
 
+def test_the_axis_floor_sits_strictly_below_a_card_at_the_smallest_round_tick(lt):
+    """#2311: the floor is the round tick below the smallest card, so a view of one-minute cards puts the floor under
+    the minute: the log range never collapses and no card sits on the axis."""
+    result = _chart(lt, [_closed(n, 1 / 60) for n in (1, 2)])
+
+    floor, top = result["ticks"][0], result["ticks"][-1]
+    assert floor["hours"] < 1 / 60, f"the floor is not below the one-minute card: {floor['hours']}"
+    assert floor["hours"] < top["hours"], "the fitted range collapsed to a zero or negative log span"
+    assert min(dot["y"] for dot in result["dots"]) > 0.0, "a one-minute card sits on the axis"
+
+
+def test_the_axis_labels_the_round_durations_inside_a_between_rung_range(lt):
+    """#2311: a view whose smallest card is 5 days and whose largest is 40 days labels the round durations inside that
+    range, so neither end is a raw mark."""
+    result = _chart(lt, [_closed(1, 5 * 24), _closed(2, 40 * 24)])
+
+    assert [tick["text"] for tick in result["ticks"]] == ["2d", "7d", "14d", "30d", "60d"]
+
+
+def test_the_axis_keeps_round_durations_past_the_ladders_last_tick(lt):
+    """#2311: past 365 days the round step doubles, so a long view still labels round durations and never only its two
+    raw ends."""
+    result = _chart(lt, [_closed(1, 30000), _closed(2, 40000)])   # about 3.4 and 4.6 years
+
+    assert [tick["hours"] for tick in result["ticks"]] == [8760, 17520, 35040, 70080]
+    assert all(tick["text"].endswith("d") for tick in result["ticks"]), \
+        f"a tick past the ladder is not a round duration: {[tick['text'] for tick in result['ticks']]}"
+    assert len({tick["hours"] for tick in result["ticks"]}) >= 2, "the axis drew fewer than two distinct ticks"
+
+
 def test_a_timeframe_keeps_only_the_cards_closed_inside_it(lt):
     items = [_closed(1, 5, days_ago=1), _closed(2, 5, days_ago=20)]
 

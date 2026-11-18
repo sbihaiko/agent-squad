@@ -59,10 +59,15 @@ tall = lt.control_chart([card(1, closed, 5), card(2, closed, 5.2)], timeframe=30
 check("the caller's plot size recomputes the clusters from the same rule",
       [c["count"] for c in small["clusters"]] == [1, 1] and [c["count"] for c in tall["clusters"]] == [2],
       ([c["count"] for c in small["clusters"]], [c["count"] for c in tall["clusters"]]))
-# #1355: the one axis is log, so the fixed-radius rule holds in both directions on it: a nearby pair merges, and the
-# (5, 5.2) pair above still splits. A dense pair that re-split on log, or a far pair that re-merged, fails one of the two.
-# #2311: the axis fits the plotted hours, so the pair above spans about 12 px of the 212 px frame and 6 px of the 106 px
-# one, and the nearby pair sits inside one dot on the fitted 4h..8h axis.
+# #1355: the one axis is log, so the fixed-radius rule holds in both directions on it: a nearby pair merges, and a far
+# pair splits. A dense pair that re-split on log, or a far pair that re-merged, fails one of the two.
+# #2311: the axis fits the plotted hours, so the (5, 5.2) pair above spans about 12 px of the 212 px frame and 6 px of
+# the 106 px one, the nearby pair sits inside one dot on the fitted 4h..8h axis, and the (5, 8) pair spans about 56 px
+# of the fitted 4h..24h axis.
+far = lt.control_chart([card(1, closed, 5), card(2, closed, 8)], timeframe=30, now=now,
+                       plot={"width": 672, "height": 212})
+check("a far pair on the log axis stays two dots", [c["count"] for c in far["clusters"]] == [1, 1],
+      [c["count"] for c in far["clusters"]])
 near = lt.control_chart([card(1, closed, 5), card(2, closed, 5.02)], timeframe=30, now=now,
                         plot={"width": 672, "height": 212})
 check("a pair closer than one dot on the log axis merges", [c["count"] for c in near["clusters"]] == [2],
