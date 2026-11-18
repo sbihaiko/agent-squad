@@ -52,19 +52,21 @@ check("a cluster serves its count and its cards", cluster["count"] == 7 and clus
 check("a cluster serves its date range and its lead-time range",
       cluster["closed"]["start"] == closed.date().isoformat() and cluster["lead"]["min"]["hours"] == 10.0
       and cluster["lead"]["max"]["hours"] == 10.0, (cluster["closed"], cluster["lead"]))
-small = lt.control_chart([card(1, closed, 5), card(2, closed, 8)], timeframe=30, now=now,
+small = lt.control_chart([card(1, closed, 5), card(2, closed, 5.2)], timeframe=30, now=now,
                          plot={"width": 672, "height": 212})
-tall = lt.control_chart([card(1, closed, 5), card(2, closed, 8)], timeframe=30, now=now,
+tall = lt.control_chart([card(1, closed, 5), card(2, closed, 5.2)], timeframe=30, now=now,
                         plot={"width": 672, "height": 106})
 check("the caller's plot size recomputes the clusters from the same rule",
       [c["count"] for c in small["clusters"]] == [1, 1] and [c["count"] for c in tall["clusters"]] == [2],
       ([c["count"] for c in small["clusters"]], [c["count"] for c in tall["clusters"]]))
-# #1355: the one axis is log, so the fixed-radius rule holds in both directions on it: a nearby pair merges, and the
-# (5, 8) pair above still splits. A dense pair that re-split on log, or a far pair that re-merged, fails one of the two.
-near = lt.control_chart([card(1, closed, 5), card(2, closed, 5.4)], timeframe=30, now=now,
+# #1355: the one axis is log, so the fixed-radius rule holds in both directions on it: a nearby pair merges and a far
+# pair splits. A dense pair that re-split on log, or a far pair that re-merged, fails the one check.
+# #2311: the axis fits the plotted hours, and one fitted 4h..24h axis holds both pairs: the (5, 5.02) pair sits inside
+# one dot, and the (5, 8) pair spans about 56 px of the 212 px frame, so this one view proves the rule both ways.
+both = lt.control_chart([card(1, closed, 5), card(2, closed, 5.02), card(3, closed, 8)], timeframe=30, now=now,
                         plot={"width": 672, "height": 212})
-check("a pair closer than one dot on the log axis merges", [c["count"] for c in near["clusters"]] == [2],
-      [c["count"] for c in near["clusters"]])
+counts = [c["count"] for c in both["clusters"]]
+check("one fitted log axis merges the nearby pair and splits the far pair", counts == [2, 1], counts)
 
 out = render(chart, "lt-dots.js")
 circles = re.findall(r"<circle [^>]*>", out)

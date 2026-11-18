@@ -86,6 +86,8 @@ def _split(items):
 
 
 def _duration(hours):
+    if hours * 60 < 1:   # under one minute: whole seconds, so a fine axis labels its floor (#2311)
+        return f"{round(hours * 3600)}s"
     minutes = round(hours * 60)
     days, rest = divmod(minutes, 1440)
     hrs, mins = divmod(rest, 60)
@@ -174,11 +176,16 @@ def lead_time(items, window=20, now=None, measure=MEASURE):
 
 # SPEC 889 #900: the control chart. The hub serves every number and position; the page draws marks only.
 # SPEC 1327 #1355: the y axis is always log, with round ticks (#1334); the chart takes no scale option.
-LOG_FLOOR_DAYS = 1 / 48       # the log axis starts at 30 minutes
-LOG_FLOOR_HOURS = 1 / 60      # no log of a span under one minute
+# #2311: the axis fits the plotted values. The top is the round tick above the largest mark and the floor the round tick
+# strictly below the smallest, so a view of hours-sized cards no longer runs to a fixed 60 days and no card sits on the
+# axis. Under the ladder's first tick the round step halves; past its last tick it doubles.
+LOG_FLOOR_HOURS = 1 / 60      # the smallest round tick, one minute; a rolling value no smaller is logged
+AXIS_MIN_HOURS = 1e-12        # the halving's hard stop, under any real mark: a mark at or under zero still ends it
+DEFAULT_TOP_HOURS = 24        # the axis top of a view that plots nothing
 PLOT_WIDTH, PLOT_HEIGHT = 672, 212  # the lead chart's usable frame: the 800 x 340 page frame less its 64 px margins
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
-LOG_TICKS = [1 / 24, 1, 7]           # days, drawn with the one duration format
+# The round durations the axis may label, in hours, with the one duration format: 1m to 365d.
+ROUND_TICKS_HOURS = [1 / 60, 2 / 60, 5 / 60, 15 / 60, 30 / 60, 1, 2, 4, 8, 24, 48, 168, 336, 720, 1440, 2160, 8760]
 SHORT_RANGE = timedelta(days=3)      # a view this short labels its x axis in hours, a longer one in days
 FIT_SHARE = 0.5                      # the cards cluster when the range they fill is at most half the view
 FIT_MIN_PAD = timedelta(hours=1)
@@ -224,6 +231,53 @@ def _window_size(count):
 
 def _clamp(v):
     return min(1.0, max(0.0, v))
+
+
+def _round_above(hours):
+    """The first round tick above `hours`, the axis top; past the ladder's last tick, the step doubles."""
+    for tick in ROUND_TICKS_HOURS:
+        if tick > hours:
+            return tick
+    top = ROUND_TICKS_HOURS[-1]
+    while top <= hours:
+        top *= 2
+    return top
+
+
+def _round_below(hours):
+    """The last round tick strictly below `hours`, the axis floor. Under the ladder's first tick the round step halves
+    until the floor is strictly below the smallest mark, so the log range never collapses and no card sits on the axis
+    (#2311). Only a mark at or under zero reaches the hard stop."""
+    for tick in reversed(ROUND_TICKS_HOURS):
+        if tick < hours:
+            return tick
+    floor = ROUND_TICKS_HOURS[0]
+    while floor >= hours and floor > AXIS_MIN_HOURS:
+        floor /= 2
+    return floor
+
+
+def _axis_ticks(floor, top):
+    """The round durations inside the fitted range, the floor and the top included. Under the ladder's first tick the
+    round step halves and past its last tick it doubles, so every label is a round duration and no raw mark becomes an
+    end label (#2311)."""
+    ticks = [tick for tick in ROUND_TICKS_HOURS if floor <= tick <= top]
+    high = ROUND_TICKS_HOURS[-1]
+    while high < top:
+        high *= 2
+        if floor <= high <= top:
+            ticks.append(high)
+    if ticks and ticks[0] > floor:   # the floor under the first rung: its halving is itself a round step
+        ticks.insert(0, floor)
+    if not ticks:
+        return [floor, top] if floor < top else [floor]
+    return ticks
+
+
+def _axis_marks(hours, rolling, lines):
+    """Every value the plot draws: the dots, the band's two edges and the reference lines, so none leaves the plot."""
+    marks = [*hours, *(low for _, low, _ in rolling), *(high for _, _, high in rolling)]
+    return marks + [line for line in lines if line is not None]
 
 
 def _day_span(first, last):
@@ -330,12 +384,20 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
     fit = _fit([utc(row["c"]) for row in plotted], start, end)
     fit_start, fit_end = (datetime.fromisoformat(fit[k]) for k in ("start", "end")) if fit else (None, None)
     fit_span = (fit_end - fit_start).total_seconds() if fit else 0
-    days_max = max([*hours, *(high for _, _, high in rolling)], default=0) / 24
-    top = max(60.0, math.ceil(days_max))
+    average = statistics.fmean(hours) if hours else None
+    p85_hours = _p85(hours) if hours else None
+    median_hours = km["median"]["hours"] if km["median"] else None
+    marks = _axis_marks(hours, rolling, [average, p85_hours, median_hours,
+                                         min(hours) if hours else None, max(hours) if hours else None])
+    floor = _round_below(min(marks)) if marks else 1.0
+    top = _round_above(max(marks)) if marks else DEFAULT_TOP_HOURS
+    log_span = math.log10(top) - math.log10(floor)
+    if log_span <= 0:   # a floor at or above the top would divide by zero: the top takes one more round step (#2311)
+        top = _round_above(top)
+        log_span = math.log10(top) - math.log10(floor)
     def position(h):
-        return _clamp((math.log10(max(h / 24, LOG_FLOOR_DAYS)) - math.log10(LOG_FLOOR_DAYS))
-                      / (math.log10(top) - math.log10(LOG_FLOOR_DAYS)))
-    ticks = [(days * 24, _duration(days * 24), position(days * 24)) for days in LOG_TICKS]
+        return _clamp((math.log10(max(h, floor)) - math.log10(floor)) / log_span)
+    ticks = [(h, _duration(h), position(h)) for h in _axis_ticks(floor, top)]
 
     dots = []
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
@@ -367,9 +429,9 @@ def control_chart(items, timeframe=None, now=None, start=None, end=None, measure
         {"hours": None, "text": NOT_ESTIMABLE, "y": None, "label": "Median"}
     median.update(estimable=km["estimable"], ci=km["ci"], ci_text=km["ci_text"])   # the Kaplan-Meier median (#1250)
     excluded_total = sum(excluded.values())
-    summary = {"average": line(statistics.fmean(hours), "Average") if hours else None,
+    summary = {"average": line(average, "Average") if hours else None,
                "median": median,
-               "p85": line(_p85(hours), "p85") if hours else None,
+               "p85": line(p85_hours, "p85") if hours else None,
                "minimum": line(min(hours), "Minimum") if hours else None,   # the expanded summary (#1334)
                "maximum": line(max(hours), "Maximum") if hours else None,
                "plotted": len(dots),
