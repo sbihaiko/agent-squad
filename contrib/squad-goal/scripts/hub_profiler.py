@@ -915,11 +915,16 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     covered = {row["at"] for row in loads or () if _num(row.get("at")) and _num(row.get("load"))
                and since <= row["at"] <= now}
     minutes = int((now - since) // LOAD_CADENCE_S) if _num(now) and now > since else 0
+    # The page draws the three ticks of each lane (#2228), so the fold names them: the Tokens lane covers the highest
+    # rate any column holds, and the Machine lane a fixed 0 to 100% of the machine.
+    rates = [v for k in keys for _, v in out[k]["tokens"]["points"]]
+    top = round(max(rates), 4) if rates else 0.0
     # A record the caller may not read is no reading at all: it asserts neither a peak nor a count of silent minutes,
     # never the whole window as a count it never made.
     return {"lines": out, "peak_load": max(peak) if peak else None,
             "cores": max(int(cores or 1), 1), "mem_gb": mem_gb,
-            "no_record_minutes": None if loads is None else max(0, minutes - len(covered))}
+            "no_record_minutes": None if loads is None else max(0, minutes - len(covered)),
+            "tokens_ticks": [0, round(top / 2, 4), top], "machine_ticks": [0, 50, 100]}
 
 
 def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=None, now=None,
@@ -994,7 +999,8 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     return {"deliveries": deliveries, "bar": deliveries >= TRIP_MIN_DELIVERIES, "columns": rows, "stages": stages,
             "record_stages": record_stages, "label": TRIP_LABEL,
             "peak_load": consumed["peak_load"], "cores": consumed["cores"], "mem_gb": consumed["mem_gb"],
-            "no_record_minutes": consumed["no_record_minutes"]}
+            "no_record_minutes": consumed["no_record_minutes"],
+            "tokens_ticks": consumed["tokens_ticks"], "machine_ticks": consumed["machine_ticks"]}
 
 
 # The loop state strip (#1765): one strip across the top of the Loop tab, from the two records the loop already writes. The

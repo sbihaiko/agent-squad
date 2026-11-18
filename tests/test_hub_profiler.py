@@ -1472,6 +1472,17 @@ def test_the_trip_payload_carries_tokens_cpu_and_ram_for_each_column(prof):
     assert (out["peak_load"], out["cores"], out["mem_gb"]) == (4.0, 8, 32.0)
 
 
+def test_the_payload_names_the_three_ticks_of_each_lane(prof):
+    """#2228: the page draws the payload's ticks, so the fold names the three of the Tokens lane and the fixed three of
+    the Machine lane, which cover 0 to 100% of the machine."""
+    out = prof.trip([span_at(2400.0)], [], since=CS,
+                    cards=[card(("Todo", 0.0, 600.0), ("Doing", 600.0, 1800.0), ("Review", 1800.0, 2400.0))],
+                    calls=[[{"at": CS + 300.0, "tokens": 600}, {"at": CS + 1200.0, "tokens": 2400}]],
+                    loads=[], now=CS + 3600.0)
+    assert out["tokens_ticks"] == [0, 480.0, 960.0], "the highest rate of the window, and its half, over the zero"
+    assert out["machine_ticks"] == [0, 50, 100], "the Machine lane's scale is the whole machine, 0 to 100%"
+
+
 def test_a_call_counts_in_the_column_of_its_end_time(prof):
     evs = [ev("run_start", CS + 100.0),
            ev("call_start", CS + 150.0, node="code.1", entry=1),
@@ -1676,15 +1687,16 @@ def test_the_view_draws_the_trip_as_five_rows_named_for_the_columns_and_five_seg
         "each segment's width is the share the fold emits, so no width is a second arithmetic"
     assert segs[1][2] == "Doing: median 4.2 min, p90 6.2 min (4 observations); Between two children median 2.5 min", \
         "the hover names the median, the p90 and the stage beside it in words"
-    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == ["Column", "Median", "p90", "Observations"]
-    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == [
+        "Column", "Tokens/issue", "Mean CPU", "Mean RAM", "Median", "p90", "Observations"]
+    rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td>', out)
     assert [r[3] for r in rows] == ["Todo", "Doing", "Review", "Landing", "Gating"], \
         "five rows, each named for its board column, in board order, with no Closed row"
-    assert rows[0] == ("todo", "todo", "", "Todo", "40.0 min &middot; Wait for a dispatch 25.0 s", "40.0 min", "4"), \
-        "the Todo row reads the queue with the dispatch wait beside it in the same cell, named in words"
-    assert rows[1] == ("doing", "doing", "", "Doing", "4.2 min &middot; Between two children 2.5 min", "6.2 min", "4")
-    assert rows[3][4:6] == ("1.3 min", "1.9 min"), "Landing stands before Gating, where the board puts it"
-    assert rows[4][4:6] == ("1.0 min", "1.0 min"), "Gating reads the wave gate, never the run's own gate"
+    assert rows[0][3:] == ("Todo", "0", "&#8212;", "&#8212;", "40.0 min &middot; Wait for a dispatch 25.0 s", "40.0 min", "4"), \
+        "the Todo row reads the queue with the dispatch wait beside it in the same cell, named in words; the fixture folds no call and no load, so its rates read a zero and two dashes"
+    assert rows[1][3:] == ("Doing", "0", "&#8212;", "&#8212;", "4.2 min &middot; Between two children 2.5 min", "6.2 min", "4")
+    assert rows[3][7:9] == ("1.3 min", "1.9 min"), "Landing stands before Gating, where the board puts it"
+    assert rows[4][7:9] == ("1.0 min", "1.0 min"), "Gating reads the wave gate, never the run's own gate"
     assert [r[1] for r in rows] == [s[0] for s in segs], "a row's swatch is the color of its segment, in the same order: the table is the bar's legend"
     assert all(r[0] == r[1] for r in rows), "the swatch of a row names the column the row names"
 
@@ -1694,7 +1706,7 @@ def test_a_column_with_no_median_draws_a_hollow_swatch_and_no_colour_segment():
     out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': none})},new Set())"))
     row = re.search(r'<tr data-p="trip/review"><td class=pn><i class="([^"]*)" aria-hidden=true></i>', out)
     assert row and "ptk-review" in row.group(1) and "ptk-none" in row.group(1), "a column with no median keeps its color as an outline, never a reading"
-    assert "pts-review" not in out, "a column with no median paints no colour, so no 4 px ghost shows a colour it has no time for"
+    assert "ptb-seg pts-review" not in out, "a column with no median paints no colour, so no 4 px ghost shows a colour it has no time for"
     assert len(re.findall(r'<i class="ptb-seg', out)) == 5, "the bar still holds one segment per drawn column: the empty column takes no colour"
     assert out.count("ptk-none") == 1, "only the column without a median is hollow"
 
@@ -1702,7 +1714,7 @@ def test_a_column_with_no_median_draws_a_hollow_swatch_and_no_colour_segment():
 def test_a_zero_median_draws_no_ghost_segment_either():
     zero = {**TRIP, "columns": [{**c, "median_s": 0.0} if c["column"] == "review" else c for c in TRIP["columns"]]}
     out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': zero})},new Set())"))
-    assert "pts-review" not in out, "the bar's own min-width would draw 4 px of a column that has no time in it"
+    assert "ptb-seg pts-review" not in out, "the bar's own min-width would draw 4 px of a column that has no time in it"
     row = re.search(r'<tr data-p="trip/review"><td class=pn><i class="([^"]*)" aria-hidden=true></i>', out)
     assert row and "ptk-none" in row.group(1), "a zero median reads as hollow in the legend too"
 
@@ -2679,14 +2691,13 @@ def test_the_core_count_is_the_reference_line_and_one_core_is_the_floor(prof):
     assert prof.load_chart([], LBASE - 600, LBASE, cores=0)["cores"] == 1, "a machine that cannot say its cores still draws one"
 
 
-def test_a_load_above_the_core_count_is_drawn_at_its_own_height_never_clipped():
-    """The y axis scales to the window's peak, so a machine at four times its core count draws its magnitude and the core
-    line sits below it as the reference (AC3)."""
+def test_a_machine_load_payload_is_never_drawn_as_a_chart():
+    """#2228: the Loop page draws no Machine Load chart. The payload may still carry the fold; no view draws it."""
     over = {**LOAD, "peak": 32.0, "cores": 8, "gap_s": 0, "gaps": [],
             "segments": [[{"at": LOAD["start"], "load": 32.0, "cpu": 90.0}]]}
-    part = load_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'load': over})},new Set())"))
-    assert 'cy="0.0"' in part, "the peak is the top of the scale, never clipped above it"
-    assert re.search(r'class=plc[^>]*y1="90.0"', part), "the core reference sits at its own share of the peak"
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'load': over, 'trip': TRIP})},new Set())")
+    assert "id=profload" not in out and "Machine load" not in out, "the Machine Load chart is gone"
+    assert "class=plc" not in out and "saturation &middot;" not in out, "the core reference line went with the chart"
 
 
 def test_the_route_answers_the_machine_load_on_the_strips_own_window(hub):
@@ -3166,39 +3177,143 @@ LOAD = {"label": "Machine load", "start": W0 - 14400, "end": W0, "window_s": 144
         "gaps": [{"start": W0 - 14340, "end": W0 - 12600, "reason": "no load record"}]}
 
 
-def load_part(out):
-    at = out.index("<section id=profload>")
-    return out[at:out.index("</section>", at) + 10]
+# ---------------------------------------------------------------- the trip chart (#2228)
+# One tall chart over the trip's columns: a Tokens lane and a Machine lane. The fixture is the fold's own answer over three
+# identical deliveries, so every width, mean and tick the page draws is the payload's, never a second arithmetic.
+def chart_trip():
+    """Three deliveries of 2400 s each, in Todo, Doing and Review, with a call in Todo and one in Doing and the minute
+    record's 39 rows of the hour. The fold's own answer is the view's fixture."""
+    span = span_at(2400.0)
+    runs = card(("Todo", 0.0, 600.0), ("Doing", 600.0, 1800.0), ("Review", 1800.0, 2400.0))
+    calls = [{"at": CS + 300.0, "tokens": 600}, {"at": CS + 1200.0, "tokens": 2400}]
+    return {**TRIP_FOLD.trip([span, span, span], [], since=CS, cards=[runs, runs, runs], calls=[calls, calls, calls],
+                             loads=every_minute(2400.0), now=CS + 3600.0, cores=8, mem_gb=32.0),
+            "window_s": 3600, "since": CS}
 
 
-def test_the_machine_load_line_stands_above_the_trip_bar_with_the_core_reference():
-    """The page draws no loop state panel, so the load line stands under the tab's header and above the trip bar."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'load': LOAD, 'trip': TRIP, 'runs': RUNS})},new Set())")
-    assert "id=profstrip" not in out, "the loop state panel is gone"
-    assert out.index("<h2>Loop</h2>") < out.index("id=profload") < out.index("id=proftrip"), "the line stands under the header"
-    part = load_part(out)
-    assert "class=pll" in part and "class=pld" in part, "the line joins its records and a lone record is a dot"
-    assert re.search(r'class=plc[^>]*>[^<]*<title>[^<]*8 cores', part), "the core count is the reference line"
-    assert re.search(r'class=plct[^>]*>saturation &middot; 8 cores<', part), "one horizontal line names saturation, as the owner asked"
-    assert "the dashed line is saturation at 8 cores" in part, "the caption says what the line is"
-    assert re.search(r'title="[^"]*no load record', part), "a gap names its reason"
-    assert "Peak 9.50" in part and "with no load record" in part
+CHART = chart_trip()
 
 
-def test_the_load_line_is_drawn_on_the_window_that_folded_it():
-    """The fold and the drawing share one window (#1768): the chart places its points on the answer's own start and end,
-    never on a second window it re-projects them onto, so the peak and the gaps the answer names are the ones drawn."""
-    wider = {**STRIP, "start": LOAD["start"] - 3600, "end": LOAD["end"] + 3600}
-    out = run_js(f"profLoad({json.dumps(LOAD)},{json.dumps(wider)})")
-    assert 'points="0.0,94.7 4.2,69.5"' in out, "the first segment's points sit on the answer's own window"
-    assert 'cx="125.0" cy="0.0"' in out, "a lone record is placed on the answer's own window"
-    assert 'x="4.2" y="0" width="120.8"' in out, "the gap shading covers the same stretch the answer names"
-    assert "Peak 9.50" in out, "the peak is the fold's own, never a second pass over another window"
+def chart_svg(out):
+    at = out.index("<svg id=proftc")
+    return out[at:out.index("</svg>", at) + 6]
 
 
-def test_the_machine_load_line_shows_with_the_switch_off():
-    off = run_js(f"profHtml({json.dumps({**VIEW, 'on': False, 'tree': None, 'context': None, 'strip': STRIP, 'load': LOAD})},new Set())")
-    assert "id=profload" in off and "<table id=proft " not in off
+def chart_js(v=None):
+    return run_js(f"profHtml({json.dumps({**VIEW, 'trip': v or CHART})},new Set())")
+
+
+def trip_row(out, col):
+    m = re.search(r'<tr data-p="trip/' + col + r'">(.*?)</tr>', out, re.S)
+    return [re.sub(r"<[^>]+>", "", td) for td in re.findall(r"<td[^>]*>(.*?)</td>", m.group(1), re.S)]
+
+
+def test_the_chart_draws_a_tokens_lane_and_a_machine_lane_each_with_three_ticks():
+    """AC2: two lanes, and each prints three ticks with its unit."""
+    out = chart_svg(chart_js())
+    assert ">Tokens<" in out and ">Machine<" in out, "one lane for the tokens a minute and one for the machine"
+    ticks = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", out)
+    assert [t for t in ticks if t.endswith("tok/min")] == ["0 tok/min", "480 tok/min", "960 tok/min"], \
+        "three Tokens ticks, each with its unit, and the top one is the token rate the payload names"
+    assert [t for t in ticks if t.endswith("%")] == ["0%", "50%", "100%"], "three Machine ticks on a 0 to 100% scale"
+
+
+def test_the_machine_lane_draws_cpu_solid_and_ram_dashed_with_a_legend():
+    """AC3: a solid CPU line and a dashed RAM line, and a legend naming the two."""
+    out = chart_svg(chart_js())
+    assert re.search(r'<polyline class="ptl-cpu pts-todo"', out) and re.search(r'<polyline class="ptl-ram pts-todo"', out)
+    src = page()
+    assert re.search(r"#proftrip \.ptl-cpu\{[^}]*stroke", src)
+    assert re.search(r"#proftrip \.ptl-ram\{[^}]*stroke-dasharray", src), "the RAM line is dashed, the CPU line solid"
+    legend = re.search(r"<span class=ptlg[^>]*>(.*?)</span>", chart_js(), re.S).group(1)
+    assert "CPU" in legend and "RAM" in legend, "the legend names the two lines"
+
+
+def test_the_width_of_each_column_follows_its_median_time_and_its_label_stands_below_the_chart():
+    """AC4 and AC5: the band is as wide as the share the fold emits, which is the column's median time over the total,
+    and a label under the chart names the column and its median."""
+    out = chart_svg(chart_js())
+    bands = re.findall(r'<rect class="ptc pts-(\w+)" x="([\d.]+)" width="([\d.]+)"', out)
+    assert [b[0] for b in bands] == ["todo", "doing", "review", "landing", "gating"]
+    assert [float(b[1]) for b in bands] == pytest.approx([1000 * sum(c["share"] for c in CHART["columns"][:i])
+                                                          for i in range(5)], abs=0.2), "each band opens where the one before it ends"
+    assert [float(b[2]) for b in bands] == pytest.approx([1000 * c["share"] for c in CHART["columns"]], abs=0.2), \
+        "each band's width is the share the fold emits, so no width is a second arithmetic"
+    labels = re.findall(r'<text class="ptlb pts-(\w+)"[^>]*>([^<]*)</text>', out)
+    assert labels == [("todo", "Todo 1.0 min"), ("doing", "Doing 1.0 min"), ("review", "Review 10.0 s"),
+                      ("landing", "Landing 10.0 s"), ("gating", "Gating &#8212;")], \
+        "every column keeps its name and its median time below the chart"
+
+
+def test_a_narrow_column_has_a_guide_line_to_its_segment():
+    """AC5: a column narrower than the wide line carries a guide from its label to its band; the wide ones need none."""
+    out = chart_svg(chart_js())
+    assert re.findall(r'<line class="ptg pts-(\w+)"', out) == ["review", "landing"], \
+        "the narrow columns carry a guide line, the wide ones need none, and a column of no width gets none"
+
+
+def test_a_wide_column_prints_the_mean_of_each_line():
+    """AC6: a wide column prints the mean of the Tokens line, the CPU line and the RAM line."""
+    out = chart_svg(chart_js())
+    means = dict(re.findall(r'<text class="ptlm pts-(\w+)"[^>]*>([^<]*)</text>', out))
+    assert means == {"todo": "mean 60 tok/min &middot; CPU 50.0% &middot; RAM 40.0%",
+                     "doing": "mean 120 tok/min &middot; CPU 50.0% &middot; RAM 40.0%"}, \
+        "the two wide columns print their three means; a narrow column prints none"
+
+
+def test_the_table_keeps_median_p90_and_observations_and_adds_tokens_cpu_and_ram():
+    """AC7: the table keeps its three columns and adds the three a column consumes."""
+    out = chart_js()
+    at = out.index("<table id=proftt")
+    table = out[at:out.index("</table>", at) + 8]
+    assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", table)] == [
+        "Column", "Tokens/issue", "Mean CPU", "Mean RAM", "Median", "p90", "Observations"]
+    assert trip_row(out, "todo") == ["Todo", "600", "50.0%", "40.0%", "1.0 min &middot; Wait for a dispatch 10.0 s", "1.0 min", "3"]
+    assert trip_row(out, "doing") == ["Doing", "2400", "50.0%", "40.0%", "1.0 min &middot; Between two children 0 ms", "1.0 min", "3"]
+
+
+def test_one_sentence_above_the_chart_states_the_peak_the_saturation_and_the_silent_minutes():
+    """AC8: the peak load, the saturation at the core count and the minutes with no load record, in one sentence."""
+    out = chart_js()
+    sentence = "Peak load 4.00 against saturation at 8 cores; 21 minutes carried no load record."
+    assert sentence in out
+    assert out.index(sentence) < out.index("<svg id=proftc")
+
+
+def test_the_page_states_that_cpu_and_ram_are_readings_of_the_whole_machine():
+    """AC9: the page says what the two Machine lines measure."""
+    out = chart_js()
+    assert "CPU and RAM are readings of the whole machine" in out
+
+
+def test_a_line_with_no_data_draws_nothing_there_and_the_table_prints_a_dash():
+    """AC10: a column with no sample of a line holds no point, so nothing is drawn and the cell reads a dash."""
+    out = chart_js()
+    svg = chart_svg(out)
+    assert not re.search(r'class="ptl-\w+ pts-gating"', svg), \
+        "Gating holds no sample, so it draws no line there, of any of the three"
+    row = trip_row(out, "gating")
+    assert row[2:4] == ["&#8212;", "&#8212;"], "no mean of CPU and RAM reads a dash, never a zero"
+
+
+def test_the_ram_hover_names_the_value_in_gigabytes():
+    """AC11: the RAM value in gigabytes shows on hover."""
+    src = chart_js()
+    assert re.search(r"<title>[^<]*RAM[^<]*32\.0 GB", src), \
+        "the RAM line's hover names the machine's memory in gigabytes"
+
+
+def test_the_chart_draws_the_ticks_and_the_points_the_payload_holds():
+    """AC12: the page draws what the payload holds. The ticks are the payload's own, and a column's line is its points
+    placed on the column's band, never a value the page derives from another."""
+    out = chart_svg(chart_js())
+    assert "960 tok/min" in out and CHART["tokens_ticks"] == [0, 480.0, 960.0]
+    band = re.search(r'<rect class="ptc pts-todo" x="([\d.]+)" width="([\d.]+)"', out)
+    x0, w = float(band.group(1)), float(band.group(2))
+    pts = re.search(r'<polyline class="ptl-tok pts-todo" points="([^"]*)"', out).group(1).split()
+    assert pts == ["%.1f,%.1f" % (x0 + p * w, 18 + 110 * (1 - v / 960))
+                   for p, v in CHART["columns"][0]["tokens"]["points"]], \
+        "a Tokens point sits at its position in the band and its height on the payload's own scale"
 
 
 def test_a_refused_profiler_poll_never_stats_the_minute_record(hub, monkeypatch):
@@ -3211,19 +3326,12 @@ def test_a_refused_profiler_poll_never_stats_the_minute_record(hub, monkeypatch)
     assert out["strip"] is None and out["load"] is None, "a refused caller draws no strip and no load"
 
 
-def test_an_allowed_poll_folds_the_load_because_the_page_draws_it_even_with_the_switch_off(hub, monkeypatch):
-    """The page draws the load line with the CPU sampling switch off, so an allowed poll folds it (#1768): the file view
-    is not the switch's, as the strip is not."""
+def test_an_allowed_poll_folds_the_load_because_the_api_carries_it_with_the_switch_off(hub, monkeypatch):
+    """The route folds the minute record with the CPU sampling switch off, so its answer carries it though no view draws
+    a load chart (#1768, #2228): the file view is not the switch's, as the strip is not."""
     mod, _, _, _, _ = hub
     out = mod.profiler_view(mod.Access(True, "", "", False), 3600, 14400)
     assert out["load"] is not None and out["load"]["start"] == out["strip"]["start"], "the chart's window is the strip's"
-
-
-def test_a_window_with_no_load_record_says_so_in_the_line():
-    empty = {**LOAD, "segments": [], "peak": 0, "gap_s": 14400,
-             "gaps": [{"start": LOAD["start"], "end": LOAD["end"], "reason": "no load record"}]}
-    part = load_part(run_js(f"profHtml({json.dumps({**VIEW, 'strip': STRIP, 'load': empty})},new Set())"))
-    assert re.search(r'title="[^"]*no load record', part) and "class=pll" not in part
 
 
 # ---------------------------------------------------------------- the run slots in use (#1766)
