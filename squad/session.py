@@ -128,10 +128,11 @@ def error_fields(err):
 
 def adapter_diagnostic(err, message=None):
     """What the record says about a call that produced no result, and — for the transport ceiling — what the transport
-    allowed. The SDK's reader raises out of its own line framer, so the frame cannot be dropped and the session cannot
-    go on: neither recovery is possible in place, and the record says so instead of leaving the run's death unexplained.
-    The only recovery is a fresh call, which the engine never makes silently (ADR-0102 rule 1: one entry is one fresh
-    session), so the record asks for one.
+    allowed. The adapter carries a message up to its reader buffer and records a message over its own ceiling while the
+    call goes on (#2267); this diagnostic is the frame past the buffer, which the reader cannot frame at all, so the
+    session cannot go on and the record says so instead of leaving the run's death unexplained. The only recovery is a
+    fresh call, which the engine never makes silently (ADR-0102 rule 1: one entry is one fresh session), so the record
+    asks for one.
     """
     d = {"error": message or str(err)}
     if isinstance(err, MessageOverCeiling):

@@ -22,6 +22,7 @@ REQUIRED = {
     "progress": ["node", "entry", "item", "session", "messages", "context_tokens", "tool"],
     "compaction": ["node", "entry", "session", "trigger"],
     "sandbox_deny": ["node", "entry", "session", "tool", "reason"],   # a child's tool call the sandbox hook denied (squad/sandbox.py)
+    "message_over_ceiling": ["node", "entry", "item", "session", "tool", "size", "ceiling"],   # #2267: one message past the transport ceiling; the call goes on
     "outcome": ["node", "entry", "outcome", "reasons", "artifact", "spend", "turns", "cap", "elapsed"],
     "wait": ["node", "owner", "deadline_at", "default"],
     "proposed": ["proposal_id", "kind", "target", "requested", "proposer"],
