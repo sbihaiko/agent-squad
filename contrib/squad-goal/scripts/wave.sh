@@ -300,6 +300,23 @@ board_write() {   # <column> <issue>: a refused card write is named, so the card
   return 0
 }
 
+# gating <clone> <range> <run>...: before a wave's tip gate starts, the card of each child in the gate moves to Gating (ADR-0170).
+# A card moves when its child entered the wave of one of the runs (the ledger's entered fact) and the gated range carries
+# the child's commit. So a child the tip check dropped from the tree stays out of the column. board.py sends no write when the card
+# already carries Gating (ADR-0144), so a repeat pass after a red or unproven attempt moves nothing: the attempt is a marker.
+# The legacy vocabulary has no Gating column, so it writes nothing.
+gating() {
+  [ "${SG_BOARD_VOCAB:-}" = shipped ] || return 0
+  local gs=$1 range=$2 c n ent seen=" "; shift 2
+  ent=$(python3 "$here/issue_ledger.py" entered "$SG_REPO" 2>/dev/null | awk -F '\t' -v rs=" $* " 'index(rs, " " $1 " ") { print $2 }' | tr '\n' ' ')
+  while read -r c; do
+    n=$(child_of "$gs" "$c"); [ -n "$n" ] || continue
+    case "$seen" in *" $n "*) continue;; esac
+    case " $ent " in *" $n "*) ;; *) continue;; esac
+    seen="$seen$n "; board_write Gating "$n"
+  done < <($G -C "$gs" log --format=%H "$range" 2>/dev/null)
+}
+
 # proof_card <issue> <obligation path|"">: the card's proof fact (#1176, spec 1163). An unproven entry records the
 # obligation key under $SG_STATE/proof-card/<issue>/ and puts `unproven` on the card, so the nightly settlement can
 # answer it. An entry that proved its work answers no obligation, so it writes nothing: a later pass proves the new
@@ -1077,6 +1094,7 @@ wave_check() {
     echo "WAVE CHECK RED $w: the tip's check was red twice on the same tree with the same failing tests ($(tr '\n' ' ' < "$mk.red.tests" 2>/dev/null)); held until the tip moves: no third check runs on this tree"
     return 7
   fi
+  gating "$S" "origin/$base..HEAD" "$run"   # the gate waits for a slot or runs from here, so its cards stand in Gating (ADR-0170)
   of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
     clog="$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log"   # the check's own output, kept: a red that names no cause has to name its log (#447)
@@ -1982,6 +2000,7 @@ land_batch() {
     if [ -n "$tipgate" ]; then
       of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
       clog="$SG_STATE/wave-check-batch.log"; touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
+      gating "$S" "$bstart..HEAD" "${rs[@]}"   # the cards of every wave in the batch stand in Gating while its gate waits or runs (ADR-0170)
       (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${rs[0]}" SG_GATE_CALLER=tip SG_GATE_BATCH="${#rs[@]}:$ids" && eval "$tipgate") >"$clog" 2>&1; rc=$?
       oc=; [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null; rm -f "$of"
       if { [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null; } || { [ $rc = 75 ] && waited_out "$(cat "$clog")"; }; then
