@@ -91,6 +91,43 @@ def test_an_edge_that_makes_a_cycle_is_refused_with_its_path_and_never_posted(gi
     assert door.posts == []
 
 
+def test_an_edge_a_chain_of_open_tickets_already_gives_is_refused_as_redundant(github):
+    door = github(FakeDoor({1: issue(1, blocked_by=[2]), 2: issue(2, blocked_by=[3]), 3: issue(3)}))
+    result = edge_write.add_edge(REPO, 1, 3)
+    assert result["status"] == "refused" and result["verdict"] == "redundant"
+    assert result["path"] == ["o/r#1", "o/r#2", "o/r#3"]
+    assert "o/r#1 > o/r#2 > o/r#3" in result["reasons"][0]
+    assert door.posts == []
+
+
+def test_a_chain_through_a_closed_ticket_does_not_make_an_edge_redundant(github):
+    door = github(FakeDoor({1: issue(1, blocked_by=[2]), 2: issue(2, blocked_by=[3], state="closed"), 3: issue(3)}))
+    assert edge_write.add_edge(REPO, 1, 3)["status"] == "written"
+    assert door.posts == [(1, 3)]
+
+
+def test_a_written_edge_names_each_older_direct_edge_it_makes_redundant(github):
+    door = github(FakeDoor({1: issue(1, blocked_by=[3]), 2: issue(2, blocked_by=[3]), 3: issue(3), 4: issue(4)}))
+    assert edge_write.add_edge(REPO, 1, 2)["now_redundant"] == [3]
+    assert edge_write.add_edge(REPO, 1, 4)["now_redundant"] == []
+    assert door.posts == [(1, 2), (1, 4)]
+
+
+def test_a_redundant_edge_makes_the_command_exit_non_zero(github, capsys):
+    github(FakeDoor({1: issue(1, blocked_by=[2]), 2: issue(2, blocked_by=[3]), 3: issue(3)}))
+    assert edge_write.main([REPO, "1:3"]) == 1
+    assert '"verdict": "redundant"' in capsys.readouterr().out
+
+
+def test_the_ticket_rules_say_when_an_edge_is_real():
+    """#2259: the writer cannot see a false edge between two tickets that only share a file, so the rule states it."""
+    for path in ("config/vendor-skills-patches/to-tickets.md", "vendor/skills/skills/to-tickets/SKILL.md"):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        for marker in ("**An edge names its reason.**", "an order of meaning", "the same symbol",
+                       "A shared file alone is no edge", "`redundant`", "`now_redundant`"):
+            assert marker in text, f"{path} does not state: {marker}"
+
+
 def test_an_edge_that_already_exists_is_not_written_again(github):
     door = github(FakeDoor({1: issue(1, blocked_by=[2]), 2: issue(2)}))
     assert edge_write.add_edge(REPO, 1, 2)["status"] == "exists"
