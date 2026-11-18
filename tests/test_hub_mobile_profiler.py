@@ -8,6 +8,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import uuid
 
 import pytest
 
@@ -17,6 +18,8 @@ from tests.test_hub_profiler import VIEW
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 PROFILER_JS = SCRIPTS / "hub-profiler.js"
+EGO = shutil.which("ego-browser")
+PHONE_WIDTH = 390
 READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 
 ESC = 'const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", \'"\': "&quot;"})[c]);\n'
@@ -205,13 +208,74 @@ def test_the_phone_table_shows_tokens_per_issue_mean_cpu_and_mean_ram():
     assert "&#8212;" in gating, "a column with no reading prints a dash, never a zero"
 
 
-def test_the_phone_chart_and_labels_stay_inside_the_phone_box(hub):
-    """At 390 px the chart fills its box and every label wraps inside its own cell: the lanes take the full width, and a
-    label is a flex item that may shrink and wrap, so one label never overlaps its neighbour. No test engine lays the page
-    out, so this reads the rules that hold the layout."""
-    page = hub.MOBILE_PAGE
-    assert re.search(r"#proftrip \.ptlane\{[^}]*width:100%[^}]*\}", page), "the lanes take the phone's width"
-    assert re.search(r"#proftrip \.ptlabels\{[^}]*flex-wrap:wrap[^}]*\}", page), "the labels wrap as blocks, never overlap"
-    assert re.search(r"#proftrip \.ptlab\{[^}]*min-width:0[^}]*overflow-wrap:anywhere[^}]*\}", page), \
-        "a label shrinks and wraps inside its own box"
-    assert re.search(r"#profb #proftt td\{[^}]*overflow-wrap:anywhere[^}]*\}", page), "a table cell wraps inside its column"
+TRIP_EGO = """
+const task = await taskSpace(SPACE_NAME);
+try {
+  const page = task.page("p1");
+  await page.cdp("Emulation.setDeviceMetricsOverride",
+                 { width: WIDTH, height: HEIGHT, deviceScaleFactor: 2, mobile: true });
+  await page.goto(URL);
+  const seen = await page.evaluate(DRAW_TRIP, [TRIP_VIEW]);
+  console.log("EGO_TRIP:" + JSON.stringify(seen));
+} finally {
+  await task.finish({ keep: [] });
+}
+"""
+
+DRAW_TRIP = """
+(args) => {
+  const [view] = args;
+  const fit = el => { const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height, right: r.right, bottom: r.bottom,
+             sw: el.scrollWidth, cw: el.clientWidth, text: el.textContent.trim() }; };
+  openLayer("profiler");
+  profPhone = true;
+  profV = view;
+  profDraw();
+  const trip = document.getElementById("proftrip");
+  return { vw: window.innerWidth, docW: document.documentElement.scrollWidth, trip: fit(trip),
+           lanes: [...trip.querySelectorAll("svg.ptlane")].map(fit),
+           labels: [...trip.querySelectorAll(".ptlab")].map(fit),
+           cells: [...document.querySelectorAll("#proftt th, #proftt td")].map(fit),
+           table: fit(document.getElementById("proftt")) };
+}
+"""
+
+
+def _trip_frame(page_html, base):
+    page = base / "hub-mobile.html"
+    page.write_text(page_html)
+    head = (f"const SPACE_NAME = {json.dumps(f'agent-squad phone trip {uuid.uuid4().hex}')};\n"
+            f"const URL = {json.dumps(page.as_uri())};\n"
+            f"const WIDTH = {PHONE_WIDTH}; const HEIGHT = 844;\n"
+            f"const TRIP_VIEW = {json.dumps(PHONE_TRIP_VIEW)};\n"
+            f"const DRAW_TRIP = {DRAW_TRIP};\n")
+    run = subprocess.run([EGO, "nodejs"], input=head + TRIP_EGO, capture_output=True, text=True, timeout=180)
+    out = run.stdout + run.stderr
+    seen = [line for line in out.splitlines() if line.startswith("EGO_TRIP:")]
+    assert seen, f"ego-browser laid out no trip: {out[-2000:]}"
+    return json.loads(seen[-1][len("EGO_TRIP:"):])
+
+
+def _overlap(a, b):
+    return min(a["right"], b["right"]) - max(a["x"], b["x"]) > 0.5 and min(a["bottom"], b["bottom"]) - max(a["y"], b["y"]) > 0.5
+
+
+@pytest.mark.heavy
+@pytest.mark.skipif(EGO is None, reason="ego-browser is needed to lay out the phone page")
+def test_the_phone_trip_fits_390_px_with_no_overlap_and_no_overflow(hub, tmp_path):
+    seen = _trip_frame(hub.MOBILE_PAGE, tmp_path)
+    assert seen["vw"] == PHONE_WIDTH, f"the phone page rendered at {seen['vw']} px, not {PHONE_WIDTH}"
+    assert seen["docW"] <= PHONE_WIDTH + 0.5, f"the page scrolls sideways: {seen['docW']} px wide"
+    assert seen["trip"]["right"] <= PHONE_WIDTH + 0.5, f"the trip runs past the screen: {seen['trip']}"
+    for i, lane in enumerate(seen["lanes"]):
+        assert lane["right"] <= PHONE_WIDTH + 0.5 and lane["w"] > 0, f"lane {i} leaves the screen or draws nothing: {lane}"
+    assert len(seen["labels"]) == 4, f"the trip drew {len(seen['labels'])} labels, not four"
+    for i, label in enumerate(seen["labels"]):
+        assert label["sw"] <= label["cw"] + 0.5, f"label {label['text']!r} overflows its box: {label}"
+        assert label["right"] <= PHONE_WIDTH + 0.5, f"label {label['text']!r} runs past the screen: {label}"
+        for other in seen["labels"][i + 1:]:
+            assert not _overlap(label, other), f"labels {label['text']!r} and {other['text']!r} overlap"
+    assert seen["table"]["right"] <= PHONE_WIDTH + 0.5, f"the table runs past the screen: {seen['table']}"
+    for cell in seen["cells"]:
+        assert cell["sw"] <= cell["cw"] + 0.5, f"cell {cell['text']!r} overflows its column: {cell}"
