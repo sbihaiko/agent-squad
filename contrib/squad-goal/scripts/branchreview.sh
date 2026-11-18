@@ -18,9 +18,9 @@ sha=$(gh_api repos/$repo/commits/$br -q .sha)
 # review runs as before. The refusal keeps the reviewed sha and the base beside it, as a review does, so the pass reads it as
 # this tip's verdict and spends no second review.
 remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; rf=$(printf '%s' "$base" | tr / _)
-if /usr/bin/git -C "${SG_CHECKOUT:-.}" fetch -q "$remote" "+refs/heads/$base:refs/sg-rev/$rf" "+refs/heads/$br:refs/sg-rev/$key" >/dev/null 2>&1 \
-   && /usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-rev/$rf" >/dev/null 2>&1; then
-  if ! /usr/bin/git -C "$SG_CHECKOUT" cherry "refs/sg-rev/$rf" "refs/sg-rev/$key" 2>/dev/null | /usr/bin/grep -q '^+'; then
+if GIT_TERMINAL_PROMPT=0 /usr/bin/git -C "${SG_CHECKOUT:-.}" fetch -q "$remote" "+refs/heads/$base:refs/sg-rev/$rf" "+refs/heads/$br:refs/sg-rev/$key" >/dev/null 2>&1 \
+   && /usr/bin/git -C "${SG_CHECKOUT:-.}" rev-parse -q --verify "refs/sg-rev/$rf" >/dev/null 2>&1; then
+  if ! /usr/bin/git -C "${SG_CHECKOUT:-.}" cherry "refs/sg-rev/$rf" "refs/sg-rev/$key" 2>/dev/null | /usr/bin/grep -q '^+'; then
     why="the branch carries no commit that is not on $base by patch"
     printf 'VERDICT: BLOCKED (%s)\n' "$why" > "$SG_STATE/review-$key.md"
     printf '%s\n' "$sha" > "$SG_STATE/review-$key.sha"; printf '%s\n' "$base" > "$SG_STATE/review-$key.base"
