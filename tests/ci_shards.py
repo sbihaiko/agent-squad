@@ -110,7 +110,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_mobile_run_control.py", "tests/test_hub_mobile_tap.py", "tests/test_hub_mobile_terminal_send.py", "tests/test_hub_model_row_narrow.py", "tests/test_hub_mux_tailnet.py",
         "tests/test_hub_nightly_fact.py", "tests/test_hub_occupancy_header.py", "tests/test_hub_run_row_read.py", "tests/test_hub_screenshot.py", "tests/test_hub_shipped_vocab.py",
         "tests/test_hub_spec_progress.py", "tests/test_hub_spend_limits.py", "tests/test_hub_subscriptions_labels.py", "tests/test_hub_terminal_start.py", "tests/test_hubmux_scope.py",
-        "tests/test_inactive_border_contrast.py", "tests/test_janitor_pass_deadline.py", "tests/test_janitor_unheld_issue.py", "tests/test_lead_spec.py", "tests/test_live_paths_dropped.py", "tests/test_model_id_shape.py",
+        "tests/test_inactive_border_contrast.py", "tests/test_janitor_pass_deadline.py", "tests/test_janitor_unheld_issue.py", "tests/test_lead_spec.py", "tests/test_live_paths_dropped.py", "tests/test_git_env_leak.py", "tests/test_model_id_shape.py",
         "tests/test_modelreg_migrate.py", "tests/test_models_chains.py", "tests/test_no_pr_path.py", "tests/test_node_commit.py", "tests/test_outcomes.py",
         "tests/test_redact.py", "tests/test_revci_notice_is_not_a_state.py", "tests/test_review_timeouts.py", "tests/test_sandbox_signals.py", "tests/test_session.py",
         "tests/test_session_card.py", "tests/test_shipped_graph_kinds.py", "tests/test_spec_forecast.py", "tests/test_spec_shape.py", "tests/test_squad_child_request_suites.py",

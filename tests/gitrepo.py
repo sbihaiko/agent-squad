@@ -3,8 +3,16 @@ import subprocess
 from pathlib import Path
 
 
+def git_env():
+    """The environment a git command of a helper gets: the session's own, with no inherited GIT_DIR, GIT_WORK_TREE or
+    GIT_INDEX_FILE (#2306). `git init --bare` with no path under GIT_DIR re-initializes that directory and sets core.bare
+    there, so a helper that ran it would write into the repository that runs the tests."""
+    import os
+    return {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+
+
 def sh(cwd, *args):
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run(args, cwd=cwd, env=git_env(), capture_output=True, text=True, check=True).stdout.strip()
 
 
 _TEMPLATE = None

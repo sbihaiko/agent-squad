@@ -817,6 +817,16 @@ mkdir -p "$sb/.scratch"; echo scratch > "$sb/.scratch/fast-gate-1983-2.log"
 sel=$(cd "$sb" && PYTHONPATH="$(cd "$d/../../.." && pwd)" "$pyreal" -m squad.testselect --stage fast --base dev 2>/dev/null)
 [ "$sel" = "tests/test_one.py" ] && ok "2032 the selector skips the scratch place even when git does not ignore it" || ko "2032 scratch log without .gitignore: '$sel', want the delta tests/test_one.py"
 
+# (#2306) The battery and the suites run under a gate, and a git hook that started the gate exports GIT_DIR: a test that
+# runs `git init --bare` with no path under GIT_DIR re-initializes the caller's repository and sets core.bare there, so
+# every git command in the checkout fails. The gate drops the three variables before the battery and the suites run.
+printf '#!/bin/bash\nprintf "gitenv GIT_DIR=%%s GIT_WORK_TREE=%%s GIT_INDEX_FILE=%%s\\n" "${GIT_DIR-unset}" "${GIT_WORK_TREE-unset}" "${GIT_INDEX_FILE-unset}" >> "%s/gitenv.log"\nexit 0\n' "$T" > "$T/gitenv.sh"
+rm -f "$T/gitenv.log"
+out=$(cd "$R" && GIT_DIR="$R/.git" GIT_WORK_TREE="$R" GIT_INDEX_FILE="$R/.git/index" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/gitenv.sh" bash "$d/fast-gate.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(cat "$T/gitenv.log" 2>/dev/null)" = "gitenv GIT_DIR=unset GIT_WORK_TREE=unset GIT_INDEX_FILE=unset" ] \
+  && ok "the gate hands the battery no GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE" || ko "gate git env: rc $rc: '$(cat "$T/gitenv.log" 2>&1)' $out"
+[ "$(git -C "$R" config --get core.bare)" = false ] && ok "the gate leaves the checkout's own config alone" || ko "the gate changed core.bare: $(git -C "$R" config --get core.bare)"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail

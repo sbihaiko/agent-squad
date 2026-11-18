@@ -31,6 +31,10 @@
 sg_battery_run() {
   local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} narrow=${6:-no} scope why="the selector named no test file" \
         out= defs= prefix="the selection is empty: "
+  # (#2306) The battery runs the repository's own tests, and a gate started from a git hook inherits GIT_DIR, GIT_WORK_TREE
+  # and GIT_INDEX_FILE: `git init --bare` with no path under GIT_DIR then re-initializes the checkout and sets core.bare.
+  # The battery drops the three, whatever built its command.
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
   "$py" -m ruff check squad tests && "$py" -m mypy squad || return
   if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
