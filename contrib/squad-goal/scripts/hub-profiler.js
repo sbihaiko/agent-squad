@@ -227,11 +227,14 @@ function profTrip(t,phone){
  const cols=t.columns||[];
  const silent=t.no_record_minutes==null?"the record's missing minutes were not read":`${t.no_record_minutes} minutes carried no load record`;
  const sentence=`Peak load ${t.peak_load==null?"&#8212;":Number(t.peak_load).toFixed(2)} against saturation at ${t.cores||1} cores; ${silent}.`;
- // One table serves both screens (#2280): the stage first, then the column's four readings, then the three costs, each
- // cell one value. Both screens print a token count in k or M, so the phone and the desktop never drift (#2253).
+ // One table serves both screens (#2280): the stage first, the column's four readings of its larger stage, then the
+ // parallelism and the effective time the chart's label states, then the three costs, each cell one value. The median
+ // takes the header `Time per issue` it carried in #2256. Both screens print a token count in k or M, so the phone and
+ // the desktop never drift (#2253).
  const dash="&#8212;";
- const table=`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Stage</th><th>Min</th><th>Median</th><th>p85</th><th>Max</th><th>Tokens / issue</th><th>CPU mean</th><th>RAM mean</th></tr></thead><tbody>${cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td>`
+ const table=`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Stage</th><th>Min</th><th>Time per issue</th><th>p85</th><th>Max</th><th>Parallelism</th><th>Effective time</th><th>Tokens / issue</th><th>CPU mean</th><th>RAM mean</th></tr></thead><tbody>${cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td>`
   +`<td>${profTripNum(c.min_s)}</td><td>${profTripNum(c.median_s)}</td><td>${profTripNum(c.p85_s)}</td><td>${profTripNum(c.max_s)}</td>`
+  +`<td>${profTripPar(c.parallelism)}</td><td>${profTripNum(c.effective_s)}</td>`
   +`<td>${profTokUnit(c.tokens_per_issue)}</td>`
   +`<td>${(c.cpu||{}).mean!=null?profTripPct(c.cpu.mean):dash}</td><td>${(c.ram||{}).mean!=null?profTripPct(c.ram.mean):dash}</td></tr>`).join("")}</tbody></table>`;
  // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them.

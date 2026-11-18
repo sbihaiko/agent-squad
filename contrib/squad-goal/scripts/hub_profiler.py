@@ -1014,11 +1014,13 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     its segment takes in the bar. A row's
     `stage` is the stage its median belongs to. The payload also keeps `stages`: the drawn board-column rows, in board
     order, each
-    with `column`, `label`, `observations`, `min_s`, `median_s`, `p85_s` and `max_s` of the column's larger stage, so a
-    reader of the older wire still reads its shape. The record's own per-stage rows live under `record_stages`, one row
-    per entry of `TRIP_STAGES_LABELLED` with its own four readings and share. Fewer than `TRIP_MIN_DELIVERIES`
-    deliveries answer `bar` False, and the page says so and draws no bar. Each column also carries what it consumes (see
-    `trip_consumption`), and the payload the machine's peak load, core count, memory and minutes with no record.
+    with `column`, `label`, `observations`, `min_s`, `median_s`, `p85_s` and `max_s` of the column's larger stage. The
+    payload names p85 where the older wire named p90 and carries no `p90_s` and no `observations_note` (#2280), so a
+    row's shape is the board-column row with one more reading at each end. The record's own per-stage rows live under
+    `record_stages`, one row per entry of `TRIP_STAGES_LABELLED` with its own four readings and share. Fewer than
+    `TRIP_MIN_DELIVERIES` deliveries answer `bar` False, and the page says so and draws no bar. Each column also carries
+    what it consumes (see `trip_consumption`), and the payload the machine's peak load, core count, memory and minutes
+    with no record.
     """
     per = {key: [] for key in TRIP_FOLD_KEYS}
     deliveries = 0

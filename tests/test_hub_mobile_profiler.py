@@ -201,7 +201,8 @@ def test_the_phone_labels_each_column_with_its_name_and_median_time():
 def test_the_phone_table_shows_tokens_per_issue_mean_cpu_and_mean_ram():
     html = phone_trip_html()
     table = html[html.index("id=proftt"):]
-    for head in ("Stage", "Min", "Median", "p85", "Max", "Tokens / issue", "CPU mean", "RAM mean"):
+    for head in ("Stage", "Min", "Time per issue", "p85", "Max", "Parallelism", "Effective time", "Tokens / issue",
+                 "CPU mean", "RAM mean"):
         assert head in table, f"the table names {head}"
     assert re.search(r"<td>600</td>", table) and re.search(r"<td>50%</td>", table) and re.search(r"<td>40%</td>", table), \
         "the Todo row carries the payload's tokens per issue and its mean CPU and RAM"
