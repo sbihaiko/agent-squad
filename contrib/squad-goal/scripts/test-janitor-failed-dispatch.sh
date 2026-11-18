@@ -80,6 +80,22 @@ touch -t 202001010000 "$T/co/runs/run-r1/record.jsonl"
 for r in u4 u5; do mk run-$r; printf 'CHILD — GitHub issue #713 (one PR):\n' > "$T/co/runs/run-$r/request.txt"
   printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #713"}\n{"event": "verdict", "verdict": "completed", "reasons": ["unproven:route.router.1"], "exit_code": 0}\n' > "$T/co/runs/run-$r/record.jsonl"
   touch -t 202001010000 "$T/co/runs/run-$r/record.jsonl"; done
+# #2245: a run that changed no file and passed its land with review_nochange counts once as `nochange`, even though its reasons
+# are unfinished proofs (an empty selection never runs a suite), so the issue never reaches a stop by repeated empty waves.
+mk run-nc; printf 'CHILD — GitHub issue #715 (one PR):\n' > "$T/co/runs/run-nc/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #715"}\n{"event": "land", "node": "c1", "outcome": "pass", "reasons": ["review_nochange"], "effect": {"name": "review", "before": "a1b2c3", "head": "a1b2c3", "review": {"verdict": "no_change"}}}\n{"event": "verdict", "verdict": "completed", "reasons": ["unproven:route.router.1", "unproven:route"], "exit_code": 0}\n' > "$T/co/runs/run-nc/record.jsonl"
+touch -t 202001010000 "$T/co/runs/run-nc/record.jsonl"
+# #2245: the cause belongs to one (child, issue). A second child's own review decides its own issue: the no-change child
+# marks only the issue it names, and the sibling issue keeps its own kind.
+mk run-nc2; printf 'CHILD — GitHub issue(s) 718, 719 (one PR):\n' > "$T/co/runs/run-nc2/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #718"}\n{"event": "spawn_accepted", "child": "c2", "definition": "GitHub issue #719"}\n{"event": "land", "node": "c1", "outcome": "pass", "reasons": ["review_nochange"], "effect": {"name": "review", "before": "a1b2c3", "head": "a1b2c3", "review": {"verdict": "no_change"}}}\n{"event": "land", "node": "c2", "outcome": "fail", "reasons": ["review_held"], "effect": {"name": "review", "review": {"verdict": "hold"}}}\n{"event": "verdict", "verdict": "completed", "reasons": ["review_held"], "exit_code": 0}\n' > "$T/co/runs/run-nc2/record.jsonl"
+# A land that did not pass is no no-change run, whatever its review said: its reasons stay unfinished proofs, so nothing counts.
+mk run-ncfail; printf 'CHILD — GitHub issue #716 (one PR):\n' > "$T/co/runs/run-ncfail/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #716"}\n{"event": "land", "node": "c1", "outcome": "fail", "reasons": ["review_nochange"], "effect": {"name": "review", "before": "a1b2c3", "head": "d4e5f6", "review": {"verdict": "no_change"}}}\n{"event": "verdict", "verdict": "completed", "reasons": ["unproven:route.router.1"], "exit_code": 0}\n' > "$T/co/runs/run-ncfail/record.jsonl"
+# A verdict written in another case still names the no-change end (the verdict comparison is case-blind).
+mk run-nccase; printf 'CHILD — GitHub issue #717 (one PR):\n' > "$T/co/runs/run-nccase/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #717"}\n{"event": "land", "node": "c1", "outcome": "pass", "reasons": ["review_nochange"], "effect": {"name": "review", "before": "a1b2c3", "head": "a1b2c3", "review": {"verdict": "No_Change"}}}\n{"event": "verdict", "verdict": "completed", "reasons": ["unproven:route.router.1"], "exit_code": 0}\n' > "$T/co/runs/run-nccase/record.jsonl"
+touch -t 202001010000 "$T/co/runs/run-nc2/record.jsonl" "$T/co/runs/run-ncfail/record.jsonl" "$T/co/runs/run-nccase/record.jsonl"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BUG_DOING=Doing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 701$' "$T/board.calls" 2>/dev/null && ok "O: failed run -> card back to Todo" || ko "O #701 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
 [ ! -e "$T/st/auto/disp-701" ] && ok "O: failed run -> disp marker dropped" || ko "O disp-701 kept: $o"
@@ -90,8 +106,22 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q -- '^--run-fields o 4 704 run-live ' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-704" ] && ok "O: an issue a live run works gets Run fields" || ko "O #704 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Todo 703$' "$T/board.calls" 2>/dev/null && /usr/bin/grep -q '^o 1 To triage 703$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/bug-703" ] && ok "O: autobug run -> loop board Todo + bug board To triage" || ko "O #703 not released: $(cat "$T/board.calls" 2>/dev/null)"
 exp=$'fail 701 run-fail ended failed: adapter_error\nfail 703 run-bug ended failed: node_spend_cap\nfail 705 run-nomark ended completed: nothing landed\nfail 708 run-held ended failed: review_held own\nfail 710 run-chain ended failed: review_held loop\nfail 713 run-r1 ended failed: ac_failed:exit 3; unproven:route.router.1
-fail 714 run-oc ended failed: owner-only: needs a credential  owner-only'
+fail 714 run-oc ended failed: owner-only: needs a credential  owner-only
+fail 715 run-nc ended completed: unproven:route.router.1; unproven:route nochange
+fail 717 run-nccase ended completed: unproven:route.router.1 nochange
+fail 718 run-nc2 ended completed: review_held nochange
+fail 719 run-nc2 ended completed: review_held own'
 [ "$(sort "$T/wave.calls" 2>/dev/null)" = "$exp" ] && ok "O: each run that delivered nothing counts once through wave.sh fail; landed, live, needs-human and listed runs do not" || ko "O fail calls: '$(cat "$T/wave.calls" 2>/dev/null)'"
+x715=$(/usr/bin/grep '^fail 715 ' "$T/wave.calls" 2>/dev/null | sort)
+[ "$x715" = 'fail 715 run-nc ended completed: unproven:route.router.1; unproven:route nochange' ] && ok "O: a run that changed no file counts once as nochange, though its reasons are unproven (#2245)" || ko "O nochange run: '$(/usr/bin/grep '^fail 715 ' "$T/wave.calls" 2>/dev/null)'"
+n716=$(/usr/bin/grep -c '^fail 716 ' "$T/wave.calls" 2>/dev/null)
+[ "${n716:-0}" = 0 ] && ok "O: a land that did not pass is no no-change run, so its unproven run counts nothing (#2245 review)" || ko "O failed land counted: $n716 fail calls for #716"
+x717=$(/usr/bin/grep '^fail 717 ' "$T/wave.calls" 2>/dev/null | sort)
+[ "$x717" = 'fail 717 run-nccase ended completed: unproven:route.router.1 nochange' ] && ok "O: a no_change verdict in another case still marks the no-change end (#2245 review)" || ko "O case-varied verdict: '$(/usr/bin/grep '^fail 717 ' "$T/wave.calls" 2>/dev/null)'"
+x718=$(/usr/bin/grep '^fail 718 ' "$T/wave.calls" 2>/dev/null | sort)
+[ "$x718" = 'fail 718 run-nc2 ended completed: review_held nochange' ] && ok "O: the no-change child marks the issue it names (#2245 review)" || ko "O no-change child: '$(/usr/bin/grep '^fail 718 ' "$T/wave.calls" 2>/dev/null)'"
+x719=$(/usr/bin/grep '^fail 719 ' "$T/wave.calls" 2>/dev/null | sort)
+[ "$x719" = 'fail 719 run-nc2 ended completed: review_held own' ] && ok "O: a sibling child's own review decides its own issue, never the no-change child's (#2245 review)" || ko "O sibling issue: '$(/usr/bin/grep '^fail 719 ' "$T/wave.calls" 2>/dev/null)'"
 n712=$(/usr/bin/grep -c '^fail 712 ' "$T/wave.calls" 2>/dev/null)
 [ "${n712:-0}" = 0 ] && ok "O: three unproven-only runs never count, so no SQUAD-NOT-STARTABLE marker (ADR-0164)" || ko "O unproven runs counted: $n712 fail calls for #712"
 n713=$(/usr/bin/grep -c '^fail 713 ' "$T/wave.calls" 2>/dev/null)

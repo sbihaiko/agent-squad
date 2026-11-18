@@ -302,7 +302,7 @@ def read(f):
     # The per-child evidence (#271): the children the run accepted, the issues each child's own accept line named, the
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
     # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
-    kids = set(); kid_issue = {}; land_nodes = set(); outs = {}; kid_review = {}; heads = []
+    kids = set(); kid_issue = {}; land_nodes = set(); outs = {}; kid_review = {}; kid_nc = {}; heads = []
     last_land = {}   # node -> the outcome and reasons of the LAST landing it made: its final landing state (#2015)
     # The spawn batch (#480): the engine answers a dispatch's requests in one batch, then starts the children. Any event after
     # the last spawn event is past that batch, so the run's choice of children is decided; spawn_ts is when it was made.
@@ -335,6 +335,14 @@ def read(f):
             eff = d.get("effect") or {}
             if isinstance(eff, dict) and isinstance(eff.get("review"), dict) and d.get("node") is not None:
                 kid_review[str(d["node"])] = eff["review"]   # the run's own review of the child (#599): rule O reads its verdict (#621)
+            # A landing that passed with review_nochange changed no file (#2245): it is the no-change end of this child, and
+            # its own issue is marked for the owner instead of reaching a second empty wave. The cause needs the passing
+            # landing and the no-change verdict together; the verdict compares case-blind, as rule O's review read does.
+            if d.get("node") is not None:
+                rv = eff.get("review") if isinstance(eff, dict) else None
+                kid_nc[str(d["node"])] = (d.get("outcome") == "pass"
+                                          and "review_nochange" in [str(x) for x in (d.get("reasons") or [])]
+                                          and isinstance(rv, dict) and str(rv.get("verdict") or "").lower() == "no_change")
             # A landing that moved the target's tip by nothing carries no work: it is no delivery, so no card is claimed and
             # no marker stands on it (ADR-0145 rule 12, #464). A record written before the effect carried `before` keeps the
             # old reading, so an old run is judged as it was.
@@ -386,7 +394,7 @@ def read(f):
     kid_land_fail_reason = {n: r for n, (o, r) in last_land.items() if o == "fail" and n in kids}
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
             "failed": ver == "failed", "reasons": rs, "end_class": ec, "landed": landed, "run_id": rid, "run_ts": rts, "last_ts": lts, "vts": vts, "vkey": vkey,
-            "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "kid_land_fail_reason": kid_land_fail_reason, "decided": decided, "spawn_ts": spawn_ts,
+            "kid_issue": kid_issue, "kid_review": kid_review, "kid_nc": kid_nc, "kid_landed": kid_landed, "kid_out": outs, "kid_land_fail_reason": kid_land_fail_reason, "decided": decided, "spawn_ts": spawn_ts,
             "open_calls": list(open_calls.values())}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
@@ -1645,7 +1653,12 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     # costs no call for a run already counted. A corrupt ledger holds the issue (ADR-0149 rule 4): nothing is counted and the
     # hold is named; the pass decides it again once the owner's rearm wrote a fresh file. A ledger module that cannot be
     # loaded sends the call: wave.sh counts a run once anyway.
-    if proof_unfinished(i["reasons"]):
+    # The no-change cause (#2245): a child's land that passed with review_nochange changed no file, so its reasons are
+    # unfinished proofs and rule O would count nothing. The trigger is the passing land plus the no-change verdict, read
+    # per (child, issue) in kid_nc, so a sibling child's review never marks an issue it does not name. That run counts
+    # once, and wave.sh fail stops the issue for the owner at that one run, so a second empty wave starts no new run.
+    nochange = any(n in iss and i["kid_nc"].get(k) for k, iss in i["kid_issue"].items())
+    if proof_unfinished(i["reasons"]) and not nochange:
         say(f"UNPROVEN #{n}: run {f.name} ended with its proof unfinished, so it is no failed dispatch ({'; '.join(i['reasons'])})")
         return True
     rec = {}
@@ -1671,13 +1684,17 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     why = f"the child of run {i['run_id']} never entered its wave: {ex}" if i["landed"] else f"ended {i['name']}: " + ("; ".join(i["reasons"]) or "nothing landed")
     # The run's own review of the child decides over the reason text (#621): CHANGES or BLOCKED a model wrote on the diff is
     # the issue's own failure (`own`); a BLOCKED the chain wrote because every model failed, a review past its deadline or one that
-    # never started, is the loop's (`loop`). No review leaves the text to wave.sh.
-    kind = ""
+    # never started, is the loop's (`loop`). No review leaves the text to wave.sh. The child whose land passed with
+    # review_nochange decides its own issue (#2245): only that (child, issue) pair takes the no-change kind.
+    kind = ""; nc = False
     for k, iss in i["kid_issue"].items():
+        if n not in iss: continue
+        if i["kid_nc"].get(k): nc = True; continue
         rv = i["kid_review"].get(k)
-        if n not in iss or not rv or str(rv.get("verdict") or "").lower() in ("approve", "no_review", ""): continue
+        if not rv or str(rv.get("verdict") or "").lower() in ("approve", "no_review", ""): continue
         lost = str(rv.get("verdict")) == "deadline" or "every review model failed" in str(rv.get("findings") or "") or str(rv.get("stderr") or "").startswith("review_not_started")
         kind = "own" if not lost or kind == "own" else "loop"
+    if nc: kind = "nochange"
     if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return False
     tail = [kind, i["end_class"]] if i.get("end_class") else ([kind] if kind else [])
     out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *tail])[1].strip()
