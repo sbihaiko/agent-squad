@@ -1898,4 +1898,19 @@ r=$(SG_WAVE_TIP_GATES="echo call >> $T/tip2209.log; [ ! -e bad2209 ]" SG_WAVE_CH
 [ "$(calls "$T/tip2209.log")" = 2 ] && ok "W2209: the check runs again on the tip that keeps a child" || ko "W2209: the tip gate ran $(calls "$T/tip2209.log") times with a child left"
 [ "$(/usr/bin/grep -c '^o 3 Todo 22094$' "$T/board.log")" = 1 ] && /usr/bin/grep -q 'issues/22093 -f state=closed' "$T/gh.log" && ok "W2209: the evicted child is requeued once and the other child's issue closes" || ko "W2209: two children: board '$(cat "$T/board.log")'"
 
+# N (#2217): a run that ends owner-only freezes its issue once, and a run that ends does-not-reproduce freezes it at this build.
+# A failed run with no class (a gate reason) is counted as before and freezes nothing.
+n1=$(calls "$T/gh.log")
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner217 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
+if /usr/bin/grep -q 'issues/2217/labels.*frozen:owner' "$T/gh.log" && /usr/bin/grep -q 'issues/2217/labels.*needs-ratification' "$T/gh.log" \
+   && /usr/bin/grep -rq 'owner-only: criterion (1) needs a credential' "$T/st" 2>/dev/null; then ok "N1: an owner-only end freezes its issue and quotes the reason"; else ko "N1: owner-only end did not freeze: '$r'"; fi
+n2=$(calls "$T/gh.log")
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner217 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
+[ "$(calls "$T/gh.log")" = "$n2" ] && ok "N2: a repeat of the counted run writes no second freeze" || ko "N2: a counted run froze the issue again: '$r'"
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr201 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
+if /usr/bin/grep -q 'issues/2201/labels.*frozen:not-startable' "$T/gh.log" && /usr/bin/grep -rq 'SQUAD-NOT-STARTABLE: build=' "$T/st" 2>/dev/null; then ok "N3: a does-not-reproduce end freezes its issue at this build"; else ko "N3: does-not-reproduce end did not freeze: '$r'"; fi
+r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2202 run-gate202 "ac-verify:no_ac_commands" own) 2>&1)
+case "$r" in *"WAVE FAILED #2202"*) ok "N4: a gate reason is counted as before";; *) ko "N4: gate reason not counted: '$r'";; esac
+/usr/bin/grep -q 'issues/2202/labels' "$T/gh.log" && ko "N4: a gate reason froze its issue" || ok "N4: a gate reason freezes nothing"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

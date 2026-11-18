@@ -298,7 +298,7 @@ def unpushed(f):   # #771: "<branch> <sha9> in <tree>" for each child tree of th
 def read(f):
     v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
     lts = ""                        # the stamp of the record's last event: rule T reads the last progress, never the start (#1191)
-    vts = None; vkey = ""; nv = 0   # the last verdict's time and its key (#692, #693): the rearm floor and rule O's read-once marker read them
+    vts = None; vkey = ""; nv = 0; ec = None   # the last verdict's time and its key (#692, #693): the rearm floor and rule O's read-once marker read them
     # The per-child evidence (#271): the children the run accepted, the issues each child's own accept line named, the
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
     # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
@@ -327,9 +327,9 @@ def read(f):
             if ev == "run_start": rts = str(d.get("ts") or d.get("started_at") or rts)
             # A verdict is final only after the last start or resume (ADR-0105): a resumed run is live again until its
             # next verdict, so an earlier verdict no longer reads it as finished (ADR-0167).
-            v = False; ver = None; rs = []; vts = None; vkey = ""; open_calls = {}
+            v = False; ver = None; rs = []; ec = None; vts = None; vkey = ""; open_calls = {}
         if ev == "verdict":   # the fold takes the last verdict event after the last start or resume (ADR-0105)
-            v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
+            v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]; ec = d.get("end_class")
             vts = d.get("ts") if isinstance(d.get("ts"), (int, float)) else None; vkey = f"{vts if vts is not None else ''}:{nv}"; nv += 1
         if ev == "land":   # only the landing stage's own event counts; a router's `routed: continue` is not a landing
             eff = d.get("effect") or {}
@@ -385,7 +385,7 @@ def read(f):
     # run's own landing stage is no child's failure, and a failure a retry stood is no failure.
     kid_land_fail_reason = {n: r for n, (o, r) in last_land.items() if o == "fail" and n in kids}
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
-            "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts, "last_ts": lts, "vts": vts, "vkey": vkey,
+            "failed": ver == "failed", "reasons": rs, "end_class": ec, "landed": landed, "run_id": rid, "run_ts": rts, "last_ts": lts, "vts": vts, "vkey": vkey,
             "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "kid_land_fail_reason": kid_land_fail_reason, "decided": decided, "spawn_ts": spawn_ts,
             "open_calls": list(open_calls.values())}
 def same_process(pidc, started_at):
@@ -1670,7 +1670,7 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
         lost = str(rv.get("verdict")) == "deadline" or "every review model failed" in str(rv.get("findings") or "") or str(rv.get("stderr") or "").startswith("review_not_started")
         kind = "own" if not lost or kind == "own" else "loop"
     if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return False
-    out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *([kind] if kind else [])])[1].strip()
+    out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *(([kind or "own", i["end_class"]]) if i.get("end_class") else ([kind] if kind else []))])[1].strip()
     if out: say(f"FAILED-DISPATCH #{n}: {out}")
     # A probe's refutation that gh or I/O failed (#888): the run stays uncounted, so the next pass calls `fail` and sends it again.
     return "WAVE PROBE-RETRY" not in out
