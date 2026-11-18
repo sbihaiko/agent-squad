@@ -92,6 +92,9 @@ def test_a_card_that_reached_gating_leaves_it_only_forward(table):
     assert not table.past("Gating", "Code Complete"), "an old spelling of Landing is no column now (#2190)"
     assert not table.past("Gating", "Closed"), "the one forward move out of Gating reads as past"
     assert table.past("Closed", "Gating"), "a re-entry into Gating after the wave landed is past"
+    # #2295: a requeue sends a card in Gating back to Todo as a no-landing move, as it does from Landing; no other reason may.
+    assert not table.refused_for_automated("Gating", "Todo", "no-landing"), "a requeue cannot leave Gating"
+    assert table.refused_for_automated("Gating", "Todo"), "a write back to Todo with no reason leaves Gating"
 
 
 def test_the_hub_vocabulary_is_the_table(table, hub):

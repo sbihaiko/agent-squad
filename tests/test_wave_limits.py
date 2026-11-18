@@ -139,4 +139,5 @@ def test_the_wave_cases_run_in_one_split_suite_each() -> None:
     assert fixture_labels == set(FIXTURE_CASES), fixture_labels
     for case in WAVE_CASES:
         assert seen.get(case) == "test-wave-aged.sh", f"{case!r} is not held by the aged suite: {seen.get(case)}"
-    assert len(seen) == 571, f"the split holds {len(seen)} cases, not the 571 the one suite held"
+    # The one suite held 571 cases when it was split: a case may join a part suite, and none may leave.
+    assert len(seen) >= 571, f"the split holds {len(seen)} cases, fewer than the 571 the one suite held"
