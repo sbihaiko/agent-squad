@@ -379,7 +379,7 @@ stop_servers; servers=
 /usr/bin/grep -q "refused" "$T/out" && ko "27 the pass prints a bare refusal: '$(cat "$T/out")'" || ok "27 the pass prints no bare refusal"
 [ "$(req)" = "$n27" ] && ok "27 the request stays, so the pass that can reach the credential moves main" || ko "27 request '$(req)'"
 [ ! -e "$ST/promote-main-hold" ] && ok "27 a credential the pass cannot reach writes no hold" || ko "27 hold '$(cat "$ST/promote-main-hold" 2>/dev/null)'"
-[ "$(alerts)" = 1 ] && /usr/bin/grep -q "cannot reach" "$ST/alerts.log" && ok "27 one alert names the credential that was not reachable" || ko "27 alerts: '$(cat "$ST/alerts.log" 2>/dev/null)'"
+[ "$(alerts)" = 1 ] && /usr/bin/grep -q "cannot reach" "$ST/alerts.log" && /usr/bin/grep -q "$n27" "$ST/alerts.log" && ok "27 one alert names the credential and the sha that was not reachable" || ko "27 alerts: '$(cat "$ST/alerts.log" 2>/dev/null)'"
 # The request the denied pass kept is answered by a pass whose remote takes the push: main moves to the requested sha, and
 # the request is cleared.
 rm -f "$ST/alerts.log" "$ST"/auto/promote-main-*
