@@ -437,6 +437,11 @@ class BoardBinding:
         self.backoff = max(0.0, self._num("SG_BOARD_READ_BACKOFF", "1"))        # the base delay, doubled per retry; 0 sleeps for no read
         self.settle_seconds = max(0.0, self._num("SG_BOARD_SETTLE_SECONDS", "60"))   # the sleep budget for a new card to reach the read (#403)
         self.server_error = re.compile(r"\bHTTP 5\d\d\b")
+        # #2319: a network error that a second try can pass. A connect that never reached the server (`dial tcp`, a
+        # refused connect, a TLS handshake timeout) sent nothing, so any call may try again; a connection that broke
+        # after the request went out (a reset, an EOF, a read timeout) may have landed a write, so only a read tries again.
+        self.unsent_error = re.compile(r"dial tcp[^\n]*(i/o timeout|connection refused)|TLS handshake timeout")
+        self.broken_error = re.compile(r"connection reset by peer|unexpected EOF|\bEOF\s*$|read tcp[^\n]*i/o timeout")
         self.items_map = None
         self._fallback = {}   # issue -> the card the GraphQL fallback read (or None), once per issue per binding (#1463)
         self.item_hints = _item_hints(env.get("SG_BOARD_ITEM_HINTS"))   # the item ids the caller holds (#1300)
@@ -483,14 +488,19 @@ class BoardBinding:
 
     def _call(self, a, inp=None, timeout=None):
         """One gh api call, with the server-error retry: the argv as the caller built it."""
-        err = ""
+        err, write, limit = "", _is_write(a), self.timeout or timeout
+        start = time.monotonic()
         for k in range(self.attempts):
-            if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
-            r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=self.timeout or timeout)
-            if not r.returncode: _log_call(a, "done" if _is_write(a) else "answer"); return r.stdout
+            pause = self.backoff * (2 ** (k - 1)) if k and self.backoff else 0.0
+            if k and limit and time.monotonic() - start + pause >= limit: break   # no retry past the caller's deadline (ADR-0051)
+            if pause: time.sleep(pause)
+            r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=limit)
+            if not r.returncode: _log_call(a, "done" if write else "answer"); return r.stdout
             _log_call(a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
-            err = r.stderr.strip()[:200]
-            if not self.server_error.search(err): break
+            full = r.stderr.strip()   # read whole: gh puts the URL first, and the cause can sit past any cut (#2319)
+            err = full[-200:] if len(full) > 200 else full
+            if not (self.server_error.search(full) or self.unsent_error.search(full)
+                    or (not write and self.broken_error.search(full))): break
         raise RuntimeError(err)
 
     def _pages(self, a, inp=None, timeout=None):

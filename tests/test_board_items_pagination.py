@@ -98,3 +98,87 @@ def test_a_move_that_cannot_reach_the_card_names_it(tmp_path):
 
     with pytest.raises(RuntimeError, match=r"#9 not on the board"):
         seam(tmp_path, gh).write(9, "Todo")
+
+
+LONG = "Get \"https://api.github.com/user/122891372/projectsV2/5/items?per_page=100&fields%5B%5D=425772760%2C427848739%2C427848747&after=Y3Vyc29yOnYyOpK5MDAwMDAwMDAuMDAwODMxMjU1MTk1MzQ0Oc4SOAnV\": "
+
+
+class FlakyGh(PagedGh):
+    """`gh api` whose first read of page two dies on the network, after a URL long enough to pass 200 characters (#2319)."""
+
+    def __init__(self, pages, error):
+        super().__init__(pages)
+        self.error, self.failed = error, False
+
+    def __call__(self, cmd, input=None, **kw):
+        if "--include" in cmd and self.after(" ".join(cmd)) == 1 and not self.failed:
+            self.failed = True
+            self.calls.append(" ".join(cmd))
+            return subprocess.CompletedProcess(cmd, 1, "", LONG + self.error)
+        return super().__call__(cmd, input=input, **kw)
+
+
+@pytest.mark.parametrize("error", ["dial tcp 4.228.31.149:443: i/o timeout", "net/http: TLS handshake timeout",
+                                   "read tcp 10.0.0.2:5000->4.228.31.149:443: read: connection reset by peer",
+                                   "unexpected EOF", "dial tcp 4.228.31.149:443: connect: connection refused"])
+def test_a_page_that_meets_a_transient_network_error_is_read_again(tmp_path, error):
+    """#2319: one page that dies on the network once is read again; the read does not fail on it."""
+    gh = FlakyGh([[card(1)], [card(2)]], error)
+
+    assert set(seam(tmp_path, gh).items()) == {"1", "2"}
+    assert gh.failed
+
+
+@pytest.mark.parametrize("error", ["dial tcp: lookup api.github.com: no such host", "x509: certificate signed by unknown authority",
+                                   "HTTP 404: Not Found"])
+def test_a_page_that_meets_a_lasting_error_fails_at_once(tmp_path, error):
+    """A name, certificate or client error does not pass by itself: the read fails on the first try."""
+    gh = FlakyGh([[card(1)], [card(2)]], error)
+
+    with pytest.raises(RuntimeError, match=re.escape(error[:20])):
+        seam(tmp_path, gh).items()
+    assert sum("after=1" in c for c in gh.calls) == 1
+
+
+def test_a_write_that_may_have_landed_is_not_sent_again(tmp_path):
+    """A write whose connection broke after the request went out may have landed, so it is not sent twice."""
+    calls = []
+
+    def gh(cmd, input=None, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", LONG + "read tcp 10.0.0.2:5000->4.228.31.149:443: read: connection reset by peer")
+
+    board = seam(tmp_path, gh)
+    with pytest.raises(RuntimeError, match="connection reset"):
+        board._call(["-X", "PATCH", "/user/1/projectsV2/5/items/PVTI_1"])
+    assert len(calls) == 1
+
+
+def test_a_write_that_never_reached_the_server_is_sent_again(tmp_path):
+    """A connect that timed out sent nothing, so the write is safe to send again."""
+    calls = []
+
+    def gh(cmd, input=None, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", LONG + "dial tcp 4.228.31.149:443: i/o timeout")
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+    assert seam(tmp_path, gh)._call(["-X", "PATCH", "/user/1/projectsV2/5/items/PVTI_1"]) == "{}"
+    assert len(calls) == 2
+
+
+def test_no_retry_starts_past_the_callers_deadline(tmp_path, monkeypatch):
+    """ADR-0051: the retries of one call stop once the caller's deadline has passed, whatever attempts remain."""
+    clock = [0.0]
+    monkeypatch.setattr(issue_state.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def gh(cmd, input=None, **kw):
+        calls.append(cmd)
+        clock[0] += 30.0   # each dial waits 30 s before it times out
+        return subprocess.CompletedProcess(cmd, 1, "", LONG + "dial tcp 4.228.31.149:443: i/o timeout")
+
+    with pytest.raises(RuntimeError, match="i/o timeout"):
+        seam(tmp_path, gh)._call(["/user/1/projectsV2/5/items"], timeout=50)
+    assert len(calls) == 2
