@@ -170,7 +170,7 @@ function profTrip(t,phone){
  const bar=`<div class=ptb role=img aria-label="${esc(`${n} deliveries in the last ${span}; the median time of each board column`)}">${cols.map(seg).join("")}</div>`;
  // One header names the Observations count on both tables, taken from the payload, and both print a token count in k
  // or M, so the phone and the desktop never drift (#2253).
- const obs=`Observations (${esc(t.observations_note||"Gating counts gate runs; every other column counts deliveries")})`;
+ const obs="Observations"+(t.observations_note?` (${esc(t.observations_note)})`:"");   // the rule layer words the note; the view names no column
  // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them.
  if(phone)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below.</p>`
   +profTripFacts(t)+profTripLanes(t)
