@@ -594,7 +594,12 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     [ "$fresh" = 1 ] && hand "$n" "$why"   # the hold keeps every dispatch pass off; the card still goes back to Todo below
   elif h=$(held_out "$n"); then   # a cap requeue counts nothing, so it reads the stop itself (#682): a stopped issue stays put
     echo "WAVE STOP #$n: $h, so the age cap does not put it back in the queue: $why"; return 0
+  elif [ -n "${SG_REQUEUE_RUN:-}" ] && [ -e "$SG_STATE/auto/empty-requeued-$SG_REQUEUE_RUN-$n" ]; then
+    # An empty landing lands once per (run, issue) (#2245): the first one puts the issue back in the queue, so a second
+    # landing of the same ended wave starts no new run.
+    echo "WAVE KEEP #$n: run $SG_REQUEUE_RUN already sent it back to the queue once, so this landing starts no new run: $why"; return 0
   fi
+  [ "${3:-}" = cap ] && [ -n "${SG_REQUEUE_RUN:-}" ] && { mkdir -p "$SG_STATE/auto" && : > "$SG_STATE/auto/empty-requeued-$SG_REQUEUE_RUN-$n"; }
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
   SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-requeue-$n}" SG_MOVE_SHA="$(reset_sha "${SG_REQUEUE_RUN:-}")" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Landing as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
@@ -646,7 +651,9 @@ fail() {   # <issue> <run> <why> [own|loop|nochange] [end class]: the run ended 
   { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
   probe_refuted "$n" "$run" && return 0   # a probe whose acceptance command is unmet refutes its premise (#888)
   if [ "$kind" = nochange ]; then   # a run that changed no file is never tried again: one such run marks the issue for the owner (#2245)
-    count "$n" "$run" "$why" own
+    why="no change landed (review_nochange): $why"   # the card reads the no-change cause, never the unproven text alone
+    loop_caused "$why" "$kind" && loopf=1
+    if [ "$loopf" = 1 ]; then count "$n" "$run" "$why" loop; else count "$n" "$run" "$why" own; fi
     [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
     stop "$n" "$why"; return 0
   fi
@@ -1694,7 +1701,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
           cap_hold "$run" "$rd" "$n" "$why";; esac; done
         retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
       fi
-      if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
+      if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/empty-requeued-$run"-*; fi
       return 0; }
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
     # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is. An unproven tip

@@ -212,11 +212,23 @@ hh release --by hal9k --to Todo 73 74
 o81=$(w fail 81 n1 "ended completed: unproven:route.router.1; unproven:route" nochange)
 case "$o81" in *"WAVE STOP #81"*) ok "a run that changed no file stops its issue at once";; *) ko "no stop after one no-change run: '$o81'";; esac
 [ "$(gl 81)" = 1 ] && /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/81/labels -f labels[]=frozen:owner' "$T/gh.log" && ok "the no-change stop freezes the issue for the owner" || ko "freeze #81: '$(/usr/bin/grep 'issues/81' "$T/gh.log" | tr '\n' ' ')'"
+/usr/bin/grep -q 'no change landed (review_nochange)' "$T"/st/cq/* 2>/dev/null && ok "the stop names the no-change cause, never the unproven text alone (#2245 review)" || ko "stop reason: '$(cat "$T"/st/cq/* 2>/dev/null | tr '\n' ' ')'"
 echo req > "$T/st/auto/disp-81"
 o81a=$(w requeue 81 "the wave reached its age cap (3600 s) and landed empty without this child: it is back in the queue" cap)
 o81b=$(w requeue 81 "the wave reached its age cap (3600 s) and landed empty without this child: it is back in the queue" cap)
 case "$o81a$o81b" in *"WAVE REQUEUE #81"*) ko "an empty landing after the stop requeued #81: '$o81a $o81b'";; *) ok "two empty landings after the stop put nothing back in the queue";; esac
 ! /usr/bin/grep -q ' Todo 81$' "$T/board.log" && ok "the card of the stopped issue does not move to Todo" || ko "board: '$(/usr/bin/grep ' 81$' "$T/board.log")'"
+# #2245 review: an issue the loop still builds lands empty once. Its first empty landing puts it back in the queue one time,
+# and a second landing of the same empty wave starts no new run, because nothing claims the issue any more.
+echo req > "$T/st/auto/disp-82"
+SG_REQUEUE_RUN=r82 w requeue 82 "the wave reached its age cap (3600 s) and landed empty without this child: it is back in the queue" cap >/dev/null
+t82a=$(/usr/bin/grep -c '^o 3 Todo 82$' "$T/board.log" 2>/dev/null)
+[ "${t82a:-0}" = 1 ] && ok "the first empty landing of a buildable issue puts it back in the queue once (#2245 review)" || ko "first empty landing of #82: ${t82a:-0} Todo moves"
+SG_REQUEUE_RUN=r82 w requeue 82 "the wave reached its age cap (3600 s) and landed empty without this child: it is back in the queue" cap >/dev/null
+t82b=$(/usr/bin/grep -c '^o 3 Todo 82$' "$T/board.log" 2>/dev/null)
+[ "${t82b:-0}" = 1 ] && ok "a second landing of the same empty wave starts no new run for the issue (#2245 review)" || ko "second empty landing of #82: ${t82b:-0} Todo moves"
+o82=$(SG_REQUEUE_RUN=r82 w requeue 82 "the wave reached its age cap (3600 s) and landed empty without this child: it is back in the queue" cap)
+case "$o82" in *"WAVE KEEP #82"*) ok "the second landing names the once-only rule";; *) ko "second landing line: '$o82'";; esac
 # The wave's age cap sends a child's issue back to the queue, and the loop then builds it again from the base: the commits
 # the child made reach no branch, so the cap pushes the child's head to fix/<n>-salvage-<run>, the work branch a finished run
 # with no wave already pushes, and names that branch (#2030, #2231).
