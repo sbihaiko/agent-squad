@@ -27,6 +27,8 @@
 /* The chart sizes its glyphs in SVG user units on the svg element, so each box scales with the viewBox; no CSS
    length here takes that over, because a caption size would not scale and would share boxes at a narrow width. */
 #proftrip .ptt,#proftrip .ptn,#proftrip .ptu,#proftrip .ptlm{fill:var(--mute)}
+#proftrip .ptv{fill:var(--mute)}#proftrip .ptvc{fill:var(--s2)}#proftrip .ptvr{fill:var(--none)}
+#proftrip circle.ptph{fill:transparent;stroke:none;pointer-events:all}
 #proftrip .ptn{fill:var(--text);font-weight:600}
 #proftrip .ptlb,#proftrip .ptls{fill:var(--text)}
 #proftrip text.ptlb.pts-todo{fill:var(--s5)}#proftrip text.ptlb.pts-doing{fill:var(--run)}#proftrip text.ptlb.pts-review{fill:var(--acc)}
