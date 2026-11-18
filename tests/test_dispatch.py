@@ -138,6 +138,71 @@ async def test_a_child_that_errors_out_names_the_error_on_the_record(tmp_path): 
 
 
 @pytest.mark.anyio
+async def test_a_router_that_ends_clean_with_no_spawns_list_gets_one_repair_try(tmp_path):    # #2336
+    """A dispatch entry that ends clean with budget left and writes no artifact answers once more, and its prompt carries
+    the reason: the answer was outside the shape. A sound answer on the repair turn ends the run `completed`."""
+    eng = make(tmp_path, {"router": [{"output": None, "spend": 0.1, "ended": CLEAN_END}, routed(req())],
+                          "route.router.1": CHILD})
+    v = await eng.run()
+    assert v.verdict == "completed"
+    calls = [c for c in eng.adapter.calls if c.node == "router"]
+    assert len(calls) == 2 and calls[1].session_id != calls[0].session_id
+    assert "outside the shape" in calls[1].prompt and "spawns" in calls[1].prompt
+    repair = [e for e in ev(tmp_path, "answer_repair") if e["node"] == "router"]
+    assert len(repair) == 1 and repair[0]["shape"] == "none"
+
+
+@pytest.mark.anyio
+async def test_a_second_answer_with_no_spawns_list_fails_the_run_and_names_the_shape(tmp_path):    # #2336
+    """One repair try only. A second clean end with no artifact ends the run `failed`, and the reason names the shape
+    it read (`none`) so the record holds why no child ran."""
+    eng = make(tmp_path, {"router": [{"output": None, "spend": 0.1, "ended": CLEAN_END},
+                                     {"output": None, "spend": 0.1, "ended": CLEAN_END}]})
+    v = await eng.run()
+    assert v.verdict == "failed"
+    assert len([c for c in eng.adapter.calls if c.node == "router"]) == 2
+    out = [e for e in ev(tmp_path, "outcome") if e["node"] == "router"][0]
+    assert out["outcome"] == "fail"
+    assert out["reasons"] == ["child_ended_early", "spawns_shape:none"]
+    assert "spawns_shape:none" in v.reasons
+
+
+@pytest.mark.anyio
+async def test_a_spawns_value_outside_the_list_is_repaired_once(tmp_path):    # #2336
+    """The list shape is the contract, so a first answer whose `spawns` value is not a list is also outside the shape:
+    it gets the repair turn, and a sound answer there ends the run."""
+    eng = make(tmp_path, {"router": [{"output": {"spawns": "tdd"}, "spend": 0.1}, routed(req())],
+                          "route.router.1": CHILD})
+    v = await eng.run()
+    assert v.verdict == "completed"
+    repair = [e for e in ev(tmp_path, "answer_repair") if e["node"] == "router"]
+    assert len(repair) == 1 and repair[0]["shape"] == "string"
+
+
+@pytest.mark.anyio
+async def test_a_second_spawns_value_outside_the_list_fails_and_names_its_shape(tmp_path):    # #2336
+    eng = make(tmp_path, {"router": [{"output": {"spawns": {"prompt": "tdd"}}, "spend": 0.1},
+                                     {"output": {"spawns": {"prompt": "tdd"}}, "spend": 0.1}]})
+    v = await eng.run()
+    assert v.verdict == "failed"
+    out = [e for e in ev(tmp_path, "outcome") if e["node"] == "router"][0]
+    assert out["reasons"] == ["spawns_shape:object"]
+    assert "spawns_shape:object" in v.reasons
+
+
+@pytest.mark.anyio
+async def test_a_valid_empty_spawns_list_is_still_no_dispatch_and_no_repair(tmp_path):    # #2336, ADR-0113 rule 18
+    """A well-formed empty list is the entry's own answer, not a shape fault: zero children without `done` fails
+    `no_dispatch` and gets no repair turn."""
+    eng = make(tmp_path, {"router": routed()})
+    v = await eng.run()
+    assert v.verdict == "failed"
+    assert len([c for c in eng.adapter.calls if c.node == "router"]) == 1
+    assert not [e for e in ev(tmp_path, "answer_repair") if e["node"] == "router"]
+    assert "no_dispatch" in v.reasons
+
+
+@pytest.mark.anyio
 async def test_a_final_gate_that_could_not_run_completes_the_run_and_names_the_node(tmp_path):    # #1825
     """The child listed its own gate in ac_commands and that gate answered exit 4 with no pytest summary: nothing is
     red and nothing was proved, so the run is completed with `unproven:final_gate`, never failed and left to a person
