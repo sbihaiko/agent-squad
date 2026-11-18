@@ -35,6 +35,7 @@ REQUIRED = {
     "model_refused": ["node", "entry", "model", "error"],   # one chain entry the provider refused before it served (#494)
     "model_retried": ["node", "entry", "model", "error"],   # one chain entry whose transport did not deliver: its one fresh call follows (#1293)
     "model_skipped": ["node", "entry", "model", "reason"],   # one chain entry left out before it was tried: outside its hours window
+    "answer_repair": ["node", "entry", "shape", "reason"],   # #2336: a dispatch entry's answer was outside the spawns-list shape, and one repair turn follows
     "land": ["node", "parent", "entry", "outcome", "reasons", "effect"],
     "review_round": ["node", "round", "head", "verdict", "offered", "review"],   # #570: one review of a child's head; `fix` starts its next entry
     "review_try": ["node", "round", "try", "review"],   # #635: one review try of a round that got no verdict; the round tries again in the gate's deadline

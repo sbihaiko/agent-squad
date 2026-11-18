@@ -435,6 +435,28 @@ def end_class(out):
     return out.get("end_class") if out.get("end_class") in END_CLASSES else None
 
 
+def spawns_shape(out):
+    """The shape a dispatch entry's answer gave for its `spawns` list: `none` (no artifact), `missing` (no key), `list`
+    (the expected shape), or the JSON type of the value it read. A dispatch entry's contract is that list, so any other
+    shape is outside it (#2336)."""
+    if not isinstance(out, dict):
+        return "none"
+    if "spawns" not in out:
+        return "missing"
+    v = out["spawns"]
+    if isinstance(v, list):
+        return "list"
+    if isinstance(v, bool):
+        return "boolean"
+    if isinstance(v, str):
+        return "string"
+    if isinstance(v, (int, float)):
+        return "number"
+    if isinstance(v, dict):
+        return "object"
+    return type(v).__name__
+
+
 def agent_outcome(node, res, cap_reason, granted=None):
     """Derive the outcome from the declared artifact. An agent node and a dispatch child share it.
 
@@ -449,6 +471,8 @@ def agent_outcome(node, res, cap_reason, granted=None):
     key = node.get("output_key")
     if key and key not in out and out.get("status") not in ("needs-human", "fail", "unproven"):    # an explicit stop answer needs no `output_key`
         return "fail", [missing_artifact_reason(res, cap_reason, granted)], None
+    if key == "spawns" and out.get("status") not in ("needs-human", "fail", "unproven") and spawns_shape(out) != "list":
+        return "fail", [f"spawns_shape:{spawns_shape(out)}"], None      # a dispatch entry's contract is the list; an explicit stop answer needs none (#2336)
     if "ac_commands" in out and not ac_commands(out)[1]:
         return "fail", ["ac_commands_invalid"], None      # the child's contract is malformed: it fails, so the router repairs it
     status = out.get("status", "pass")
