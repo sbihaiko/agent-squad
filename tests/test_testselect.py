@@ -77,17 +77,28 @@ def test_a_test_that_imports_from_a_selected_test_selects_that_test_too(tmp_path
 
 
 def test_a_script_reached_through_an_imported_test_helper_selects_the_tests_that_import_it(tmp_path):
-    """#2239: a helper test module names a script by a path literal, and another test runs the script through that helper.
-    A change to the script selects the helper, so the test that imports the helper runs with it."""
+    """#2239: the helper copies janitor.py from a tuple of script names, and the deadline test imports the helper."""
+    helper = (
+        "import shutil\n"
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parents[1]\n"
+        'SCRIPTS = ROOT / "contrib/squad-goal/scripts"\n'
+        "\n"
+        "def sandbox(tmp_path):\n"
+        '    for name in ("janitor.py", "ghcall.sh"):\n'
+        "        shutil.copy(SCRIPTS / name, tmp_path / name)\n"
+        "\n"
+        "def janitor(tmp_path):\n"
+        '    return tmp_path / "janitor.py"\n'
+    )
+    deadline = "from tests.test_janitor_card_done_base import janitor, sandbox\n\ndef test_deadline(tmp_path):\n    sandbox(tmp_path)\n"
     repo = tip(tmp_path, {"contrib/squad-goal/scripts/janitor.py": "print('bye')\n"}, extra={
         "contrib/squad-goal/scripts/janitor.py": "print('hi')\n",
-        "tests/test_card_done_base.py": "from pathlib import Path\n"
-                                        "SCRIPTS = Path(__file__).resolve().parents[1] / 'contrib/squad-goal/scripts'\n"
-                                        "\ndef janitor():\n    return SCRIPTS / 'janitor.py'\n",
-        "tests/test_pass_deadline.py": "from tests.test_card_done_base import janitor\n"
-                                       "\ndef test_janitor():\n    assert janitor()\n",
+        "contrib/squad-goal/scripts/ghcall.sh": "echo\n",
+        "tests/test_janitor_card_done_base.py": helper,
+        "tests/test_janitor_pass_deadline.py": deadline,
     })
-    assert select(repo) == ["tests/test_card_done_base.py", "tests/test_pass_deadline.py"]
+    assert select(repo) == ["tests/test_janitor_card_done_base.py", "tests/test_janitor_pass_deadline.py"]
 
 
 def test_a_changed_test_file_selects_itself(tmp_path):
