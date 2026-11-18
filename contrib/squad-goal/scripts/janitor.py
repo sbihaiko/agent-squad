@@ -28,6 +28,8 @@
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  U  an auto/disp-<n> marker whose named run or request is no longer live (no active-runs.txt entry and no run folder under the run root names it) and whose issue's ledger records the owner's rearm newer than the marker's mtime, with no pending card write: the marker is dropped (#1586), so the frontier answers the issue startable again. The card is rule R's and the dispatch count is rule O's, so U writes one line and nothing else; a live run, an older rearm and a pending card write (ADR-0165) each hold the marker. `auto/taken-*` is rule T's own case (ADR-0166) and is never read.
  V  a wave marker of a run that ended: `auto/wave-<run>`, `wave-start-<run>` and `wave-pause-<run>` stand for the run's landing pass, and the loop lands a wave only for a line of active-runs.txt. A run that left the listing can never land it again, and the marker stayed for ever (1325 of them, #2140). The pass drops the markers of a run no line names and no live process works, and names each one; a listed run's wave, and a folder a live process works, stay.
+ W  a run whose child started on a blocker's approved tip (`STACK TIP:` in its request, #2260) and whose blocker left Landing without a landing: the blocker's card reads a column before Landing and its branch tip is not in the landing branch, so the child's commits sit on a branch the base may never hold.
+    The pass stops the run, writes the killed verdict `stack_base_left_landing:#<blocker>`, drops the dispatch markers of its issues and writes the reoffer marker of each, so the frontier builds them again once the blocker is startable. A blocker still in Landing or Gating, a blocker whose work reached the landing branch, and a run cut from the base keep the run.
  X  an auto/disp-<n> or auto/bug-<n> marker whose issue reads closed is dropped (#2142): the loop dispatched the issue,
     the issue closed, and the marker stayed, so sg_dispatch_claimed read a reopened issue as already claimed and the
     frontier skipped it with no line. A marker of an open issue stays. A live run that works the issue, a taken-over
@@ -1037,6 +1039,41 @@ def dev_ci_running():   # a check on the landing branch tip has not ended: one r
         ok, out = door_read(f"repos/{repo0}/commits/{os.environ.get('SG_LAND_BRANCH') or 'dev'}/check-runs", '[.check_runs[]|select(.status!="completed")]|length')
         _devci = ok and out not in ("", "0")
     return _devci
+LANDING_COLS = {"Landing", "Gating", "Code Complete", "Closed", "Done"}   # the columns from Landing on: the blocker's work is approved and on its way
+_TIP_LINE = re.compile(r"^STACK TIP: ([0-9a-fA-F]{7,64}) \(#(\d+), a blocker in Landing\)[ \t]*$", re.M)
+# W (#2260) STACK-BASE-LEFT-LANDING: a run whose child started on a blocker's approved tip. A blocker that leaves Landing
+# without landing (its review asked for changes, an owner rearm, a failed gate) is no base: the child's commits sit on a
+# branch the base may never hold, and the landing would carry them into $SG_BASE with none of the blocker's approvals. The
+# run is stopped, one killed verdict says why, its dispatch markers are dropped and its issues get the card's way back, so
+# the frontier builds them again once the blocker is startable. A blocker whose card still reads Landing or Gating, and one
+# whose branch tip already stands in the landing branch, keep the run: its work landed, and only the card lags.
+for n, i in live.items():
+    f = livef.get(n)
+    if f is None: continue
+    mk = st / "auto" / f"janitor-stackleft-{n[-6:]}"
+    if mk.exists(): continue
+    try: req = (f / "request.txt").read_text()
+    except OSError: continue
+    m = _TIP_LINE.search(req)
+    if not m: continue   # a child cut from the base, or one stacked by a file conflict: rule W owns only the Landing stack
+    blk = m.group(2)
+    ok, cols, _h = board_read(proj)
+    if not ok: continue   # a board that did not answer moves nothing and stops nothing
+    col = cols.get(str(blk), "")
+    if not col or col in LANDING_COLS: continue
+    if any(g in ("behind", "identical") for _b, g in work_branches().get(str(blk), [])): continue   # the work reached the base
+    say(f"STACK-BASE-LEFT-LANDING {n}: blocker #{blk} sits in {col} without a landing, so the branch of {n} is stacked on "
+        + f"commits the base may never hold; stopping the run and freeing its issues")
+    if dry: continue
+    mk.touch(); mark_killed(f, f"stack_base_left_landing:#{blk}")
+    freed = req_issues(f) | i["acc"]
+    for x in sorted(freed):
+        (st / "auto" / f"reoffer-{x}").write_text(n + "\n")   # the card's way back, read by the board pass (#1034)
+        for p in (st / "auto").glob(f"disp-{x}"):
+            if owns(f, i, p): p.unlink(missing_ok=True)
+    for q in inside(f):
+        if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} is stacked on blocker #{blk}, which left Landing")
+    if i["pid"] and same_process(i["pid"], i["started_at"]): kill(i["pid"], f"last call of run {n}")
 def wave_facts(n, runs):   # the board facts of issue n whose child entered the wave of one of `runs` (the folder name or the record's run id)
     import board_facts
     work_branches()
