@@ -30,6 +30,8 @@
 #proftrip .ptn{fill:var(--fg);font-weight:600}
 #proftrip .ptlb{fill:var(--fg)}#proftrip .ptls{fill:var(--mute)}
 #proftrip .ptgap{fill:var(--bg)}#proftrip .ptfoot{color:var(--mute);font-size:var(--fs-caption);margin:8px 0 0}
+#proftrip .ptv{fill:var(--mute)}#proftrip .ptvc{fill:var(--s2)}#proftrip .ptvr{fill:var(--none)}
+#proftrip circle.ptph{fill:transparent;stroke:none;pointer-events:all}
 #proftrip text.ptlb.pts-todo{fill:var(--s5)}#proftrip text.ptlb.pts-doing{fill:var(--run)}#proftrip text.ptlb.pts-review{fill:var(--acc)}
 #proftrip text.ptlb.pts-gating{fill:var(--warn)}#proftrip text.ptlb.pts-landing{fill:var(--ok)}
 #proftrip .ptlmt{fill:var(--fg)}#proftrip .ptlmc{fill:var(--s7)}#proftrip .ptlmr{fill:var(--none)}
