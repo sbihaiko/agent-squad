@@ -127,7 +127,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_board_filter_bar.py", "tests/test_hub_board_observation.py", "tests/test_hub_board_outcomes.py", "tests/test_hub_cache_split.py", "tests/test_hub_childcc_row.py",
         "tests/test_hub_compare_cache.py", "tests/test_hub_donut_sidebar.py", "tests/test_hub_fixture_seam_defaults.py", "tests/test_hub_loop_switch_page.py", "tests/test_hub_machine_load.py",
         "tests/test_hub_mobile_board.py", "tests/test_hub_mobile_empty_columns.py", "tests/test_hub_mobile_layers.py", "tests/test_hub_mobile_lead_chart.py", "tests/test_hub_mobile_nav_shell.py",
-        "tests/test_hub_mobile_specs.py", "tests/test_hub_profiler.py",
+        "tests/test_hub_mobile_specs.py", "tests/test_hub_profiler.py", "tests/test_slot_holders.py",
         "tests/test_hub_mobile_phone_density.py",
         "tests/test_hub_mobile_push.py", "tests/test_hub_mobile_settings_theme.py", "tests/test_hub_mobile_visual_floor.py", "tests/test_hub_model_add_box.py", "tests/test_hub_model_off_switch.py", "tests/test_hub_models_version.py",
         "tests/test_hub_page_reload.py", "tests/test_hub_router_envelope.py", "tests/test_hub_router_queue_models.py", "tests/test_hub_run_share.py", "tests/test_hub_run_sheet.py",

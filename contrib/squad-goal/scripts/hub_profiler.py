@@ -1876,7 +1876,7 @@ def run_slots(invocations, caps, window_s, now, cap=None, unreadable=()):
 # minutes are the stretches the loop was draining or off while the last record still named a startable Todo card: no
 # pass writes a record while the loop is stopped, so that record speaks for the whole stretch. The fold is pure: it
 # reads the lists a caller folded from the files, never a file, a clock or GitHub.
-SLOT_WAIT_LABEL = "Who holds a run slot while Todo waits"
+SLOT_WAIT_LABEL = "Who holds a run slot while a card waits"
 SLOT_KIND_LABELS = {"doing": "A run with a card in Doing", "landing": "Finished, waiting for its landing",
                     "gates": "Waiting for a gate slot", "autobug": "An autobug run", "unknown": "An unknown holder",
                     "drained": "Loop drained or stopped"}
