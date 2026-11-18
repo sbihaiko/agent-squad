@@ -240,19 +240,9 @@ push gui/11-s; rev gui/11-s CHANGES "d.sh:2 the same finding"; r=$(OPEN="7 8 9 1
 push gui/11-s; rev gui/11-s CHANGES "d.sh:3 the same finding"; r=$(OPEN="7 8 9 11" fp)
 [ "$(n gui/11-s)" = 2 ] && ok "22 the third pass with the same finding dispatches no third fix run" || ko "22 dispatched $(n gui/11-s) fix runs: '$r'"
 case "$r" in *"BRANCHFIX STOP gui/11-s"*"stalled"*) ok "22 the stop names the branch as stalled";; *) ko "22 no stalled stop line: '$r'";; esac
-# 24) (#2309) a fix marker that names a run that never started holds its tip for ever: the janitor frees the marker of the
-#     round the run never began, and the next pass dispatches that tip again.
-: > "$T/launch.log"; push gui/40-ns; rev gui/40-ns CHANGES "v.sh:1 fix"; S40=$($O rev-parse gui/40-ns)
-mkdir -p "$T/co/runs/run-never-ns"
-printf 'CHILD — GitHub issue(s) 40 (bug)\n' > "$T/co/runs/run-never-ns/request.txt"
-touch -t 202001010000 "$T/co/runs/run-never-ns/request.txt"
-echo run-never-ns > "$T/st/active-runs.txt"
-echo run-never-ns > "$T/st/auto/branchfix-gui_40-ns-${S40:0:9}"
+# 24) (#2309) a tip whose fix marker was released (test-janitor-neverstarted.sh proves the janitor releases the marker of
+#     a never-started run) is dispatched again by the next pass. Case 2 already proves a standing marker holds its tip.
+: > "$T/launch.log"; push gui/40-ns; rev gui/40-ns CHANGES "v.sh:1 fix"
 r=$(OPEN="40" fp)
-[ "$(n gui/40-ns)" = 0 ] && ok "2309 a fix marker naming a never-started run holds its tip" || ko "2309 the held tip was dispatched: '$r'"
-cp "$d/janitor.py" "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$d/spec_fold.py" "$T/s/"
-j=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_NOTIFY=/usr/bin/true python3 -I "$T/s/janitor.py" 2>&1)
-[ -z "$(ls "$T/st/auto"/branchfix-gui_40-ns-* 2>/dev/null)" ] && ok "2309 the janitor frees the fix marker of the never-started run" || ko "2309 the marker stayed: '$(ls "$T/st/auto"/branchfix-gui_40-ns-* 2>/dev/null)' $j"
-r=$(OPEN="40" fp)
-[ "$(n gui/40-ns)" = 1 ] && ok "2309 the next pass dispatches the released tip again" || ko "2309 after the janitor: $(n gui/40-ns) dispatch(es): '$r'"
+[ "$(n gui/40-ns)" = 1 ] && ok "2309 the pass after the marker's release dispatches that tip again" || ko "2309 after the release: $(n gui/40-ns) dispatch(es): '$r'"
 exit $fail

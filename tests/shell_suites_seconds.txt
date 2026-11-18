@@ -26,7 +26,7 @@ test-board-reset.sh 1.00
 test-board-run-fields.sh 0.92
 test-board-test-case.sh 1.01
 test-board-transitions.sh 0.76
-test-branchfix-pass.sh 55.03
+test-branchfix-pass.sh 11.09
 test-branchland.sh 86.83
 test-branchreview-pass.sh 27.40
 test-branchreview.sh 14.14

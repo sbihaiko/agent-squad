@@ -4,6 +4,8 @@
 # never-started threshold, auto/bug-N present. The janitor must drop the marker and queue
 # one retry comment; a second never-started run for the same issue keeps the marker, queues
 # an evidence comment (quoting launch.log) and raises HEALTH; no third retry.
+# It also frees the auto/branchfix- marker of the fix round the run never began (#2309), and
+# only a marker that names this run.
 # Stubbed gh/notifier. usage: bash test-janitor-neverstarted.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
@@ -33,8 +35,12 @@ runj() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_N
 mkrun run-never-a 1492 autobug-x
 echo autobug-x > "$T/st/auto/bug-1492"
 echo autobug-other > "$T/st/auto/bug-900"   # only mentioned in the request body prose, never dispatched here
+echo run-never-a > "$T/st/auto/branchfix-gui_40-ns-123456789"   # (#2309) the round this run never started
+echo run-other > "$T/st/auto/branchfix-gui_41-ns-987654321"     # another run's round, not this one's
 o=$(runj)
 [ ! -e "$T/st/auto/bug-1492" ] && ok "first never-started run drops auto/bug-N" || ko "bug marker kept: $o"
+[ ! -e "$T/st/auto/branchfix-gui_40-ns-123456789" ] && ok "the never-started run frees the fix marker of the round it never began (#2309)" || ko "fix marker kept: $o"
+[ -e "$T/st/auto/branchfix-gui_41-ns-987654321" ] && ok "a fix marker naming another run stays (#2309)" || ko "another run's fix marker was freed: $o"
 [ -e "$T/st/auto/bug-900" ] && ok "an issue only named in the request body keeps its marker" || ko "freed bug-900 (mentioned in prose): $o"
 [ -z "$(ls "$T/st/cq"/*#900-*.md 2>/dev/null)" ] && ok "no comment queued for an issue named only in prose" || ko "commented on 900: $(ls "$T/st/cq" 2>/dev/null)"
 cq=$(ls "$T/st/cq"/*#1492-*.md 2>/dev/null | wc -l | tr -d ' ')
