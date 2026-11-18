@@ -803,6 +803,18 @@ def _series(bins, mean):
     return {"points": pts, "mean": round(mean, 4) if mean is not None else None}
 
 
+def _tokens_top(v):
+    """The Tokens lane's top tick: the first round 1, 2, 2.5 or 5 times a power of ten above `v`, so the lane's top
+    stands above every point and a point is never clamped to the edge (#2228)."""
+    if not _num(v) or v <= 0:
+        return 0.0
+    step = 10.0 ** int(math.floor(math.log10(v)))
+    for m in (1.0, 2.0, 2.5, 5.0, 10.0):
+        if v < m * step:
+            return round(m * step, 4)
+    return round(10.0 * step, 4)
+
+
 def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, loads=None, now=None,
                      cores=None, mem_gb=None):
     """Each drawn column's Tokens, CPU and RAM line, and the machine facts the page prints beside them.
@@ -916,9 +928,12 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
                and since <= row["at"] <= now}
     minutes = int((now - since) // LOAD_CADENCE_S) if _num(now) and now > since else 0
     # The page draws the three ticks of each lane (#2228), so the fold names them: the Tokens lane covers the highest
-    # rate any column holds, and the Machine lane a fixed 0 to 100% of the machine.
-    rates = [v for k in keys for _, v in out[k]["tokens"]["points"]]
-    top = round(max(rates), 4) if rates else 0.0
+    # rate any column holds, and the Machine lane a fixed 0 to 100% of the machine. The top tick is a round number
+    # strictly above every point, so no point sits on the lane's edge and none is clamped there.
+    rates = [v for k in keys
+             for _, v in ((out[k].get("tokens") or {}).get("points") or ())
+             if _num(v)]
+    top = _tokens_top(max(rates)) if rates else 0.0
     # A record the caller may not read is no reading at all: it asserts neither a peak nor a count of silent minutes,
     # never the whole window as a count it never made.
     return {"lines": out, "peak_load": max(peak) if peak else None,

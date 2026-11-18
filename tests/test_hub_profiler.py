@@ -1479,7 +1479,8 @@ def test_the_payload_names_the_three_ticks_of_each_lane(prof):
                     cards=[card(("Todo", 0.0, 600.0), ("Doing", 600.0, 1800.0), ("Review", 1800.0, 2400.0))],
                     calls=[[{"at": CS + 300.0, "tokens": 600}, {"at": CS + 1200.0, "tokens": 2400}]],
                     loads=[], now=CS + 3600.0)
-    assert out["tokens_ticks"] == [0, 480.0, 960.0], "the highest rate of the window, and its half, over the zero"
+    assert out["tokens_ticks"] == [0, 500.0, 1000.0], \
+        "a round ceiling above the window's highest rate, 960 a minute, and its half, over the zero"
     assert out["machine_ticks"] == [0, 50, 100], "the Machine lane's scale is the whole machine, 0 to 100%"
 
 
@@ -3213,8 +3214,8 @@ def test_the_chart_draws_a_tokens_lane_and_a_machine_lane_each_with_three_ticks(
     out = chart_svg(chart_js())
     assert ">Tokens<" in out and ">Machine<" in out, "one lane for the tokens a minute and one for the machine"
     ticks = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", out)
-    assert [t for t in ticks if t.endswith("tok/min")] == ["0 tok/min", "480 tok/min", "960 tok/min"], \
-        "three Tokens ticks, each with its unit, and the top one is the token rate the payload names"
+    assert [t for t in ticks if t.endswith("tok/min")] == ["0 tok/min", "500 tok/min", "1000 tok/min"], \
+        "three Tokens ticks, each with its unit, and the top one stands above the token rate the payload holds"
     assert [t for t in ticks if t.endswith("%")] == ["0%", "50%", "100%"], "three Machine ticks on a 0 to 100% scale"
 
 
@@ -3297,23 +3298,69 @@ def test_a_line_with_no_data_draws_nothing_there_and_the_table_prints_a_dash():
 
 
 def test_the_ram_hover_names_the_value_in_gigabytes():
-    """AC11: the RAM value in gigabytes shows on hover."""
+    """AC11: the RAM value in gigabytes shows on hover. The gigabyte reading is the machine's, so its hover is the RAM
+    legend entry; a column's RAM hover names only that column's percent, never a percent read as gigabytes."""
     src = chart_js()
-    assert re.search(r"<title>[^<]*RAM[^<]*32\.0 GB", src), \
-        "the RAM line's hover names the machine's memory in gigabytes"
+    legend = re.search(r"<i class=plk-ram></i><span([^>]*)>RAM</span>", src)
+    assert legend and "32.0 GB" in legend.group(1), "the RAM legend entry's hover names the machine's memory"
+    hovers = re.findall(r'<polyline class="ptl-ram[^"]*"[^>]*><title>([^<]*)</title>', src)
+    assert hovers, "a column that holds a RAM sample draws its RAM line"
+    assert not [h for h in hovers if "GB" in h], "no RAM percent hover claims gigabytes"
 
 
 def test_the_chart_draws_the_ticks_and_the_points_the_payload_holds():
     """AC12: the page draws what the payload holds. The ticks are the payload's own, and a column's line is its points
     placed on the column's band, never a value the page derives from another."""
     out = chart_svg(chart_js())
-    assert "960 tok/min" in out and CHART["tokens_ticks"] == [0, 480.0, 960.0]
+    assert "1000 tok/min" in out and CHART["tokens_ticks"] == [0, 500.0, 1000.0]
     band = re.search(r'<rect class="ptc pts-todo" x="([\d.]+)" width="([\d.]+)"', out)
     x0, w = float(band.group(1)), float(band.group(2))
-    pts = re.search(r'<polyline class="ptl-tok pts-todo" points="([^"]*)"', out).group(1).split()
-    assert pts == [f"{x0 + p * w:.1f},{18 + 110 * (1 - v / 960):.1f}"
-                   for p, v in CHART["columns"][0]["tokens"]["points"]], \
+    # The fixture's Todo holds one call of 600 tokens at half its run: a 480 a minute rate, drawn at its own height
+    # on the payload's 1000 a minute top tick.
+    assert CHART["columns"][0]["tokens"]["points"] == [[0.5625, 480.0]]
+    dot = re.search(r'<circle class="ptl-tok pts-todo" cx="([\d.]+)" cy="([\d.]+)"', out)
+    assert (float(dot.group(1)), float(dot.group(2))) == \
+        (pytest.approx(x0 + 0.5625 * w, abs=0.1), pytest.approx(18 + 110 * (1 - 480 / 1000), abs=0.1)), \
         "a Tokens point sits at its position in the band and its height on the payload's own scale"
+
+
+def test_a_column_line_of_one_point_draws_a_dot_and_a_longer_one_a_polyline():
+    """AC10's other side: a column with one sample of a line draws a dot there, and a line of several samples a polyline;
+    only a column with no sample draws nothing."""
+    out = chart_svg(chart_js())
+    assert re.search(r'<circle class="ptl-tok pts-todo" cx="[\d.]+" cy="[\d.]+" r=2.5>', out), \
+        "one Tokens sample draws a dot, never a polyline of one coordinate that draws nothing"
+    assert re.search(r'<polyline class="ptl-cpu pts-todo" points="[^"]+ [^"]+"', out), "eight samples draw a line"
+    assert not re.search(r'class="ptl-\w+ pts-gating"', out), "a column with no sample draws nothing"
+
+
+def test_the_fold_sets_the_tokens_top_tick_above_every_point_it_emits():
+    """AC12, and the peak the lane must never hide: the Tokens top tick is a round number strictly above every rate
+    the columns hold, so no point the fold emits reaches the lane's edge or its clamp."""
+    rates = [v for c in CHART["columns"] for _, v in c["tokens"]["points"]]
+    assert rates and CHART["tokens_ticks"][2] > max(rates) and CHART["tokens_ticks"][:2] == [0, 500.0]
+    over = {**CHART, "tokens_ticks": [0, 100.0, 200.0]}
+    assert chart_svg(chart_js(over)).count('points="') >= 1, "a malformed top tick still draws the page's lanes"
+
+
+def test_the_machine_lane_keeps_the_machines_scale_though_the_peak_stands_over_the_core_count():
+    """AC8 and the core reference the load chart lost (#2228): the sentence names a peak load above the core count, and
+    the Machine lane keeps the machine's 0 to 100% scale, never one scaled to the peak."""
+    over = {**CHART, "peak_load": 32.0, "cores": 8}
+    out = chart_js(over)
+    assert "Peak load 32.00 against saturation at 8 cores" in out, "the sentence names the peak over the core count"
+    ticks = re.findall(r"<text class=ptt[^>]*>([^<]+)</text>", chart_svg(out))
+    assert [t for t in ticks if t.endswith("%")] == ["0%", "50%", "100%"], "100% stays the machine's own top"
+    assert chart_svg(out) == chart_svg(chart_js()), "a peak above the core count moves neither scale nor point"
+
+
+def test_a_wide_column_with_no_point_on_a_line_prints_a_dash_for_that_mean():
+    """AC10 and AC12: a line with no point in a wide column reads a dash in its mean row, never a value alone."""
+    v = json.loads(json.dumps(CHART))
+    v["columns"][0]["ram"] = {"points": [], "mean": None}
+    means = dict(re.findall(r'<text class="ptlm pts-(\w+)"[^>]*>([^<]*)</text>', chart_svg(chart_js(v))))
+    assert means["todo"] == "mean 60 tok/min &middot; CPU 50.0% &middot; RAM &#8212;", \
+        "the RAM line draws nothing and its mean reads a dash"
 
 
 def test_a_refused_profiler_poll_never_stats_the_minute_record(hub, monkeypatch):

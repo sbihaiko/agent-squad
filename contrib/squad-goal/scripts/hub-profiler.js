@@ -29,7 +29,11 @@ const profPct=v=>v==null?"&#8212;":(100*v).toFixed(1)+"%";
 // deliveries draw no bar. Under the bar one tall chart draws the trip's columns as bands: a Tokens lane with one line in
 // tokens a minute, and a Machine lane with a solid CPU line and a dashed RAM line on one scale, 0 to 100% of the machine.
 // The Machine Load chart is gone: this chart's own Machine lane replaces it. The page draws only what the payload holds:
-// a width, a point, a mean, a median or a tick is the fold's, never a value this page derives.
+// a width, a point, a mean, a median or a tick is the fold's, never a value this page derives. The Tokens lane's top
+// tick stands strictly above every point the fold emits, so no point reaches the lane's edge or its clamp. A column's
+// percent hover names its own share of the machine; the machine's memory in gigabytes is the RAM legend entry's hover,
+// so no percent reading carries a gigabyte suffix. A line with no point in a column draws nothing there, one sample of a
+// line draws a dot, and a wide column's mean reads a dash for a line that holds no point.
 const profTripNum=s=>s==null?"&#8212;":profTime(s);
 const profTokens=v=>v==null?"&#8212;":String(Math.round(v));
 const PROF_TRIP_W=1000,PROF_TRIP_LANE=110,PROF_TRIP_TOP=18,PROF_TRIP_GAP=26,PROF_TRIP_LABEL=64;
@@ -42,27 +46,35 @@ function profTripChart(t,cols){
  const bands=[];let x=0;   // each column's band opens where the one before it ends, its width the fold's own share
  cols.forEach(c=>{const w=Math.max(0,c.share||0)*PROF_TRIP_W;bands.push({c,x0:x,x1:x+w,wide:(c.share||0)>=PROF_TRIP_WIDE});x+=w});
  const tokTop=PROF_TRIP_TOP,macTop=PROF_TRIP_TOP+PROF_TRIP_LANE+PROF_TRIP_GAP,chartBot=macTop+PROF_TRIP_LANE;
- const H=chartBot+PROF_TRIP_LABEL,top=(t.tokens_ticks||[])[2]||0;
+ const H=chartBot+PROF_TRIP_LABEL;
+ const ticks=Array.isArray(t.tokens_ticks)&&t.tokens_ticks.length===3?t.tokens_ticks:[],top=ticks[2]||0;
+ // The fold emits a top tick strictly above every point, so no point reaches this clamp; it only keeps a malformed
+ // payload inside the lane's box, where a point still draws rather than leaving the canvas.
  const ty=v=>tokTop+PROF_TRIP_LANE*(1-(top>0?Math.min(Math.max(v,0)/top,1):0)),my=v=>macTop+PROF_TRIP_LANE*(1-Math.min(Math.max(v,0),1));
  const tx=(b,p)=>b.x0+Math.min(Math.max(p,0),1)*(b.x1-b.x0),tick=v=>v>=10?String(Math.round(v)):String(v);
  const axis=(values,y0,unit)=>values.map(v=>`<line class=ptg0 x1="0" y1="${y0(v).toFixed(1)}" x2="${PROF_TRIP_W}" y2="${y0(v).toFixed(1)}"></line>`
   +`<text class=ptt x="${PROF_TRIP_W-4}" y="${(y0(v)-3).toFixed(1)}" text-anchor=end>${esc(tick(v)+unit)}</text>`).join("");
  const bandsOf=(y,h)=>bands.map(b=>`<rect class="ptc pts-${esc(b.c.column)}" x="${b.x0.toFixed(1)}" width="${(b.x1-b.x0).toFixed(1)}" y="${y}" height="${h}"></rect>`).join("");
  const bandAll=bandsOf(tokTop,chartBot-tokTop);   // one band per column, over both lanes, so a column reads as one block
- const lineOf=(cls,pts,y,title)=>!pts||!pts.length?""
-  :`<polyline class="${cls} pts-${esc(title.column)}" points="${pts.map(([p,v])=>`${tx(title.band,p).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"><title>${esc(title.text)}</title></polyline>`;
- const gb=t.mem_gb==null?"":`, ${Number(t.mem_gb).toFixed(1)} GB of memory`;
+ const lineOf=(cls,pts,y,title)=>{if(!pts||!pts.length)return "";   // no sample draws nothing in the column (AC10)
+  const xy=pts.map(([p,v])=>`${tx(title.band,p).toFixed(1)},${y(v).toFixed(1)}`),t=`<title>${esc(title.text)}</title>`,c=`${cls} pts-${esc(title.column)}`;
+  // One sample is data: a polyline of one coordinate draws nothing, so it draws a dot at that sample instead.
+  return pts.length===1?`<circle class="${c}" cx="${xy[0].split(",")[0]}" cy="${xy[0].split(",")[1]}" r=2.5>${t}</circle>`
+   :`<polyline class="${c}" points="${xy.join(" ")}">${t}</polyline>`};
  const drawn=bands.map(b=>{
   const c=b.c,who={column:c.column,band:b};
   const tok=lineOf("ptl-tok",c.tokens&&c.tokens.points,ty,{...who,text:`${c.label}: ${profTokens(c.tokens&&c.tokens.mean)} tokens a minute`});
   const cpu=lineOf("ptl-cpu",c.cpu&&c.cpu.points,my,{...who,text:`${c.label}: CPU ${profPct(c.cpu&&c.cpu.mean)} of the whole machine`});
-  const ram=lineOf("ptl-ram",c.ram&&c.ram.points,my,{...who,text:`${c.label}: RAM ${profPct(c.ram&&c.ram.mean)} of the whole machine${gb}`});
+  // The percent is the column's reading of the whole machine: the machine's gigabytes stay on the RAM legend entry's hover.
+  const ram=lineOf("ptl-ram",c.ram&&c.ram.points,my,{...who,text:`${c.label}: RAM ${profPct(c.ram&&c.ram.mean)} of the whole machine`});
   return tok+cpu+ram}).join("");
+ // A mean cell reads the payload's mean only where that column holds a point of the line; no point reads a dash (AC10).
+ const meanCell=(line,fmt)=>line&&line.points&&line.points.length?fmt(line.mean):"&#8212;";
  const labels=bands.map((b,i)=>{
   const txt=`${esc(b.c.label)} ${profTripNum(b.c.median_s)}`,mid=(b.x0+b.x1)/2;
   if(b.wide){   // a wide column prints the mean of each line under its name
    return `<text class="ptlb pts-${esc(b.c.column)}" x="${(b.x0+2).toFixed(1)}" y="${(chartBot+16).toFixed(1)}">${txt}</text>`
-    +`<text class="ptlm pts-${esc(b.c.column)}" x="${(b.x0+2).toFixed(1)}" y="${(chartBot+30).toFixed(1)}">mean ${profTokens(b.c.tokens&&b.c.tokens.mean)} tok/min &middot; CPU ${profPct(b.c.cpu&&b.c.cpu.mean)} &middot; RAM ${profPct(b.c.ram&&b.c.ram.mean)}</text>`}
+    +`<text class="ptlm pts-${esc(b.c.column)}" x="${(b.x0+2).toFixed(1)}" y="${(chartBot+30).toFixed(1)}">mean ${meanCell(b.c.tokens,v=>profTokens(v)+" tok/min")} &middot; CPU ${meanCell(b.c.cpu,profPct)} &middot; RAM ${meanCell(b.c.ram,profPct)}</text>`}
   const y=chartBot+30+(i%2)*14;   // the narrow labels alternate their row, so two guides never end on one line of text
   const guide=(b.c.median_s||0)>0?`<line class="ptg pts-${esc(b.c.column)}" x1="${mid.toFixed(1)}" y1="${chartBot}" x2="${mid.toFixed(1)}" y2="${(y-10).toFixed(1)}"></line>`:"";
   return guide+`<text class="ptlb pts-${esc(b.c.column)}" x="${mid.toFixed(1)}" y="${y.toFixed(1)}" text-anchor=middle>${txt}</text>`}).join("");
@@ -89,7 +101,8 @@ function profTrip(t){
   +`<td>${profTripCell(c)}</td><td>${profTripNum(c.p90_s)}</td><td>${c.observations||0}</td></tr>`).join("");
  return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the bar folds ${cols.length} segments, one per board column, in the order of the rows below.</p>`
   +`<p class=tpn>${sentence}</p>${bar}`
-  +`<p class=tpn><span class=ptlg aria-hidden=true><i class=plk-cpu></i>CPU<i class=plk-ram></i>RAM</span> Tokens a minute; CPU and RAM on one scale, 0 to 100% of the machine.</p>`
+  // The machine's memory in gigabytes is the RAM legend's hover: the percent hovers name a column's own share.
+  +`<p class=tpn><span class=ptlg aria-hidden=true><i class=plk-cpu></i>CPU<i class=plk-ram></i><span${t.mem_gb==null?"":` title="the machine holds ${Number(t.mem_gb).toFixed(1)} GB of memory"`}>RAM</span></span> Tokens a minute; CPU and RAM on one scale, 0 to 100% of the machine.</p>`
   +profTripChart(t,cols)
   +`<p class=tpn>CPU and RAM are readings of the whole machine, never of one issue alone.</p>`
   +`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Column</th><th>Tokens/issue</th><th>Mean CPU</th><th>Mean RAM</th><th>Median</th><th>p90</th><th>Observations</th></tr></thead><tbody>${rows}</tbody></table></section>`}
