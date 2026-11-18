@@ -2937,6 +2937,17 @@ def trip_view(window_s, now=None, allowed=True):
                                 mem_gb=mem_total_gb(), rework=rework,
                                 waves=[{"wave": p.parent.name, "issues": issues[p]} for p in files])}
 
+def slot_wait_view(window_s, now=None, states=None, allowed=True):
+    """The split of the Todo wait per holder kind (#2286), under the trip table of the Loop tab: the refusal records the
+    frontier wrote (`slot-refusals.jsonl`, `squad/slot_holders.py`), folded with the strip's own rows so the drained
+    minutes sit on the switch's own axis. The records are read here, and the fold is the rule layer's
+    (`hub_profiler.slot_wait`). A caller the hub refused reads no record, so its payload asserts no split."""
+    if not allowed:
+        return None
+    now = time.time() if now is None else now
+    return hub_profiler.slot_wait(hub_profiler.slot_records(_read(STATE / "slot-refusals.jsonl")),
+                                  states or (), now - hub_profiler.strip_window(window_s), now)
+
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
 PROMOTED_MAIN = re.compile(r"promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
 PROMOTE_ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")   # the date the writer puts before its marker
@@ -3134,6 +3145,8 @@ def profiler_view(a, w=None, sw=None, ww=None):
            "context": None, "last_reading": None, "interval_s": None, "failed_readings": 0,
            "processes_read": 0, "processes_seen": 0, "coverage": None,
            "trip": trip_view(window_s, now, allowed=a.allowed), "runs": profile_run_table(window_s), "runs_window_s": window_s,
+           # #2286: the split under the trip table, on the trip's own window and the strip's switch states
+           "slot_wait": slot_wait_view(window_s, now, (st or {}).get("rows"), allowed=a.allowed),
            "strip": st, "slots": slot_view(sw, now, (loop_caps() or {}).get("runs")) if a.allowed else None, "load": load,
            "runs_windows": [{"s": s, "label": hub_profiler.RUN_WINDOW_LABELS[s]} for s in hub_profiler.RUN_WINDOWS],
            "wall": wall_view(ww, now) if a.allowed else None,

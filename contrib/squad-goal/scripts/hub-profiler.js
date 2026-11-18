@@ -319,13 +319,29 @@ function profNote(v){
   +(v.coverage==null?"":v.coverage>=1?"Read every process.":`Read ${(100*v.coverage).toFixed(1)}% of the processes.`)
   +" A process that lives between two readings is not counted."}
 function profHtml(v,open,phone){
- const head=`<div class=lph><h2>Loop</h2></div>`,trip=profTrip(v.trip,phone);
+ // The split stands under the trip table and never apart from it: a view with no trip table draws no holder line.
+ const head=`<div class=lph><h2>Loop</h2></div>`,trip=profTrip(v.trip,phone),slots=profSlotWait(v.trip?v.slot_wait:null);
  // The switch ends the page: the readings stand above it, and the switch that turns them on or off follows them (owner ask).
  const foot=`<div class=lph id=proffoot>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>${!v.write&&v.reason?`<p class=lpr>${esc(v.reason)}</p>`:""}`;
- if(!v.on||!v.tree)return head+trip+foot;   // the file views read files only, so the switch does not gate them
+ if(!v.on||!v.tree)return head+trip+slots+foot;   // the file views read files only, so the switch does not gate them
  const rows=[];profRows(v.tree,v.tree.name,1,open,rows);
- return head+trip+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
+ return head+trip+slots+`<table id=proft role=treegrid aria-label="Hot spots of the loop"><thead><tr><th title="the node's share of the loop's CPU time in the window, with its children">Hot spot</th><th title="CPU seconds of the node's own processes">Self time</th><th title="CPU seconds of the node with its children; the rows sort by it">Total time</th><th title="the starts the sampler observed under the node, a second over the window; a lower bound, because a process that lives between two readings is not seen">Starts/s (lower bound)</th></tr></thead><tbody>${rows.join("")}</tbody></table>`
   +(v.context?profCtx(v.context,open):"")+foot}
+// The split of the wait for a free run slot per holder kind (#2286): under the trip table, one line per holder kind, the largest first.
+// Each line is the minutes a startable card waited while that kind held a run slot, and the passes that named it. The writer
+// is the frontier pass itself, so the page starts no measure of its own; the rule layer words every label and orders the
+// lines, and the view only prints them.
+function profSlotWait(s){
+ if(!s)return "";
+ const rows=s.lines||[],n=s.refusals||0,span=profTime(s.window_s||0);
+ const head=`<h3>${esc(s.label||"Who holds a run slot while a card waits")}</h3>`;
+ // The drained minutes sit apart from the holder lines: no run held the slot then, the loop itself stopped dispatching.
+ const dr=Number(s.drained_minutes)||0,drain=dr>0?` The loop was drained or stopped for ${profTime(dr*60)} of that wait.`:"";
+ if(!rows.length)return `<section id=profslots>${head}<p class=tpn>${n===0?`No refused dispatch was recorded in the last ${span}, so no holder is named.`:`${n} refusal${n===1?"":"s"} in the last ${span}, and no holder kind carried a minute.`}${drain}</p></section>`;
+ const sub=`${n} refusal${n===1?"":"s"} in the last ${span}: each line is the minutes a startable card waited while that kind held a run slot.${drain}`;
+ const body=rows.map(l=>`<tr data-p="slot/${esc(l.kind)}"><td class=pnm>${esc(l.label||l.kind)}</td><td>${profTime((l.minutes||0)*60)}</td><td>${l.passes||0}</td></tr>`).join("");
+ return `<section id=profslots>${head}<p class=tpn>${sub}</p>`
+  +`<table id=profsl aria-label="Who holds a run slot while a card waits, a holder kind a row"><thead><tr><th>Holder</th><th>Wait</th><th>Refusals</th></tr></thead><tbody>${body}</tbody></table></section>`}
 // profiler:end
 let profV=null,profErr="",profPhone=false;const profOpen=new Set();   // profPhone: the page the render draws for (the phone drops the load chart, #2229)
 function profDraw(){if(!profV)return;const b=document.getElementById("profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");

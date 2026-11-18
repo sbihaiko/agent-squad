@@ -24,6 +24,7 @@ it answers, is a lower bound.
 import collections
 import functools
 import importlib.util
+import json
 import math
 import pathlib
 import re
@@ -1866,3 +1867,87 @@ def run_slots(invocations, caps, window_s, now, cap=None, unreadable=()):
     return {"window_s": w, "start": start, "end": end, "label": SLOTS_LABEL,
             "cap": ceilings[-1]["cap"] if ceilings else (cap if isinstance(cap, int) and not isinstance(cap, bool) else None),
             "rows": rows, "ceilings": ceilings, "gaps": gaps, "peak": peak, "top": max(max(vals), 1)}
+
+
+# The slot holders (#2286): the split of the Todo wait per holder kind, under the trip table of the Loop tab. The
+# frontier pass writes one record per refusal for "no slot" (`squad/slot_holders.py`), and this fold reads them: each
+# record speaks from its own instant to the next one, and the last to now, one gap cap at most. A kind the record names
+# holds a slot for the whole stretch, so its minutes are the minutes of Todo wait while it held one. The drained
+# minutes are the stretches the loop was draining or off while the last record still named a startable Todo card: no
+# pass writes a record while the loop is stopped, so that record speaks for the whole stretch. The fold is pure: it
+# reads the lists a caller folded from the files, never a file, a clock or GitHub.
+SLOT_WAIT_LABEL = "Who holds a run slot while a card waits"
+SLOT_KIND_LABELS = {"doing": "A run with a card in Doing", "landing": "Finished, waiting for its landing",
+                    "gates": "Waiting for a gate slot", "autobug": "An autobug run", "unknown": "An unknown holder",
+                    "drained": "Loop drained or stopped"}
+SLOT_KIND_ORDER = ("doing", "landing", "gates", "autobug", "unknown", "drained")   # the order ties keep
+SLOT_GAP_CAP_S = 900   # a refusal record speaks for the wait after it, at most this long: a stale file claims no hours
+# A drained stretch is one no pass dispatches in: the loop drains, is off, or is silent past the strip's own bound while
+# the switch says on. A `gap` names a stretch no source covers, which is no evidence of a wait and so is never drained.
+DRAINED_STATES = frozenset(("draining", "off", "down"))
+
+
+def slot_records(text):
+    """The refusal records of the file's text, in order. A line the reader cannot parse, and a line with no instant, is
+    dropped whole, so a half-written line is no record and never stops the reader."""
+    out = []
+    for raw in (text or "").splitlines():
+        try:
+            r = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and isinstance(r.get("at"), (int, float)) and not isinstance(r.get("at"), bool):
+            out.append(r)
+    return out
+
+
+def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
+    """`(records, states, since, now)` -> the Todo wait of the window per holder kind, the largest first.
+
+    `records` is one dict per refusal record (`at`, `free`, `cap`, `todo`, `holders` of `{name, kind}`), `states` the
+    strip's rows (`start`, `end`, `state`) of the same window. A record outside `[since, now]` is no part of the
+    window. Each record covers its own instant to the next record's, to `now`, or one `gap_cap` at most, whichever is
+    first, and every kind it names adds those minutes. A drained stretch adds its own minutes when the last record at
+    or before its end names a startable Todo card (`todo` above zero): no pass writes a record while no dispatch runs,
+    so that record speaks for the whole stretch, and it speaks even when it stands before the window's start.
+    `lines` holds one row per kind with minutes, the kind's own order breaking a tie, and `drained` is counted in the
+    `drained_minutes` field as well, because the page names it apart.
+    """
+    rows = sorted((r for r in records
+                   if isinstance(r, dict) and isinstance(r.get("at"), (int, float)) and not isinstance(r.get("at"), bool)
+                   and since <= r["at"] <= now), key=lambda r: r["at"])
+    # The drained evidence spans the whole file, not the window: a refusal written before the window still says whether a
+    # card waited when the loop stopped inside it.
+    everything = sorted((r for r in records
+                         if isinstance(r, dict) and isinstance(r.get("at"), (int, float))
+                         and not isinstance(r.get("at"), bool)), key=lambda r: r["at"])
+    minutes = {k: 0.0 for k in SLOT_KIND_ORDER}
+    passes = {k: 0 for k in SLOT_KIND_ORDER}
+    for i, r in enumerate(rows):
+        end = min(now, r["at"] + gap_cap, rows[i + 1]["at"] if i + 1 < len(rows) else now)
+        span = max(0.0, end - r["at"]) / 60.0
+        kinds = {h.get("kind") for h in (r.get("holders") or ()) if isinstance(h, dict)}
+        for k in kinds:
+            if k not in minutes: continue
+            minutes[k] += span
+            passes[k] += 1
+    drained, drained_rows = 0.0, 0
+    for st in states or ():
+        if not isinstance(st, dict) or st.get("state") not in DRAINED_STATES: continue
+        a, b = st.get("start"), st.get("end")
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)) or isinstance(a, bool) or isinstance(b, bool):
+            continue
+        a, b = max(a, since), min(b, now)
+        if b <= a: continue
+        before = [r for r in everything if r["at"] <= b]
+        if before and _num(before[-1].get("todo")) and before[-1]["todo"] > 0:
+            drained += (b - a) / 60.0
+            drained_rows += 1
+    if drained > 0:
+        minutes["drained"] = drained
+        passes["drained"] = drained_rows
+    lines = [{"kind": k, "label": SLOT_KIND_LABELS[k], "minutes": round(minutes[k], 1), "passes": passes[k]}
+             for k in SLOT_KIND_ORDER if minutes[k] > 0]
+    lines.sort(key=lambda line: (-line["minutes"], SLOT_KIND_ORDER.index(line["kind"])))
+    return {"window_s": max(0.0, now - since), "label": SLOT_WAIT_LABEL, "refusals": len(rows),
+            "drained_minutes": round(drained, 1), "lines": lines, "gap_cap_s": gap_cap}

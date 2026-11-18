@@ -107,5 +107,48 @@ four; run
 [ "$(spent)" = "$seed" ] && ok "the request names the seed's dispatch budget" || ko "the request names '$(spent)', not the seed's '$seed'"
 $G -q 'spend 8' "$MKLOG.body" && ko "the request still carries the hardcoded spend 8" || ok "no hardcoded spend 8 survives"
 
+# 3) (#2286) A pass that refuses a startable card for "no slot" writes the slot-holder record from the counters it already
+#    reads: the record names the slot count it left and the cards waiting in Todo, so the Loop page can split the wait.
+scene slots
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four; run
+rec=$d/st/slot-refusals.jsonl
+if [ -f "$rec" ]; then
+  [ "$(tail -1 "$rec" | jq -r '.todo')" = 4 ] && ok "the refusal writes the slot-holder record with the four cards waiting" || ko "the record names '$(tail -1 "$rec" | jq -r '.todo')' cards, not the four in Todo"
+  [ "$(tail -1 "$rec" | jq -r '.cap')" = 1 ] && ok "the record names the run cap the pass read" || ko "the record names cap '$(tail -1 "$rec" | jq -r '.cap')', not the pass's 1"
+else
+  ko "a pass that refused a startable card for no slot wrote no slot-holder record"
+fi
+
+# 4) (#2286) The record names each holder of a run slot, resolved from the state dir and the checkout the pass names: one
+#    live run holds the only slot, so every Todo card waits, and the record names that run and its kind.
+scene holders
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+mkdir -p "$d/co/runs/run-live"
+printf '{"event":"run_start"}\n' > "$d/co/runs/run-live/record.jsonl"
+printf 'x\n' > "$d/co/runs/run-live/request.txt"
+printf 'run-live\n' > "$d/st/active-runs.txt"
+four; run
+rec=$d/st/slot-refusals.jsonl
+if [ -f "$rec" ]; then
+  [ "$(tail -1 "$rec" | jq -r '.holders|length')" = 1 ] && ok "the record names the one holder of the pass's only run slot" || ko "the record names '$(tail -1 "$rec" | jq -r '.holders|length')' holders, not the one live run"
+  [ "$(tail -1 "$rec" | jq -r '.holders[0].name')" = run-live ] && ok "the holder is the run the state dir's active list names" || ko "the holder is '$(tail -1 "$rec" | jq -r '.holders[0].name')', not run-live"
+  [ "$(tail -1 "$rec" | jq -r '.holders[0].kind')" = doing ] && ok "a live run with no verdict holds the slot in Doing" || ko "the holder's kind is '$(tail -1 "$rec" | jq -r '.holders[0].kind')', not doing"
+  [ "$(tail -1 "$rec" | jq -r '.free')" = 0 ] && ok "the record names the zero free slots the holder leaves" || ko "the record names '$(tail -1 "$rec" | jq -r '.free')' free slots, not the holder's 0"
+else
+  ko "a pass that refused a startable card for no slot wrote no slot-holder record for its holder"
+fi
+
+# 5) (#2286) A record the pass cannot write is named on stderr and never fails the pass: a measure is no gate.
+scene unwritable
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+mkdir -p "$d/co/runs/run-live"; printf '{"event":"run_start"}\n' > "$d/co/runs/run-live/record.jsonl"; printf 'x\n' > "$d/co/runs/run-live/request.txt"; printf 'run-live\n' > "$d/st/active-runs.txt"   # the slot is held, so the pass refuses a card for "no slot" and writes the record
+mkdir -p "$d/fk"; cp -R "$repo/squad" "$d/fk/squad"; cp -R "$repo/config" "$d/fk/config"
+printf 'def record_pass(*a, **k):\n    raise RuntimeError("the record could not be written")\n' > "$d/fk/squad/slot_holders.py"
+four
+out=$(SG_SQUAD=$d/fk SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1); rc=$?
+case "$out" in *"FRONTIER: the slot-holder record was not written"*) ok "a failed record is named on stderr";; *) ko "a failed record is silent: '$out'";; esac
+[ "$rc" = 0 ] && ok "a failed record never fails the pass" || ko "a failed record ended the pass with $rc"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
