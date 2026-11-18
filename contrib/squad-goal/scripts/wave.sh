@@ -20,6 +20,11 @@
 # final push (the wave's landing pass), never between entries: between them the tip moves only by a child that entered.
 # A child whose own commits and a sibling's commits in the wave change one file never enters (#1434): the entry reads the two
 # diffs, not the issue bodies, so a file neither body names is a conflict before the wave, not a conflict at the landing.
+# A child's gate can fail on a red the base carries, not on the child's change: the run cut its wave from a base that has moved
+# since, and the fix for that red may be in the current base. When the entry gate fails, the entry rebases the child on the
+# current $SG_BASE once and runs the gate again on that tree (#2272): a pass lets the child enter, and a red on the rebased tree
+# requeues it as before. The entry record and the requeue line name each failed test and say whether the base tip fails it too.
+# A rebase that conflicts holds the child where it stands with its commits kept, and requeues nothing.
 #
 # The gates are the profile's SG_WAVE_GATES: by default the fast gate (fast-gate.sh): ruff, mypy, the fast battery and the shell suites of the scripts the child changes. `start` works in a
 # throwaway clone, never in a checkout of the owner's, as ffland.sh does. `enter` runs where the child works, so it reads
@@ -704,7 +709,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # base is read here, not left to the caller's shell: the sibling check below compares a diff against origin/$base, and an
   # unset base would silently disable it (#1434 review).
   local run=$1 iss=$2 w br sha files out SG_REQUEUE_RUN=$1 base=${SG_BASE:-dev}; w=$(wave_of "$run")
-  local obl="" gwhy="" gnot="" grc=0 reuse="" skipped=""
+  local obl="" gwhy="" gnot="" grc=0 reuse="" skipped="" prior="" baseretried=0 firstrs="" rebsha=""
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
@@ -821,6 +826,70 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
          refuse "the diff of a sibling in $w changes the same file ($list): a merge_conflict of one wave, so the child waits for a run that builds it alone"; return 1;;
     esac
   }
+  # failed_ids <reason>: the test ids a gate's reason names, one per line, in pytest's `path::case` shape. A reason that names
+  # none (a lint, a type, a shell suite) gives no line, and no base answer is asked for it.
+  failed_ids() { printf '%s\n' "$1" | tr ' \t' '\n\n' | /usr/bin/grep -E '^[^: ]+\.py::[^ ]+$' | LC_ALL=C sort -u; }
+  # base_fails <id>...: the named tests the base tip fails, one per line. Exit 0: every named test passes at the base tip;
+  # 2: the base tip was measured, and the ids it named are the ones it fails (none named: it was told apart by the caller);
+  # 1: the base tip was not measured (its ref does not resolve, the worktree cannot be made, or the run answered nothing).
+  # The run happens in a detached worktree of the child's own repository at origin/<base>. SG_WAVE_BASE_PYTEST replaces the
+  # command, which runs in that worktree and reads the ids in SG_WAVE_BASE_IDS.
+  base_fails() {
+    local d lg rc
+    d=$(mktemp -d "${TMPDIR:-/tmp}/wave-base.XXXXXX" 2>/dev/null) || return 1
+    if ! $G worktree add -q --detach "$d" "origin/$base" >/dev/null 2>&1; then rm -rf "$d"; return 1; fi
+    if [ -n "${SG_WAVE_BASE_PYTEST:-}" ]; then
+      lg=$(cd "$d" && SG_WAVE_BASE_IDS="$*" bash -c "$SG_WAVE_BASE_PYTEST" 2>&1); rc=$?
+    else
+      lg=$(cd "$d" && "$py" -m pytest -p no:deepeval -q "$@" 2>&1); rc=$?
+    fi
+    $G worktree remove --force "$d" >/dev/null 2>&1; rm -rf "$d"
+    [ "$rc" = 0 ] && return 0
+    printf '%s\n' "$lg" | sed -n -e 's/^FAILED \([^ ]*\).*/\1/p' -e 's/^ERROR \([^ ]*::[^ ]*\).*/\1/p' | LC_ALL=C sort -u
+    return 2
+  }
+  # base_verdict <id>...: one clause per named test, joined by "; ", saying whether the base tip fails it. The base runs once,
+  # with every named test together, so the record answers each test without one run per test.
+  base_verdict() {
+    local reds src=0 id out=""
+    [ $# -gt 0 ] || return 0
+    reds=$(base_fails "$@") || src=$?
+    case "$src" in
+      1) printf 'the base tip was not measured'; return 0;;
+      2) [ -n "$reds" ] || { printf 'the base tip was not measured'; return 0; };;
+    esac
+    for id in "$@"; do
+      if printf '%s\n' "$reds" | /usr/bin/grep -qxF -- "$id"; then out="$out${out:+; }$id: the base tip fails it"
+      else out="$out${out:+; }$id: the base tip passes it"; fi
+    done
+    printf '%s' "$out"
+  }
+  # rebase_on_base (#2272): one rebase of the child on the current base, so a gate that failed on a base the base itself has
+  # fixed since is measured again on the newer tree (ADR-0164: a pass on a descendant that fixed the red releases it).
+  # Exit 0: the child is on the current base. Exit 1: the rebase conflicts or fails, so the child is held where it stands
+  # with its commits kept, and no gate runs on a tree the rebase did not settle.
+  rebase_on_base() {
+    $G fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>/dev/null || {
+      hold "the base $base is not on $remote, so the child cannot be rebased on it after a red gate"; return 1; }
+    $G rev-parse -q --verify "origin/$base" >/dev/null 2>&1 || {
+      hold "the base $base does not resolve after the fetch, so the child cannot be rebased on it after a red gate"; return 1; }
+    if ! out=$($G rebase "origin/$base" 2>&1); then
+      files=$($G diff --name-only --diff-filter=U | tr '\n' ' '); $G rebase --abort >/dev/null 2>&1
+      if [ -n "$files" ]; then hold "the rebase on $base conflicts: ${files% }; its commits are kept, not requeued"
+      else hold "the rebase on $base failed: $(printf '%s\n' "$out" | /usr/bin/grep -v '^[[:space:]]*$' | tail -1)"; fi
+      return 1
+    fi
+    return 0
+  }
+  # red_note <reason>: the clause the entry record carries for a gate that failed: each failed test named, and the base tip's
+  # own answer for it (#2272). Prints nothing when the reason names no test.
+  red_note() {
+    local ids vd
+    ids=$(failed_ids "$1")
+    [ -n "$ids" ] || return 0
+    vd=$(base_verdict $ids)
+    printf 'failed tests: %s; %s' "$(printf '%s' "$ids" | tr '\n' ' ' | sed 's/ $//')" "$vd"
+  }
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
   # They run under the machine-wide gate lock (#392), in try mode (#575): the fast lane runs the childcc pass, which makes the entry, in the
@@ -853,29 +922,65 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       SG_GATE_CALLER=entry bash "$here/gate.sh" --skip fast "$($G rev-parse HEAD)" >/dev/null 2>&1
       skipped=1; return 0
     fi
-    of=$(mktemp "${TMPDIR:-/tmp}/wave-outcome.XXXXXX" 2>/dev/null) || of=
-    [ -z "$of" ] || : > "$of"
-    # SG_GATE_CARD names the card this gate answers for: its attempt is journaled and projected to Gate Tries (#1255).
-    # SG_GATE_WAVE names the wave the gate is for, so the wave's Gating fact reads it (#1257).
-    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_CALLER=entry SG_GATE_ENTRY_MODE=gated SG_GATE_KIND=fast SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
-    oc= rs= ran= notran=
-    [ -z "$of" ] || IFS=$'\t' read -r oc rs ran notran < "$of" 2>/dev/null
-    [ -z "$of" ] || rm -f "$of"
-    obl=""; gwhy=""; gnot=""
-    if [ $grc = 73 ] && h=$(held_by "$out"); then
-      case "$h" in slots:*) hold "the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
-        landing) hold "the landing's gate is queued ahead of this one (#1858); the child enters on a later pass";;
-        *) hold "the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
-    [ $grc = 75 ] && waited_out "$out" && { hold "the local gates waited for the gate lock past their bound; the child enters on a later pass"; return 1; }
-    case "$oc" in
-      pass) return 0;;
-      unproven) obl=$(obligation_of "$($G rev-parse HEAD)"); gwhy=$rs; gnot=$notran; return 0;;
-      fail) refuse "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1;;
-    esac
-    # No word: a memo hit writes none and is always a pass (#955); fast-gate's 2 and 4 are its unproven codes (spec 1163).
-    [ $grc = 0 ] && return 0
-    case "$grc" in 2|4) obl=$(obligation_of "$($G rev-parse HEAD)"); gwhy=$rs; gnot=$notran; return 0;; esac
-    hold "the local gates reported no outcome (exit $grc); the child enters on a later pass"; return 1
+    while :; do
+      of=$(mktemp "${TMPDIR:-/tmp}/wave-outcome.XXXXXX" 2>/dev/null) || of=
+      [ -z "$of" ] || : > "$of"
+      # SG_GATE_CARD names the card this gate answers for: its attempt is journaled and projected to Gate Tries (#1255).
+      # SG_GATE_WAVE names the wave the gate is for, so the wave's Gating fact reads it (#1257).
+      out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_CALLER=entry SG_GATE_ENTRY_MODE=gated SG_GATE_KIND=fast SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
+      oc= rs= ran= notran=
+      [ -z "$of" ] || IFS=$'\t' read -r oc rs ran notran < "$of" 2>/dev/null
+      [ -z "$of" ] || rm -f "$of"
+      obl=""; gwhy=""; gnot=""
+      if [ $grc = 73 ] && h=$(held_by "$out"); then
+        case "$h" in slots:*) hold "the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
+          landing) hold "the landing's gate is queued ahead of this one (#1858); the child enters on a later pass";;
+          *) hold "the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
+      [ $grc = 75 ] && waited_out "$out" && { hold "the local gates waited for the gate lock past their bound; the child enters on a later pass"; return 1; }
+      case "$oc" in
+        pass)
+          # (#2272) A pass on the tree the rebase made follows a red the wave tip carried: the entry record names that red,
+          # each test it reported, and the base tip's own answer for each, so a reader sees the base's red was not the child's.
+          if [ -z "$prior" ] && [ -n "$firstrs" ]; then
+            prior="the entry gate failed on the wave tip at ${rsha:0:9}: $firstrs"
+            local rn; rn=$(red_note "$firstrs"); [ -z "$rn" ] || prior="$prior; $rn"
+            prior="$prior; the child was rebased on $base at ${rebsha:0:9} once, and the gate passed on the rebased tree"
+          fi
+          return 0;;
+        unproven)
+          if [ -z "$prior" ] && [ -n "$firstrs" ]; then
+            prior="the entry gate failed on the wave tip at ${rsha:0:9}: $firstrs"
+            local rn; rn=$(red_note "$firstrs"); [ -z "$rn" ] || prior="$prior; $rn"
+            prior="$prior; the child was rebased on $base at ${rebsha:0:9} once, and the gate carried its obligation from that tree"
+          fi
+          obl=$(obligation_of "$($G rev-parse HEAD)"); gwhy=$rs; gnot=$notran; return 0;;
+        fail)
+          # (#2272) A red at the entry may be the base's red, not the child's: the wave was cut from a base that has moved
+          # since, and the fix for this red may be on the current base. One rebase on origin/<base> and one re-measure decide
+          # it (ADR-0164: a pass on a descendant that fixed the red releases it). The record names each failed test and
+          # whether the base tip fails it. A red on the rebased tip requeues the child, as before.
+          if [ "$baseretried" = 0 ] && [ "${SG_WAVE_ENTRY_BASE_RETRY:-1}" != 0 ]; then
+            baseretried=1; firstrs=$rs; reuse=""; skipped=""
+            rebase_on_base || return 1
+            rebsha=$($G rev-parse HEAD)
+            continue
+          fi
+          local why rn line
+          # The gate's own word carries the failed tests (fast-gate names them in its reason); a bare `exit N` carries
+          # nothing, so the gate's last line is read instead, as before.
+          case "$rs" in ''|'-'|exit\ [0-9]*) line=$(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)
+            why="the local gates failed: ${line:-${rs:-no answer}}";;
+            *) why="the local gates failed: $rs";; esac
+          rn=$(red_note "$rs"); [ -z "$rn" ] || why="$why; $rn"
+          [ -z "$firstrs" ] || [ "$firstrs" = "$rs" ] || why="$why; the first gate failed on the wave tip at ${rsha:0:9}: $firstrs"
+          [ -z "$rebsha" ] || why="$why; the child was rebased on $base at ${rebsha:0:9} once, and the gate ran again on that tree: red again"
+          refuse "$why"; return 1;;
+      esac
+      # No word: a memo hit writes none and is always a pass (#955); fast-gate's 2 and 4 are its unproven codes (spec 1163).
+      [ $grc = 0 ] && return 0
+      case "$grc" in 2|4) obl=$(obligation_of "$($G rev-parse HEAD)"); gwhy=$rs; gnot=$notran; return 0;; esac
+      hold "the local gates reported no outcome (exit $grc); the child enters on a later pass"; return 1
+    done
   }
   rebase_on_tip || return $?
   gates || return 1
@@ -896,6 +1001,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       # An entry that ran no battery is no silent skip either (#1800): its record says the entry gate is off, and the wave's
       # landing gate is what proves the child.
       [ -z "$skipped" ] || cause="$cause; skipped: the entry gate is off (SG_WAVE_ENTRY_GATE=off), so no battery ran at the entry"
+      # (#2272) An entry that passed only after the rebase carries the red it first met and the base tip's answer for each
+      # test, so no reader takes the entry for a clean pass on the wave tip.
+      [ -z "$prior" ] || cause="$cause; $prior"
       if [ -n "$obl" ]; then
         local oba och osc odl
         IFS=$'\t' read -r _ _ oba och osc odl < "$obl" 2>/dev/null
