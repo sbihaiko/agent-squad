@@ -76,6 +76,20 @@ def test_a_test_that_imports_from_a_selected_test_selects_that_test_too(tmp_path
     assert select(repo) == ["tests/test_flow.py", "tests/test_gamma.py", "tests/test_survival.py"]
 
 
+def test_a_script_reached_through_an_imported_test_helper_selects_the_tests_that_import_it(tmp_path):
+    """#2239: a helper test module names a script by a path literal, and another test runs the script through that helper.
+    A change to the script selects the helper, so the test that imports the helper runs with it."""
+    repo = tip(tmp_path, {"contrib/squad-goal/scripts/janitor.py": "print('bye')\n"}, extra={
+        "contrib/squad-goal/scripts/janitor.py": "print('hi')\n",
+        "tests/test_card_done_base.py": "from pathlib import Path\n"
+                                        "SCRIPTS = Path(__file__).resolve().parents[1] / 'contrib/squad-goal/scripts'\n"
+                                        "\ndef janitor():\n    return SCRIPTS / 'janitor.py'\n",
+        "tests/test_pass_deadline.py": "from tests.test_card_done_base import janitor\n"
+                                       "\ndef test_janitor():\n    assert janitor()\n",
+    })
+    assert select(repo) == ["tests/test_card_done_base.py", "tests/test_pass_deadline.py"]
+
+
 def test_a_changed_test_file_selects_itself(tmp_path):
     repo = tip(tmp_path, {"tests/test_gamma.py": "from squad.gamma import VALUE\nX = 1\n"})
     assert select(repo) == ["tests/test_gamma.py"]
