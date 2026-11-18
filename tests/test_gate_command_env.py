@@ -152,29 +152,31 @@ def folded(tmp_path, cmd):
 
 def test_an_entry_gate_at_exit_four_with_no_red_folds_to_completed_unproven(tmp_path):     # #2337
     # The fast gate answers exit 4 on a line that names no red and carries no pytest summary: the bounded-attempt line
-    # (#1527) is one of them. The gate measured nothing, so it is unproven (ADR-0164), and a run whose only failing
-    # outcome is unproven completes with unproven:<node> instead of failing and losing its commits.
+    # (#1527) is one of them. Its `fast-gate:` line is the gate's own mark, so the exit is read as the gate's. The gate
+    # measured nothing, so it is unproven (ADR-0164), and a run whose only failing outcome is unproven completes with
+    # unproven:<node> instead of failing and losing its commits.
     cmd = f"echo {shlex.quote(BOUNDED_ALREADY_LINE)}; exit 4"
     r, v = folded(tmp_path, cmd)
-    assert r.outcome == "unproven", r.findings
+    assert r.ok and r.outcome == "unproven", r.findings
     assert (v.verdict, v.exit_code) == ("completed", 0), v.reasons
     assert v.reasons == ["unproven:final_gate"]
 
 
 def test_a_measured_red_at_exit_four_still_folds_to_failed(tmp_path):     # #2337
     # A measurement that names a red is never released by the exit code: the defect holds the run (ADR-0164).
-    cmd = "printf 'FAIL contrib/squad-goal/scripts/test-x.sh::case\\n'; exit 4"
+    cmd = "printf 'FAILED contrib/squad-goal/scripts/test-x.sh::case\\n'; exit 4"
     r, v = folded(tmp_path, cmd)
-    assert r.outcome == "fail" and (v.verdict, v.exit_code) == ("failed", 1), v.reasons
+    assert not r.ok and r.outcome == "fail" and (v.verdict, v.exit_code) == ("failed", 1), v.reasons
     assert any(reason.startswith("ac-verify:ac_failed:") for reason in v.reasons), v.reasons
 
 
-def test_an_exit_four_with_no_summary_and_no_red_is_unproven(tmp_path):     # #2337
-    # The gate's own words are not required: an exit-4 line that names no red carries no such word, and the run must not
-    # lose the commits of a measurement that never happened. A summary or a named red still makes it a measured failure.
-    r = run(tmp_path, "sh -c 'exit 4'")
-    assert r.ok and r.outcome == "unproven"
-    assert r.findings == ["unproven:sh -c 'exit 4'"]
+def test_an_exit_four_outside_the_gate_is_a_measured_failure(tmp_path):     # #2337
+    # The exit code alone is not the gate's: any command may exit 4 by design, and a hard error that measured a real
+    # defect must never be released as unproven. Only the gate's own `fast-gate:` line proves the exit is the gate's,
+    # so a bare exit 4 with no such line stays a measured failure and the run still fails.
+    r = run(tmp_path, "sh -c 'echo hard-error; exit 4'")
+    assert not r.ok and r.outcome == "fail"
+    assert r.findings[0].startswith("ac_failed:")
 
 
 def test_a_measured_shell_red_at_exit_four_is_not_unproven(tmp_path):     # #1825
