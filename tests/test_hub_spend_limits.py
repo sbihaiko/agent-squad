@@ -293,6 +293,7 @@ def lim_eval(hub, script):
 const STORE={};
 const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",className:""});
 const setBar=()=>{};
+let RO=false;const RO_WHY="";   // the page's read-only switch, which the write path reads as it loads (#2433)
 """
     body = "\n".join([harness, esc.group(0), tk.group(0), sett, lim, script])
     p = subprocess.run(["node", "-"], input=body, capture_output=True, text=True, timeout=60)

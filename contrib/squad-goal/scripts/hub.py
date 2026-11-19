@@ -7471,7 +7471,9 @@ async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)retu
  if(kanSent[name]===val){if(kanBad===name){kanBad="";kanBadMsg="";limRender()}return {skip:true}}   // the last write posted this column's value already (#2433)
  let d;try{d=send?await send({columns:body,confirm:true}):await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:body,confirm:true})})).json()}catch(x){d={err:"save failed"}}
  if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";delete kanSent[name]}
- else{kanS=d.state||kanS;kanDraft=kanClone(kanS.columns||[]);kanBad="";kanBadMsg="";kanOK=name;kanVal=String(body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
+ else{kanS=d.state||kanS;const st=(kanS&&kanS.columns)||[],landed=st.find(x=>x.name===name);
+  kanDraft=kanCols().map(c=>{const s=st.find(x=>x.name===c.name);return s?{...c,max_cards:c.name===name?s.max_cards:c.max_cards,count:s.count}:c});   // the landed column folds into the draft, so another column's staged edit stays and its count moves on (#2433)
+  kanBad="";kanBadMsg="";kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban <small id=kanchip>${esc(kanChip())}</small></h3>`
