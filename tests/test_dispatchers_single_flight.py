@@ -60,7 +60,7 @@ def _scripts(tmp_path, cluster_sleep):
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
     for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py",
-                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py", "loopbug.sh", "basered.sh",
+                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py", "loopbug.sh", "basered.sh", "columnlimit.sh",
                  "skiplabels.sh"):
         (d / name).write_text((SCRIPTS / name).read_text())
     # The test sets every SG_* it needs, and the dispatchers read the lane skip set from the helper their env.sh sources (#1593).
