@@ -34,7 +34,11 @@ G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 # The scripts a case runs: one copy of this checkout's scripts, by a list.
 for f in wave.sh issue_ledger.py ghread.py wavepause.py child_issues.py address.sh caps.sh serial.sh  \
   ghcall.sh drainpolicy.py base-battery.sh basecheck.sh fast-gate.sh quality-reading.py siblings.py  \
-  cluster.py autohunt.sh revformat.py gate.sh; do cp "$d/$f" "$T/s/"; done 2>/dev/null
+  cluster.py autohunt.sh revformat.py gate.sh columnlimit.sh; do cp "$d/$f" "$T/s/"; done 2>/dev/null
+# The one board read of the wave's Testing bound (#2439): a case sets SG_BOARD_ROWS to a file of "<issue>\t<column>" rows, and a
+# case that sets none reads a board that answers no card. The read is issue_state.py beside the scripts, and the stub refuses
+# every option, so a caller that starts reading by another route fails here instead of passing on a silent empty answer.
+printf '#!/usr/bin/env python3\nimport os, sys\nif len(sys.argv) > 1:\n    sys.exit(1)\nf = os.environ.get("SG_BOARD_ROWS")\nif f and os.path.exists(f):\n    sys.stdout.write(open(f).read())\n' > "$T/s/issue_state.py"
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 # A capped run here is an ended run: the retirement an age-cap requeue waits for (#1970) is test-wave-retire.sh's, and here
 # a stub proves the end at once, so no process table is read and no process is signalled.

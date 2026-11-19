@@ -58,7 +58,8 @@ COLUMN_STOP = {"Backlog": "the spec and ticket publish adds no card past this",
                "Todo": "the board write refuses a card that leaves Backlog for Todo past this",
                "Doing": "the dispatch pass (autofrontier) claims no card past this",
                "Batching": "the dispatch pass (autofrontier) starts no run past this",
-               "Reviewing": "the branch review pass starts no review past this"}
+               "Reviewing": "the branch review pass starts no review past this",
+               "Testing": "no new wave enters its gate past this"}
 NO_STOP = "no pass reads it yet"
 
 
