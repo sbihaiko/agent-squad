@@ -30,9 +30,11 @@ def test_a_pass_records_the_kind_of_every_slot_it_holds(tmp_path, monkeypatch):
     (co / "runs" / "run-b" / "request.txt").write_text("CHILD — GitHub issue(s) 77 (bug; one root cause, one branch):\n")
     (co / "runs" / "run-c").mkdir(parents=True)
     (co / "runs" / "run-c" / "record.jsonl").write_text('{"event": "run_start"}\n')
+    (co / "runs" / "run-c" / "request.txt").write_text("CHILD — GitHub issue(s) 88 (feature):\n")
     st = tmp_path / "st"
     (st / "auto").mkdir(parents=True)
     (st / "auto" / "bug-77").write_text("autobug-20261118-101010\n")
+    (st / "auto" / "disp-88").write_text("run-c\n")
 
     class Ceil:
         caps = {"runs": 3, "children": 6, "gates": 2, "reviews": 1}
@@ -114,8 +116,10 @@ def test_a_holder_is_classified_by_the_slot_it_holds():
     assert SH.classify("run-a", '{"event": "run_start"}', waiting={"run-a"}, autobug=set()) == "gates"
     assert SH.classify("run-b", '{"event": "run_start"}', waiting=set(), autobug={"run-b"}) == "autobug"
     assert SH.classify("run-c", '{"event": "verdict"}', waiting=set(), autobug=set()) == "landing"
-    assert SH.classify("run-d", '{"event": "run_start"}', waiting=set(), autobug=set()) == "doing"
-    assert SH.classify("run-e", None, waiting=set(), autobug=set()) == "unknown"
+    assert SH.classify("run-d", '{"event": "run_start"}', waiting=set(), autobug=set(), card={"run-d"}) == "doing"
+    assert SH.classify("run-e", '{"event": "run_start"}', waiting=set(), autobug=set()) == "unknown", \
+        "a live run that names no card is unknown"
+    assert SH.classify("run-f", None, waiting=set(), autobug=set()) == "unknown"
 
 
 def test_a_slot_record_round_trips_through_its_file(tmp_path):
@@ -173,3 +177,58 @@ def test_a_write_leaves_no_partial_file_behind(tmp_path):
     path = tmp_path / SH.FILE
     SH.write(path, at=1.0, free=0, cap=3, todo=1, holders=[])
     assert sorted(p.name for p in tmp_path.iterdir()) == [SH.FILE], "the write's own temp file is gone"
+
+
+def test_each_holder_kind_is_named_from_the_state_directory(tmp_path, monkeypatch):
+    """#2363: a fixture state directory names the kind of every holder: a gate waiter, an autobug run, a wave, a finished
+    run, a card dispatch with its issue, and a run that names no card with the age of its last progress."""
+    import os
+    import time
+    from pathlib import Path
+
+    from squad import caps as C
+    co, st = tmp_path / "co", tmp_path / "st"
+
+    def run(name, record, request=None):
+        folder = co / "runs" / name
+        folder.mkdir(parents=True)
+        (folder / "record.jsonl").write_text(record)
+        if request is not None:
+            (folder / "request.txt").write_text(request)
+        return folder
+
+    started, finished = '{"event": "run_start"}\n', '{"event": "verdict"}\n'
+    folders = [
+        run("run-gate", started),
+        run("run-bug", started, "CHILD — GitHub issue(s) 77 (bug; one root cause, one branch):\n"),
+        run("run-wave", started),
+        run("run-card", started, "CHILD — GitHub issue(s) 88 (feature):\n"),
+        run("run-done", finished),
+        run("run-idle", started),
+    ]
+    idle = folders[-1] / "record.jsonl"
+    stamp = time.time() - 600
+    os.utime(idle, (stamp, stamp))
+    st.mkdir()
+    (st / "active-runs.txt").write_text("\n".join(str(f) for f in folders) + "\n")
+    (st / "auto").mkdir()
+    (st / "auto" / "bug-77").write_text("autobug-20261118-101010\n")
+    (st / "auto" / "disp-88").write_text("run-card\n")
+    (st / "auto" / "wave-run-wave").write_text("wave/run-wave\n")
+
+    class Ceil:
+        caps = {"runs": 6, "children": 6, "gates": 2, "reviews": 1}
+        def run_holders(self, active_runs, root=".", now=None):
+            return [Path(r).name for r in Path(active_runs).read_text().split()]
+        def waiting(self):
+            return [{"ceiling": "gates", "holder": "run-gate"}]
+    monkeypatch.setattr(C, "ceiling", lambda checkout=None: Ceil())
+    monkeypatch.setattr(C, "free_runs", lambda c, a, root=".": 0)
+    by = {h["name"]: h for h in SH.record_pass(st, 2, str(co))["holders"]}
+    assert {n: h["kind"] for n, h in by.items()} == {
+        "run-gate": "gates", "run-bug": "autobug", "run-wave": "wave", "run-card": "doing",
+        "run-done": "landing", "run-idle": "unknown"}
+    assert by["run-card"]["issue"] == 88, "a card dispatch names its issue"
+    assert by["run-wave"]["wave"] == "wave/run-wave", "a wave names the wave it runs"
+    assert by["run-idle"]["age_s"] == pytest.approx(600, abs=5), "an unknown holder carries its last progress age"
+    assert "issue" not in by["run-gate"] and "age_s" not in by["run-gate"], "only the kinds that carry detail carry it"

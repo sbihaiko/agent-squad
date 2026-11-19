@@ -357,7 +357,7 @@ function profSlotWait(s){
  const dr=Number(s.drained_minutes)||0,drain=dr>0?` The loop was drained or stopped for ${profTime(dr*60)} of that wait.`:"";
  if(!rows.length)return `<section id=profslots>${head}<p class=tpn>${n===0?`No refused dispatch was recorded in the last ${span}, so no holder is named.`:`${n} refusal${n===1?"":"s"} in the last ${span}, and no holder kind carried a minute.`}${drain}</p></section>`;
  const sub=`${n} refusal${n===1?"":"s"} in the last ${span}: each line is the minutes a startable card waited while that kind held a run slot.${drain}`;
- const body=rows.map(l=>`<tr data-p="slot/${esc(l.kind)}"><td class=pnm>${esc(l.label||l.kind)}</td><td>${profTime((l.minutes||0)*60)}</td><td>${l.passes||0}</td></tr>`).join("");
+ const body=rows.map(l=>`<tr data-p="slot/${esc(l.kind)}"><td class=pnm>${esc(l.label||l.kind)}${(l.holders||[]).length?`<ul class=psh>${l.holders.map(w=>`<li>${esc(w)}</li>`).join("")}</ul>`:""}</td><td>${profTime((l.minutes||0)*60)}</td><td>${l.passes||0}</td></tr>`).join("");
  return `<section id=profslots>${head}<p class=tpn>${sub}</p>`
   +`<table id=profsl aria-label="Who holds a run slot while a card waits, a holder kind a row"><thead><tr><th>Holder</th><th>Wait</th><th>Refusals</th></tr></thead><tbody>${body}</tbody></table></section>`}
 // profiler:end

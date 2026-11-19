@@ -61,7 +61,7 @@ head -1 "$T/st/review-$key.md" | /usr/bin/grep -q APPROVE && ok "the second roun
 # 4) the fix request: it works on the same branch, commits on it and opens no pull request
 echo '#7 title' > /dev/null; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — wrong — fix\n' > "$T/st/review-$key.md"
 r=$(AF_DRY=1 bash "$T/s/branchfix.sh" gui/7-x 7 2>&1)
-case "$r" in *"check out origin/gui/7-x and commit on top; push nothing and open no pull request: once the run ends, the loop pushes the run's head to gui/7-x (fast-forward only)"*) ok "the fix round commits on the work branch, and the loop pushes it (#768)";; *) ko "fix request: '$r'";; esac
+case "$r" in *"commit on top of the branch your worktree has checked out (that branch is the tip of gui/7-x), and create no branch of your own; push nothing and open no pull request: once the run ends, the loop pushes the run's head to gui/7-x (fast-forward only)"*) ok "the fix round commits on the work branch, and the loop pushes it (#768)";; *) ko "fix request: '$r'";; esac
 case "$r" in *"a.cs:1"*) ok "the fix request carries the findings";; *) ko "no findings in the fix request";; esac
 # 5) the child of a wave (#376): the review reads only the child's own commits, against its merge-base with the wave branch,
 #    and the verdict still lands in the issue's one status comment. SG_REVIEW_BASE names the branch the diff is taken against.
