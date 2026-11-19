@@ -83,13 +83,15 @@ def test_a_chart_subject_rises_only_when_its_own_input_changes(hub, board):
 def _chart_harness(hub, drive, onchange=""):
     # Re-anchored (#1247): the chart's settings are no longer stored, so there is no saveLT line; the LT_TYPES line
     # carries LT_START, the start the payload measures from, which ltOwn reads.
-    lines = ["const LT_TYPES=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet",
-             "const barMoved", "function squadChart(", "function squadStreamLost(",
-             "function squadStreamBack(", "pollBoard();setInterval(pollIfVisible(pollBoard)", "function squadChartTick(", "setInterval(pollIfVisible(squadChartTick)"]
+    lines = ["const pollIfVisible=", "const LT_TYPES=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom",
+             "const ltGet", "const barMoved", "function squadChart(", "function squadStreamLost(",
+             "function squadStreamBack(", "pollBoard();setInterval(pollIfVisible(pollBoard)", "function squadChartTick(",
+             "setInterval(pollIfVisible(squadChartTick)"]
     page = [next(line for line in hub.PAGE.splitlines() if line.startswith(p)) for p in lines]
     stubs = """
 const FETCHED=[],POLLED=[],INTERVALS=[],RUNS=[];
 globalThis.window={squadStreamLive:undefined};
+globalThis.document={hidden:false};
 const el=()=>({hidden:true,handlers:{},addEventListener(t,f){this.handlers[t]=f}});
 const EL={"#flowov":el(),"#fwl":el(),"#sse":el(),"#flowb":el()};
 const $=s=>EL[s];
@@ -99,7 +101,6 @@ let bo={},FLOWK=null,FLOWD={},CF={r:"30",ty:"task",hidden:[]},LT={tf:"30",log:fa
 const ls={},save=()=>{},saveB=()=>{},pollBoard=()=>POLLED.push(1);
 const drawFlow=()=>{},flowTabs=()=>{},poll=()=>RUNS.push(1);
 const settle=()=>new Promise(r=>setTimeout(r,0));
-const pollIfVisible=fn=>fn;   // the visible gate is the page's own line, not this block
 """
     script = stubs + "\n".join(page) + "\n" + onchange + "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
@@ -156,6 +157,18 @@ console.log(JSON.stringify({noStream,liveChart,board:POLLED.length}));""")
     assert out["noStream"] == {"fetched": [f"/api/chart/cfd?{BAR}"], "polled": 0}, "no stream: the open chart is re-read"
     assert out["liveChart"] == {"fetched": [], "polled": 0}, "a live stream: the tick reads no chart"
     assert out["board"] == 1, "the board tick is unchanged"
+
+
+@needs_node
+def test_a_hidden_page_fires_no_chart_or_board_poll(hub):
+    """The page's own gate, not a stub: a hidden document makes both interval callbacks read nothing."""
+    out = _chart_harness(hub, """
+POLLED.length=0;FETCHED.length=0;document.hidden=true;
+for(const f of INTERVALS)f();
+await settle();
+console.log(JSON.stringify({fetched:FETCHED.slice(),polled:POLLED.length,intervals:INTERVALS.length}));""")
+    assert out["intervals"] == 2, "the page registers the board tick and the chart tick"
+    assert out["fetched"] == [] and out["polled"] == 0, "a hidden page read the chart or the board"
 
 
 @needs_node

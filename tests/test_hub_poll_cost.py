@@ -15,9 +15,11 @@ import importlib.util
 import json
 import os
 import pathlib
-import re
+import shutil
+import subprocess
 import tempfile
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -41,10 +43,19 @@ def hub():
     return mod
 
 
+class Served:
+    """One hub handler, its counted builds, the clock under the test's hand and the record file a build reads."""
+
+    def __init__(self, port, stats_calls, prof_calls, clock, records):
+        self.port, self.stats_calls, self.prof_calls, self.clock, self.records = port, stats_calls, prof_calls, clock, records
+
+
 @pytest.fixture
 def served(hub, monkeypatch):
     """The hub's own handler over HTTP, with each costly build counted and one clock under the test's hand."""
     stats_calls, prof_calls, clock = [], [], [1000.0]
+    records = pathlib.Path(tempfile.mkdtemp()) / "records.txt"   # what the profiler build reads, one run a line
+    records.write_text("run-a\n")
 
     def counted_stats(period, src="both"):
         stats_calls.append((period, src))
@@ -52,7 +63,7 @@ def served(hub, monkeypatch):
 
     def counted_prof(*a, **k):
         prof_calls.append(1)
-        return {"tree": []}
+        return {"rows": records.read_text().split()}
 
     monkeypatch.setattr(hub, "stats", counted_stats)
     monkeypatch.setattr(hub, "profiler_view", counted_prof)
@@ -63,7 +74,7 @@ def served(hub, monkeypatch):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), hub.H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        yield srv.server_port, stats_calls, prof_calls, clock
+        yield Served(srv.server_port, stats_calls, prof_calls, clock, records)
     finally:
         srv.shutdown()
         srv.server_close()
@@ -81,7 +92,7 @@ def get(port, path):
 
 def test_two_stats_reads_inside_the_poll_window_build_once(served):
     """One page's two reads inside its poll window share one build; the next window builds again."""
-    port, stats_calls, _, clock = served
+    port, stats_calls, clock = served.port, served.stats_calls, served.clock
     first = get(port, "/api/stats?period=day&src=both")
     second = get(port, "/api/stats?period=day&src=both")
     assert len(stats_calls) == 1, f"two reads inside one window built the spend answer {len(stats_calls)} times"
@@ -93,7 +104,7 @@ def test_two_stats_reads_inside_the_poll_window_build_once(served):
 
 def test_the_spend_answer_is_kept_per_period_and_source(served):
     """The page asks for a period and a billing source: one pair's answer never serves another pair."""
-    port, stats_calls, _, _ = served
+    port, stats_calls = served.port, served.stats_calls
     get(port, "/api/stats?period=day&src=both")
     get(port, "/api/stats?period=hour&src=both")
     get(port, "/api/stats?period=day&src=sub")
@@ -108,25 +119,57 @@ def test_the_spend_answer_is_per_profile(hub, monkeypatch):
     assert other._STATS_KEPT is not hub._STATS_KEPT, "two loaded profiles share one kept spend answer"
 
 
+def test_the_spend_answer_is_no_older_than_twenty_seconds(hub, served):
+    """The issue's Expected list: `/api/stats` answers from a cache no older than 20 s."""
+    assert hub.STATS_POLL_SECS <= 20.0, f"STATS_POLL_SECS is {hub.STATS_POLL_SECS}, older than the 20 s the issue asks"
+    get(served.port, "/api/stats?period=day&src=both")
+    served.clock[0] += 19.9
+    get(served.port, "/api/stats?period=day&src=both")
+    assert len(served.stats_calls) == 1, "a read under 20 s must not wait on a fresh build"
+    served.clock[0] += 0.2
+    get(served.port, "/api/stats?period=day&src=both")
+    assert len(served.stats_calls) == 2, "a read past 20 s must build again"
+
+
 def test_the_profiler_file_view_is_built_once_per_off_window(served):
     """With the sampling switch off the page reads the file views every 30 s: one build per window, shared by pages."""
-    port, _, prof_calls, clock = served
-    get(port, "/api/profiler")
-    get(port, "/api/profiler")
-    assert len(prof_calls) == 1, f"two reads inside one window built the profiler view {len(prof_calls)} times"
-    clock[0] += 1000.0
-    get(port, "/api/profiler")
-    assert len(prof_calls) == 2, "a read past the window builds the view again"
+    get(served.port, "/api/profiler")
+    get(served.port, "/api/profiler")
+    assert len(served.prof_calls) == 1, f"two reads inside one window built the profiler view {len(served.prof_calls)} times"
+    served.clock[0] += 1000.0
+    get(served.port, "/api/profiler")
+    assert len(served.prof_calls) == 2, "a read past the window builds the view again"
+
+
+def test_the_off_switch_view_is_served_from_a_cache_under_a_fifth_of_a_second(served):
+    """The issue's Expected list: the switch-off file views come from a cache and cost under 0.2 s."""
+    get(served.port, "/api/profiler")
+    start = time.monotonic()
+    for _ in range(5):
+        get(served.port, "/api/profiler")
+    cost = (time.monotonic() - start) / 5
+    assert len(served.prof_calls) == 1, "a cached read built the view again"
+    assert cost < 0.2, f"a cached profiler read cost {cost:.3f} s, over the issue's 0.2 s"
+
+
+def test_a_record_written_after_a_cached_read_shows_within_the_switch_on_cadence(served, hub):
+    """The page polls every 2 s with the switch on: a record written after a cached read is served at the next poll."""
+    assert 0 < hub.PROF_ON_SECS <= 2.0, f"PROF_ON_SECS is {hub.PROF_ON_SECS}, slower than the page's 2 s poll"
+    hub.PROFILER_SWITCH.write_text(json.dumps({"on": True, "at": 0}))
+    assert get(served.port, "/api/profiler")["rows"] == ["run-a"]
+    served.records.write_text("run-a\nrun-b\n")   # a record written after the read that built the kept view
+    served.clock[0] += 2.0
+    assert get(served.port, "/api/profiler")["rows"] == ["run-a", "run-b"], \
+        "a record written after a cached read waited past the page's next poll"
 
 
 def test_the_switch_write_clears_the_kept_profiler_view(hub, served):
     """A switch write is the page's own change: the next read shows it, never a view kept from before it."""
-    assert hasattr(hub, "prof_kept_clear"), "the switch write clears the kept view through `prof_kept_clear`"
-    port, _, prof_calls, _ = served
-    get(port, "/api/profiler")
-    hub.prof_kept_clear()
-    get(port, "/api/profiler")
-    assert len(prof_calls) == 2, "the view kept before the write served the read after it"
+    assert callable(getattr(hub, "clear_prof_cache", None)), "the switch write clears the kept view through `clear_prof_cache`"
+    get(served.port, "/api/profiler")
+    hub.clear_prof_cache()
+    get(served.port, "/api/profiler")
+    assert len(served.prof_calls) == 2, "the view kept before the write served the read after it"
 
 
 def test_the_watch_tick_reads_a_change_within_two_seconds(hub):
@@ -138,32 +181,69 @@ def test_the_watch_tick_reads_a_change_within_two_seconds(hub):
         "else the fallback does its work")
 
 
-POLLS = ("poll", "pollStats", "loadPoll", "loopPoll", "accPoll", "pollBoard", "squadChartTick", "endedPoll", "profPoll")
-POLLER = re.compile(r"setInterval\((.*?),(\d+|LOAD_MS)\)")
-HELPER = "pollIfVisible"
+def test_the_watch_tick_costs_under_a_fiftieth_of_a_core(hub, tmp_path):
+    """The issue's Expected list: the watcher costs under 0.02 core. The tick's measured time over its own period is its
+    share of the core, taken as the best of five readings of the same tree so a busy machine is never the claim."""
+    for n in range(200):
+        d = tmp_path / f"run-20261115-{n:06d}-aaaaaa"
+        d.mkdir()
+        (d / "record.jsonl").write_text("{}")
+    ticks = []
+    for _ in range(5):
+        start = time.monotonic()
+        hub.run_watch_state([tmp_path])
+        ticks.append(time.monotonic() - start)
+    cost = min(ticks) / hub.RUN_WATCH_SECS
+    assert cost < 0.02, f"the watch tick costs {cost:.4f} core: {min(ticks) * 1000:.1f} ms a tick over 200 records"
 
 
-def test_every_desktop_poller_reads_through_the_one_visible_gate(hub):
-    """A tab in the background asks nothing, as the phone page and the profiler already do: a hidden page costs no CPU.
+# ---- the page's own visible gate, run in node --------------------------------------------------------
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
-    Every hub read goes through one gate, so a poller added later cannot regress the rule by naming no hidden check. A
-    timer that only rewrites text already on the page opens no request, and it is not asserted."""
+GATE_LINES = ("const pollIfVisible=", "poll();setInterval(pollIfVisible(poll),",
+              "loadPoll();setInterval(pollIfVisible(loadPoll),", "pollBoard();setInterval(pollIfVisible(pollBoard),",
+              "setInterval(pollIfVisible(squadChartTick),", 'addEventListener("visibilitychange"')
+
+
+def _gate_script(hub, body):
+    """The page's own gate and its four poll registrations, run in node over stubs that count each route as a fetch.
+
+    The stubs stand for the four pollers' work and never for the gate: the gate line is the page's own text, so a page
+    that lost it fails here."""
     page = hub.served_page("")
-    assert f"const {HELPER}=" in page, "the page defines no visible gate for its polls"
-    # The Loop timers decide through `profDue`/`profFileDue`, which read document.hidden themselves: either gate passes.
-    loose = [body.strip()[:70] for body, _ in POLLER.findall(page)
-             if any(re.search(rf"\b{p}\b", body) for p in POLLS)
-             and f"{HELPER}(" not in body and "document.hidden" not in body]
-    assert not loose, "these pollers read the hub without the visible gate: " + " | ".join(loose)
+    lines = [next(line for line in page.splitlines() if line.startswith(p)) for p in GATE_LINES]
+    stubs = """
+const FETCHED=[],INTERVALS=[],HANDLERS={};
+globalThis.document={hidden:true,addEventListener(t,f){HANDLERS[t]=f}};
+globalThis.addEventListener=(t,f)=>{HANDLERS[t]=f};
+globalThis.setInterval=(f,ms)=>{INTERVALS.push(f)};
+globalThis.fetch=async u=>{FETCHED.push(u);return {json:async()=>({})}};
+const poll=()=>fetch("/api/loop"),loadPoll=()=>fetch("/api/load"),pollBoard=()=>fetch("/api/board"),
+      squadChartTick=()=>fetch("/api/chart/cfd"),profPoll=()=>fetch("/api/profiler");
+const LOAD_MS=5000,TAB="loop",profV={},profDue=()=>true;
+"""
+    script = stubs + "\n".join(lines) + "\nFETCHED.length=0;\n" + body + "\n"
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
-def test_a_page_back_in_front_reads_the_fast_polls_without_a_burst(hub):
-    """A hidden page reads nothing, so its return reads the two fastest polls at once. The slow ones wait their timer: nine
-    reads at once against a hub that just idled is the burst the hidden page removed."""
-    page = hub.served_page("")
-    handler = page[page.index("visibilitychange"):]
-    handler = handler[:handler.index("});") + 3]
-    missing = [p for p in ("poll", "pollBoard", "profPoll") if p not in handler]
-    assert not missing, "a returning page reads nothing of " + ", ".join(missing)
-    burst = [p for p in ("pollStats", "endedPoll", "loadPoll", "accPoll", "loopPoll") if p + "()" in handler]
-    assert not burst, "a returning page bursts the hub with " + ", ".join(burst)
+@needs_node
+def test_a_hidden_page_asks_nothing_for_board_loop_load_or_chart(hub):
+    """document.hidden=true: no interval callback fires a fetch for the board, the loop, the load or the chart."""
+    out = _gate_script(hub, "for(const f of INTERVALS)f();console.log(JSON.stringify({n:INTERVALS.length,fetched:FETCHED}));")
+    assert out["n"] == 4, "the page registers one timer for the board, the loop, the load and the chart"
+    assert out["fetched"] == [], "a hidden page read: " + ", ".join(out["fetched"])
+
+
+@needs_node
+def test_a_page_back_in_front_restarts_the_polls(hub):
+    """visibilitychange on a hidden page reads nothing; back in front, it reads the loop, the board and the profiler."""
+    out = _gate_script(hub, """
+document.hidden=true;HANDLERS.visibilitychange();
+const whileHidden=FETCHED.slice();
+document.hidden=false;HANDLERS.visibilitychange();
+console.log(JSON.stringify({whileHidden,returned:FETCHED,n:INTERVALS.length}));""")
+    assert out["whileHidden"] == [], "a hidden page read on visibilitychange: " + ", ".join(out["whileHidden"])
+    assert out["returned"] == ["/api/loop", "/api/board", "/api/profiler"], out["returned"]
+    assert out["n"] == 4, "a return keeps the page's four poll timers"

@@ -211,7 +211,7 @@ def test_the_page_carries_a_footer_strip_and_polls_the_reading():
     assert "<div class=igs id=igs" in src and "instDraw(d)" in src    # the instruments card and its one paint (#983)
     assert 'const LOAD_MS=Number("__LOADMS__")||5000;' in src
     assert '.replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))' in src
-    assert "setInterval(pollIfVisible(loadPoll),LOAD_MS)" in src
+    assert re.search(r"setInterval\([^;]*loadPoll\),LOAD_MS\)", src), "the load poll repeats on its own window"
 
 
 # ---------------------------------------------------------------- where the reading sits
@@ -283,8 +283,8 @@ def test_the_docked_board_stays_inside_the_panes_so_the_bar_keeps_the_full_width
 
 def test_one_element_carries_the_reading_however_often_it_is_repainted(hub, pg):
     assert pg.order.count("igs") == 1                                 # one reading on the page, never two that can disagree
-    assert hub.PAGE.count("setInterval(pollIfVisible(loadPoll)") == 1                # one timer for the whole window
     assert hub.PAGE.count('fetch("/api/load")') == 1                  # one request per tick, whatever renders the value
+    # The one timer for the whole window is asserted by behaviour in tests/test_hub_poll_cost.py.
 
 
 def _render_load_mark(hub, run):
