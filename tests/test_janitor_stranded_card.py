@@ -72,7 +72,8 @@ def sandbox(tmp_path: Path, *, card: str, named: bool = False, labels: str = "")
     """The janitor beside its modules, a stub `gh` and board, and a checkout with a bare origin that holds `main`.
     `card` is the column the board reads for #2201. `named` puts a fix commit `(#2201)`, two hours old, in origin/main."""
     for name in ("janitor.py", "ghcall.sh", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py",
-                 "board-definition.json", "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py"):
+                 "board-definition.json", "board_facts.py", "spec_fold.py", "issue_ledger.py", "wip_snapshot.py",
+                 "skiplabels.sh"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
     calls = tmp_path / "calls"
@@ -315,3 +316,19 @@ def test_a_card_with_a_kept_marker_is_not_stranded(tmp_path):
     janitor(tmp_path)
     assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path)
     assert f"STRANDED #{N}" not in decided(tmp_path)
+
+
+# --- #2352: the stale-card rule reads the skip labels the frontier reads ---------------------------------------------
+
+
+@pytest.mark.heavy
+def test_a_stale_card_whose_issue_carries_a_skip_label_moves_nothing(tmp_path):
+    """A Doing card with a recorded dispatch, no live run, no marker and nothing landed moves nothing when the frontier
+    refuses its issue for a skip label, and the rule names that label once."""
+    sandbox(tmp_path, card="Doing", labels="ready-for-HAL9K")
+    ledger(tmp_path, "wave", f"x/y#{N}", "run-old", "entered", "the child entered the wave")
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+    assert str(N) not in writes(tmp_path), writes(tmp_path)
+    assert f"STALE-CARD #{N}" not in decided(tmp_path), decided(tmp_path)
+    skipped = [x for x in decided(tmp_path).splitlines() if f"SKIP-LABEL #{N}" in x]
+    assert len(skipped) == 1 and "ready-for-HAL9K" in skipped[0], decided(tmp_path)

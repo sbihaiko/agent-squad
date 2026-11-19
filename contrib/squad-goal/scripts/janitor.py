@@ -864,6 +864,9 @@ base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to 
 def issue_info(x, fresh=False):
     return issue_read(x, fresh)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
+def frontier_skip():   # the labels the frontier refuses an issue for: the list autofrontier.sh reads (sg_frontier_skip, #2352)
+    r = subprocess.run(["bash", "-c", '. "$0"; sg_frontier_skip', str(pathlib.Path(__file__).parent / "skiplabels.sh")], capture_output=True, text=True)
+    return {x for x in r.stdout.strip().split(",") if x}
 _open = None
 def close_spec(n, why):   # the comment, then the close as completed, both through the door's write (gh_send)
     door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send"]
@@ -1460,6 +1463,7 @@ def reconcile_board():
                                 os.environ.get("SG_FRONTIER_SKIP_LABELS") or "") for x in v.split(",") if x} | {
         "frozen:owner", "frozen:dependency", "ready-for-human", "ready-for-HAL9K", "needs-triage", "needs-info",
         "needs-ratification", "debt", RUN_PARENT}
+    FRONTIER_SKIP = frontier_skip()
     oans, olabels = open_issues()
     if oans: fill_missing(proj, set(olabels) | set(expected))   # a card the REST read omitted is asked once of the GraphQL read and rides the pass's map (#1463)
     specs = {k for k, ls in olabels.items() if "spec" in ls} if oans else set()
@@ -1532,8 +1536,12 @@ def reconcile_board():
             # the two apart: a card the loop dispatched goes back to Todo, and the pass names it once before any other case.
             if not is_spec and have_cards.get(n, "") == doing and not holding(n) and not (st / "auto" / f"disp-{n}").exists() and not (st / "auto" / f"bug-{n}").exists():
                 if dispatched(n) and not base_landed(n, set()) and branch_ahead_count(n) == "0" and not owner_frozen(n):   # the one-time recovery (#1034): a card a run left in Doing has no other way back, and the recorded dispatch proves the loop owns it (#1987)
-                    say(f"STALE-CARD #{n}: card {doing} with a recorded dispatch, no live run, no marker and nothing landed; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
-                    set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {doing} with a recorded dispatch, no live run, no marker and nothing landed", rank=20)
+                    held = sorted(issue_labels(n) & FRONTIER_SKIP)   # the frontier refuses such an issue, so Todo would never dispatch it (#2352)
+                    if held:
+                        say(f"SKIP-LABEL #{n}: card {doing} with a recorded dispatch stays; the frontier skips the issue for label {', '.join(held)}")
+                    else:
+                        say(f"STALE-CARD #{n}: card {doing} with a recorded dispatch, no live run, no marker and nothing landed; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
+                        set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {doing} with a recorded dispatch, no live run, no marker and nothing landed", rank=20)
                 else:
                     mk = st / "auto" / f"janitor-doing-norun-{n}"
                     if not mk.exists():
