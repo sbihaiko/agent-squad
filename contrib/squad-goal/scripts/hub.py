@@ -5811,7 +5811,7 @@ def board(moves=None):
             want = PRIORITY_FLIGHT.get(i["n"])
             why = PRIORITY_REFUSED.get(i["n"])
         if want is not None: row["pr"] = board_priority.mark(want); row["prp"] = True
-        if why is not None: row["prr"] = why[1]
+        if why is not None and why[2] == board_cache.get("t"): row["prr"] = why[1]   # a refusal lasts until the board is read again
         if isinstance(i.get("gt"), (int, float)) and i["gt"] > 0:
             row["gt"] = int(i["gt"])   # the card's Gate Tries, off the field the read carried (#1255)
             row["gchip"] = f"Gating · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
@@ -6162,7 +6162,7 @@ PRIORITY_LEVELS = ("urgent", "high", "normal", "low")
 PRIORITY_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_BOARD_PRIORITY_WRITE is not on (tailnet.board_priority_write)"
 PRIORITY_AUDIT = STATE / "board-priority.jsonl"   # one line per write the owner asked for: the card, old value, new value, time (#2289)
 PRIORITY_FLIGHT = {}    # card number -> level the owner chose, from the route's answer until the writer's
-PRIORITY_REFUSED = {}   # card number -> (old level, the reason the writer refused)
+PRIORITY_REFUSED = {}   # card number -> (old level, the reason the writer refused, the board read the refusal came after)
 PRIORITY_LOCK = threading.Lock()
 PRIORITY_THREADS = []
 
@@ -6187,36 +6187,49 @@ def priority_refusal(a, origin_ok, tn):
     if a.tailnet and tn.get("board_priority_write") is not True: return PRIORITY_READ_ONLY
     return "" if origin_ok else "forbidden"
 
-def priority_audit(issue, old, new, who, frm):
-    """One line per write the owner asked for: the card, the old value, the new value, the time, and who asked from where."""
+def tailnet_origin(tn):
+    """The tailnet Origin a Priority write names: https on the project file's host, whether the file names it bare or with its scheme."""
+    host = re.sub(r"^https?://", "", str(tn.get("host") or "").strip()).rstrip("/")
+    return f"https://{host}" if host else ""
+
+def priority_audit(issue, old, new, who, frm, reason):
+    """One line per write the owner asked for, written once the writer answered: the card, the old and new value, the time, who
+    asked from where, and the outcome. A refused write has `ok` false and its reason."""
     record = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "issue": issue, "repository": REPO,
-              "from": old, "to": new, "who": who, "from_where": frm}
+              "from": old, "to": new, "who": who, "from_where": frm, "ok": not reason, "reason": reason}
+    PRIORITY_AUDIT.parent.mkdir(parents=True, exist_ok=True)
     with PRIORITY_AUDIT.open("a") as f: f.write(json.dumps(record) + "\n")
 
+def priority_issue_row(n):
+    """One issue as the inheritance rule reads it (#1979): its body, its label names and its state, from the issue read."""
+    r = ghread.read(f"repos/{REPO}/issues/{n}")
+    if not r.is_answer: raise RuntimeError(r.line()[:200] or f"#{n}: the issue read did not answer")
+    d = r.answer if isinstance(r.answer, dict) else {}
+    labels = [x.get("name") if isinstance(x, dict) else x for x in d.get("labels") or []]
+    return {"body": d.get("body") or "", "sub_issues": [], "labels": labels, "state": str(d.get("state") or "").lower()}
+
 def priority_family(spec):
-    """The spec and its open children as the inheritance rule reads them (#1979), from the board cache alone: the parent the
-    read recorded (`pa`), each child's labels and state, and the spec's sub-issue list. A closed child is not a target."""
-    items = {i["n"]: i for i in board_cache.get("items") or []}
-    kids = sorted(n for n, i in items.items() if i.get("pa") == spec and str(i.get("s") or "").lower() == "open")
-    def row(n):
-        i = items[n]
-        return {"body": "", "sub_issues": [], "labels": list(i.get("l") or []),
-                "state": "open" if str(i.get("s") or "").lower() == "open" else "closed"}
-    by = {spec: {**row(spec), "sub_issues": kids}}
-    for n in kids: by[n] = row(n)
+    """The spec and its children as the inheritance rule reads them (#1979): the children the board cache links by `pa` and the
+    spec's native sub-issues, each read for its body, labels and state. A closed child is not a target."""
+    subs, err = sub_issues(spec, REPO)
+    if err: raise RuntimeError(err)
+    items = [i for i in board_cache.get("items") or [] if (i.get("r") or REPO).lower() == REPO.lower()]
+    nums = {i["n"] for i in items if i.get("pa") == spec} | {s["number"] for s in subs if isinstance(s, dict) and isinstance(s.get("number"), int)}
+    nums.discard(spec)
+    by = {spec: priority_issue_row(spec)}
+    for n in sorted(nums): by[n] = priority_issue_row(n)
+    by[spec]["sub_issues"] = sorted(n for n in nums if by[n]["state"] == "open")
     return by
 
 def priority_propagate(spec, level):
     """Carry a spec's new Priority to its open children by the inheritance rule (#1979). A failure here never undoes the
     spec's own write, which the writer already proved: it is logged once and the next change carries the value again."""
-    item = next((i for i in board_cache.get("items") or [] if i.get("n") == spec), None)
-    if item is None or _columns_module.SPEC_LABEL not in (item.get("l") or []): return
     try:
         priority_backfill.propagate(board_seam(), REPO, spec, int(time.time() * 1000), level, priority_family(spec))
     except Exception as e:
         log_once(f"hub: the Priority of spec #{spec} did not reach its children: {type(e).__name__}: {' '.join(str(e).split())}")
 
-def _settle_priority(n, level, old):
+def _settle_priority(n, level, old, who, frm):
     """The writer's answer for one Priority write, in the background. A proved write changes the served value at once, so the
     card's next draw carries it with no pending chip and no board read; a refusal keeps the read's value and names its reason."""
     reason = None
@@ -6231,6 +6244,7 @@ def _settle_priority(n, level, old):
         except OSError: pass
     except Exception as e:
         reason = str(e)[:200] or "the writer did not answer"
+    priority_audit(n, old, level, who, frm, reason or "")
     if reason is None:
         with _board_lock:
             for i in board_cache.get("items") or []:
@@ -6239,12 +6253,13 @@ def _settle_priority(n, level, old):
     with PRIORITY_LOCK:
         PRIORITY_FLIGHT.pop(n, None)
         if reason is None: PRIORITY_REFUSED.pop(n, None)
-        else: PRIORITY_REFUSED[n] = (old, reason)
+        else: PRIORITY_REFUSED[n] = (old, reason, board_cache.get("t"))
     if reason is None: priority_propagate(n, level)
 
 def priority_write(body, who="owner", frm="loopback"):
-    """One Priority write the owner asked for: validate, skip a value the card already carries (ADR-0144), audit the write,
-    and send it in the background. The answer names the card and the level, and whether a write was sent."""
+    """One Priority write the owner asked for: validate, skip a value the card already carries (ADR-0144), and send it in the
+    background; the audit line follows the writer's answer. A second ask while the card's write is in flight starts no write
+    and answers the in-flight level. The answer names the card and the level, and whether a write was sent."""
     if not isinstance(body, dict): return {"err": "bad request"}
     n, level = body.get("issue"), body.get("priority")
     if isinstance(n, bool) or not isinstance(n, int) or n <= 0: return {"err": "issue: a number"}
@@ -6255,23 +6270,17 @@ def priority_write(body, who="owner", frm="loopback"):
     old = item.get("p") or ""
     if old == level: return {"ok": True, "issue": n, "priority": level, "changed": False}   # no board write on an unchanged value
     with PRIORITY_LOCK:
-        if n in PRIORITY_FLIGHT: return {"err": "the card's Priority is already being written"}
-    PRIORITY_AUDIT.parent.mkdir(parents=True, exist_ok=True)
-    priority_audit(n, old, level, who, frm)
-    with PRIORITY_LOCK:
+        if n in PRIORITY_FLIGHT: return {"ok": True, "issue": n, "priority": PRIORITY_FLIGHT[n], "changed": False, "pending": True}
         PRIORITY_FLIGHT[n] = level
         PRIORITY_REFUSED.pop(n, None)
         PRIORITY_THREADS[:] = [t for t in PRIORITY_THREADS if t.is_alive()]
-        t = threading.Thread(target=_settle_priority, args=(n, level, old), daemon=True, name=f"board-priority-{n}")
+        t = threading.Thread(target=_settle_priority, args=(n, level, old, who, frm), daemon=True, name=f"board-priority-{n}")
         PRIORITY_THREADS.append(t)
     t.start()
     return {"ok": True, "issue": n, "priority": level, "changed": True, "pending": True}
 
-def priority_route(a, raw, origin_ok):
-    """The `/api/board/priority` write read as the loop switch's is: the access rule, the tailnet grant, then the origin and
-    JSON body before any write. A refusal names its reason."""
-    why = priority_refusal(a, origin_ok, tailnet_block())
-    if why: return 403, {"err": "forbidden", "reason": why}
+def priority_route(a, raw):
+    """The JSON body of a `/api/board/priority` write that the access rule and the origin already let through."""
     try: body = json.loads(raw or b"{}")
     except ValueError: return 400, {"err": "bad request"}
     out = priority_write(body, a.login or "owner", "tailnet" if a.tailnet else "loopback")
@@ -8061,10 +8070,10 @@ const PRD_LEVELS=["urgent","high","normal","low"],PRD_ICON={urgent:"⇈",high:"�
 const prdClose=()=>{for(const d of document.querySelectorAll("#bbody .prd"))d.remove();for(const b of document.querySelectorAll("#bbody .prio.pbtn"))b.setAttribute("aria-expanded","false")};
 const prdPaint=(b,l)=>{b.dataset.level=l;b.className="prio pbtn "+PRD_TONE[l];b.textContent=PRD_ICON[l];b.title="Priority "+l+" — set the Priority";b.setAttribute("aria-label","Priority "+l)};
 const prdShow=b=>{prdClose();const cur=b.dataset.level,dd=document.createElement("div");dd.className="prd";dd.setAttribute("role","listbox");dd.setAttribute("aria-label","Priority");dd.innerHTML=PRD_LEVELS.map(l=>`<div role=option tabindex=-1 data-level="${l}" aria-selected="${l===cur}">${PRD_ICON[l]} ${l[0].toUpperCase()+l.slice(1)}</div>`).join("");b.setAttribute("aria-expanded","true");b.parentElement.insertBefore(dd,b.nextSibling);(dd.querySelector("[aria-selected=true]")||dd.firstElementChild).focus()};
-const prdPick=async(b,l)=>{const card=b.closest(".it"),n=+card.dataset.n,old=b.dataset.level;prdClose();if(l===old)return;prdPaint(b,l);const chip=document.createElement("span");chip.className="prp";chip.textContent="pending";chip.title="the Priority write has not been proved yet";card.appendChild(chip);
+const prdPick=async(b,l)=>{const card=b.closest(".it"),n=+card.dataset.n,old=b.dataset.level;prdClose();if(l===old)return;prdPaint(b,l);
 try{const r=await fetch("/api/board/priority",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n,priority:l})}),d=await r.json();
- if(d.err){prdPaint(b,old);chip.remove();card.insertAdjacentHTML("beforeend",`<div class="prr pwr">${esc(d.err)}${d.reason?" — "+esc(d.reason):""}</div>`)}
- else pollBoard()}catch(x){prdPaint(b,old);chip.remove();card.insertAdjacentHTML("beforeend",'<div class="prr pwr">the hub did not answer</div>')}};
+ if(d.err){prdPaint(b,old);card.insertAdjacentHTML("beforeend",`<div class="prr pwr">${esc(d.err)}${d.reason?" — "+esc(d.reason):""}</div>`)}
+ else pollBoard()}catch(x){prdPaint(b,old);card.insertAdjacentHTML("beforeend",'<div class="prr pwr">the hub did not answer</div>')}};
 document.addEventListener("click",e=>{const b=e.target.closest("#bbody .prio.pbtn");if(b){e.preventDefault();e.stopPropagation();b.getAttribute("aria-expanded")==="true"?prdClose():prdShow(b);return}const o=e.target.closest("#bbody .prd [role=option]");if(o){e.preventDefault();e.stopPropagation();prdPick(o.closest(".prd").previousElementSibling,o.dataset.level);return}if(!e.target.closest("#bbody .prd"))prdClose()});
 document.addEventListener("keydown",e=>{const b=e.target.closest&&e.target.closest("#bbody .prio.pbtn");
  if(e.key==="Escape"){const open=document.querySelector("#bbody .prd");if(open){e.preventDefault();const btn=open.previousElementSibling;prdClose();if(btn)btn.focus()}return}
@@ -9929,13 +9938,23 @@ class H(BaseHTTPRequestHandler):
         self.answer(*profiler_switch(a, body, origin_ok))
 
     def priority_post(self, a):
-        """The Kanban card's Priority write (#2289): the body before any refusal, then the hub's own origin (or the tailnet's
-        with its own grant), then the write. A refused write names its reason and changes nothing."""
-        length = self.headers.get("Content-Length") or "0"
-        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        """The Kanban card's Priority write (#2289): the access rule, the tailnet grant and the origin are checked before the
+        body is read. A refusal, or a Content-Length that is not a number, ends the connection with its answer."""
         tn = tailnet_block()
-        origin_ok = "json" in (self.headers.get("Content-Type") or "") and ((self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self))
-        self.answer(*priority_route(a, raw, origin_ok))
+        origin, want = self.headers.get("Origin") or "", tailnet_origin(tn)
+        origin_ok = "json" in (self.headers.get("Content-Type") or "") and (bool(want) and origin == want if a.tailnet else own_origin(self))
+        why = priority_refusal(a, origin_ok, tn)
+        if why:
+            self.close_connection = True   # the body stays unread, so the connection ends with this answer
+            return self.answer(403, {"err": "forbidden", "reason": why})
+        length = self.headers.get("Content-Length") or ""
+        if not length.isdigit():
+            self.close_connection = True
+            return self.answer(400, {"err": "bad request", "reason": "Content-Length: a number"})
+        if int(length) > 1 << 20:
+            self.close_connection = True
+            return self.answer(413, {"err": "too large"})
+        self.answer(*priority_route(a, self.rfile.read(int(length))))
 
     def send_to_session(self, a):
         """A message to a live session (#834, #898): a JSON body, and from loopback the hub's own Origin, from the tailnet an
@@ -10087,7 +10106,9 @@ class H(BaseHTTPRequestHandler):
         self.answer(200, out)
 
     def answer(self, code, out):
-        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data)))
+        if self.close_connection: self.send_header("Connection", "close")
+        self.end_headers(); self.wfile.write(data)
 
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
