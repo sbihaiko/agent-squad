@@ -4,6 +4,9 @@ Two branches that each add a test file to the same shard edit the same place of 
 conflicts. One test file per line keeps each addition on its own line, and the union merge driver keeps both lines when
 two branches touch the same place. The partition stays exact through it: every `tests/test_*.py` file of the tree is in
 exactly one shard.
+
+`.gitattributes` stays off `squad/testselect_inert.txt` because this module reads its union line: a change to the attribute
+file reaches this test, so it is not inert.
 """
 
 import ast
