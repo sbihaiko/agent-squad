@@ -313,6 +313,20 @@ bran="ruff mypy pytest"; bnot=-
 # (#1249) A battery whose selection was empty ran no pytest, so it proves nothing: the line it logged names why.
 empty=$(/usr/bin/grep -m 1 '^no pytest ran' "$lg")
 [ -z "$empty" ] || { bran="ruff mypy"; bnot=pytest; }
+# (#2357) A suite that declares its live copy in a `# mirrors:` line must name every module its fixture loads: the check
+# reads the suite's own commands and the line, and a load the line misses (or a name the repository lacks) fails the gate.
+# It runs here, over the suites this gate runs, and takes no gate slot of its own; child-gate.sh runs one suite a caller
+# names and enumerates none, so there is nothing for this check to read there.
+mcs=""; for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] && mcs="$mcs $s"; done
+if [ -n "$mcs" ]; then
+  mcout=$("$py" "$here/mirrorcheck.py" $mcs 2>&1) || mcfail=1
+  echo "$mcout"
+  if [ -n "${mcfail:-}" ]; then
+    reason=$(printf '%s\n' "$mcout" | sed -n 's/^mirrorcheck: FAIL //p' | tr '\n' ';' | sed 's/;$//')
+    verdict fail "mirror list: $reason" "$bran" "$bnot"
+    echo "fast-gate: FAILED: the mirror list disagrees with a fixture: $reason"; exit 1
+  fi
+fi
 failed=""; ranS=""; hitmax=
 # (#1839) A suite spends the gate's clock too: past it its whole tree is killed, as the battery's, so a suite that parks holds the
 # gate slot no longer than the ceiling allows.
