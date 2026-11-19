@@ -1582,6 +1582,19 @@ def _positive_int(v):
     except (TypeError, ValueError): return None
     return n if n > 0 and str(v).strip() == str(n) else None
 
+CAP_UNITS = {"K": 1000, "M": 1000000, "B": 1000000000, "T": 1000000000000}
+
+def _cap_value(v):
+    """A daily cap: a positive whole number, or that number with a K, M, B or T unit (6M, 250M, 1T). The hub stores the
+    plain integer the guard reads, whatever the owner typed."""
+    n = _positive_int(v)
+    if n is not None: return n
+    if isinstance(v, bool): return None
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMBT])", str(v).strip(), re.IGNORECASE)
+    if not m: return None
+    x = float(m.group(1)) * CAP_UNITS[m.group(2).upper()]
+    return int(x) if x > 0 and x == int(x) else None
+
 def _positive_num(v):
     """A pause factor: a positive number, whole or fractional. A bool is not one."""
     if isinstance(v, bool): return None
@@ -1702,8 +1715,8 @@ def limits_set(body):
     path = profile_file()
     if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
     cur = limits_settings(path)
-    cap = _positive_int(body.get("cap", cur["cap"]))
-    if cap is None: return {"err": "token cap must be a positive whole number"}
+    cap = _cap_value(body.get("cap", cur["cap"]))
+    if cap is None: return {"err": "token cap must be a positive whole number, as 1500000, 6M, 250M or 1T"}
     factor = _positive_num(body.get("factor", cur["factor"]))
     if factor is None: return {"err": "pause factor must be a positive number"}
     guard = _guard_value(body.get("guard", cur["guard"]))
@@ -7398,6 +7411,11 @@ function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme
   +(kanMsg?`<div class="mx${kanMsg.startsWith("!")?" err":""}" role=status>${esc(kanMsg.replace(/^!/,""))}</div>`:"")}
 // }KAN
 const limN=v=>v==null?"—":tk(v);
+const LIM_UNITS=[["T",1e12],["B",1e9],["M",1e6],["K",1e3]],LIM_SCALE={K:1e3,M:1e6,B:1e9,T:1e12};
+const limCapFmt=n=>{const x=Number(n);if(n===""||n==null||!Number.isFinite(x))return String(n??"");   // a cap reads 1.5M, 250M or 1T, never a row of zeros (#2434)
+ for(const[u,d]of LIM_UNITS)if(x>=d)return String(+(x/d).toFixed(2))+u;return String(x)};
+const limCapParse=s=>{const t=String(s??"").trim(),m=t.match(/^(\d+(?:\.\d+)?)\s*([KMBT])$/i);   // the field takes the same units back (#2434)
+ const x=m?+m[1]*LIM_SCALE[m[2].toUpperCase()]:/^\d+$/.test(t)?+t:NaN;return Number.isInteger(x)&&x>0?x:null};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
 const limVals=()=>limPend||{guard:limG(),cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
@@ -7411,7 +7429,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  ],`Profile file: <code>${esc(s.profile||"none in force")}</code>`)   // the note row is the profile path alone; the last change stays data, never a fifth fact
  +setSettings("lim",[
   setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${v.guard==="on"?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>`),
-  setRow("Daily token cap",`<input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="Daily token cap">`),
+  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limCapFmt(v.cap))}" aria-label="Daily token cap"> <small class=kstop>Accepts 6M, 250M, 1T.</small>`),
   setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="Pause factor">`,"the hourly burn that pauses dispatch, as a multiple of the cap's hourly share"),
  ]);
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
@@ -7420,8 +7438,9 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
  try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
  limRender()}
-async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
- try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
+async function limPost(confirm){const vals=limVals(),cap=limCapParse(vals.cap),send={...vals,cap:cap==null?vals.cap:cap};   // the hub stores a plain integer whatever unit was typed (#2434)
+ if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
+ try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...send,confirm})}),d=await r.json();
  if(d.err){limDiff=null;limMsg="!"+d.err}
  else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
  else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
@@ -7502,7 +7521,7 @@ const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & cha
 const SET_SAVE=["lim","mdl","slk","sub"];   // the themes the one Save writes; Loop and Access stage no file here
 let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
-const limDirty=()=>kanDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows are this theme's too (#2432)
+const limDirty=()=>kanDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(limCapParse(v.cap)??v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows are this theme's too (#2432)
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
 const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);

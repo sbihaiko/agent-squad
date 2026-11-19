@@ -160,6 +160,14 @@ def test_a_cap_that_is_not_a_positive_whole_number_is_refused(ctx, bad):
     assert profile_text(ctx) == before
 
 
+@pytest.mark.parametrize("typed,stored", [("6M", 6000000), ("250M", 250000000), ("1T", 1000000000000)])
+def test_a_cap_typed_with_a_unit_suffix_stores_a_plain_integer(ctx, typed, stored):
+    out = save(ctx, cap=typed, factor="2", guard="on", confirm=True)
+    assert not out.get("err"), out
+    assert out["state"]["cap"] == stored, out
+    assert sourced(ctx, "SG_TOKEN_BURN_CAP") == str(stored)
+
+
 @pytest.mark.parametrize("bad", ["0", "-1", "abc", "", True])
 def test_a_pause_factor_that_is_not_a_positive_number_is_refused(ctx, bad):
     before = profile_text(ctx)
@@ -341,6 +349,23 @@ def test_the_guard_is_a_switch_that_shows_its_state(ctx):
 def test_a_flipped_switch_answers_the_word_the_hub_reads(ctx):
     assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:true};console.log(JSON.stringify(limVals().guard))') == "on"
     assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limVals().guard))') == "off"
+
+
+def test_the_cap_reads_with_a_unit_suffix_and_its_field_takes_text(ctx):
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    field = re.search(r"<input id=limc ([^>]*)>", settings)
+    assert field, settings
+    assert 'value="1.5M"' in field.group(0), field.group(0)
+    assert "type=number" not in field.group(0), "a number input refuses a unit suffix"
+    got = lim_eval(ctx["hub"], 'console.log(JSON.stringify([1500000,6000000,250000000,1000000000000,999,8000000000]'
+                                ".map(limCapFmt)))")
+    assert got == ["1.5M", "6M", "250M", "1T", "999", "8B"], got
+
+
+def test_the_cap_field_accepts_a_k_m_b_or_t_suffix(ctx):
+    got = lim_eval(ctx["hub"], 'console.log(JSON.stringify(["6M","250M","1T","1500000","2.5K","1.5M","1.5","abc","0M",'
+                                '"-3M",""].map(limCapParse)))')
+    assert got == [6000000, 250000000, 1000000000000, 1500000, 2500, 1500000, None, None, None, None, None], got
 
 
 def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
