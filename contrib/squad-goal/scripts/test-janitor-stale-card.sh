@@ -89,6 +89,7 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 [ -e "$T/st/auto/disp-1008" ] && ! /usr/bin/grep -q ' 1008$' "$T/board.calls" 2>/dev/null && ok "G: a fresh marker stays" || ko "G #1008 touched: $(bc)"
 ! /usr/bin/grep -q ' 1007$' "$T/board.calls" 2>/dev/null && ok "H: a card past In Progress is never downgraded" || ko "H #1007 moved: $(bc)"
 /usr/bin/grep -q '^o 4 Code Complete 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Code Complete, never Done" || ko "I #1009 not reconciled to Code Complete: $(bc)"
+/usr/bin/grep -q '^o 4 Landing 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Landing, never Done" || ko "I #1009 not reconciled to Landing: $(bc)"
 [ -e "$T/st/auto/disp-1010" ] && ! /usr/bin/grep -q ' 1010$' "$T/board.calls" 2>/dev/null && ok "J: a refused read touches nothing" || ko "J #1010 touched on a refusal: $(bc)"
 [ ! -e "$T/st/auto/disp-1012" ] && ! /usr/bin/grep -q ' 1012$' "$T/board.calls" 2>/dev/null && ok "K: a Todo card behind a marker no run holds is released, the card untouched (#771)" || ko "K #1012 stays claimed: $(bc) $o"
 [ ! -L "$T/st/auto/disp-1013" ] && /usr/bin/grep -q '^o 4 Todo 1013$' "$T/board.calls" 2>/dev/null && ! grep -q Traceback <<< "$o" && ok "L: a dangling marker is dropped, its card released, the pass reaches the card pass (#794)" || ko "L #1013: $(bc) $o"
