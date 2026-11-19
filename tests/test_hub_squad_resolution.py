@@ -7,7 +7,6 @@ import importlib.machinery
 import importlib.util
 import pathlib
 import sys
-import tempfile
 import threading
 import time
 import types
@@ -18,34 +17,44 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
 
+def _squad_keys():
+    return [k for k in sys.modules if k == "squad" or k.startswith("squad.")]
+
+
+@pytest.fixture(autouse=True)
+def restore_squad_modules():
+    before = {k: sys.modules[k] for k in _squad_keys()}
+    yield
+    for k in _squad_keys():
+        del sys.modules[k]
+    sys.modules.update(before)
+
+
 @pytest.fixture
-def hub(monkeypatch):
+def hub(monkeypatch, tmp_path):
     monkeypatch.setenv("SG_REPO", "x/y")
     monkeypatch.setenv("SG_OWNER", "x")
     monkeypatch.setenv("SG_PROJECT", "4")
     monkeypatch.setenv("SG_CHECKOUT", str(ROOT))
-    monkeypatch.setenv("SG_HUB_DIR", tempfile.mkdtemp())
+    monkeypatch.setenv("SG_HUB_DIR", str(tmp_path / "hub"))
     spec = importlib.util.spec_from_file_location("hub_squad_resolution", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-def _half_built(name):
-    """A module whose import is in progress: its file is set and its body has not run."""
+def _bare_stub(name):
+    """A module the package binds before its body runs: its file is set and no import spec records a finished import."""
     stub = types.ModuleType(name)
     stub.__file__ = str(ROOT / "squad" / (name.split(".")[-1] + ".py"))
-    stub.__spec__ = importlib.machinery.ModuleSpec(name, None)
-    stub.__spec__._initializing = True
     return stub
 
 
 @pytest.fixture
 def partial_reap(monkeypatch):
-    """The package binds `reap` before its body runs, the state a second thread sees during another profile's import."""
     pkg = types.ModuleType("squad")
     pkg.__path__ = [str(ROOT / "squad")]
-    stub = _half_built("squad.reap")
+    stub = _bare_stub("squad.reap")
     pkg.reap = stub
     monkeypatch.setitem(sys.modules, "squad", pkg)
     monkeypatch.setitem(sys.modules, "squad.reap", stub)
@@ -79,13 +88,16 @@ def test_two_threads_resolving_squad_at_once_each_get_a_fully_imported_module(hu
     assert answers == [True, True]
 
 
-def test_a_nested_name_is_imported_only_when_its_own_body_completed(hub, monkeypatch):
+def test_a_nested_name_is_imported_only_when_its_import_finished(hub, monkeypatch):
     pkg = types.ModuleType("squad")
     sub = types.ModuleType("squad.sub")
-    child = _half_built("squad.sub.x")
+    child = _bare_stub("squad.sub.x")
     sub.x = child
     pkg.sub = sub
     monkeypatch.setitem(sys.modules, "squad", pkg)
+    assert not hub._imported(("sub.x",), (child,))
+    child.__spec__ = importlib.machinery.ModuleSpec("squad.sub.x", None)
+    child.__spec__._initializing = True
     assert not hub._imported(("sub.x",), (child,))
     child.__spec__._initializing = False
     assert hub._imported(("sub.x",), (child,))

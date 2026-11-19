@@ -675,11 +675,11 @@ def _bound(pkg, name, m):
     for part in path:
         owner = getattr(owner, part, None)
         if owner is None: return False
-    return getattr(owner, leaf, None) is m and not getattr(getattr(m, "__spec__", None), "_initializing", False)
+    return getattr(owner, leaf, None) is m and getattr(getattr(m, "__spec__", None), "_initializing", True) is False
 
 def _imported(names, mods):
-    """True when each module finished its import: its package binds it, and its body is no longer running (its spec is still
-    initializing while the body runs, even when the package already names it) (#2358)."""
+    """True when each module finished its import: its package binds it, and its spec records the import system's finished
+    mark (`_initializing` is False once the body has run; a bare module carries no such mark) (#2358)."""
     pkg = sys.modules.get("squad")
     return pkg is not None and all(_bound(pkg, n, m) for n, m in zip(names, mods))
 
