@@ -82,9 +82,10 @@ MODEL = {"vc": ["Todo", "Doing", "Code Review"], "cols": ["Todo", "Doing", "Code
 def _drawn(model=None):
     """The lane markup the page builds for this model, with the board and the browser stubbed out."""
     body = re.search(r"const laneHtml=m=>\{.*?\n return h\+\"</div>\"\};", HUB_PY.read_text(), re.S).group(0)
+    count = re.search(r"^function colCount\(.*$", HUB_PY.read_text(), re.M).group(0)   # the header count, against a limit (#2287)
     stubs = ('const esc=s=>String(s),colOf=()=>"var(--s1)",CN={},eye=()=>"",SLOTS=new Map(),cards=()=>"",bo={},f="",'
-             'BOARD_VOCAB={todo:"Todo",doing:"Doing",review:"Code Review"};')
-    html = _lanes_rule(stubs + body + f"console.log(JSON.stringify(laneHtml({json.dumps(model or MODEL)})));")
+             'COLS={},BOARD_VOCAB={todo:"Todo",doing:"Doing",review:"Code Review"};')
+    html = _lanes_rule(stubs + count + "\n" + body + f"console.log(JSON.stringify(laneHtml({json.dumps(model or MODEL)})));")
     return html
 
 

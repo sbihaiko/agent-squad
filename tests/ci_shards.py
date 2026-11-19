@@ -63,7 +63,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_workcmd_counts.py", "tests/test_check_ste.py", "tests/test_drain_policy.py",
     ),
     (
-        "tests/test_board_history_fixtures.py", "tests/test_board_write_unchanged.py", "tests/test_chat_facts.py", "tests/test_cli.py", "tests/test_config_write.py", "tests/test_dashboard_child_issues.py",
+        "tests/test_board_history_fixtures.py", "tests/test_board_limits.py", "tests/test_board_write_unchanged.py", "tests/test_hub_board_column_limits.py", "tests/test_chat_facts.py", "tests/test_cli.py", "tests/test_config_write.py", "tests/test_dashboard_child_issues.py",
         "tests/test_dashboard_labels.py", "tests/test_dashboard_leak_guard.py", "tests/test_dashboard_replay.py", "tests/test_dashboard_server.py", "tests/test_dashboard_states.py",
         "tests/test_dashboard_tailnet.py", "tests/test_defaults.py", "tests/test_envelope_workspace.py", "tests/test_field_run.py", "tests/test_gate_tries_surface.py",
         "tests/test_gh_aggregate_reads.py", "tests/test_gh_interface_check.py", "tests/test_gh_throttle.py", "tests/test_hub_board_blockers.py", "tests/test_hub_board_priority.py", "tests/test_hub_chain_shape.py",
