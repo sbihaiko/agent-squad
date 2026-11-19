@@ -215,9 +215,13 @@ class CmdResult:
 # on 127 after a real check failed. So the shell's own start-failure text is read with it, beside what the command starts.
 CANNOT_START = (126, 127)
 # The exit the fast gate gives when it could not run a battery (`contrib/squad-goal/scripts/fast-gate.sh`: 0 pass, 1 fail,
-# 2 and 4 unproven). The run's gate reads it with the evidence: only a command that printed no summary and named no failing
-# test is unproven, so a command's own exit 4 that measured something stays a measured failure (#1825).
+# 2 and 4 unproven). The run's gate reads it with the evidence: a command that printed no summary and named no failing test
+# measured nothing, so it is unproven; a command that measured something stays a measured failure (#1825, #2337).
 GATE_UNPROVEN_EXIT = 4
+# The gate's own mark: every exit-4 path of fast-gate.sh prints one line that starts `fast-gate:`. The exit code is not
+# exclusive to the gate, because any command may exit 4 for its own reason, so only this line scopes the exit to the gate.
+# A bare exit 4 with no such line measured nothing the gate can vouch for and stays a measured failure (#2337).
+GATE_PROVENANCE = re.compile(r"^fast-gate:", re.MULTILINE)
 
 
 def _named_a_failure(output):
@@ -226,17 +230,6 @@ def _named_a_failure(output):
     return any(NAME_SIGNAL.match(line) for line in (text or "").splitlines())
 
 
-# The gate's own words that say it measured nothing (`contrib/squad-goal/scripts/fast-gate.sh`): a bounded battery, an
-# inconclusive battery, a full budget, or a gate that answered `unproven`. The positive line is required, because the exit
-# code alone proves nothing: a battery that ran a shell suite prints no pytest summary, and a red it named must stay a
-# measured failure (#1825).
-UNPROVEN_SIGNAL = re.compile(r"\bunproven\b|\bno battery ran\b|\binconclusive\b|\bbudget is full\b|\bthe gate does not pass\b")
-
-
-def _said_unproven(output):
-    """True when the output carries the gate's own unproven line: the evidence that the attempt measured nothing."""
-    text = output.decode("utf-8", "replace") if isinstance(output, bytes) else output
-    return UNPROVEN_SIGNAL.search(text or "") is not None
 # The shell's report that it never started a program. A shell builtin that starts says nothing of the kind. The suites run
 # under more than one shell and the words differ: bash says `No such file or directory`, the CI's dash says `not found`.
 START_REFUSAL = ("command not found", "No such file or directory", "not found", "Permission denied", "is a directory")
@@ -352,10 +345,11 @@ def run(cmd, cwd, timeout=None):
     A command the shell cannot parse is `malformed`, not a failed check: nothing ran, so nothing was proved false.
     So is a command whose leading program cannot start (exit 126 or 127 with no such executable): a path that names no
     program proves nothing about the code. A program that did start is a measured failure at any exit.
-    A command that ends on the gate's unproven exit (4), carries the gate's own unproven line, and printed no pytest
-    summary line is `unproven`: the gate could not run, so nothing was proved false (ADR-0164, #1825). The evidence
-    decides that, never the exit code alone: a command that printed a summary, a failing line, or no unproven line at
-    all measured or may have measured its answer, and stays a failure.
+    A command that ends on the gate's unproven exit (4), carries the gate's own `fast-gate:` line, printed no pytest
+    summary line, and named no failing test is `unproven`: the gate measured nothing, so nothing was proved false
+    (ADR-0164, #1825, #2337). The exit code alone is not the gate's, because any command may exit 4 for its own reason, so
+    without that line the command is a measured failure. A command that printed a summary or named a red measured its
+    answer and stays a failure.
     `timeout` None takes the cap of `ac_timeout()` at call time, so `SG_AC_TIMEOUT` reaches the gate and the landing check.
     The counts of the output's last pytest summary are reported beside the exit code, on a green command and a red one
     alike (#80). A timeout and a command the shell cannot parse report none: nothing was measured.
@@ -394,7 +388,8 @@ def run(cmd, cwd, timeout=None):
     if r.returncode in CANNOT_START and _cannot_start(cmd, cwd, env, stderr):      # nothing ran, so nothing was measured (#1803)
         return CmdResult(False, evidence_of(r.stdout + r.stderr), malformed=True)
     out, counts = evidence_of(r.stdout + r.stderr), counts_of(r.stdout + r.stderr)
-    if (r.returncode == GATE_UNPROVEN_EXIT and counts is None and not _named_a_failure(r.stdout + r.stderr)
-            and _said_unproven(r.stdout + r.stderr)):     # the gate's own line is the evidence, never the exit alone (#1825)
-        return CmdResult(False, out, unproven=True)
+    text = r.stdout + r.stderr
+    if (r.returncode == GATE_UNPROVEN_EXIT and GATE_PROVENANCE.search(text.decode("utf-8", "replace"))
+            and counts is None and not _named_a_failure(text)):
+        return CmdResult(False, out, unproven=True)     # the gate's exit 4, no summary and no red named: nothing was measured (#2337)
     return CmdResult(False, out, counts=counts)
