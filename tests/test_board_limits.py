@@ -4,6 +4,8 @@ The project settings file accepts one limit per board column, a whole number fro
 defaults follow the present machine limits, so the first release changes no behaviour. The module answers a card limit
 only (#2430): a machine cap counts run slots, and the pass that bounds slots reads it in its own unit.
 """
+import pathlib
+
 import pytest
 import yaml
 
@@ -81,6 +83,19 @@ def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
 @pytest.mark.parametrize("name", ["Todo", "Testing"])
 def test_a_column_the_limit_stops_no_pass_yet_says_so(name):
     assert B.column_stop(name) == "no pass reads it yet"
+
+
+def test_the_batching_stop_text_names_the_pass_and_its_refusal():
+    # The Settings screen draws `column_stop`; the pass prints its own line. Both must name the same effect, or an operator
+    # reads "starts no run" in Settings and meets an unrelated message in the log (the Batching limit's text drifted once).
+    script = (pathlib.Path(__file__).resolve().parents[1]
+              / "contrib/squad-goal" / "scripts" / "autofrontier.sh").read_text()
+    assert "sg_column_limit Batching" in script, "the named pass reads no Batching limit"
+    refusal = [ln for ln in script.splitlines() if "column Batching full" in ln and "nothing dispatched" in ln]
+    assert refusal, "the pass carries no Batching-full refusal line"
+    stops = B.column_stop("Batching")
+    assert "starts no run" in stops, stops
+    assert "autofrontier" in stops, stops
 
 
 def test_a_column_the_store_does_not_carry_answers_the_no_reader_line():
