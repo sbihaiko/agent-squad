@@ -7411,7 +7411,7 @@ let limS=null,limMsg="";   // the last state the hub saved; a typed value lives 
    along. The page writes and renders; the hub validates, writes atomically and records the change (ADR-0030, ADR-0137). */
 const LIM_FIELD={limg:"guard",limc:"cap",limf:"factor"},LIM_NAME={guard:"token guard",cap:"daily token cap",factor:"pause factor"};
 const LIM_ID={guard:"#limg",cap:"#limc",factor:"#limf"};
-let limOK="",limVal="",limAt=0,limBad="",limBadMsg="",limTmr=null,limPauseMs=700;
+let limOK="",limVal="",limAt=0,limBad="",limBadMsg="",limTmr=null,limPauseMs=700,limSent={};   // limSent holds the value each field last posted, so a timer save and a later blur send one request (#2433)
 const limKName=k=>LIM_NAME[k]||k;
 const limMark=k=>limOK===k?"<span class=lok aria-label=saved>✓</span>":"";
 const limBadCls=k=>limBad===k?" class=bad":"";
@@ -7425,13 +7425,13 @@ const limTyped=k=>{if(k==="guard"){const g=$("#limg");return g?limG():null}   //
  const el=$(LIM_ID[k]);return el&&typeof el.value==="string"?el.value:null};
 async function limSend(body){const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
 async function limWrite(which,send=limSend){if(which.startsWith("kan:"))return kanWrite(which.slice(4));
- if(limBad&&limBad!==which)return {err:limBadMsg||limKName(limBad)+" was not saved"};   // one refused field holds the write until it is fixed
  const cur=limS||{},vals={guard:String(cur.guard??""),cap:String(cur.cap??""),factor:String(cur.factor??"")},typed=limTyped(which);
- if(typed!==null)vals[which]=typed;   // only the edited field leaves the saved state
+ if(typed!==null)vals[which]=which==="cap"&&limCapParse(typed)!=null?String(limCapParse(typed)):typed;   // a cap leaves as the whole integer its units denote; text the parse refuses stays raw, for the hub to refuse (#2433)
+ if(limSent[which]===vals[which]){if(limBad===which){limBad="";limBadMsg="";limRender()}return {skip:true}}   // the last write posted this value already, so a timer save and then a blur send one request (#2433)
  let d;
  try{d=await send({...vals,confirm:true})}catch(x){d={err:"save failed"}}
- if(d.err){limBad=which;limBadMsg=d.err;limOK="";limAt=0}
- else{limS=d.state||limS;limBad="";limBadMsg="";limOK=which;limVal=String((d.state||vals)[which]);limAt=Date.now()}
+ if(d.err){limBad=which;limBadMsg=d.err;limOK="";limAt=0;delete limSent[which]}   // a refused value is never remembered as posted
+ else{limS=d.state||limS;limBad="";limBadMsg="";limOK=which;limVal=String((d.state||vals)[which]);limAt=Date.now();limSent[which]=vals[which]}
  limRender();if(typeof setBar==="function")setBar();return d}
 function limQueue(which,send){clearTimeout(limTmr);limTmr=setTimeout(()=>limWrite(which,send),limPauseMs)}
 
@@ -7472,7 +7472,7 @@ const limBurn=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hou
  return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const s=limS,v=s,off=s.guard==="off";
+ const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
  setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
@@ -7481,9 +7481,9 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
   setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
  ],`Profile: <code title="${esc(s.profile||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path on hover (#2434); the last change stays data, never a fifth fact
  +setSettings("lim",[
-  setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${v.guard==="on"?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>${limMark("guard")}`),
-  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}> <small class=kstop>Accepts 6M, 250M, 1T.</small>${limMark("cap")}`),
-  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>${limMark("factor")}`),
+  setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>${limMark("guard")}`),
+  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}> <small class=kstop>Accepts 6M, 250M, 1T.</small>${limMark("cap")}`),
+  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${limBad==="factor"&&badVal!==null?esc(badVal):v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>${limMark("factor")}`),
  ],limLine());   // one line: the saved value and its age, or what the hub refused (#2433)
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
@@ -7605,7 +7605,8 @@ $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
 const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);if(!say.length)return;
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
+// The explicit revert drops a refused value and redraws the saved state (#2433).
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
