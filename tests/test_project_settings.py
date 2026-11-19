@@ -179,8 +179,9 @@ def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     overlay = yaml.safe_load((Path(__file__).resolve().parents[1] / "docs" / "squad" / "defaults.yaml").read_text())
     # Owner ruling: four runs and twelve children. Four runs outran the three gate slots, so a child's entry gate can be
     # queued behind its siblings and reach its bound unproven; the run records that as a wait, never as work lost.
-    # The gate slots go below the plugin's twelve so one gate runs at a time: at twelve, three gates held the machine between
-    # them, each kept its slots while it waited for the lock, and the queue outlived the takeover bound (#1191). A project may
-    # only lower a machine-wide cap, and this one lowers it.
-    assert overlay["caps"] == {"runs": 4, "children": 12, "gates": 3}
+    # The gate slots go below the plugin's twelve: at twelve, three gates held the machine between them, each kept its slots
+    # while it waited for the lock, and the queue outlived the takeover bound (#1191). A project may only lower a machine-wide
+    # cap, and this one lowers it. Owner 2026-11-19: four slots, because the loop's gate asks two and a run's command asks two,
+    # so a landing and a child gate run together; at three the landing took the whole budget and 18 runs waited in one day.
+    assert overlay["caps"] == {"runs": 4, "children": 12, "gates": 4}
     assert overlay["limits"]["max_budget_usd"] == 30
