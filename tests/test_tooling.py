@@ -833,6 +833,28 @@ def test_every_shell_fixture_that_runs_a_dispatcher_pins_its_disk_floor():
     assert unpinned == [], f"these fixtures run autobug.sh or autofrontier.sh with no SG_MIN_FREE_GB pin: {unpinned}"
 
 
+# #2397: a fixture that runs the real autobug.sh or autofrontier.sh switches the nightly window off. Without it the
+# dispatch hold (ghcall.sh, gh_dispatch_hold) reads the wall clock, and in the nightly hour every pass holds and the suite
+# is red. The daily suites run in that hour, so the suite is red exactly when the loop measures it.
+def _runs_a_dispatcher_in_the_nightly_window(text):
+    """True when a non-comment line runs the real dispatcher and no SG_NIGHTLY_OFF assignment is in the file."""
+    runs = any(_DISPATCHER_RUN.search(line) and not _NOT_A_RUN.search(line) for line in text.splitlines())
+    return runs and not re.search(r"(?m)^\s*(?:export\s+)?SG_NIGHTLY_OFF=", text)
+
+
+def test_a_dispatcher_fixture_switches_the_nightly_window_off_in_the_text():
+    """The guard itself: a fixture that runs the dispatcher with the window on is caught; a stub or a switched-off fixture is not."""
+    assert _runs_a_dispatcher_in_the_nightly_window('bash "$T/s/autobug.sh"\n')
+    assert not _runs_a_dispatcher_in_the_nightly_window('export SG_NIGHTLY_OFF=1\nbash "$T/s/autobug.sh"\n')
+    assert not _runs_a_dispatcher_in_the_nightly_window('printf "#!/bin/bash\\nexit 0\\n" > "$F/autobug.sh"\n')
+
+
+def test_every_shell_fixture_that_runs_a_dispatcher_switches_the_nightly_window_off():
+    scripts = ROOT / "contrib/squad-goal/scripts"
+    found = [p.name for p in sorted(scripts.glob("test-*.sh")) if _runs_a_dispatcher_in_the_nightly_window(p.read_text(errors="replace"))]
+    assert found == [], f"these fixtures run autobug.sh or autofrontier.sh with the nightly window on: {found}"
+
+
 def test_no_shell_suite_probes_the_machine_for_a_sleep_it_did_not_start():
     """A suite that hangs a process to prove a deadline finds and ends that process by a name only its own run holds
     (#1735). `pgrep -f "sleep 2718"` reads every suite on the machine: two gates side by side then read each other's hang

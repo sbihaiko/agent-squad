@@ -10,6 +10,7 @@
 # Nothing here touches the network, a model or a board.
 for v in $(compgen -e | /usr/bin/grep -E '^(SG_|FC_)'); do unset "$v"; done
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
+export SG_NIGHTLY_OFF=1   # the dispatch hold reads the wall clock: the nightly hour must not hold a fixture pass (#2397); a case that tests the hold sets its own hour
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
 G=/usr/bin/git
@@ -33,7 +34,7 @@ echo '{"core":{"remaining":100,"limit":5000,"reset":'"$(( $(date +%s) + 3000 ))"
 frontier_pass() {
   local n=$1 t; t=$(mktemp -d -p "$T")
   mkdir -p "$t/s" "$t/st/auto" "$t/bin" "$t/co/docs/squad/workflows" "$t/fix"
-  for f in autofrontier.sh columnlimit.sh stack.sh startability.sh skiplabels.sh workbranches.sh ghcall.sh drainpolicy.py ghread.py ghthrottle.py single.sh cluster.py address.sh issue_ledger.py; do cp "$d/$f" "$t/s/"; done
+  for f in autofrontier.sh columnlimit.sh stack.sh startability.sh skiplabels.sh workbranches.sh ghcall.sh drainpolicy.py ghread.py ghthrottle.py single.sh cluster.py address.sh issue_ledger.py liveholds.py; do cp "$d/$f" "$t/s/"; done
   printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$t/st" "$t/co" > "$t/s/env.sh"
   printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":24,"max_parallel":2}]}]}' > "$t/co/docs/squad/workflows/dynamic.graph.json"
   printf 'caps:\n  runs: 10\n' > "$t/co/docs/squad/defaults.yaml"
