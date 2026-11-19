@@ -55,10 +55,11 @@ def test_the_text_of_a_number_writes_an_integer(tmp_path):
 # --- the default values
 
 def test_the_plugin_defaults_hold_the_table():
-    # The plugin file names the columns it limits; a column it leaves out answers the module's default, which is none
-    # (Backlog). Where the file names a column, its value is the store's.
+    # The plugin file names every column of the table, so a column it left out fails here instead of answering the
+    # module's default unnoticed.
     cfg = D.load()["columns"]
-    assert {n: cfg[n]["max_cards"] for n in cfg} == {n: TABLE[n] for n in cfg}
+    assert set(cfg) == set(TABLE)
+    assert {n: cfg[n]["max_cards"] for n in TABLE} == TABLE
 
 
 def test_the_plugin_defaults_pass_their_own_checker():
