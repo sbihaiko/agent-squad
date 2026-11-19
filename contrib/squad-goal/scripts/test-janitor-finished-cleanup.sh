@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.05
 # A finished run is cleaned before FINISHED-RUN drops its line (#2419). A run whose verdict is final leaves active-runs.txt
 # on its first pass, and no later pass reads it, so every cleanup must run in that same pass: rule A kills the leftover
 # processes, and the ccdefer markers go. Rule A already kills a leftover; its kill holds no longer, because the drop read
