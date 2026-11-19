@@ -22,6 +22,20 @@ got=$(sg_column_limit Doing "$T/co")
 [ "$got" = 7 ] && ok "the seam answers the column's card limit whatever a machine cap says" || ko "the seam answered '$got', not 7"
 [ -z "$(type -t sg_board_limit_effective)" ] && ok "the seam holds no machine-cap helper" || ko "the seam still exposes sg_board_limit_effective"
 
+# 2b) The card count of a column (#2430): every board row of that column, and for Doing each hand hold whose issue has no
+#     card there. A hold on a card already in Doing counts once.
+printf '41\tDoing\n42\tDoing\n43\tIn Progress\n44\tTodo\n' > "$T/board"
+got=$(sg_column_cards Doing "$T/board")
+[ "$got" = 3 ] && ok "the count reads Doing and In Progress rows" || ko "the count answered '$got', not 3"
+printf '[{"number":42,"labels":[{"name":"ready-for-human"}]}]' > "$T/issues.json"
+got=$(sg_column_cards Doing "$T/board" "$T/issues.json")
+[ "$got" = 3 ] && ok "a hold on a card already in Doing counts once" || ko "a hold on a Doing card counted twice: '$got'"
+printf '[{"number":90,"labels":[{"name":"ready-for-HAL9K"}]}]' > "$T/issues.json"
+got=$(sg_column_cards Doing "$T/board" "$T/issues.json")
+[ "$got" = 4 ] && ok "a hand hold whose issue has no Doing card adds one" || ko "the hold did not count in Doing: '$got'"
+got=$(sg_column_cards Todo "$T/board" "$T/issues.json")
+[ "$got" = 1 ] && ok "another column counts its rows only" || ko "the Todo count answered '$got', not 1"
+
 # 3) A column with no limit answers nothing and rc 0.
 limits null
 got=$(sg_column_limit Doing "$T/co"); rc=$?
