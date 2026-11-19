@@ -1464,28 +1464,31 @@ is_md_note() {
   return 1
 }
 
+# paths_classified <text>: every path an issue's text names that is no Markdown note, one per line, each prefixed `T ` for a
+# test path or `C ` for a code path. It reads the paths one line at a time and never word-splits them again, so a path with
+# whitespace stays one path. Every decision a text's paths settle is read from this one classification, so the decisions
+# never disagree about a path.
+paths_classified() {
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    is_md_note "$p" && continue
+    if is_test_path "$p"; then printf 'T %s\n' "$p"; else printf 'C %s\n' "$p"; fi
+  done < <(paths_of "$1")
+}
+
 # paths_nonnote <text>: the paths an issue's text names that are no Markdown note, one per line.
 paths_nonnote() {
-  local p
-  for p in $(paths_of "$1"); do is_md_note "$p" || printf '%s\n' "$p"; done
+  local l
+  while IFS= read -r l; do [ -n "$l" ] && printf '%s\n' "${l#? }"; done < <(paths_classified "$1")
 }
 
 # paths_nontest <text> (#2418): the paths an issue's text names that are neither a test path nor a Markdown note, one per
 # line: the code the text asks for. It is empty when the text names test paths and notes only, and empty when it names no
-# path at all. The two decisions of a text -- whether it asks for a test alone, and the code it names -- both derive from
-# this one classification, so they never disagree about a path.
+# path at all.
 paths_nontest() {
-  local p
-  for p in $(paths_nonnote "$1"); do is_test_path "$p" || printf '%s\n' "$p"; done
-}
-
-# asks_test_only <text> (#2418): 0 when the text names at least one path that is no note, and every such path is a test
-# path. Such an issue asks for a test change, and a wave of tests alone answers it. A text that names a code path asks for
-# more than a test, and a text that names no path cannot be shown to ask for a test alone: both keep the issue open.
-asks_test_only() {
-  local all code
-  all=$(paths_nonnote "$1"); [ -n "$all" ] || return 1
-  code=$(paths_nontest "$1"); [ -z "$code" ]
+  local l
+  while IFS= read -r l; do case "$l" in 'C '*) printf '%s\n' "${l#C }";; esac; done < <(paths_classified "$1")
 }
 
 # testonly_read <from> <to> (#2418): the one issue a wave that changes test files only names in its Refs, read against the
@@ -1494,18 +1497,25 @@ asks_test_only() {
 # Otherwise `testmiss` names the issue and `testpaths` the code its text asks for, and testonly_book records both on it.
 # It reads no issue when the wave changes code, names no issue, or names several.
 testonly_read() {
-  local only txt
+  local only txt cls l
+  local -a miss=()
   testmiss=""; testpaths=""
   [ -z "$issues" ] && [ -z "$amb" ] && [ -z "$nontest" ] || return 0
   [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ] || return 0
   only=$(printf '%s' "$rfs" | tr -d ' ')
+  # (#2418) The token is used as an issue number: a Refs token that is no number names no issue, so it takes no decision.
+  case "$only" in ''|*[!0-9]*) return 0;; esac
   txt=$(issue_text "$only" 2>/dev/null) || txt=""
-  if [ -n "$txt" ] && asks_test_only "$txt"; then
+  # One classification of the text's paths settles both decisions of the rule: the issue asks for a test change when it
+  # names at least one path and every such path is a test path, and `testpaths` is the code paths of that same read.
+  cls=$(paths_classified "$txt")
+  while IFS= read -r l; do case "$l" in 'C '*) miss+=("${l#C }");; esac; done <<< "$cls"
+  if [ -n "$txt" ] && [ -n "$cls" ] && [ ${#miss[@]} = 0 ]; then
     issues=$only
     echo "WAVE-NOTE $w: the wave changes test files only, and issue #$only asks for a test change (its text names test paths and no code path); the landing closes #$only"
   else
     testmiss=$only
-    testpaths=$(paths_nontest "$txt" | while IFS= read -r f; do printf '%s' "${testpaths:+$testpaths, }$f"; done)
+    if [ ${#miss[@]} -gt 0 ]; then testpaths=$(printf '%s, ' "${miss[@]}"); testpaths=${testpaths%, }; fi
   fi
 }
 
@@ -1848,7 +1858,7 @@ wave_conflict() {
 }
 
 land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
-  local run=$1 w SG_REQUEUE_RUN=$1; w=$(wave_of "$run")
+  local run=$1 w SG_REQUEUE_RUN=$1 testmiss testpaths; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
   # The run's own folder, as active-runs.txt records it: an absolute path (a loop run lives under its issue worktree) or a bare
   # name under the checkout's runs/. The caller passes it; without one the name is read as a bare name.
@@ -2062,6 +2072,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
     land_read "origin/$base" HEAD
+    # (#2418) A wave that changes test files only delivers the one issue its Refs name when that issue asks for a test
+    # change: its text names test paths and no code path. A wave of tests alone then answers the issue (#533 held that it
+    # delivers nothing when the issue asks for more). The issue whose text asks for code, or names no path, keeps open:
+    # `testmiss` names it and `testpaths` the code it asks for, and testonly_book records why on it.
+    testonly_read "origin/$base" HEAD
     # ONE push of the wave's tip to the base: one ref update, one CI run, and a push git refuses unless it is a fast-forward,
     # so no merge commit can land. Nothing else is pushed -- no child branch, and the wave branch goes once its work is in.
     out=$(sc push -q origin "HEAD:refs/heads/$base" 2>&1) && break
@@ -2090,11 +2105,8 @@ land_read() {
     # wave that names two issues (#869).
     rfs=$(refs_of "$S" "$1..$2")
     nontest=$(sc diff --name-only "$1" "$2" 2>/dev/null | while IFS= read -r f; do is_code_path "$f" && { echo "$f"; break; }; done)
-    # (#2418) A wave that changes test files only delivers the one issue its Refs name when that issue asks for a test
-    # change: its text names test paths and no code path. A wave of tests alone then answers the issue (#533 held that it
-    # delivers nothing when the issue asks for more). The issue whose text asks for code, or names no path, keeps open:
-    # `testmiss` names it and `testpaths` the code it asks for, and testonly_book records why on it.
-    testonly_read "$1" "$2"
+    # (#2418) The test-only decision reads this range too, but its caller makes it, never this read: `land` and each run of
+    # `land_batch` call testonly_read after land_read, so a batch run reads its own range and no other run's.
     if [ -z "$issues" ] && [ -z "$amb" ] && [ -n "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
       issues=$(printf '%s' "$rfs" | tr -d ' ')
       echo "WAVE-NOTE $w: the only Refs of the wave name #$issues, on a test-only RED commit, and its fix commit names none; the landing closes #$issues"
@@ -2357,9 +2369,12 @@ land_batch() {
   for i in $(seq $(( ${#rs[@]} - 1 )) -1 0); do
     run=${rs[$i]}; w=${ws[$i]}; rd=${rds[$i]}; sha=${tips[$i]}; SG_REQUEUE_RUN=$run
     k=$bstart; [ "$i" = 0 ] || k=${tips[$((i - 1))]}
-    if [ "$run" = "$self0" ]; then land_read "$k" "$sha"; land_books; brc=$?
+    # (#2418) Each run of the batch takes the test-only decision over its own range, with the two fields cleared first, so
+    # testonly_book books that run's issue and never a value the run before it left.
+    testmiss=""; testpaths=""
+    if [ "$run" = "$self0" ]; then land_read "$k" "$sha"; testonly_read "$k" "$sha"; land_books; brc=$?
     else
-      { land_read "$k" "$sha"; land_books; } 2>&1 | sed "s|^|BATCH $run: |"
+      { testmiss=""; testpaths=""; land_read "$k" "$sha"; testonly_read "$k" "$sha"; land_books; } 2>&1 | sed "s|^|BATCH $run: |"
       [ "${PIPESTATUS[0]}" = 0 ] && : > "$SG_STATE/auto/wland-$run"
     fi
   done
