@@ -19,6 +19,15 @@ sg_battery_workers() {
   echo "${SG_BATTERY_WORKERS:-$w}"
 }
 
+# sg_git_env_scrub (#2306): a git hook exports GIT_DIR, and a gate it starts hands it to every suite. A fixture that runs
+# `git init --bare` or `git config` in a folder of its own then writes GIT_DIR instead, and that set core.bare = true on the
+# checkout that ran the gate. Each suite runner (gate.sh, fast-gate.sh, child-gate.sh, shell-suites.sh, daysuites.sh) calls this before any
+# suite runs. Git then finds the repository from the working directory, which is the checkout a hook names.
+# The work is one test of the three names the criteria list; GIT_COMMON_DIR and GIT_OBJECT_DIRECTORY redirect git just the
+# same way, so they go with them, and a gate entry with no hook variable does nothing.
+# tests/shell_suites.py (GIT_LOCATION) keeps the same list for the pytest side.
+sg_git_env_scrub() { if [ -n "${GIT_DIR+1}${GIT_WORK_TREE+1}${GIT_INDEX_FILE+1}" ]; then unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY; fi; return 0; }
+
 # drain_stopping: a drain has committed its stop (#1711). Its last busy read and the stop are two instants, and a review or
 # a landing that starts between them is work the drain could not see and takes with the group. So the drain writes
 # $SG_STATE/auto/drain-stop before that last read, and every taker asks here: a review exits 5, a landing exits 76, both of

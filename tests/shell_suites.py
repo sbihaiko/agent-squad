@@ -89,9 +89,18 @@ def end_group(pgid):
     return True
 
 
+# (#2306) A git hook or a gate exports these, and a fixture's `git init --bare` or `git config` in its own folder then writes
+# the caller's checkout instead. caps.sh (sg_git_env_scrub) keeps the same list for the shell gates.
+# GIT_HOOK_LOCATION is the three names the criteria list: the pytest process drops those at import, and a spawned suite starts
+# with all five cleared.
+GIT_HOOK_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+GIT_LOCATION = GIT_HOOK_LOCATION + ("GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")
+
+
 def _run(suite, timeout=None, extra_env=None):
     timeout = timeout_for(suite) if timeout is None else timeout
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "SERIAL_"))}   # the gate exports its lock bounds (#755)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("SG_", "SERIAL_")) and k not in GIT_LOCATION}   # the gate exports its lock bounds (#755)
     if extra_env:
         env.update(extra_env)   # a variable a caller sets on purpose, after the clear: the suite must survive it
     with tempfile.TemporaryDirectory() as home:

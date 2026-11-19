@@ -89,6 +89,8 @@
 # own. A gate whose caller lives never takes that path.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 . "$here/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"   # SG_PS in every branch, the --run child too (#1508)
+# (#2306) The gate command never writes a GIT_DIR its caller exported. A caps.sh with no scrub refuses the gate, never skips it.
+sg_git_env_scrub || { echo "gate.sh: $here/caps.sh gave no sg_git_env_scrub, so a hook's GIT_DIR would reach the gate; refused" >&2; exit 2; }
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
 }

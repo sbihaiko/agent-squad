@@ -7,7 +7,7 @@
 # and leaves that lock alone.
 # usage: bash test-shell-suites-gate.sh [path/to/shell-suites.sh]
 src=${1:-$(dirname "$0")/shell-suites.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-S=$T/s; mkdir -p "$S"; cp "$src" "$(dirname "$src")/serial.sh" "$S/"   # serial.sh beside the suites, as in the checkout
+S=$T/s; mkdir -p "$S"; cp "$src" "$(dirname "$src")/serial.sh" "$(dirname "$src")/caps.sh" "$S/"   # serial.sh and caps.sh (the git scrub, #2306) beside the suites, as in the checkout
 export SG_STATE=$T/st; mkdir -p "$SG_STATE"
 printf '#!/bin/bash\necho start >> %s/log; sleep 2; echo end >> %s/log\n' "$T" "$T" > "$S/test-slow.sh"
 : > "$T/log"

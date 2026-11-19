@@ -72,6 +72,7 @@ test-gh-pass-bounded.sh 3.40
 test-ghcache.sh 2.83
 test-ghcall-refusal.sh 0.41
 test-ghspend.sh 6.27
+test-git-env-scrub.sh 4.02
 test-hand-gate.sh 1.86
 test-health.sh 141.70
 test-heartbeat.sh 0.86
@@ -110,6 +111,7 @@ test-janitor-board-reconcile.sh 4.71
 test-janitor-board-vocab.sh 1.58
 test-janitor-branch-state.sh 1.14
 test-janitor-ccdefer.sh 0.95
+test-janitor-checkout-bare.sh 4.61
 test-janitor-cleanup.sh 13.68
 test-janitor-comment-quota.sh 1.36
 test-janitor-dashboard-ceiling.sh 2.34

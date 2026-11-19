@@ -3547,7 +3547,7 @@ def test_1392_the_gui_suite_command_goes_through_the_serial_lock_and_the_shell_s
     scripts = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("shell-suites.sh", "serial.sh"):
+    for name in ("shell-suites.sh", "serial.sh", "caps.sh"):   # caps.sh holds the git scrub shell-suites.sh requires (#2306)
         (d / name).write_text((scripts / name).read_text())
     suite = d / "test-x.sh"
     suite.write_text("#!/bin/bash\nexit 0\n")

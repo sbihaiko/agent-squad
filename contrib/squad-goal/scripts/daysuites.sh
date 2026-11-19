@@ -38,6 +38,8 @@ if [ "${1:-}" = --suite ]; then
   sg_caps take gates "$holder" --count "$SG_DAYSUITES_SLOTS" --wait "$SG_DAYSUITES_SLOT_WAIT" --pid $$ --target "$PWD" >/dev/null; rc=$?
   [ "$rc" = 0 ] || { echo "daysuites: held: no caps.gates slot within ${SG_DAYSUITES_SLOT_WAIT}s; $suite did not run (exit $rc)" >&2; exit 73; }
   took=1
+  # (#2306) The suite never writes a GIT_DIR its caller exported, as at every other suite runner. A missing scrub refuses the suite.
+  sg_git_env_scrub || { echo "daysuites: $here/caps.sh gave no sg_git_env_scrub; $suite did not run" >&2; exit 2; }
   hm=$(mktemp -d) 2>/dev/null || hm=
   # Hermetic like shell-suites.sh: every inherited SG_* and SERIAL_* is cleared and HOME sits in its own temp dir, so the
   # live loop's state and profile never reach an assertion. The pass's own state is read before this line, never after.
