@@ -22,6 +22,7 @@ case "$a" in
   *graphql*) printf '%s\n' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}';;
   *repos/x/y/branches*) :;;
   *repos/x/y/issues/5001*) printf 'open\t\tIssue 5001\t\t\n';;
+  *repos/x/y/issues/5003*) printf 'open\t\tIssue 5003\t\t\n';;
 esac
 J
 sed -i '' "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
@@ -62,11 +63,14 @@ echo '[{"number":5001,"state":"closed","state_reason":"completed","title":"Issue
 run > /dev/null
 [ "$(reads 5001)" = 1 ] && [ "$(fact 5001)" = closed ] && ok "a changed issue takes its facts from the list, with no read of its own" || ko "changed issue: reads $(reads 5001), fact '$(fact 5001)'"
 
-# An entry older than a day is read again, so a deleted issue is found.
+# An entry older than a day is read again, so a deleted issue is found. Issue 5001 closed above, and the janitor retires its run
+# (CLOSED-RUN, #2138), so the aged entry belongs to a run that still holds an open issue.
+mk run-c 5003
 echo '[]' > "$T/sync.json"
-python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["issues"]["5001"]["at"]=1.0; json.dump(d, open(p,"w"))' "$F"
 run > /dev/null
-[ "$(reads 5001)" = 2 ] && ok "an entry older than a day is read again" || ko "reads of an old entry: $(reads 5001)"
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["issues"]["5003"]["at"]=1.0; json.dump(d, open(p,"w"))' "$F"
+run > /dev/null
+[ "$(reads 5003)" = 2 ] && ok "an entry older than a day is read again" || ko "reads of an old entry: $(reads 5003)"
 
 # GitHub's deleted message is an answer about the issue, never a fact to keep.
 mk run-b 5002
