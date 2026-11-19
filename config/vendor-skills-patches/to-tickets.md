@@ -9,6 +9,11 @@ reading aid: it never replaces the parent relation, and the sub-issue link stays
 a spec (a plan, a conversation) carries no prefix, and a prefix names the spec's number only, never a wave, a kind or a
 column.
 
+**A full Backlog refuses the publish.** A Backlog card limit holds new work out of a full Backlog. Before you add a
+ticket's card, run `bash contrib/squad-goal/scripts/backlog-gate.sh ticket`. Exit 0 means the card may be added. Exit 3
+prints the refusal: add no card, report that line unchanged as the reason the publish stopped, and publish no further
+ticket. Any other exit means the board did not answer: add no card, and report its line too.
+
 **Publish order, per ticket.** A card in Todo with no holder is dispatched, so a ticket is held until it is complete.
 For each ticket: create the issue with the label `frozen:not-startable` set, which is the publish hold. Then add it to
 the board, and set the card to Status Backlog with Priority low. Set the Priority through the board door,

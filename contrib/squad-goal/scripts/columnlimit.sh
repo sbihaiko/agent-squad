@@ -37,6 +37,20 @@ sg_column_limit() {   # <column> [target]
   case "$_SG_COLUMN_OUT" in none) return 0 ;; esac
   printf '%s\n' "$_SG_COLUMN_OUT"
 }
+sg_column_publish_column() {   # <kind>: the column a publish of a spec, ticket or bug adds its card to (#2436)
+  local out rc
+  sg_column_root || { sg_column_fail "no squad/board_limits.py"; return 2; }
+  out=$(PYTHONPATH="$_SG_COLUMN_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -P -m squad.board_limits column "$1" 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || { sg_column_fail "squad.board_limits column exited $rc"; return 2; }
+  printf '%s\n' "$out"
+}
+sg_column_publish_refusal() {   # <kind> <cards> [target]: the refusal line and 3 at a full column; 0 and no line under it
+  local out rc
+  sg_column_root || { sg_column_fail "no squad/board_limits.py"; return 2; }
+  out=$(PYTHONPATH="$_SG_COLUMN_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -P -m squad.board_limits refuse "$1" "$2" --target "${3:-${SG_CHECKOUT:-.}}" 2>/dev/null); rc=$?
+  case "$rc" in 0) return 0 ;; 3) printf '%s\n' "$out"; return 3 ;; esac
+  sg_column_fail "squad.board_limits refuse exited $rc"; return 2
+}
 sg_column_cards() {   # <column> <board> [issues]: the cards of one column; a hand hold counts in Doing (#2430)
   # The board answers one tab-separated row per card, `<issue>\t<column>`. Doing answers under both its names. A hand hold
   # is a person's own work on a card, so it takes its share of the Doing column: the hold file's label face on the issue

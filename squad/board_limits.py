@@ -14,6 +14,7 @@ has one resolution.
 Guard: `tests/test_board_limits.py`, `tests/test_hub_board_column_limits.py`.
 """
 import argparse
+import sys
 
 from squad import defaults as D
 from squad import project_settings as P
@@ -102,6 +103,12 @@ def main(argv=None):
             return 0
         print(why)
         raise SystemExit(3)
+    if argv[:1] == ["column"]:   # the column a publish adds its card to (#2436)
+        ap = argparse.ArgumentParser(prog="board_limits column", description="Print the column a publish adds to.")
+        ap.add_argument("kind", choices=sorted(PUBLISH_COLUMN))
+        a = ap.parse_args(argv[1:])
+        print(publish_column(a.kind))
+        return 0
     ap = argparse.ArgumentParser(description="Print one board column's card limit.")
     ap.add_argument("column")
     ap.add_argument("--target", default=".")

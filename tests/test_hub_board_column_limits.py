@@ -89,9 +89,10 @@ def test_each_column_count_comes_from_the_loop_board_cache(hub):
 def test_a_row_states_what_its_limit_stops_or_that_no_pass_reads_it(hub):
     mod, _ = hub
     stops = {c["name"]: c["stops"] for c in mod.columns_read()["columns"]}
+    assert "publish" in stops["Backlog"], stops["Backlog"]
     assert "autofrontier" in stops["Doing"], stops["Doing"]
     assert "branch review pass" in stops["Reviewing"], stops["Reviewing"]
-    for name in ("Backlog", "Todo", "Batching", "Testing"):
+    for name in ("Todo", "Batching", "Testing"):
         assert "no pass reads it yet" in stops[name], (name, stops[name])
 
 
