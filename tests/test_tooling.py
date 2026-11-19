@@ -300,6 +300,20 @@ def test_every_process_table_read_of_a_command_asks_for_the_full_one():
     assert not offenders, "a ps read of a command is not asked for the wide form:\n" + "\n".join(offenders)
 
 
+def test_no_test_rebinds_pathlib_home_on_the_class_for_the_whole_process():
+    """A guard for the test-isolation rule: `pathlib.Path.home` is one class shared by every test in a suite process. A
+    test that assigns it instead of patching it through `monkeypatch` leaves a deleted tmp_path behind, so every later
+    reader of a home reads the wrong tree. The hub then resolves no plugin install and returns an empty tailnet block
+    (#2474, ADR-0018, ADR-0133)."""
+    offenders = []
+    for p in sorted((ROOT / "tests").glob("*.py")):
+        for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if re.search(r"\bPath\.home\s*=(?!=)", code) and "monkeypatch.setattr" not in code:
+                offenders.append(f"{p.relative_to(ROOT)}:{n}: {line.strip()[:120]}")
+    assert not offenders, "a test rebinds pathlib.Path.home for the whole process; patch it through monkeypatch:\n" + "\n".join(offenders)
+
+
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
     """Guard for the CI rule: the two promotion pull requests start the run, and nothing else.
 
