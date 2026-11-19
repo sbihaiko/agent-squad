@@ -56,6 +56,7 @@ def limit(name, target="."):
 # so every field the Settings screen draws states its effect.
 COLUMN_STOP = {"Backlog": "the spec and ticket publish adds no card past this",
                "Doing": "the dispatch pass (autofrontier) claims no card past this",
+               "Batching": "the dispatch pass (autofrontier) starts no run past this",
                "Reviewing": "the branch review pass starts no review past this"}
 NO_STOP = "no pass reads it yet"
 
