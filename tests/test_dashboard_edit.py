@@ -15,6 +15,7 @@ from tests.helpers import five, node, router
 
 
 # --- read-only fields ---
+@pytest.mark.heavy   # starts node: 4.4 s on a CI runner (#2455)
 def test_a_gate_check_and_thresholds_cannot_be_edited_but_its_place_can():
     d = five()
     g = copy.deepcopy(node(d, "spec_gate"))

@@ -73,11 +73,15 @@ def test_the_pass_reads_a_test_case_in_the_one_items_read_it_already_makes(hub, 
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
     monkeypatch.setattr(hub.subprocess, "run", run)
+    # The REST lane is no part of this case: with no answer stubbed, whether it reads depends on the machine's quota and its
+    # login, and a serial shard then fails where a lone run passes (#2455). The items read below is the one under test.
+    monkeypatch.setattr(hub, "_rest_page", lambda route: [])
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
     hub.board_pass()
     reads = [c for c in calls if "/items" in c and "projectsV2" in c]
     assert len(reads) == 1 and "DraftIssue" in reads[0]
-    assert hub.board_cache["cases"] == [FAILED]
+    held = {k: v for k, v in hub.board_cache.items() if k != "items"}
+    assert hub.board_cache.get("cases") == [FAILED], f"the pass wrote no cases: {held}"
     assert [i["n"] for i in hub.board_cache["items"]] == [11]
 
 
