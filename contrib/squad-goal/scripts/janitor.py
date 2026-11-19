@@ -618,6 +618,18 @@ for r in names:
         held |= req_issues(f); keep.append(r); continue
     n = f.name
     if i["verdict"]:
+        # A (#2406): a run with its verdict is over, so a process left in its folder is a leftover. The kill comes before
+        # every rule below that drops the line: no later pass reads a dropped run, so its leftovers would live for ever.
+        if i["idle"] > 180:
+            for q in inside(f):
+                c = procs.get(q, (0, ""))[1]
+                # Another run's own session is never a leftover of this one: childfix.sh starts a fix run with its target
+                # inside the folder of the run it fixes, and rule A killed that engine while it still waited at the run cap
+                # -- a state that names no pid, so no reap could prove it dead and its slot stayed counted (#1270). The engine of
+                # that run is `squad start` (the .venv entry point), not a session, so ENGINE spares it too. This run's own
+                # session is still a leftover, so the pid its record names stays killable, as rule 433 has it.
+                if (SESSION.search(c) or ENGINE.search(c)) and q != i["pid"]: continue
+                if "dashboard_server" not in c and not own_pass(q): kill(q, f"leftover of finished run {n}")
         nums = req_issues(f) | i["acc"]
         if nums and all(issue_is_gone(x) for x in nums):
             say(f"GONE-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is gone; dropped from active-runs")
@@ -641,16 +653,6 @@ for r in names:
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
             drop_line(r); keep_run(r, f, i)   # the line leaves this pass (#2144), and the card pass and rule Q still read the run's record (#2138)
             continue
-        if i["idle"] > 180:
-            for q in inside(f):
-                c = procs.get(q, (0, ""))[1]
-                # Another run's own session is never a leftover of this one: childfix.sh starts a fix run with its target
-                # inside the folder of the run it fixes, and rule A killed that engine while it still waited at the run cap
-                # -- a state that names no pid, so no reap could prove it dead and its slot stayed counted (#1270). The engine of
-                # that run is `squad start` (the .venv entry point), not a session, so ENGINE spares it too. This run's own
-                # session is still a leftover, so the pid its record names stays killable, as rule 433 has it.
-                if (SESSION.search(c) or ENGINE.search(c)) and q != i["pid"]: continue
-                if "dashboard_server" not in c and not own_pass(q): kill(q, f"leftover of finished run {n}")
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")

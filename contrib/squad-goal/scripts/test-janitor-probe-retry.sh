@@ -3,7 +3,7 @@
 # and it reads a run once (auto/counted-<run>). The real janitor drives the real wave.sh here; only gh, the board and
 # `squad premise-check` are stand-ins:
 #  (A) premise-check fails for a transient cause (exit 75: a gh or I/O error): the run is not marked counted, so the next
-#      janitor pass sends the refutation again; once it is recorded, the run is marked counted and a third pass sends nothing.
+#      janitor pass sends the refutation again; once it is recorded, the run is read no more and a third pass sends nothing.
 #  (B) premise-check refuses the refutation (any other exit: the premise was never recorded as needs a probe): the refusal is
 #      named to the owner once and never retried, since the same refusal cannot change (ADR-0134).
 #  (C) a probe whose child entered its wave is requeued by the wave entry (`wave.sh requeue`), and rule O skips the run: a
@@ -58,19 +58,22 @@ mk run-b 61 871; printf '2\n' > "$T/pc-871"       # B: refused for good
 pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=main SG_HUB_DIR="$T/st" \
   SG_PREMISE_CHECK="$T/bin/pc" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" >> "$T/janitor.out" 2>&1; }
 calls() { /usr/bin/grep -c "^$1 " "$T/pc.log" 2>/dev/null; }
+# A run is read no more once its line left active-runs and no retry marker names its issue: a finished run leaves the list on
+# its first pass (FINISHED-RUN, 7fba525ed, #2138), and its read-once marker auto/counted-<run> goes with the line (#693).
+settled() { ! /usr/bin/grep -qx "$1" "$T/st/active-runs.txt" 2>/dev/null && [ ! -e "$T/st/auto/probe-retry-$2" ]; }
 
 pass
 [ "$(calls 870)" = 1 ] && [ ! -e "$T/st/auto/counted-run-a" ] \
   && ok "A: a refutation that failed for a transient cause leaves its run uncounted" || ko "A1: calls $(calls 870), counted $(ls "$T/st/auto" | tr '\n' ' '): $(tail -20 "$T/janitor.out")"
 /usr/bin/grep -q 'PROBE-RETRY #60' "$T/st/cycle.log" "$T/janitor.out" 2>/dev/null && ok "A: the retry is named in the pass log" || ko "A: no retry line: $(cat "$T/st/cycle.log" 2>/dev/null)"
 pass
-[ "$(calls 870)" = 2 ] && [ -e "$T/st/auto/counted-run-a" ] \
-  && ok "A: the next janitor pass sends the refutation again, and then the run is counted" || ko "A2: calls $(calls 870), counted $(ls "$T/st/auto" | tr '\n' ' '): $(tail -20 "$T/janitor.out")"
+[ "$(calls 870)" = 2 ] && settled run-a 60 \
+  && ok "A: the next janitor pass sends the refutation again, and then the run is read no more" || ko "A2: calls $(calls 870), runs $(tr '\n' ' ' < "$T/st/active-runs.txt"), auto $(ls "$T/st/auto" | tr '\n' ' '): $(tail -20 "$T/janitor.out")"
 pass
 [ "$(calls 870)" = 2 ] && ok "A: a recorded refutation is not sent a third time" || ko "A3: calls $(calls 870)"
 
-[ "$(calls 871)" = 1 ] && [ -e "$T/st/auto/counted-run-b" ] \
-  && ok "B: a refused refutation is sent once and never retried" || ko "B: calls $(calls 871), counted $(ls "$T/st/auto" | tr '\n' ' ')"
+[ "$(calls 871)" = 1 ] && settled run-b 61 \
+  && ok "B: a refused refutation is sent once and never retried" || ko "B: calls $(calls 871), runs $(tr '\n' ' ' < "$T/st/active-runs.txt"), auto $(ls "$T/st/auto" | tr '\n' ' ')"
 /usr/bin/grep -q 'PROBE-REFUSED #61' "$T/st/cycle.log" "$T/janitor.out" 2>/dev/null && ls "$T/st/cq/" 2>/dev/null | /usr/bin/grep -q '#61-' \
   && ok "B: the refusal is named to the owner on the issue" || ko "B: refusal not named: $(cat "$T/st/cycle.log" 2>/dev/null) cq: $(ls "$T/st/cq")"
 # C and D: the wave entry's requeue (rule O never reads a child that entered its wave) meets a transient failure.
