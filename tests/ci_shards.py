@@ -56,7 +56,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_handhold.py", "tests/test_hub_live_cache.py", "tests/test_hub_live_work.py",
         "tests/test_janitor_hand_hold.py", "tests/test_janitor_takeover.py", "tests/test_retire.py", "tests/test_jev_screen_set.py", "tests/test_launch.py", "tests/test_launch_modules.py", "tests/test_launch_off_models.py", "tests/test_limits.py",
         "tests/test_livecheck.py", "tests/test_model_fallthrough.py", "tests/test_plugin.py", "tests/test_release_changelog.py", "tests/test_review_calibration.py",
-        "tests/test_review_fix.py", "tests/test_review_grok_measure.py", "tests/test_run_liveness.py", "tests/test_scripts_manifest.py", "tests/test_shell_suites.py",
+        "tests/test_review_fix.py", "tests/test_review_grok_measure.py", "tests/test_run_liveness.py", "tests/test_mirrorcheck.py", "tests/test_scripts_manifest.py", "tests/test_shell_suites.py",
         "tests/test_slow_cap.py", "tests/test_stall.py", "tests/test_steprec.py", "tests/test_subject_config.py", "tests/test_tailnet_access.py", "tests/test_tailnet_check.py",
         "tests/test_tailnet_exposure_guard.py", "tests/test_to_test_scenario_areas.py", "tests/test_to_test_scenario_write_back_areas.py", "tests/test_voiced.py", "tests/test_voice_setup.py",
         "tests/test_operator_probe.py", "tests/test_operators.py", "tests/test_proxystop.py", "tests/test_launch_agents.py", "tests/test_workcmd.py",
