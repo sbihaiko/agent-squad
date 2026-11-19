@@ -44,7 +44,7 @@ newday() { rm -f "$ST"/auto/daysuites-2*; }   # a new day: the marker goes, the 
 newworld() { newday; rm -f "$ST/auto/daysuites-red"; }   # a new fixture: no marker and no red record from another case
 run() {  # <tree> [extra VAR=val...]: one pass against the fixture; prints its output
   local tree=$1; shift
-  env "$@" SG_STATE="$ST" SG_DAYSUITES_TREE="$tree" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
+  env SG_DAYSUITES_LOAD=0.0 "$@" SG_STATE="$ST" SG_DAYSUITES_TREE="$tree" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
     SG_SQUAD="$SG_SQUAD" SQUAD_CAPS_DIR="$SQUAD_CAPS_DIR" RUNLOG="$T/ran.log" SLOTS_SEEN="$T/slots.log" \
     GHLOG="$T/gh.log" SERIAL_POLL_SECONDS=0.05 bash "$S/daysuites.sh" 2>&1
 }
@@ -136,7 +136,7 @@ LAND
   commit "$feed"; $GIT -C "$feed" push -q "$origin" HEAD:refs/heads/dev
 }
 run_from_origin() {  # the pass with the dev tip read from the bare origin, and no tree override
-  env SG_STATE="$ST" SG_DAYSUITES_REMOTE="$T/origin.git" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
+  env SG_DAYSUITES_LOAD=0.0 SG_STATE="$ST" SG_DAYSUITES_REMOTE="$T/origin.git" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
     SG_SQUAD="$SG_SQUAD" SQUAD_CAPS_DIR="$SQUAD_CAPS_DIR" GHLOG="$T/gh.log" SERIAL_POLL_SECONDS=0.05 \
     bash "$S/daysuites.sh" 2>&1
 }
@@ -158,6 +158,32 @@ new=$(/usr/bin/git -C "$T/origin.git" rev-parse dev); old=$(head -1 "$T/heads.lo
 [ "$(filed)" = 1 ] && ok "a suite red on the new tip files one bug" || ko "a suite red on the new tip filed $(filed) bugs"
 $G -qF "$new" "$T/gh.log" && ok "the bug names the sha of the last red run" || ko "the bug does not name the new tip's sha"
 $G -qF "$old" "$T/gh.log" && ko "the bug names the old tip's sha" || ok "the bug does not name the old tip's sha"
+
+# 8) the nightly hour of the profile holds the pass: no suite runs, no day marker is spent, and a later hour runs the list
+newworld; tree=$T/w8; mktree "$tree"
+suite "$tree" test-alpha.sh 'echo "$0" >> "$RUNLOG"; exit 0'
+commit "$tree"; : > "$T/ran.log"
+out=$(run "$tree" SG_NIGHTLY_HOUR=04 SG_DAYSUITES_HOUR=04); rc=$?
+[ "$rc" = 0 ] && ok "the nightly hour holds the pass (exit 0)" || ko "the nightly hour exited $rc: $out"
+[ "$(ran)" = 0 ] && ok "no suite ran in the nightly hour of the profile" || ko "a suite ran in the nightly hour"
+case "$out" in *nightly*) ok "the pass names the nightly hour that held it";; *) ko "the hold is silent: $out";; esac
+[ -z "$(/bin/ls -A "$ST/auto" 2>/dev/null | $G '^daysuites-2')" ] && ok "a pass held by the nightly hour spends no day marker" \
+  || ko "a pass held by the nightly hour spent the day marker"
+out=$(run "$tree" SG_NIGHTLY_HOUR=04 SG_DAYSUITES_HOUR=09); rc=$?
+[ "$rc" = 0 ] && [ "$(ran)" = 1 ] && ok "the pass runs outside the nightly hour" || ko "the pass outside the hour exited $rc: $out"
+
+# 9) a suite that fails with the load at its start over the saturation line ends unproven: no bug, no day marker, a record
+newworld; tree=$T/w9; mktree "$tree"
+suite "$tree" test-red.sh 'echo "$0" >> "$RUNLOG"; echo "FAIL the widget did not settle"; exit 1'
+commit "$tree"; : > "$T/gh.log"; : > "$T/ran.log"
+out=$(run "$tree" SG_DAYSUITES_LOAD=32.0 SG_DAYSUITES_CORES=8); rc=$?
+[ "$rc" = 4 ] && ok "a suite over the saturation line ends unproven (exit 4)" || ko "the loaded red pass exited $rc: $out"
+case "$out" in *"unproven: load"*) ok "the pass records 'unproven: load'";; *) ko "the pass does not record 'unproven: load': $out";; esac
+[ "$(filed)" = 0 ] && ok "a suite over the saturation line files no bug" || ko "a loaded red row filed $(filed) bug(s)"
+$G -qF "test-red.sh" "$ST/auto/daysuites-unproven" 2>/dev/null && ok "the unproven record names the suite" \
+  || ko "the unproven record does not name the suite"
+[ -z "$(/bin/ls -A "$ST/auto" 2>/dev/null | $G '^daysuites-2')" ] && ok "an unproven suite spends no day marker" \
+  || ko "an unproven suite spent the day marker"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "daysuites: every case green"

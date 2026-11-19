@@ -160,7 +160,7 @@
   .b.completed { color:var(--ok); } .b.verified { color:var(--ok); font-style:italic; } .b.unverified { color:var(--ok); border-style:dashed; }
   .b.failed { color:var(--err); } .b.no-repro { color:var(--none); } .b.taken-over { color:var(--warn); } .b.retired-age-cap { color:var(--none); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
   .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.unreadable { color:var(--warn); border-style:dotted; } .b.stalled { color:var(--wait); border-style:dashed; }
-  .b.no-verdict-yet { color:var(--none); }
+  .b.no-verdict-yet { color:var(--mute); }
   .card:focus { outline:var(--focus-w) solid var(--focus); } .card:focus-visible > rect { stroke:var(--highlight); stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
   .group-card .sq rect { fill:var(--inset); stroke:var(--edge-rest); stroke-width:1.2; }

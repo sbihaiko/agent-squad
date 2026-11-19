@@ -550,7 +550,7 @@ def test_the_live_poll_is_its_own_statement_after_the_runs_poll(hub):
 
 def test_the_page_reads_live_work_on_load_and_after_a_loop_action(hub):
     """#1697: the live rows are read when the page loads, and again after a start, a drain or a stop."""
-    assert re.search(r"^setInterval\(loopPoll,5000\);loopPoll\(\);livePoll\(\);", hub.PAGE, re.M), \
+    assert re.search(r"^setInterval\(pollIfVisible\(loopPoll\),5000\);loopPoll\(\);livePoll\(\);", hub.PAGE, re.M), \
         "the page does not read the live work on load"
     loop_post = re.search(r"^async function loopPost\(.*$", hub.PAGE, re.M).group(0)
     assert "livePoll()" in loop_post, loop_post

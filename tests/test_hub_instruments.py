@@ -166,7 +166,7 @@ def test_the_card_sits_in_the_sidebar_and_the_settings_strip_is_gone(hub):
 
 def test_the_card_reads_the_one_load_route_and_stays_calm(hub):
     page = hub.PAGE
-    assert page.count('fetch("/api/load")') == 1 and page.count("setInterval(loadPoll") == 1
+    assert page.count('fetch("/api/load")') == 1 and page.count("setInterval(pollIfVisible(loadPoll)") == 1
     assert "instDraw(d)" in page
     reduced = next(line for line in (ROOT / "contrib/squad-goal/scripts/web-tokens.css").read_text().splitlines()
                    if line.startswith("@media (prefers-reduced-motion: reduce)"))

@@ -581,6 +581,9 @@ def hub(served, monkeypatch):
     # The record's rows live in the module's state and every fixture starts with no record: a case that writes one must
     # never hand its rows to the next (#1768).
     mod.LOAD_STATE.update(record_at=None, record_cpu_sum=0.0, record_cpu_n=0, record_rows=None, record_stamp=None)
+    # The route keeps its answer for the page's own poll window (#2440), and the server is module-scoped: a case must
+    # never read a view the case before it built.
+    mod.prof_kept_clear()
     table = Table()
     monkeypatch.setattr(mod, "process_table", table)
     for key in ("loop_write", "profiler_write"):

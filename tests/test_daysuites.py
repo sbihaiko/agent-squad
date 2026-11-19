@@ -78,6 +78,8 @@ class World:
             "SG_SQUAD": str(ROOT), "SQUAD_CAPS_DIR": str(self.tmp / "caps"),
             "FILED": str(self.filed), "RUNLOG": str(self.runlog), "SLOTS_SEEN": str(self.slots),
             "SERIAL_POLL_SECONDS": "0.05", "PATH": os.environ["PATH"],
+            # The host's own load never decides a case: a case that wants a loaded start names SG_DAYSUITES_LOAD itself.
+            "SG_DAYSUITES_LOAD": "0.0",
         }
         env.update({k: str(v) for k, v in extra.items()})
         return subprocess.run(["bash", str(self.scripts / "daysuites.sh")], capture_output=True, text=True,
@@ -160,6 +162,34 @@ def test_a_red_suite_files_one_bug_with_its_name_first_fail_line_and_the_dev_sha
     assert "FAIL the widget did not settle" in block, "the body does not name the first FAIL line"
     assert "second line" not in block, "the body names more than the first FAIL line"
     assert w.sha in block, "the body does not name the dev sha"
+
+
+def test_the_pass_runs_outside_the_nightly_hour(tmp_path):
+    """Criterion 5 (#2417): in the nightly hour of the profile the pass starts no suite and spends no day marker, so a
+    later cycle outside the hour runs the whole list."""
+    w = World(tmp_path, {"test-alpha.sh": GREEN})
+    held = w.run(SG_NIGHTLY_HOUR="04", SG_DAYSUITES_HOUR="04")
+    assert held.returncode == 0, held.stdout + held.stderr
+    assert w.ran() == [], "a suite ran in the nightly hour of the profile"
+    assert "nightly" in held.stdout + held.stderr, "the pass did not say the nightly hour held it"
+    assert not list(w.st.glob("auto/daysuites-2*")), "a pass held by the nightly hour spent the day's marker"
+    later = w.run(SG_NIGHTLY_HOUR="04", SG_DAYSUITES_HOUR="09")
+    assert later.returncode == 0, later.stdout + later.stderr
+    assert [Path(p).name for p in w.ran()] == ["test-alpha.sh"], "the pass did not run outside the nightly hour"
+
+
+def test_a_red_suite_over_the_saturation_line_is_unproven_and_files_no_bug(tmp_path):
+    """Criterion 6 (#2417, ADR-0164): a suite that fails with the load at its start above the core count ends unproven:
+    no bug, no day marker, a record that names 'unproven: load' and exit 4."""
+    w = World(tmp_path, {"test-red.sh": RED})
+    done = w.run(SG_DAYSUITES_LOAD="32.0", SG_DAYSUITES_CORES="8")
+    assert done.returncode == 4, done.stdout + done.stderr
+    out = done.stdout + done.stderr
+    assert "unproven: load" in out, f"the pass did not record 'unproven: load': {out}"
+    assert w.filings() == [], "a suite over the saturation line filed a bug"
+    assert not list(w.st.glob("auto/daysuites-2*")), "an unproven suite spent the day's marker"
+    record = (w.st / "auto" / "daysuites-unproven").read_text()
+    assert "test-red.sh" in record and "unproven: load" in record, f"the unproven record is wrong: {record!r}"
 
 
 def test_a_suite_red_on_two_passes_in_a_row_files_no_second_bug(tmp_path):

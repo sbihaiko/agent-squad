@@ -177,7 +177,7 @@ def test_the_defaults_checker_and_config_check_read_one_catalog():
 
 def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     overlay = yaml.safe_load((Path(__file__).resolve().parents[1] / "docs" / "squad" / "defaults.yaml").read_text())
-    # Owner ruling: four runs and twelve children. Four runs outrun the three gate slots, so a child's entry gate can be
+    # Owner ruling: four runs and twelve children. Four runs outran the three gate slots, so a child's entry gate can be
     # queued behind its siblings and reach its bound unproven; the run records that as a wait, never as work lost.
     # The gate slots go below the plugin's twelve so one gate runs at a time: at twelve, three gates held the machine between
     # them, each kept its slots while it waited for the lock, and the queue outlived the takeover bound (#1191). A project may

@@ -427,6 +427,77 @@ J
   rm -rf "$T/st/state"   # a refused card write leaves its event pending; the next iteration and case start with no ledger
 done
 
+# 8d) (#2416) a red whose cause an open bug already owns files no second bug. A person fixes the bug of that cause by hand,
+# and its card sits in Doing, or the issue carries a hand hold. The loop measures the same cause again in a later pass; the
+# pass files no new bug, because one defect has one owner. The cause is the fingerprint the naming helper builds, and the
+# issue that names it comes from the open-issue list this pass already holds -- no second read.
+rm -rf "$T/st/auto" "$T/st/state"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+cp "$T/issues.json" "$T/issues.8d.bak"; cp "$T/cards.tsv" "$T/cards.8d.bak"   # the cases after 8d read the list the case above it left
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
+printf '1228\tTodo\n' > "$T/cards.tsv"
+: > "$T/filed"; : > "$T/st/cycle.log"; : > "$T/board.calls"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},parent:(if .parent then {number:.parent} else null end),comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo "[]" ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
+    for a in "\$@"; do case "\$a" in body=@*) cat "\${a#body=@}" >> "$T/filed";; esac; done
+    echo '{"number":900}' ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"; export BOARD="$T/s/board.sh"
+bash "$T/s/autobug.sh" >/dev/null 2>&1
+FP=$($G '^title=' "$T/filed" | head -1 | $G -oE '\[[0-9a-f]{12}\]$')
+[ -n "$FP" ] && ok "8d the first red files one bug, with its cause's fingerprint" || ko "8d setup: the first red filed no fingerprinted bug: $(cat "$T/filed")"
+# The bug the loop filed is open and carries the cause; a person holds its card in Doing.
+python3 - "$T/issues.json" "$FP" <<'PY'
+import json, sys
+p, fp = sys.argv[1], sys.argv[2].strip("[]")
+d = json.load(open(p))
+d.append({"number": 900, "title": "[SQUAD] refused BOARD-WRITE-FAILED o/4 #1228 -> In Progress [%s]" % fp,
+          "body": "The loop could not prove a write. Filed by autobug", "created_at": "2026-10-10T18:00:00Z",
+          "labels": ["bug", "ready-for-agent"]})
+json.dump(d, open(p, "w"))
+PY
+printf '1228\tTodo\n900\tDoing\n' > "$T/cards.tsv"
+: > "$T/filed"; : > "$T/st/cycle.log"; rm -rf "$T/st/state"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "8d the pass that meets the owned cause finishes" || ko "8d the pass exited $rc: '$r'"
+[ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "8d a second red of a cause an open bug in Doing owns files no bug" || ko "8d a second bug was filed: $(cat "$T/filed")"
+$G -q '#900' "$T/st/cycle.log" && ok "8d the cycle log names the bug that owns the cause" || ko "8d cycle.log: $(cat "$T/st/cycle.log")"
+# The same owner with its card in Todo and a hand hold on it: the hold is the loop's own fact, whatever the column reads.
+printf '1228\tTodo\n900\tTodo\n' > "$T/cards.tsv"
+python3 - "$T/issues.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for i in d:
+    if i["number"] == 900:
+        i["labels"] = ["bug", "ready-for-human"]
+json.dump(d, open(p, "w"))
+PY
+mkdir -p "$T/st/auto"; printf 'by manual\nsince 2026-10-10T18:00:00Z\nuntil 2026-10-11T18:00:00Z\n' > "$T/st/auto/hold-900"
+: > "$T/filed"; : > "$T/st/cycle.log"; rm -rf "$T/st/state"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "8d a bug under a hand hold owns its cause too" || ko "8d a bug was filed beside a hand hold: $(cat "$T/filed")"
+rm -f "$T/st/auto/hold-900"
+rm -rf "$T/st/state"   # 8d's refused card write leaves its event pending; the cases after it start with no ledger
+cp "$T/issues.8d.bak" "$T/issues.json"; cp "$T/cards.8d.bak" "$T/cards.tsv"; rm -f "$T/issues.8d.bak" "$T/cards.8d.bak"
+
 # 9) (#188) the dispatch moves the cards of the issues it just requested, and an issue the loop filed itself carries no
 # card until the board pass adds one. A plain move for a card the board does not carry is refused ("#N not on the
 # board"), and through sg_write that refusal is filed as one more bug, whose own dispatch is refused the same way and

@@ -265,11 +265,14 @@ def wip_snapshot(folder, run_id, dry=False):   # #1662: the one writer of a run'
         spec = importlib.util.spec_from_file_location(name, pathlib.Path(__file__).resolve().parent / "wip_snapshot.py")
         mod = importlib.util.module_from_spec(spec); sys.modules[name] = mod; spec.loader.exec_module(mod)
     return sys.modules[name].snapshot_run(folder, run_id, dry=dry)
+killed = set()   # every pid this pass kills: the process table is the pass-start snapshot, so a run whose leftover this pass
+# killed is read as live no more (#2419). A rule that decides a run is over reads it, never the stale table alone.
 def kill(pidv, why):
     if pidv in me: return
     for q in reversed(tree(pidv)):
         if q in me: continue
         say(f"kill pid={q} ({procs.get(q, (0, '?'))[1][:70]}) {why}")
+        killed.add(q)
         if not dry:
             try: os.kill(q, signal.SIGTERM)
             except OSError: pass
@@ -630,6 +633,15 @@ for r in names:
                 # session is still a leftover, so the pid its record names stays killable, as rule 433 has it.
                 if (SESSION.search(c) or ENGINE.search(c)) and q != i["pid"]: continue
                 if "dashboard_server" not in c and not own_pass(q): kill(q, f"leftover of finished run {n}")
+        # A run with its verdict is over, so a deferral marker it left names a wait no later pass can end: childcc writes
+        # auto/ccdefer-<run>-<child> while a finished run's child still waits, and the wave reads it as a wait still owed
+        # (run-20261030-184206-f63e6b waited 2h30, #945, #931). The marker of a run that ended is dropped here, and named,
+        # before any rule below drops the line: no later pass reads a dropped run, so its markers would live for ever (#2419).
+        mks = [p for p in (st / "auto").iterdir() if ccdefer_owner(p.name) == n] if (st / "auto").is_dir() else []
+        if mks:
+            say(f"CCDEFER-DROPPED {n}: {len(mks)} deferral marker(s) of a finished run dropped ({', '.join(sorted(p.name for p in mks))}); the run is over, so no wave waits on it")
+            if not dry:
+                for p in mks: p.unlink(missing_ok=True)
         nums = req_issues(f) | i["acc"]
         if nums and all(issue_is_gone(x) for x in nums):
             say(f"GONE-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is gone; dropped from active-runs")
@@ -650,21 +662,13 @@ for r in names:
         # pass adds it to `keep` and to `dropped`, and the rewritten list leaves it out.
         reap_ended = i["failed"] and any(str(x).startswith("killed/") for x in i["reasons"])   # the reap-ended block below names these runs (#1854)
         if i["idle"] > 300 and not reap_ended and not open_wave(n, i["run_id"]) \
-                and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
+                and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f) if q not in killed) and not holds_lease(n):
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
             drop_line(r); keep_run(r, f, i)   # the line leaves this pass (#2144), and the card pass and rule Q still read the run's record (#2138)
             continue
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")
-        # A run with its verdict is over, so a deferral marker it left names a wait no later pass can end: childcc writes
-        # auto/ccdefer-<run>-<child> while a finished run's child still waits, and the wave reads it as a wait still owed
-        # (run-20261030-184206-f63e6b waited 2h30, #945, #931). The marker of a run that ended is dropped here, and named.
-        mks = [p for p in (st / "auto").iterdir() if ccdefer_owner(p.name) == n] if (st / "auto").is_dir() else []
-        if mks:
-            say(f"CCDEFER-DROPPED {n}: {len(mks)} deferral marker(s) of a finished run dropped ({', '.join(sorted(p.name for p in mks))}); the run is over, so no wave waits on it")
-            if not dry:
-                for p in mks: p.unlink(missing_ok=True)
         # #1854: the health pass's reap ends a run whose engine died and cannot drop its line, since rules O and R read the
         # run from the listing on the pass after the reap. This pass has read it, from `names`, and the reoffer marker
         # carries its issues to the card pass, as a rule-C zombie's do. So a run the reap ended (a killed verdict), with no

@@ -85,7 +85,7 @@ def _chart_harness(hub, drive, onchange=""):
     # carries LT_START, the start the payload measures from, which ltOwn reads.
     lines = ["const LT_TYPES=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet",
              "const barMoved", "function squadChart(", "function squadStreamLost(",
-             "function squadStreamBack(", "pollBoard();setInterval(pollBoard", "function squadChartTick(", "setInterval(squadChartTick"]
+             "function squadStreamBack(", "pollBoard();setInterval(pollIfVisible(pollBoard)", "function squadChartTick(", "setInterval(pollIfVisible(squadChartTick)"]
     page = [next(line for line in hub.PAGE.splitlines() if line.startswith(p)) for p in lines]
     stubs = """
 const FETCHED=[],POLLED=[],INTERVALS=[],RUNS=[];
@@ -99,6 +99,7 @@ let bo={},FLOWK=null,FLOWD={},CF={r:"30",ty:"task",hidden:[]},LT={tf:"30",log:fa
 const ls={},save=()=>{},saveB=()=>{},pollBoard=()=>POLLED.push(1);
 const drawFlow=()=>{},flowTabs=()=>{},poll=()=>RUNS.push(1);
 const settle=()=>new Promise(r=>setTimeout(r,0));
+const pollIfVisible=fn=>fn;   // the visible gate is the page's own line, not this block
 """
     script = stubs + "\n".join(page) + "\n" + onchange + "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
