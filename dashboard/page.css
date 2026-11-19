@@ -226,7 +226,7 @@
   #vchip.v-bad { border-color:var(--err); color:var(--err); }
   #vchip.v-nr { border-color:var(--none); color:var(--none); }
   #vchip.v-wait { border-color:var(--wait); color:var(--wait); }
-  #vchip.v-none { border-color:var(--none); color:var(--none); }
+  #vchip.v-none { border-color:var(--mute); color:var(--mute); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
   #vchip.v-human { border-color:var(--warn); color:var(--warn); }
   #vchip[data-mk=filled]::before{content:"● "} #vchip[data-mk=hollow]::before{content:"○ "} #vchip[data-mk=bar]::before{content:"▌ "}
