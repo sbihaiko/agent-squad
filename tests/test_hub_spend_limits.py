@@ -363,6 +363,14 @@ def test_a_flipped_switch_answers_the_word_the_hub_reads(ctx):
     assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limTyped("guard")))') == "off"
 
 
+def test_a_flipped_switch_saves_the_word_the_hub_reads(ctx):
+    """The guard's own write reads the switch, not the saved state: a switch set off posts off."""
+    body = ("let seen=null;limS=" + json.dumps(LIM) + ";limRender();STORE[\"#limg\"]={checked:false};"
+            "limWrite(\"guard\",async b=>{seen=b;return {diff:[],state:{...limS,guard:\"off\"}}})"
+            ".then(()=>console.log(JSON.stringify({guard:seen&&seen.guard,saved:limS.guard})))")
+    assert lim_eval(ctx["hub"], body) == {"guard": "off", "saved": "off"}
+
+
 def test_the_cap_reads_with_a_unit_suffix_and_its_field_takes_text(ctx):
     _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
     field = re.search(r"<input id=limc ([^>]*)>", settings)

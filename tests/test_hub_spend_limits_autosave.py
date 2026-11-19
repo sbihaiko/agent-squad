@@ -94,6 +94,34 @@ setTimeout(()=>console.log(JSON.stringify({n,ok:limOK})),120);""")
     assert got == {"n": 1, "ok": "cap"}, got
 
 
+def test_two_fields_edited_inside_one_pause_each_post_once(hub):
+    """Each field has its own timer: a pause in one field never cancels another field's pending save."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let sent=[];limPauseMs=20;
+const send=async b=>{sent.push(b);return {diff:[],state:{guard:"on",cap:+b.cap,factor:+b.factor}}};
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+STORE["#limc"].value="2000";STORE["#limf"].value="3";
+limQueue("cap",send);limQueue("factor",send);
+setTimeout(()=>{const last=sent[sent.length-1]||{};
+  console.log(JSON.stringify({n:sent.length,order:sent.map(b=>b.factor==="3"?"factor":"cap"),cap:last.cap,factor:last.factor}))},150);""")
+    assert got == {"n": 2, "order": ["cap", "factor"], "cap": "2000", "factor": "3"}, got
+
+
+def test_a_write_inside_another_field_s_write_carries_the_saved_value(hub):
+    """The writes run one after the other: the second body carries the value the first one saved, never the stale one."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let sent=[];limPauseMs=10;
+const send=async b=>{sent.push(b);await new Promise(r=>setTimeout(r,30));
+  return {diff:[],state:{guard:"on",cap:+b.cap,factor:+b.factor}}};
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+STORE["#limc"].value="2000";STORE["#limf"].value="3";
+limQueue("cap",send);limQueue("factor",send);
+setTimeout(()=>console.log(JSON.stringify({n:sent.length,cap:sent[1]&&sent[1].cap})),220);""")
+    assert got == {"n": 2, "cap": "2000"}, got
+
+
 def test_one_field_write_merges_its_edit_onto_the_saved_state(hub):
     """The body is the whole theme, because the route writes one file whole; only the edited field leaves the saved state."""
     mod, _, _ = hub
@@ -122,6 +150,7 @@ limWrite("cap",send).then(async()=>{
   console.log(JSON.stringify({sent,cap:limS.cap,bad:limBad}));});""")
     assert got["sent"], got            # the refused cap was tried once
     assert [b.get("cap") for b in got["sent"]].count("1.5") == 1, got["sent"]   # and never again by the guard save
+    assert got["sent"][-1]["cap"] == "1000", got["sent"]   # the guard save carries the saved cap, not the refused text
     assert got["cap"] == 1000, got
 
 
@@ -219,6 +248,33 @@ kanWrite("Doing",async b=>{n++;return {diff:["Kanban · Doing: 6 -> 5"],state:{f
   const h=kanHtml();console.log(JSON.stringify({n,ok:kanOK,val:kanVal,line:(h.match(/Saved · [^<]*/)||[""])[0]}))});""")
     assert got["n"] == 1 and got["ok"] == "Doing" and got["val"] == "5", got
     assert got["line"].startswith("Saved · Doing") and "5" in got["line"], got
+
+
+def test_a_kanban_column_the_last_write_posted_never_posts_again(hub):
+    """The whole payload posts once per changed column: a timer save and then a blur send one request."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let n=0;
+kanS={file:"/p",columns:[{name:"Doing",max_cards:6,count:5,stops:""}]};kanDraft=kanClone(kanS.columns);
+const send=async()=>{n++;return {diff:["Kanban · Doing: 6 -> 5"],state:{file:"/p",columns:[{name:"Doing",max_cards:5,count:5,stops:""}]}}};
+kanWrite("Doing",send).then(()=>kanWrite("Doing",send)).then(()=>{
+  console.log(JSON.stringify({n,line:(kanHtml().match(/Saved · [^<]*/)||[""])[0]}))});""")
+    assert got["n"] == 1, got
+    assert "Kanban · Doing: 6 -&gt; 5" in got["line"], got["line"]   # the confirm ADR-0137 asks for shows on the line
+
+
+def test_two_kanban_columns_edited_inside_one_pause_each_post_once(hub):
+    mod, _, _ = hub
+    got = _node(mod, """
+let sent=[];limPauseMs=20;
+kanS={file:"/p",columns:[{name:"Doing",max_cards:6,count:5,stops:""},{name:"Reviewing",max_cards:4,count:2,stops:""}]};
+kanDraft=kanClone(kanS.columns);
+const send=async b=>{sent.push(b);return {diff:[],state:{file:"/p",columns:[{name:"Doing",max_cards:+b.columns.Doing,count:5,stops:""},{name:"Reviewing",max_cards:+b.columns.Reviewing,count:2,stops:""}]}}};
+kanDraft[0].max_cards=5;limQueue("kan:Doing",send);
+kanDraft[1].max_cards=3;limQueue("kan:Reviewing",send);
+setTimeout(()=>{const last=sent[sent.length-1]||{columns:{}};
+  console.log(JSON.stringify({n:sent.length,doing:last.columns.Doing,reviewing:last.columns.Reviewing}))},150);""")
+    assert got == {"n": 2, "doing": "5", "reviewing": "3"}, got
 
 
 # --- the bar: Spend & limits keeps no button, every other theme keeps both
