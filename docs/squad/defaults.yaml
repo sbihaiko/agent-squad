@@ -8,7 +8,9 @@
 caps:
   runs: 4
   children: 12
-  gates: 3                          # one loop gate of three workers at a time on this 8-core machine (owner): at six slots
-                                    # three gates ran at once and the load average passed 140; at two a gate ran slow (#1716)
+  gates: 4                          # owner 2026-11-19: the loop's gate asks two slots and a run's command asks two, so a
+                                    # landing and a child gate run together. At three the landing took the whole budget and
+                                    # 18 runs waited in one day. At six three gates ran at once and the load average passed
+                                    # 140; at two a gate ran slow (#1716).
 limits:
   max_budget_usd: 30

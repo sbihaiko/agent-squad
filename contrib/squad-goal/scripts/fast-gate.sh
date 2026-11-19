@@ -197,8 +197,15 @@ classify() {
   if [ -n "$p" ] || /usr/bin/grep -qE 'errors? during collection' "$log"; then echo "collection pytest could not collect ${p:-its tests}"; return; fi
   p=$(ids_of "$log" | tr '\n' ' ' | sed 's/ $//')
   [ -n "$p" ] && { echo "pytest the base battery failed at $p"; return; }
-  p=$(/usr/bin/grep -oE 'No module named [^a-z]*(ruff|mypy|pytest)([^A-Za-z0-9_.]|$)' "$log" | head -n 1 | sed -E 's/.*named [^a-z]*([a-z]+).*/\1/')
-  [ -n "$p" ] && { echo "absent $p is absent from the battery's interpreter, so its check did not run"; return; }
+  p=$(/usr/bin/grep -oE "No module named '?([A-Za-z0-9_.]+)'?" "$log" | head -n 1 | sed -E "s/.*named '?([A-Za-z0-9_.]+)'?.*/\1/")
+  # (#2421) A battery whose own pytest cannot import names the module it lacks, and no test id reached this line: the check
+  # that did not run is the tool that imports it. A module other than ruff, mypy or pytest is one pytest loads at start, so
+  # pytest did not run; the tool absent is pytest, never an `unknown` red retried twice.
+  case $p in
+    '') ;;
+    ruff|mypy|pytest) echo "absent $p is absent from the battery's interpreter, so its check did not run"; return;;
+    *) echo "absent pytest is absent from the battery's interpreter (it lacks $p), so its check did not run"; return;;
+  esac
   if [ "$rc" -ge 128 ] || /usr/bin/grep -qE 'node down|crashed worker|worker .*crashed|^Killed|MemoryError|Cannot allocate memory|Too many open files|Resource temporarily unavailable' "$log"; then
     echo "saturation the battery exited $rc with a crashed worker or a kill, and no test id"; return; fi
   echo "unknown the battery exited $rc and named no lint, type, collection or test failure"
