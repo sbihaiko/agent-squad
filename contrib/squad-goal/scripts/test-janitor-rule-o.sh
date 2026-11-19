@@ -2,11 +2,11 @@
 # Rule O (#1811): `landed` is the pass of the stage that lands the work, and the release must actually happen.
 #  (A) a failed run whose only pass is the router's landed nothing -> its marker is dropped, and rule R (the card's one owner) writes Todo;
 #  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed), and whose landing reached
-#      the landing branch (its head is an ancestor of origin/dev), keeps card and marker, and the card stops at Code Complete (#239: not Done);
+#      the landing branch (its head is an ancestor of origin/dev), keeps card and marker, and the card stops at Landing (#239: not Done);
 #  (G) a failed run whose landing is only its local land commit (the head is in no origin/dev) delivered nothing (#691, ADR-0143):
 #      the card goes back to Todo and the marker is dropped, so the issue dispatches again;
 #  (C) an issue a work branch names keeps its marker (#382: a branch, never a pull request), but a failed run's branch is stale:
-#      the card goes back to Todo, never forward to Code Complete (#660; ADR-0143: nothing delivered is the one backward move).
+#      the card goes back to Todo, never forward to Landing (#660; ADR-0143: nothing delivered is the one backward move).
 # The gh stub answers the same way the live API does, including its refusal of a POST to /search/issues:
 # `gh api search/issues -f q=...` returns "Not Found", `gh api -X GET search/issues -f q=...` answers the real count.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
@@ -79,9 +79,9 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 [ ! -e "$T/st/auto/disp-801" ] && ok "O: failed run whose only pass is the router's -> marker dropped" || ko "O disp-801 kept: $o"
 /usr/bin/grep -q 'DISPATCH-FAILED #801' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'no_landed_change' "$T/st/cq/"*801* >/dev/null 2>&1 && /usr/bin/grep -q 'run-router' "$T/st/cq/"*801* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Code Complete 802$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 802' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a failed run whose landing reached origin/dev stops at Code Complete, never Done, and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Todo 803$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Code Complete 803' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: a failed run's stale work branch keeps its marker, and its card goes back to Todo" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Todo 807$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -Eq 'Code Complete 807|Done 807' "$T/board.calls" 2>/dev/null && ok "R: a failed run whose landing never reached origin/dev delivered nothing, so its card goes back to Todo (#691)" || ko "R #807 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Landing 802$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 802' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a failed run whose landing reached origin/dev stops at Landing, never Done, and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 803$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Landing 803' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: a failed run's stale work branch keeps its marker, and its card goes back to Todo" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 807$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -Eq 'Landing 807|Done 807' "$T/board.calls" 2>/dev/null && ok "R: a failed run whose landing never reached origin/dev delivered nothing, so its card goes back to Todo (#691)" || ko "R #807 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-807" ] && /usr/bin/grep -q 'DISPATCH-FAILED #807' "$T/st/cycle.log" 2>/dev/null && ok "O: a failed run's local-only landing drops its marker, so the issue dispatches again (#691)" || ko "O disp-807 kept: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q "DISPATCH-FAILED #807.*salvage: gui/807-x ${local:0:9}" "$T/st/cycle.log" 2>/dev/null && /usr/bin/grep -q "gui/807-x ${local:0:9}" "$T/st/cq/"*807* 2>/dev/null && ok "O: a failed run's unpushed child commits are named for salvage in the log and the comment (#771)" || ko "O #807 salvage not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -Eqx "gui/807-x ${local:0:9} in .*/co/runs/run-local/ws/c1" "$T/st/auto/salvage-807" 2>/dev/null && ok "O: the salvage tree is kept as auto/salvage-807, so the next dispatch names it (#771)" || ko "O #807 no salvage fact: $(cat "$T/st/auto/salvage-807" 2>&1)"

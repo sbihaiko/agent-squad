@@ -7,7 +7,7 @@
 # #89, #93, #94 and #96 sat in Done with gui/89, gui/93, gui/94 and gui/96 each one commit ahead of main and no merge in
 # the history, and the close pass named none of them for over an hour.
 #
-# A run's own landing, whatever the fork base holds, keeps the card at Code Complete: only a merged pull request naming
+# A run's own landing, whatever the fork base holds, keeps the card at Landing: only a merged pull request naming
 # the issue on the base, or a closed issue, makes it Done (#239). Stubbed gh and board.sh, a temp fork repository, a temp
 # state dir.
 # usage: bash test-janitor-unlanded-branch.sh [janitor.py]
@@ -73,19 +73,19 @@ rec run-reverted '{"event":"run_start","run_id":"run-reverted","ts":"2026-10-13T
 o=$(HOME="$T/home" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_FORK_DIR="$T/fork" SG_FORK_BASE=main SG_FORK_BRANCH='gui/%n' \
     SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
-/usr/bin/grep -q '^STATUS o 4 Code Complete 2101$' "$T/board.calls" 2>/dev/null \
-  && ok "a branch ahead of the base keeps the card at Code Complete, never Done" \
-  || ko "#2101 not Code Complete: $(bc) $o"
+/usr/bin/grep -q '^STATUS o 4 Landing 2101$' "$T/board.calls" 2>/dev/null \
+  && ok "a branch ahead of the base keeps the card at Landing, never Done" \
+  || ko "#2101 not Landing: $(bc) $o"
 /usr/bin/grep -q '^STATUS o 4 Done 2101$' "$T/board.calls" 2>/dev/null \
   && ko "#2101 moved to Done over a branch the base never took" || ok "and it is never written to Done"
-/usr/bin/grep -q '^STATUS o 4 Code Complete 2102$' "$T/board.calls" 2>/dev/null \
-  && ok "a run whose work is on the base stops at Code Complete until a merge names it" || ko "#2102 not Code Complete: $(bc) $o"
+/usr/bin/grep -q '^STATUS o 4 Landing 2102$' "$T/board.calls" 2>/dev/null \
+  && ok "a run whose work is on the base stops at Landing until a merge names it" || ko "#2102 not Landing: $(bc) $o"
 /usr/bin/grep -q '^STATUS o 4 Done 2102$' "$T/board.calls" 2>/dev/null \
   && ko "#2102 moved to Done from the run's own landing" || ok "and #2102 never reads Done from the local landing"
 # #100: gui/2103 was merged and taken back. Its commits are ancestors of the base, so `branch_ahead` answers no and the
-# card read Done over work the base does not hold. The card belongs at Code Complete until the base takes the merge again.
-/usr/bin/grep -q '^STATUS o 4 Code Complete 2103$' "$T/board.calls" 2>/dev/null \
-  && ok "a landing that was taken back leaves the card at Code Complete" || ko "#2103 not Code Complete: $(bc) $o"
+# card read Done over work the base does not hold. The card belongs at Landing until the base takes the merge again.
+/usr/bin/grep -q '^STATUS o 4 Landing 2103$' "$T/board.calls" 2>/dev/null \
+  && ok "a landing that was taken back leaves the card at Landing" || ko "#2103 not Landing: $(bc) $o"
 /usr/bin/grep -q '^STATUS o 4 Done 2103$' "$T/board.calls" 2>/dev/null \
   && ko "#2103 moved to Done over a landing the base took back" || ok "and a card already in Done is moved out of it"
 rm -rf "$T"
