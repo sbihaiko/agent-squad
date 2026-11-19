@@ -79,11 +79,7 @@ def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
     assert "Backlog for Todo" in B.column_stop("Todo")
     assert "autofrontier" in B.column_stop("Batching")
     assert "branch review pass" in B.column_stop("Reviewing")
-
-
-@pytest.mark.parametrize("name", ["Testing"])
-def test_a_column_the_limit_stops_no_pass_yet_says_so(name):
-    assert B.column_stop(name) == "no pass reads it yet"
+    assert "wave" in B.column_stop("Testing")
 
 
 def test_the_batching_stop_text_names_the_pass_and_its_refusal():

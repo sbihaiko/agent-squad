@@ -94,8 +94,7 @@ def test_a_row_states_what_its_limit_stops_or_that_no_pass_reads_it(hub):
     assert "Backlog for Todo" in stops["Todo"], stops["Todo"]
     assert "autofrontier" in stops["Batching"], stops["Batching"]
     assert "branch review pass" in stops["Reviewing"], stops["Reviewing"]
-    for name in ("Testing",):
-        assert "no pass reads it yet" in stops[name], (name, stops[name])
+    assert "wave" in stops["Testing"], stops["Testing"]
 
 
 def test_a_save_asks_for_the_diff_before_it_writes(hub):
