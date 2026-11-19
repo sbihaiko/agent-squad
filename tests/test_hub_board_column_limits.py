@@ -131,6 +131,11 @@ def test_the_board_theme_draws_one_row_per_column_with_its_limit(hub):
     assert 'value=""' in b and 'value="6"' in b
 
 
+def test_the_node_spawning_board_theme_test_is_marked_heavy():
+    fn = globals()["test_the_board_theme_draws_one_row_per_column_with_its_limit"]
+    assert any(m.name == "heavy" for m in getattr(fn, "pytestmark", [])), "a call that starts node carries no heavy mark"
+
+
 # --- the Kanban header
 
 def test_the_column_header_shows_n_over_max_only_where_a_limit_exists(hub):
