@@ -39,6 +39,7 @@ test-childcc.sh 17.10
 test-childfix.sh 0.58
 test-cluster.sh 7.87
 test-codex-reset.sh 0.15
+test-columnlimit.sh 0.88
 test-consult.sh 0.57
 test-cqflush-address.sh 1.82
 test-cqflush-home.sh 1.15
@@ -160,6 +161,7 @@ test-live-check.sh 7.32
 test-live-guard.sh 7.00
 test-loopbug-review.sh 21.41
 test-merge-audit.sh 1.32
+test-mirrorcheck.sh 0.37
 test-mkreq.sh 6.64
 test-model-recover.sh 0.72
 test-nightly.sh 27.75
