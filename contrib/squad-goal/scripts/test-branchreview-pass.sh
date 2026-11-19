@@ -196,11 +196,11 @@ case "$r" in *"BRANCHREVIEW column Reviewing full: 2 of 2 card(s) in Reviewing; 
 printf '7\tReview\n8\tTodo\n' > "$T/rows.txt"
 r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
 [ "$(n gui/51-c)" = 1 ] && ok "a Reviewing column under its limit reviews its branch as before" || ko "no review ran under the limit: '$r'"
-# caps.reviews lowers the Reviewing bound (#2287): two cards under a column limit of 9 is not full on the column alone, but
-# caps.reviews 1 makes the effective bound 1, so the pass refuses. This proves the lower of the two applies.
+# caps.reviews never lowers the Reviewing card limit (#2430): two cards under a column limit of 9 is not full on the
+# column, and the review slots are another unit that every job takes through sg_caps.
 printf '7\tReview\n8\tReview\n' > "$T/rows.txt"
 printf 'caps:\n  reviews: 1\ncolumns:\n  Reviewing:\n    max_cards: 9\n' > "$T/co/docs/squad/defaults.yaml"
 r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
-case "$r" in *"BRANCHREVIEW column Reviewing full: 2 of 1 card(s) in Reviewing"*) ok "caps.reviews lowers the Reviewing column limit";; *) ko "caps.reviews did not lower the Reviewing limit: '$r'";; esac
+case "$r" in *"BRANCHREVIEW column Reviewing full"*) ko "caps.reviews lowered the Reviewing card limit: '$r'";; *) ok "caps.reviews never lowers the Reviewing card limit";; esac
 rm -f "$T/co/docs/squad/defaults.yaml"; unset BOARD_ROWS BOARDREADLOG
 exit $fail

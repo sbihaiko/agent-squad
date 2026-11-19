@@ -184,7 +184,7 @@ run = doc.get("run") if isinstance(doc, dict) else None
 gmc = run.get("max_children") if isinstance(run, dict) else None
 limits = [x for x in ((gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
 dash = lambda x: x if x is not None else "-"
-print(C.free_runs(ceil, sys.argv[2], root="."), dash(env), min(limits) if limits else "-", dash(spend), ceil.caps["runs"])   # the last is caps.runs, the machine cap the Doing column also obeys (#2287)
+print(C.free_runs(ceil, sys.argv[2], root="."), dash(env), min(limits) if limits else "-", dash(spend), ceil.caps["runs"])   # the last is caps.runs, the run-slot cap the pass names in its refusal (#2430)
 PY
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
@@ -265,11 +265,10 @@ board=$(sg_board_rows "$(sg_go_csv "$F/issues.json" "$SG_FRONTIER_LABEL")") || {
 printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
 export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from this pass's one board read (#1620)
 export SG_STACK_GRAPH="$F/issues.json"   # stack.sh holds a card whose dependency component is invalid or unknown (#1984)
-# A card limit on the Doing column (#2287): the pass starts no card while the column holds its maximum, and says so once.
-# The bound is the lower of the column limit and caps.runs, the machine cap that also bounds Doing. The count is the pass's
-# own board read, so the limit costs no second read. An unread limit falls back to caps.runs with one alert, so dispatch
-# continues inside the machine bound; only with no machine cap either is it a defect that dispatches nothing.
-doing_max=$(sg_board_limit_effective Doing "$runs_cap"); cm_rc=$?
+# A card limit on the Doing column (#2287, #2430): the pass starts no card while the column holds its maximum, and says so
+# once. The bound is the Doing card limit alone: the run slots are another unit, and a run carries one or more cards. The
+# count is the pass's own board read, so the limit costs no second read.
+doing_max=$(sg_column_limit Doing); cm_rc=$?
 [ "$cm_rc" -eq 0 ] || { echo "FRONTIER the Doing column limit is unreadable; a defect, not no limit: nothing dispatched this pass"; exit 0; }
 case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(awk -F '\t' '$2=="Doing"||$2=="In Progress"{n++} END{print n+0}' "$F/board")
   [ "$doing_n" -lt "$doing_max" ] || { echo "FRONTIER column Doing full: $doing_n of $doing_max card(s) in Doing; nothing dispatched this pass"; exit 0; } ;; esac
