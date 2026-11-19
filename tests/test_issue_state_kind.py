@@ -139,6 +139,7 @@ def test_fresh_hub_board_cache_serves_status_and_kind_without_a_board_read(tmp_p
     assert calls == []
 
 
+@pytest.mark.heavy   # 0.6 s here, past the 2 s line on the CI runner: the live-read fallback and its imports (#2474)
 @pytest.mark.parametrize("cache_state", ["missing", "stale"])
 def test_missing_or_stale_hub_board_cache_falls_back_to_live_read(tmp_path, monkeypatch, cache_state):
     cache = tmp_path / "hub-board.json"

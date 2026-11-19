@@ -516,7 +516,7 @@ def test_without_the_variable_the_seam_still_reads_the_global_profiles(home, tmp
     profiles.mkdir(parents=True)
     (profiles / "p1.sh").write_text(': "${SG_REPO:=owner/app}"\n: "${SG_CHECKOUT:=$HOME/src/app}"\n')
     mod = load_sessions()
-    mod.pathlib.Path.home = classmethod(lambda cls: tmp_path)
+    monkeypatch.setattr(mod.pathlib.Path, "home", classmethod(lambda cls: tmp_path))
     assert mod.profiles_dir() == str(profiles)
     repo = tmp_path / "checkout"; repo.mkdir()
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)

@@ -304,6 +304,7 @@ def test_the_loop_answer_carries_the_four_health_keys(hub, monkeypatch):
     assert health["live_gates"] == len(v["live"]["gates"]) == 1, health
 
 
+@pytest.mark.heavy   # four node starts: 0.3 s here, past the 2 s line on the CI runner's cold disk (#2474)
 def test_the_theme_opens_on_its_state_line():
     """The theme's first line states on, off, draining or starting, before any other fact (#1280)."""
     for state in ("on", "off", "draining", "starting"):
