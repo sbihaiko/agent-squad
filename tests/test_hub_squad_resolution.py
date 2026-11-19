@@ -3,8 +3,8 @@
 hubmux.py serves every profile from one interpreter, and each profile's resolution purges and re-imports `squad`. A thread
 that asks during that window can receive a module whose body has not run, so a name the body defines is missing.
 """
+import importlib.machinery
 import importlib.util
-import os
 import pathlib
 import sys
 import tempfile
@@ -19,23 +19,35 @@ HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
 
 @pytest.fixture
-def hub():
-    os.environ.setdefault("SG_REPO", "x/y")
-    os.environ.setdefault("SG_OWNER", "x")
-    os.environ.setdefault("SG_PROJECT", "4")
-    os.environ.setdefault("SG_CHECKOUT", str(ROOT))
-    os.environ.setdefault("SG_HUB_DIR", tempfile.mkdtemp())
+def hub(monkeypatch):
+    monkeypatch.setenv("SG_REPO", "x/y")
+    monkeypatch.setenv("SG_OWNER", "x")
+    monkeypatch.setenv("SG_PROJECT", "4")
+    monkeypatch.setenv("SG_CHECKOUT", str(ROOT))
+    monkeypatch.setenv("SG_HUB_DIR", tempfile.mkdtemp())
     spec = importlib.util.spec_from_file_location("hub_squad_resolution", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
+def _half_built(name):
+    """A module whose import is in progress: its file is set and its body has not run."""
+    stub = types.ModuleType(name)
+    stub.__file__ = str(ROOT / "squad" / (name.split(".")[-1] + ".py"))
+    stub.__spec__ = importlib.machinery.ModuleSpec(name, None)
+    stub.__spec__._initializing = True
+    return stub
+
+
 @pytest.fixture
 def partial_reap(monkeypatch):
-    """`squad.reap` as an import in progress holds it: the module object exists and its file is set, its body has not run."""
-    stub = types.ModuleType("squad.reap")
-    stub.__file__ = str(ROOT / "squad" / "reap.py")
+    """The package binds `reap` before its body runs, the state a second thread sees during another profile's import."""
+    pkg = types.ModuleType("squad")
+    pkg.__path__ = [str(ROOT / "squad")]
+    stub = _half_built("squad.reap")
+    pkg.reap = stub
+    monkeypatch.setitem(sys.modules, "squad", pkg)
     monkeypatch.setitem(sys.modules, "squad.reap", stub)
     return stub
 
@@ -54,7 +66,7 @@ def test_two_threads_resolving_squad_at_once_each_get_a_fully_imported_module(hu
         start.wait()
         try:
             (reap,) = hub.load_squad([str(ROOT)], ("reap",))
-            answers.append(hasattr(reap, "run_live"))
+            answers.append(reap is not partial_reap and hasattr(reap, "run_live"))
         except Exception as e:  # noqa: BLE001 - the point is that every answer carries the name
             failures.append(f"{type(e).__name__}: {e}")
 
@@ -65,6 +77,18 @@ def test_two_threads_resolving_squad_at_once_each_get_a_fully_imported_module(hu
         t.join()
     assert not failures, failures
     assert answers == [True, True]
+
+
+def test_a_nested_name_is_imported_only_when_its_own_body_completed(hub, monkeypatch):
+    pkg = types.ModuleType("squad")
+    sub = types.ModuleType("squad.sub")
+    child = _half_built("squad.sub.x")
+    sub.x = child
+    pkg.sub = sub
+    monkeypatch.setitem(sys.modules, "squad", pkg)
+    assert not hub._imported(("sub.x",), (child,))
+    child.__spec__._initializing = False
+    assert hub._imported(("sub.x",), (child,))
 
 
 def test_an_unreadable_holder_fact_yields_no_holder_and_one_named_failure(hub, monkeypatch, tmp_path, capsys):

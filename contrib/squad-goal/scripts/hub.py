@@ -669,11 +669,19 @@ def _squad_names():
     "the terminal supervisor is not running"."""
     return [m for m in sys.modules.copy() if m == "squad" or m.startswith("squad.")]
 
+def _bound(pkg, name, m):
+    owner = pkg
+    *path, leaf = name.split(".")
+    for part in path:
+        owner = getattr(owner, part, None)
+        if owner is None: return False
+    return getattr(owner, leaf, None) is m and not getattr(getattr(m, "__spec__", None), "_initializing", False)
+
 def _imported(names, mods):
-    """True when each module finished its import: the `squad` package binds a submodule only after its body has run, so a
-    module whose body is still running (its file already set) is not yet an answer (#2358)."""
+    """True when each module finished its import: its package binds it, and its body is no longer running (its spec is still
+    initializing while the body runs, even when the package already names it) (#2358)."""
     pkg = sys.modules.get("squad")
-    return pkg is not None and all(getattr(pkg, n, None) is m for n, m in zip(names, mods))
+    return pkg is not None and all(_bound(pkg, n, m) for n, m in zip(names, mods))
 
 def _held_squad(roots, names):
     """The modules this process already holds, when the first of them lives under one of the asked roots: the answer needs
