@@ -18,7 +18,7 @@ HUB_GET_ROUTES = {
     "/api/adapter-errors", "/api/board", "/api/chart/cfd", "/api/columns", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/live", "/api/load", "/api/models",
     "/api/runs", "/api/sessions", "/api/sessions/card", "/api/sessions/clip", "/api/sessions/conversation", "/api/sessions/image", "/api/sessions/send", "/api/slack", "/api/speed", "/api/stats", "/api/status",
     "/api/subs", "/api/version",
-}   # /api/columns: the Settings Board theme reads the card limit of each column (#2287)
+}   # /api/columns: the Spend & limits theme reads the card limit of each column (#2432)
 
 
 def page():
