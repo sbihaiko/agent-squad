@@ -2278,89 +2278,13 @@ def test_a_refusal_record_speaks_for_its_gap_cap_only(prof):
     assert minutes["gates"] == prof.SLOT_GAP_CAP_S / 60.0, "the record speaks for one gap cap, never two hours"
 
 
-SLOT_WAIT = {"window_s": 86400, "refusals": 12, "drained_minutes": 90.0,
-             "lines": [{"kind": "gates", "label": "Waiting for a gate slot", "minutes": 300.0, "passes": 8},
-                       {"kind": "landing", "label": "Finished, waiting for its landing", "minutes": 120.0, "passes": 4},
-                       {"kind": "drained", "label": "Loop drained or stopped", "minutes": 90.0, "passes": 2},
-                       {"kind": "doing", "label": "A run with a card in Doing", "minutes": 30.0, "passes": 1}]}
-
-
-def test_the_loop_page_shows_the_slot_wait_split_under_the_trip_table():
-    """#2286: the split stands under the trip table, one line per holder kind, the largest first."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': SLOT_WAIT})},new Set())")
-    at = out.index("<section id=profslots>")
-    assert at > out.index("<table id=proftt"), "the split stands under the trip table"
-    assert at < out.index("<table id=proft ", out.index("</table>", out.index("<table id=proftt"))), \
-        "the split stands above the hot-spot tree"
-    rows = re.findall(r'<tr data-p="slot/(\w+)"><td class=pnm>([^<]*)</td><td>([^<]*)</td><td>(\d+)</td></tr>', out[at:])
-    assert [r[0] for r in rows] == ["gates", "landing", "drained", "doing"], \
-        "one line per holder kind, the largest first, in the order the payload gives"
-    assert rows[0][1:] == ("Waiting for a gate slot", "5.0 h", "8"), "the line names the kind, its minutes and its passes"
-    assert "12 refusals" in out[at:], "the block names the refusals it folded"
-
-
-def test_the_slot_wait_split_names_the_drained_minutes_apart():
-    """#2286: the record counts the minutes the loop was drained or stopped while a card waited, and the page prints
-    that number apart from the holder lines."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': SLOT_WAIT})},new Set())")
-    at = out.index("<section id=profslots>")
-    caption = out[at:out.index("<table", at)]
-    assert "drained or stopped" in caption and "1.5 h" in caption, \
-        f"the caption names the 90 drained minutes of the payload: {caption}"
-
-
-def test_the_slot_wait_split_is_drawn_only_under_a_trip_table():
-    """#2286: the split stands under the trip table, so a view with no trip draws no holder line, and the file view
-    draws the split only where it draws that table."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': None, 'slot_wait': SLOT_WAIT})},new Set())")
-    assert "<section id=profslots>" not in out, "no trip table above it, so the split stays off the page"
-    file_view = {**VIEW, "on": False, "tree": None, "trip": TRIP, "slot_wait": SLOT_WAIT}
-    out = run_js(f"profHtml({json.dumps(file_view)},new Set())")
-    at = out.index("<section id=profslots>")
-    assert at > out.index("<table id=proftt"), "the file view draws the split under the trip table, never apart"
-
-
-def test_the_slot_wait_split_says_so_when_no_refusal_was_recorded():
-    """#2286: a window with no record draws no invented line, so an empty window reads as no measure."""
-    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': {'window_s': 86400, 'refusals': 0, 'lines': [], 'drained_minutes': 0.0}})},new Set())")
-    at = out.index("<section id=profslots>")
-    assert "No refused dispatch" in out[at:], "a window with no refusal names that, and draws no empty table"
-    assert 'data-p="slot/' not in out[at:]
-
-
-def test_the_route_carries_the_slot_wait_split_of_the_records_it_reads(hub):
-    """#2286: the payload folds the refusal records the frontier wrote, keyed to the page's window, and a caller the
-    hub refused reads no record, so its payload names no split."""
-    mod, port, _, state, _ = hub
-    now = time.time()
-    path = state / "slot-refusals.jsonl"
-    recs = [{"at": now - 600, "free": 0, "cap": 3, "todo": 4,
-             "holders": [{"name": "run-a", "kind": "gates"}, {"name": "run-b", "kind": "gates"}]},
-            {"at": now - 300, "free": 0, "cap": 3, "todo": 2,
-             "holders": [{"name": "run-c", "kind": "landing"}]}]
-    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
-    try:
-        t0 = time.time()
-        code, v = ask(port, "GET")
-        t1 = time.time()
-        assert code == 200 and v["slot_wait"]["refusals"] == 2
-        assert {line["kind"] for line in v["slot_wait"]["lines"]} == {"gates", "landing"}
-        # The route reads its own `now` inside the call, so the minutes it carries are pinned to the clock the call ran
-        # between: the first record speaks 300 s to the second, and the second speaks the stretch that ended at that
-        # `now` (at most the gap cap).
-        route = {line["kind"]: line["minutes"] for line in v["slot_wait"]["lines"]}
-        assert route["gates"] == 5.0, "the first refusal's 300 s to the second are 5 minutes of gate wait"
-        # The route's own now lies inside [t0, t1], and its minutes are rounded to one decimal: the value the same clock
-        # gives is the value the route carries.
-        assert route["landing"] == round(((t0 + t1) / 2 - (now - 300)) / 60, 1), \
-            f"the last refusal speaks from its instant to the route's own now, never to another clock: {route}"
-        # The fold on a frozen clock: the first record speaks its five minutes to the second record, and the second
-        # record speaks to the `now` handed in, one gap cap at most.
-        out = mod.slot_wait_view(86400, now, [], allowed=True)
-        assert {line["kind"]: line["minutes"] for line in out["lines"]} == {"gates": 5.0, "landing": 5.0}
-    finally:
-        path.unlink(missing_ok=True)
-    assert mod.slot_wait_view(86400, now, [], allowed=False) is None, "a refused caller gets no split"
+def test_the_loop_page_draws_no_slot_holder_panel():
+    """The owner removed the "Who holds a run slot while a card waits" panel: the Loop page draws no holder table,
+    whatever the payload carries."""
+    stale = {"window_s": 86400, "refusals": 3, "drained_minutes": 0.0,
+             "lines": [{"kind": "gates", "label": "Waiting for a gate slot", "minutes": 30.0, "passes": 3}]}
+    out = run_js(f"profHtml({json.dumps({**VIEW, 'trip': TRIP, 'slot_wait': stale})},new Set())")
+    assert "profslots" not in out and "Who holds a run slot" not in out and 'data-p="slot/' not in out
 
 
 def test_the_profile_doc_names_the_bar_as_the_live_form_of_its_trip_table():
