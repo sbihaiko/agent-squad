@@ -68,10 +68,15 @@ def _text(path):
         return ""
 
 
+def claim_issues(text):
+    """The issue numbers a request's claim line names, in the order the line gives them: the number list of the CLAIM
+    line, split by its own separators (a comma or whitespace), so a number in the prose around it is no claimed issue."""
+    return [int(n) for m in CLAIM.finditer(text) for n in re.split(r"[,\s]+", m.group(1).strip()) if n.isdigit()]
+
+
 def _claimed(checkout, name):
     """The issue numbers the run's claim line names, in the order the line gives them."""
-    text = _text(_folder(checkout, name) / "request.txt")
-    return [int(n) for m in CLAIM.finditer(text) for n in re.findall(r"\d+", m.group(1))]
+    return claim_issues(_text(_folder(checkout, name) / "request.txt"))
 
 
 def _autobug_holders(state_dir, checkout, holders):
