@@ -6,10 +6,10 @@
 # then a blur write once. A refused value in one field never holds another field's write, and the refused field keeps the
 # typed value and its error mark until a successful write or the explicit Discard resets it.
 # The theme's own sources are sliced out of hub.py by marker and run in node with a stub DOM: no browser, no server.
-# When node is not on PATH the run says so and makes no claim. usage: bash test-hub-limits-autosave.sh [path/to/hub.py]
+# When node is not on PATH the run says so and exits non-zero, so a missing tool never reads as a pass. usage: bash test-hub-limits-autosave.sh [path/to/hub.py]
 # mirrors: hub.py
 d=$(cd "$(dirname "$0")" && pwd); hub=${1:-$d/hub.py}
-if ! command -v node >/dev/null 2>&1; then echo "node not on PATH: the limits save rules are not proved here"; exit 0; fi
+if ! command -v node >/dev/null 2>&1; then echo "node not on PATH: the limits save rules are not proved here"; exit 1; fi
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1: $2"; fail=1; }
 
@@ -24,6 +24,7 @@ const sett=src.slice(src.indexOf("// SETT{"), src.indexOf("// }SETT")+"// }SETT"
 const lim=src.slice(src.indexOf("let limS=null"), src.indexOf("async function limLoad()"));
 for(const fn of ["function limRender(","function limWrite(","function limQueue("]){ if(!lim.includes(fn)){ console.error("the slice lost "+fn); process.exit(2); } }
 const stub='const STORE=new Proxy({},{get:(o,s)=>o[s]||(o[s]={innerHTML:"",textContent:"",className:"",value:undefined})});'
+  +'const document={activeElement:null};const RO=process.env.HUB_RO==="1",RO_WHY="read only";'
   +'const $=s=>STORE[s];const setBar=()=>{};function setChip(){}';
 vm.runInThisContext([stub,esc,sett,lim,body].join("\n"));
 JS
@@ -106,6 +107,58 @@ STORE["#limc"].value="6M";
 limWrite("cap",async b=>({diff:[],state:{...limS,cap:6000000}})).then(()=>{
   const h=STORE["#lbody"].innerHTML;
   console.log(JSON.stringify({value:h.includes("value=\"6M\""),invalid:h.includes("aria-invalid=true")}))});'
+
+# --- a read-only view writes nothing and arms no timer
+
+HUB_RO=1 run "a read-only view posts no limits write and arms no timer" '{"n":0,"t":0}' '
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+STORE["#limc"].value="6M";limPauseMs=10;
+let n=0;const send=async b=>{n++;return {diff:[],state:{...limS,cap:6000000}}};
+limWrite("cap",send).then(()=>{limQueue("cap",send);
+  setTimeout(()=>console.log(JSON.stringify({n,t:Object.keys(limTmr).length})),80)})'
+unset HUB_RO
+
+HUB_RO=1 run "a read-only view posts no Kanban write" '{"n":0,"skip":true}' '
+kanS={columns:[{name:"Doing",max_cards:3,count:1}],file:"p/s.yaml"};kanDraft=kanClone(kanS.columns);
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+let n=0;const send=async b=>{n++;return {diff:[],state:kanS}};
+kanWrite("Doing",send).then(d=>console.log(JSON.stringify({n,skip:!!d&&d.skip===true})))'
+unset HUB_RO
+
+# --- a field with unsent text keeps its inputs; the mark and the line move in place
+
+run "a focused field keeps the inputs a save of another field would rebuild" '{"kept":true,"status":true}' '
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+STORE["#limc"].value="7M";STORE["#limc"].id="limc";document.activeElement=STORE["#limc"];
+STORE["#lbody"].innerHTML="SENTINEL";
+limWrite("factor",async b=>({diff:[],state:{...limS,factor:3}})).then(()=>{
+  console.log(JSON.stringify({kept:STORE["#lbody"].innerHTML==="SENTINEL",status:/Saved/.test(STORE["#limstat"].innerHTML)}))})'
+
+run "a field with a pending timer keeps the inputs" '{"kept":true}' '
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+STORE["#lbody"].innerHTML="SENTINEL";limPauseMs=9000;limQueue("cap",async()=>({}));
+limRender();
+const kept=STORE["#lbody"].innerHTML==="SENTINEL";
+clearTimeout(limTmr["cap"]);delete limTmr["cap"];
+console.log(JSON.stringify({kept}))'
+
+# --- a Kanban save posts the saved value of every other column
+
+run "a Kanban save posts the saved value of the other columns" '{"Doing":"3","Reviewing":"5"}' '
+kanS={columns:[{name:"Doing",max_cards:3,count:1},{name:"Reviewing",max_cards:5,count:0}],file:"p/s.yaml"};
+kanDraft=kanClone(kanS.columns);
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+kanDraft[1].max_cards=9;
+let seen=null;kanWrite("Doing",async b=>{seen=b;return {diff:[],state:{columns:kanS.columns}}}).then(()=>{
+  console.log(JSON.stringify(seen.columns))})'
+
+# --- a missing node fails the guard, so a host without node never reads a pass
+
+nd=$(mktemp -d); ln -s "$(command -v dirname)" "$nd/dirname" 2>/dev/null
+guard_out=$(env PATH="$nd" "$(command -v bash)" "$0" "$hub" 2>&1); guard_rc=$?
+rm -rf "$nd"
+if [ "$guard_rc" -ne 0 ] && printf '%s' "$guard_out" | grep -q "node not on PATH"; then ok "a missing node fails the guard"
+else ko "a missing node fails the guard" "exited $guard_rc: $guard_out"; fi
 
 [ $fail = 0 ] && echo "all limits save checks passed" || echo "some limits save checks failed"
 exit $fail
