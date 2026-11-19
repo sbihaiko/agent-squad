@@ -54,6 +54,12 @@ rev gui/7-x CHANGES "a.sh:3 the cap is wrong"; rev fix/8-y APPROVE "none"; rev g
 r=$(fp)
 [ "$(n gui/7-x)" = 1 ] && ok "a CHANGES review at the tip dispatches one fix run" || ko "gui/7-x dispatched $(n gui/7-x) times: '$r'"
 /usr/bin/grep -q "FIX RUN on the work branch gui/7-x for GitHub issue #7.*a.sh:3 the cap is wrong" "$T/launch.log" && ok "the request is the branchfix.sh text with the findings" || ko "request: $(cat "$T/launch.log" 2>/dev/null)"
+# (#2350) The round names ONE base: the work-branch tip, in the CUT FROM line launch.py reads. The run worktree starts there,
+# so the child commits on the work branch by construction and its head fast-forwards. The request never tells the child to
+# check out origin/<branch>: that second base is what made the head no fast-forward of the branch.
+q=$(head -1 "$T/launch.log" 2>/dev/null)
+case "$q" in *"CUT FROM: gui/7-x"*) ok "2350 the request names one base, the work-branch tip (CUT FROM)";; *) ko "2350 the request names no work-branch tip: '$q'";; esac
+case "$q" in *"check out origin/"*) ko "2350 the request names a second base: '$q'";; *) ok "2350 the request sends the child to the branch its worktree holds";; esac
 # (#1374) the round is marked as a fix run, so the final gate proves its commands in the child's tree, never in the target
 [ "$(head -1 "$T/fix.log" 2>/dev/null)" = 1 ] && ok "the round is launched marked as a fix run (#1374)" || ko "SG_FIX_RUN did not reach launch.py"
 /usr/bin/grep -q 'one entry for the child below' "$T/launch.log" && ok "the request asks for one child in the spawns list, as an autofix request does" || ko "no spawn instruction in the request"
@@ -193,7 +199,7 @@ push "$rb"; rev "$rb" CHANGES "g.sh:1 the rebase conflicts"; echo origin/dev > "
 r=$(OPEN="30" fp)
 q=$(/usr/bin/grep "work branch $rb " "$T/launch.log")
 [ "$(n "$rb")" = 1 ] && ok "a kept rebase branch gets one fix run" || ko "a kept rebase branch dispatched $(n "$rb") times: '$r'"
-case "$q" in *"REBASE ROUND"*"rebase it on origin/dev"*) ok "the round's wording names the ref the round rebases on";; *) ko "the round's wording: '$q'";; esac
+case "$q" in *"REBASE ROUND"*"rebase the branch it has checked out on origin/dev"*) ok "the round's wording names the ref the round rebases on";; *) ko "the round's wording: '$q'";; esac
 rid=$(cat "$T/st/auto/branchfix-fix_30-rebase-r1-"* 2>/dev/null)
 tg2=$T/tg2; rm -rf "$tg2"; $G clone -q "$T/origin.git" "$tg2" 2>/dev/null
 (cd "$tg2" && $G checkout -q -b "squad/run/$rid" origin/dev && echo rb > rb30 && $G add rb30 && $G -c user.email=a@b -c user.name=t commit -q -m "the round (Refs #30)")
@@ -206,7 +212,7 @@ case "$r" in *"BRANCHFIX PUSH $rb"*) ok "the round's push is named";; *) ko "no 
 #     ordinary round.
 : > "$T/launch.log"; push fix/31-rebase-hand; rev fix/31-rebase-hand CHANGES "m.sh:1 fix"; r=$(OPEN="31" fp)
 q=$(/usr/bin/grep "work branch fix/31-rebase-hand " "$T/launch.log")
-case "$q" in *"REBASE ROUND"*) ko "a hand-made rebase-named branch got the rebase round: '$q'";; *"check out origin/fix/31-rebase-hand and commit on top"*) ok "a hand-made rebase-named branch gets the ordinary round";; *) ko "no ordinary round for the hand-made branch: '$q'";; esac
+case "$q" in *"REBASE ROUND"*) ko "a hand-made rebase-named branch got the rebase round: '$q'";; *"commit on top of the branch your worktree has checked out"*) ok "a hand-made rebase-named branch gets the ordinary round";; *) ko "no ordinary round for the hand-made branch: '$q'";; esac
 # 21) (#1344, BLOCKING 2) the lease is on the sha the round was dispatched for: a writer that pushed to the branch after the
 #     review is never clobbered, and the round is refused by name.
 : > "$T/launch.log"; rb=fix/32-rebase-r1
