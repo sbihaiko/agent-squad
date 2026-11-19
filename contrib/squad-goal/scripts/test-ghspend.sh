@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 6.27
 # Regression test for ADR-0277's "the loop can see what it spends": every call appends one line to $SG_STATE/api.log (timestamp,
 # transport, route, cache hit or miss, outcome, spending pass), an exhausted cooldown and a sustained miss rate are health causes
 # of their own, and the operator reads both in health's own output, alerts.log and health.json -- not only in the log file. It runs

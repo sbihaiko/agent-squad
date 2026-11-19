@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.28
 # Regression test for prepush.sh, the run's own pre-push check (#361: the pull-request path is gone, so the only mode is
 # `--local <body-file>`: the run, in its worktree, runs it before every push). Throwaway repo, a bare local remote, a temp
 # state dir. usage: bash test-prepush.sh [scripts dir]

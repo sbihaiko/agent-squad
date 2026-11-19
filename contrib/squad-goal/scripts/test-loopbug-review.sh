@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 21.41
 # Guard for ADR-0171 (#1358): a loop defect is reviewed by Fable or Astra before it is built, and autobug.sh dispatches
 # no loop-bug issue without an approving plan review of its current body. Offline: stub gh and stub claude, no model.
 # usage: bash test-loopbug-review.sh [scripts dir]

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.13
 # The red tier's files (#2203): a red complete tier names the test files of its failing jobs in one record the loop reads, and
 # the dev-to-stg promotion runs those files on the dev tip before it moves stg. Offline: a bare remote, a stub CI seam, a stub
 # gh for the pull request, and a stub test runner. usage: bash test-red-tier.sh

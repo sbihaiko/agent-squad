@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.52
 # Regression test for #705: the hub's delivery metrics are read-only and come from the loop's own local records -- the issue
 # ledgers, the landing ledger, the auto/ markers and the run folders. The hub is loaded in a fresh process, in a fake live
 # copy of no repository, with the records handed in; nothing is started and nothing is written. usage: bash test-hub-metrics.sh

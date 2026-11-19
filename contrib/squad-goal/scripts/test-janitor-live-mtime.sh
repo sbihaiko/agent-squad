@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.68
 # Rule M (#659): a file under the live skill directory whose mtime changed while no publish ran raises LIVE-MTIME in alerts.log.
 # live-guard.sh stamps $SG_STATE/live-publish.stamp and every publish writes the live PUBLISHED file; a change in a pass that follows either is the publish's own.
 # Stubbed gh and board; a temp state dir and a temp live skill. usage: bash test-janitor-live-mtime.sh [janitor.py]

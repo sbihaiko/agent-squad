@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 10.13
 # Regression test for the run's completion landing its wave (#375, ADR-0145 rule 10): the cycle that reads a run's verdict
 # runs `wave.sh land <run>` for a finished run that cut a wave, and leaves a run that cut none alone. usage: bash test-watch-land.sh [path/to/watch.sh]
 # Fixture: a copy of watch.sh in a temp scripts dir with every step stubbed, a `gh` that answers nothing and a `sleep` that

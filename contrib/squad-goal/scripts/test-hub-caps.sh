@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.33
 # Regression test for the hub footer ceilings: loop_caps() must find the squad package from a hub.py that runs outside the repository
 # (the live copy under ~/.claude/skills, where parents[3] is ~/.claude), and a failure to find it must be logged once, never swallowed
 # (no network, no server). usage: bash test-hub-caps.sh

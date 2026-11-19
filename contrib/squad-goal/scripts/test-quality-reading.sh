@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.06
 # Regression test for quality-reading.py: the code-quality reading of the squad modules a tip changes (#885). It is a report
 # beside the pytest counts, never a gate: each outcome is one line and the exit is 0. Stub radon and mutmut log their argv,
 # which each case compares exactly, and print canned output. A throwaway repository; no real tool runs.

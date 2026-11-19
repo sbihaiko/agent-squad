@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.80
 # The floor never moves a card back (#550, ADR-0143): a card that has a column keeps it, whatever its labels, so a no-auto
 # bug the owner put in Todo stays in Todo and a bug in Backlog stays in Backlog. Only an open issue with no card gets a
 # column from the floor, once: Todo for a bug, Backlog for anything else (with the shipped vocabulary). A run parent gets no

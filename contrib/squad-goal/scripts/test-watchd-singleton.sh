@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 7.76
 # Guard for #1587: one driver per state directory, and a stop that reaches every driver.
 # A driver outside the slot kept a loop of its own: it was visible to neither `alive` nor `stop`, so two loops ran the
 # janitor, the frontier and the dispatch on one state directory and burned the GitHub REST budget. Five cases, each in

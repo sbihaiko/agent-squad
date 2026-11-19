@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.59
 # A run's end never moves a card the owner parked in Backlog (#2007). The loop's one backward move undoes its own
 # dispatch claim, and a dispatch reads Todo only, so a card in Backlog was never claimed: it is the owner's (ADR-0142,
 # ADR-0143). Rule R derives Todo for a run that ended without landing anything; that Todo must not reach a Backlog

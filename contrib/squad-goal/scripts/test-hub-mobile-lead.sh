@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.18
 # Guard for #1333 (SPEC 1327): the phone's lead-time screen draws the payload /api/chart/lead serves and computes none of
 # its numbers. The tooltip of a tapped mark reads a lone card's weight and date from the served dot, and a cluster's lead
 # and closed ranges from the cluster's own served objects — never a range the view recomputes (ADR-0137). The legend and

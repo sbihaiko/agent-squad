@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.53
 # The spec forecast: host-free (no hub, no GitHub client), repeatable across processes under a fixed seed, and it names its gates.
 # Fixtures and a temp dir only: never the network, never the live hub state.
 # usage: bash test-spec-forecast.sh [spec_forecast.py]

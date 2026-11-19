@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.15
 # Regression tests for codex-reset.py --sync (#1525), no network. usage: bash test-codex-reset.sh [path/to/codex-reset.py]
 # 1) a marker the cache has outlived is deleted, so a codex model is tried again once the window resets.
 # 2) a full window writes its reset into the marker; 3) a marker younger than the cache reading is kept, so --hit still holds.

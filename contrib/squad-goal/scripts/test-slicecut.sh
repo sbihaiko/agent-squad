@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 6.44
 # Regression test for slicecut.py (#1504, ADR-0150 across runs): a file is edited by a child branch only, never by a
 # sibling branch. Two runs that take sibling issues naming one file used to cut both branches from the base, and the
 # second to land conflicted. The rule here, one file at a time:

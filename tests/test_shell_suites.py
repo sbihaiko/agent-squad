@@ -1,7 +1,7 @@
 """One test per shell suite beside the scripts, so the gate runs them (#394). A red suite fails its test with its FAIL lines.
 
-A suite is found by `tests/shell_suites.py`: a new `test-*.sh` needs no edit here. The suites named in
-`tests/shell_suites_seconds.txt` as 0.5 s or more carry `heavy`, so the fast battery leaves them out and the full run keeps all.
+A suite is found by `tests/shell_suites.py`: a new `test-*.sh` needs no edit here. A suite whose own `# seconds:` header
+is 0.5 s or more carries `heavy`, so the fast battery leaves it out and the full run keeps all.
 One over the slow line also carries a `slow` reason, since neither the 20 s cap nor the call deadline guards a unit test's
 work, and a real script suite's own wall time is the machine's.
 """

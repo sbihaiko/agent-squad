@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 17.10
 # Regression test for childcc.py (stub gh + board, no network). usage: bash test-childcc.sh [path/to/childcc.py]
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 unset SG_BOARD_VOCAB SG_CHILDCC_BUDGET   # the old-vocabulary cases and the one-child passes need them unset; a caller that exports them must not turn the suite red

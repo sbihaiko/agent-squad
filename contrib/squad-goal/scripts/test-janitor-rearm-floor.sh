@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.08
 # Regression test for janitor rule O after a rearm (#692) and for its rescans (#693). Stubbed gh/board/wave.sh; a temp state dir.
 #  (A) a rearm keeps a floor: a run the ledger listed before the rearm, or one whose verdict is older than the rearm, is never
 #      sent to `wave.sh fail` again, so a rearmed issue is not stopped again by its old runs;

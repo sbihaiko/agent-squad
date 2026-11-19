@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 7.18
 # Rule (#1962): a ticket whose closure closes its spec (every other open sub-issue already in dev) is dispatched before an
 # ordinary ticket of an earlier wave, after bugs. With no such ticket the earlier wave still goes first.
 # Stubbed gh, stack.sh, startability and mkreq; a temp checkout whose origin/dev holds the landed tickets.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.59
 # Regression test for janitor rule H (RED-LOOP, STATE-REGRESSION from the issue's loop comments), stubbed gh. usage: bash test-janitor-h.sh [path/to/janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/runs/.hub"; cp "$src" "$T/janitor.py"; for f in "$(dirname "$src")"/*.py "$(dirname "$src")"/*.sh; do [ "$f" -ef "$src" ] || cp "$f" "$T/"; done   # the modules janitor imports sit beside it, as in the live copy

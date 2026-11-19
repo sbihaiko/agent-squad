@@ -128,7 +128,7 @@ def test_the_wave_cases_run_in_one_split_suite_each() -> None:
     assert (SCRIPTS / WAVE_FIXTURE).is_file(), f"{WAVE_FIXTURE} is missing"
     measured = shell_suites.measured()
     for name in WAVE_SUITES:
-        assert name in measured, f"{name} has no row in shell_suites_seconds.txt"
+        assert name in measured, f"{name} carries no '# seconds:' header"
     # One label, one suite: a case copied into two suites runs twice, and a case left behind runs nowhere.
     seen: dict[str, str] = {}
     for name, text in sources.items():

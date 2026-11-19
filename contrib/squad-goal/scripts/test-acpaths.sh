@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.38
 # Regression test for acpaths.py (#729): a ticket's acceptance commands that name a repository path the repository does not
 # hold are found before dispatch. A path the ticket creates is not missing. Offline: a throwaway repository and issue files.
 # usage: bash test-acpaths.sh [scripts dir]

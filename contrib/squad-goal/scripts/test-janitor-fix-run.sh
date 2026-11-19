@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.24
 # A fix run is started by childfix.sh with its target inside the folder of the run it fixes (#1270). When that run is
 # finished, rule A killed every process whose cwd sits in the folder, and the fix run's engine died there while it still
 # waited at the run cap -- a state that names no pid, so the reap could not prove it dead and its run slot stayed counted

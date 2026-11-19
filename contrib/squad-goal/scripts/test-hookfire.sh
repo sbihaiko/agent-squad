@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.66
 # One case per rule of the event entry (hookfire.sh, #1837): the branch the CI run reports picks the pass, and only the
 # passes this repository promotes; a pass runs under the lock the watch cycle uses; an event that finds the pass in flight
 # adds nothing; a failed pass says so on stderr and in the cycle log; and the workflow that fires it names the runner and

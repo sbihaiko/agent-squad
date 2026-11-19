@@ -413,20 +413,6 @@ def test_the_inert_list_names_no_path_a_test_reads():
         assert not read, f"{entry} is named by a test: {read}"
 
 
-def test_a_changed_shell_suite_seconds_file_selects_the_tests_that_import_its_reader(tmp_path):
-    repo = tip(
-        tmp_path,
-        {"tests/shell_suites_seconds.txt": "suite 2\n"},
-        extra={
-            "tests/shell_suites_seconds.txt": "suite 1\n",
-            "tests/shell_suites.py": "SECONDS_LIST = 'x'\n",
-            "tests/test_reader.py": "from tests import shell_suites\n",
-            "tests/test_other.py": "X = 1\n",
-        },
-    )
-    assert select(repo) == ["tests/test_reader.py"]
-
-
 def test_a_dynamic_test_with_no_import_edge_is_selected_by_its_declared_path(tmp_path):
     """The DEPENDS list is a selection: a test that loads its modules by path is picked up from the path it declares."""
     loader = (
@@ -510,31 +496,6 @@ def test_a_module_whose_dynamic_target_names_no_existing_file_still_answers_all(
     assert select(repo)[0].startswith("all:")
 
 
-def test_the_measured_seconds_file_selects_its_readers_though_one_loads_a_script_by_path(tmp_path):
-    """The shape a hand gate meets: a script change edits the measured line of its suite, the selector maps that data file to
-    its reader, and a test importing the reader also loads a script by a computed path. The reader's tests are the delta; their
-    own dynamic load never widens the answer to the full battery (ADR-0169)."""
-    reader = "def run(p):\n    return None\n"
-    dynamic_reader = (
-        "import importlib.util\n"
-        "from tests import shell_suites\n"
-        "\n"
-        "SCRIPTS = 'contrib/squad-goal/scripts'\n"
-        "SPEC = importlib.util.spec_from_file_location('m', SCRIPTS + '/watchd.sh')\n"
-    )
-    repo = tip(
-        tmp_path,
-        {"tests/shell_suites_seconds.txt": "suite 1\nsuite 2\n"},
-        extra={
-            "tests/shell_suites_seconds.txt": "suite 1\n",
-            "tests/shell_suites.py": reader,
-            "tests/test_reader.py": "from tests import shell_suites\n",
-            "tests/test_dynamic.py": dynamic_reader,
-        },
-    )
-    assert select(repo) == ["tests/test_dynamic.py", "tests/test_reader.py"]
-
-
 SHARD_GUARD_BASE = {"tests/test_tooling.py": "def test_every_test_file_is_in_exactly_one_full_suite_shard():\n    pass\n"}
 
 
@@ -553,19 +514,26 @@ def test_a_delta_that_only_edits_a_test_file_does_not_select_the_shard_guard(tmp
     assert select(repo) == ["tests/test_alpha.py"]
 
 
-def test_a_delta_that_edits_the_shard_map_selects_the_shard_guard_not_the_full_battery(tmp_path):
-    """#1870: every card that adds a test file edits `tests/ci_shards.py` to give it a shard line, so the selector answered
-    `all` for a required edit and spent a full battery on it. The guard that reads the map is the only test the edit reaches."""
-    extra = {**SHARD_GUARD_BASE, "tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a'}\n"}
-    repo = tip(tmp_path, {"tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a', 'test_beta.py': 'b'}\n"}, extra=extra)
-    assert select(repo) == ["tests/test_tooling.py"]
+def test_a_delta_that_edits_the_shard_module_selects_the_tests_that_read_it(tmp_path):
+    """#2442: no card edits `tests/ci_shards.py` to give a test file a shard line, because the partition is derived from the
+    tree. The module is an ordinary helper under `tests/`, so only the tests that import or name it are the delta."""
+    repo = tip(
+        tmp_path,
+        {"tests/ci_shards.py": "SHARD_COUNT = 7\n"},
+        extra={"tests/ci_shards.py": "SHARD_COUNT = 6\n", "tests/test_ci_shards.py": "from tests import ci_shards\n",
+               "tests/test_other.py": "X = 1\n"},
+    )
+    assert select(repo) == ["tests/test_ci_shards.py"]
 
 
-def test_an_edited_shard_map_beside_a_changed_module_selects_the_guard_and_the_module_importers(tmp_path):
-    extra = {**SHARD_GUARD_BASE, "tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a'}\n"}
-    repo = tip(tmp_path, {"tests/ci_shards.py": "SHARDS = {'test_alpha.py': 'a', 'test_beta.py': 'b'}\n",
-                          "squad/alpha.py": "VALUE = 2\n"}, extra=extra)
-    assert sorted(select(repo)) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_tooling.py"]
+def test_an_edited_shard_module_beside_a_changed_module_selects_only_their_readers(tmp_path):
+    repo = tip(
+        tmp_path,
+        {"tests/ci_shards.py": "SHARD_COUNT = 7\n", "squad/alpha.py": "VALUE = 2\n"},
+        extra={"tests/ci_shards.py": "SHARD_COUNT = 6\n", "tests/test_ci_shards.py": "from tests import ci_shards\n",
+               "tests/test_alpha.py": "from squad import alpha\n"},
+    )
+    assert sorted(select(repo)) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_ci_shards.py"]
 
 
 def test_an_edited_helper_answers_the_tests_that_import_it(tmp_path):
@@ -596,8 +564,8 @@ MEASURED_LINE_GUARD_BASE = {
 
 
 def test_a_delta_that_adds_a_shell_suite_selects_the_measured_line_guard(tmp_path):
-    """The measured-line guard reads every `test-*.sh` beside the scripts and fails a suite with no line in
-    tests/shell_suites_seconds.txt, so a delta that adds one reaches it."""
+    """The measured-line guard reads every `test-*.sh` beside the scripts and fails a suite with no `# seconds:` header,
+    so a delta that adds one reaches it."""
     repo = tip(
         tmp_path,
         {"contrib/squad-goal/scripts/test-new-suite.sh": "true\n"},

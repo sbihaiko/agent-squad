@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 27.40
 # Regression test for the review pass (#397): branchreviewpass.sh reviews each pushed work branch once per tip, so branchland.sh
 # finds an APPROVE at the tip. Stub gh (every argv logged), stub review.sh (writes the verdict and the sha, logs the call), a bare
 # local remote, temp state dir. One line per case. usage: bash test-branchreview-pass.sh [scripts dir]

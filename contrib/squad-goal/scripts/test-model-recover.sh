@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.72
 # Regression test for model-recover.sh (ADR-0160): an omitted model is probed on its own review lane, and the streak is
 # cleared only on a real answer. A stub gateway answers or fails on command. usage: bash test-model-recover.sh [script]
 src=${1:-$(dirname "$0")/model-recover.sh}; S=$(dirname "$src"); T=$(mktemp -d); fail=0

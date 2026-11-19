@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.20
 # Regression test for #830: hub.py lists the runs that ended on the machine's local day, and no other day's run.
 # usage: bash test-hub-ended.sh [path/to/hub.py]
 d=$(cd "$(dirname "$0")" && pwd); src=${1:-$d/hub.py}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0

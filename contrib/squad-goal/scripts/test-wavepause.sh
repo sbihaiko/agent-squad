@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.65
 # Regression test for the pause of a wave's age cap (#637): `wave.sh expired <run>` does not count the time a child of the
 # wave spends in an in-run review round or fix entry (the run's record), or in a childcc fix run (auto/wave-pause-<run>).
 # usage: bash test-wavepause.sh [scripts dir]

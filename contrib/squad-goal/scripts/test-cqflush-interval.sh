@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.13
 # The comment flusher waits SG_FLUSH_INTERVAL seconds between passes, empty queue or not: 120 unless the profile in force sets it (#329).
 # cqflush.sh --interval prints the resolved value and exits, so no test sleeps. Offline: fixture profiles, a gh that always fails, an alarm against a loop.
 # usage: bash test-cqflush-interval.sh [scripts dir]

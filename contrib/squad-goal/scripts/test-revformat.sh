@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 10.21
 # Regression tests for revformat.py, the shape of a squad review (#1777): line 1 VERDICT, then a
 # ## Blocking / ## Debt section (whichever is non-empty), one bullet per finding of at most two
 # lines "file:line — defect — concrete failure — fix", themes under ### headings, most severe first.

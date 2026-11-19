@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.05
 # Guard for #831: pause and resume of the phone's run screen are one client module, and the rules are the whole of it.
 # Every request goes to the run's own control route through the hub's /dash/ forward route, with the desktop page's body;
 # the screen offers no request for an ended run or a dashboard that does not answer, and the resume it offers after a

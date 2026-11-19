@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.97
 # Late board writes are reported by actor, and a verified correction keeps both instants (#1022, ADR-0164, ADR-0149).
 # board_lag.py reads the board facts of the issue ledger: `rows <repo>` prints the Monitor payload, and `correct` adds one
 # correction or refuses it as a conflict. Corrections are a versioned file with a backup: a lost file marks the instants approximate.

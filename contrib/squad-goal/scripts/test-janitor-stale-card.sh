@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.32
 # Rule Q: a card In Progress behind a dispatch marker, with no run working the issue, is released -- however the run ended.
 # Rules E and O read a run's verdict. A run that ends with no verdict or that left
 # active-runs by any other road never reaches either rule, so its card stays In Progress behind its auto/disp-<n> marker,

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 44.77
 # The stg-to-main promotion pass (ADR-0145, ADR-0173): promote-main-pass.sh asks for the complete CI tier on the stg tip, by
 # the `promote` label on the one stg -> main pull request, and moves main to the proven sha by a fast-forward. A red tier holds
 # main and files one bug; an unproven one holds main and files nothing; an unfinished one holds nothing else. A red's hold

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.62
 # A card moves forward only (ADR-0143). An automated writer (any Status write whose SG_MOVE_BY is not `owner`) that would
 # move a card to an earlier column is rejected: the card keeps its column, the issue gets the `rework` label, and the
 # rejection is logged to $SG_STATE/board-rejections.jsonl. The one backward move is back to Todo: the loop undoing its own

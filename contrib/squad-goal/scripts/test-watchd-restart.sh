@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 27.21
 # Guard for #1471: a restart after a publish drains the live runs first (ADR-0162 decision 3). `watchd.sh restart`
 # pauses dispatch at once, marks its drain, and a detached waiter stops the supervisor only once no run and no gate is
 # live; then it starts the supervisor again, so a published copy never lands under a run its stop would kill. The lanes

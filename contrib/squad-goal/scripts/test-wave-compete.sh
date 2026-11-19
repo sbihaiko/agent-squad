@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 8.03
 # An offline run lands two children while a competing gate holds the lock (spec 1163, #1177): a throwaway repository with a
 # real remote and a real worktree, the real wave.sh, gate.sh, serial.sh and caps.sh, and one gate that holds the lock.
 # Both children enter before the competing gate starts, the wave's landing check queues behind it, and both land inside the

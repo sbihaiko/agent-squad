@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 25.72
 # #1477: one probe times the authenticated Slack download and the gemini-2.5-flash transcription of one voice clip.
 # usage: bash test-probe-gemini-transcribe.sh [path/to/probe-gemini-transcribe.sh]
 # The suite calls no network: it checks the no-key refusal, that no key reaches any output, and the 90th percentile

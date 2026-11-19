@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.22
 # Regression test for #94: shell-suites.sh takes no machine-wide `gate` lock. The lock guarded the full pytest gate only,
 # and one holder held across the shell suites blocked every gate on the machine for a quarter hour. The local gate retired
 # with the local land path (#115): the machine's full gate is the CI check job, which the landing pass (branchland.sh) reads,

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.02
 # mirrors: caps.sh fast-gate.sh gate.sh child-gate.sh shell-suites.sh daysuites.sh
 # Regression test for #2306: a git hook or a gate exports GIT_DIR, and a suite under it re-initializes that repository. Each
 # gate entry point clears the git location variables before it runs a suite, so the probe's bare repository lands at its own

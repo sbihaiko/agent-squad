@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.12
 # One case per rule of the land (address.sh): sg_land_target answers, for an addressed issue, the checkout, the base, the
 # branch the land merges and the route that owns it -- in the profile's own repository, and in no other.
 # route=pr: every land is the pull request's merge into $SG_BASE, so no branch is named (#115 retired the local route).

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 28.70
 # The entry and the tip under an unproven outcome (#682, #694, spec 1163, spec 1797, #2149): an obligation admits a
 # child, and an unproven wave tip never lands. A card stands in Testing while its wave's tip gate waits or runs (#2295).
 # The last cases read the run's dispatch set (#775, #776, #1340).

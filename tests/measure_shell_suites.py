@@ -1,9 +1,10 @@
-"""Measure each shell suite, so `tests/shell_suites_seconds.txt` holds a measured time for every suite (#629).
+"""Measure each shell suite, so every suite carries a measured time in its own header (#629).
 
 Each suite runs serially, `--runs` times (default 3), through `shell_suites.run`, the same seam the runner uses. A failed
 run is rejected; the row is the median of the green runs. With no name it measures every suite; with names, only those.
-It prints sorted `name seconds` rows. `--write` puts them into the list, and keeps the rows of suites it did not measure.
-Measure on a quiet machine: under load a suite takes longer, and the list then marks it heavier than it is.
+It prints sorted `name seconds` rows. `--write` writes each row into that suite's own header, `# seconds: <n>`, so it
+rewrites no file but the ones it measured. Measure on a quiet machine: under load a suite takes longer, and the header
+then marks it heavier than it is.
 
     python3 -m tests.measure_shell_suites [--runs N] [--write] [test-x.sh ...]
 """
@@ -14,13 +15,6 @@ import sys
 import time
 
 from tests import shell_suites
-
-HEADER = (
-    "# Measured run time in seconds of each shell suite, one 'name seconds' per line; the runner reads it (tests/shell_suites.py).\n"
-    f"# {shell_suites.HEAVY_SECONDS:g} s or more: heavy. Over {shell_suites.SLOW_SECONDS:g} s: also a slow reason. "
-    "Every suite is listed; a test fails on one that is not.\n"
-    "# Rows come from `python3 -m tests.measure_shell_suites --write [name ...]`, run serially on a quiet machine.\n"
-)
 
 
 def measure(suite, runs):
@@ -38,15 +32,11 @@ def measure(suite, runs):
     return statistics.median(times) if times else None
 
 
-def render(rows):
-    return HEADER + "".join(f"{name} {seconds:.2f}\n" for name, seconds in sorted(rows.items()))
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("names", nargs="*", help="suites to measure; none measures every suite")
     parser.add_argument("--runs", type=int, default=3)
-    parser.add_argument("--write", action="store_true", help="write the rows into tests/shell_suites_seconds.txt")
+    parser.add_argument("--write", action="store_true", help="write each row into the header of the suite it measured")
     args = parser.parse_args(argv)
     suites = shell_suites.discover()
     if args.names:
@@ -65,12 +55,9 @@ def main(argv=None):
             rows[suite.name] = seconds
             print(f"{suite.name} {seconds:.2f}", flush=True)
     if args.write:
-        merged = {**shell_suites.measured(), **rows}
-        present = {p.name for p in shell_suites.discover()}
-        merged = {name: s for name, s in merged.items() if name in present}
-        tmp = shell_suites.SECONDS_LIST.with_suffix(".tmp")
-        tmp.write_text(render(merged))
-        tmp.replace(shell_suites.SECONDS_LIST)   # atomic, so a stopped run never leaves half a list
+        by_name = {suite.name: suite for suite in suites}
+        for name, seconds in rows.items():
+            shell_suites.set_seconds(by_name[name], seconds)   # one suite's own file, never a shared line
     return 1 if failed else 0
 
 

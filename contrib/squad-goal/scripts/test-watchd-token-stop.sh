@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 6.28
 # `watchd.sh stop` stops the loop for good (#489): the stop takes the supervisor down with it, so the supervisor, the cycle
 # and the fast lane all exit, and nothing restarts. A start is a relight: it clears the token guard's markers.
 # Offline: a temp state dir, a stub env.sh and a stub watch.sh that stops the daemon from inside a cycle.

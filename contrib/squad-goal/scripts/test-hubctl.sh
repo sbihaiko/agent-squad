@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.66
 # Guard for #1552: a hub that loaded no repository profile refuses a tailnet request by naming that cause, never the
 # tailnet host rule, which did not refuse it. A hub with a profile still refuses an unknown Host with the host rule,
 # so the fix never blinds the rule itself. The mux serves on an ephemeral loopback port inside this process: no hub is

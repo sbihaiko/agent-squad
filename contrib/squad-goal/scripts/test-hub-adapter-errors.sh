@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.14
 # Regression test for #698: the hub counts the adapter_error run verdicts by route and cause, and a corrupt record
 # counts its valid prefix instead of ending the scan. The hub is loaded in a fresh process, in a fake live copy of no
 # repository, with the run folders handed in; the classifier comes from the squad package the profile names. No network,

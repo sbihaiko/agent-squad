@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.04
 # Guard for #829: the move rules of the phone's Board tab are one client module, and the rules are the whole of it. A
 # release before the threshold does nothing; a card the hub does not mark promotable never stages; the Undo, the app going
 # hidden, a profile change and a second move staged over this one all cancel a staged move, and a cancelled move is never

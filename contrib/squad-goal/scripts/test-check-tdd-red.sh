@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 5.05
 # Regression test for #1848 / ADR-0136: the guard the ADR names, driven through its public interface only
 # (a repo, a range, the env). It proves the refusal in both directions and the squash case:
 #   - a fix whose test FAILS at the fix's parent passes, and the pass names the measurement;

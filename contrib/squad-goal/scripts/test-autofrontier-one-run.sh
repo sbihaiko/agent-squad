@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 27.39
 # Regression test for autofrontier.sh: a pass starts one run per free run slot, at most one per child (#728); with fewer slots
 # than children the children share the runs. The children of one run never pass the envelope the author set (the dispatch
 # node's max_children), and the children of the pass never pass the machine-wide child ceiling (run.max_children less the

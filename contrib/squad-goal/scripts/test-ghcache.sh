@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.83
 # Regression test for #6 (ADR-0277): a read repeated inside its window is answered from a snapshot and spends no request,
 # a changed key or a corrupt entry goes live, and nothing that gates a write is ever answered from the snapshot. It runs
 # the real readers as processes (ghthrottle.py, ghread.py, and ghcall.sh's doors) against a stub `gh` that records every

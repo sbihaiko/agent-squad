@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 29.55
 # The landing paths a condition outside the wave decides (#477, #656, #1710, #1961, #1684): a landing that cannot
 # happen, a fetch the network or the machine fails, a red tip that names no child, and a full gate budget.
 # mirrors: wave.sh wave-fixture.sh

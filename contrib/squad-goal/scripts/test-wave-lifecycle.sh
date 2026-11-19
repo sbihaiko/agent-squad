@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 58.00
 # Regression test for the run lifecycle of a wave (#375, ADR-0145 rules 8, 9, 10 and 12): the production launch cuts the
 # run's wave branch, the production child-completion pass makes a finished child enter it, and the production completion of
 # a finished run lands the wave its children are in.

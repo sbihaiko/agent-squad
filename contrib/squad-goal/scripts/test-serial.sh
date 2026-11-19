@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 36.68
 # Regression test for serial.sh: two commands under the same lock never overlap, a stale lock is taken over, exit codes pass through,
 # a waiter prints one line naming the holder and runs as soon as the holder ends, and a command already inside the lock does not wait.
 # usage: bash test-serial.sh [path/to/serial.sh]

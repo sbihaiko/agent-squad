@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.82
 # The live loop lands finished work through branchland.sh. It has no local landing path.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"

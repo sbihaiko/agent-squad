@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.41
 # Regression test for ghcall.sh's refusal contract: a GraphQL `errors[]` body with no `data` (a rate limit comes back this
 # way, with gh exit 0 or 1) is a refusal -- exit 2, GitHub's own message, logged as refused -- never "failed: no verdict".
 # It runs the real door against a stub `gh`; nothing here touches the network. usage: bash test-ghcall-refusal.sh
