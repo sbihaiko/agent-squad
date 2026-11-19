@@ -10,7 +10,7 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 export SG_NIGHTLY_OFF=1
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/basered.sh" "$d/autofrontier.sh" "$d/columnlimit.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$d/issue_ledger.py" "$d/liveholds.py" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/basered.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$d/issue_ledger.py" "$d/liveholds.py" "$T/s/"
 # The fixture reaches no network (#556): `sg_work_issues` runs `git ls-remote` on the repository's https remote,
 # and an unset remote took every pass to github.com -- 0.7 s per pass at best, a stall at worst. git refuses the
 # transport itself, so the read answers "no branch" at once, the same fact a 404 gives, and no pass leaves the machine.
@@ -210,7 +210,7 @@ fi
 # body became the whole candidate list, and `pick+=($c)` (unquoted) then split it on whitespace: every word of the
 # message became an "issue number" and a `bug-<word>` marker was written for each of the ~50 tokens. Three children were
 # spawned on that text. The fixture keeps the exact shape of that body: many words, digits inside them, one long line.
-cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"   # test 5 stubbed it out; put the real pass back
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$T/s/"   # test 5 stubbed it out; put the real pass back
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"
 cat > "$T/refusal.json" <<'JSON'
 {"message":"API rate limit exceeded for user ID 122891372. If you reach out to GitHub Support for help, please include the request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2A and timestamp 2026-10-12 05:12:10 UTC. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)","documentation_url":"https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api#rate-limiting","status":"403"}
@@ -271,7 +271,7 @@ printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project l
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
-cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$T/s/"
 printf 'import os, sys\nif os.environ.get("AB_DRY"): sys.exit(0)\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/launch.py"
 held() {   # $1: the body of the issue's comments, one line each
   local cj; cj=$(if [ -n "$1" ]; then jq -Rs '[{body:.}]' <<<"$1"; else echo '[]'; fi)   # gh's list shape (#847)
@@ -322,7 +322,7 @@ held ''   # back to the unmarked issue the cases after 7b read
 # and the issue arrives through the filer's own contract -- the [SQUAD] prefix, the "Filed by" line, the bug kind and the
 # startable label. No process, no queue reader, no timer: the refused write itself asks.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
@@ -434,7 +434,7 @@ done
 # does not carry is added with its status, and a card it already carries answers "already exists" and is moved.
 # The stub below answers like board.py does: the add path succeeds, the plain move is refused.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
@@ -497,7 +497,7 @@ unset SG_BUG_PROJECT SG_BUG_DOING SG_BOARD_VOCAB
 # write door, the name it gives is a member of the set the helper owns, and the cycle log repeats that same name. A
 # refusal named by hand -- a name the set does not hold -- is refused by the helper instead of filed under a guess.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
@@ -532,7 +532,7 @@ unset SG_BUG_PROJECT SG_BUG_DOING
 # reads a bare `--- issue #N` line, while the request itself tells it the text below is DATA. Every stub above answers
 # without a `-q`, which is what let a malformed program go unnoticed: a program that never runs is never checked.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
@@ -571,7 +571,7 @@ $G -qE 'jq: error' "$T/err218" && ko "11 the pass logged a jq parse error: $(cat
 # the door filed "refused BOARD-WRITE-FAILED ... gh: HTTP 500" as a bug. The real board.sh and board.py run here, and
 # the stub answers the board's first issue read with HTTP 500: the card is still written, and nothing is filed.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T"/st/owner-kind-* "$T"/st/rest-*
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$T/s/"   # board.py imports the seam
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$T/s/"   # board.py imports the seam
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
 printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
@@ -644,7 +644,7 @@ cp "$T/issue_state-stub.py" "$T/s/issue_state.py"   # the dry cases below read t
 # bug and no label; 1501 carries the bug label but kind task (the kind wins); 1502 carries the label and no kind (the
 # label stays the fallback for an item no kind was written on); 1503 carries kind bug and a skip label. Its own sandbox.
 K=$T/k; mkdir -p "$K/bin" "$K/st/auto" "$K/co/docs/squad" "$K/s"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$K/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$K/s/"
 : > "$K/st/active-runs.txt"; printf 'caps:\n  runs: 4\n' > "$K/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$K/st" "$K/co" > "$K/s/env.sh"
 printf '#!/bin/bash\necho READY\n' > "$K/s/stack.sh"; chmod +x "$K/s/stack.sh"
@@ -819,7 +819,7 @@ case "$r" in *"[72]"*) ko "16 a bug went out with no board read: '$r'";; *"board
 # already reads for its blocker gate, published to the loop log and to the issue's line on the board, and it has no marker:
 # closing the issue is the only action that resumes dispatch.
 rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$T/s/"
 printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 printf 'print("-")\n' > "$T/s/fundroom.py"
@@ -881,7 +881,7 @@ case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "17b closing the issue resu
 # the same issue, and each fetch paid a Python startup plus a gh call. The stub records the plain issue routes it
 # answers: the pass asks for the issue one time, and the number it validated is the JSON the cluster receives.
 rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 printf 'print("-")\n' > "$T/s/fundroom.py"
@@ -1235,7 +1235,7 @@ $G -qE "^AUTOBUG: rate limited until 22:13 UTC;" "$T/err33" && ok "33 the line n
 # The line names what the pass dispatched, or the first reason it dispatched nothing, in this order: loop off; no free
 # run slot; a pending card event (ADR-0165); no startable bug. One line per pass, never one per issue.
 PL=$T/passline; mkdir -p "$PL/bin" "$PL/st/auto" "$PL/co/docs/squad/workflows" "$PL/s" "$T/caps/runs"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$PL/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$PL/s/"
 : > "$PL/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$PL/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$PL/st" "$PL/co" > "$PL/s/env.sh"
@@ -1285,8 +1285,9 @@ $G -qxF 'AUTOBUG pass 1: none (no slot)' "$PL/st/cycle.log" && ok "34a a full-ca
   || ko "34a cycle.log: '$(cat "$PL/st/cycle.log")'"
 [ "$($G -c '^AUTOBUG pass ' "$PL/st/cycle.log")" = 1 ] && ok "34a the pass writes one line, never one per issue" \
   || ko "34a the line repeats: '$(cat "$PL/st/cycle.log")'"
-# 34b: the same two bugs with a free slot: the pass dispatches, and names the issue it took
-pl_fresh
+# 34b: the same two bugs with a free slot: the pass dispatches, and names the issue it took. The two bugs share one file,
+# so one cluster of two cards goes to Doing: the project grants two card slots here (#2423), or the column bound holds it.
+pl_fresh; printf 'caps:\n  runs: 2\n' > "$PL/co/docs/squad/defaults.yaml"
 r=$(pl_run); rc=$?
 [ "$rc" = 0 ] && ok "34b a dispatching pass exits 0" || ko "34b the pass exited $rc: '$r'"
 $G -qE '^AUTOBUG pass 1: dispatched #160[12]$' "$PL/st/cycle.log" && ok "34b a dispatching pass writes what it dispatched" \
@@ -1313,7 +1314,7 @@ rm -f "$PL/st/auto/off"
 # costs no write, a bug that already carries the label costs none either, and bugs-waiting counts an untriaged Todo bug.
 # The fixture records one call order: every GitHub call, every ledger call and the launch land in the same file.
 TR=$T/triage; mkdir -p "$TR/bin" "$TR/st/auto" "$TR/st/req" "$TR/st/cq" "$TR/st/locks" "$TR/co/docs/squad/workflows" "$TR/s"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/slicecut.py" "$d/liveholds.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$TR/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/cluster.py" "$d/slicecut.py" "$d/liveholds.py" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/ghthrottle.py" "$TR/s/"
 : > "$TR/st/active-runs.txt"
 printf 'caps:\n  runs: 2\n' > "$TR/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$TR/st" "$TR/co" > "$TR/s/env.sh"
@@ -1456,7 +1457,7 @@ case "$r" in *"[1740]"*) ok "40 the bug is dispatched when no live run holds its
 # 13) (#2052) a card write refused because its issue was deleted (HTTP 410) names the deleted card once in the cycle log
 # and files no bug: GitHub has no issue to write, so a defect about it would never be fixed. Nothing launches for it.
 rm -rf "$T/st/auto" "$T/st/state" "$T/st/gh-cache"; rm -f "$T"/st/gh-*.json; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
@@ -1503,7 +1504,7 @@ rm -f "$T/gone1228"
 # 13b) (#2094) a card write the board refuses by its own rule (a backward move, exit 3) is recorded by the board and named in
 # the cycle log, and it files no bug: the rule working is no defect to fix, and filing it opened one issue per pass.
 rm -rf "$T/st/auto" "$T/st/state" "$T/st/gh-cache" "$T/launched"; rm -f "$T"/st/gh-*.json; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/columnlimit.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: the card keeps its column: a move back from Abandoned is refused (ADR-0143)" >&2; exit 3\n' "$T" > "$T/s/board.sh"
 chmod +x "$T/s/board.sh"; : > "$T/filed"; : > "$T/st/cycle.log"
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
@@ -1557,5 +1558,75 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err35"); rc=$?
 [ ! -s "$T/gh35.calls" ] && ok "35 a held quota sends no gh call" || ko "35 a gh call was sent: '$(cat "$T/gh35.calls")'"
 $G -qE "^AUTOBUG: quota pool graphql has 0 requests left, under SG_GH_FLOOR: no request sent; nothing dispatched$" "$T/err35" && ok "35 the line names the held pool" || ko "35 no pool line: '$(cat "$T/err35")'"
 rm -f "$T/st/gh-ratelimit.json" "$T/gh35.calls"
+
+# 41a) (#2423) the bug lane obeys the Doing column limit, as the frontier does (#2287): a column at its effective maximum
+# starts no run, and the pass's one cycle.log line names the limit. Two cards of ONE live run count twice -- each card
+# counts once -- so the column is full at 2.
+tr_fresh
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$TR/co/docs/squad/defaults.yaml"
+mkdir -p "$TR/co/runs/run-2423"
+printf 'CHILD — GitHub issue(s) 1702, 1704 (bug; one root cause, one branch):\n' > "$TR/co/runs/run-2423/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "task": "GitHub issue #1702, #1704"}\n' > "$TR/co/runs/run-2423/record.jsonl"
+printf '%s\n' run-2423 > "$TR/st/active-runs.txt"
+printf '1701\tTodo\n1702\tDoing\n1704\tDoing\n' > "$TR/cards.tsv"
+printf '[{"number":1701,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},{"number":1702,"title":"Core: first card","body":"step b.py","created_at":"2026-10-10T14:00:00Z","labels":["bug","ready-for-agent"]},{"number":1704,"title":"Core: second card","body":"step c.py","created_at":"2026-10-10T14:01:00Z","labels":["bug","ready-for-agent"]}]\n' > "$TR/issues.json"
+r=$(tr_run); rc=$?
+[ "$rc" = 0 ] && ok "41a a pass with a full Doing column exits 0" || ko "41a exit $rc: '$r'"
+[ -z "$($G '^launch ' "$TR/calls")" ] && ok "41a a full Doing column launches nothing" || ko "41a launch: '$($G '^launch ' "$TR/calls")'"
+[ -z "$(ls "$TR/st/req/"*.body 2>/dev/null)" ] && ok "41a a full Doing column writes no request" || ko "41a request: '$(cat "$TR/st/req/"*.body 2>/dev/null)'"
+[ "$($G -c 'Doing full' "$TR/st/cycle.log")" = 1 ] && ok "41a the pass logs one line about the full column" || ko "41a cycle.log: '$(cat "$TR/st/cycle.log")'"
+$G -q 'Doing full: 2 of 2 card(s)' "$TR/st/cycle.log" && ok "41a the line names the column limit and the count" || ko "41a line: '$(cat "$TR/st/cycle.log")'"
+: > "$TR/st/active-runs.txt"; rm -rf "$TR/co/runs/run-2423"
+
+# 41b) (#2423) one card leaves Doing: the next pass dispatches the bug, before any ticket of the frontier.
+tr_fresh
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$TR/co/docs/squad/defaults.yaml"
+mkdir -p "$TR/co/runs/run-2423"
+printf 'CHILD — GitHub issue(s) 1702, 1704 (bug; one root cause, one branch):\n' > "$TR/co/runs/run-2423/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "task": "GitHub issue #1702, #1704"}\n' > "$TR/co/runs/run-2423/record.jsonl"
+printf '%s\n' run-2423 > "$TR/st/active-runs.txt"
+printf '1701\tTodo\n1702\tDoing\n1703\tTodo\n1704\tDoing\n' > "$TR/cards.tsv"
+printf '[{"number":1701,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},{"number":1702,"title":"Core: first card","body":"step b.py","created_at":"2026-10-10T14:00:00Z","labels":["bug","ready-for-agent"]},{"number":1703,"title":"Slice: a frontier ticket","body":"UI/Logic/Foo.cs","created_at":"2026-10-10T14:30:00Z","labels":["ready-for-agent"]},{"number":1704,"title":"Core: second card","body":"step c.py","created_at":"2026-10-10T14:01:00Z","labels":["bug","ready-for-agent"]}]\n' > "$TR/issues.json"
+r=$(tr_run); rc=$?
+[ -z "$($G '^launch ' "$TR/calls")" ] && ok "41b a full Doing column holds the bug" || ko "41b launch: '$($G '^launch ' "$TR/calls")'"
+printf '1701\tTodo\n1703\tTodo\n1704\tDoing\n' > "$TR/cards.tsv"   # the card of #1702 left Doing
+r=$(tr_run); rc=$?
+[ "$rc" = 0 ] && ok "41b the pass that frees a card exits 0" || ko "41b exit $rc: '$r'"
+[ -n "$($G '^launch ' "$TR/calls")" ] && ok "41b a freed card lets the bug run" || ko "41b no launch: '$r'"
+$G -q '^CHILD — GitHub issue(s) 1701 ' "$TR/st/req/"*.body 2>/dev/null && ok "41b the bug is taken before any frontier ticket" || ko "41b request: '$(cat "$TR/st/req/"*.body 2>/dev/null)'"
+$G -q '^CHILD — GitHub issue(s) .*1703' "$TR/st/req/"*.body 2>/dev/null && ko "41b a frontier ticket is in the bug run" || ok "41b no frontier ticket in the bug run"
+: > "$TR/st/active-runs.txt"; rm -rf "$TR/co/runs/run-2423"
+
+# 41c) (#2423) a batch of two bugs that does not fit the free cards dispatches only the bugs that fit: one card free,
+# two startable bugs, one run.
+tr_fresh
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$TR/co/docs/squad/defaults.yaml"
+mkdir -p "$TR/co/runs/run-2423"
+printf 'CHILD — GitHub issue(s) 1702 (bug; one root cause, one branch):\n' > "$TR/co/runs/run-2423/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "task": "GitHub issue #1702"}\n' > "$TR/co/runs/run-2423/record.jsonl"
+printf '%s\n' run-2423 > "$TR/st/active-runs.txt"
+printf '1701\tTodo\n1702\tDoing\n1705\tTodo\n' > "$TR/cards.tsv"
+printf '[{"number":1701,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},{"number":1702,"title":"Core: first card","body":"step b.py","created_at":"2026-10-10T14:00:00Z","labels":["bug","ready-for-agent"]},{"number":1705,"title":"Ui: other crash","body":"step zz/q.py","created_at":"2026-10-10T15:05:00Z","labels":["bug","ready-for-agent"]}]\n' > "$TR/issues.json"
+r=$(tr_run); rc=$?
+[ "$rc" = 0 ] && ok "41c a batch over the free cards exits 0" || ko "41c exit $rc: '$r'"
+[ "$($G -c '^launch ' "$TR/calls")" = 1 ] && ok "41c one run starts for the one free card" || ko "41c launches: '$($G -c '^launch ' "$TR/calls")'"
+[ "$($G -c '^CHILD — GitHub issue(s)' "$TR/st/req/"*.body 2>/dev/null)" = 1 ] && ok "41c only the bugs that fit are in the request" || ko "41c request: '$(cat "$TR/st/req/"*.body 2>/dev/null)'"
+$G -q '^CHILD — GitHub issue(s) 1701 ' "$TR/st/req/"*.body 2>/dev/null && ok "41c the first bug in order takes the free card" || ko "41c request: '$(cat "$TR/st/req/"*.body 2>/dev/null)'"
+: > "$TR/st/active-runs.txt"; rm -rf "$TR/co/runs/run-2423"
+
+# 41d) (#2423) a card under a hand hold counts against the limit: a person works it in Doing, and the bug lane leaves the
+# column alone.
+tr_fresh
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 1\n' > "$TR/co/docs/squad/defaults.yaml"
+mkdir -p "$TR/st/auto"
+printf 'by hal9k\nsince 2026-10-10T12:00:00Z\nuntil 2099-01-01T00:00:00Z\n' > "$TR/st/auto/hold-1702"
+printf '1701\tTodo\n1702\tDoing\n' > "$TR/cards.tsv"
+printf '[{"number":1701,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},{"number":1702,"title":"Core: a card worked by hand","body":"step b.py","created_at":"2026-10-10T14:00:00Z","labels":["bug","ready-for-agent","ready-for-HAL9K"]}]\n' > "$TR/issues.json"
+r=$(tr_run); rc=$?
+[ "$rc" = 0 ] && ok "41d a pass with a held card in a full column exits 0" || ko "41d exit $rc: '$r'"
+[ -z "$($G '^launch ' "$TR/calls")" ] && ok "41d a card under a hand hold counts against the limit" || ko "41d launch: '$($G '^launch ' "$TR/calls")'"
+$G -q 'Doing full: 1 of 1 card(s)' "$TR/st/cycle.log" && ok "41d the line names the held card in the count" || ko "41d cycle.log: '$(cat "$TR/st/cycle.log")'"
+rm -f "$TR/st/auto/hold-1702"
+printf 'caps:\n  runs: 2\n' > "$TR/co/docs/squad/defaults.yaml"
 
 rm -rf "$T"; exit $fail
