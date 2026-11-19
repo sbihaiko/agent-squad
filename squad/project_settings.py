@@ -61,6 +61,7 @@ CATALOG = {
     "tailnet.terminals_send": ("bool", None, None, "true or false", "the phone may send a message to a live session of this profile; the grant holds for every allowed login of the profile"),
     "tailnet.loop_write": ("bool", None, None, "true or false", "the tailnet may start and stop the loop from the hub; off, the switch is read-only from the tailnet"),
     "tailnet.profiler_write": ("bool", None, None, "true or false", "the tailnet may turn the hub's CPU sampling on and off; off, that switch is read-only from the tailnet"),
+    "tailnet.board_priority_write": ("bool", None, None, "true or false", "the tailnet may set a card's Priority from the hub; off, that write is refused from the tailnet"),
 }
 # The keys the plugin defaults must hold; a missing one is a defect of that file. The rest are optional.
 REQUIRED = {"options.effort", "options.permission_mode", "limits.max_stalls", "limits.max_budget_usd", "limits.max_output_tokens", "limits.context_tokens",
@@ -75,7 +76,8 @@ CALL = ("limits.max_output_tokens", "limits.context_tokens", "limits.max_stalls"
 ENV = ".env"
 ENV_KEYS = {"tailnet.host": "SQUAD_TAILNET_HOST", "tailnet.allow": "SQUAD_TAILNET_ALLOW", "tailnet.terminals_read": "SQUAD_TAILNET_TERMINALS_READ",
             "tailnet.terminals_attach": "SQUAD_TAILNET_TERMINALS_ATTACH", "tailnet.terminals_send": "SQUAD_TAILNET_TERMINALS_SEND",
-            "tailnet.loop_write": "SQUAD_TAILNET_LOOP_WRITE", "tailnet.profiler_write": "SQUAD_TAILNET_PROFILER_WRITE"}
+            "tailnet.loop_write": "SQUAD_TAILNET_LOOP_WRITE", "tailnet.profiler_write": "SQUAD_TAILNET_PROFILER_WRITE",
+            "tailnet.board_priority_write": "SQUAD_TAILNET_BOARD_PRIORITY_WRITE"}
 
 
 def _env_lines(target):
@@ -92,7 +94,7 @@ def env_tailnet(target):
         name, sep, raw = line.partition("=")
         if sep and name.strip() in names:
             key, raw = names[name.strip()], raw.strip().strip('"\'')
-            out[key] = [x.strip() for x in raw.split(",") if x.strip()] if key == "allow" else yaml.safe_load(raw) if key in ("terminals_send", "loop_write", "profiler_write") else raw
+            out[key] = [x.strip() for x in raw.split(",") if x.strip()] if key == "allow" else yaml.safe_load(raw) if key in ("terminals_send", "loop_write", "profiler_write", "board_priority_write") else raw
     return out
 
 
