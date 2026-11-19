@@ -358,8 +358,8 @@ def test_the_guard_is_a_switch_that_shows_its_state(ctx):
 
 
 def test_a_flipped_switch_answers_the_word_the_hub_reads(ctx):
-    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:true};console.log(JSON.stringify(limVals().guard))') == "on"
-    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limVals().guard))') == "off"
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:true};console.log(JSON.stringify(limTyped("guard")))') == "on"
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limTyped("guard")))') == "off"
 
 
 def test_the_cap_reads_with_a_unit_suffix_and_its_field_takes_text(ctx):
