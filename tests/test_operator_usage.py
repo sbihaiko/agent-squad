@@ -37,6 +37,10 @@ def OU():
 
 @pytest.fixture(scope="module")
 def hub():
+    """Bind a hub module to a throwaway environment. A module-scoped fixture outlives this file's tests, so every name
+    it sets is restored at teardown: a leaked SG_REPO reaches a later file's hub and breaks its board pass (#2457)."""
+    names = ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_HUB_DIR", "SG_STATE")
+    saved = {name: os.environ.get(name) for name in names}
     for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT"):
         os.environ.setdefault(k, "x")
     os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
@@ -44,7 +48,34 @@ def hub():
     spec = importlib.util.spec_from_file_location("hub_operator_usage", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    try:
+        yield mod
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_the_hub_fixture_restores_the_environment_it_sets(monkeypatch):
+    """#2457: the fixture runs at module scope, so a name it leaves behind reaches every later test in the process. A
+    leaked SG_REPO with no owner made a later board pass drop the items it had read and carry no test cases."""
+    names = ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_HUB_DIR", "SG_STATE")
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    gen = hub.__wrapped__()
+    has_teardown = hasattr(gen, "__next__")
+    try:
+        if has_teardown:
+            next(gen)                          # the fixture's setup binds the throwaway environment
+        assert os.environ["SG_REPO"] == "x"    # a fixture that never yields leaves this behind for good
+    finally:
+        if has_teardown:
+            for _ in gen:                      # the fixture's teardown is the behavior under test
+                pass
+    leaked = [name for name in names if name in os.environ]
+    assert leaked == [], f"{', '.join(leaked)} leaked into the process environment"
 
 
 def _line(mid, model, inp, out, cr, cc=0, ts=T, text=None):
