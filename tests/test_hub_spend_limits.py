@@ -255,8 +255,8 @@ LIM = {"profile": "/p/profiles/t.sh", "file": "/p/profiles/t.sh", "guard": "on",
        "last_change": {"at": "2026-11-04 09:12:00", "text": "Spend & limits · token cap: 1000 -> 2000"}}
 
 
-def lim_draw(hub, view):
-    """The theme's own renderer in node over one view: the two blocks the owner reads, and both chips."""
+def lim_eval(hub, script):
+    """The theme's own helpers in node, over a fake turn of the page: the script runs last and prints one JSON line."""
     if shutil.which("node") is None:
         pytest.skip("node is required")
     page = hub.PAGE
@@ -275,14 +275,18 @@ const STORE={};
 const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",className:""});
 const setBar=()=>{};
 """
-    body = "\n".join([harness, esc.group(0), tk.group(0), sett, lim,
-                      f"limS={json.dumps(view)};limRender();",
-                      'console.log(JSON.stringify({html:STORE["#lbody"].innerHTML,'
-                      'sr:STORE["#limsr"].textContent,srcls:STORE["#limsr"].className,'
-                      'nav:STORE["#limnav"].textContent,navcls:STORE["#limnav"].className}))'])
+    body = "\n".join([harness, esc.group(0), tk.group(0), sett, lim, script])
     p = subprocess.run(["node", "-"], input=body, capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
+
+
+def lim_draw(hub, view):
+    """The theme's own renderer in node over one view: the two blocks the owner reads, and both chips."""
+    return lim_eval(hub, f"limS={json.dumps(view)};limRender();"
+                         'console.log(JSON.stringify({html:STORE["#lbody"].innerHTML,'
+                         'sr:STORE["#limsr"].textContent,srcls:STORE["#limsr"].className,'
+                         'nav:STORE["#limnav"].textContent,navcls:STORE["#limnav"].className}))')
 
 
 def lim_blocks(out):
@@ -322,6 +326,21 @@ def test_the_settings_block_holds_only_the_three_editable_settings(ctx):
            ["Token guard", "Daily token cap", "Pause factor"], settings
     for fact in ("class=\"tile", "class=tile", "<span class=tk>", "Last hour", "Pauses over", "Profile file"):
         assert fact not in settings, f"the Settings block carries the fact {fact!r}"
+
+
+def test_the_guard_is_a_switch_that_shows_its_state(ctx):
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    assert "select id=limg" not in settings and "id=limg type=checkbox" in settings, settings
+    assert re.search(r"<input id=limg type=checkbox role=switch[^>]* checked", settings), "a guard on does not read as on"
+    assert "Off: dispatch never pauses on token burn." in settings, settings
+    off = lim_blocks(lim_draw(ctx["hub"], dict(LIM, guard="off")))[1]
+    assert re.search(r"<input id=limg type=checkbox role=switch[^>]*>", off) and \
+           not re.search(r"<input id=limg[^>]* checked", off), "a guard off reads checked"
+
+
+def test_a_flipped_switch_answers_the_word_the_hub_reads(ctx):
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:true};console.log(JSON.stringify(limVals().guard))') == "on"
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limVals().guard))') == "off"
 
 
 def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
