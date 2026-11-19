@@ -816,3 +816,18 @@ def test_a_twelve_hour_timeframe_names_whole_hours(lt):
     """#2029: the 12-hour preset is half a day, and the chart text reads `last 12 hours`, never `12.0`."""
     chart = lt.control_chart([], timeframe=0.5, now=BASE)
     assert "last 12 hours" in json.dumps(chart), json.dumps(chart)[:300]
+
+
+def test_a_card_with_no_time_on_the_board_is_left_out_and_never_stretches_the_log_axis(lt):
+    """A card closed the moment it entered the start column (a record of work done before the card existed) has a
+    lead time under one second. A log axis cannot place it: the floor halved toward zero and the axis ran from "0s" to
+    days, so every real dot sat in a thin band at the top. The chart leaves such a card out, names the reason, and
+    fits the axis to the real dots."""
+    items = [_card(1, 5), _card(2, 8), _card(3, 0.0), _card(4, 6)]
+    chart = lt.control_chart(items, now=BASE + timedelta(days=1))
+    assert sorted(dot["n"] for dot in chart["dots"]) == [1, 2, 4], "the card with no lead time is no dot"
+    assert chart["excluded"] == {"no_lead_time": 1}, "the reason is counted"
+    assert lt.exclusion_text("no_lead_time") == "closed with no time on the board", "the reason is stated in words"
+    floor = min(tick["hours"] for tick in chart["ticks"])
+    assert floor >= 1.0, f"the axis floor fits the real dots (5 h to 8 h), never a zero card: {floor}"
+    assert all(tick["text"] != "0s" for tick in chart["ticks"]), "no tick reads 0s"

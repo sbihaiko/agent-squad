@@ -53,9 +53,3 @@
 #profb table .pbar{display:block;height:100%;background:var(--err)}#profb table .pnm{margin-left:6px}#profb table .pk-orphan .pnm{color:var(--err)}#profb table .pk-other .pnm,#profb table .pk-unknown .pnm{color:var(--mute)}#profb .lerr{color:var(--err)}
 /* The run slots in use (#1766): a step line of the slots a run holds and the cap as its dashed ceiling, on the window the
    route folds the loop state for, so a column of the page is one instant in both views. A gap is the hatched band. */
-#profslots{margin:0 0 18px}#profslots .lslotsh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:0 0 4px}
-#profslots h4{margin:0;font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
-#profslots .lslwrap{position:relative;display:block;width:100%;height:56px;background:var(--edge);border-radius:var(--radius-sm);overflow:hidden}
-#profslots .lsl{display:block;width:100%;height:100%}#profslots .lsline{fill:none;stroke:var(--acc);stroke-width:2}
-#profslots .lscap{fill:none;stroke:var(--err);stroke-width:1.5;stroke-dasharray:3 3}
-#profslots .lsg{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(45deg,transparent 0 4px,var(--line) 4px 8px)}
