@@ -3095,13 +3095,35 @@ def test_a_machine_load_payload_is_never_drawn_as_a_chart():
     assert "class=plc" not in out and "saturation &middot;" not in out, "the core reference line went with the chart"
 
 
+class Clock:
+    """The hub's clock, frozen at one instant: every other time attribute is the real module's."""
+
+    def __init__(self, at):
+        self.at = at
+
+    def time(self):
+        return self.at
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+EDGE_NOW = 1_800_000_000.1236     # a stamp whose own millisecond rounds up, as the record's writer stamps one
+
+
+def load_record_rows_at(now):
+    """The case's rows of the minute record, one a minute and the newest in the case's own second. The writer stamps
+    whole seconds, so no row sits at the window's edge, where a stamp rounded to the millisecond lands past the route's
+    clock a moment later (#2300)."""
+    return [f"{int(now) - 600 + i * 60}\t{2.0 + i:.2f}\t{50.0 + i:.1f}" for i in range(11)]
+
+
 def test_the_route_answers_the_machine_load_on_the_strips_own_window(hub):
     """The load is the rule layer's fold of the minute record: its rows are in the answer, on the strip's own window, so
     a column of the page is one instant in both. A file view: no process table."""
     mod, port, _, state, table = hub
     now = time.time()
-    rows = [f"{now - 600 + i * 60:.3f}\t{2.0 + i:.2f}\t{50.0 + i:.1f}" for i in range(11)]
-    (state / "load-record.tsv").write_text("\n".join(rows) + "\n")
+    (state / "load-record.tsv").write_text("\n".join(load_record_rows_at(now)) + "\n")
     mod.LOAD_STATE.update(record_rows=None, record_stamp=None)
     code, v = ask(port, "GET", path="/api/profiler?sw=14400")
     assert code == 200
@@ -3111,6 +3133,18 @@ def test_the_route_answers_the_machine_load_on_the_strips_own_window(hub):
     assert len(flat(load)) >= 10 and load["peak"] > 0 and load["gaps"], "an unrecorded head is a gap, never a zero"
     assert [p["load"] for p in flat(load)] == [2.0 + i for i in range(11)], "the points are the file's own lines"
     assert table.reads == 0, "the load line reads files only"
+
+
+def test_the_route_answers_the_newest_row_when_its_clock_reads_a_moment_later(hub, monkeypatch):
+    """The case stamps its rows and the route reads its own clock a moment later. The newest row lies inside the window,
+    so no skew of a fraction of a millisecond moves it past the strip's own end (#2300)."""
+    mod, port, _, state, table = hub
+    (state / "load-record.tsv").write_text("\n".join(load_record_rows_at(EDGE_NOW)) + "\n")
+    mod.LOAD_STATE.update(record_rows=None, record_stamp=None)
+    monkeypatch.setattr(mod, "time", Clock(EDGE_NOW + 0.0002))
+    code, v = ask(port, "GET", path="/api/profiler?sw=14400")
+    assert code == 200
+    assert [p["load"] for p in flat(v["load"])] == [2.0 + i for i in range(11)], "the points are the file's own lines"
 
 
 # The load monitor's own minute record: one line a minute, written atomically and bounded to a fixed age, with the CPU
