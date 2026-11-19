@@ -433,7 +433,10 @@ done
 # issue that names it comes from the open-issue list this pass already holds -- no second read.
 rm -rf "$T/st/auto" "$T/st/state"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq"
 cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
-printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+# Two slots: the owner's card in Doing fills one, and the pass needs the other free card to meet the red and reach the owner
+# check (#2423, ADR-0148 decision 2). One slot made the column bound stop the pass before any write, so case 8d never read
+# the owner and proved nothing.
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"
 cp "$T/issues.json" "$T/issues.8d.bak"; cp "$T/cards.tsv" "$T/cards.8d.bak"   # the cases after 8d read the list the case above it left
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
