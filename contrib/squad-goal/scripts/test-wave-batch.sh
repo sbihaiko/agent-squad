@@ -195,10 +195,20 @@ r=$(ogate run-ta); rc=$?
 kill $ohp 2>/dev/null
 [ $rc != 0 ] && ok "o: the pass waits" || ko "o: exit $rc: '$r'"
 case "$r" in *"WAVE WAIT batch run-ta,run-tb"*) ok "o: one wait line names the batch";; *) ko "o: no wait line: '$r'";; esac
-case "$r" in *"held by child-gate-7"*) ok "o: the wait names the gate that held the slot";; *) ko "o: no holder named: '$r'";; esac
+case "$r" in *"the gate slots are held by child-gate-7"*) ok "o: the wait names the gate that held the slot";; *) ko "o: no holder named: '$r'";; esac
+case "$r" in *"lease pid"*) ko "o: the wait line quotes the lease detail: '$r'";; *) ok "o: the wait line carries no lease detail";; esac
 case "$r" in *"each run lands alone"*) ko "o: the batch read the skip as a failed check: '$r'";; *) ok "o: the skip never lands each run alone";; esac
 [ "$(devpushes)" = 0 ] && ok "o: no wave lands on the skipped check" || ko "o: pushes to dev: '$(cat "$T/pushes.log")'"
 $O rev-parse -q --verify wave/run-tb >/dev/null && ok "o: the queued wave keeps its branch" || ko "o: the queued run's branch went"
+rm -f "$T/st/auto"/wland-*
+# o2 (#2330): a 73 that names no gate hold is not a skip the batch can wait out: a gate that answered 73 for a real failure
+# would wait for ever. The batch takes the check's own failure path and lands each run alone, as a red does.
+printf '#!/bin/bash\necho "gate: something went wrong the batch never saw"\nexit 73\n' > "$T/o2-tip.sh"
+o2gate() { (cd "$T/co" && SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES="bash '$T/o2-tip.sh'" bash "$T/s/wave.sh" land "$1" "$T/co/runs/$1" 2>&1); }
+mkrun run-tc 143; mkrun run-td 144; queue run-td; reset
+r=$(o2gate run-tc); rc=$?
+case "$r" in *"answered 73 and named no gate hold"*) ok "o2: the unnamed 73 is named as the check's own failure";; *) ko "o2: the unnamed 73 is not named: exit $rc: '$r'";; esac
+case "$r" in *"WAVE WAIT batch"*) ko "o2: the batch waited on a 73 that named no hold: '$r'";; *) ok "o2: the batch never waits on an unnamed 73";; esac
 rm -f "$T/st/auto"/wland-*
 
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
