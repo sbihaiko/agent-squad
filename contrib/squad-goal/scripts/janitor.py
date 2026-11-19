@@ -752,7 +752,8 @@ if not dry: _active_runs_module().rewrite(act, names, lines)
 # V: a wave marker `auto/wave-<run>` stands for a run's landing pass, and only a line of active-runs.txt makes the loop land
 # that wave (watch.sh reads the run from the listing): a run that left the listing can never land it again, so its marker stays
 # for ever (1325 of them on 2026-11-17, #2140). The pass drops the wave markers of a run no line names and no live process
-# works, and names each one; the wave of a live run, or of a folder a live process works, stays.
+# works, and names each one; the wave of a live run, or of a folder a live process works, stays. Each marker names its run
+# through its known prefix, the entry clock `wave-entry-<run>` included, so a live run's clock and recut marker stay (#2473).
 if (st / "auto").is_dir():
     live_names = set()
     for r in lines:
@@ -760,7 +761,9 @@ if (st / "auto").is_dir():
         li = live.get(lf.name) or read(lf)
         if li: live_names.add(li["run_id"])
     for wp in sorted((st / "auto").glob("wave-*")):
-        wrun = next((wp.name[len(k):] for k in ("wave-start-", "wave-pause-", "wave-") if wp.name.startswith(k)), "")
+        # The known prefixes come first and the bare `wave-` last, so the entry clock `wave-entry-<run>` and the recut marker
+        # `wave-recut-<run>` name their run, not `entry-<run>` or `recut-<run>` (#2473).
+        wrun = next((wp.name[len(k):] for k in ("wave-start-", "wave-pause-", "wave-entry-", "wave-recut-", "wave-") if wp.name.startswith(k)), "")
         if not wrun or wrun in live_names: continue
         if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(co / "runs" / wrun)): continue
         say(f"WAVE-DROPPED {wp.name}: its run is not in active-runs and no process works its folder, so the wave can no longer land")
