@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.32
 # Regression test for merge-audit.sh: after a hand resolution of a conflicted file, a line both parents hold must survive. The fixture reproduces the watch.sh line a resolution deleted; the script still parsed, and nothing else looked. Keeping one side's text over the other's is not a failure. Throwaway repo, no network.
 src=${1:-$(dirname "$0")/merge-audit.sh}; src=$(cd "$(dirname "$src")" && pwd)/$(basename "$src"); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/r"; G=/usr/bin/git; g() { $G -C "$T/r" -c user.email=a@b -c user.name=t "$@"; }

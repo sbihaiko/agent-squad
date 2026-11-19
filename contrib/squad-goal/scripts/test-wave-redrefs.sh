@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 22.78
 # Regression test for #1474: a wave whose fix commit says `TDD RED` closes its issues. A squashed RED commit (a RED message that
 # changes code as well as tests) delivers by the per-commit rule, as any commit does. A RED commit that changes test files only
 # (a path under tests/, fixtures/ or a helper, conftest.py, pytest.ini, test-*.sh, test_*.py) delivers nothing (#533). A wave

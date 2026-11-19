@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.34
 # The dashboard term of the freeze of 2026-10-13 (issue #70). Rules B, J and C reap the dashboard of ONE run the pass knows about.
 # When any of them stops working for any other reason -- a run dropped from active-runs, a record the pass cannot read -- the
 # dashboards of finished runs accumulate with nothing bounding them (41 were alive by 06:47). This suite proves the counted

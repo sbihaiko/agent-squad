@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.61
 # The stored attachment path and the message line come from one seam (#1150): the image route serves the file for its session
 # only, the line names exactly that path with one data-not-instruction sentence, and the overlay still draws the marker.
 # usage: bash test-hub-attachment.sh [path/to/hub.py]

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 7.02
 # An issue is held from its dispatch until its delivery ends (#539). The sequence of 2026-10-18 01:24: run A (000438) took
 # #536 and ended with nothing landed; run B (011009) took it again, its child entered wave/<B>, and B recorded its verdict
 # while the wave had not landed yet. No fix/ or gui/ branch names the issue. The janitor's rule O for run A dropped

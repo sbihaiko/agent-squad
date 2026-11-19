@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.57
 # Guard for #923: the loop switch on the hub. Start, drain-stop and stop-now write through one route; each change writes one
 # audit line (who, when, from where); a stop-now is refused without its confirm and names what it kills; a tailnet request is
 # read-only unless tailnet.loop_write (SQUAD_TAILNET_LOOP_WRITE) is on, and the refusal gives its reason. The state reads

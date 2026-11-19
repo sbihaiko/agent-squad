@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 7.32
 # The nightly live check (spec 1163, #1178): the queue's invariants, proven against the running loop and the live state.
 # It asserts only what the rules promise (ADR-0153, ADR-0163, ADR-0164):
 #   - no child waits on the lock or the slots beyond the bound while every slot holder is itself queued for the lock,

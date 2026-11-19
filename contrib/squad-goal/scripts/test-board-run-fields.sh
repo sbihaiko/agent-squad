@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.92
 # The board pass names the run that holds a card: `board.py --run-fields <owner> <project> <issue#> <run> <run-started>` writes
 # the two text fields Run and Run started, and `--clear-run` clears them when the card leaves In Progress. Both are one
 # PATCH on the one item, they flag the hub to refresh at once, and a refusal is named on stderr and exits non-zero.

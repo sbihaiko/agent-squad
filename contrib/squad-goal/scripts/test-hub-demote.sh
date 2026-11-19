@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.07
 # Regression test for the hub's run listing: a failed / unverified / needs-human run whose every issue is closed stops being open business (no network, no server). usage: bash test-hub-demote.sh [path/to/hub.py]
 src=$(cd "$(dirname "${1:-$0}")" && pwd)/$(basename "${1:-hub.py}"); [ -n "$1" ] || src=$(cd "$(dirname "$0")" && pwd)/hub.py; export HUB_SRC=$src; T=$(mktemp -d); fail=0
 export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_STATE="$T/st"

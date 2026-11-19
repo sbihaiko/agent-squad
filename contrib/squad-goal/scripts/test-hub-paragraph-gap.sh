@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.08
 # Guard for #1078: a paragraph break in the panel is one empty line, the line box at the panel's text size, at 10 px and at 22 px.
 # usage: bash test-hub-paragraph-gap.sh [path/to/hub-overlay.js]
 d=$(cd "$(dirname "$0")" && pwd); js=${1:-$d/hub-overlay.js}

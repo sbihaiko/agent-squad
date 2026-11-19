@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.34
 # A run the janitor took over or the wave age cap retired reads as its own hub state, and only when its record names that cause
 # and holds no measured red (ADR-0029, ADR-0164). The raw verdict, exit code and reasons stay as recorded, whatever the state.
 # usage: bash test-hub-run-cause.sh [path/to/hub.py]

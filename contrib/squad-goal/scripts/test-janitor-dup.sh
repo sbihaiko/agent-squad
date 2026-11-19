@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.24
 # #865 (janitor DUP): two live runs accept one issue. The older run keeps it; the newer run's process tree is killed and the pass says so.
 # Before #865 the pass named both and killed neither ("not killed"), so two sessions worked one issue for as long as both stood.
 # A dry run kills nothing. Stubbed gh and board; a temp state dir; live runs are sleepers whose cwd sits in their run folder.

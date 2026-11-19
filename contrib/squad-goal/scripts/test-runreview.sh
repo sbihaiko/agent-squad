@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.06
 # Regression test for the review a loop run gives its own children (#601, ADR-0145 rule 9): runreview.sh is the command the
 # loop workflow's review gate runs in a passed child's worktree, before the run merges it. It wraps childreview.sh, takes one
 # `reviews` slot of the machine-wide budget (waiting, on one line), says "no review here" (exit 3) when the run has no wave,

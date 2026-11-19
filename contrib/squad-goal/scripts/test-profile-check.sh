@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.16
 # Table test for profile-check.sh (#763): a new profile runs one check, and each setup gap is named before the loop misbehaves.
 # The profile parses, names a real repository, board and checkout whose origin is that repository, and the repository holds
 # the labels the loop and /to-tickets use. Offline: throwaway profiles and checkouts, a stub reader for the label list.

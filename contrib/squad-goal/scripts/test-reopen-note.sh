@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.64
 # Guard for #817: a reopened issue is dispatched and reviewed with the reason it was reopened. The request and the review read
 # the issue body only, so a run on an issue reopened with "two defects still fail" re-read the old acceptance criteria, found
 # them met, and fixed something adjacent. reopen-note.py prints the comments posted since the last reopen, by a member of the

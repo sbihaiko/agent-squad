@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.57
 # Guard for triage-labels.sh (#1673): the label bootstrap creates a missing triage label and refreshes the rest, idempotently,
 # and its --check names each missing label without a write. The vocabulary doc's first table names the labels it creates.
 # Offline: a stub gh that keeps the repository's labels in a file, and a stub reader for the label list.

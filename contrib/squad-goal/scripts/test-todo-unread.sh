@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.53
 # Regression test for sg_todo_cards with a go list (#800): a go-labelled issue whose card the board read does not carry
 # is named on stderr and in alerts.log, and a known node id that answers Todo rescues it into the Todo list. Hermetic:
 # a stub gh answers the fields, the items route (through the --jq the caller passes), the one-card read and the issue's own

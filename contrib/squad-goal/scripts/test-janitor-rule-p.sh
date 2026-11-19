@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.48
 # Rule P (#1830): a landing that was later unwound leaves a `fork-<n>-<sha9>` marker claiming a delivery the fork base
 # no longer has. No other rule owns that state: rule O releases a FAILED run that landed nothing, and a close pass can
 # only merge a branch that is ahead of the base. The card goes back to the dispatchable column and the markers are

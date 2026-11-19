@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.14
 # The card column comes from the work branch's state, never from a pull request. With SG_BOARD_VOCAB=shipped the janitor reads
 # the remote work branches (`fix|gui/<n>-...`) and how each stands against the landing branch (dev): a branch ahead of dev puts
 # its card in Batching; a branch in dev puts a card that reached Batching in Closed (Done). An open pull request or a

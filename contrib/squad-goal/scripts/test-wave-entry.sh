@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 26.87
 # The wave's entry (#374, #376, #392): the run cuts its wave branch, a green child enters it by a fast-forward,
 # and a child held out says why: failed gates, a conflict, a review that did not approve it, or a held gate lock.
 # mirrors: wave.sh wave-fixture.sh

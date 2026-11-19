@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 6.67
 # Guard for #1386: `watchd.sh start` is refused while any loop-bug issue is open, bare or prefixed, and reads the open
 # issues once through the one seam (ADR-0146). A read that fails proves nothing and starts the loop, saying so. A start
 # on an already-running loop is not a start: it cancels a drain and succeeds, whatever the issues say.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.57
 # Regression test for janitor rule K: a `disp-<n>` marker whose request log says `Nothing ran` (10 min old, no live run on the
 # issue) is dropped like rule E does for `verdict failed`, so autofrontier/autobug dispatch the issue again.
 # usage: bash test-janitor-k.sh [janitor.py]

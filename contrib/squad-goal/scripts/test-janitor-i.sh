@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.13
 # Regression test for janitor rule I (RUN-ON-CLOSED-ISSUES: a live run whose issues are all closed; duplicates/not_planned -> stop, otherwise report once), stubbed gh. usage: bash test-janitor-i.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$T/board_columns.py"; cp "$(dirname "$src")/board-definition.json" "$T/board-definition.json"

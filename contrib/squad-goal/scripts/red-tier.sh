@@ -29,7 +29,7 @@ record)
       k=$(printf '%s\n' "$shards" | awk -F'\t' -v j="$job" '$1 == j { print $2; exit }')
       [ -n "$k" ] || continue
       named=$(red_job_files "$sha" "$job")
-      if [ -n "$named" ]; then printf '%s\n' "$named"; else git -C "$tree" show "$sha:tests/ci_shards.py" | python3 - "$k" 2>/dev/null; fi
+      if [ -n "$named" ]; then printf '%s\n' "$named"; else git -C "$tree" show "$sha:tests/ci_shards.py" | python3 - "$k" "$tree" 2>/dev/null; fi
     done | tr ' ' '\n' | sed '/^$/d' | awk '!seen[$0]++')
   mkdir -p "$state"
   { printf '%s\n' "$sha"; [ -z "$files" ] || printf '%s\n' "$files"; } > "$rec.$$" && mv -f "$rec.$$" "$rec"

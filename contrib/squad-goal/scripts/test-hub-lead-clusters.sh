@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.09
 # Regression test for #1331: the lead chart's payload clusters carry one fixed radius, their cards, their count, their
 # closed-date range and their lead-time range; a card past p85 never merges; the page draws a lone card as a hollow dot
 # and a cluster as one outlined filled dot, with no stacked bar, no count text, and a tooltip naming the mark, the lead

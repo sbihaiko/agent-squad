@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 20.37
 # Regression test for autobug ranking (bug first, then debt) and autofrontier skipping debt (Refs #1494).
 # Offline: stub gh. usage: bash test-autobug.sh [scripts dir]
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own

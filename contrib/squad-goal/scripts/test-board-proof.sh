@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.52
 # `board.py --proof` carries the fact of an unproven landing on the issue's card (spec 1163, #1176): `unproven` while the
 # proof obligation is open, `proof:red` when the settlement measured a defect, and neither on a green settlement or a
 # proven landing. The label write is proven by the issue read that follows it, and a write the read does not carry is a

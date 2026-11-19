@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.85
 # Rule C: a zombie run (no verdict, record idle, no process inside its folder, no live call) gets the killed verdict in its own
 # record (squad.killed, the one writer) and leaves active-runs.txt on the same pass that frees its leases, so the listing and the
 # leases agree in one sample (#1854); the log names the removal. An open wave holds its line until the wave lands. Without the

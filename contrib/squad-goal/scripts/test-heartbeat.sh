@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.86
 # Regression test for heartbeat.sh's dead-run pass: a run in active-runs.txt with no verdict while no squad process is alive was killed
 # (session restart, crash). The pass writes the verdict into the run's own record, so the hub shows the run as ended and stops counting it live.
 # Stubbed env.sh and ps pattern; the real squad package writes the verdict. usage: bash test-heartbeat.sh [heartbeat.sh]

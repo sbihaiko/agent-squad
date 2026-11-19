@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 12.95
 # ADR-0051: a call has a deadline. The janitor runs commands whose child may leave a grandchild behind, and a command may
 # hang. Neither may hold the pass: the module runs every command into a file (never a pipe) and cuts it at its deadline.
 #  (A) the stub `gh` starts `sleep` in the background: the child exits while a pipe-based caller would keep reading;

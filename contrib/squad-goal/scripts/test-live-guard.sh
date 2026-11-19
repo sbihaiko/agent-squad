@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 7.00
 # Regression test for live-guard.sh: the step the watch cycle runs so the live skill -- the copy the loop and the owner's
 # info bar actually run -- follows the repository copy, and the difference is read instead of assumed (issue #152).
 # usage: bash test-live-guard.sh [path/to/live-guard.sh]

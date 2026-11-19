@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.95
 # A run that recorded its verdict is over, and no deferral marker of it survives the pass (#945).
 # childcc writes auto/ccdefer-<run>-<child> for a child its run never reviewed, and the wave reads that run's marker as a wait
 # that is still owed: after the run recorded a verdict the marker names a wait that can never end, so watch.sh prints

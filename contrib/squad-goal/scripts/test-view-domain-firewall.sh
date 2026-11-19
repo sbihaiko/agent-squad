@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.37
 # Regression test for the second half of the GUI rule (#1849, ADR-0137 sections 3 and 4): verify-view-domain-firewall.sh refuses
 # a view whose code-behind reaches the domain - a file, a client, the host's own state, a domain service - instead of
 # constructing, binding and delegating to its view model. The rule is the direction; the paths and the domain names are the

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.95
 # Regression test for autofrontier.sh: the pass reads the run's own envelope, from the file the engine will run, and the
 # request it builds carries those numbers. The spend it names was a hardcoded 8 while the dispatch node of the graph the
 # engine runs allows 4, so every child request was over the limit: the router read `spend_outside_budget` in its notes,

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.73
 # A fast lane whose supervisor died exits, so it never runs beside the lane of the next watchd start; and its exit keeps a pid
 # file that names another lane (#527).
 # Offline: stub steps beside a copy of fastloop.sh, a 0.6 s beat, and an alarm so a hung loop cannot run on.

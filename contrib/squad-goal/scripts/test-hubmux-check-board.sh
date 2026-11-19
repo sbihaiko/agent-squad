@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.81
 # Regression test for #1000: a hub on a port other than the live hub's (7700) is a check hub, and starting it never creates the
 # live board cache folder under the machine state base (no GitHub: the first board pass fails and writes nothing). usage: bash test-hubmux-check-board.sh
 here=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; pid=""

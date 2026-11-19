@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.84
 # A run the janitor takes over (ADR-0166) ends with the killed verdict that names its cause, `killed/taken-over`, in its own
 # record. The hub reads that cause as an intervention; a run with no cause reads as a plain failure (ADR-0029).
 # Stubbed gh and board; a temp state dir. usage: bash test-janitor-takeover-cause.sh [janitor.py]

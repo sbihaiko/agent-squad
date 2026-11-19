@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.54
 # (#847) The unmetered REST spenders the audit ranked top log every call to api.log, through the door's own log writer:
 # the board seam (issue_state.py, the hub board pass and the autobug and autofrontier reads) and reconcile.py's reads.
 # Offline: a stub gh answers every call with []. The calls are the lines of $T/calls. Output contracts are not in scope here.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.09
 # Guard for #997: the phone sheet steps through the cards the opened card's run holds in its column, and a card with no run
 # steps the whole column. The selection rule is the gesture module's, run by node with no DOM; the page is checked for the
 # wiring that reads it. The page is driven over the stub DOM by tests/test_hub_mobile_board.py.
