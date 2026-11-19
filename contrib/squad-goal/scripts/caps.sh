@@ -19,6 +19,42 @@ sg_battery_workers() {
   echo "${SG_BATTERY_WORKERS:-$w}"
 }
 
+# (#2379, ADR-0169 rule 9) sg_full_bound <delta bound>: the bound of a gate whose battery runs the full scope, in whole seconds,
+# measured from this machine's own gates ($SG_STATE/gate-history, the line gate.sh writes). The window is the last 20 full-battery
+# gates that ran a battery (selection `all:` or scope `full`, never a reused verdict); the measure is the longest wall among those
+# that passed or that a bound stopped (outcome unproven, reason `bounded`), and the bound is 3/2 of it, rounded up. A failed gate
+# measures nothing, because a red ends before the battery does. The bound is never under the delta bound and never over the cap,
+# SG_GATE_FULL_MAX_SECONDS, twice the delta bound by default; a window with no measure answers the cap. A bounded gate counts at
+# its own wall, so a battery that outgrew the bound raises the next one, up to the cap and no further. The owner's
+# SG_GATE_FULL_BOUND_SECONDS wins over the measure, clamped to the delta bound so no lock or lease ever shrinks under a delta gate.
+# The wall is field 20 (finish minus the in-lock start, the interval the bound limits), else finish minus start on an older row;
+# a row whose numbers do not read is skipped, and the answer is always a whole number.
+sg_full_bound() {
+  local delta=${1:-900} o cap
+  case $delta in ''|*[!0-9]*|0) delta=900;; esac
+  o=${SG_GATE_FULL_BOUND_SECONDS:-}
+  case $o in ''|*[!0-9]*|0) ;; *) [ "$o" -gt "$delta" ] && echo "$o" || echo "$delta"; return 0;; esac
+  cap=${SG_GATE_FULL_MAX_SECONDS:-}; case $cap in ''|*[!0-9]*|0) cap=$(( 2 * delta ));; esac
+  [ "$cap" -ge "$delta" ] || cap=$delta
+  tail -n 5000 "${SG_STATE:-/tmp/sg-state}/gate-history" 2>/dev/null | /usr/bin/awk -F'\t' -v d="$delta" -v c="$cap" '
+    ($6 ~ /^all:/ || $7 == "full") && $17 != "reused" && $22 != "yes" {
+      if (NF >= 20 && $20 ~ /^[0-9]+$/) w = $20 + 0
+      else if ($1 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && $1 >= $5) w = $1 - $5
+      else next
+      m = ($8 == "pass" || ($8 == "" && $3 == "pass") || ($8 == "unproven" && $9 ~ /^bounded/)) ? 1 : 0
+      n++; wall[n] = w; meas[n] = m
+    }
+    END {
+      best = -1
+      for (i = (n > 20 ? n - 19 : 1); i <= n; i++) if (meas[i] && wall[i] > best) best = wall[i]
+      if (best < 0) { print c; exit }
+      b = int((3 * best + 1) / 2)
+      if (b < d) b = d
+      if (b > c) b = c
+      print b
+    }' || echo "$cap"
+}
+
 # sg_git_env_scrub (#2306): a git hook exports GIT_DIR, and a gate it starts hands it to every suite. A fixture that runs
 # `git init --bare` or `git config` in a folder of its own then writes GIT_DIR instead, and that set core.bare = true on the
 # checkout that ran the gate. Each suite runner (gate.sh, fast-gate.sh, child-gate.sh, shell-suites.sh, daysuites.sh) calls this before any

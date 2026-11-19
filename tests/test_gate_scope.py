@@ -35,8 +35,8 @@ def battery(tmp_path, repo, stage):
     py.chmod(0o755)
     sel = tmp_path / f"select-{stage}"
     scope = tmp_path / f"scope-{stage}"
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "SG_SCOPE_ROOT": str(ROOT),
-           "GATE_SELECT_FILE": str(sel), "GATE_SCOPE_FILE": str(scope)}
+    env = {**{k: v for k, v in os.environ.items() if not k.startswith("GATE_")}, "PYTHONPATH": str(ROOT),
+           "SG_SCOPE_ROOT": str(ROOT), "GATE_SELECT_FILE": str(sel), "GATE_SCOPE_FILE": str(scope)}
     env.pop("SG_TEST_SELECT", None)   # a gate that runs this suite may hold it; the case reads its own stage, never the live one
     env.pop("SG_GATE_STAGE", None)
     cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 yes "{stage}"'
@@ -121,7 +121,9 @@ def test_an_empty_selection_runs_no_pytest_and_logs_why(tmp_path):
     )
     py.chmod(0o755)
     sel = tmp_path / "select-fast"
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "SG_SCOPE_ROOT": str(ROOT), "GATE_SELECT_FILE": str(sel)}
+    # (#2379) No inherited gate record: a gate that runs this suite exports its own scope file, and this battery would write it.
+    env = {**{k: v for k, v in os.environ.items() if not k.startswith("GATE_")},
+           "PYTHONPATH": str(ROOT), "SG_SCOPE_ROOT": str(ROOT), "GATE_SELECT_FILE": str(sel)}
     env.pop("SG_TEST_SELECT", None)
     env.pop("SG_GATE_STAGE", None)
     cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 yes fast'

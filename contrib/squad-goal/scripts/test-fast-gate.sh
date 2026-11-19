@@ -632,6 +632,76 @@ pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "the suite's tree survived the 
 [ "$(tail -n 1 "$gm/gate-history" | cut -f8)" = unproven ] && ok "the ceiling is recorded as unproven, never a pass" || ko "ceiling history: '$(tail -n 1 "$gm/gate-history" 2>/dev/null)'"
 rm -rf "$gmcap"
 
+# (#2379, ADR-0169 rule 9) A full battery takes its own bound, measured from this machine's gate history: 3/2 of the longest
+# wall of a passing or bounded full-battery gate among the last 20 full-battery gates, never under the delta bound and never
+# over the cap (SG_GATE_FULL_MAX_SECONDS, default twice the delta bound). A window with no such row answers the cap. The owner's
+# SG_GATE_FULL_BOUND_SECONDS wins, clamped to the delta bound. A delta row, a reused row and a failed row measure nothing.
+fbh=$T/fullbound; mkdir -p "$fbh"
+hrow() {  # <selection> <scope> <outcome> <reason> <wall> [<mode>] [<reused>]: one 26-field history row
+  local r=pass; [ "$3" = pass ] || r=fail
+  printf '%s\tfast\t%s\tsha\t1000\t%s\t%s\t%s\t%s\t-\t-\t3\t-\tlanding\t1\t1\t%s\ttree\t0\t%s\t1\t%s\tlocal\t-\t-\t-\n' \
+    "$(( 1000 + $5 ))" "$r" "$1" "$2" "$3" "$4" "${6:-gated}" "$5" "${7:-no}"
+}
+fpass() { hrow "all: landing runs the full battery" full pass - "$1"; }
+fb() {  # [<VAR=value>...]: sg_full_bound over $fbh/gate-history for a 900 s delta bound
+  env -u SG_GATE_FULL_BOUND_SECONDS -u SG_GATE_FULL_MAX_SECONDS SG_STATE="$fbh" "$@" bash -c '. "$1/caps.sh"; sg_full_bound 900' _ "$d"
+}
+fbcase() {  # <want> <label> [<VAR=value>...]: the history file is already written
+  local want=$1 label=$2 got; shift 2; got=$(fb "$@")
+  [ "$got" = "$want" ] && ok "2379 full bound: $label ($got s)" || ko "2379 full bound: $label: got '$got', want $want"
+}
+rm -f "$fbh/gate-history"; fbcase 1800 "no history answers the cap, twice the delta bound"
+{ fpass 400; fpass 600; } > "$fbh/gate-history"; fbcase 900 "3/2 of a short full pass never falls under the delta bound"
+fpass 1000 > "$fbh/gate-history"; fbcase 1500 "3/2 of the longest full pass"
+fpass 1091 > "$fbh/gate-history"; fbcase 1637 "3/2 rounds up"
+fpass 1300 > "$fbh/gate-history"; fbcase 1800 "the cap holds the measured value"
+fbcase 1950 "an owner cap above the measure lets it through" SG_GATE_FULL_MAX_SECONDS=3000
+fbcase 900 "a cap under the delta bound answers the delta bound" SG_GATE_FULL_MAX_SECONDS=100
+fbcase 1400 "the owner's bound wins over the measure" SG_GATE_FULL_BOUND_SECONDS=1400
+fbcase 900 "the owner's bound is clamped to the delta bound" SG_GATE_FULL_BOUND_SECONDS=100
+fbcase 1800 "a bound that is not a whole number is no override" SG_GATE_FULL_BOUND_SECONDS=abc
+{ fpass 400; hrow "selected 9 files" delta pass - 1500; hrow "all: x" full pass - 1500 reused; hrow "all: x" full pass - 1500 gated yes
+  hrow "all: x" full fail "the base battery failed at t" 1500; hrow "selected 0 files" delta unproven "no pytest ran" 1500; } > "$fbh/gate-history"
+fbcase 900 "a delta, reused, failed or narrowed row measures nothing"
+{ fpass 400; hrow "all: x" full unproven "bounded: the battery passed its 905s deadline" 905; } > "$fbh/gate-history"
+fbcase 1358 "a bounded full gate raises the bound by its own wall"
+hrow "all: x" full unproven "bounded: the battery passed its 905s deadline" 905 > "$fbh/gate-history"
+fbcase 1358 "a bounded full gate alone is a measure"
+hrow "all: x" full fail "the base battery failed at t" 400 > "$fbh/gate-history"; fbcase 1800 "a window with no pass and no bounded gate answers the cap"
+{ fpass 1100; for _ in $(seq 20); do fpass 400; done; } > "$fbh/gate-history"; fbcase 900 "a pass older than the last 20 full gates measures nothing"
+{ fpass 1100; for _ in $(seq 19); do fpass 400; done; } > "$fbh/gate-history"; fbcase 1650 "a pass inside the last 20 full gates measures"
+{ printf 'garbage\n'; printf 'x\tfast\tpass\tsha\ty\tall: x\tfull\tpass\t-\n'; fpass 400; } > "$fbh/gate-history"
+fbcase 900 "a corrupt row is skipped and the answer stays a whole number"
+printf '2000\tfast\tpass\tsha\t1000\tall: x\tfull\tpass\t-\t-\t-\t3\t-\n' > "$fbh/gate-history"
+fbcase 1500 "a row from before the wall field measures finish minus start"
+# The gate widens its clock only once the battery named the full scope, and it keeps the wider clock once named: a battery
+# that writes `full` and then `delta` (the leak #2379 found) still finishes, and a delta battery keeps the delta bound.
+# The `full` stands 3 s before the rewrite, so the watchdogs' looks (1 s in fast-gate, 2 s in gate.sh) read it under load too.
+vstub fullthendelta 'printf "full\n" > "$GATE_SCOPE_FILE"; sleep 3; printf "delta\n" > "$GATE_SCOPE_FILE"; sleep 8; exit 0'
+fbst=$T/fbst; mkdir -p "$fbst"   # its own state: a red an earlier case left on this tree would stand over these attempts
+s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=30 vfg fullthendelta); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 0 ] && [ "$el" -ge 11 ] && ok "2379 a full battery runs past the delta bound to the full bound, and a later delta never shortens it (${el}s)" \
+  || ko "2379 full battery past the delta bound: rc $rc in ${el}s, last '$(last "$out")'"
+[ "$(tail -n 1 "$fbst/gate-history" | cut -f7)" = full ] && ok "2379 the history records the full scope the gate latched" || ko "2379 latched scope: '$(tail -n 1 "$fbst/gate-history" 2>/dev/null)'"
+vstub fullhang 'printf "full\n" > "$GATE_SCOPE_FILE"; sleep $HANG_NAP'
+s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=4 vfg fullhang); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 4 ] && [ "$el" -ge 3 ] && [ "$el" -lt 20 ] && case "$(last "$out")" in *"bounded"*" 4s "*|*"bounded"*" its 4s"*) true;; *) false;; esac \
+  && ok "2379 a full battery past its full bound is bounded and the line names the full bound (${el}s)" || ko "2379 full hang: rc $rc in ${el}s, last '$(last "$out")'"
+pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "2379 the full battery's tree survived its bound" || ok "2379 the full bound kills the battery's tree"
+# A caller that hands its own clock and no full clock (a proof) is never widened: the full scope keeps the caller's deadline.
+s0=$(date +%s); out=$(cd "$R" && SG_STATE="$fbst" SG_SERIAL_HELD=gate GATE_DEADLINE_EPOCH=$(( $(date +%s) + 2 )) SG_GATE_FULL_BOUND_SECONDS=30 \
+  env -u GATE_FULL_DEADLINE_EPOCH -u GATE_SCOPE_FILE SG_FAST_BASE=dev SG_FAST_CMD="bash $T/fullhang.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 4 ] && [ "$el" -lt 10 ] && ok "2379 a caller's clock with no full clock is never widened (${el}s)" || ko "2379 a caller's clock was widened: rc $rc in ${el}s, last '$(last "$out")'"
+pkill -f "sleep $HANG_NAP" 2>/dev/null
+# The battery's pytest never reads or writes the gate's record or clock: a test that writes the inherited scope file turned
+# every landing row of the history into `delta` (#2379). A stub interpreter plays ruff, mypy, the selector and that test.
+lk=$T/leak; mkdir -p "$lk"
+printf '#!/bin/bash\ncase "$1 $2" in\n  "-m squad.testselect") echo "all: stub";;\n  "-m pytest") [ -z "${GATE_SCOPE_FILE:-}" ] || echo delta > "$GATE_SCOPE_FILE"; env | /usr/bin/grep -cE "^(GATE_|SG_GATE_FULL_)" > "%s/vars"; echo "1 passed";;\nesac\nexit 0\n' "$lk" > "$lk/py"; chmod +x "$lk/py"
+lcmd=$(. "$d/base-battery.sh"; SG_GATE_WORKERS=1 sg_base_battery "$lk/py" dev landing)
+(cd "$R" && env GATE_SCOPE_FILE="$lk/scope" GATE_SELECT_FILE="$lk/sel" GATE_DEADLINE_EPOCH=1 SG_GATE_FULL_BOUND_SECONDS=7 bash -c "$lcmd") >/dev/null 2>&1
+[ "$(cat "$lk/scope" 2>/dev/null)" = full ] && [ "$(cat "$lk/vars" 2>/dev/null)" = 0 ] \
+  && ok "2379 the battery's pytest sees no gate record or clock, so the scope stays the battery's" || ko "2379 leak: scope '$(cat "$lk/scope" 2>/dev/null)', gate names seen by pytest '$(cat "$lk/vars" 2>/dev/null)'"
+
 # (#1086) The gate's interpreter is sg_gate_python's answer (caps.sh): SG_GATE_PY, else the checkout's venv, else the venv
 # beside the worktree's common git directory, else python3. The gate calls it for the code-quality reading, so a stub in the
 # venv logs the exact interpreter the gate used. A checkout with no venv of its own must reach the venv beside it, never a

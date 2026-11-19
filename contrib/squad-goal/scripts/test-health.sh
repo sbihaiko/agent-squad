@@ -408,6 +408,14 @@ o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing
   && ok "a landing whose last gate round is past the bounds alerts, naming the held instant" || ko "a stale gate round did not alert: $o"
 kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "the round-progress landing clears its cause" || ko "round-progress cause not cleared: $o"
+# ---- #2379: the landing gate runs the full battery, so its bound is the full bound (sg_full_bound; with no gate history, twice the
+# delta bound). A round past the gate wait plus the delta bound, and inside the gate wait plus the full bound, is a full gate still
+# running, never a stuck landing.
+mkdir -p "$T/st/locks/single-wland"; /bin/sleep 60 & lh=$!; echo "$lh" > "$T/st/locks/single-wland/pid"
+touch -t "$(date -r $(( $(date +%s) - 1900 )) +%Y%m%d%H%M.%S)" "$T/st/locks/single-wland/pid"
+o=$(env -u SG_GATE_FULL_BOUND_SECONDS -u SG_GATE_FULL_MAX_SECONDS -u SG_GATE_BOUND_SECONDS -u SERIAL_WAIT_SECONDS bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held:' && ko "2379 a landing inside the full gate bound alerted: $o" || ok "2379 a landing past the delta bound and inside the full bound stays quiet"
+kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland" "$T/st/auto/health-landing-held"
 # ---- #1775: a janitor pass that holds its single-janitor lock past its own bound is stuck, not slow. The pass deadline
 # lives inside janitor.py (#1774) and fires only when the next call would start, so a hang in the shell wrapper, or in
 # Python code between calls, held the lock in silence. The bound is the pass deadline plus one call deadline; a live
