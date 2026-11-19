@@ -517,10 +517,10 @@ def drop_line(r):   # #2144: every run loop rule that leaves a run's line out of
     # primitive: it edits no other list and reads no file, so a caller that must also read the run for its card calls keep_run
     # beside it (FINISHED-RUN does). The second keep source is `reaped`: a run whose open wave still lands it keeps its line
     # there, and the rewrite keeps a reaped line whatever `dropped` says (see the zombie rule below).
-    # The record that feeds the card pass belongs to the caller's keep_run, never to this primitive. Only FINISHED-RUN drops a
-    # line and still reads the card, so only it calls keep_run beside the drop. The other callers drop with no record, and
-    # that is correct: GONE-RUN's issues are deleted, CLOSED-RUN's card the closed-issue Done rule already answered, the
-    # killed and never-started runs write reoffer markers for the card's way back, and a missing folder has no record.
+    # The record that feeds the card pass belongs to the caller's keep_run, never to this primitive. FINISHED-RUN and CLOSED-RUN
+    # drop a line and still read the card, so they call keep_run beside the drop. The other callers drop with no record, and
+    # that is correct: GONE-RUN's issues are deleted, the killed and never-started runs write reoffer markers for the card's
+    # way back, and a missing folder has no record.
     dropped.add(r)
 def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
     try: c = p.read_text().strip()
@@ -609,13 +609,12 @@ for r in names:
             say(f"GONE-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is gone; dropped from active-runs")
             drop_line(r)
             continue
-        # #2138: the run has its verdict and every issue it names is closed, so nothing reads its line again: the card pass
-        # has no card to move and the landing pass has no issue to wait for. A line the loop still counts as live work holds
-        # the child room the frontier needs, and six such lines left it reporting "no slot" with nothing running. A run with
-        # an open issue keeps its line, as before: its wave or its card still read it.
+        # #2138: the run has its verdict and every issue it names is closed, so its line leaves active-runs. A line the loop
+        # still counts as live work holds the child room the frontier needs, and six such lines left it reporting "no slot"
+        # with nothing running. A run with an open issue keeps its line, as before: its wave or its card still read it.
         if nums and all(issue_read(x)[0] == "closed" for x in nums):
             say(f"CLOSED-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is closed; dropped from active-runs")
-            drop_line(r)
+            drop_line(r); keep_run(r, f, i)   # a closed issue is not in the open list, so only the run's record moves its card
             continue
         # #2138: a run whose verdict is final is over. Its line stays only while a wave stands for it (that wave still lands
         # its children) or a live process or lease names it. A line the loop counts as live work holds the child room the
