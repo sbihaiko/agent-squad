@@ -395,9 +395,9 @@ def _set_bar(hub):
     """The Save bar's own source, run in node: what it labels the bar and which buttons it disables for one theme."""
     page = hub.PAGE
     src = page[page.index("const STH="):page.index("function setTheme(")]
+    # the four names the bar's own slice calls from outside it: the DOM accessor, the stored theme, and two dirty tests
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
-            'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;const kanDirty=()=>false;'
-            'const slotDirty=()=>false;const limVals=()=>({guard:"",cap:"",factor:""});let limS=null,slDraft=null,slS=null,slotS=null,slotDraft=null;'
+            'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
             'let RO=false;const RO_WHY="Read-only over the tailnet";')
     body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
             'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent,'

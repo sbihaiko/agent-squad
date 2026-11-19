@@ -7412,26 +7412,37 @@ $("#mbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!
 /* Settings > Spend & limits (#926): the token guard's on/off switch, its daily cap and its pause factor, with the burn
    it measures and whether dispatch is paused now. The page renders and asks; the hub validates, writes the profile and
    records the change (ADR-0137), and the guard reads it on its next pass with no restart. */
-let limS=null,limMsg="",limPend=null;   // limPend holds a typed value the hub refused, so the field keeps it
+let limS=null,limMsg="";   // the last state the hub saved; a typed value lives only in its own field
 
 /* Spend & limits saves each field on its own, with no button (#2433). A valid edit posts once, on the field's blur or
    after a short pause in typing; the field then shows a check mark, its group shows one line naming the saved value and
    the line's age, and a value the hub refuses marks the field, writes nothing and leaves the saved state in force.
-   The page writes and renders; the hub validates, writes atomically and records the change (ADR-0030, ADR-0137). */
+   A write carries the saved state with only the edited field changed, so a refused value in another field never rides
+   along. The page writes and renders; the hub validates, writes atomically and records the change (ADR-0030, ADR-0137). */
 const LIM_FIELD={limg:"guard",limc:"cap",limf:"factor"},LIM_NAME={guard:"token guard",cap:"daily token cap",factor:"pause factor"};
+const LIM_ID={guard:"#limg",cap:"#limc",factor:"#limf"};
 let limOK="",limVal="",limAt=0,limBad="",limBadMsg="",limTmr=null,limPauseMs=700;
 const limKName=k=>LIM_NAME[k]||k;
 const limMark=k=>limOK===k?"<span class=lok aria-label=saved>✓</span>":"";
 const limBadCls=k=>limBad===k?" class=bad":"";
+const limAgeTxt=now=>`${span(((now||Date.now())-limAt)/1000)} ago`;
 function limLine(){if(limBad)return `<span class=lbad aria-hidden=true>!</span> ${esc(limBadMsg||limKName(limBad)+" was not saved")}`;
- if(!limOK)return "";return `<span class=lok aria-hidden=true>✓</span> Saved · ${esc(limKName(limOK))} ${esc(limVal)} · ${span((Date.now()-limAt)/1000)} ago`}
+ if(!limOK)return "";return `<span class=lok aria-hidden=true>✓</span> Saved · ${esc(limKName(limOK))} ${esc(limVal)} · <span id=limage>${limAgeTxt()}</span>`}
+function limTick(now){const el=$("#limage");if(el&&limOK)el.textContent=limAgeTxt(now)}   // the age moves on with the clock, with no new write
+const limAgeTmr=setInterval(()=>limTick(),1000);if(limAgeTmr&&limAgeTmr.unref)limAgeTmr.unref();
+/* The value the reader typed in the field's own input, or null when the page has not drawn it yet. */
+const limTyped=k=>{if(k==="guard"){const g=$("#limg");return g?limG():null}   // the guard is a switch: its checked state is the word the hub reads (#2434)
+ const el=$(LIM_ID[k]);return el&&typeof el.value==="string"?el.value:null};
 async function limSend(body){const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
 async function limWrite(which,send=limSend){if(which.startsWith("kan:"))return kanWrite(which.slice(4));
  if(which.startsWith("slot:"))return slotPost(true);   // a slot cap saves on its own, like the limit fields (#2435)
- const vals=limVals(),cap=limCapParse(vals.cap);let d;
- try{d=await send({...vals,cap:cap==null?vals.cap:cap,confirm:true})}catch(x){d={err:"save failed"}}   // the hub stores a plain integer whatever unit was typed (#2434)
- if(d.err){limBad=which;limBadMsg=d.err;limOK="";limAt=0;limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor}}
- else{limS=d.state||limS;limPend=null;limBad="";limBadMsg="";limOK=which;limVal=String((d.state||vals)[which]);limAt=Date.now()}
+ if(limBad&&limBad!==which)return {err:limBadMsg||limKName(limBad)+" was not saved"};   // one refused field holds the write until it is fixed
+ const cur=limS||{},vals={guard:String(cur.guard??""),cap:String(cur.cap??""),factor:String(cur.factor??"")},typed=limTyped(which);
+ if(typed!==null)vals[which]=typed;   // only the edited field leaves the saved state
+ let d;
+ try{d=await send({...vals,confirm:true})}catch(x){d={err:"save failed"}}
+ if(d.err){limBad=which;limBadMsg=d.err;limOK="";limAt=0}
+ else{limS=d.state||limS;limBad="";limBadMsg="";limOK=which;limVal=String((d.state||vals)[which]);limAt=Date.now()}
  limRender();if(typeof setBar==="function")setBar();return d}
 function limQueue(which,send){clearTimeout(limTmr);limTmr=setTimeout(()=>limWrite(which,send),limPauseMs)}
 
@@ -7505,12 +7516,8 @@ const limCapParse=s=>{const t=String(s??"").trim(),m=t.match(/^(\d+(?:\.\d+)?)\s
 const limBurn=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hourly burn that pauses dispatch: factor x the cap's hourly share (#2434)
  return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
-/* The field's value comes from the input the reader sees; with none drawn yet (a first render, or the node harness) the
-   typed value the hub refused stands in, then the saved state. */
-const limVals=()=>{const g=$("#limg"),c=$("#limc"),f=$("#limf");
- return g||c||f?{guard:limG(),cap:(c||{}).value||"",factor:(f||{}).value||""}:limPend||{guard:"",cap:"",factor:""}};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const s=limS,v=limPend||s,off=s.guard==="off";
+ const s=limS,v=s,off=s.guard==="off";
  setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
@@ -7651,7 +7658,7 @@ $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
 const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);if(!say.length)return;
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
