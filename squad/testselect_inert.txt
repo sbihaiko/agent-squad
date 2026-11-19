@@ -1,3 +1,2 @@
 # Paths no test reads. A change to a listed path selects no test. Read by squad/testselect.py.
-.gitattributes
 LICENSE
