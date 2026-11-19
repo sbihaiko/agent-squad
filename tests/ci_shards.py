@@ -15,7 +15,6 @@ across the shards because a sibling job's check is the wall clock of the slowest
 usage: python3 tests/ci_shards.py <shard> [root]   print the shard's test files, one line (shard 1 to SHARD_COUNT);
                                                   `root` is the tree to read, its own repository by default
 """
-import functools
 import re
 import sys
 from pathlib import Path
@@ -43,9 +42,9 @@ def test_files(root: Path) -> list[str]:
     return sorted(f"tests/{path.name}" for path in (root / "tests").glob("test_*.py"))
 
 
-@functools.cache
 def partition(root: str) -> tuple[tuple[str, ...], ...]:
-    """The shards of one tree: each file, heaviest first, in the shard that carries the least weight so far."""
+    """The shards of one tree: each file, heaviest first, in the shard that carries the least weight so far. The answer is
+    rebuilt on every call, so a tree that changed since the last query is read again and no call answers for an older tree."""
     tree = Path(root)
     weights = {path: weight(tree / path) for path in test_files(tree)}
     shards: list[list[str]] = [[] for _ in range(SHARD_COUNT)]
