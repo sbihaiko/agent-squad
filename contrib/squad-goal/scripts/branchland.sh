@@ -54,9 +54,10 @@ fixcmd=${SG_RUFF_FIX_CMD:-"'$py' -m ruff check --fix squad tests"}
 # record and the log that quote the output do not carry it a second time.
 unwait() { printf '%s\n' "$1" | /usr/bin/grep '^serial: waiting for lock' >&2; printf '%s' "$1" | /usr/bin/grep -v '^serial: waiting for lock'; }
 # slotwait <rc> <output> (#2330): 0 when the gate's bounded wait for the gate lock or its slots ran out: exit 75 with the line
-# serial.sh or caps.py writes then. No battery ran, so it is the machine's capacity, as exit 73 is. A 75 with no such line is the
-# gate's own hold deadline.
-slotwait() { [ "$1" = 75 ] && printf '%s\n' "$2" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* waited [0-9.]+s for caps\.gates'; }
+# serial.sh or caps.py writes then. No battery ran, so it is the machine's capacity, as exit 73 is. A gate stopped mid-wait
+# keeps only the live line caps.py writes when the wait begins (#2452), so that line names a wait too. A 75 with no such line
+# is the gate's own hold deadline.
+slotwait() { [ "$1" = 75 ] && printf '%s\n' "$2" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* is waiting for [0-9]+ slot\(s\): caps\.gates|^caps: .* waited [0-9.]+s for caps\.gates'; }
 localgate() { local br=$1 sha=$2 i=$3 wt out rc red base gaid cap
   base=$(/usr/bin/git ls-remote "$remote" "refs/heads/$land" 2>/dev/null | awk '{print substr($1,1,7)}')
   # One landing cycle is one gate attempt (#1255): the first gate, the rerun of what failed and the ruff-fix
@@ -99,13 +100,21 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc red base gaid cap
   # (#1684): gate.sh took no slot, so no battery ran. Neither gets a rerun and neither gets a ruff fix, so nothing grants the
   # landing it held and no fix round is paid for a tree the gate never read.
   red=$rc   # the first gate's answer: a retry that never ran never clears it (#1684)
+  redout=$out   # the evidence that named the red: the text its finding carries, never a rerun's proof of nothing (#2452)
   # cap: why the first gate ran no battery, empty when it ran one. A full budget (73) and a bounded wait that ran out (75, #2330)
   # take the same path: no rerun, no ruff fix, no fix round and no wait marker.
   cap=; [ "$rc" = 73 ] && cap="the machine gate budget was full"
   slotwait "$rc" "$out" && cap="the bounded wait for a gate slot or the gate lock ran out"
-  [ "$rc" = 0 ] || [ "$rc" = 4 ] || [ -n "$cap" ] || { out="$out
+  # (#2452) The rerun answers one question: are the failed tests a flake? It gets the node ids the gate named, so a red that
+  # named no id has nothing to rerun and keeps its own answer and evidence. A rerun that never ran (a full budget, or a wait
+  # that ran out) clears nothing: the first gate's answer and evidence stand, and no wait line reaches a Finding.
+  local rids; rids=$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')
+  if [ "$rc" != 0 ] && [ "$rc" != 4 ] && [ -z "$cap" ] && [ -n "$rids" ]; then
+    out="$out
 --- the rerun of what failed ---
-$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. SG_GATE_CALLER=landing SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); { [ "$rc" = 73 ] || slotwait "$rc" "$out"; } && [ "$red" = 1 ] && rc=1; }
+$(cd "$wt/tip" && SG_GATE_FAILED="$rids" PYTHONPATH=. SG_GATE_CALLER=landing SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out")
+    { [ "$rc" = 73 ] || slotwait "$rc" "$out"; } && { rc=$red; out=$redout; }
+  fi
   # Only ruff red, and ruff says it can fix it: `ruff check --fix` (safe fixes only) in the trial, one commit, the gate again.
   # The fixed trial is pushed to the branch (it is rebased on $land), so the fix lands with the branch.
   if [ "$rc" != 0 ] && [ "$rc" != 4 ] && [ -z "$cap" ] && printf '%s' "$out" | /usr/bin/grep -q 'fixable with the'; then
@@ -119,7 +128,7 @@ $(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([
       /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate commit -q -m "Apply ruff --fix at the landing
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
-      local rr=$rc; out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_CALLER=landing SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out"); { [ "$rc" = 73 ] || slotwait "$rc" "$out"; } && rc=$rr   # a re-gate that never ran clears nothing (#1684)
+      local rr=$rc rout=$out; out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_CALLER=landing SG_GATE_KIND=fast SG_GATE_CARD="$i" SG_GATE_AID="$gaid" bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out"); { [ "$rc" = 73 ] || slotwait "$rc" "$out"; } && { rc=$rr; out=$rout; }   # a re-gate that never ran clears nothing, and its wait is no Finding (#1684, #2452)
       if [ "$rc" = 0 ] && ! /usr/bin/git -C "$wt/tip" push -q --force-with-lease="refs/heads/$br:$sha" "$remote" "HEAD:refs/heads/$br" >/dev/null 2>&1; then rc=1; out="the ruff fix passed the gate but its push to $br was refused"; fi
     fi
   fi
