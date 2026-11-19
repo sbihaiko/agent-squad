@@ -11,7 +11,7 @@
 #  (F) a work branch names the issue (#382): card and marker stay;
 #  (G) a marker younger than the grace stays;
 #  (H) a card another step moved past In Progress stays where it is;
-#  (I) a run that landed work and ended is reconciled to Code Complete (#239: a local landing is not Done);
+#  (I) a run that landed work and ended is reconciled to Landing, the definition's column (#239, ADR-0141, #2190: a local landing is not Done);
 #  (J) a GitHub refusal is not an answer: nothing is touched, and the next pass (the API back) releases the card;
 #  (K) #771: a failed run left active-runs before rule O released it, and rule R put its card back in Todo: the marker is
 #      dropped with no board write, so the frontier dispatches the issue again instead of reading it as claimed for good.
@@ -88,7 +88,6 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 [ -e "$T/st/auto/disp-1006" ] && ! /usr/bin/grep -q ' 1006$' "$T/board.calls" 2>/dev/null && ok "F: an issue a work branch names keeps its card and marker" || ko "F #1006 touched: $(bc)"
 [ -e "$T/st/auto/disp-1008" ] && ! /usr/bin/grep -q ' 1008$' "$T/board.calls" 2>/dev/null && ok "G: a fresh marker stays" || ko "G #1008 touched: $(bc)"
 ! /usr/bin/grep -q ' 1007$' "$T/board.calls" 2>/dev/null && ok "H: a card past In Progress is never downgraded" || ko "H #1007 moved: $(bc)"
-/usr/bin/grep -q '^o 4 Code Complete 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Code Complete, never Done" || ko "I #1009 not reconciled to Code Complete: $(bc)"
 /usr/bin/grep -q '^o 4 Landing 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Landing, never Done" || ko "I #1009 not reconciled to Landing: $(bc)"
 [ -e "$T/st/auto/disp-1010" ] && ! /usr/bin/grep -q ' 1010$' "$T/board.calls" 2>/dev/null && ok "J: a refused read touches nothing" || ko "J #1010 touched on a refusal: $(bc)"
 [ ! -e "$T/st/auto/disp-1012" ] && ! /usr/bin/grep -q ' 1012$' "$T/board.calls" 2>/dev/null && ok "K: a Todo card behind a marker no run holds is released, the card untouched (#771)" || ko "K #1012 stays claimed: $(bc) $o"
