@@ -218,4 +218,15 @@ case "$r" in *"WAVE WAIT batch"*) ko "o3: the batch waited on a 73 that names no
 case "$r" in *"WAVE BATCH: the tip's check of batch run-tc,run-td is red, so each run lands alone"*) ok "o3: the unnamed 73 takes the red path";; *) ko "o3: exit $rc: '$r'";; esac
 rm -f "$T/st/auto"/wland-*
 
+# p (#2330): a red batch gate sends each run to land alone. A claimed run that landed alone never goes back to the queue, even
+# when the lead run's own landing then waits on a held gate lock: the queue is restored only when the batch itself waited.
+printf '#!/bin/bash\n[ -z "${SG_GATE_BATCH:-}" ] || exit 1\n[ ! -e g-run-ua ] || { echo "serial: lock gate held by pid 1: skipped, not queued (SERIAL_TRY)"; exit 73; }\nexit 0\n' > "$T/p-tip.sh"
+rm -f "$T/st/auto"/wland-*; mkrun run-ua 151; mkrun run-ub 152; queue run-ub; reset
+r=$(ogate "$T/p-tip.sh" run-ua); rc=$?
+case "$r" in *"WAVE BATCH: the tip's check of batch run-ua,run-ub is red, so each run lands alone"*) ok "p: the red batch lands each run alone";; *) ko "p: no fallback line: exit $rc: '$r'";; esac
+$O cat-file -e dev:g-run-ub 2>/dev/null && ok "p: the claimed run lands alone" || ko "p: run-ub did not land: exit $rc: '$r'"
+[ -e "$T/st/auto/wland-run-ub.queued" ] && ko "p: a run that landed alone went back to the queue (lead exit $rc)" || ok "p: a run that landed alone stays out of the queue"
+[ $rc = 1 ] && ok "p: the lead run's own landing waits (exit 1)" || ko "p: the lead run's landing exit $rc, want 1: '$r'"
+rm -f "$T/st/auto"/wland-*
+
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

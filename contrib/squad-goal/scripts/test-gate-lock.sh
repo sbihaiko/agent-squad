@@ -185,4 +185,14 @@ el=$(( $(date +%s) - t0 ))
 [ "$(occ gates)" = 1 ] && ok "2330 the tip check that gave up holds no slot" || ko "2330 slots after the short take: $(occ gates) held, want the one child slot"
 capsctl | /usr/bin/grep -q '"next"' && ko "2330 the tip marker outlived the expired wait: $(capsctl)" || ok "2330 the expired wait leaves no tip marker"
 capsctl release gates "child-gate-$live" >/dev/null 2>&1
+# (#2330) The same bounded take ends in a take when the child's slot frees inside the bound: the tip check gets its whole count,
+# runs its command, exits 0, and leaves no slot and no marker behind.
+capsctl take gates "child-gate-$live" --count 1 --target "$T/three" --pid "$live" >/dev/null
+( sleep 1.5; capsctl release gates "child-gate-$live" >/dev/null 2>&1 ) & rel=$!
+out=$( (cd "$T/three" && SG_GATE_WORKERS=3 SG_GATE_CALLER=tip SG_GATE_SLOT_WAIT_SECONDS=20 bash "$T/s/gate.sh" sh -c 'echo "took $SQUAD_GATE_WORKERS"') 2>"$T/err6"); rc=$?
+wait "$rel" 2>/dev/null
+[ $rc = 0 ] && [ "$out" = "took 3" ] && ok "2330 a tip check whose slot frees inside the bound takes its whole count and runs" \
+  || ko "2330 wait then take: rc $rc out='$out' err=$(tr '\n' ' ' < "$T/err6")"
+[ "$(occ gates)" = 0 ] && ok "2330 the tip check that took its slots gives them back" || ko "2330 slots after the take: $(occ gates)"
+capsctl | /usr/bin/grep -q '"next"' && ko "2330 the tip marker outlived the take: $(capsctl)" || ok "2330 the take leaves no tip marker"
 cd "$T"; rm -rf "$T"; exit $fail
