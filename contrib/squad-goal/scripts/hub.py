@@ -7408,9 +7408,9 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
   setTile("Pauses over",limN(s.pause_line)+" tokens/h","neutral"),
  ],`Profile file: <code>${esc(s.profile||"none in force")}</code>`)   // the note row is the profile path alone; the last change stays data, never a fifth fact
  +setSettings("lim",[
-  setRow("token guard",`<select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select>`),
-  setRow("daily token cap",`<input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap">`),
-  setRow("pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="pause factor">`,"the hourly burn that pauses dispatch, as a multiple of the cap's hourly share"),
+  setRow("Token guard",`<select id=limg aria-label="Token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select>`),
+  setRow("Daily token cap",`<input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="Daily token cap">`),
+  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="Pause factor">`,"the hourly burn that pauses dispatch, as a multiple of the cap's hourly share"),
  ]);
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)

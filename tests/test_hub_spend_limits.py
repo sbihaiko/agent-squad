@@ -319,7 +319,7 @@ def test_the_settings_block_holds_only_the_three_editable_settings(ctx):
     _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
     assert settings.count("class=setrow") == 3, settings
     assert re.findall(r"<span class=sl>(.*?)</span>", settings) == \
-           ["token guard", "daily token cap", "pause factor"], settings
+           ["Token guard", "Daily token cap", "Pause factor"], settings
     for fact in ("class=\"tile", "class=tile", "<span class=tk>", "Last hour", "Pauses over", "Profile file"):
         assert fact not in settings, f"the Settings block carries the fact {fact!r}"
 
